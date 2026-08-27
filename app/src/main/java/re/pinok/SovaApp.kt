@@ -1303,6 +1303,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
                     val name = (profile.firstName + " " + profile.lastName).trim()
                     pendingIncomingCallTitle = name.take(40).ifBlank { "Входящий звонок" }
                     pendingIncomingCallPhoto = profile.photo100
+                    // #CALLS-FIX (2026-08-27): имя подтянулось — обновляем уведомление,
+                    // чтобы в шторке было «Иван Иванов», а не «Кто-то звонит вам в VK».
+                    showIncomingCallNotification()
                 }
             } catch (e: Exception) {
                 AppLog.w("SovaApp", "refreshIncomingCaller: ${e.message}")
@@ -1575,7 +1578,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
             android.app.Notification.Builder(this, "vk_calls")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setContentTitle("Входящий звонок")
-                .setContentText("Кто-то звонит вам в VK")
+                // #CALLS-FIX (2026-08-27): показываем имя звонящего (если уже подтянулось),
+                // а не безличное «Кто-то звонит вам в VK».
+                .setContentText(
+                    if (pendingIncomingCallTitle.isNotBlank()) pendingIncomingCallTitle
+                    else "Кто-то звонит вам в VK"
+                )
                 .setContentIntent(pi)
                 .setAutoCancel(true)
                 .setPriority(android.app.Notification.PRIORITY_HIGH)

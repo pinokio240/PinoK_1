@@ -58,6 +58,15 @@ class WebRtcEngine(
     @Volatile
     private var iceServers: List<PeerConnection.IceServer> = emptyList()
 
+    // #CALLS-OUT-FIX (2026-08-27): флаг «PeerConnection создан». Читается с main-потока
+    // (CallScreen решает: применять answer/offer сразу или кэшировать до accept),
+    // пишется на signaling thread — поэтому @Volatile.
+    @Volatile
+    private var pcCreated = false
+
+    /** true, если PeerConnection жив (создан и не закрыт). */
+    fun hasPeerConnection(): Boolean = pcCreated
+
     // #CALLS-FIX: отдельный signaling thread для всех операций PeerConnection.
     // Создание PC/audio source с main-потока → нативный SIGABRT в libjingle
     // ("front() called on an empty vector").
@@ -148,6 +157,7 @@ class WebRtcEngine(
             localAudioTrack?.setEnabled(false)
             peerConnection?.close()
             peerConnection = null
+            pcCreated = false
             localAudioTrack = null
             audioSource?.dispose()
             audioSource = null
@@ -243,12 +253,23 @@ class WebRtcEngine(
                 )
                 // #CALLS-FIX: как в VK (PeerConnectionClient.m109a) — добавляем
                 // TURN ?transport=tcp вариант (tcpCandidatePolicy=ENABLED).
-                servers.add(
-                    PeerConnection.IceServer.builder("$url?transport=tcp")
-                        .setUsername(turn.username ?: "")
-                        .setPassword(turn.credential ?: "")
-                        .createIceServer()
-                )
+                // #CALLS-OUT-FIX (2026-08-27): НЕ дублируем transport-параметр.
+                // Если url уже содержит "?transport=udp" — склейка "$url?transport=tcp"
+                // давала некорректный URL с ДВУМЯ transport (?transport=udp?transport=tcp)
+                // — libjingle такой сервер молча отбрасывал.
+                val tcpUrl = when {
+                    url.contains("transport=") -> null
+                    url.contains('?') -> "$url&transport=tcp"
+                    else -> "$url?transport=tcp"
+                }
+                tcpUrl?.let { tcp ->
+                    servers.add(
+                        PeerConnection.IceServer.builder(tcp)
+                            .setUsername(turn.username ?: "")
+                            .setPassword(turn.credential ?: "")
+                            .createIceServer()
+                    )
+                }
             }
         }
         // fallback — если params пустые
@@ -264,6 +285,7 @@ class WebRtcEngine(
             localAudioTrack?.setEnabled(false)
             peerConnection?.close()
             peerConnection = null
+            pcCreated = false
             localAudioTrack = null
             audioSource?.dispose()
             audioSource = null
@@ -328,6 +350,7 @@ class WebRtcEngine(
         pcConstraints.optional.add(MediaConstraints.KeyValuePair("DtlsSrtpKeyAgreement", "true"))
         @Suppress("DEPRECATION")
         peerConnection = factory?.createPeerConnection(rtcConfig, pcConstraints, observer)
+        pcCreated = peerConnection != null
     }
 
     private fun createLocalAudioTrack() {

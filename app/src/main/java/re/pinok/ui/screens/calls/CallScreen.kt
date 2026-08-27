@@ -97,6 +97,21 @@ fun CallScreen(
     var isMuted by remember { mutableStateOf(false) }
     var isSpeakerOn by remember { mutableStateOf(false) }
     var callDuration by remember { mutableStateOf(0L) }
+    // #CALLS-MIC-GUARD (2026-08-27): без RECORD_AUDIO трек создаётся, но захват
+    // не идёт — собеседник слышит тишину. Запрашиваем разрешение до начала звонка.
+    var micGranted by remember { mutableStateOf(re.pinok.util.PermissionManager.hasRecordAudio(context)) }
+    var failText by remember { mutableStateOf<String?>(null) }
+    var noAnswer by remember { mutableStateOf(false) }
+    val micLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        micGranted = granted
+        if (!granted) {
+            AppLog.w("CallScreen", "RECORD_AUDIO denied — звонок невозможен")
+            failText = "Нет доступа к микрофону"
+            phase = CallPhase.FAILED
+        }
+    }
 
     val peer = CallParticipant(peerId = peerId, name = title, photo100 = photo)
     val call = VkCall(
@@ -161,6 +176,8 @@ fun CallScreen(
 
     LaunchedEffect(Unit) {
         engine.initialize()
+        // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
+        if (!micGranted) micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
         if (incoming) {
             // #CALLS: входящий звонок. Если есть payload — декодируем conversation
             // params и подключаемся к WebSocket-сигналингу (accept/decline).
@@ -360,10 +377,25 @@ fun CallScreen(
                 re.pinok.realtime.CallSignalingClient.CMD_OFFER -> {
                     // #CALLS: запоминаем participantId собеседника для ответа.
                     msg.participantId?.let { remoteParticipantId.value = it }
-                    // Кэшируем offer — применим после создания PeerConnection (при accept).
                     msg.sdp?.let { sdp ->
-                        pendingOffer.value = sdp to (msg.sdpType ?: "offer")
-                        AppLog.i("CallScreen", "offer кэширован (${sdp.take(30)}…) participant=$remoteParticipantId")
+                        val isOffer = msg.command == re.pinok.realtime.CallSignalingClient.CMD_OFFER ||
+                            msg.sdpType == "offer"
+                        val type = if (isOffer) org.webrtc.SessionDescription.Type.OFFER
+                        else org.webrtc.SessionDescription.Type.ANSWER
+                        if (engine.hasPeerConnection()) {
+                            // #CALLS-OUT-FIX (2026-08-27): PC уже создан — answer/offer
+                            // применяем СРАЗУ. Раньше answer лишь кэшировался в
+                            // pendingOffer, который читается ТОЛЬКО в кнопке «Принять»
+                            // входящего звонка → в исходящем answer не применялся вовсе,
+                            // звонок вечно висел «Звоним…».
+                            AppLog.i("CallScreen", "applying remote ${type.name.lowercase()} immediately (PC ready)")
+                            engine.setRemoteSdp(sdp, type)
+                            if (!isOffer) phase = CallPhase.CONNECTING
+                        } else {
+                            // Входящий до «Принять»: PC ещё нет — кэшируем; применит accept.
+                            pendingOffer.value = sdp to if (isOffer) "offer" else "answer"
+                            AppLog.i("CallScreen", "remote ${msg.sdpType} кэширован (${sdp.take(30)}…) participant=$remoteParticipantId")
+                        }
                     }
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_CANDIDATE -> {
@@ -436,6 +468,12 @@ fun CallScreen(
                             ?.takeIf { it.isJsonArray }?.asJsonArray
                         if (participantsArr != null && remoteParticipantId.value == null) {
                             val myVkUid = app.exchangeAuthRepository.userId()
+                            // #CALLS-OUT-FIX (2026-08-27): наш okcdn uid берём из prefs
+                            // (callsSessionUid — заполняет ensureCallsSessionKey). Хардкод
+                            // 584520805550 был верен только на устройстве разработчика —
+                            // на любом другом «я» не распознавалось, и offer уходил
+                            // самому себе → звонок вечно «Звоним…».
+                            val myOkUid = runCatching { app.prefs.data.first().callsSessionUid }.getOrDefault(0L)
                             for (el in participantsArr) {
                                 if (!el.isJsonObject) continue
                                 val p = el.asJsonObject
@@ -443,8 +481,8 @@ fun CallScreen(
                                 val extVkId = extId?.get("id")?.takeIf { it.isJsonPrimitive }?.asLong
                                 val pId = p.get("id")?.takeIf { it.isJsonPrimitive }?.asLong
                                 val state = p.get("state")?.takeIf { it.isJsonPrimitive }?.asString
-                                // Собеседник: другой VK id, не okcdn uid (наш).
-                                val isMe = extVkId == myVkUid || pId == 584520805550L
+                                // Собеседник: другой VK id / не наш okcdn uid.
+                                val isMe = extVkId == myVkUid || (myOkUid > 0L && pId == myOkUid)
                                 if (!isMe && pId != null && pId > 0L) {
                                     remoteParticipantId.value = pId.toString()
                                     AppLog.i("CallScreen", "participantId собеседника из connection.participants: $pId (extId=$extVkId state=$state)")
@@ -540,6 +578,22 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-OUT-FIX (2026-08-27): таймаут дозвона. Если за 45с answer не пришёл
+    // (абонент офлайн/не отвечает) — рвём звонок, а не висим в «Звоним…» навсегда.
+    LaunchedEffect(phase) {
+        if (phase == CallPhase.RINGING && !incoming) {
+            kotlinx.coroutines.delay(45_000L)
+            if (phase == CallPhase.RINGING && !incoming) {
+                AppLog.i("CallScreen", "Исходящий: 45с без ответа — завершаем (no answer)")
+                noAnswer = true
+                signaling.hangup("timeout")
+                engine.endCall()
+                signaling.stop()
+                phase = CallPhase.ENDED
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -599,8 +653,8 @@ fun CallScreen(
                         CallPhase.RINGING -> if (incoming) "Входящий звонок…" else "Звоним…"
                         CallPhase.CONNECTING -> "Соединение…"
                         CallPhase.ACTIVE -> formatDuration(callDuration)
-                        CallPhase.ENDED -> "Звонок завершён"
-                        CallPhase.FAILED -> "Ошибка соединения"
+                        CallPhase.ENDED -> if (noAnswer) "Абонент не отвечает" else "Звонок завершён"
+                        CallPhase.FAILED -> failText ?: "Ошибка соединения"
                         else -> ""
                     },
                     color = Color.White.copy(alpha = 0.7f),

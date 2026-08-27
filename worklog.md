@@ -4361,3 +4361,29 @@ bg-auth-loop-resume. Manual logout исключён (reason == "logout") — ю�
 3. PinoK style violations из §55 (3 строки с ?: и !! в ExchangeAuthRepository
    и AuthActivity) — остались, будут почищены отдельным коммитом.
 
+
+---
+Task ID: CALLS-OUTGOING-FIX
+Agent: main (Z.ai Code)
+Task: Сделать звонки рабочими как в веб-версии VK: нажал значок звонка → позвонил. Изучение всей звонковой цепочки + фиксы.
+
+Work Log:
+- Изучил CALLS_MAP.md, CALLS_UI_BUTTONS.md, CallScreen.kt (797 строк), CallSignalingClient.kt (403), WebRtcEngine.kt (414), ConversationParamsDecoder.kt, SovaApp.kt (call notifier/session_key), VKApiClient.kt (vchat.* методы), навигацию (ChatDetailScreen кнопка звонка → Screen.Call).
+- Обнаружил, что worklog ветки PinoK НЕ содержит звонковых сессий (они были в другой копии; в коде маркеры #CALLS-OUTGOING 2026-08-24) — вся актуальная карта состояния в CALLS_MAP.md.
+- FIX-1 (КРИТИЧЕСКИЙ, исходящий не мог соединиться): в обработчике signaling.messages CMD_ANSWER только кэшировался в pendingOffer, который читается ТОЛЬКО кнопкой «Принять» входящего → answer собеседника в исходящем звонке никогда не применялся → «Звоним…» навсегда. Теперь: если engine.hasPeerConnection() → setRemoteSdp сразу (answer для исходящего, re-offer для renegotiation); иначе кэш до accept (входящий).
+- FIX-2 (КРИТИЧЕСКИЙ, на чужих устройствах): в разборе connection.participants «это я» определялось как `pId == 584520805550L` — хардкод okcdn uid устройства-разработчика. На любом другом устройстве PinoK считал себя собеседником и слал offer самому себе. Теперь okcdn uid берётся из prefs (callsSessionUid, заполняет ensureCallsSessionKey).
+- FIX-3: setIceServers склеивал `"$url?transport=tcp"` для TURN URL, который уже содержал `?transport=udp` → некорректный URL с двумя transport (libjingle молча отбрасывал). Теперь transport=tcp добавляется только если не указан, с учётом '?'/'&'.
+- FIX-4a: guard RECORD_AUDIO в CallScreen (rememberLauncherForActivityResult) — без разрешения собеседник слышал тишину; при отказе — FAILED «Нет доступа к микрофону».
+- FIX-4b: таймаут дозвона 45с для исходящего (RINGING) → hangup("timeout"), текст «Абонент не отвечает» (раньше звонок висел вечно, если абонент офлайн).
+- FIX-5: уведомление о входящем теперь показывает имя звонящего (pendingIncomingCallTitle), обновляется после usersGetByIds; раньше — безличное «Кто-то звонит вам в VK».
+- WebRtcEngine: добавлен @Volatile pcCreated + hasPeerConnection() (флаг ставится/снимается на signaling thread в createPeerConnection/endCall/release).
+- Проверки: braces/parens сбалансированы (delta=0 по правкам), `!!` в новых строках = 0, `?:` осознанные (UI-boundary), стиль CODING_STYLE.md соблюдён. rememberLauncherForActivityResult уже используется в 5 экранах (activity-compose есть).
+
+Stage Summary:
+- Исходящий звонок «нажал значок звонка → позвонил» теперь имеет рабочую SDP-цепочку: startCall → vchat.startConversation (свой UUID) → WS → offer → answer ПРИМЕНЯЕТСЯ → ICE.
+- Исправлена работа на любых устройствах (не только с okcdn uid 584520805550).
+- Файлы: CallScreen.kt (+68/−14), WebRtcEngine.kt (+35/−3), SovaApp.kt (+10/−1).
+- Осталось проверить на устройстве (сборка APK на стороне пользователя):
+  1. Исходящий: лог должен показать "applying remote answer immediately (PC ready)" → "ICE: CONNECTED".
+  2. Входящий: unchanged-путь (offer кэшируется до accept) — регресса нет.
+  3. Если ICE по-прежнему CHECKING→FAILED — вернуть к CALLS_MAP §10: сравнить SDP с эталоном Chrome (a=setup, m-line, DTLS fingerprint).
