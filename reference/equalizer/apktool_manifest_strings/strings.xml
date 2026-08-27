@@ -1,0 +1,801 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="abc_action_bar_home_description">Navigate home</string>
+    <string name="abc_action_bar_up_description">Navigate up</string>
+    <string name="abc_action_menu_overflow_description">More options</string>
+    <string name="abc_action_mode_done">Done</string>
+    <string name="abc_activity_chooser_view_see_all">See all</string>
+    <string name="abc_activitychooserview_choose_application">Choose an app</string>
+    <string name="abc_capital_off">OFF</string>
+    <string name="abc_capital_on">ON</string>
+    <string name="abc_menu_alt_shortcut_label">Alt+</string>
+    <string name="abc_menu_ctrl_shortcut_label">Ctrl+</string>
+    <string name="abc_menu_delete_shortcut_label">delete</string>
+    <string name="abc_menu_enter_shortcut_label">enter</string>
+    <string name="abc_menu_function_shortcut_label">Function+</string>
+    <string name="abc_menu_meta_shortcut_label">Meta+</string>
+    <string name="abc_menu_shift_shortcut_label">Shift+</string>
+    <string name="abc_menu_space_shortcut_label">space</string>
+    <string name="abc_menu_sym_shortcut_label">Sym+</string>
+    <string name="abc_prepend_shortcut_label">Menu+</string>
+    <string name="abc_search_hint">Search…</string>
+    <string name="abc_searchview_description_clear">Clear query</string>
+    <string name="abc_searchview_description_query">Search query</string>
+    <string name="abc_searchview_description_search">Search</string>
+    <string name="abc_searchview_description_submit">Submit query</string>
+    <string name="abc_searchview_description_voice">Voice search</string>
+    <string name="abc_shareactionprovider_share_with">Share with</string>
+    <string name="abc_shareactionprovider_share_with_application">Share with %s</string>
+    <string name="abc_toolbar_collapse_description">Collapse</string>
+    <string name="about">About</string>
+    <string name="actions">Actions</string>
+    <string name="ad_unit_admob_banner">ca-app-pub-4563216819962244/7032416782</string>
+    <string name="ad_unit_admob_interstitial">ca-app-pub-4563216819962244/5697431615</string>
+    <string name="ad_unit_admob_native">ca-app-pub-4563216819962244/2472502478</string>
+    <string name="ad_unit_admob_rewarded">ca-app-pub-4563216819962244/5035086634</string>
+    <string name="ad_unit_applovin_banner" />
+    <string name="ad_unit_applovin_interstitial" />
+    <string name="ad_unit_applovin_mrec_banner" />
+    <string name="ad_unit_applovin_native" />
+    <string name="ad_unit_applovin_rewarded" />
+    <string name="ad_units">Ad Units</string>
+    <string name="ads_provider">ADMOB</string>
+    <string name="ads_sdk_version">SDK Version</string>
+    <string name="advertisement_network_settings">Advertisement Network Settings</string>
+    <string name="age_restricted_user">Age Restricted User</string>
+    <string name="allow">ALLOW</string>
+    <string name="allowed_ad_types">interstitial,banner,rewarded,native</string>
+    <string name="allowed_rate_dialog_sources">happy_moment,relaunch</string>
+    <string name="always_attach_to_global_mix">Always Attach to Global Mix</string>
+    <string name="an_open_source_light_weight_equalizer_for_all_devices">A Light Weight Equalizer for all devices.</string>
+    <string name="analytics_prefix" />
+    <string name="androidx_startup">androidx.startup</string>
+    <string name="any_donation_will_remove_the_ads">This will remove all the ads and unlock premium features.</string>
+    <string name="api_level">API Level</string>
+    <string name="app_id">Application ID</string>
+    <string name="app_language">App Language</string>
+    <string name="app_name">Equalizer</string>
+    <string name="app_review_status">App Review Status</string>
+    <string name="app_version">App Version</string>
+    <string name="appbar_scrolling_view_behavior">com.google.android.material.appbar.AppBarLayout$ScrollingViewBehavior</string>
+    <string name="application_info">Application Info</string>
+    <string name="applovin_agree_message">Please press \"Continue\" if you choose to start using our app.</string>
+    <string name="applovin_alt_privacy_policy_text" />
+    <string name="applovin_continue_button_text">Continue</string>
+    <string name="applovin_creative_debugger_disabled_text">Enable the Creative Debugger SDK settings in order to view recent ads.</string>
+    <string name="applovin_creative_debugger_no_ads_text">No recently displayed ads found.</string>
+    <string name="applovin_list_item_image_description">Displays more info about the list item.</string>
+    <string name="applovin_pp_and_tos_title">To use %s you must agree to our Terms &amp; Conditions and affirm you have reviewed our Privacy Policy</string>
+    <string name="applovin_pp_title">To use %s you must affirm that you have reviewed and acknowledged our Privacy Policy.</string>
+    <string name="applovin_privacy_policy_text">Privacy Policy</string>
+    <string name="applovin_sdk_key">cMGlg2ieK3wNSpDuxGKn0Rnsklgf1JcEm21Fk5d5IXSzS_qwZzVyHeAao4iZ4UEqlOlh9RnDprTRk5PPPK-TQW</string>
+    <string name="applovin_terms_of_service_text">Terms &amp; Conditions</string>
+    <string name="applovin_terms_of_use_text">Terms of Use</string>
+    <string name="are_you_enjoying_equalizer">Are you enjoying Equalizer?</string>
+    <string name="are_you_sure_you_want_to_delete_this">Are you sure you want to delete this?</string>
+    <string name="attach_to_global_mix">ATTACH TO GLOBAL MIX</string>
+    <string name="attach_to_global_mix_small">Attach to Global Mix</string>
+    <string name="attached_to">Attached to %s</string>
+    <string name="autofill">Autofill</string>
+    <string name="automatically_apply_this_profile">Automatically apply this profile (optional)</string>
+    <string name="backup">Backup</string>
+    <string name="backup_and_restore">Backup &amp; Restore</string>
+    <string name="backup_or_restore_your_saved_profiles">Backup or restore your saved profiles</string>
+    <string name="bass_boost">Bass Boost</string>
+    <string name="bass_boost_frequency">Bass Boost Frequency</string>
+    <string name="bass_boost_frequency_equalizer_pro">Bass Boost Frequency (Equalizer Pro)</string>
+    <string name="bass_boost_max_gain">Bass Boost Max Gain</string>
+    <string name="bass_boost_max_gain_equalizer_pro">Bass Boost Max Gain (Equalizer Pro)</string>
+    <string name="battery_opt_description">Allow Equalizer to run without battery restrictions so your audio effects continue working while music plays</string>
+    <string name="best_equalizer_bass_booster_and_volume_booster_on_play_store">Best Equalizer, Bass Booster and Volume Booster on Play Store</string>
+    <string name="best_value">Best Value</string>
+    <string name="black_screen">Black Screen</string>
+    <string name="bottom_sheet_behavior">com.google.android.material.bottomsheet.BottomSheetBehavior</string>
+    <string name="bottomsheet_action_collapse">Collapse the bottom sheet</string>
+    <string name="bottomsheet_action_expand">Expand the bottom sheet</string>
+    <string name="bottomsheet_action_expand_halfway">Expand halfway</string>
+    <string name="bottomsheet_drag_handle_clicked">Drag handle double-tapped</string>
+    <string name="bottomsheet_drag_handle_content_description">Drag handle</string>
+    <string name="by_default_equalizer_will_attach_to_global_mix">By default, Equalizer will attach to global mix as a fallback when no music player is detected.</string>
+    <string name="call_notification_answer_action">Answer</string>
+    <string name="call_notification_answer_video_action">Video</string>
+    <string name="call_notification_decline_action">Decline</string>
+    <string name="call_notification_hang_up_action">Hang Up</string>
+    <string name="call_notification_incoming_text">Incoming call</string>
+    <string name="call_notification_ongoing_text">Ongoing call</string>
+    <string name="call_notification_screening_text">Screening an incoming call</string>
+    <string name="campaign_attribution_link" />
+    <string name="cancel">Cancel</string>
+    <string name="car_profile">Car Profile</string>
+    <string name="change_the_look_and_feel">Change the look &amp; feel of the app</string>
+    <string name="channel_balance">Audio Balance</string>
+    <string name="character_counter_content_description">Characters entered %1$d of %2$d</string>
+    <string name="character_counter_overflowed_content_description">Character limit exceeded %1$d of %2$d</string>
+    <string name="character_counter_pattern">%1$d/%2$d</string>
+    <string name="charged_9_99_year">Charged $9.99/year</string>
+    <string name="charged_value_per_year">Charged %s/year</string>
+    <string name="checkout_our_other_apps">Checkout our other apps</string>
+    <string name="choose_your_style">Choose your style!</string>
+    <string name="clear_text_end_icon_content_description">Clear text</string>
+    <string name="close_button">Close button</string>
+    <string name="close_drawer">Close navigation menu</string>
+    <string name="close_sheet">Close sheet</string>
+    <string name="color">Color</string>
+    <string name="com.google.firebase.crashlytics.mapping_file_id">a04ab38ab0344e82add4cf5f858035c3</string>
+    <string name="com.google.firebase.crashlytics.version_control_info">"repositories {
+  system: GIT
+  local_root_path: \"$PROJECT_DIR\"
+  revision: \"ac908b13668b3ae11c97a1ef381ec6c494946952\"
+}
+"</string>
+    <string name="common_google_play_services_enable_button">Enable</string>
+    <string name="common_google_play_services_enable_text">"%1$s won't work unless you enable Google Play services."</string>
+    <string name="common_google_play_services_enable_title">Enable Google Play services</string>
+    <string name="common_google_play_services_install_button">Install</string>
+    <string name="common_google_play_services_install_text">"%1$s won't run without Google Play services, which are missing from your device."</string>
+    <string name="common_google_play_services_install_title">Get Google Play services</string>
+    <string name="common_google_play_services_notification_channel_name">Google Play services availability</string>
+    <string name="common_google_play_services_notification_ticker">Google Play services error</string>
+    <string name="common_google_play_services_unknown_issue">%1$s is having trouble with Google Play services. Please try again.</string>
+    <string name="common_google_play_services_unsupported_text">"%1$s won't run without Google Play services, which are not supported by your device."</string>
+    <string name="common_google_play_services_update_button">Update</string>
+    <string name="common_google_play_services_update_text">"%1$s won't run unless you update Google Play services."</string>
+    <string name="common_google_play_services_update_title">Update Google Play services</string>
+    <string name="common_google_play_services_updating_text">"%1$s won't run without Google Play services, which are currently updating."</string>
+    <string name="common_google_play_services_wear_update_text">New version of Google Play services needed. It will update itself shortly.</string>
+    <string name="common_open_on_phone">Open on phone</string>
+    <string name="common_signin_button_text">Sign in</string>
+    <string name="common_signin_button_text_long">Sign in with Google</string>
+    <string name="completed_integration">Completed Integration</string>
+    <string name="components">Components</string>
+    <string name="connected_auto_applied_profile" formatted="false">%s connected. Auto-applied %s profile.</string>
+    <string name="contact_support_title">Customer Support</string>
+    <string name="contact_vip_support_title">VIP Customer Support</string>
+    <string name="copy">Copy</string>
+    <string name="copy_toast_msg">Link copied to clipboard</string>
+    <string name="dark">Dark</string>
+    <string name="dark_theme">Dark Theme</string>
+    <string name="dark_theme_enabled">Dark Theme Enabled</string>
+    <string name="debug_panel_ad_unit_format">Format</string>
+    <string name="debug_panel_ad_unit_id">ID</string>
+    <string name="default_error_message">Invalid input</string>
+    <string name="default_popup_window_title">Pop-Up Window</string>
+    <string name="delete">Delete</string>
+    <string name="delete_profile">Delete Profile</string>
+    <string name="detach_from_youtube_music">DETACH FROM YOUTUBE MUSIC</string>
+    <string name="device_restarted">Device Restarted</string>
+    <string name="disable">Disable</string>
+    <string name="disableOther">Disable other Equalizers before enabling this</string>
+    <string name="disable_battery_optimization">Disable Battery Optimization</string>
+    <string name="disable_battery_optimization_for_equalizer">Disable battery optimization for equalizer for better functioning</string>
+    <string name="div_slider_range_end">Range end</string>
+    <string name="div_slider_range_start">Range start</string>
+    <string name="do_you_want_to_enable_logging">Do you want to enable logging?</string>
+    <string name="donate">Upgrade to Equalizer Pro</string>
+    <string name="dropdown_menu">Dropdown menu</string>
+    <string name="edit">Edit</string>
+    <string name="edit_profile">Edit Profile</string>
+    <string name="enable">Enable</string>
+    <string name="enable_equalizer">Equalizer</string>
+    <string name="enable_the_equalizer_or_any_effect_before_opening_your_media_player">"Enable the Equalizer or any Effect before opening your media player.
+
+Equalizer attaches itself to the media player that is currently playing.
+Most media players let other apps to apply effects to their songs, some require additional configuration, but some do not allow other apps to apply effects to their songs.
+Depending on this, the equalizer may not attach itself to some media players and will attach itself to the Global Mix to support these players, eg. YouTube (this may not work on all the devices).
+
+If you are using Spotify or Youtube Music, make sure you restart them while keeping the equalizer or any effect enabled.
+
+Equalizer will also show the notification when it detects any media player, tap on the notification to attach the equalizer to that media player.
+
+Also, turn off all the battery optimizations for this app for a better experience.
+
+Now, play some music and enjoy the equalizer."</string>
+    <string name="enable_this_only_if_the_effects_are_not_working_as_intended">Not recommended. Enable this only if the effects are not working as intended. Enabling this will also disable 10-band EQ.</string>
+    <string name="enable_this_only_if_you_are_facing_issues">Enable this only if you are facing issues with the attachment of the effects</string>
+    <string name="enable_this_option_only_if_the_app_is_stopping_in_background_unexpectedly">Enable this option only if the app is stopping in background unexpectedly</string>
+    <string name="equalizer_is_enabled">Equalizer is enabled</string>
+    <string name="equalizer_pro_version">Equalizer Pro version</string>
+    <string name="equalizer_will_not_attach_to_global_mix_when_no_music_player">Equalizer will only attach to music players, and will never attach to global mix.</string>
+    <string name="equalizer_will_now_always_attach">Equalizer will now always attach to the Global Mix. This may not work on all devices.</string>
+    <string name="error_a11y_label">Error: invalid</string>
+    <string name="error_bind_service">Equalizer not operational</string>
+    <string name="error_icon_content_description">Error</string>
+    <string name="exo_download_completed">Download completed</string>
+    <string name="exo_download_description">Download</string>
+    <string name="exo_download_downloading">Downloading</string>
+    <string name="exo_download_failed">Download failed</string>
+    <string name="exo_download_notification_channel_name">Downloads</string>
+    <string name="exo_download_paused">Downloads paused</string>
+    <string name="exo_download_paused_for_network">Downloads waiting for network</string>
+    <string name="exo_download_paused_for_wifi">Downloads waiting for WiFi</string>
+    <string name="exo_download_removing">Removing downloads</string>
+    <string name="expand_button_title">Advanced</string>
+    <string name="exposed_dropdown_menu_content_description">Show dropdown menu</string>
+    <string name="fab_transformation_scrim_behavior">com.google.android.material.transformation.FabTransformationScrimBehavior</string>
+    <string name="fab_transformation_sheet_behavior">com.google.android.material.transformation.FabTransformationSheetBehavior</string>
+    <string name="fallback_background_mode">Fallback Background Mode</string>
+    <string name="fallback_menu_item_copy_link">Copy link</string>
+    <string name="fallback_menu_item_open_in_browser">Open in browser</string>
+    <string name="fallback_menu_item_share_link">Share link</string>
+    <string name="fcm_fallback_notification_channel_label">Miscellaneous</string>
+    <string name="features">Features</string>
+    <string name="file_saved_successfully">File saved successfully as %s</string>
+    <string name="finish">Finish</string>
+    <string name="follow_system">Follow System</string>
+    <string name="forever">Forever</string>
+    <string name="fork_on_github">Fork on GitHub</string>
+    <string name="frame_duration_in_ms">Frame Duration (in milliseconds)</string>
+    <string name="gcm_defaultSenderId">317693405329</string>
+    <string name="get_equalizer_pro">Get Equalizer Pro: No ads, exclusive features, premium experience. Upgrade now!</string>
+    <string name="get_equalizer_pro_2">Get Equalizer Pro: No ads, exclusive features, superior sound. Upgrade now!</string>
+    <string name="global_mix">Global Mix</string>
+    <string name="google_api_key">AIzaSyBwB6YwaHKI18TNuvs7UHFrpZ7Gtk5a6WQ</string>
+    <string name="google_app_id">1:317693405329:android:3245f78b7aa595cfc7b730</string>
+    <string name="google_crash_reporting_api_key">AIzaSyBwB6YwaHKI18TNuvs7UHFrpZ7Gtk5a6WQ</string>
+    <string name="google_storage_bucket">zipoapps-flat-equalizer.appspot.com</string>
+    <string name="happy_moment">DEFAULT</string>
+    <string name="happy_moment_capping_type">SESSION</string>
+    <string name="has_location_consent">Has Location Consent</string>
+    <string name="has_user_consent">Has User Consent</string>
+    <string name="help">Help</string>
+    <string name="hey_check_out_this_equalizer_profile">"Hey, check out this Equalizer profile that I'm using: %s"</string>
+    <string name="hide_bottom_view_on_scroll_behavior">com.google.android.material.behavior.HideBottomViewOnScrollBehavior</string>
+    <string name="hide_show_notifications">Hide/Show Notifications</string>
+    <string name="how_about_a_rating_on_the_play_store">How about a rating on the Play Store, then?</string>
+    <string name="icon_content_description">Dialog Icon</string>
+    <string name="in_progress">In progress</string>
+    <string name="increase_this_if_you_are_facing_audio_clipping">"Current value is %sms.
+Increasing this will improve audio quality and reduce audio clipping, but it will also increase latency."</string>
+    <string name="increasing_the_frame_duration_will_reduce_audio_clipping_but_it_will_also_increase_latency_keep_the_frame_duration_as_low_as_possible_ndefault_value_is_10ms_nallowed_range_10_value_10_000">"Increasing the frame duration will improve audio quality and reduce audio clipping, but it will also increase latency.
+Enter a value between 10ms &amp; 1000ms.
+Default value is 10ms."</string>
+    <string name="indeterminate">Partially checked</string>
+    <string name="integrated">Integrated</string>
+    <string name="integration_errors">Integration Errors</string>
+    <string name="interstitial_capping_type">SESSION</string>
+    <string name="invalid_integration">Invalid Integration</string>
+    <string name="invalid_mediation_adapter_version">Invalid mediation adapter version</string>
+    <string name="invalid_purchase_try_again">Invalid purchase, please try again later</string>
+    <string name="item_view_role_description">Tab</string>
+    <string name="join_our_telegram_community">Join our Telegram Community</string>
+    <string name="join_our_telegram_community_to_receive_the_latest_updates_make_feature_requests_participate_in_beta_testing_of_experimental_features_and_more">Join our Telegram community to receive the latest updates, make feature requests, participate in beta testing of experimental features, and more.</string>
+    <string name="keep_equalizer_running_smoothly">Keep Equalizer running smoothly</string>
+    <string name="left_right_channel_balance_disabled">Left / Right channel balance feature is disabled</string>
+    <string name="left_right_channel_balance_enabled">Left / Right channel balance feature is enabled. This may not work on all devices.</string>
+    <string name="let_s_get_a_few_things_sorted_out">"Let's get a few things sorted out!"</string>
+    <string name="lifetime">Lifetime</string>
+    <string name="light">Light</string>
+    <string name="light_theme_enabled">Light Theme Enabled</string>
+    <string name="load_other_profile">Load Other Profile</string>
+    <string name="load_profile">Load Profile</string>
+    <string name="lock_the_screen_anytime_and_save_battery_on_amoled_screen_while_playing_videos">Lock the screen anytime and save battery on AMOLED screen while playing videos</string>
+    <string name="logging_is_disabled">Logging is disabled</string>
+    <string name="logging_is_enabled">Logging is enabled</string>
+    <string name="loudness">Loudness</string>
+    <string name="loudness_max_gain">Loudness Max Gain</string>
+    <string name="loudness_max_gain_equalizer_pro">Loudness Max Gain (Equalizer Pro)</string>
+    <string name="m3_exceed_max_badge_text_suffix">%1$s%2$s</string>
+    <string name="m3_ref_typeface_brand_regular">sans-serif</string>
+    <string name="m3_ref_typeface_plain_medium">sans-serif-medium</string>
+    <string name="m3_ref_typeface_plain_regular">sans-serif</string>
+    <string name="m3_sys_motion_easing_emphasized">path(M 0,0 C 0.05, 0, 0.133333, 0.06, 0.166666, 0.4 C 0.208333, 0.82, 0.25, 1, 1, 1)</string>
+    <string name="m3_sys_motion_easing_emphasized_path_data">M 0,0 C 0.05, 0, 0.133333, 0.06, 0.166666, 0.4 C 0.208333, 0.82, 0.25, 1, 1, 1</string>
+    <string name="m3_sys_motion_easing_legacy_accelerate">cubic-bezier(0.4, 0, 1, 1)</string>
+    <string name="m3_sys_motion_easing_legacy_decelerate">cubic-bezier(0, 0, 0.2, 1)</string>
+    <string name="m3_sys_motion_easing_linear">cubic-bezier(0, 0, 1, 1)</string>
+    <string name="m3_sys_motion_easing_standard">cubic-bezier(0.2, 0, 0, 1)</string>
+    <string name="main_sku">s1_v1t0_10000_trial_7d_yearly</string>
+    <string name="material_clock_display_divider">:</string>
+    <string name="material_clock_toggle_content_description">Select AM or PM</string>
+    <string name="material_hour_24h_suffix">%1$s hours</string>
+    <string name="material_hour_selection">Select hour</string>
+    <string name="material_hour_suffix">"%1$s o'clock"</string>
+    <string name="material_minute_selection">Select minutes</string>
+    <string name="material_minute_suffix">%1$s minutes</string>
+    <string name="material_motion_easing_accelerated">cubic-bezier(0.4, 0.0, 1.0, 1.0)</string>
+    <string name="material_motion_easing_decelerated">cubic-bezier(0.0, 0.0, 0.2, 1.0)</string>
+    <string name="material_motion_easing_emphasized">path(M 0,0 C 0.05, 0, 0.133333, 0.06, 0.166666, 0.4 C 0.208333, 0.82, 0.25, 1, 1, 1)</string>
+    <string name="material_motion_easing_linear">cubic-bezier(0.0, 0.0, 1.0, 1.0)</string>
+    <string name="material_motion_easing_standard">cubic-bezier(0.4, 0.0, 0.2, 1.0)</string>
+    <string name="material_slider_range_end">Range end</string>
+    <string name="material_slider_range_start">Range start</string>
+    <string name="material_slider_value">Value</string>
+    <string name="material_timepicker_am">AM</string>
+    <string name="material_timepicker_clock_mode_description">Switch to clock mode for the time input.</string>
+    <string name="material_timepicker_hour">Hour</string>
+    <string name="material_timepicker_minute">Minute</string>
+    <string name="material_timepicker_pm">PM</string>
+    <string name="material_timepicker_select_time">Select time</string>
+    <string name="material_timepicker_text_input_mode_description">Switch to text input mode for the time input.</string>
+    <string name="mc2_snackbar_pane_title">Alert</string>
+    <string name="message_override_set_start_session">IMPORTANT: Please set `onetime_start_session` value to 0 using Testykal</string>
+    <string name="mind_giving_us_some_feedback">Mind giving us some feedback?</string>
+    <string name="missing_integration">Missing Integration</string>
+    <string name="monetization_ads_internal_after_timer_value">сек</string>
+    <string name="monetization_ads_internal_before_timer_value">До начисления награды осталось</string>
+    <string name="monetization_ads_internal_go">Перейти</string>
+    <string name="monetization_ads_internal_install">Установить</string>
+    <string name="monetization_ads_internal_install_from_google_play">Установить из Google Play</string>
+    <string name="monetization_ads_internal_instream_ad_position">%1$d из %2$d</string>
+    <string name="monetization_ads_internal_instream_call_to_action">Перейти ➔</string>
+    <string name="monetization_ads_internal_instream_feedback">Ещё</string>
+    <string name="monetization_ads_internal_instream_muted">Включить звук</string>
+    <string name="monetization_ads_internal_instream_skip">Пропустить</string>
+    <string name="monetization_ads_internal_instream_sponsored_default">РЕКЛАМА</string>
+    <string name="monetization_ads_internal_instream_sponsored_social">СОЦИАЛЬНАЯ РЕКЛАМА</string>
+    <string name="monetization_ads_internal_instream_unmuted">Выключить звук</string>
+    <string name="monetization_ads_internal_mediation_sponsored_text">Реклама</string>
+    <string name="monetization_ads_internal_rewarded_close_verification_button_close">Закрыть</string>
+    <string name="monetization_ads_internal_rewarded_close_verification_button_dismiss">Досмотреть</string>
+    <string name="monetization_ads_internal_rewarded_close_verification_text">Если закрыть рекламу до окончания таймера, награда за просмотр не будет начислена</string>
+    <string name="monetization_ads_internal_rewarded_close_verification_title">Закрыть рекламу?</string>
+    <string name="monetization_ads_internal_scan_qrcode">Отсканируйте код</string>
+    <string name="monetization_ads_internal_text_divider">·</string>
+    <string name="monetization_ads_internal_text_divider_with_space">·</string>
+    <string name="monetization_ads_internal_tools_age_text">3+</string>
+    <string name="monetization_ads_internal_tools_app_install_call_to_action_text">Установить</string>
+    <string name="monetization_ads_internal_tools_app_install_call_to_action_text_large">Установить из Google Play</string>
+    <string name="monetization_ads_internal_tools_body_text">Огромный выбор авто. Удобный поиск. Авто новые и с пробегом. Ежедневные обновления. Огромный выбор авто. Огромный выбор авто. Удобный поиск. Авто новые и с пробегом. Ежедневные обновления. Огромный выбор авто</string>
+    <string name="monetization_ads_internal_tools_call_to_action_text">Перейти на сайт</string>
+    <string name="monetization_ads_internal_tools_domain_text">domain</string>
+    <string name="monetization_ads_internal_tools_price_text">price</string>
+    <string name="monetization_ads_internal_tools_rating_text">rating</string>
+    <string name="monetization_ads_internal_tools_review_count_text">review count</string>
+    <string name="monetization_ads_internal_tools_sponsored_text">sponsored</string>
+    <string name="monetization_ads_internal_tools_title_text">Покупка и продажа элитных и дешёвых машин на Авто.ру</string>
+    <string name="monetization_ads_internal_tools_warning_text">Есть противопоказания. Обратитесь к специалисту Есть противопоказания. Обратитесь к специалисту</string>
+    <string name="monetization_ads_mediation_api_sponsored_text">Ad</string>
+    <string name="monthly">Monthly</string>
+    <string name="mr_controller_collapse_group">Collapse</string>
+    <string name="mr_controller_expand_group">Expand</string>
+    <string name="mr_dialog_default_group_name">Group</string>
+    <string name="mr_route_name_bluetooth">Bluetooth</string>
+    <string name="mr_route_name_speaker">Speaker</string>
+    <string name="mr_route_name_tv">TV</string>
+    <string name="mr_route_name_unknown">Unknown</string>
+    <string name="mr_user_route_category_name">Devices</string>
+    <string name="mtrl_badge_numberless_content_description">New notification</string>
+    <string name="mtrl_checkbox_button_icon_path_checked">M14,18.2 11.4,15.6 10,17 14,21 22,13 20.6,11.6z</string>
+    <string name="mtrl_checkbox_button_icon_path_group_name">icon</string>
+    <string name="mtrl_checkbox_button_icon_path_indeterminate">M13.4,15 11,15 11,17 13.4,17 21,17 21,15z</string>
+    <string name="mtrl_checkbox_button_icon_path_name">icon path</string>
+    <string name="mtrl_checkbox_button_path_checked">M23,7H9C7.9,7,7,7.9,7,9v14c0,1.1,0.9,2,2,2h14c1.1,0,2-0.9,2-2V9C25,7.9,24.1,7,23,7z</string>
+    <string name="mtrl_checkbox_button_path_group_name">button</string>
+    <string name="mtrl_checkbox_button_path_name">button path</string>
+    <string name="mtrl_checkbox_button_path_unchecked">M23,7H9C7.9,7,7,7.9,7,9v14c0,1.1,0.9,2,2,2h14c1.1,0,2-0.9,2-2V9C25,7.9,24.1,7,23,7z M23,23H9V9h14V23z</string>
+    <string name="mtrl_checkbox_state_description_checked">Checked</string>
+    <string name="mtrl_checkbox_state_description_indeterminate">Partially checked</string>
+    <string name="mtrl_checkbox_state_description_unchecked">Not checked</string>
+    <string name="mtrl_chip_close_icon_content_description">Remove %1$s</string>
+    <string name="mtrl_exceed_max_badge_number_content_description">More than %1$d new notifications</string>
+    <string name="mtrl_exceed_max_badge_number_suffix">%1$d%2$s</string>
+    <string name="mtrl_picker_a11y_next_month">Change to next month</string>
+    <string name="mtrl_picker_a11y_prev_month">Change to previous month</string>
+    <string name="mtrl_picker_announce_current_range_selection">Start date selection: %1$s – End date selection: %2$s</string>
+    <string name="mtrl_picker_announce_current_selection">Current selection: %1$s</string>
+    <string name="mtrl_picker_announce_current_selection_none">none</string>
+    <string name="mtrl_picker_cancel">Cancel</string>
+    <string name="mtrl_picker_confirm">OK</string>
+    <string name="mtrl_picker_date_header_selected">%1$s</string>
+    <string name="mtrl_picker_date_header_title">Select Date</string>
+    <string name="mtrl_picker_date_header_unselected">Selected date</string>
+    <string name="mtrl_picker_day_of_week_column_header">%1$s</string>
+    <string name="mtrl_picker_end_date_description">End date %1$s</string>
+    <string name="mtrl_picker_invalid_format">Invalid format.</string>
+    <string name="mtrl_picker_invalid_format_example">Example: %1$s</string>
+    <string name="mtrl_picker_invalid_format_use">Use: %1$s</string>
+    <string name="mtrl_picker_invalid_range">Invalid range.</string>
+    <string name="mtrl_picker_navigate_to_current_year_description">Navigate to current year %1$d</string>
+    <string name="mtrl_picker_navigate_to_year_description">Navigate to year %1$d</string>
+    <string name="mtrl_picker_out_of_range">Out of range: %1$s</string>
+    <string name="mtrl_picker_range_header_only_end_selected">Start date – %1$s</string>
+    <string name="mtrl_picker_range_header_only_start_selected">%1$s – End date</string>
+    <string name="mtrl_picker_range_header_selected">%1$s – %2$s</string>
+    <string name="mtrl_picker_range_header_title">Select Range</string>
+    <string name="mtrl_picker_range_header_unselected">Start date – End date</string>
+    <string name="mtrl_picker_save">Save</string>
+    <string name="mtrl_picker_start_date_description">Start date %1$s</string>
+    <string name="mtrl_picker_text_input_date_hint">Date</string>
+    <string name="mtrl_picker_text_input_date_range_end_hint">End date</string>
+    <string name="mtrl_picker_text_input_date_range_start_hint">Start date</string>
+    <string name="mtrl_picker_text_input_day_abbr">d</string>
+    <string name="mtrl_picker_text_input_month_abbr">m</string>
+    <string name="mtrl_picker_text_input_year_abbr">y</string>
+    <string name="mtrl_picker_today_description">Today %1$s</string>
+    <string name="mtrl_picker_toggle_to_calendar_input_mode">Switch to calendar input mode</string>
+    <string name="mtrl_picker_toggle_to_day_selection">Tap to switch to Calendar view</string>
+    <string name="mtrl_picker_toggle_to_text_input_mode">Switch to text input mode</string>
+    <string name="mtrl_picker_toggle_to_year_selection">Tap to switch to year view</string>
+    <string name="mtrl_switch_thumb_group_name">circle_group</string>
+    <string name="mtrl_switch_thumb_path_checked">M4,16 A12,12 0 0,1 16,4 H16 A12,12 0 0,1 16,28 H16 A12,12 0 0,1 4,16</string>
+    <string name="mtrl_switch_thumb_path_morphing">M0,16 A11,11 0 0,1 11,5 H21 A11,11 0 0,1 21,27 H11 A11,11 0 0,1 0,16</string>
+    <string name="mtrl_switch_thumb_path_name">circle</string>
+    <string name="mtrl_switch_thumb_path_pressed">M2,16 A14,14 0 0,1 16,2 H16 A14,14 0 0,1 16,30 H16 A14,14 0 0,1 2,16</string>
+    <string name="mtrl_switch_thumb_path_unchecked">M8,16 A8,8 0 0,1 16,8 H16 A8,8 0 0,1 16,24 H16 A8,8 0 0,1 8,16</string>
+    <string name="mtrl_switch_track_decoration_path">M1,16 A15,15 0 0,1 16,1 H36 A15,15 0 0,1 36,31 H16 A15,15 0 0,1 1,16</string>
+    <string name="mtrl_switch_track_path">M0,16 A16,16 0 0,1 16,0 H36 A16,16 0 0,1 36,32 H16 A16,16 0 0,1 0,16</string>
+    <string name="mtrl_timepicker_cancel">Cancel</string>
+    <string name="mtrl_timepicker_confirm">OK</string>
+    <string name="native_ads_ad">Ad</string>
+    <string name="native_body">Body</string>
+    <string name="native_headline">Headline</string>
+    <string name="native_media_view">Media View</string>
+    <string name="navigation_menu">Navigation menu</string>
+    <string name="new_profile">New Profile</string>
+    <string name="next">Next</string>
+    <string name="no">No</string>
+    <string name="no_file_manager_found">No File Manager found, please install a File Manager from Play Store</string>
+    <string name="no_music_player_detected">No Music Player Detected</string>
+    <string name="no_saved_bluetooth_devices_connect_to_a_bluetooth_device_while_equalizer_is_on_to_add_it">No saved Bluetooth devices. Connect to a Bluetooth device while Equalizer is on to add it.</string>
+    <string name="no_thanks">No, thanks</string>
+    <string name="no_value_set">No value set</string>
+    <string name="not_integrated">Not Integrated</string>
+    <string name="not_really">Not really</string>
+    <string name="not_selected">Not selected</string>
+    <string name="not_set">Not set</string>
+    <string name="notifications_permission_confirm">Allow</string>
+    <string name="notifications_permission_decline">"Don't allow"</string>
+    <string name="notifications_permission_title">Allow app to send you notifications?</string>
+    <string name="off_time_left" formatted="false">%s OFF! %s Left!</string>
+    <string name="offline_dialog_image_description">Icon</string>
+    <string name="offline_dialog_text">"Thanks for your interest.
+We will share more once you're back online."</string>
+    <string name="offline_notification_title">"You are back online! Let's pick up where we left off"</string>
+    <string name="offline_notification_title_with_advertiser">You are back online! Continue learning about %s</string>
+    <string name="offline_opt_in_confirm">OK</string>
+    <string name="offline_opt_in_decline">No thanks</string>
+    <string name="offline_opt_in_message">"We'll send you a notification with a link to the advertiser site."</string>
+    <string name="offline_opt_in_title">"Open ad when you're back online."</string>
+    <string name="ok">OK</string>
+    <string name="ok_sure">OK, sure!</string>
+    <string name="okay">Okay</string>
+    <string name="onetime_offer_sku" />
+    <string name="onetime_offer_strikethrough_sku" />
+    <string name="only_attach_to_music_players">Only Attach to Music Players</string>
+    <string name="open_apps_notification_settings">"Open app's notification settings"</string>
+    <string name="or">or</string>
+    <string name="or_0_83_month">or $0.83/month</string>
+    <string name="or_value_per_month">or %s/month</string>
+    <string name="password_toggle_content_description">Show password</string>
+    <string name="path_password_eye">M12,4.5C7,4.5 2.73,7.61 1,12c1.73,4.39 6,7.5 11,7.5s9.27,-3.11 11,-7.5c-1.73,-4.39 -6,-7.5 -11,-7.5zM12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5zM12,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3 -1.34,-3 -3,-3z</string>
+    <string name="path_password_eye_mask_strike_through">M2,4.27 L19.73,22 L22.27,19.46 L4.54,1.73 L4.54,1 L23,1 L23,23 L1,23 L1,4.27 Z</string>
+    <string name="path_password_eye_mask_visible">M2,4.27 L2,4.27 L4.54,1.73 L4.54,1.73 L4.54,1 L23,1 L23,23 L1,23 L1,4.27 Z</string>
+    <string name="path_password_strike_through">M3.27,4.27 L19.74,20.74</string>
+    <string name="paywall" />
+    <string name="permission_reqd">Permission required</string>
+    <string name="personalized_ads">Personalized Ads</string>
+    <string name="ph_admob_app_id">ca-app-pub-4563216819962244~4234863050</string>
+    <string name="ph_continue">Continue</string>
+    <string name="ph_customer_support">Customer Support</string>
+    <string name="ph_customer_support_summary">"Tell us what changes you'd like to see, or bugs you've discovered."</string>
+    <string name="ph_delete_account">Delete Account</string>
+    <string name="ph_delete_account_summary">Make a request to delete your account.</string>
+    <string name="ph_feature_1">Simple Equalizer</string>
+    <string name="ph_feature_1_description">Easy sound adjustment tool</string>
+    <string name="ph_feature_2">Different Themes</string>
+    <string name="ph_feature_2_description">Variety of themes available</string>
+    <string name="ph_feature_3">Loudness Max Gain</string>
+    <string name="ph_feature_3_description">Maximize your volume output</string>
+    <string name="ph_feature_4">Bass Booster Customization</string>
+    <string name="ph_feature_4_description">Boost bass to preference</string>
+    <string name="ph_feature_5">Remove Ads</string>
+    <string name="ph_feature_5_description">Enjoy an ad-free experience</string>
+    <string name="ph_get_special_price">Get special price</string>
+    <string name="ph_limited_time_offer">Limited time offer</string>
+    <string name="ph_manage_subscriptions">Manage subscription</string>
+    <string name="ph_manage_subscriptions_summary">View your plan details and billing status in the Google Play Store.</string>
+    <string name="ph_offer_basic">Basic</string>
+    <string name="ph_offer_premium">Premium</string>
+    <string name="ph_one_time_offer_name">Lifetime premium</string>
+    <string name="ph_open_settings">Open Settings</string>
+    <string name="ph_open_settings_summary">"Quick access to app's preferences"</string>
+    <string name="ph_personalized_ads">Personalized Ads</string>
+    <string name="ph_personalized_ads_summary">Tap to customize your ad experience and enjoy tailored content based on your interests.</string>
+    <string name="ph_privacy_policy">Privacy Policy</string>
+    <string name="ph_privacy_policy_summary">Read the Privacy Policy.</string>
+    <string name="ph_rate_us">Rate Us</string>
+    <string name="ph_rate_us_summary">Do you like this app? Please support it with 5 stars.</string>
+    <string name="ph_remove_ads">Remove Ads</string>
+    <string name="ph_remove_ads_summary">Remove all ads within the app.</string>
+    <string name="ph_settings">Settings</string>
+    <string name="ph_share_app">Share</string>
+    <string name="ph_share_app_summary">Do you want to share this app with your friends?</string>
+    <string name="ph_singular_api_key">rounds_ai_ltd_28551ef8</string>
+    <string name="ph_singular_secret_key">57b60cf9582da95223843a13abae64b7</string>
+    <string name="ph_start_30_day_trial_cta">START FREE 30-DAY TRIAL</string>
+    <string name="ph_start_3_day_trial_cta">START FREE 3-DAY TRIAL</string>
+    <string name="ph_start_7_day_trial_cta">START FREE 7-DAY TRIAL</string>
+    <string name="ph_start_free_trial">Start free trial</string>
+    <string name="ph_start_like_pro">Start Like a Pro</string>
+    <string name="ph_start_premium_cta">START PREMIUM</string>
+    <string name="ph_start_trial_cta">START FREE TRIAL</string>
+    <string name="ph_terms">Terms Of Service</string>
+    <string name="ph_terms_summary">Read the Terms and Conditions.</string>
+    <string name="ph_try_for_free">Try For Free</string>
+    <string name="ph_try_for_zero">Try For %s</string>
+    <string name="ph_try_limited">or try limited version</string>
+    <string name="ph_unlock_all_features">Unlock All Features</string>
+    <string name="ph_version">Version:</string>
+    <string name="ph_vip_customer_support">VIP Customer Support</string>
+    <string name="playpass_sku" />
+    <string name="please_enter_profile">Please Enter the Name of the Profile</string>
+    <string name="please_save_profile">Please save a Profile first</string>
+    <string name="please_wait">Please wait…</string>
+    <string name="preference_copied">\"%1$s\" copied to clipboard.</string>
+    <string name="premium_packages" />
+    <string name="premium_subscription_info">Subscription is billed after the trial ends and will auto-renew. Cancel subscription anytime before trial ends to avoid charges.</string>
+    <string name="premium_terms_and_conditions">By continuing you agree to our &lt;a href=%1$s>Terms&lt;/a> and &lt;a href=%2$s>Privacy&lt;/a> policies.</string>
+    <string name="presets">Presets</string>
+    <string name="privacy_policy">Privacy Policy</string>
+    <string name="privacy_url">https://beatblendlabs.com/flatequalizer/privacy</string>
+    <string name="profile_deleted_successfully">Profile Deleted Successfully</string>
+    <string name="profile_name">Profile Name</string>
+    <string name="profile_name_modified">%s (modified)</string>
+    <string name="profile_saved_applied_successfully">Profile Saved &amp; Applied Successfully</string>
+    <string name="profile_saved_successfully">Profile Saved Successfully</string>
+    <string name="profile_selected">%s profile selected</string>
+    <string name="project_id">zipoapps-flat-equalizer</string>
+    <string name="provided">Provided</string>
+    <string name="purchase">Purchase</string>
+    <string name="purchase_expired_please_purchase_again">Purchase expired, please purchase again</string>
+    <string name="purchase_thanks">Thank you for Purchasing. You are now upgraded to Equalizer Pro.</string>
+    <string name="purchased_successfully">Purchased successfully!</string>
+    <string name="purchasing_please_wait">Purchasing, please wait…</string>
+    <string name="range_end">Range end</string>
+    <string name="range_start">Range start</string>
+    <string name="rate">Rate</string>
+    <string name="rate_dialog_subtitle">Let us know by leaving a 5 star rating</string>
+    <string name="rate_dialog_thanks">Thanks!</string>
+    <string name="rate_dialog_title">"How do you like
+our app?"</string>
+    <string name="rate_us_description">"We are working hard for a better user experience.
+We'd greatly appreciate if you can rate us"</string>
+    <string name="rate_us_hint">The best we can get</string>
+    <string name="rate_us_mode">VALIDATE_INTENT</string>
+    <string name="rate_us_title">"Do you like 
+ %s ?"</string>
+    <string name="rationale_permission">To provide info when Equalizer is enable and to which app is attached</string>
+    <string name="rationale_permission_detailed">We need Push Notification permission to be able to provide info when Equalizer is enable and to which app is attached. You can adjust this setting anytime in your device`s setting</string>
+    <string name="read_and_write_permission">Read and write permissions are required to load and save the backup file</string>
+    <string name="remove_ads">Remove Ads</string>
+    <string name="report_bugs">Report Bugs</string>
+    <string name="report_bugs_or_give_us_some_feedback">Report bugs or give us some feedback</string>
+    <string name="reset">Reset</string>
+    <string name="restart">Restart</string>
+    <string name="restore">Restore</string>
+    <string name="restore_an_old_backup_that_you_have_created_earlier_this_will_overwrite_all_the_current_profiles_and_unsaved_changes">Restore an old backup that you have created earlier. This will overwrite all the current profiles and unsaved changes.</string>
+    <string name="restore_may_not_work_properly">Restore may not work properly due to different backup version</string>
+    <string name="restored_from_backup">Restored from backup successfully</string>
+    <string name="reverb">Reverb</string>
+    <string name="reverb_effects">Reverb Effects</string>
+    <string name="reverb_effects_are_disabled">Reverb effects are disabled</string>
+    <string name="reverb_effects_are_enabled">Reverb effects are enabled. This may not work on all devices.</string>
+    <string name="s1">Save image</string>
+    <string name="s2">Allow Ad to store image in Picture gallery?</string>
+    <string name="s3">Accept</string>
+    <string name="s4">Decline</string>
+    <string name="s5">Create calendar event</string>
+    <string name="s6">Allow Ad to create a calendar event?</string>
+    <string name="s7">Test Ad</string>
+    <string name="safe_headphones">Safe Headphones</string>
+    <string name="sale_time_left">Sale! %s Left!</string>
+    <string name="sample_terms_and_conditions">By continuing you agree to our <a href="https://zipoapps.com">Terms</a> and <a href="https://zipoapps.com">Privacy</a> policies</string>
+    <string name="save">SAVE</string>
+    <string name="save_and_apply">Save &amp; Apply</string>
+    <string name="save_as_new_profile">Save As New Profile</string>
+    <string name="save_as_profile">Save As Profile</string>
+    <string name="save_profile_override">Save Profile (Override)</string>
+    <string name="saved_bluetooth_devices">Saved Bluetooth Devices</string>
+    <string name="sdk_integration">SDK Integration</string>
+    <string name="sdk_integration_status">SDK Integration Status</string>
+    <string name="sdk_undefined">SDK Undefined</string>
+    <string name="search_menu_title">Search</string>
+    <string name="searchbar_scrolling_view_behavior">com.google.android.material.search.SearchBar$ScrollingViewBehavior</string>
+    <string name="searchview_clear_text_content_description">Clear text</string>
+    <string name="searchview_navigation_content_description">Back</string>
+    <string name="selected">Selected</string>
+    <string name="send">Send</string>
+    <string name="send_us_a_feedback">Send us a feedback</string>
+    <string name="set_value">Set Value</string>
+    <string name="settings">Settings</string>
+    <string name="share">Share</string>
+    <string name="share_profile">Share Profile</string>
+    <string name="shared_profile">Shared Profile</string>
+    <string name="side_sheet_accessibility_pane_title">Side Sheet</string>
+    <string name="side_sheet_behavior">com.google.android.material.sidesheet.SideSheetBehavior</string>
+    <string name="sku_price_default">{0} after FREE trial</string>
+    <string name="sku_price_monthly_30d_trial">{0}/month after FREE 30-day trial</string>
+    <string name="sku_price_monthly_3d_trial">{0}/month after FREE 3-day trial</string>
+    <string name="sku_price_monthly_7d_trial">{0}/month after FREE 7-day trial</string>
+    <string name="sku_price_monthly_no_trial">{0}/month</string>
+    <string name="sku_price_onetime">{0} one-time payment</string>
+    <string name="sku_price_weekly_30d_trial">{0}/week after FREE 30-day trial</string>
+    <string name="sku_price_weekly_3d_trial">{0}/week after FREE 3-day trial</string>
+    <string name="sku_price_weekly_7d_trial">{0}/week after FREE 7-day trial</string>
+    <string name="sku_price_weekly_no_trial">{0}/week</string>
+    <string name="sku_price_yearly_30d_trial">{0}/year after FREE 30-day trial</string>
+    <string name="sku_price_yearly_3d_trial">{0}/year after FREE 3-day trial</string>
+    <string name="sku_price_yearly_7d_trial">{0}/year after FREE 7-day trial</string>
+    <string name="sku_price_yearly_no_trial">{0}/year</string>
+    <string name="small_room">Small Room</string>
+    <string name="something_went_wrong">Something went wrong, please try again later</string>
+    <string name="speaker">Speaker</string>
+    <string name="start_like_pro_text_trial" />
+    <string name="state_empty">Empty</string>
+    <string name="state_off">Off</string>
+    <string name="state_on">On</string>
+    <string name="status_bar_notification_info_overflow">999+</string>
+    <string name="stop">Stop</string>
+    <string name="style">Style</string>
+    <string name="subscribed_successfully">Subscribed successfully!</string>
+    <string name="summary_collapsed_preference_list">%1$s, %2$s</string>
+    <string name="support_email">support.flatequalizer@beatblendlabs.com</string>
+    <string name="support_hint">Describe the issue (at least 20 characters)</string>
+    <string name="support_info_text_long">Cancel your subscription anytime in the Play Store; purchases are restored automatically. Use your subscription on multiple devices with the same Google account.</string>
+    <string name="support_summary">Upgrading to Equalizer Pro will remove all the ads.</string>
+    <string name="support_vip_email">support.flatequalizer.vip@beatblendlabs.com</string>
+    <string name="switch_role">Switch</string>
+    <string name="system">System</string>
+    <string name="system_auto">System Auto</string>
+    <string name="tab">Tab</string>
+    <string name="tap_to_equalize">Tap to equalize %s</string>
+    <string name="tap_to_reinitialize_equalizer">Tap to reinitialize Equalizer</string>
+    <string name="tcf_consent">TCF Consent</string>
+    <string name="template_percent">%1$d percent.</string>
+    <string name="terms_url">https://beatblendlabs.com/flatequalizer/terms</string>
+    <string name="the_link_is_invalid_or_has_expired">The link is invalid or has expired</string>
+    <string name="theme">Theme</string>
+    <string name="this_will_backup_all_of_your_saved_profiles_as_well_as_your_unsaved_changes_the_backup_will_be_saved_to_your_downloads_folder">This will backup all of your saved profiles as well as your unsaved changes. The backup will be saved to your Downloads folder.</string>
+    <string name="title_activity_settings">Settings</string>
+    <string name="to_add_a_new_bluetooth_device">To add a new bluetooth device to the list, just connect to it while Equalizer is active.</string>
+    <string name="tooltip_description">tooltip</string>
+    <string name="tooltip_label">show tooltip</string>
+    <string name="turn_on_permission">Turn On Push Notifications</string>
+    <string name="undo_changes">Undo Changes</string>
+    <string name="unsaved">Unsaved</string>
+    <string name="update_the_app_from_play_store">"Oops! This feature isn't ready for your device yet. Stay tuned for the update! 🎉"</string>
+    <string name="upgrade">Upgrade</string>
+    <string name="upgrade_to_equalizer_pro_and_enjoy_ad_free_experience_premium_features_and_priority_support">Upgrade to Equalizer Pro for an even better audio experience with no ads and exclusive features.</string>
+    <string name="upgraded_to_equalizer_pro">Upgraded to Equalizer Pro</string>
+    <string name="use_10_band_equalizer">Use 10-Band Equalizer</string>
+    <string name="use_legacy_effects">Use Legacy Effects</string>
+    <string name="user_privacy">User Privacy</string>
+    <string name="using_10_band_equalizer">Using 10-band equalizer</string>
+    <string name="using_5_band_equalizer">Using 5-band equalizer</string>
+    <string name="using_deprecated_effects_disable_this_to_enable_10_band_eq">Using Deprecated Effects. Disable this to enable 10-Band EQ.</string>
+    <string name="v7_preference_off">OFF</string>
+    <string name="v7_preference_on">ON</string>
+    <string name="value_off">%s OFF</string>
+    <string name="value_one_time">%s one-time</string>
+    <string name="value_per_month">%s/month</string>
+    <string name="version">Version</string>
+    <string name="view_saved_bluetooth_devices">View saved Bluetooth devices</string>
+    <string name="virtualizer">Virtualizer</string>
+    <string name="visit_our_developer_page_and_checkout_our_other_apps">Visit our developer page and checkout our other apps</string>
+    <string name="volume">Volume</string>
+    <string name="volume_slider">Volume Slider</string>
+    <string name="volume_slider_is_hidden">Volume slider is hidden</string>
+    <string name="volume_slider_is_shown">Volume slider is shown</string>
+    <string name="warning">Use Loudness Enhancer with Caution</string>
+    <string name="watermark_label_prefix">"AdMob - "</string>
+    <string name="welcome_back_we_ve_restored">"Welcome back! We've restored your purchases"</string>
+    <string name="welcome_to_flat_equalizer">Welcome to Flat Equalizer</string>
+    <string name="yandex_mobileads_age_restricted_user">com.yandex.mobile.ads.AGE_RESTRICTED_USER</string>
+    <string name="yandex_mobileads_appmetrica_easy_integration_enabled">com.yandex.mobile.ads.APPMETRICA_EASY_INTEGRATION_ENABLED</string>
+    <string name="yandex_mobileads_automatic_sdk_initialization">com.yandex.mobile.ads.AUTOMATIC_SDK_INITIALIZATION</string>
+    <string name="yandex_mobileads_enable_logging">com.yandex.mobile.ads.ENABLE_LOGGING</string>
+    <string name="yearly">Yearly</string>
+    <string name="yes">Yes!</string>
+    <string name="yes_dull">Yes</string>
+    <string name="you_can_change_this_anytime_in_the_settings">You can change this anytime in the settings</string>
+    <item type="string" name="APKTOOL_DUMMY_0" />
+    <item type="string" name="APKTOOL_DUMMY_1" />
+    <item type="string" name="APKTOOL_DUMMY_2" />
+    <item type="string" name="APKTOOL_DUMMY_b3" />
+    <item type="string" name="APKTOOL_DUMMY_d1" />
+    <item type="string" name="APKTOOL_DUMMY_e6" />
+    <item type="string" name="APKTOOL_DUMMY_f6" />
+    <item type="string" name="APKTOOL_DUMMY_fa" />
+    <item type="string" name="APKTOOL_DUMMY_107" />
+    <item type="string" name="APKTOOL_DUMMY_10c" />
+    <item type="string" name="APKTOOL_DUMMY_10d" />
+    <item type="string" name="APKTOOL_DUMMY_10f" />
+    <item type="string" name="APKTOOL_DUMMY_114" />
+    <item type="string" name="APKTOOL_DUMMY_115" />
+    <item type="string" name="APKTOOL_DUMMY_116" />
+    <item type="string" name="APKTOOL_DUMMY_117" />
+    <item type="string" name="APKTOOL_DUMMY_118" />
+    <item type="string" name="APKTOOL_DUMMY_119" />
+    <item type="string" name="APKTOOL_DUMMY_11a" />
+    <item type="string" name="APKTOOL_DUMMY_11b" />
+    <item type="string" name="APKTOOL_DUMMY_11c" />
+    <item type="string" name="APKTOOL_DUMMY_11d" />
+    <item type="string" name="APKTOOL_DUMMY_11e" />
+    <item type="string" name="APKTOOL_DUMMY_11f" />
+    <item type="string" name="APKTOOL_DUMMY_120" />
+    <item type="string" name="APKTOOL_DUMMY_121" />
+    <item type="string" name="APKTOOL_DUMMY_122" />
+    <item type="string" name="APKTOOL_DUMMY_123" />
+    <item type="string" name="APKTOOL_DUMMY_124" />
+    <item type="string" name="APKTOOL_DUMMY_125" />
+    <item type="string" name="APKTOOL_DUMMY_126" />
+    <item type="string" name="APKTOOL_DUMMY_127" />
+    <item type="string" name="APKTOOL_DUMMY_128" />
+    <item type="string" name="APKTOOL_DUMMY_129" />
+    <item type="string" name="APKTOOL_DUMMY_12a" />
+    <item type="string" name="APKTOOL_DUMMY_12b" />
+    <item type="string" name="APKTOOL_DUMMY_12c" />
+    <item type="string" name="APKTOOL_DUMMY_12d" />
+    <item type="string" name="APKTOOL_DUMMY_12e" />
+    <item type="string" name="APKTOOL_DUMMY_12f" />
+    <item type="string" name="APKTOOL_DUMMY_130" />
+    <item type="string" name="APKTOOL_DUMMY_131" />
+    <item type="string" name="APKTOOL_DUMMY_132" />
+    <item type="string" name="APKTOOL_DUMMY_133" />
+    <item type="string" name="APKTOOL_DUMMY_134" />
+    <item type="string" name="APKTOOL_DUMMY_135" />
+    <item type="string" name="APKTOOL_DUMMY_136" />
+    <item type="string" name="APKTOOL_DUMMY_137" />
+    <item type="string" name="APKTOOL_DUMMY_138" />
+    <item type="string" name="APKTOOL_DUMMY_139" />
+    <item type="string" name="APKTOOL_DUMMY_13a" />
+    <item type="string" name="APKTOOL_DUMMY_13b" />
+    <item type="string" name="APKTOOL_DUMMY_13c" />
+    <item type="string" name="APKTOOL_DUMMY_13d" />
+    <item type="string" name="APKTOOL_DUMMY_13e" />
+    <item type="string" name="APKTOOL_DUMMY_13f" />
+    <item type="string" name="APKTOOL_DUMMY_140" />
+    <item type="string" name="APKTOOL_DUMMY_141" />
+    <item type="string" name="APKTOOL_DUMMY_142" />
+    <item type="string" name="APKTOOL_DUMMY_143" />
+    <item type="string" name="APKTOOL_DUMMY_144" />
+    <item type="string" name="APKTOOL_DUMMY_145" />
+    <item type="string" name="APKTOOL_DUMMY_146" />
+    <item type="string" name="APKTOOL_DUMMY_147" />
+    <item type="string" name="APKTOOL_DUMMY_148" />
+    <item type="string" name="APKTOOL_DUMMY_149" />
+    <item type="string" name="APKTOOL_DUMMY_14a" />
+    <item type="string" name="APKTOOL_DUMMY_14b" />
+    <item type="string" name="APKTOOL_DUMMY_14c" />
+    <item type="string" name="APKTOOL_DUMMY_14d" />
+    <item type="string" name="APKTOOL_DUMMY_14e" />
+    <item type="string" name="APKTOOL_DUMMY_18d" />
+    <item type="string" name="APKTOOL_DUMMY_18e" />
+    <item type="string" name="APKTOOL_DUMMY_18f" />
+    <item type="string" name="APKTOOL_DUMMY_190" />
+    <item type="string" name="APKTOOL_DUMMY_191" />
+    <item type="string" name="APKTOOL_DUMMY_192" />
+    <item type="string" name="APKTOOL_DUMMY_193" />
+    <item type="string" name="APKTOOL_DUMMY_194" />
+    <item type="string" name="APKTOOL_DUMMY_195" />
+    <item type="string" name="APKTOOL_DUMMY_196" />
+    <item type="string" name="APKTOOL_DUMMY_197" />
+    <item type="string" name="APKTOOL_DUMMY_198" />
+    <item type="string" name="APKTOOL_DUMMY_199" />
+    <item type="string" name="APKTOOL_DUMMY_19a" />
+    <item type="string" name="APKTOOL_DUMMY_19b" />
+    <item type="string" name="APKTOOL_DUMMY_19c" />
+    <item type="string" name="APKTOOL_DUMMY_19d" />
+    <item type="string" name="APKTOOL_DUMMY_19e" />
+    <item type="string" name="APKTOOL_DUMMY_19f" />
+    <item type="string" name="APKTOOL_DUMMY_1a1" />
+    <item type="string" name="APKTOOL_DUMMY_1a3" />
+    <item type="string" name="APKTOOL_DUMMY_1a4" />
+    <item type="string" name="APKTOOL_DUMMY_1a5" />
+    <item type="string" name="APKTOOL_DUMMY_1a6" />
+    <item type="string" name="APKTOOL_DUMMY_1a7" />
+    <item type="string" name="APKTOOL_DUMMY_1a8" />
+    <item type="string" name="APKTOOL_DUMMY_1a9" />
+    <item type="string" name="APKTOOL_DUMMY_1ab" />
+    <item type="string" name="APKTOOL_DUMMY_1ac" />
+    <item type="string" name="APKTOOL_DUMMY_1b1" />
+    <item type="string" name="APKTOOL_DUMMY_237" />
+    <item type="string" name="APKTOOL_DUMMY_23a" />
+    <item type="string" name="APKTOOL_DUMMY_23b" />
+    <item type="string" name="APKTOOL_DUMMY_23c" />
+    <item type="string" name="APKTOOL_DUMMY_23d" />
+    <item type="string" name="APKTOOL_DUMMY_2bc" />
+    <item type="string" name="APKTOOL_DUMMY_2de" />
+    <item type="string" name="APKTOOL_DUMMY_303" />
+    <item type="string" name="APKTOOL_DUMMY_304" />
+</resources>

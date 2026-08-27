@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Encrypted token is in EncryptedSharedPreferences — don't back up to avoid leakage -->
+    <exclude domain="sharedpref" path="sova_secure_prefs.xml" />
+    <!-- Don't back up DataStore either -->
+    <exclude domain="file" path="datastore/" />
+</full-backup-content>

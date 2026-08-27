@@ -1,0 +1,38 @@
+# ─── Android / Gradle ─────────────────────────────────────────────
+*.iml
+.gradle/
+/local.properties
+/.idea/*
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml
+!.idea/misc.xml
+.DS_Store
+/build
+app/build/
+.kotlin/
+/captures
+.externalNativeBuild
+.cxx
+
+# ─── Декомпиляты (НЕ коммитить в эту ветку) ───────────────────────
+# Эти папки содержат 165 000+ .java файлов из декомпиляции APK
+# SOVAVRE.apk и VK-8.178.apk. Они нужны только как справочный материал
+# и лежат в ветке `main`. Здесь не нужны.
+#
+# ВАЖНО: в декомпилятах есть файлы с именами Windows reserved device
+# names (nul.java, aux.java, con.java, prn.java, lpt0.java в xsna.*) —
+# Windows физически не может создать такие файлы. Поэтому декомпиляты
+# не должны попадать в эту ветку никогда.
+sovavre-decompiled/
+vk-decompiled/
+
+# ─── Kotlin / Java ─────────────────────────────────────────────────
+*.class
+hs_err_pid*
+
+# ─── Tool internal state ───────────────────────────────────────────
+.gigatool/
+
+# ─── Логи и временные файлы ────────────────────────────────────────
+*.log
+logs/
