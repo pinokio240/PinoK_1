@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  P1-7 #AUTH-AUDIT: добавлены .ru домены (VK мигрирует с .com на .ru, 2025-2026).
+  Дефолтный mobileWebHost = m.vk.ru, но конфиг содержал только .com — подозрительно.
+  base-config с trust-anchors system+user применяется ко ВСЕМ доменам, поэтому
+  отсутствие .ru не блокировало загрузку, но VK-специфичные domain-config правила
+  не применялись к .ru доменам. Теперь применяются.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- .com домены (legacy, всё ещё работают) -->
+        <domain includeSubdomains="true">vk.com</domain>
+        <domain includeSubdomains="true">vkontakte.ru</domain>
+        <domain includeSubdomains="true">userapi.com</domain>
+        <domain includeSubdomains="true">vk.me</domain>
+        <domain includeSubdomains="true">mycdn.me</domain>
+        <domain includeSubdomains="true">vk-cdn.net</domain>
+        <domain includeSubdomains="true">id.vk.com</domain>
+        <domain includeSubdomains="true">oauth.vk.com</domain>
+        <domain includeSubdomains="true">login.vk.com</domain>
+        <domain includeSubdomains="true">api.vk.com</domain>
+        <!-- .ru домены (актуальные, VK мигрирует на .ru) -->
+        <domain includeSubdomains="true">vk.ru</domain>
+        <domain includeSubdomains="true">m.vk.ru</domain>
+        <domain includeSubdomains="true">id.vk.ru</domain>
+        <domain includeSubdomains="true">oauth.vk.ru</domain>
+        <domain includeSubdomains="true">login.vk.ru</domain>
+        <domain includeSubdomains="true">api.vk.ru</domain>
+        <domain includeSubdomains="true">web.api.vk.ru</domain>
+        <!-- VK Video (отдельный домен для видеоплеера) -->
+        <domain includeSubdomains="true">vkvideo.ru</domain>
+        <!-- VK analytics/telemetry (akashi.vk-portal.net — видел SSL error в логе) -->
+        <domain includeSubdomains="true">vk-portal.net</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

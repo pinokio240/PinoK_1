@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme — used by activities, overridden in Compose by PinoKTheme -->
+    <style name="Theme.PinoK" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/sova_bg</item>
+        <item name="android:statusBarColor">@color/sova_bg</item>
+        <item name="android:navigationBarColor">@color/sova_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <!-- Splash theme (no UI, white screen while PinoKTheme is loading) -->
+    <style name="Theme.PinoK.Splash" parent="Theme.PinoK">
+        <item name="android:windowBackground">@color/sova_bg</item>
+    </style>
+
+    <!--
+        Fix #339: transparent theme for AuthActivity silent re-login.
+        Применяется динамически в AuthActivity.onCreate когда EXTRA_SILENT_MODE=true.
+        windowIsTranslucent=true + прозрачный windowBackground → юзер НЕ видит
+        UI flash (WebView / LANDING) при авто-ре-логине через remixsid после
+        истечения web_token (каждые ~15 мин в фоне). Под лежащим MainActivity
+        остаётся виден предыдущий кадр (loading / последний экран), а AuthActivity
+        делает silent refresh в невидимом WebView и завершается с RESULT_OK.
+        windowAnimationStyle=null — убирает slide-in/out анимацию Activity.
+    -->
+    <style name="Theme.PinoK.Silent" parent="Theme.PinoK">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

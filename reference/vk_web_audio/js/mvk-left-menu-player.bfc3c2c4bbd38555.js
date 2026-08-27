@@ -1,0 +1,1 @@
+langChunkLoadingGlobal(["langs/mvk/mvk-left-menu-player", {"mobile_audio_player_ad":"Реклама","mobile_audio_player_next":"Следующий трек","mobile_audio_player_pause":"Остановить","mobile_audio_player_play":"Воспроизвести"}]);

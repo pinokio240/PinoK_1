@@ -1,0 +1,438 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- P5.3: Camera — для съёмки фото прямо из чата -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Audio FX (Equalizer).
+         MODIFY_AUDIO_SETTINGS нужен на некоторых OEM-прошивках (Samsung/Xiaomi),
+         чтобы AudioFX-сессия корректно применялась к выходному тракту. Без него
+         EqualizerHelper.setEnabled(true) молча fails на ряде устройств.
+         Также используется для ringtone/volume управления в будущем. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Storage (for media downloads, on API <= 28) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Granular media permissions (API 33+ / Android 13+)
+         Replaces READ_EXTERNAL_STORAGE for audio, video, images.
+         Required for: offline manager playback, file access, media picking. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+    <!-- MANAGE_EXTERNAL_STORAGE (API 30+ / Android 11+)
+         Required for: custom cache path selection on external storage/SD.
+         Requested via Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+         NOT via standard permission dialog (Android restriction). -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!-- Media playback (foreground service) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Foreground service types (Android 14+ / API 34+).
+         Каждый тип требует своего permission, иначе Service.startForeground()
+         падает with SecurityException на Android 14+.
+
+         FOREGROUND_SERVICE_MICROPHONE — запись голосовых сообщений в foreground
+           (VoiceRecorder + будущий VoiceRecordService для длинных голосовых).
+         FOREGROUND_SERVICE_REMOTE_MESSAGING — LongPoll/messaging foreground
+           (планируется: persistent LongPoll service для real-time доставки
+           сообщений в фоне, как у Telegram).
+         FOREGROUND_SERVICE_CAMERA — камера в foreground (P5.3 + будущий
+           direct-camera-from-chat feature). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+
+    <!-- Bluetooth audio routing (Android 12+ / API 31+).
+         BLUETOOTH_CONNECT нужен для подключения/переключения Bluetooth-аудио
+         (PlayerService: reattach equalizer при переключении BT-устройств).
+         Без него BluetoothHeadset.getConnectionState() кидает SecurityException
+         на Android 12+. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Notifications & alarms.
+         SCHEDULE_EXACT_ALARM — Android 12+ для точных alarm'ов (своевременные
+           уведомления, отложенные напоминания). Без этого setExact() молча
+           становится inexact.
+         USE_FULL_SCREEN_INTENT — Android 14+ для heads-up уведомлений
+           (звонки, срочные сообщения). Без этого high-priority notifications
+           показываются только в shade, не всплывают.
+         ACCESS_NOTIFICATION_POLICY — чтение/изменение DND (Do Not Disturb).
+           Нужно для «Не беспокоить» sync: app может проверить, включён ли DND
+           на устройстве, и подавлять свои уведомления соответственно. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- Biometric (Locker) -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+
+    <!-- Vibration for PIN feedback -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Boot receiver (re-lock on boot + auto-start LongPoll on boot) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- For requestSingleUse (anti-tracking: ignore battery opt)
+         «Безграничная работа в фоне» — основной механизм: запросить у пользователя
+         разрешение игнорировать battery optimizations для приложения. Без этого
+         Android Doze через ~1-2 часа сна убивает LongPoll polling → сообщения
+         перестают приходить, пока пользователь не откроет приложение.
+         Запрос делается через Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+         (см. SovaApp.requestBatteryOptimizationExemption). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <!-- Fix #51-A: queries для ACTION_VIEW http/https — на Android 11+ (API 30)
+             resolveActivity() возвращает null для неявных intents если пакет не объявлен
+             в <queries>. Без этого LinkCard.onClick думал что нет браузера и показывал
+             Toast "Нет приложения для открытия ссылки" даже при установленном Chrome. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+
+        <!-- Fix #VK-APP-SSO: <queries> для прямого запуска официального VK app
+             (com.vkontakte.android) из VkAppDirectLauncher и VkAppIntentInspector.
+             Без явного <package> объявления на Android 11+ (API 30):
+               - resolveActivity() с setPackage("com.vkontakte.android") вернёт null
+               - getPackageInfo() упадёт с NameNotFoundException
+               - queryIntentActivities() не увидит VK app в результатах
+             Мы используем прямой package query чтобы:
+               1. Проверить установлен ли VK app (быстрая диагностика).
+               2. Получить его intent-filters через PackageManager.GET_INTENT_FILTERS
+                  (VkAppIntentInspector — разведка всех scheme/host/path которые
+                  VK app принимает, поиск недокументированных auth-deeplink'ов).
+               3. Запустить VK app с OAuth URL через setPackage() в надежде что
+                  VK app имеет intent-filter на https://oauth.vk.com/* или
+                  https://id.vk.ru/* (App Links manual routing).
+             См. /home/z/vkx/reference/VKID_SDK_ANALYSIS.md Flow 2 (Silent Auth
+             через приложение VK). -->
+        <package android:name="com.vkontakte.android" />
+
+        <!-- Also query VK Lite (VK Metro / ВКонтакте Lite) — альтернативный
+             клиент с другим package name, тоже может иметь auth intent-filters. -->
+        <package android:name="com.vk.android.lite" />
+
+        <!-- intent для vklink:// scheme — потенциальная undocumented
+             auth-deeplink схема в VK app (проверяется VkAppIntentInspector). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="vkontakte" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="vk" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="vklink" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".SovaApp"
+        android:enableOnBackInvokedCallback="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.PinoK.Splash"
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="34">
+
+        <!-- Launcher activity (single-activity Compose architecture) -->
+        <!--
+          Fix #142 (2026-08-03): android:supportsPictureInPicture="true" —
+          декларативный флаг для системы что MainActivity поддерживает PiP.
+          БЕЗ этого атрибута enterPictureInPictureMode() на некоторых оболочках
+          (MIUI/OneUI/EMUI) молча fail с «Activity does not support PiP»,
+          хотя VideoPipController.requestPip() вызывает activity.enterPictureInPictureMode(params)
+          в try/catch (исключение проглатывается → пользователь не получает PiP).
+          На AOSP Android 8+ enterPictureInPictureMode работает без manifest-флага,
+          но сторонние оболочки (особенно MIUI) требуют именно декларацию в манифесте.
+
+          configChanges ОБЯЗАТЕЛЕН для PiP: переход в/из PiP триггерит
+          configuration change (smallestScreenSize, screenLayout). Без этого
+          activity пересоздаётся → ExoPlayer/WebView уничтожается → видео
+          прерывается. Уже было в configChanges, добавлен комментарий.
+        -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.PinoK.Splash"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|uiMode|density|fontScale">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Deep links for VK OAuth callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sova2" android:host="oauth" />
+            </intent-filter>
+            <!--
+              Fix #154: PinoK как target в системном share-меню ("Отправить/Поделиться").
+              Пользователь может поделиться текстом, ссылками, файлами или изображениями
+              из других приложений (браузер, галерея, etc.) → PinoK появляется в списке
+              получателей наравне с SOVA V RE / Telegram / VK.
+
+              Fix #156: расширил MIME-типы — изначально был только text/plain, но:
+                - .txt файлы из некоторых FileProvider идут как application/octet-stream
+                - лог-файлы могут идти как text/x-log или text/plain; charset=utf-8
+                - share sheet на разных оболочностях (MIUI, OneUI) капризно матчит
+              Теперь ловим text/* (все текстовые), application/octet-stream (бинарный
+              без явного типа — часто .txt/.log), и image/* (картинки).
+              Каждый intent-filter имеет явный android:label="PinoK" — без него
+              share sheet может показать техническое имя активности вместо бренда.
+            -->
+            <intent-filter android:label="PinoK">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
+            <intent-filter android:label="PinoK">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter android:label="PinoK">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <!--
+              §47 #URL-INTENT-FILTER: PinoK как target для тапа по VK-ссылкам.
+              Пользователь тапает на https://vk.com/wall-123_456 в браузере,
+              Telegram, мессенджере → Android показывает chooser с PinoK.
+
+              Без autoVerify="true" (App Links требует assetlinks.json на домене,
+              что для vk.com невозможно) — пользователь выбирает PinoK вручную
+              в chooser dialog. После выбора можно нажать "Всегда" чтобы PinoK
+              стал default handler.
+
+              Hosts: vk.com, m.vk.com, vk.ru, m.vk.ru (4 домена VK).
+              PathPrefix: /wall, /photo, /video, /id, /club, /topic.
+              parseVkUrl() валидирует формат — для некорректных URL (например
+              /wallpaper) вернёт null и ACTION_VIEW тихо no-op.
+
+              Связанные: §42.4 #PUSH-DEEPLINK (тап на push), §46 #REMOTE-INPUT
+              (ответ из шторки).
+            -->
+            <intent-filter android:label="PinoK">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="vk.com" />
+                <data android:scheme="https" android:host="m.vk.com" />
+                <data android:scheme="https" android:host="vk.ru" />
+                <data android:scheme="https" android:host="m.vk.ru" />
+                <data android:pathPrefix="/wall" />
+                <data android:pathPrefix="/photo" />
+                <data android:pathPrefix="/video" />
+                <data android:pathPrefix="/id" />
+                <data android:pathPrefix="/club" />
+                <data android:pathPrefix="/topic" />
+            </intent-filter>
+            <!-- §47: http fallback для старых ссылок (VK редиректит на https,
+                 но некоторые legacy-ссылки в Telegram/браузерах идут как http). -->
+            <intent-filter android:label="PinoK">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" android:host="vk.com" />
+                <data android:scheme="http" android:host="m.vk.com" />
+                <data android:scheme="http" android:host="vk.ru" />
+                <data android:scheme="http" android:host="m.vk.ru" />
+                <data android:pathPrefix="/wall" />
+                <data android:pathPrefix="/photo" />
+                <data android:pathPrefix="/video" />
+                <data android:pathPrefix="/id" />
+                <data android:pathPrefix="/club" />
+                <data android:pathPrefix="/topic" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          #PIP-VIDEO-ONLY: отдельная активность, которая уходит в PiP.
+          Содержит ТОЛЬКО видео (ExoPlayer + PlayerView) — MainActivity остаётся
+          полноэкранной и browsable, а поверх плавает PiP-окно этой активности.
+          supportsPictureInPicture="true" ДОЛЖЕН быть только здесь (не на MainActivity),
+          иначе в PiP сворачивается всё приложение. configChanges обязателен —
+          переход в/из PiP триггерит configuration change.
+        -->
+        <activity
+            android:name=".ui.videoplayer.VideoPipActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:supportsPictureInPicture="true"
+            android:theme="@style/Theme.PinoK"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|uiMode|density|fontScale" />
+
+        <!-- Auth activity (Direct Auth primary + OAuth WebView fallback) -->
+        <activity
+            android:name=".auth.AuthActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density|uiMode|navigation"
+            android:theme="@style/Theme.PinoK" />
+
+        <!-- OAuth WebView — открывает oauth.vk.com/authorize, пароль вводится на VK.
+             configChanges ОБЯЗАТЕЛЬНО: VK ID страница (id.vk.com/auth) триггерит
+             orientation change через JS screen.orientation API. Без configChanges
+             Activity пересоздаётся → WebView уничтожается → страница перезагружается
+             → бесконечный цикл (fix #40). -->
+        <activity
+            android:name=".auth.OAuthWebViewActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density|uiMode|navigation"
+            android:theme="@style/Theme.PinoK" />
+
+        <!-- Locker activity (PIN + biometric) -->
+        <activity
+            android:name=".locker.LockerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.PinoK" />
+
+        <!-- Foreground media player service -->
+        <service
+            android:name=".service.PlayerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+        <!--
+          MusicDownloadService — foreground-сервис уведомлений для загрузки музыки.
+          OkHttp-based загрузки (Media3 DownloadManager удалён в 1.8.0).
+        -->
+        <service
+            android:name=".media.MusicDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
+          VideoDownloadService — foreground-сервис уведомлений для загрузки видео.
+          OkHttp-based загрузки (Media3 DownloadManager удалён в 1.8.0).
+        -->
+        <service
+            android:name=".media.VideoDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
+          StoryVideoDownloadService (Fix #100) — foreground-сервис уведомлений
+          для загрузки ВИДЕО-историй (stories). OkHttp-based, отдельный от
+          VideoDownloadService: другой ID-namespace (Int storyId vs Long videoId),
+          TTL 24h, URL-refresh on 403.
+        -->
+        <service
+            android:name=".media.StoryVideoDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
+          ClipDownloadService (§37.12 #329) — foreground-сервис уведомлений
+          для загрузки VK Clips (коротких вертикальных видео). OkHttp-based,
+          отдельный от StoryVideoDownloadService: модель Video (Long videoId),
+          TTL 7 дней, URL-refresh on 403 через videoGetClipById.
+        -->
+        <service
+            android:name=".media.ClipDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Boot receiver — re-lock on boot + auto-start LongPoll keep-alive (Fix #340) -->
+        <receiver
+            android:name=".locker.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- §42.2 #PUSH-ENHANCED: приёмник кнопок из push-уведомления. -->
+        <!-- §46 #REMOTE-INPUT: ACTION_REPLY — прямой ответ из шторки (RemoteInput). -->
+        <!-- Fix #135b: ACTION_DISMISS — swipe-dismiss notification, чистит кеш. -->
+        <receiver
+            android:name=".realtime.NotificationActionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="re.pinok.action.MARK_READ" />
+                <action android:name="re.pinok.action.REPLY" />
+                <action android:name="re.pinok.action.DISMISS" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          LongPollKeepAliveService (Fix #340) — foreground-сервис, удерживающий
+          процесс живым в фоне. Без FCM это единственный способ получать
+          push-уведомления о новых сообщениях когда приложение свёрнуто/убито.
+          Тип remoteMessaging не подпадает под 6-часовой Android 14+ timeout.
+        -->
+        <service
+            android:name=".realtime.LongPollKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
+        <!--
+          FileProvider — used by the in-app log viewer to export UTF-8 log files
+          via Intent.ACTION_SEND (share to Telegram / email / Files / etc.).
+          Authority: ${applicationId}.fileprovider
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+</manifest>

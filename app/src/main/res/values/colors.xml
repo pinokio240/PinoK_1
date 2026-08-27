@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- B&W minimalist base -->
+    <color name="sova_bg">#FFFFFFFF</color>
+    <color name="sova_bg_dark">#FF000000</color>
+    <color name="sova_fg">#FF000000</color>
+    <color name="sova_fg_dark">#FFFFFFFF</color>
+    <color name="ic_launcher_background">#FF000000</color>
+</resources>

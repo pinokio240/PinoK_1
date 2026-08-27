@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PinoK</string>
+
+    <!-- Bottom nav -->
+    <string name="nav_feed">Лента</string>
+    <string name="nav_messages">Сообщения</string>
+    <string name="nav_music">Музыка</string>
+    <string name="nav_video">Видео</string>
+    <string name="nav_profile">Профиль</string>
+
+    <!-- Drawer -->
+    <string name="nav_services">Сервисы</string>
+    <string name="nav_notifications">Уведомления</string>
+    <string name="nav_settings">Настройки</string>
+    <string name="nav_logout">Выйти</string>
+
+    <!-- Auth -->
+    <string name="auth_title">Вход ВКонтакте</string>
+    <string name="auth_hint">Войдите через аккаунт ВК</string>
+    <string name="auth_sign_in">Войти</string>
+    <string name="auth_offline_mode">Режим офлайн</string>
+    <string name="auth_error">Ошибка авторизации</string>
+
+    <!-- Locker -->
+    <string name="locker_title">Введите PIN</string>
+    <string name="locker_biometric">Или используйте биометрию</string>
+    <string name="locker_wrong_pin">Неверный PIN</string>
+    <string name="locker_setup_title">Создайте PIN</string>
+    <string name="locker_confirm_title">Подтвердите PIN</string>
+
+    <!-- Feed -->
+    <string name="feed_empty">Лента пуста</string>
+    <string name="feed_offline">Офлайн-режим: показаны кэшированные данные</string>
+
+    <!-- Messages -->
+    <string name="messages_empty">Нет диалогов</string>
+    <string name="messages_dnr_active">DNR активен</string>
+    <string name="messages_dnt_active">DNT активен</string>
+
+    <!-- Music -->
+    <string name="music_empty">Нет музыки</string>
+    <string name="music_download">Скачать</string>
+
+    <!-- MusicDownloadService notifications -->
+    <string name="music_download_channel_name">Загрузка музыки</string>
+    <string name="music_download_channel_description">Уведомления о загрузке треков для офлайн-прослушивания</string>
+    <string name="music_download_notification_active_title">Загрузка музыки: %1$d</string>
+    <string name="music_download_notification_complete_title">Загрузка завершена</string>
+    <string name="music_download_notification_text">Прогресс: %1$d%%</string>
+
+    <!-- VideoDownloadService notifications -->
+    <string name="video_download_channel_name">Загрузка видео</string>
+    <string name="video_download_channel_description">Уведомления о загрузке видео для офлайн-просмотра</string>
+    <string name="video_download_notification_active_title">Загрузка видео: %1$d</string>
+    <string name="video_download_notification_complete_title">Видео загружено</string>
+    <string name="video_download_notification_text">Прогресс: %1$d%%</string>
+
+    <!-- StoryVideoDownloadService notifications (Fix #100) -->
+    <string name="story_video_download_channel_name">Загрузка видео-историй</string>
+    <string name="story_video_download_channel_description">Уведомления о загрузке видео из историй для офлайн-просмотра</string>
+    <string name="story_video_download_notification_active_title">Загрузка истории: %1$d</string>
+    <string name="story_video_download_notification_complete_title">История загружена</string>
+    <string name="story_video_download_notification_text">Прогресс: %1$d%%</string>
+
+    <!-- ClipDownloadService notifications (§37.12 #329) -->
+    <string name="clip_video_download_channel_name">Загрузка клипов</string>
+    <string name="clip_video_download_channel_description">Уведомления о загрузке VK Клипов для офлайн-просмотра</string>
+    <string name="clip_video_download_notification_active_title">Загрузка клипа: %1$d</string>
+    <string name="clip_video_download_notification_complete_title">Клип загружен</string>
+    <string name="clip_video_download_notification_text">Прогресс: %1$d%%</string>
+
+    <!-- OfflineManager: Stories tab (Fix #100) -->
+    <string name="offline_tab_stories">Истории (%1$d)</string>
+
+    <!-- Settings categories -->
+    <string name="settings_news">Новости</string>
+    <string name="settings_interface">Интерфейс</string>
+    <string name="settings_privacy">Приватность</string>
+    <string name="settings_messages">Сообщения</string>
+    <string name="settings_music">Музыка</string>
+    <string name="settings_cache">Кэш аудио</string>
+    <string name="settings_network">Сеть</string>
+    <string name="settings_locker">Защита</string>
+    <string name="settings_about">О приложении</string>
+
+    <!-- Cache settings -->
+    <string name="cache_used">Использовано</string>
+    <string name="cache_max_size">Макс. размер</string>
+    <string name="cache_unlimited">Без ограничений</string>
+    <string name="cache_unlimited_desc">Заполнять свободное место на носителе</string>
+    <string name="cache_location">Расположение кэша</string>
+    <string name="cache_internal">Внутренняя память</string>
+    <string name="cache_external">Внешний носитель</string>
+    <string name="cache_pick_folder">Выбрать папку</string>
+    <string name="cache_reset_path">Сбросить</string>
+    <string name="cache_clear">Очистить кэш (%1$s)</string>
+    <string name="cache_volume_dialog_title">Выбрать расположение кэша</string>
+    <string name="cache_permission_needed">Для доступа к флешке/SD-карте нужно разрешение \"Все файлы\".</string>
+    <string name="cache_grant_permission">Дать разрешение</string>
+    <string name="cache_available_free">%s свободно</string>
+    <string name="cache_app_internal">Кэш приложения (автоочистка)</string>
+    <string name="cache_subfolder_note">Кэш будет создан в подпапке audio_stream/</string>
+
+    <!-- Mods -->
+    <string name="mod_dnr">DNR (не читать)</string>
+    <string name="mod_dnt">DNT (не печатать)</string>
+    <string name="mod_undelete">Показать удалённые</string>
+    <string name="mod_unedit">Показать оригинал правок</string>
+    <string name="mod_offline">Офлайн-режим</string>
+    <string name="mod_device_mask">Маскировка устройства</string>
+    <string name="mod_antitelemetry">Анти-телеметрия</string>
+    <string name="mod_ssl_pinning">SSL pinning</string>
+    <string name="mod_away_bypass">Обход away.php</string>
+    <string name="mod_ad_block">Блокировка рекламы</string>
+
+    <!-- About -->
+    <string name="about_version">Версия</string>
+    <string name="about_build">Сборка</string>
+    <string name="about_github">GitHub</string>
+</resources>
