@@ -4387,3 +4387,26 @@ Stage Summary:
   1. Исходящий: лог должен показать "applying remote answer immediately (PC ready)" → "ICE: CONNECTED".
   2. Входящий: unchanged-путь (offer кэшируется до accept) — регресса нет.
   3. Если ICE по-прежнему CHECKING→FAILED — вернуть к CALLS_MAP §10: сравнить SDP с эталоном Chrome (a=setup, m-line, DTLS fingerprint).
+
+---
+Task ID: CALLS-DOC
+Agent: main (Z.ai Code)
+Task: Сделать запись в HISTORY.md (хистор) и создать файл `звонки.md` со всей информацией о звонках — включая всю найденную и имеющуюся документацию.
+
+Work Log:
+- Прошёлся grep-ом по всей кодовой базе (call/Call/webrtc/rtc) — 127 файлов с упоминаниями, выделена звонковая подсистема.
+- Изучил детально ядро: CallModels.kt (82, модели VkCall/CallPhase/QueueCredential), CallSignalingClient.kt (403, WS-сигналинг: команды accept-call/hangup/transmit-data, уведомления connection/registered-peer/topology-changed/remote-hangup), WebRtcEngine.kt (437, PeerConnectionFactory на signaling thread, JavaAudioDeviceModule, UNIFIED_PLAN, ICE из params), ConversationParamsDecoder.kt (167, payload LP 115 len:base64→LZ4→JSON tkn/wse/trne…), Queuev4Client.kt (199, long-poll a_check, LP 115/70/-1/-2).
+- Изучил UI-слой: CallScreen.kt (851, полный оркестратор звонка — обе фазы, mic-guard, таймаут 45с, join-ссылка), CallsMainScreen.kt (356, табы Позвонить друзьям/История/Пропущенные) + 10 секций экрана «Звонки», CallsWebViewScreen.
+- Изучил API-слой VKApiClient.kt §calls (~строки 10470–11630): VCHAT_BASES/VCHAT_API_KEYS, getCallToken, getAnonymToken, vchatAnonymLogin, vchatGetConversationParams, vchatSystemGetInfo, vchatStartConversation, vchatJoinConversation, vchatHangupConversation, vchatCreateJoinLink, messagesStartCall, messagesGetCurrentCalls, getInboundCalls, getScheduledCalls, getCallParticipants, getCallPreview, getGroupsForCall, getCallRecordings, getCallTranscriptions, editCall, deleteScheduledCall, calls.getHistory, calls.getMissedCalls, queueSubscribe.
+- Изучил оркестрацию SovaApp.kt: startCallNotifier (3 канала входящих: LongPoll 115 + queuev4 + events_queue), refreshIncomingCaller, startCallSignaling, ensureCallsSessionKey ($-токен→anonymLogin version=3, auto-renew), getCallConversationParams (renew при 102), канал уведомлений vk_calls, pendingIncomingCall* + consumeIncomingCall; DNS-пин calls.okcdn.ru→155.212.204.12.
+- Изучил входные точки: ChatDetailScreen (~2259 кнопка звонка в шапке), SovaNavHost (3 маршрута Call + LaunchedEffect на pendingIncomingCallPayload), AndroidManifest (RECORD_AUDIO/MODIFY_AUDIO_SETTINGS/FOREGROUND_SERVICE_MICROPHONE/CAMERA/BLUETOOTH_CONNECT).
+- Обнаружил и перечитал существующие звонковые документы: CALLS_MAP.md (284, маршрутная карта протокола — §0 базовые факты, §1–8 авторизация/WS/WebRTC/маршруты, §10 эталон pcap Chrome) и CALLS_UI_BUTTONS.md (130, кнопки из веб-снапшотов VKUI с testid). Оба полностью консолидированы в новый файл.
+- Уточнил по worklog историю звонковых фиксов (запись CALLS-OUTGOING-FIX 2026-08-27: answer-apply, okcdn uid из prefs, transport=tcp дедуп, mic-guard, таймаут, имя звонящего в уведомлении).
+- Создал звонки.md (сводный документ в стиле видео.md/музыка.md, 19 разделов): Executive Summary архитектуры, карта всех файлов с ролями и размерами, идентификаторы и хосты (okcdn uid vs VK uid, application_key CGMMEJLGDIHBABABA, DNS-пин), авторизация vchat ($-токен messages.getCallToken → auth.anonymLogin version=3 → session_key -w-fl…/okcdn uid), все vchat-методы с ТОЧНЫМИ параметрами (startConversation: UUID+externalIds+caller_app_id 6287487+protocolVersion 5), VK API методы таблицей, queuev4 формат и LP-коды, conversation params декодирование (LZ4 + поля), WS сигналинг (URL, команды, уведомления, парсинг-варианты SDP), WebRTC-конфиг (field trials, ADM, PC config, аудио-констрейнты, порядок SDP), пошаговые маршруты входящего/исходящего, UI (веб-эталоны testid + Compose-реализация), уведомления, права, 16 подводных камней, timeline фиксов, pcap-эталон §17, текущее состояние + TODO (видео, групповые, виджет, BT-роутинг), гайд диагностики logcat (теги и типовые ошибки).
+- Создал запись в HISTORY.md (был пустой) — краткий журнал с Task ID CALLS-DOC.
+
+Stage Summary:
+- Создан звонки.md — ЕДИНЫЙ сводный документ по звонкам (~600 строк, 19 разделов), вобравший CALLS_MAP.md + CALLS_UI_BUTTONS.md + полный разбор кода; теперь вся звонковая документация в одном файле рядом с видео.md/музыка.md.
+- HISTORY.md заполнен первой записью (журнал истории).
+- Звонковый код НЕ менялся (документационная сессия). Текущий статус звонков: обе фазы реализованы; проверка ICE CONNECTED на устройстве — за пользователем (нет Android SDK в песочнице).
+- Потенциальные следующие шаги зафиксированы в звонки.md §18: видеозвонок, групповые, свернутый виджет, BT-роутинг звонка, рингтон в RINGING.
