@@ -4410,3 +4410,23 @@ Stage Summary:
 - HISTORY.md заполнен первой записью (журнал истории).
 - Звонковый код НЕ менялся (документационная сессия). Текущий статус звонков: обе фазы реализованы; проверка ICE CONNECTED на устройстве — за пользователем (нет Android SDK в песочнице).
 - Потенциальные следующие шаги зафиксированы в звонки.md §18: видеозвонок, групповые, свернутый виджет, BT-роутинг звонка, рингтон в RINGING.
+
+---
+Task ID: MERGE-213115F
+Agent: main (Z.ai Code)
+Task: Объединить force-push'нутый снапшот 213115f («calls: анализ веб-версии + план реализации + полный снапшот проекта») с нашей веткой звонков без потери данных с любой стороны; опубликовать на GitHub с проверкой.
+
+Work Log:
+- Обнаружил force-push: remote перезаписан орфанным коммитом 213115f (без родителей, 2026-08-27 20:24 UTC), наши b2f6622/e4ccc5a с remote исчезли. Создал бэкап-ветки backup/premerge-e4ccc5a и backup/snapshot-213115f.
+- Сопоставил деревья: 213115f = состояние РАННЕЙ стадии звонков (нет CallSignalingClient/ConversationParamsDecoder/Calls-UI секций/§calls в VKApiClient, CallScreen 337 строк vs 851) + НОВАЯ музыкальная работа (SirenTranscoder: -f mpegts, -fflags +genpts, -ignore_unknown, validateTranscodedM4a; TrackDownloadManager: MediaMuxer-путь) + полный архив доков (HISTORY.md 10311 строк).
+- Коммит наших доков: 338ef6e (звонки.md ~812 строк, HISTORY.md CALLS-DOC, worklog CALLS-DOC).
+- git merge --allow-unrelated-histories origin/PinoK → 378 конфликтов: ~345 mode-only (снапшот пометил файлы 100755, blob'и идентичны), ~33 содержательных.
+- Разрешение: звонки/auth/nav/prefs/VKApiClient/SovaApp/TrackDownloadManager/VK_IMPORT_API.MD/reference-дампы → OURS (новее: полная реализация звонков, #CALLS-ANTIFRAUD, MP3-экспорт); chan_screen.png → THEIRS (добавлен); jar идентичен.
+- SirenTranscoder.kt — UNION: база снапшота (mpegts/genpts/ignore_unknown/validateTranscodedM4a) + наша transcodeToMp3 расширена их libmp3lame-кодированием (вместо битого -c:a copy) с параметрами title/artist/album/quality (совместимость вызова из TrackDownloadManager); elvis заменён на явный if (PinoK style).
+- HISTORY.md — UNION: их архив 10311 строк + наша запись CALLS-DOC от 2026-08-28 (итог 10345 строк).
+- worklog.md → OURS (их версия = наша минус секция CALLS-OUTGOING-FIX, строгое подмножество).
+
+Stage Summary:
+- Merge-коммит объединяет обе истории: полные звонки (e4ccc5a) + снапшот 213115f. Ничего не утеряно: все фичи обеих сторон в дереве.
+- SirenTranscoder.kt теперь содержит ВСЕ улучшения: TS-демуксер, genpts, ignore_unknown, validateTranscodedM4a, transcodeToMp3 с libmp3lame+ID3v2.
+- Режимы файлов нормализованы к 100644 (стиль репо), бэкап-ветки сохранены локально.

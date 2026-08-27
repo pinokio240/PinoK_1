@@ -1,6 +1,8 @@
 // File: media/SirenTranscoder.kt
 package re.pinok.media
 
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.arthenica.ffmpegkit.FFmpegSession
@@ -39,7 +41,8 @@ import java.io.File
  *     через executeWithArgumentsAsync с CompletableDeferred для ожидания.
  *  3. withTimeoutOrNull(FFMPEG_TIMEOUT_MS) — если за 2 минуты ffmpeg не завершился,
  *     вызываем FFmpegKit.cancel(sessionId) и возвращаем false.
- *  4. В callback'е проверяем ReturnCode.isSuccess + размер output ≥ 10KB.
+ *  4. В callback'е проверяем ReturnCode.isSuccess + размер output ≥ 10KB
+ *     + validateTranscodedM4a (MediaExtractor проверяет sr/ch/dur).
  *
  * Безопасность:
  *  — Все пути — File (не строки с user input), экранирование не нужно.
@@ -82,8 +85,10 @@ object SirenTranscoder {
      *
      * @param inputTs  входной .ts файл (склеенные siren-сегменты, magic 0x25).
      * @param outputM4a выходной .m4a файл (будет перезаписан).
-     * @return true если транскод успешен и output ≥ [MIN_OUTPUT_BYTES].
-     *         false при ошибке ffmpeg, таймауте или слишком маленьком output.
+     * @return true если транскод успешен и output ≥ [MIN_OUTPUT_BYTES]
+ *         и прошёл validateTranscodedM4a.
+     *         false при ошибке ffmpeg, таймауте, слишком маленьком output
+     *         или некорректных аудио-параметрах.
      */
     suspend fun transcodeToM4a(inputTs: File, outputM4a: File): Boolean {
         if (!inputTs.exists()) {
@@ -101,6 +106,14 @@ object SirenTranscoder {
 
         // Аргументы ffmpeg:
         //   -y              — overwrite output без вопроса
+        //   -f mpegts       — force MPEG-TS demuxer (склеенный файл содержит
+        //                     микс TS-сегментов и raw Siren; без -f mpegts
+        //                     ffmpeg может выбрать неверный формат)
+        //   -fflags +genpts — генерировать PTS для потоков без таймстемпов
+        //                     (важно при миксе TS и raw Siren — потеря синхронизации)
+        //   -ignore_unknown — пропустить неизвестные потоки (raw Siren данные
+        //                     внутри TS-контейнера могут быть определены как
+        //                     неизвестный stream)
         //   -i input.ts     — входной файл
         //   -vn             — нет видео (аудио-only, на всякий случай)
         //   -c:a aac        — кодек AAC (libfdk_aac недоступен в audio-build,
@@ -112,15 +125,19 @@ object SirenTranscoder {
         //   -movflags +faststart — moov atom в начале (fast streaming start)
         //   output.m4a
         //
-        // НЕ используем -map — ffmpeg сам выберет первый audio stream.
-        // Siren декодируется встроенным декодером g7221 (или siren, смотря
-        // по тому, как ffmpeg-kit собран — в full-gpl он включён).
+        // Fix #SIREN-PLAYBACK: добавлены -f mpegts, -fflags +genpts,
+        // -ignore_unknown. Без них ffmpeg терял синхронизацию на
+        // миксе TS/Siren сегментов → M4A с 88200Hz и чередующимся
+        // mono/stereo → ExoPlayer rapidly cycling AudioTracks.
         //
         // Передаём массивом аргументов напрямую (не строкой с кавычками) —
         // FFmpegKitConfig.parseArguments нам НЕ нужен, executeWithArgumentsAsync
         // принимает String[] и сам корректно передаст пути с пробелами.
         val arguments = arrayOf(
             "-y",
+            "-f", "mpegts",
+            "-fflags", "+genpts",
+            "-ignore_unknown",
             "-i", inputTs.absolutePath,
             "-vn",
             "-c:a", "aac",
@@ -173,11 +190,12 @@ object SirenTranscoder {
 
     /**
      * Callback завершения ffmpeg-сессии. Вызывается native потоком ffmpeg-kit.
-     * Проверяет returnCode, state и размер output файла, завершает [completion].
+     * Проверяет returnCode, state, размер output и аудио-параметры (MediaExtractor),
+     * завершает [completion].
      */
     private fun onSessionCompleted(
         session: FFmpegSession,
-        outputM4a: File,
+        outputFile: File,
         inputSize: Long,
         completion: kotlinx.coroutines.CompletableDeferred<Boolean>
     ) {
@@ -194,7 +212,7 @@ object SirenTranscoder {
                 safeLogs
             }
             AppLog.e(TAG, "transcodeToM4a: session FAILED (state). Last logs:\n$logPreview")
-            outputM4a.delete()
+            outputFile.delete()
             completion.complete(false)
             return
         }
@@ -211,18 +229,34 @@ object SirenTranscoder {
                 TAG,
                 "transcodeToM4a: ffmpeg returnCode=${returnCode.value} (not success). Last logs:\n$logPreview"
             )
-            outputM4a.delete()
+            outputFile.delete()
             completion.complete(false)
             return
         }
 
-        val outSize = outputM4a.length()
+        val outSize = outputFile.length()
         if (outSize < MIN_OUTPUT_BYTES) {
             AppLog.e(
                 TAG,
                 "transcodeToM4a: output too small (${outSize}B, expected ≥$MIN_OUTPUT_BYTES) — transcode produced empty file"
             )
-            outputM4a.delete()
+            outputFile.delete()
+            completion.complete(false)
+            return
+        }
+
+        // Fix #SIREN-PLAYBACK: валидация аудио-параметров транскодированного файла.
+        // ffmpeg может «успешно» создать M4A с битым аудио-контентом
+        // (неправильный sample-rate, чередующийся channel-count) — структурно
+        // файл валиден (ftyp+moov+mdat), но ExoPlayer производит:
+        //   - AudioTrack на 88200 Hz вместо 44100
+        //   - Rapid AudioTrack cycling (create→stop→create каждый 30-2000мс)
+        //   - Позиция продвигается в 20x быстрее реального времени
+        // Проверяем через MediaExtractor: sample-rate == 44100, channels == 2,
+        // duration > 0. Если что-то не совпадает — считаем транскод проваленным.
+        if (!validateTranscodedM4a(outputFile)) {
+            AppLog.e(TAG, "transcodeToM4a: output validation FAILED — file has incorrect audio parameters, deleting")
+            outputFile.delete()
             completion.complete(false)
             return
         }
@@ -238,10 +272,64 @@ object SirenTranscoder {
     }
 
     /**
-     * #AUDIO-MP3: Транскодировать .m4a → .mp3 через ffmpeg-kit.
-     * VK Music Saver: AAC с расширением .mp3 + ID3v2-теги.
+     * Fix #SIREN-PLAYBACK: валидация транскодированного M4A файла.
+     *
+     * Открывает файл через MediaExtractor и проверяет:
+     *   - Sample rate == 44100 Hz (допуск ±100 Hz для целочисленного округления)
+     *   - Channel count == 2 (stereo)
+     *   - Duration > 0 (файл содержит реальный аудио-контент)
+     *
+     * Если любой параметр не совпадает — файл содержит битый аудио-контент
+     * (типично для некорректного Siren→AAC транскодинга) и не должен
+     * использоваться для офлайн-воспроизведения.
      */
-suspend fun transcodeToMp3(
+    private fun validateTranscodedM4a(file: File): Boolean {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(file.absolutePath)
+            var validated = false
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) {
+                    val sampleRate = try { format.getInteger(MediaFormat.KEY_SAMPLE_RATE) } catch (_: Exception) { -1 }
+                    val channels = try { format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) } catch (_: Exception) { -1 }
+                    val durationUs = try { format.getLong(MediaFormat.KEY_DURATION) } catch (_: Exception) { -1L }
+                    val durationSec = durationUs / 1_000_000
+                    // AAC LC encoder округляет 44100 → 44100 (точно).
+                    // Допуск ±100 Hz для защиты от округления на других энкодерах.
+                    val srOk = sampleRate in 44000..44200
+                    val chOk = channels == 2
+                    val durOk = durationUs > 0
+                    if (srOk && chOk && durOk) {
+                        AppLog.i(TAG, "validateTranscodedM4a: OK — sr=${sampleRate}Hz ch=$channels dur=${durationSec}s (${file.length() / 1024}KB)")
+                        validated = true
+                    } else {
+                        AppLog.e(TAG, "validateTranscodedM4a: FAIL — sr=${sampleRate}Hz${if (!srOk) " (expected 44100)" else ""} ch=$channels${if (!chOk) " (expected 2)" else ""} dur=${durationUs}us${if (!durOk) " (expected >0)" else ""}")
+                    }
+                    break // Проверяем только первый audio track
+                }
+            }
+            if (!validated && extractor.trackCount == 0) {
+                AppLog.e(TAG, "validateTranscodedM4a: FAIL — no tracks in M4A")
+            }
+            validated
+        } catch (e: Exception) {
+            AppLog.e(TAG, "validateTranscodedM4a: exception: ${e.message}")
+            false
+        } finally {
+            extractor.release()
+        }
+    }
+
+    /**
+     * #AUDIO-MP3: Транскодировать вход (m4a/ts) → .mp3 через ffmpeg-kit.
+     * VK Music Saver: libmp3lame-кодирование + ID3v2-теги.
+     * #MERGE-213115F: union — libmp3lame из снапшота (правильное декодирование
+     * AAC/Siren вместо битого -c:a copy) + метаданные title/artist/album/quality
+     * из ветки звонков.
+     */
+    suspend fun transcodeToMp3(
         inputM4a: File,
         outputMp3: File,
         title: String? = null,
@@ -259,8 +347,13 @@ suspend fun transcodeToMp3(
             return false
         }
         outputMp3.delete()
-        val args = mutableListOf("-y", "-i", inputM4a.absolutePath, "-vn", "-c:a", "copy", "-id3v2_version", "3")
-        if (quality != null) { args.add("-b:a"); args.add(quality) }
+        val args = mutableListOf(
+            "-y", "-i", inputM4a.absolutePath, "-vn",
+            "-c:a", "libmp3lame",
+            "-id3v2_version", "3"
+        )
+        // PinoK style: без elvis (?:) — явный if.
+        if (quality != null) { args.add("-b:a"); args.add(quality) } else { args.add("-b:a"); args.add("192k") }
         if (title != null) { args.add("-metadata"); args.add("title=$title") }
         if (artist != null) { args.add("-metadata"); args.add("artist=$artist") }
         if (album != null) { args.add("-metadata"); args.add("album=$album") }
@@ -282,7 +375,7 @@ suspend fun transcodeToMp3(
         return false
     }
 
-/**
+    /**
      * Проверить, поддерживает ли установленный ffmpeg-kit декодер Siren/G.722.1.
      */
     fun checkSirenDecoderAvailable(): Boolean {
