@@ -35,6 +35,8 @@ class WebRtcEngine(
     private val onCallPhaseChanged: (CallPhase) -> Unit,
     private val onLocalSdpReady: (SessionDescription) -> Unit,
     private val onIceCandidateReady: (IceCandidate) -> Unit,
+    /** #CALLS-DIAG (2026-08-29): сырое имя ICE-состояния для экранной диагностики. */
+    private val onIceStateChanged: ((String) -> Unit)? = null,
 ) {
     companion object {
         private const val TAG = "WebRtcEngine"
@@ -327,6 +329,7 @@ class WebRtcEngine(
             override fun onSignalingChange(state: PeerConnection.SignalingState) {}
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                 AppLog.d(TAG, "ICE: $state")
+                onIceStateChanged?.invoke(state.name)
                 when (state) {
                     PeerConnection.IceConnectionState.CONNECTED -> onCallPhaseChanged(CallPhase.ACTIVE)
                     PeerConnection.IceConnectionState.FAILED -> onCallPhaseChanged(CallPhase.FAILED)

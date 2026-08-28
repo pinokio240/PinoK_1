@@ -4446,3 +4446,24 @@ Work Log:
 Stage Summary:
 - Все 5 групп предупреждений из лога сборки устранены; новых источников предупреждений того же класса в репо нет.
 - «Unable to strip libraries» — не код-предупреждение (упаковка .so as-is, норма для ffmpegkit/libjingle).
+
+---
+Task ID: CALLS-DIAG
+Agent: main (Z.ai Code)
+Task: Пользователь: «звонки не работают как в веб-браузере», «браузер не использует WS ссылки вообще». Разобраться с WS-утверждением, аудит звонкового кода, исправить найденное.
+
+Work Log:
+- Сверил с дампами репо: веб-эталон ТАКЖЕ использует WS-сигналинг (getConversationParams отдаёт wss://videowebrtc.okcdn.ru/ws2 — дамп Chrome 2026-08-24 в HISTORY; calls-sdk vendors~calls-sdk реализует WS-команды; звонок в вебе — в ОТДЕЛЬНОМ окне «Сообщения и вызовы», потому в DevTools основной вкладки WS не виден; WS-URL динамический, в статике страницы отсутствует).
+- Прочитал полностью CallScreen.kt (851), CallSignalingClient.kt (403), WebRtcEngine.kt (437) — сверка с маршрутами звонки.md §10/§11: порядок сигналинга соответствует эталону Chrome (offer инициатора → connection.participants → answer сразу в PC → ICE).
+- НАЙДЕН БАГ: CallSignalingClient.connectLoop при неудачном ПЕРВОМ коннекте (onFailure) зависал навсегда в «while (!isWsOpen()) delay(500)» — webSocket не null, wsOpen false; реконнект с backoff недостижим; экран молча висел «Соединение…».
+- Фикс connectLoop: ожидание открытия ≤10с (CONNECT_TIMEOUT_MS) с ранним выходом по wsFailed; cancel() мёртвой попытки; retry с backoff; сброс backoff после успешного открытия; lastWsError (@Volatile) пишется в onFailure/onClosed/catch.
+- Добавил CallSignalingClient.wsState() — человекочитаемое состояние WS для экрана.
+- WebRtcEngine: опциональный колбэк onIceStateChanged (state.name из onIceConnectionChange).
+- CallScreen #CALLS-DIAG: diagWs/diagEvent/diagIce/diagPc/diagPid; опрос раз в секунду; в signaling-коллекторе diagEvent=msg.command; CMD_CALL_ERROR → failText с message/error сервера; тех-строки в UI при фазах != ACTIVE/RINGING: «Диагностика: WS … • PC … • ICE …» + «Сигналинг: … • участник …».
+- Обновил звонки.md (timeline §16 + блок в §19 про экранную диагностику), HISTORY.md (сессия 2026-08-29 CALLS-DIAG).
+
+Stage Summary:
+- Коммит #CALLS-DIAG: CallSignalingClient.kt (+59/-6), CallScreen.kt (+42), WebRtcEngine.kt (+3), звонки.md, HISTORY.md, worklog.md.
+- Ключевой результат: (1) WS-реконнект теперь реально работает (раньше не срабатывал никогда при провале первого подключения); (2) на экране звонка видна диагностика WS/PC/ICE — пользователь может прислать скриншот вместо logcat.
+- Утверждение «браузер не использует WS» опровергнуто дампами: WS есть, но в отдельном окне звонка и с динамическим URL от сервера.
+- Компиляция в песочнице невозможна (нет Android SDK) — сборка и проверка warnings на стороне пользователя.

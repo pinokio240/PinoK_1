@@ -93,6 +93,9 @@ class CallSignalingClient(
     @Volatile
     private var conversationId: String = ""
 
+    /** #CALLS-DIAG (2026-08-29): сколько ждём открытия WS, прежде чем рвать попытку. */
+    private val CONNECT_TIMEOUT_MS = 10_000L
+
     private val _messages = MutableSharedFlow<SignalingMessage>(replay = 0, extraBufferCapacity = 64)
     val messages: SharedFlow<SignalingMessage> = _messages.asSharedFlow()
 
@@ -123,6 +126,17 @@ class CallSignalingClient(
     }
 
     fun isRunning(): Boolean = running
+
+    /**
+     * #CALLS-DIAG (2026-08-29): человекочитаемое состояние WS для экранной
+     * диагностики звонка (CallScreen показывает её при CONNECTING/FAILED/ENDED).
+     */
+    fun wsState(): String = when {
+        !running -> "выкл"
+        wsOpen -> "подключён"
+        lastWsError != null -> "ошибка: $lastWsError"
+        else -> "подключение…"
+    }
 
     // ─── Команды ────────────────────────────────────────────────
 
@@ -189,22 +203,43 @@ class CallSignalingClient(
                 val url = buildUrl(userId, conversationId, params, peerId)
                 AppLog.i(TAG, "connectLoop: connecting to signaling...")
                 val req = Request.Builder().url(url).build()
+                wsOpen = false
+                wsFailed = false
+                lastWsError = null
                 webSocket = httpClient.newWebSocket(req, WsListener())
-                // Ждём пока WS откроется/закроется; reconnect через delay при failure.
-                while (running && webSocket != null && !isWsOpen()) {
-                    delay(500)
+                // #CALLS-DIAG (2026-08-29): ждём открытия НЕ дольше CONNECT_TIMEOUT_MS
+                // и выходим раньше при явной ошибке (onFailure). Раньше при неудачном
+                // первом коннекте цикл «while (!isWsOpen())» крутился вечно —
+                // реконнект не срабатывал вовсе, звонок молча висел «Соединение…».
+                var waited = 0L
+                while (running && !isWsOpen() && !wsFailed && waited < CONNECT_TIMEOUT_MS) {
+                    delay(250)
+                    waited += 250
                 }
-                // WS открыт — держим соединение. Если закроется — listener сбросит wsOpen=false.
-                while (running && webSocket != null && isWsOpen()) {
+                if (!isWsOpen()) {
+                    try { webSocket?.cancel() } catch (_: Exception) {}
+                    if (running) {
+                        val why = lastWsError ?: "таймаут ${CONNECT_TIMEOUT_MS}мс"
+                        lastWsError = why
+                        AppLog.w(TAG, "connectLoop: WS не открыт ($why) — retry через ${backoff}мс")
+                        delay(backoff)
+                        backoff = minOf(backoff * 2, 30_000L)
+                    }
+                    continue
+                }
+                // WS открыт — держим соединение. Если закроется — listener сбросит wsOpen.
+                backoff = 1_000L
+                while (running && isWsOpen()) {
                     delay(2_000)
                 }
                 if (running) {
-                    AppLog.w(TAG, "connectLoop: WS закрыт, reconnect через ${backoff}ms")
+                    AppLog.w(TAG, "connectLoop: WS закрыт (${lastWsError ?: "без ошибки"}), reconnect через ${backoff}ms")
                     delay(backoff)
                     backoff = minOf(backoff * 2, 30_000L)
                 }
             } catch (e: Exception) {
                 AppLog.w(TAG, "connectLoop error: ${e.message}")
+                lastWsError = e.message ?: "ошибка соединения"
                 if (running) {
                     delay(backoff)
                     backoff = minOf(backoff * 2, 30_000L)
@@ -215,6 +250,12 @@ class CallSignalingClient(
 
     @Volatile
     private var wsOpen = false
+    /** #CALLS-DIAG: попытка провалилась (onFailure/onClosed до открытия). */
+    @Volatile
+    private var wsFailed = false
+    /** #CALLS-DIAG: последняя причина ошибки/закрытия WS. */
+    @Volatile
+    private var lastWsError: String? = null
     private fun isWsOpen() = wsOpen
 
     private fun buildUrl(
@@ -273,6 +314,8 @@ class CallSignalingClient(
     private inner class WsListener : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             wsOpen = true
+            wsFailed = false
+            lastWsError = null
             AppLog.i(TAG, "onOpen: signaling connected (code=${response.code})")
         }
 
@@ -325,11 +368,15 @@ class CallSignalingClient(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             wsOpen = false
+            wsFailed = true
+            lastWsError = "закрыт сервером (code=$code)"
             AppLog.i(TAG, "onClosed: code=$code reason=$reason")
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             wsOpen = false
+            wsFailed = true
+            lastWsError = t.message ?: "сбой соединения"
             AppLog.w(TAG, "onFailure: ${t.message}")
         }
     }

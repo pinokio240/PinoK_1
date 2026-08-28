@@ -143,6 +143,14 @@ fun CallScreen(
     val pendingLocalCandidates = remember { mutableStateOf<MutableList<org.webrtc.IceCandidate>>(mutableListOf()) }
     // #CALLS: call_id активного звонка — для кнопки «Ссылка» (vchat.createJoinLink).
     val activeCallId = remember { mutableStateOf<String?>(null) }
+    // #CALLS-DIAG (2026-08-29): экранная диагностика — состояние WS/PC/ICE и последнее
+    // событие сигналинга. Видна при CONNECTING/FAILED/ENDED: пользователь шлёт скриншот
+    // вместо logcat — сразу видно, где затык (WS не открылся / PC не создан / ICE FAILED).
+    var diagWs by remember { mutableStateOf("—") }
+    var diagEvent by remember { mutableStateOf("—") }
+    var diagIce by remember { mutableStateOf("—") }
+    var diagPc by remember { mutableStateOf("PC нет") }
+    var diagPid by remember { mutableStateOf("участник —") }
 
     val engine = remember {
         WebRtcEngine(
@@ -171,6 +179,7 @@ fun CallScreen(
                     pendingLocalCandidates.value.add(candidate)
                 }
             },
+            onIceStateChanged = { diagIce = it },
         )
     }
 
@@ -368,10 +377,21 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-DIAG: раз в секунду обновляем тех-строку (WS/PC/участник).
+    LaunchedEffect(Unit) {
+        while (true) {
+            diagWs = signaling.wsState()
+            diagPc = if (engine.hasPeerConnection()) "PC есть" else "PC нет"
+            diagPid = remoteParticipantId.value?.let { "участник $it" } ?: "участник —"
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+
     // #CALLS: слушаем WebSocket-сигналинг — SDP/ICE для WebRTC.
     LaunchedEffect(Unit) {
         signaling.messages.collect { msg ->
             AppLog.i("CallScreen", "signaling: command=${msg.command} sdp=${msg.sdp?.take(40)} cand=${msg.candidate?.take(40)}")
+            diagEvent = msg.command
             when (msg.command) {
                 re.pinok.realtime.CallSignalingClient.CMD_ANSWER,
                 re.pinok.realtime.CallSignalingClient.CMD_OFFER -> {
@@ -412,6 +432,10 @@ fun CallScreen(
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_CALL_ERROR -> {
                     AppLog.w("CallScreen", "Signaling error: ${msg.json}")
+                    // #CALLS-DIAG: показываем причину прямо на экране, не только в логе.
+                    val errText = msg.json.get("message")?.takeIf { it.isJsonPrimitive }?.asString
+                        ?: msg.json.get("error")?.takeIf { it.isJsonPrimitive }?.asString
+                    failText = if (errText != null) "Ошибка сигналинга: $errText" else "Ошибка сигналинга"
                     phase = CallPhase.FAILED
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_REGISTERED_PEER -> {
@@ -817,6 +841,24 @@ fun CallScreen(
                         }
                     }
                     else -> {}
+                }
+
+                // #CALLS-DIAG (2026-08-29): тех-строки диагностики — видны пока звонок
+                // НЕ активен (соединяемся/ошибка/завершён). Скриншот экрана заменяет logcat.
+                if (phase != CallPhase.ACTIVE && phase != CallPhase.RINGING) {
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        text = "Диагностика: WS $diagWs • $diagPc • ICE $diagIce",
+                        color = Color.White.copy(alpha = 0.45f),
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        text = "Сигналинг: $diagEvent • $diagPid",
+                        color = Color.White.copy(alpha = 0.45f),
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                    )
                 }
             }
         }
