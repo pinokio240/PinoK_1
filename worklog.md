@@ -4430,3 +4430,19 @@ Stage Summary:
 - Merge-коммит объединяет обе истории: полные звонки (e4ccc5a) + снапшот 213115f. Ничего не утеряно: все фичи обеих сторон в дереве.
 - SirenTranscoder.kt теперь содержит ВСЕ улучшения: TS-демуксер, genpts, ignore_unknown, validateTranscodedM4a, transcodeToMp3 с libmp3lame+ID3v2.
 - Режимы файлов нормализованы к 100644 (стиль репо), бэкап-ветки сохранены локально.
+
+---
+Task ID: WARNINGS-FIX
+Agent: main (Z.ai Code)
+Task: Убрать предупреждения компиляции из сборки пользователя (compileDebugKotlin): deprecated-иконки, лишний safe call, deprecated override, FlowPreview.
+
+Work Log:
+- CallsHistoryScreen.kt + CallsHistorySection.kt: Icons.Filled.CallMade/CallReceived → Icons.AutoMirrored.Filled.* (6 вхождений, импорты + использования). AutoMirrored-семейство по репо больше нигде не использовалось (проверено grep).
+- CallsWebViewScreen.kt:65 — убран лишний safe call: app.exchangeAuthRepository?.remixsid() → .remixsid() (receiver non-null).
+- CallsWebViewScreen.kt:111 — deprecated 4-арг onReceivedError заменён на современный overload (view, request: WebResourceRequest, error: WebResourceError) + импорт WebResourceError; minSdk 24 ≥ API 23 — совместимо.
+- VideoScreen.kt — @OptIn(kotlinx.coroutines.FlowPreview::class) для debounce (#VIDEO-SEARCH). MusicScreen с debounce не предупреждён компилятором (проверка OptIn-аннотации выше по файлу — не трогал).
+- Инцидент по ходу: фоновый процесс песочницы chmod'анул все файлы 755 и подменил .gitignore на Next.js-шаблон. Восстановлено: chmod 644 по списку git diff + git checkout -- .gitignore. Контент Android-файлов не пострадал (numstat-проверка).
+
+Stage Summary:
+- Все 5 групп предупреждений из лога сборки устранены; новых источников предупреждений того же класса в репо нет.
+- «Unable to strip libraries» — не код-предупреждение (упаковка .so as-is, норма для ffmpegkit/libjingle).

@@ -3,6 +3,7 @@ package re.pinok.ui.screens.calls
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -62,7 +63,7 @@ fun CallsWebViewScreen(
             }
             // 2) remixsid из storage (если нет в CookieManager)
             if (!cookies.containsKey("remixsid")) {
-                val rid = app.exchangeAuthRepository?.remixsid()
+                val rid = app.exchangeAuthRepository.remixsid()
                 if (!rid.isNullOrBlank()) cookies["remixsid"] = rid
             }
             // 3) статические куки
@@ -108,8 +109,8 @@ fun CallsWebViewScreen(
                                 AppLog.d(TAG, "nav: ${request.url}")
                                 return false
                             }
-                            override fun onReceivedError(view: WebView, errorCode: Int, description: String, failingUrl: String) {
-                                AppLog.e(TAG, "error $errorCode: $description url=$failingUrl")
+                            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                                AppLog.e(TAG, "error ${error.errorCode}: ${error.description} url=${request.url}")
                             }
                         }
                         webChromeClient = object : WebChromeClient() {

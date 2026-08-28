@@ -18,8 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallMade
-import androidx.compose.material.icons.filled.CallReceived
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.IconButton
@@ -181,10 +181,10 @@ fun CallHistoryItemCard(
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val (icon, tint) = when (item.direction) {
-                        CallDir.OUTGOING -> Icons.Filled.CallMade to Color(0xFF1976D2)
-                        CallDir.INCOMING -> Icons.Filled.CallReceived to Color(0xFF4CAF50)
-                        CallDir.MISSED_OUTGOING -> Icons.Filled.CallMade to Color(0xFFE53935)
-                        CallDir.MISSED_INCOMING -> Icons.Filled.CallReceived to Color(0xFFE53935)
+                        CallDir.OUTGOING -> Icons.AutoMirrored.Filled.CallMade to Color(0xFF1976D2)
+                        CallDir.INCOMING -> Icons.AutoMirrored.Filled.CallReceived to Color(0xFF4CAF50)
+                        CallDir.MISSED_OUTGOING -> Icons.AutoMirrored.Filled.CallMade to Color(0xFFE53935)
+                        CallDir.MISSED_INCOMING -> Icons.AutoMirrored.Filled.CallReceived to Color(0xFFE53935)
                     }
                     Icon(icon, null, Modifier.size(14.dp), tint = tint)
                     Spacer(Modifier.width(4.dp))

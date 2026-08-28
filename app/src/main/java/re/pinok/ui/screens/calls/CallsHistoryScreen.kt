@@ -20,8 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.CallMade
-import androidx.compose.material.icons.filled.CallReceived
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.outlined.PhoneDisabled
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -198,7 +198,7 @@ private fun CallHistoryCard(
                 Text(name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        if (direction == "входящий") Icons.Filled.CallReceived else Icons.Filled.CallMade,
+                        if (direction == "входящий") Icons.AutoMirrored.Filled.CallReceived else Icons.AutoMirrored.Filled.CallMade,
                         null, Modifier.size(14.dp),
                         tint = if (direction == "входящий") Color(0xFF4CAF50) else Color(0xFF1976D2),
                     )

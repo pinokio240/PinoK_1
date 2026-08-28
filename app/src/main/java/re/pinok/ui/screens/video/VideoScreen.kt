@@ -90,6 +90,7 @@ import java.util.Locale
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@OptIn(kotlinx.coroutines.FlowPreview::class) // #VIDEO-SEARCH: debounce — FlowPreview API
 fun VideoScreen(
     onVideoClick: (Video) -> Unit = {},
 ) {
