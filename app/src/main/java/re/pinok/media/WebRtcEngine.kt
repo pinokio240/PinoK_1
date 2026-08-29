@@ -394,7 +394,16 @@ class WebRtcEngine(
                         iceStateGen.incrementAndGet()
                         onCallPhaseChanged(CallPhase.ACTIVE)
                     }
-                    PeerConnection.IceConnectionState.FAILED -> onCallPhaseChanged(CallPhase.FAILED)
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        onCallPhaseChanged(CallPhase.FAILED)
+                        // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): при FAILED снимаем
+                        // getStats — candidate-pair статистика показывает, УХОДИЛИ ЛИ наши
+                        // STUN-проверки (requestsSent) и ПРИХОДИЛИ ЛИ ответы (responsesReceived).
+                        // Это решающий диагноз «обоюдной тишины»: если requestsSent>0 при
+                        // responsesReceived=0 на ВСЕХ парах — собеседник не отвечает (его
+                        // агент не запущен/answer до него не дошёл), а не сеть.
+                        dumpIceStats()
+                    }
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
                         val gen = iceStateGen.incrementAndGet()
                         signalingHandler?.postDelayed({
@@ -495,6 +504,54 @@ class WebRtcEngine(
         pendingRemoteIce.remove("remote")?.forEach { candidate ->
             peerConnection?.addIceCandidate(candidate)
         }
+    }
+
+    /**
+     * #CALLS-ICE-REANSWER (2026-08-29): снимок candidate-pair статистики при ICE FAILED.
+     * Для каждой пары логируем: типы/адреса локального и удалённого кандидата, state,
+     * nominated, requestsSent/responsesReceived (наши проверки) и requestsReceived/
+     * responsesSent (чужие проверки к нам). API: org.webrtc.RTCStatsCollectorCallback
+     * (stream-webrtc-android 1.3.10, libwebrtc M114).
+     */
+    private fun dumpIceStats() {
+        val pc = peerConnection ?: return
+        runCatching {
+            pc.getStats { report ->
+                try {
+                    val candInfo = HashMap<String, String>()
+                    for (stat in report.statsMap.values) {
+                        if (stat.type == "local-candidate" || stat.type == "remote-candidate") {
+                            val ip = stat.members["ip"] ?: stat.members["address"] ?: "?"
+                            val port = stat.members["port"] ?: "?"
+                            val ctype = stat.members["candidateType"] ?: "?"
+                            candInfo[stat.id] = "$ctype $ip:$port"
+                        }
+                    }
+                    val sb = StringBuilder()
+                    for (stat in report.statsMap.values) {
+                        if (stat.type == "candidate-pair") {
+                            val localId = stat.members["localCandidateId"]?.toString()
+                            val remoteId = stat.members["remoteCandidateId"]?.toString()
+                            sb.append("[")
+                                .append(candInfo[localId] ?: localId ?: "?")
+                                .append(" <-> ")
+                                .append(candInfo[remoteId] ?: remoteId ?: "?")
+                                .append("] state=").append(stat.members["state"])
+                                .append(" nom=").append(stat.members["nominated"])
+                                .append(" reqS=").append(stat.members["requestsSent"])
+                                .append(" resR=").append(stat.members["responsesReceived"])
+                                .append(" reqR=").append(stat.members["requestsReceived"])
+                                .append(" resS=").append(stat.members["responsesSent"])
+                                .append(" | ")
+                        }
+                    }
+                    val s = sb.toString()
+                    AppLog.w(TAG, if (s.isEmpty()) "ICE stats: нет candidate-pair в отчёте" else "ICE stats: $s")
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "ICE stats parse error: ${e.message}")
+                }
+            }
+        }.onFailure { AppLog.w(TAG, "ICE stats API error: ${it.message}") }
     }
 }
 

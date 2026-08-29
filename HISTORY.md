@@ -10666,3 +10666,80 @@ WebRtcEngine.kt (+27/-3), AppLog.kt (+3/-1), звонки.md (§8.3, §10, §11,
 теперь он различает «offer не дошёл» (offer —), «answer не ушёл» (offer ✓
 answer —, answer×N), «сервер отверг команду» (ошибка сервера/ack) и
 «сеть/TURN» (обa ✓ + ICE FAILED).
+
+---
+
+## Сессия 2026-08-29 (7) — Task ID: CALLS-ICE-REANSWER + CALLS-NAME-FIX
+
+### Проект: PinoK
+
+### Контекст: пользователь после сборки ffc39c3 прислал скриншот входящего звонка + лог 22:29:
+«Ошибка соединения», diag «WS подключён • PC есть • ICE FAILED», сигналинг
+«settings-update • участник 595859469344 • conv ✓ • offer ✓ • answer ✓» + «имя
+входящего с аватаркой нет» (заглушка «Входящий+звонок», аватар — буква «В»).
+
+### Разбор лога 22:29 (входящий, VK Desktop ← PinoK):
+
+1. **Сигналинг теперь БЕЗУПРЕЧЕН** (все фиксы 20b71a1..ffc39c3 сработали):
+   offer + 4 кандидата звонящего приняты ДО «Принять» (буфер движка), answer
+   создан и отправлен, ВСЕ 12 transmit-data ackнуты сервером
+   (`SERVER_RESPONSE: {"response":"transmit-data"}` ×12).
+2. **TURN-аллокация успешна** — у нас 4 relay-кандидата
+   (95.163.34.188×2, 90.156.236.85×2): credentials из WS `connection`
+   conversationParams валидны (гипотеза сессии 2026-08-23 подтверждена практикой).
+3. **Обе стороны за одним NAT** (srflx 95.26.25.9 у обоих), relay на одних
+   серверах — при живом ICE-агенте звонящего relay↔relay обязан связаться.
+4. **ICE: CHECKING (22:29:10.98) → FAILED (22:29:27.16)** — 16с без единой
+   успешной пары. Вывод: агент звонящего НЕ шлёт проверки → наш answer им
+   НЕ применён (первая копия потеряна/просрочена).
+5. **topology-changed {topology:SERVER, offerTo:[]}** через 10с после answer —
+   сервер сам фиксирует «медиа-ноги нет» (то же в логах 21:26 и 21:44).
+6. **Звонящий — VK Desktop** (peerId type WEB_TRANSPORT, msid ARDAMS —
+   нативный libwebrtc, НЕ Chrome; host-кандидатов не шлёт — SDK фильтрует).
+7. Звонящий сбросил через 40с (REMOTE_HANGUP, HUNGUP/closed-conversation).
+
+### Находка 1 (главная): для входящих НЕ БЫЛО ретрансмита answer.
+doReoffer работает только для исходящих; answer уходил РОВНО ОДИН РАЗ.
+Если звонящий пропустил его (race с accepted-call, сброс состояния при
+topology→SERVER) — починить было нечем.
+
+**Фикс (#CALLS-ICE-REANSWER):** CallScreen `doReanswer(reason)` — ретрансмит
+answer (engine.lastLocalSdp) + ВСЕХ локальных кандидатов (allLocalCandidates)
+для ВХОДЯЩИХ. Триггеры: accepted-call / registered-peer /
+topology-changed→SERVER. Гварды: direction==INCOMING, answerSent, !iceConnected,
+≤4 повторов, ≥3с между отправками; diag `ans×N`. iceConnected ставится в
+engine-callback при ACTIVE (после CONNECTED дубли запрещены — второй answer
+после stable может уронить setRemoteDescription у собеседника).
+
+**Находка 2 (диагностика):** при ICE FAILED теперь снимается getStats
+(WebRtcEngine.dumpIceStats): candidate-pair статистика — state, nominated,
+requestsSent/responsesReceived (наши проверки), requestsReceived/responsesSent
+(чужие). Следующий лог однозначно различит: reqS>0/resR=0/reqR=0 — собеседник
+молчит (answer не применён у него); reqR>0 — его проверки доходят, проблема
+в ответах. API: RTCStatsCollectorCallback (stream-webrtc-android 1.3.10).
+
+**Находка 3 (topology-SERVER при исходящем):** offerTo пуст → раньше мы молчали.
+Теперь doReoffer (как в эталоне: после смены topology сервер ждёт повторный offer).
+
+### Находка 4: «Входящий+звонок» — URLEncoder-баг + гонка.
+
+1. Screen.buildRoute (Call И ChatDetail!) кодировал заголовок
+   java.net.URLEncoder — FORM-кодирование (пробел → «+»), а Navigation
+   декодирует только %XX → «Входящий+звонок» на экране. Фикс:
+   android.net.Uri.encode (%20) — как в остальных маршрутах проекта
+   (artist_detail/catalog_section уже так делали).
+2. Гонка: навигация на CallScreen срабатывает мгновенно по payload, а
+   refreshIncomingCaller (async) не успевал → экран получал заглушку.
+   Фикс: CallScreen САМ подтягивает caller info (messagesGetCurrentCalls →
+   caller_id → usersGetByIds → peerName/peerPhoto state) с логами
+   `CALLER_INFO: id=… profile=OK/нет`; refreshIncomingCaller теперь логирует
+   callerId/profile (раньше отказ был невидим).
+
+**Файлы:** CallScreen.kt (+126), WebRtcEngine.kt (+59), Screen.kt (+17/-12),
+SovaApp.kt (+4), звонки.md (§8.2, §16, §19, §20.4), HISTORY.md, worklog.md.
+
+**Сборка:** на стороне пользователя: git pull → assembleDebug → входящий звонок
+→ что смотреть: `REANSWER #N (topology-SERVER)` после topology-changed;
+`ICE stats: …` при неудаче (решающий диагноз); `ICE: CONNECTED` — цель.
+Экран: имя/аватар должны подтянуться в течение ~1с после открытия; заголовок
+без «+». Скриншот diag при неудаче: `ans×N` покажет, сколько раз повторялся answer.

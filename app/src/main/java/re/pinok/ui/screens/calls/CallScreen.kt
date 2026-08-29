@@ -115,6 +115,12 @@ fun CallScreen(
     }
 
     val peer = CallParticipant(peerId = peerId, name = title, photo100 = photo)
+    // #CALLS-NAME-FIX (2026-08-29): имя/аватар — state, а не val: они могут подтянуться
+    // ПОСЛЕ навигации (refreshIncomingCaller в SovaApp — async, навигация срабатывает
+    // мгновенно по payload). Если пришли пустыми/заглушкой — сам подтягиваем через
+    // messagesGetCurrentCalls → usersGetByIds.
+    var peerName by remember { mutableStateOf(title) }
+    var peerPhoto by remember { mutableStateOf<String?>(photo) }
     val call = VkCall(
         callId = "",
         peer = peer,
@@ -149,6 +155,14 @@ fun CallScreen(
     // звонящий повисал и сбрасывал звонок (remote-hangup через ~37с).
     val offerReceived = remember { mutableStateOf(false) }
     val answerSent = remember { mutableStateOf(false) }
+    // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): флаг «ICE подключён» — блокирует
+    // ретрансмит answer после установления связи (дубликат answer после stable
+    // может уронить setRemoteDescription у собеседника).
+    val iceConnected = remember { mutableStateOf(false) }
+    // #CALLS-ICE-REANSWER: счётчик повторных answer + время последней отправки
+    // (анти-спам: не чаще раза в 3с, максимум 4 повторов за звонок).
+    var reanswerCount by remember { mutableStateOf(0) }
+    var lastAnswerSentAt by remember { mutableStateOf(0L) }
     // #CALLS-ACK-REOFFER (2026-08-29): diag-строка ретраев answer ("answer×N")
     var diagAnswer by remember { mutableStateOf("") }
     val uiScope = rememberCoroutineScope()
@@ -162,6 +176,7 @@ fun CallScreen(
                 val ok = signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
                 if (ok) {
                     answerSent.value = true
+                    lastAnswerSentAt = System.currentTimeMillis()
                     if (attempt > 1) diagAnswer = "answer×$attempt"
                     AppLog.i("CallScreen", "ANSWER отправлен (участник=$pid, попытка $attempt)")
                     return@launch
@@ -208,7 +223,11 @@ fun CallScreen(
     val engine = remember {
         WebRtcEngine(
             context = context,
-            onCallPhaseChanged = { phase = it },
+            onCallPhaseChanged = {
+                phase = it
+                // #CALLS-ICE-REANSWER: ICE CONNECTED — дальше answer не повторяем.
+                if (it == CallPhase.ACTIVE) iceConnected.value = true
+            },
             onLocalSdpReady = { sdp ->
                 // #CALLS: отправляем наш SDP (offer для исходящего, answer для входящего).
                 // Если participantId ещё неизвестен (исходящий: приходит из connection
@@ -296,6 +315,48 @@ fun CallScreen(
                 reofferCount++
                 diagReoffer = "offer×$reofferCount"
                 AppLog.i("CallScreen", "REOFFER #$reofferCount ($reason): offer + ${allLocalCandidates.value.size} кандидатов → $pid")
+            }
+        }
+    }
+
+    // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): РЕТРАНСМИТ ANSWER для ВХОДЯЩЕГО.
+    // Хронология лога 22:29: сигналинг полный (offer ✓, answer ✓ ack сервера, 12
+    // кандидатов ✓), TURN-аллокация успешна (4 relay), но ICE 16с в CHECKING → FAILED
+    // без единой пары; topology-changed → SERVER (offerTo:[]) через 10с; звонящий
+    // (VK Desktop, WEB_TRANSPORT) сбросил через 40с. Раз relay↔relay не связался —
+    // агент звонящего не шлёт проверки: первая копия answer им НЕ ПРИМЕНЕНА
+    // (потеряна/просрочена: race с accepted-call, сброс состояния при SERVER-topology).
+    // Для исходящих такой механизм есть (doReoffer), для входящих — НЕТ: answer
+    // отправлялся ровно один раз. Повторяем answer + ВСЕ локальные кандидаты на
+    // ключевые события, пока ICE не подключился.
+    val doReanswer: (String) -> Unit = { reason ->
+        if (direction != CallDirection.INCOMING) {
+            AppLog.i("CallScreen", "REANSWER пропущен ($reason): не входящий")
+        } else if (!answerSent.value) {
+            AppLog.i("CallScreen", "REANSWER пропущен ($reason): answer ещё не отправлялся")
+        } else if (iceConnected.value) {
+            AppLog.i("CallScreen", "REANSWER пропущен ($reason): ICE уже подключён")
+        } else if (reanswerCount >= 4) {
+            AppLog.w("CallScreen", "REANSWER пропущен ($reason): лимит 4 повторов")
+        } else {
+            val pid = remoteParticipantId.value
+            val sdp = engine.lastLocalSdp()
+            if (pid.isNullOrBlank() || sdp == null || sdp.type != SessionDescription.Type.ANSWER) {
+                AppLog.w("CallScreen", "REANSWER невозможен ($reason): pid=$pid, sdp=${sdp != null}")
+            } else {
+                val now = System.currentTimeMillis()
+                if (now - lastAnswerSentAt < 3000L) {
+                    AppLog.i("CallScreen", "REANSWER пропущен ($reason): <3с с последней отправки")
+                } else {
+                    lastAnswerSentAt = now
+                    signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                    allLocalCandidates.value.forEach { c ->
+                        signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
+                    }
+                    reanswerCount++
+                    diagAnswer = "ans×$reanswerCount"
+                    AppLog.i("CallScreen", "REANSWER #$reanswerCount ($reason): answer + ${allLocalCandidates.value.size} кандидатов → $pid")
+                }
             }
         }
     }
@@ -633,6 +694,11 @@ fun CallScreen(
                         msg.participantId?.let { remoteParticipantId.value = it }
                     }
                     doReoffer("accepted-call")
+                    // #CALLS-ICE-REANSWER: для входящего это может быть эхо НАШЕГО accept,
+                    // но также — уведомление, что звонящий (пере)подтвердил участие
+                    // (напр. после nudge-перерегистрации). Если его агент пропустил первую
+                    // копию answer — повторяем.
+                    doReanswer("accepted-call")
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_REGISTERED_PEER -> {
                     // #CALLS-OUTGOING (2026-08-24, подтверждено реальным WS):
@@ -651,6 +717,9 @@ fun CallScreen(
                         // (pid заполняется из connection.participants за секунду ДО
                         // registered-peer) — переотправка не срабатывала никогда.
                         doReoffer("registered-peer")
+                        // #CALLS-ICE-REANSWER: звонящий (пере)зарегистрировался — возможно,
+                        // его клиент перезапустился/сбросил состояние: повторяем answer.
+                        doReanswer("registered-peer")
                     }
                 }
                 "connection" -> {
@@ -732,6 +801,19 @@ fun CallScreen(
                     val offerTo = msg.json.get("offerTo")
                         ?.takeIf { it.isJsonArray }?.asJsonArray
                     AppLog.i("CallScreen", "topology-changed: topology=$topology offerTo=$offerTo")
+                    // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): topology-changed → SERVER
+                    // приходит через ~10с после answer, если сервер не видит медиа-ноги
+                    // (все три лога входящих: 21:26, 21:44, 22:29). offerTo пуст — но звонящий
+                    // при смене topology может сбросить своё SDP-состояние: повторяем answer
+                    // + кандидатов, чтобы он мог пересобрать соединение.
+                    if (topology == "SERVER") {
+                        doReanswer("topology-SERVER")
+                        if (direction == CallDirection.OUTGOING && (offerTo == null || offerTo.size() == 0)) {
+                            // #CALLS-FIX (2026-08-24): сервер ждёт повторную отправку offer
+                            // в новом режиме даже без offerTo (звонки.md §11).
+                            doReoffer("topology-SERVER")
+                        }
+                    }
                     if (offerTo != null && offerTo.size() > 0) {
                         val pid = offerTo[0].takeIf { it.isJsonPrimitive }?.asLong
                         if (pid != null && pid > 0L) {
@@ -776,6 +858,38 @@ fun CallScreen(
         onDispose {
             engine.release()
             signaling.stop()
+        }
+    }
+
+    // #CALLS-NAME-FIX (2026-08-29): самостоятельная подтяжка имени/аватара звонящего.
+    // Лог 22:29: экран открылся с заглушкой «Входящий звонок» — refreshIncomingCaller
+    // не успел (гонка с навигацией) либо молча не нашёл caller_id. Дублируем логику
+    // на экране и ЛОГИРУЕМ результат (раньше отказ был невидим).
+    LaunchedEffect(incoming) {
+        if (!incoming) return@LaunchedEffect
+        val placeholder = peerName.isBlank() || peerName == "Входящий звонок" || peerName == "Звонок"
+        if (!placeholder && !peerPhoto.isNullOrBlank()) return@LaunchedEffect
+        kotlinx.coroutines.delay(300) // даём шанс refreshIncomingCaller опередить
+        try {
+            val fetched = withContext(Dispatchers.IO) {
+                val cur = app.apiClient.messagesGetCurrentCalls().firstOrNull()
+                val cid = cur?.get("caller_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong ?: 0L
+                if (cid <= 0L) null else cid to app.apiClient.usersGetByIds(listOf(cid))[cid]
+            }
+            if (fetched == null) {
+                AppLog.w("CallScreen", "CALLER_INFO: не получен (нет активного звонка/caller_id=0)")
+            } else {
+                val (cid, profile) = fetched
+                AppLog.i("CallScreen", "CALLER_INFO: id=$cid profile=${if (profile != null) "OK" else "нет"}")
+                if (profile != null) {
+                    val nm = (profile.firstName + " " + profile.lastName).trim()
+                    if (nm.isNotBlank()) peerName = nm
+                    val ph = profile.photo100
+                    if (!ph.isNullOrBlank()) peerPhoto = ph
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.w("CallScreen", "CALLER_INFO error: ${e.message}")
         }
     }
 
@@ -883,7 +997,7 @@ fun CallScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(title, color = Color.White) },
+                title = { Text(peerName, color = Color.White) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(0xFF1A1A2E),
                     titleContentColor = Color.White,
@@ -909,14 +1023,17 @@ fun CallScreen(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (photo != null) {
+                    // #CALLS-NAME-FIX: локальная копия — делегированное свойство
+                    // не смарт-кастится после null-проверки.
+                    val ph = peerPhoto
+                    if (ph != null) {
                         AsyncImage(
-                            model = photo,
+                            model = ph,
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize().clip(CircleShape),
                         )
                     } else {
-                        Text(title.take(1).uppercase(), fontSize = 40.sp, color = Color.White)
+                        Text(peerName.take(1).uppercase(), fontSize = 40.sp, color = Color.White)
                     }
                 }
 
@@ -924,7 +1041,7 @@ fun CallScreen(
 
                 // Имя звонящего/собеседника — крупно (как в VK)
                 Text(
-                    text = title,
+                    text = peerName,
                     color = Color.White,
                     fontSize = 26.sp,
                     fontWeight = FontWeight.SemiBold,

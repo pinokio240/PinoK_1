@@ -4565,3 +4565,24 @@ Stage Summary:
 - Закрыты 7 остаточных дыр доставки SDP: accepted-call → reoffer (вероятный главный фикс исходящего), надёжный answer с ретраями, флаш кэша при позднем pid, accept ДО answer, nudge с re-accept + RINGING-nudge, ICE DISCONNECTED grace 10с, полная видимость ack'ов/потерь команд.
 - Следующий скриншот diag однозначно различает: offer — / offer ✓ answer — (answer×N) / ошибка сервера / оба ✓ + ICE FAILED.
 - Коммит + push на origin/PinoK; компиляция и тест на устройстве пользователя (в песочнице нет Android SDK).
+
+---
+Task ID: CALLS-ICE-REANSWER + CALLS-NAME-FIX
+Agent: main (Z.ai Code)
+Task: Пользователь (скриншот + лог 22:29 входящего): «Ошибка соединения», diag «WS подключён • PC есть • ICE FAILED», сигналинг «conv ✓ offer ✓ answer ✓»; «имя входящего с аватаркой нет».
+
+Work Log:
+- Полный разбор лога 22:29: сигналинг безупречен (offer+4 кандидата приняты до «Принять», answer отправлен, 12× transmit-data ack'нуты SERVER_RESPONSE), TURN-аллокация успешна (4 relay — credentials из WS connection валидны), обе стороны за одним NAT (srflx 95.26.25.9 у обоих) и на одних TURN (95.163.34.188/90.156.236.85) — а ICE 16с CHECKING → FAILED без единой пары. topology-changed {SERVER, offerTo:[]} через 10с (то же в логах 21:26/21:44). Звонящий — VK Desktop (WEB_TRANSPORT, msid ARDAMS — нативный libwebrtc), сброс через 40с.
+- Вывод: агент звонящего не шлёт проверки → наш answer им не применён. Для входящих ретрансмита answer НЕ СУЩЕСТВОВАЛО (doReoffer — только исходящие; answer уходил ровно один раз).
+- CallScreen #CALLS-ICE-REANSWER: doReanswer(reason) — ретрансмит answer (engine.lastLocalSdp) + всех локальных кандидатов для ВХОДЯЩИХ на accepted-call / registered-peer / topology-changed→SERVER; гварды: incoming, answerSent, !iceConnected, ≤4 повторов, ≥3с между отправками; iceConnected ставится при ACTIVE в engine-колбэке; diag «ans×N». Для исходящего: topology-SERVER с пустым offerTo → doReoffer.
+- WebRtcEngine #CALLS-ICE-REANSWER: dumpIceStats() при ICE FAILED — getStats (RTCStatsCollectorCallback) → в лог candidate-pair статистика (state/nominated/reqS/resR/reqR/resS + адреса) — следующий лог однозначно различит «собеседник молчит» (reqS>0, resR=0, reqR=0) от «проблема в ответах» (reqR>0).
+- Screen.kt #CALLS-NAME-FIX: «Входящий+звонок» — java.net.URLEncoder (FORM-кодирование: пробел → «+») в Call.buildRoute И ChatDetail.buildRoute; Navigation декодирует только %XX. Заменено на android.net.Uri.encode (%20) — как в остальных маршрутах проекта.
+- CallScreen #CALLS-NAME-FIX: гонка — навигация срабатывает раньше async refreshIncomingCaller. peerName/peerPhoto — state; LaunchedEffect сам подтягивает (messagesGetCurrentCalls → caller_id → usersGetByIds) с логами CALLER_INFO; UI (TopAppBar/аватар/имя) переведён на peerName/peerPhoto (smart-cast обойдён локальной копией).
+- SovaApp.refreshIncomingCaller: логи callerId/profile (раньше отказ был невидим).
+- звонки.md: §8.2 (topology-changed — новая семантика), §16 (+2 строки), §19 (диаг-легенда + маркеры REANSWER/CALLER_INFO/ICE stats), §20.4 (полный разбор 22:29). HISTORY.md (запись (7)), worklog.md.
+- Проверки: баланс скобок 0/0 по 3 файлам (SovaApp — преморний -13 в строках); URLEncoder в Screen.kt остался только в комментариях; смарт-каст делегированного свойства обойдён; peer = CallParticipant оставлен на исходных title/photo (инициальные значения для acceptCall).
+
+Stage Summary:
+- Сигналинг-этап входящих теперь считается закрытым (ack'и сервера это доказывают); открытый фронт — применение answer на стороне звонящего. Первый в истории механизм ретрансмита answer для входящих + решающая диагностика (ICE stats) при провале.
+- Имя/аватар: двойной баг (FORM-кодирование «+» + гонка навигации) закрыт на обоих уровнях (route + экран).
+- Сборка/тест на устройстве пользователя (в песочнице нет Android SDK): git pull → assembleDebug → входящий звонок → смотреть REANSWER #N, ICE stats при неудаче, CALLER_INFO.

@@ -170,9 +170,13 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         const val ARG_PEER_ID = "peerId"
         const val ARG_TITLE = "title"
         const val ARG_PHOTO = "photo"
+        // #CALLS-NAME-FIX (2026-08-29): java.net.URLEncoder делает FORM-кодирование —
+        // пробел → «+», а Navigation декодирует только %XX (Uri.decode): заголовки
+        // диалогов отображались как «Имя+Фамилия». android.net.Uri.encode даёт %20,
+        // который Navigation корректно разворачивает обратно в пробел.
         fun buildRoute(peerId: Long, title: String, photo: String?): String {
-            val t = java.net.URLEncoder.encode(title.ifBlank { "Диалог" }, "UTF-8")
-            val p = photo?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+            val t = android.net.Uri.encode(title.ifBlank { "Диалог" })
+            val p = photo?.let { android.net.Uri.encode(it) } ?: ""
             return "chat_detail/$peerId?title=$t&photo=$p"
         }
     }
@@ -322,9 +326,12 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         const val ARG_INCOMING = "incoming"
         const val ARG_PAYLOAD = "payload"
         fun buildRoute(peerId: Long, title: String, photo: String?, incoming: Boolean, payload: String? = null): String {
-            val t = java.net.URLEncoder.encode(title.ifBlank { "Звонок" }, "UTF-8")
-            val p = photo?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
-            val pl = payload?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+            // #CALLS-NAME-FIX (2026-08-29): URLEncoder (FORM) превращал пробел в «+»:
+            // «Входящий звонок» приходил на экран как «Входящий+звонок» (Navigation
+            // декодирует %XX, но не «+»). Uri.encode → %20 → корректный пробел.
+            val t = android.net.Uri.encode(title.ifBlank { "Звонок" })
+            val p = photo?.let { android.net.Uri.encode(it) } ?: ""
+            val pl = payload?.let { android.net.Uri.encode(it) } ?: ""
             return "call/$peerId?title=$t&photo=$p&incoming=$incoming&payload=$pl"
         }
     }

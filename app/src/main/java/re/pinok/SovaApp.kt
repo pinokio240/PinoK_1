@@ -1291,6 +1291,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
                 val callerId = withContext(Dispatchers.IO) {
                     apiClient.messagesGetCurrentCalls().firstOrNull()?.get("caller_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
                 }
+                // #CALLS-NAME-FIX (2026-08-29): раньше отказ был невидим (молча return)
+                // — в логе 22:29 имя/аватар остались заглушкой без единой подсказки почему.
+                AppLog.i("SovaApp", "refreshIncomingCaller: callerId=$callerId")
                 if (callerId <= 0L) {
                     pendingIncomingCallPeerId = callerId
                     return@launch
@@ -1299,6 +1302,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
                 val profile = withContext(Dispatchers.IO) {
                     apiClient.usersGetByIds(listOf(callerId))[callerId]
                 }
+                AppLog.i("SovaApp", "refreshIncomingCaller: profile=${if (profile != null) "OK" else "нет"}")
                 if (profile != null) {
                     val name = (profile.firstName + " " + profile.lastName).trim()
                     pendingIncomingCallTitle = name.take(40).ifBlank { "Входящий звонок" }
