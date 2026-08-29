@@ -4543,3 +4543,25 @@ Stage Summary:
 - Добавлен первый watchdog для входящего: nudge-перерегистрация WS через 8с без offer (сервер разошлёт registered-peer, звонящий переотправит offer) и честный FAILED через 45с вместо вечного «Соединение…».
 - Диагностика на экране теперь различает «offer не дошёл» (offer —) и «answer не ушёл» (offer ✓ answer —) и «ICE/сеть» (оба ✓ + ICE FAILED).
 - Коммит + push на origin/PinoK; сборка/тест на устройстве пользователя (git pull → assembleDebug).
+
+---
+Task ID: CALLS-ACK-REOFFER
+Agent: main (Z.ai Code)
+Task: Пользователь после теста сборки b1a0bee (#CALLS-IN-OFFER): «Уже чуть лучше но не работает». Лог/скриншот не приложены — полный аудит входящего и исходящего пути на предмет остаточных дыр доставки SDP/ICE + усиление диагностики.
+
+Work Log:
+- Перечитал worklog (CALLS-DIAG → CALLS-IN-OFFER), CallScreen.kt (1098), CallSignalingClient.kt (453), WebRtcEngine.kt (486), SovaApp (входящая цепочка), звонки.md (§8.3/§10/§11/§16/§19/§20), AppLog (per-category gating).
+- НАХОДКА 1: серверное уведомление accepted-call игнорировалось (falls to else в when). Лог 20:31: registered-peer 25.316 → accepted-call 32.487 — если сервер ретранслирует transmit-data только «принявшим», reoffer на registered-peer тоже выбрасывался. Фикс: CMD_ACCEPTED_CALL + doReoffer("accepted-call") (guard answerReceived; для входящего — эхо своего accept, пропускается).
+- НАХОДКА 2: answerSent=true ставился ДО отправки; send() при закрытом WS молча отбрасывал команду. Фикс: send()→Boolean; sendAnswerReliably — ретрай 500мс×30 (переживает реконнект), answerSent только на успехе, diag answer×N.
+- НАХОДКА 3: offer без participantId → answer навсегда в кэше. Фикс: flushPendingLocal(pid) — флаш SDP/ICE-кэша при первом появлении pid (CMD_CANDIDATE, connection.participants, accepted-call); connection.participants-ветка переведена на общий флаш.
+- НАХОДКА 4: «Принять» — accept-call перенесён ДО engine.acceptCall (детерминированный порядок; engine — асинхронный post).
+- НАХОДКА 5: nudge перерегистрировал WS без повторного accept (новый peer мог считаться «не принявшим»). Фикс: sigRestart(reAccept) — после открытия WS повторный accept-call (только CONNECTING-nudge); добавлен RINGING-nudge (7с без offer до «Принять», invoke(false)).
+- НАХОДКА 6 (#CALLS-DROP-GRACE): ICE DISCONNECTED мгновенно = ENDED — транзиентные пропадания сети рвали разговоры. Фикс: grace 10с с генерационным счётчиком (CONNECTED инвалидирует таймер); ICE-лог d→i; endCall инвалидирует таймер.
+- НАХОДКА 7: диагностика — ack'и сервера (type:response/error) ранее игнорировались; теперь SERVER_RESPONSE/SERVER_ERROR на INFO + CallScreen-branch («ack:…»/«ошибка сервера»); send-лог command/seq/ok на INFO; detectCommand распознаёт примитивный sdp-энвелоп (data.sdp строкой + data.type); тег CallSignaling → категория CALLS (AppLog.categoryForTag); diag + conv ✓/— и answer×N; guard повторного offer учитывает и answerSent.
+- Проверки: баланс скобок/скобок 0 по всем 4 файлам; grep на остатки sigRestart?.invoke() без аргумента, answerSent.value=true вне ретраера — чисто; git diff просмотрен полностью.
+- Документация: звонки.md (§8.3 строки accepted-call/response/примитивный sdp; §10 маршрут — RINGING-nudge, порядок accept, sendAnswerReliably, DROP-GRACE; §11 — accepted-call reoffer; §16 timeline строка; §19 diag-легенда + маркеры; §20.3 разбор), HISTORY.md (запись (6)), worklog.md.
+
+Stage Summary:
+- Закрыты 7 остаточных дыр доставки SDP: accepted-call → reoffer (вероятный главный фикс исходящего), надёжный answer с ретраями, флаш кэша при позднем pid, accept ДО answer, nudge с re-accept + RINGING-nudge, ICE DISCONNECTED grace 10с, полная видимость ack'ов/потерь команд.
+- Следующий скриншот diag однозначно различает: offer — / offer ✓ answer — (answer×N) / ошибка сервера / оба ✓ + ICE FAILED.
+- Коммит + push на origin/PinoK; компиляция и тест на устройстве пользователя (в песочнице нет Android SDK).

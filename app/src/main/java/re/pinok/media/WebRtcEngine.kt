@@ -78,6 +78,14 @@ class WebRtcEngine(
     @Volatile
     private var pendingRemoteSdp: SessionDescription? = null
 
+    // #CALLS-DROP-GRACE (2026-08-29): DISCONNECTED часто транзиентен (смена Wi-Fi↔LTE,
+    // краткая потеря пакетов) — ICE восстанавливается сам. Раньше первый же
+    // DISCONNECTED мгновенно переводил экран в ENDED — живые разговоры обрывались.
+    // Даём 10с на восстановление: CONNECTED/повторный DISCONNECTED инвалидируют таймер
+    // (генерационный счётчик), переживший таймер закрывает звонок.
+    private val iceStateGen = java.util.concurrent.atomic.AtomicLong(0)
+    private val iceRecoveryTimeoutMs = 10_000L
+
     /** Установлен ли remote description (или он ждёт в буфере до создания PC). */
     fun hasRemoteDescription(): Boolean =
         peerConnection?.remoteDescription != null || pendingRemoteSdp != null
@@ -183,6 +191,8 @@ class WebRtcEngine(
     }
 
     fun endCall() {
+        // инвалидирует возможный DISCONNECTED-таймер
+        iceStateGen.incrementAndGet()
         post {
             localAudioTrack?.setEnabled(false)
             peerConnection?.close()
@@ -374,12 +384,26 @@ class WebRtcEngine(
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onSignalingChange(state: PeerConnection.SignalingState) {}
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                AppLog.d(TAG, "ICE: $state")
+                // #CALLS-DROP-GRACE: INFO вместо DEBUG — ICE-переходы должны быть видны
+                // в любом логе (раньше тонули в DEBUG-фильтре).
+                AppLog.i(TAG, "ICE: $state")
                 onIceStateChanged?.invoke(state.name)
                 when (state) {
-                    PeerConnection.IceConnectionState.CONNECTED -> onCallPhaseChanged(CallPhase.ACTIVE)
+                    PeerConnection.IceConnectionState.CONNECTED -> {
+                        // инвалидирует висящий DISCONNECTED-таймер (генерация изменилась)
+                        iceStateGen.incrementAndGet()
+                        onCallPhaseChanged(CallPhase.ACTIVE)
+                    }
                     PeerConnection.IceConnectionState.FAILED -> onCallPhaseChanged(CallPhase.FAILED)
-                    PeerConnection.IceConnectionState.DISCONNECTED -> onCallPhaseChanged(CallPhase.ENDED)
+                    PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        val gen = iceStateGen.incrementAndGet()
+                        signalingHandler?.postDelayed({
+                            if (gen == iceStateGen.get() && peerConnection != null) {
+                                AppLog.w(TAG, "ICE DISCONNECTED держится >${iceRecoveryTimeoutMs / 1000}с — завершаем звонок")
+                                onCallPhaseChanged(CallPhase.ENDED)
+                            }
+                        }, iceRecoveryTimeoutMs)
+                    }
                     else -> {}
                 }
             }

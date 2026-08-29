@@ -10586,3 +10586,83 @@ PC был создан (ICE CLOSED), значит основной была пр
 перерегистрация WS (nudge)`, звонящий должен переотправить offer; если и
 после nudge тишина — через 45с экран честно скажет «Данные звонка не получены»
 вместо вечного «Соединение…», а diag-строка покажет `offer —`.
+
+---
+
+## 2026-08-29 (6) — Task ID: CALLS-ACK-REOFFER — «Уже чуть лучше но не работает»: остаточные дыры доставки SDP
+
+Пользователь протестировал сборку b1a0bee (#CALLS-IN-OFFER): «Уже чуть лучше
+но не работает». Прогресс есть (nudge/буферизация сдвинули входящий с мёртвой
+точки), но звонок по-прежнему не устанавливается. Свежий лог/скриншот не
+приложены, поэтому выполнен полный аудит входящего И исходящего пути на
+предмет остаточных дыр доставки SDP/ICE — найдено и закрыто 7 проблем
+(#CALLS-ACK-REOFFER + #CALLS-DROP-GRACE).
+
+**Находка 1 (accepted-call игнорировался — вероятно главная):** сервер шлёт
+вызывающему `accepted-call`, когда вызываемый принял звонок. В логе 20:31
+REGISTERED_PEER собеседника был в 25.316, а accepted-call — в 32.487 (7
+секунд между ними). Если сервер ретранслирует transmit-data только
+«принявшим» участникам, то наш reoffer на registered-peer (фикс
+#CALLS-REOFFER) тоже выбрасывался — переотправка происходила ДО момента
+реальной готовности собеседника. Теперь `doReoffer("accepted-call")` —
+переотправка offer+кандидатов ещё и в момент принятия звонка (guard
+answerReceived сохранён). Для входящего это эхо собственного accept —
+безопасно пропускается.
+
+**Находка 2 (answer терялся молча):** `CallSignalingClient.send()` при
+закрытом WS отбрасывал команду, но `answerSent.value = true` ставился ДО
+отправки (в onLocalSdpReady) — ретраев не существовало. Теперь send()
+возвращает Boolean; `sendAnswerReliably`: ретрай каждые 500мс до 15с
+(переживает WS-реконнект), answerSent=true ТОЛЬКО на успешной отправке;
+если answer так и не ушёл — FAILED с текстом. Diag: `answer×N`.
+
+**Находка 3 (offer без participantId блокировал answer навсегда):** если
+offer пришёл без participantId (вариант релея), созданный answer кэшировался
+в pendingLocalSdp и не отправлялся никогда — pid появлялся позже из
+candidates/connection. Теперь `flushPendingLocal(pid)`: флаш кэшированных
+SDP/ICE при первом появлении participantId (в CMD_CANDIDATE, в
+connection.participants, в accepted-call).
+
+**Находка 4 (порядок accept/answer):** в «Принять» `signaling.acceptCall`
+теперь уходит ДО `engine.acceptCall` — детерминированно раньше answer
+(engine.acceptCall — асинхронный post на signaling thread; сервер может
+ретранслировать transmit-data только подтвердившим участие). Лог
+`Принять: accept-call отправлен/ОТБРОШЕН`.
+
+**Находка 5 (nudge без re-accept + нет RINGING-nudge):** перерегистрация WS
+создавала нового peer'а, о котором сервер мог знать «не принявшим» — его
+transmit-data не ретранслировался. Теперь sigRestart(reAccept: Boolean):
+после перерегистрации и открытия WS отправляется ПОВТОРНЫЙ accept-call
+(только для CONNECTING-nudge; RINGING-nudge accept не повторяет —
+пользователь ещё не принял). Добавлен RINGING-nudge: 7с в RINGING без offer →
+перерегистрация — offer буферизуется в движке ещё ДО нажатия «Принять».
+
+**Находка 6 (DISCONNECTED рвал живые звонки, #CALLS-DROP-GRACE):** первый же
+ICE DISCONNECTED переводил экран в ENDED — транзиентные пропадания сети
+(Wi-Fi↔LTE) обрывали разговор, хотя ICE восстанавливается сам. Теперь
+grace 10с с генерационным счётчиком: CONNECTED/повторный DISCONNECTED
+инвалидируют таймер, переживший таймер закрывает звонок. ICE-переходы
+подняты с DEBUG до INFO.
+
+**Находка 7 (слепые зоны диагностики):** (а) ack'и сервера
+`{type:"response"|"error", sequence, response, participantIds}` молча
+игнорировались — теперь логируются на INFO (`SERVER_RESPONSE/SERVER_ERROR`)
+и видны в diag как `ack:…`/`ошибка сервера`; (б) `send: command=… seq=…
+ok=true/false` на INFO — потеря любой команды теперь видна в логе;
+(в) detectCommand распознаёт примитивный sdp-энвелоп
+(`data:{sdp:"v=0…", type:"offer"}` — раньше классифицировался «event» и
+терялся); (г) тег CallSignaling отнесён к категории CALLS; (д) diag
+дополнена `conv ✓/—` (есть ли conversation_id) и `answer×N`.
+
+**Файлы:** CallScreen.kt (+136/-32), CallSignalingClient.kt (+56/-25),
+WebRtcEngine.kt (+27/-3), AppLog.kt (+3/-1), звонки.md (§8.3, §10, §11, §16,
+§19, §20.3), HISTORY.md, worklog.md.
+
+**Сборка:** на стороне пользователя: git pull → assembleDebug → тест обоих
+направлений. Что смотреть в логе: `ACCEPTED_CALL: …` → `REOFFER #N
+(accepted-call)` (исходящий); `send: command=transmit-data ok=true` +
+`SERVER_RESPONSE: …` (доставка подтверждена сервером); `ANSWER отправлен
+(участник=…, попытка 1)`; `ICE: CONNECTED`. При неудаче — скриншот diag:
+теперь он различает «offer не дошёл» (offer —), «answer не ушёл» (offer ✓
+answer —, answer×N), «сервер отверг команду» (ошибка сервера/ack) и
+«сеть/TURN» (обa ✓ + ICE FAILED).

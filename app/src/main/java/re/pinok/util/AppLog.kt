@@ -219,7 +219,9 @@ object AppLog {
         "DraggableLogFab", "BugReport", "ThemeManager", "BottomNav" -> LogCategory.UI
 
         // CALLS
-        "WebRtcEngine", "Queuev4Client", "CallScreen", "CallsHistory" -> LogCategory.CALLS
+        // #CALLS-ACK-REOFFER (2026-08-29): "CallSignaling" добавлен (раньше падал в
+        // else → SYSTEM). Категория CALLS принудительно включается в SovaApp.startCallSignaling.
+        "WebRtcEngine", "Queuev4Client", "CallScreen", "CallsHistory", "CallSignaling" -> LogCategory.CALLS
 
         // SYSTEM
         "SovaApp", "MainActivity", "BootReceiver", "Linkify", "AppLog",

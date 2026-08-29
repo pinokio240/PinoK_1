@@ -66,6 +66,13 @@ class CallSignalingClient(
          *  participantType:"USER", peerId:{id,type} } — participantId здесь —
          *  ID участника, НА КОТОРЫЙ нужно слать offer/ICE (исходящий). */
         const val CMD_REGISTERED_PEER = "registered-peer"
+        /** #CALLS-ACK-REOFFER (2026-08-29): собеседник ПРИНЯЛ звонок.
+         *  Сервер шлёт { notification:"accepted-call" } вызывающему. Это ЕДИНСТВЕННЫЙ
+         *  гарантированный момент, когда вызываемый готов принимать transmit-data
+         *  (лог 20:31: registered-peer в 25.316, accepted-call в 32.487 — 7с между
+         *  ними): если сервер ретранслирует transmit-data только «принявшим» peer'ам,
+         *  offer, отправленный на registered-peer, тоже выбрасывался. */
+        const val CMD_ACCEPTED_CALL = "accepted-call"
         /** Ack от сервера: { type:"response", sequence:N, response:"transmit-data"|"accept-call" }. */
         const val CMD_RESPONSE = "response"
         /** Собеседник завершил звонок / участник покинул conversation. */
@@ -143,8 +150,8 @@ class CallSignalingClient(
 
     // ─── Команды ────────────────────────────────────────────────
 
-    /** Принять входящий звонок (audio). */
-    fun acceptCall(isVideo: Boolean = false) {
+    /** Принять входящий звонок (audio). @return true — команда реально ушла в WS. */
+    fun acceptCall(isVideo: Boolean = false): Boolean {
         val media = JsonObject().apply {
             addProperty("isAudioEnabled", true)
             addProperty("isVideoEnabled", isVideo)
@@ -155,41 +162,43 @@ class CallSignalingClient(
         }
         val params = mutableMapOf<String, Any>("mediaSettings" to media)
         if (conversationId.isNotBlank()) params["conversationId"] = conversationId
-        send(CMD_ACCEPT_CALL, params)
+        return send(CMD_ACCEPT_CALL, params)
     }
 
-    /** Отклонить входящий звонок. */
-    fun declineCall() {
+    /** Отклонить входящий звонок. @return true — команда реально ушла в WS. */
+    fun declineCall(): Boolean {
         val params = mutableMapOf<String, Any>("reason" to "declined")
         if (conversationId.isNotBlank()) params["conversationId"] = conversationId
-        send(CMD_HANGUP, params)
+        return send(CMD_HANGUP, params)
     }
 
-    /** Завершить звонок. */
-    fun hangup(reason: String = "hungup") {
+    /** Завершить звонок. @return true — команда реально ушла в WS. */
+    fun hangup(reason: String = "hungup"): Boolean {
         val params = mutableMapOf<String, Any>("reason" to reason)
         if (conversationId.isNotBlank()) params["conversationId"] = conversationId
-        send(CMD_HANGUP, params)
+        return send(CMD_HANGUP, params)
     }
 
-    /** Отправить SDP (answer для входящего, offer для исходящего). */
-    fun sendSdp(participantId: String, sdp: String, type: String) {
+    /** Отправить SDP (answer для входящего, offer для исходящего).
+     *  @return true — команда реально ушла в WS (#CALLS-ACK-REOFFER: false = потеряна,
+     *  вызывающему ответ нужен ретрай — answer терять нельзя). */
+    fun sendSdp(participantId: String, sdp: String, type: String): Boolean {
         val data = JsonObject().apply {
             addProperty("sdp", sdp)
             addProperty("type", type)
         }
-        send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
+        return send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
     }
 
-    /** Отправить ICE candidate. */
-    fun sendCandidate(participantId: String, sdpMid: String?, sdpMLineIndex: Int?, candidate: String) {
+    /** Отправить ICE candidate. @return true — команда реально ушла в WS. */
+    fun sendCandidate(participantId: String, sdpMid: String?, sdpMLineIndex: Int?, candidate: String): Boolean {
         val c = JsonObject().apply {
             addProperty("candidate", candidate)
             sdpMid?.let { addProperty("sdpMid", it) }
             sdpMLineIndex?.let { addProperty("sdpMLineIndex", it) }
         }
         val data = JsonObject().apply { add("candidate", c) }
-        send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
+        return send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
     }
 
     // ─── Внутреннее ─────────────────────────────────────────────
@@ -287,16 +296,20 @@ class CallSignalingClient(
         return if (base.contains("?")) base + "&" + query else base + "?" + query
     }
 
-    private fun send(command: String, params: Map<String, Any>) {
-        val ws = webSocket ?: return
-        if (!wsOpen) {
+    /** #CALLS-ACK-REOFFER (2026-08-29): send возвращает Boolean — раньше команда при
+     *  закрытом WS молча отбрасывалась (answer терялось навсегда, флаг answerSent
+     *  при этом уже стоял true). Теперь вызывающий код видит неудачу и ретраит. */
+    private fun send(command: String, params: Map<String, Any>): Boolean {
+        val ws = webSocket
+        if (ws == null || !wsOpen) {
             AppLog.w(TAG, "send: WS не открыт, команда '$command' отброшена")
-            return
+            return false
         }
         try {
+            val seq = sequence.incrementAndGet()
             val payload = JsonObject().apply {
                 addProperty("command", command)
-                addProperty("sequence", sequence.incrementAndGet())
+                addProperty("sequence", seq)
                 params.forEach { (k, v) ->
                     when (v) {
                         is String -> addProperty(k, v)
@@ -307,10 +320,14 @@ class CallSignalingClient(
                     }
                 }
             }
-            AppLog.d(TAG, "send: $payload")
-            ws.send(payload.toString())
+            val ok = ws.send(payload.toString())
+            // INFO (не DEBUG): факт отправки/потери команд — главный диагностический след
+            AppLog.i(TAG, "send: command=$command seq=$seq ok=$ok")
+            AppLog.d(TAG, "send payload: $payload")
+            return ok
         } catch (e: Exception) {
             AppLog.w(TAG, "send error: ${e.message}")
+            return false
         }
     }
 
@@ -325,6 +342,15 @@ class CallSignalingClient(
         override fun onMessage(webSocket: WebSocket, text: String) {
             try {
                 val json = JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject ?: return
+                // #CALLS-ACK-REOFFER (2026-08-29): ack'и/ошибки сервера — {type:"response"|"error",
+                // sequence:N, response:"transmit-data"|"accept-call", participantIds:[…]}. Раньше
+                // молча игнорировались — успех/отказ доставки наших offer/answer/accept был невиден.
+                val topType = json.get("type")?.takeIf { it.isJsonPrimitive }?.asString
+                if (topType == "response" || topType == "error") {
+                    AppLog.i(TAG, "SERVER_${topType.uppercase()}: $text")
+                    _messages.tryEmit(SignalingMessage(topType, json))
+                    return
+                }
                 val command = json.get("command")?.takeIf { it.isJsonPrimitive }?.asString
                     ?: json.get("notification")?.takeIf { it.isJsonPrimitive }?.asString
                     ?: detectCommand(json)
@@ -347,6 +373,8 @@ class CallSignalingClient(
                     AppLog.i(TAG, "REGISTERED_PEER: $text")
                 } else if (effective2 == CMD_REMOTE_HANGUP) {
                     AppLog.i(TAG, "REMOTE_HANGUP: $text")
+                } else if (effective2 == CMD_ACCEPTED_CALL || effective2 == CMD_ACCEPTED_OUTGOING) {
+                    AppLog.i(TAG, "ACCEPTED_CALL: $text")
                 } else {
                     AppLog.d(TAG, "onMessage: command=$command eff=$effective body=${text.take(300)}")
                 }
@@ -384,17 +412,23 @@ class CallSignalingClient(
         }
     }
 
+    /** #CALLS-ACK-REOFFER (2026-08-29): распознаём и примитивный sdp — envelope вида
+     *  {data:{sdp:"v=0…", type:"offer"}} (строка, а не объект). Раньше такой offer
+     *  классифицировался как «event» и молча терялся. */
     private fun detectCommand(json: JsonObject): String {
         val data = json.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
-        val sdp = data?.get("sdp")?.takeIf { it.isJsonObject }?.asJsonObject
-            ?: data?.get("sdp")?.takeIf { it.isJsonPrimitive } ?: json.get("sdp")
+        val sdpObj = data?.get("sdp")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?: json.get("sdp")?.takeIf { it.isJsonObject }?.asJsonObject
+        val sdpPrim = data?.get("sdp")?.takeIf { it.isJsonPrimitive } != null ||
+            json.get("sdp")?.takeIf { it.isJsonPrimitive } != null
         val cand = data?.get("candidate")?.takeIf { it.isJsonObject }?.asJsonObject
             ?: json.get("candidate")?.takeIf { it.isJsonObject }?.asJsonObject
-        val sdpType = sdp?.takeIf { it.isJsonObject }?.asJsonObject
-            ?.get("type")?.takeIf { it.isJsonPrimitive }?.asString
+        val sdpType = sdpObj?.get("type")?.takeIf { it.isJsonPrimitive }?.asString
+            ?: data?.get("type")?.takeIf { it.isJsonPrimitive }?.asString
+            ?: json.get("type")?.takeIf { it.isJsonPrimitive }?.asString
         return when {
-            sdp != null && sdpType == "offer" -> CMD_OFFER
-            sdp != null && sdpType == "answer" -> CMD_ANSWER
+            (sdpObj != null || sdpPrim) && sdpType == "offer" -> CMD_OFFER
+            (sdpObj != null || sdpPrim) && sdpType == "answer" -> CMD_ANSWER
             cand != null -> CMD_CANDIDATE
             json.get("notification")?.takeIf { it.isJsonPrimitive }?.asString == "connection" -> "connection"
             json.has("endpoint") -> "connection"

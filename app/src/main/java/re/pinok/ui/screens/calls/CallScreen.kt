@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -148,10 +149,40 @@ fun CallScreen(
     // звонящий повисал и сбрасывал звонок (remote-hangup через ~37с).
     val offerReceived = remember { mutableStateOf(false) }
     val answerSent = remember { mutableStateOf(false) }
+    // #CALLS-ACK-REOFFER (2026-08-29): diag-строка ретраев answer ("answer×N")
+    var diagAnswer by remember { mutableStateOf("") }
+    val uiScope = rememberCoroutineScope()
+    // #CALLS-ACK-REOFFER (2026-08-29): надёжная отправка answer. Раньше answerSent
+    // ставился ДО отправки, а send() при закрытом WS молча отбрасывал команду —
+    // answer терялся навсегда, звонящий ждал до сброса. Ретраим до 15с;
+    // answerSent=true ТОЛЬКО на успешной отправке.
+    val sendAnswerReliably: (String, org.webrtc.SessionDescription) -> Unit = { pid, sdp ->
+        uiScope.launch {
+            for (attempt in 1..30) {
+                val ok = signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                if (ok) {
+                    answerSent.value = true
+                    if (attempt > 1) diagAnswer = "answer×$attempt"
+                    AppLog.i("CallScreen", "ANSWER отправлен (участник=$pid, попытка $attempt)")
+                    return@launch
+                }
+                AppLog.w("CallScreen", "ANSWER не ушёл (попытка $attempt, WS=${signaling.wsState()}) — ретрай 500мс")
+                kotlinx.coroutines.delay(500)
+            }
+            AppLog.e("CallScreen", "ANSWER не отправлен за 15с — WS мёртв")
+            failText = "Не удалось отправить ответ (сеть)"
+            phase = CallPhase.FAILED
+        }
+    }
     // #CALLS-IN-OFFER: параметры последнего signaling.start — для nudge-перерегистрации
     // WS (входящий: если offer не пришёл, перерегистрация заставит сервер снова
     // разослать registered-peer → звонящий переотправит offer — семантика §8.3 звонки.md).
-    var sigRestart: (() -> Unit)? by remember { mutableStateOf(null) }
+    // Аргумент reAccept (#CALLS-ACK-REOFFER): после перерегистрации ЗАНОВО отправить
+    // accept-call — новый WS-peer может считаться сервером «не принявшим», и его
+    // transmit-data не будет ретранслироваться, пока он не подтвердит участие.
+    var sigRestart: ((Boolean) -> Unit)? by remember { mutableStateOf(null) }
+    // #CALLS-ACK-REOFFER: сигналинг поднялся (триггер RINGING-nudge)
+    var sigStarted by remember { mutableStateOf(false) }
     // #CALLS-OUTGOING: кэш нашего offer/candidates до получения participantId.
     val pendingLocalSdp = remember { mutableStateOf<org.webrtc.SessionDescription?>(null) }
     val pendingLocalCandidates = remember { mutableStateOf<MutableList<org.webrtc.IceCandidate>>(mutableListOf()) }
@@ -182,16 +213,20 @@ fun CallScreen(
                 // #CALLS: отправляем наш SDP (offer для исходящего, answer для входящего).
                 // Если participantId ещё неизвестен (исходящий: приходит из connection
                 // ПОСЛЕ createOffer) — кэшируем и отправим при получении participantId.
-                // #CALLS-IN-OFFER: факт отправки answer — для watchdog'а входящего.
-                if (sdp.type == SessionDescription.Type.ANSWER) answerSent.value = true
+                // #CALLS-ACK-REOFFER: answer отправляется надёжно (ретраи), offer —
+                // обычным путём (его надёжность обеспечивает reoffer-механизм).
                 val pid = remoteParticipantId.value
                 if (pid != null) {
                     AppLog.i("CallScreen", "sending local SDP type=${sdp.type} to participant=$pid")
                     AppLog.i("CallScreen", "FULL_LOCAL_${sdp.type} SDP:\n${sdp.description}")
-                    signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                    if (sdp.type == SessionDescription.Type.ANSWER) {
+                        sendAnswerReliably(pid, sdp)
+                    } else {
+                        signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                    }
                 } else {
                     pendingLocalSdp.value = sdp
-                    AppLog.w("CallScreen", "local SDP готов, participantId неизвестен — кэшируем")
+                    AppLog.w("CallScreen", "local SDP готов (${sdp.type}), participantId неизвестен — кэшируем")
                 }
             },
             onIceCandidateReady = { candidate ->
@@ -210,6 +245,31 @@ fun CallScreen(
             },
             onIceStateChanged = { diagIce = it },
         )
+    }
+
+    // #CALLS-ACK-REOFFER (2026-08-29): флаш кэша, когда participantId стал известен
+    // ПОЗЖЕ готовности SDP/кандидатов (offer пришёл без participantId, pid вернули
+    // последующие candidate/connection). Раньше кэшированный answer оставался в кэше
+    // навсегда — answer не уходил, звонящий сбрасывал звонок.
+    val flushPendingLocal: (String) -> Unit = { pid ->
+        val sdp = pendingLocalSdp.value
+        if (sdp != null) {
+            pendingLocalSdp.value = null
+            if (sdp.type == SessionDescription.Type.ANSWER) {
+                sendAnswerReliably(pid, sdp)
+            } else {
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+            }
+            AppLog.i("CallScreen", "кэшированный ${sdp.type} отправлен (участник=$pid)")
+        }
+        val cachedCnt = pendingLocalCandidates.value.size
+        if (cachedCnt > 0) {
+            pendingLocalCandidates.value.forEach { c ->
+                signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
+            }
+            pendingLocalCandidates.value.clear()
+            AppLog.i("CallScreen", "кэшированные ICE ($cachedCnt) отправлены (участник=$pid)")
+        }
     }
 
     // #CALLS-REOFFER (2026-08-29): повторная отправка offer + всех локальных ICE-кандидатов.
@@ -318,12 +378,25 @@ fun CallScreen(
                 engine.setIceServers(resolvedParams)
                 AppLog.i("CallScreen", "Signaling start: conversationId=$convId userId=$uid (okUid=$okUid)")
                 signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
-                // #CALLS-IN-OFFER: сохраняем параметры для nudge-перерегистрации WS
-                // (watchdog входящего: offer не пришёл → переподключаем WS).
-                sigRestart = {
-                    signaling.stop()
-                    signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
+                // #CALLS-ACK-REOFFER (2026-08-29): сохраняем параметры для nudge-перерегистрации WS
+                // (watchdog входящего: offer не пришёл → переподключаем WS; reAccept=true —
+                // после перерегистрации заново отправить accept-call).
+                sigRestart = { reAccept ->
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        signaling.stop()
+                        signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
+                        var waited = 0
+                        while (!signaling.isWsReady() && waited < 10_000) {
+                            kotlinx.coroutines.delay(250)
+                            waited += 250
+                        }
+                        if (reAccept && signaling.isWsReady()) {
+                            val ok = signaling.acceptCall(isVideo = false)
+                            AppLog.i("CallScreen", "nudge: WS перерегистрирован, повторный accept-call ok=$ok")
+                        }
+                    }
                 }
+                sigStarted = true
                 AppLog.i("CallScreen", "Signaling started — ждём accept/decline от пользователя")
                 // #CALLS-IN-FIX: «Принять» ждёт эти params — сообщаем в самом конце,
                 // когда activeCallId/ICE-серверы/сигналинг уже готовы.
@@ -494,10 +567,11 @@ fun CallScreen(
                             AppLog.w("CallScreen", "повторный answer проигнорирован (уже применён)")
                             return@collect
                         }
-                        // #CALLS-IN-OFFER: повторный offer после отправки answer игнорируем
-                        // (звонящий мог не увидеть наш answer и переотправить offer).
-                        if (isOffer && answerReceived.value) {
-                            AppLog.w("CallScreen", "повторный offer проигнорирован (answer уже отправлен)")
+                        // #CALLS-IN-OFFER/#CALLS-ACK-REOFFER: повторный offer ПОСЛЕ отправки/получения
+                        // answer игнорируем (звонящий мог не увидеть наш answer и переотправить offer;
+                        // повторный setRemoteDescription(offer) в have-local-offer упал бы).
+                        if (isOffer && (answerReceived.value || answerSent.value)) {
+                            AppLog.w("CallScreen", "повторный offer проигнорирован (answer уже отправлен/получен)")
                             return@collect
                         }
                         if (isOffer) offerReceived.value = true
@@ -514,7 +588,14 @@ fun CallScreen(
                     }
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_CANDIDATE -> {
+                    val pidBefore = remoteParticipantId.value
                     msg.participantId?.let { remoteParticipantId.value = it }
+                    // #CALLS-ACK-REOFFER: pid стал известен только сейчас (offer пришёл без
+                    // participantId, pid вернули кандидаты) — флашим кэшированные SDP/ICE,
+                    // иначе кэшированный answer остаётся в кэше навсегда.
+                    if (pidBefore == null && remoteParticipantId.value != null) {
+                        flushPendingLocal(remoteParticipantId.value!!)
+                    }
                     msg.candidate?.let { c ->
                         // #CALLS-IN-OFFER: движок сам буферизует кандидата, если
                         // remoteDescription ещё не установлен (pendingRemoteIce → drain
@@ -529,6 +610,29 @@ fun CallScreen(
                         ?: msg.json.get("error")?.takeIf { it.isJsonPrimitive }?.asString
                     failText = if (errText != null) "Ошибка сигналинга: $errText" else "Ошибка сигналинга"
                     phase = CallPhase.FAILED
+                }
+                "response", "error" -> {
+                    // #CALLS-ACK-REOFFER (2026-08-29): ack сервера на наши команды.
+                    // participantIds — кому реально доставлен transmit-data; error — сервер
+                    // отверг команду (раньше всё это молча игнорировалось).
+                    val resp = msg.json.get("response")?.takeIf { it.isJsonPrimitive }?.asString
+                    val pids = msg.json.get("participantIds")?.takeIf { it.isJsonArray }?.asJsonArray?.toString()
+                    AppLog.i("CallScreen", "сервер ack: ${msg.command} response=$resp participantIds=$pids")
+                    diagEvent = if (msg.command == "error") "ошибка сервера" else "ack:$resp"
+                }
+                re.pinok.realtime.CallSignalingClient.CMD_ACCEPTED_CALL,
+                re.pinok.realtime.CallSignalingClient.CMD_ACCEPTED_OUTGOING -> {
+                    // #CALLS-ACK-REOFFER (2026-08-29): собеседник ПРИНЯЛ звонок. Единственный
+                    // гарантированный момент, когда вызываемый готов принимать transmit-data
+                    // (лог 20:31: registered-peer 25.316 → accepted-call 32.487). Если сервер
+                    // ретранслирует transmit-data только «принявшим» peer'ам, reoffer на
+                    // registered-peer тоже выбрасывался — переотправляем offer ещё раз.
+                    // Для входящего это эхо нашего собственного accept — doReoffer пропустит.
+                    AppLog.i("CallScreen", "accepted-call: собеседник принял звонок — reoffer")
+                    if (remoteParticipantId.value == null) {
+                        msg.participantId?.let { remoteParticipantId.value = it }
+                    }
+                    doReoffer("accepted-call")
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_REGISTERED_PEER -> {
                     // #CALLS-OUTGOING (2026-08-24, подтверждено реальным WS):
@@ -599,16 +703,8 @@ fun CallScreen(
                                 if (!isMe && pId != null && pId > 0L) {
                                     remoteParticipantId.value = pId.toString()
                                     AppLog.i("CallScreen", "participantId собеседника из connection.participants: $pId (extId=$extVkId state=$state)")
-                                    val cached = pendingLocalSdp.value
-                                    if (cached != null) {
-                                        pendingLocalSdp.value = null
-                                        signaling.sendSdp(pId.toString(), cached.description, cached.type.name.lowercase())
-                                        AppLog.i("CallScreen", "кэшированный offer отправлен ($pId)")
-                                    }
-                                    pendingLocalCandidates.value.forEach { c ->
-                                        signaling.sendCandidate(pId.toString(), c.sdpMid, c.sdpMLineIndex, c.sdp)
-                                    }
-                                    pendingLocalCandidates.value.clear()
+                                    // #CALLS-ACK-REOFFER: флаш кэша (offer/answer + кандидаты)
+                                    flushPendingLocal(pId.toString())
                                     break
                                 }
                             }
@@ -745,8 +841,8 @@ fun CallScreen(
             if (phase == CallPhase.CONNECTING && incoming && !engine.hasRemoteDescription() && !inNudgeDone) {
                 inNudgeDone = true
                 diagReoffer = "nudge WS"
-                AppLog.w("CallScreen", "IN-Watchdog: 8с без offer — перерегистрация WS (nudge)")
-                sigRestart?.invoke()
+                AppLog.w("CallScreen", "IN-Watchdog: 8с без offer — перерегистрация WS + повторный accept (nudge)")
+                sigRestart?.invoke(true)
             }
             kotlinx.coroutines.delay(12_000L)
             if (phase == CallPhase.CONNECTING && incoming && !engine.hasRemoteDescription()) {
@@ -755,12 +851,32 @@ fun CallScreen(
             kotlinx.coroutines.delay(25_000L)
             if (phase == CallPhase.CONNECTING && incoming && !answerSent.value) {
                 AppLog.w("CallScreen", "IN-Watchdog: 45с без answer — обрываем звонок")
-                failText = "Данные звонка не получены (offer не пришёл)"
+                failText = when {
+                    !engine.hasRemoteDescription() -> "Данные звонка не получены (offer не пришёл)"
+                    else -> "Не удалось отправить ответ (сеть)"
+                }
                 signaling.hangup("timeout")
                 engine.endCall()
                 signaling.stop()
                 phase = CallPhase.FAILED
             }
+        }
+    }
+
+    // #CALLS-ACK-REOFFER (2026-08-29): nudge ещё на этапе RINGING (до «Принять»).
+    // offer звонящего, отправленный до нашей регистрации, сервер выбрасывает; если
+    // звонящий сам не переотправляет offer — перерегистрация WS порождает
+    // registered-peer → звонящий переотправит offer, и он буферизуется в движке
+    // ещё ДО нажатия «Принять» (к моменту accept ответ создаётся мгновенно).
+    var inRingNudgeDone by remember { mutableStateOf(false) }
+    LaunchedEffect(sigStarted) {
+        if (!sigStarted || !incoming) return@LaunchedEffect
+        kotlinx.coroutines.delay(7_000L)
+        if (incoming && phase == CallPhase.RINGING && !engine.hasRemoteDescription() && !inRingNudgeDone) {
+            inRingNudgeDone = true
+            diagReoffer = "nudge WS (ring)"
+            AppLog.w("CallScreen", "IN-Watchdog: 7с в RINGING без offer — перерегистрация WS (nudge)")
+            sigRestart?.invoke(false)
         }
     }
 
@@ -921,6 +1037,7 @@ fun CallScreen(
                                                     params = resolved,
                                                     peerId = peerId,
                                                 )
+                                                sigStarted = true
                                             }
                                             // Ждём открытия WS (до 10с) — иначе accept-call будет отброшен.
                                             var wsWaited = 0
@@ -943,15 +1060,17 @@ fun CallScreen(
                                                     )
                                                 }
                                             }
+                                            // #CALLS-ACK-REOFFER (2026-08-29): accept-call ДО создания PC/answer —
+                                            // сервер ретранслирует transmit-data участникам, подтвердившим участие;
+                                            // answer, ушедший раньше accept, мог выбрасываться. Плюс это
+                                            // детерминированный порядок (engine.acceptCall — асинхронный post).
+                                            val acceptOk = signaling.acceptCall(isVideo = false)
+                                            AppLog.i("CallScreen", "Принять: accept-call ${if (acceptOk) "отправлен" else "ОТБРОШЕН (WS закрыт!)"}")
                                             // #CALLS-IN-OFFER: PC создаётся здесь; offer, буферизованный
                                             // движком (пришёл до «Принять»), применяется САМ в acceptCall
                                             // (setRemoteDescription → createAnswer → answer уйдёт).
-                                            // Раньше offer читался из pendingOffer ПОСЛЕ engine.acceptCall:
-                                            // если он прилетал в этот момент — затирался (pendingOffer=null),
-                                            // answer не создавался, звонящий сбрасывал звонок.
                                             engine.acceptCall(call)
-                                            signaling.acceptCall(isVideo = false)
-                                            AppLog.i("CallScreen", "Принять: accept-call отправлен, offerReceived=${offerReceived.value}")
+                                            AppLog.i("CallScreen", "Принять: PC создаётся, offerReceived=${offerReceived.value}")
                                             phase = CallPhase.CONNECTING
                                         }
                                     },
@@ -1058,7 +1177,7 @@ fun CallScreen(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Сигналинг: $diagEvent • $diagPid • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}",
+                        text = "Сигналинг: $diagEvent • $diagPid • conv ${if (activeCallId.value.isNullOrBlank()) "—" else "✓"} • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}${if (diagAnswer.isBlank()) "" else " • $diagAnswer"}",
                         color = Color.White.copy(alpha = 0.45f),
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
