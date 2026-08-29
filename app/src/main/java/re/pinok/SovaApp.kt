@@ -1504,6 +1504,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
                         AppLog.i("SovaApp", "getCallParams: vchat OK (attempt $attempt)")
                         break
                     }
+                    // #CALLS-IN-FIX (2026-08-29): сбой должен быть ВИДЕН в логе —
+                    // раньше attempt с null проходил молча, и по логу было не понять,
+                    // где именно завис входящий звонок.
+                    AppLog.w("SovaApp", "getCallParams: vchat null (attempt $attempt, convId=$conversationId)")
                     // 3) Не получилось — проверяем, была ли ошибка именно 102 (session expired)
                     //    и обновляем session_key. Даже если причина другая — пробуем свежий ключ.
                     if (sessionKey.isNullOrBlank() || attempt == 1) {

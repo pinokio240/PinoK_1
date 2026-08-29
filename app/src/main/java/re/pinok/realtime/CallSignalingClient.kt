@@ -127,6 +127,9 @@ class CallSignalingClient(
 
     fun isRunning(): Boolean = running
 
+    /** #CALLS-IN-FIX (2026-08-29): WS сигналинга открыт — команды уходят, а не отбрасываются. */
+    fun isWsReady(): Boolean = running && wsOpen
+
     /**
      * #CALLS-DIAG (2026-08-29): человекочитаемое состояние WS для экранной
      * диагностики звонка (CallScreen показывает её при CONNECTING/FAILED/ENDED).

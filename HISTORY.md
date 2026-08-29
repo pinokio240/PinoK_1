@@ -10457,3 +10457,51 @@ offer отправляется/переотправляется.)
 **Сборка:** компиляция на стороне пользователя (нет Android SDK в песочнице):
 `git pull` → `:app:assembleDebug`, проверить отсутствие новых warnings, затем
 тестовый звонок; при неудаче — скриншот diag-строк (теперь там «offer×N»).
+
+## 2026-08-29 (4) — Task ID: CALLS-IN-FIX — входящий звонок: «Принять» срабатывало вхолостую, params висели 45с
+
+**Лог 20:54 (входящий):** INCOMING_CALL (LP 115) пришёл, пользователь нажал
+«Принять» — Communication mode + Local audio track (движок стартовал), но:
+- `getCallParams: session_key из prefs` в 20:54:57.171 — и НИ ОДНОГО
+  `vchat OK` до конца лога (20:55:36) → `vchat.getConversationParams` висел;
+- нет `setIceServers`, нет `connectLoop: connecting` → сигналинг не поднят;
+- `ensureCallsSessionKey: уже есть` в 20:54:59.163 с MAIN-потока = клик
+  «Принять»; accept-call ушёл в send() с webSocket==null → отброшен молча;
+- 37с «Соединение…» → 20:55:36 ICE: CLOSED / Call ended (абонент/пользователь
+  положил трубку, соединения не было).
+
+**Причина 1 (висяк HTTP):** у общего OkHttpClient readTimeout=45с (long-poll).
+vchatGetConversationParams перебирает 3 хоста × 4 ключа ПОСЛЕДОВАТЕЛЬНО — при
+зависании первого combo резолв params молча висел 45с+ (наш кейс: лог кончился
+раньше, чем истёк таймаут первого запроса). Раньше ещё и null-attempt не
+логировался вовсе.
+
+**Причина 2 (гонка accept):** кнопка «Принять» выполняла accept немедленно,
+не дожидаясь params/сигналинга. Если params не готовы — accept-call/answer
+уходят в никуда, offer не приходит, «Соединение…» навсегда.
+
+**Фиксы (#CALLS-IN-FIX):**
+1. VKApiClient.vchatGetConversationParams: per-call timeout 10с
+   (`httpClient.newCall(req).apply { timeout().timeout(10s) }`) — в норме
+   vchat отвечает <1с; 45с-бюджет long-poll сюда не годится.
+2. SovaApp.getCallConversationParams: лог `getCallParams: vchat null
+   (attempt N, convId=…)` — сбой теперь виден.
+3. CallScreen «Принять»: phase=CONNECTING → ждёт params через
+   CompletableDeferred (≤20с) → если сигналинг не поднят — поднимает
+   (params+activeCallId уже готовы) → ждёт isWsReady() ≤10с →
+   vchatJoinConversation → engine.acceptCall → применить кэшированные
+   offer/кандидаты (кэш чистится) → signaling.acceptCall. Провал →
+   FAILED с текстом («Не удалось получить параметры звонка» / «Нет связи
+   с сервером звонков»).
+4. CallScreen «Отклонить»: если WS не готов — HTTP-fallback
+   vchat.hangupConversation(reason="declined") (раньше decline молча терялся,
+   звонок продолжал звонить на других устройствах).
+5. CallSignalingClient.isWsReady() — public `running && wsOpen`.
+
+**Файлы:** CallScreen.kt (+90/-25), CallSignalingClient.kt (+3), SovaApp.kt (+5),
+VKApiClient.kt (+8/-1), звонки.md (§16, §19, новый §20), HISTORY.md, worklog.md.
+
+**Сборка:** на стороне пользователя: git pull → assembleDebug → входящий тест:
+позвонить с другого устройства, принять, смотреть «ICE: CONNECTED» и диалог.
+Если params опять висят — в логе теперь будет `getCallParams: vchat null
+(attempt 1, convId=…)` через 10с (вместо тишины).

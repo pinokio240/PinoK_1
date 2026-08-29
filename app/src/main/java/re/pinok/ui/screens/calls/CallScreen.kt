@@ -130,6 +130,14 @@ fun CallScreen(
     val incomingParams = remember(incomingPayload) {
         incomingPayload?.let { re.pinok.media.ConversationParamsDecoder.decode(it) }
     }
+    // #CALLS-IN-FIX (2026-08-29, лог 20:54): входящий звонок завис в «Соединение…»:
+    // vchat.getConversationParams висел 45с (readTimeout long-poll), а кнопка
+    // «Принять» сработала сразу — accept-call ушёл в никуда (сигналинг не был
+    // поднят), offer не пришёл. Теперь «Принять» ждёт готовности params через
+    // этот deferred, поднимает сигналинг и шлёт accept только при открытом WS.
+    val incomingParamsDeferred = remember {
+        kotlinx.coroutines.CompletableDeferred<re.pinok.media.ConversationParamsDecoder.Params?>()
+    }
     // #CALLS: participantId собеседника (из offer/candidate в сигналинге).
     // Нужен для отправки answer SDP и ICE candidates обратно.
     val remoteParticipantId = remember { mutableStateOf<String?>(null) }
@@ -273,7 +281,10 @@ fun CallScreen(
             val resolvedParams = params
             if (resolvedParams == null) {
                 AppLog.w("CallScreen", "Не удалось получить conversation params — звонок принять нельзя")
-                phase = CallPhase.FAILED
+                // #CALLS-IN-FIX: сообщаем ошибку и ждущему «Принять» (иначе он ждал бы deferred вечно).
+                failText = "Не удалось получить параметры звонка"
+                incomingParamsDeferred.complete(null)
+                if (phase == CallPhase.RINGING) phase = CallPhase.FAILED
             } else {
                 // #CALLS-FIX: userId в WS URL — это okcdn uid из _okcls_anonymLogin
                 // (напр. 584520805550), НЕ VK user_id (171093180). Токен из
@@ -289,6 +300,9 @@ fun CallScreen(
                 AppLog.i("CallScreen", "Signaling start: conversationId=$convId userId=$uid (okUid=$okUid)")
                 signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
                 AppLog.i("CallScreen", "Signaling started — ждём accept/decline от пользователя")
+                // #CALLS-IN-FIX: «Принять» ждёт эти params — сообщаем в самом конце,
+                // когда activeCallId/ICE-серверы/сигналинг уже готовы.
+                incomingParamsDeferred.complete(resolvedParams)
             }
         } else {
             AppLog.i("CallScreen", "Starting call to peerId=$peerId")
@@ -784,7 +798,25 @@ fun CallScreen(
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                                 IconButton(
                                     onClick = {
-                                        signaling.declineCall()
+                                        // #CALLS-IN-FIX (2026-08-29): если сигналинг не поднят /
+                                        // WS не открыт — declineCall молча отбрасывается в send()
+                                        // и звонок продолжает звонить на других устройствах.
+                                        // Fallback — HTTP vchat.hangupConversation(reason=declined).
+                                        if (signaling.isWsReady()) {
+                                            signaling.declineCall()
+                                        } else {
+                                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                                                val sk = app.ensureCallsSessionKey()
+                                                val cid = activeCallId.value
+                                                if (sk != null && !cid.isNullOrBlank()) {
+                                                    withContext(Dispatchers.IO) {
+                                                        app.apiClient.vchatHangupConversation(cid, sk, reason = "declined")
+                                                    }
+                                                } else {
+                                                    AppLog.w("CallScreen", "Отклонить: нет WS и нет convId/sessionKey — decline не отправлен")
+                                                }
+                                            }
+                                        }
                                         signaling.stop()
                                         phase = CallPhase.ENDED
                                         onNavigateBack()
@@ -805,6 +837,49 @@ fun CallScreen(
                                 IconButton(
                                     onClick = {
                                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                                            // #CALLS-IN-FIX (2026-08-29, лог 20:54): раньше accept
+                                            // выполнялся мгновенно — если params ещё резолвились
+                                            // (vchat при сбое висит до 45с), сигналинг не был поднят:
+                                            // accept-call и answer уходили в никуда, «Соединение…» висело
+                                            // вечно. Теперь: ждём params → поднимаем сигналинг (если ещё
+                                            // не поднят) → ждём открытия WS → и только потом accept.
+                                            phase = CallPhase.CONNECTING
+                                            val resolved = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                                                incomingParamsDeferred.await()
+                                            }
+                                            if (resolved == null) {
+                                                AppLog.w("CallScreen", "Принять: params не получены (таймаут 20с/ошибка) — отмена")
+                                                failText = "Не удалось получить параметры звонка"
+                                                phase = CallPhase.FAILED
+                                                return@launch
+                                            }
+                                            if (!signaling.isRunning()) {
+                                                // LaunchedEffect не успел/не смог — поднимаем сигналинг сами.
+                                                val snap0 = app.prefs.data.first()
+                                                val okUid0 = snap0.callsSessionUid
+                                                val uid0 = if (okUid0 > 0L) okUid0 else app.exchangeAuthRepository.userId()
+                                                engine.setIceServers(resolved)
+                                                AppLog.i("CallScreen", "Принять: сигналинг не был поднят — стартуем (convId=${activeCallId.value})")
+                                                signaling.start(
+                                                    userId = uid0,
+                                                    conversationId = activeCallId.value ?: "",
+                                                    params = resolved,
+                                                    peerId = peerId,
+                                                )
+                                            }
+                                            // Ждём открытия WS (до 10с) — иначе accept-call будет отброшен.
+                                            var wsWaited = 0
+                                            while (!signaling.isWsReady() && wsWaited < 10_000) {
+                                                kotlinx.coroutines.delay(250)
+                                                wsWaited += 250
+                                            }
+                                            if (!signaling.isWsReady()) {
+                                                AppLog.w("CallScreen", "Принять: WS сигналинга не открылся за 10с — отмена")
+                                                failText = "Нет связи с сервером звонков"
+                                                phase = CallPhase.FAILED
+                                                return@launch
+                                            }
+                                            AppLog.i("CallScreen", "Принять: params готовы, ws готов — accept")
                                             val sk = app.ensureCallsSessionKey()
                                             if (sk != null) {
                                                 withContext(Dispatchers.IO) {
@@ -813,20 +888,21 @@ fun CallScreen(
                                                     )
                                                 }
                                             }
+                                            engine.acceptCall(call)
+                                            val offer = pendingOffer.value
+                                            if (offer != null) {
+                                                val type = if (offer.second == "offer") org.webrtc.SessionDescription.Type.OFFER
+                                                else org.webrtc.SessionDescription.Type.ANSWER
+                                                engine.setRemoteSdp(offer.first, type)
+                                            }
+                                            pendingOffer.value = null
+                                            pendingCandidates.value.forEach { (mid, idx, cand) ->
+                                                engine.addRemoteIceCandidate(mid, idx, cand)
+                                            }
+                                            pendingCandidates.value.clear()
+                                            signaling.acceptCall(isVideo = false)
+                                            phase = CallPhase.CONNECTING
                                         }
-                                        engine.acceptCall(call)
-                                        val offer = pendingOffer.value
-                                        if (offer != null) {
-                                            val type = if (offer.second == "offer") org.webrtc.SessionDescription.Type.OFFER
-                                            else org.webrtc.SessionDescription.Type.ANSWER
-                                            engine.setRemoteSdp(offer.first, type)
-                                        }
-                                        pendingCandidates.value.forEach { (mid, idx, cand) ->
-                                            engine.addRemoteIceCandidate(mid, idx, cand)
-                                        }
-                                        pendingCandidates.value.clear()
-                                        signaling.acceptCall(isVideo = false)
-                                        phase = CallPhase.CONNECTING
                                     },
                                     modifier = Modifier
                                         .size(64.dp)

@@ -4501,3 +4501,24 @@ Stage Summary:
 - Бонус-фиксы: потеря ICE-кандидатов в исходящем до смены фазы; вечное «Соединение…» без таймаута; двойной answer от второго устройства собеседника.
 - Зафиксирована отдельная проблема: events_queue subscribe вернул null → входящие звонки недоступны (SovaApp:1357/1377) — отдельная задача.
 - Компиляция на стороне пользователя (нет Android SDK): git pull → assembleDebug → тестовый звонок → при неудаче скриншот diag (теперь с «offer×N»).
+
+---
+Task ID: CALLS-IN-FIX
+Agent: main (Z.ai Code)
+Task: Входящий звонок (лог 20:54): «Принять» нажато, движок стартовал, но сигналинг не поднялся (нет setIceServers/connectLoop), vchat.getConversationParams не вернулся за 39с, «Соединение…» → ICE CLOSED.
+
+Work Log:
+- Диагноз: (1) vchatGetConversationParams висел на readTimeout=45с общего клиента (long-poll), 3×4 combo последовательно; (2) accept-кнопка не ждала params — accept-call уходил в send() с null-WS и молча отбрасывался; (3) null-attempt vchat не логировался — тишина в логе.
+- VKApiClient: per-call timeout 10с в vchatGetConversationParams (call.timeout()).
+- SovaApp: лог `getCallParams: vchat null (attempt N, convId=…)`.
+- CallSignalingClient: public isWsReady() = running && wsOpen.
+- CallScreen «Принять»: CONNECTING → await incomingParamsDeferred (≤20с) → сам поднимает signaling при необходимости → ждёт isWsReady() ≤10с → join → engine.acceptCall → применить offer/кандидаты → accept-call; ошибки → FAILED с текстом.
+- CallScreen «Отклонить»: если WS не готов — HTTP vchat.hangupConversation(reason=declined).
+- LaunchedEffect входящего: complete(deferred) на обоих путях (params/ошибка), failText при ошибке, phase=FAILED только из RINGING (не глушит accept-флоу).
+- звонки.md: §16 строка, §19 маркеры, новый §20 «Входящий звонок: цепочка и грабли»; HISTORY.md (4), worklog.
+
+Stage Summary:
+- Устранены обе причины отказа входящих: висяк vchat (bounded 10с + видимые логи) и гонка accept (ждёт params+WS).
+- «Отклонить» больше не теряется при неподнятому сигналинге (HTTP-fallback).
+- Прим.: startup-предупреждение «events_queue subscribe вернул null» из этого же лога осталось (LP 115 при этом дошёл через основной queue) — не блокер, отдельная тема.
+- Сборка/тест на стороне пользователя: входящий звонок → «Принять» → ожидание ICE: CONNECTED.

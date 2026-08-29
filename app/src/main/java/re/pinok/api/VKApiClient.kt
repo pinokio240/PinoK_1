@@ -11098,7 +11098,14 @@ class VKApiClient(
                         .url("$base/fb.do")
                         .post(form.build())
                         .build()
-                    httpClient.newCall(req).execute().use { resp ->
+                    // #CALLS-IN-FIX (2026-08-29): общий клиент ждёт readTimeout=45с
+                    // (рассчитан на long-poll). Для vchat это слишком долго: при сбое
+                    // резолв conversation params входящего звонка молча висел 45с+,
+                    // сигналинг не поднимался, принять звонок было нельзя. Бужем
+                    // КАЖДЫЙ вызов 10с — в норме vchat отвечает за <1с.
+                    httpClient.newCall(req).apply {
+                        timeout().timeout(10_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    }.execute().use { resp ->
                         val body = resp.body?.string() ?: ""
                         if (!resp.isSuccessful) {
                             AppLog.w("VKApiClient", "vchat $base key=$apiKey HTTP ${resp.code}: ${body.take(100)}")
