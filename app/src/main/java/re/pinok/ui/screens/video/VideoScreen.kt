@@ -88,9 +88,8 @@ import java.util.Locale
  *
  * @param onVideoClick Callback при тапе на карточку — открывает VideoPlayerScreen.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class) // #VIDEO-SEARCH: debounce — FlowPreview API; #OPTIN-FIX: @OptIn не повторяем — параметры объединены в одну аннотацию
 @Composable
-@OptIn(kotlinx.coroutines.FlowPreview::class) // #VIDEO-SEARCH: debounce — FlowPreview API
 fun VideoScreen(
     onVideoClick: (Video) -> Unit = {},
 ) {

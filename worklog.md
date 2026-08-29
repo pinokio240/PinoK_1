@@ -4467,3 +4467,19 @@ Stage Summary:
 - Ключевой результат: (1) WS-реконнект теперь реально работает (раньше не срабатывал никогда при провале первого подключения); (2) на экране звонка видна диагностика WS/PC/ICE — пользователь может прислать скриншот вместо logcat.
 - Утверждение «браузер не использует WS» опровергнуто дампами: WS есть, но в отдельном окне звонка и с динамическим URL от сервера.
 - Компиляция в песочнице невозможна (нет Android SDK) — сборка и проверка warnings на стороне пользователя.
+
+---
+Task ID: OPTIN-FIX
+Agent: main (Z.ai Code)
+Task: Сборка пользователя падает: VideoScreen.kt:93:1 «This annotation is not repeatable» после WARNINGS-FIX (3066b9d).
+
+Work Log:
+- Диагноз: в 3066b9d (#WARNINGS-FIX) к VideoScreen добавлена ВТОРАЯ аннотация @OptIn(FlowPreview) ПОД @Composable — @OptIn не @Repeatable, две аннотации на одной функции = ошибка компиляции. Строка 93:1 на стороне пользователя точно совпала со второй @OptIn на origin.
+- Попутно обнаружил: фоновый процесс песочницы ОТКАТИЛ локальный .git к 30b82d0 (коммиты 3066b9d/a2e6def исчезли из локальной ветки), рабочее дерево замусорено модификациями. Восстановлено: git fetch + git reset --hard origin/PinoK (CALLS-DIAG цел на origin — проверено grep'ом по origin/PinoK:CallSignalingClient.kt).
+- Фикс: обе @OptIn объединены в одну: @OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class) + @Composable перед fun VideoScreen.
+- Свип по всем .kt (grep -rl @OptIn + списки строк): повторных/стековых @OptIn больше нет (ClipsFeedScreen/ClipInteractionsSheet/FeedScreen/Community/Notifications/ChatDetail/Messages/Profile/Bookmarks/Photos — все на РАЗНЫХ функциях).
+- worklog.md + HISTORY.md обновлены.
+
+Stage Summary:
+- Коммит #OPTIN-FIX: VideoScreen.kt — одна объединённая @OptIn (снимает и FlowPreview-warning, и ошибку «not repeatable»).
+- Инцидент песочницы задокументирован (второй раз: chmod/755+.gitignore был в WARNINGS-FIX; теперь откат .git). Проверять git log перед/после работ.

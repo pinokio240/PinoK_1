@@ -10384,3 +10384,16 @@ PiP снова показывает старый клип.
 
 **Сборка:** песочница без Android SDK — компиляция на стороне пользователя
 (`:app:assembleDebug`); проверить, что новых warnings нет.
+
+## 2026-08-29 (2) — Task ID: OPTIN-FIX — фикс ошибки компиляции из WARNINGS-FIX
+
+**Симптом:** сборка пользователя падает — `VideoScreen.kt:93:1 This annotation is not repeatable`.
+
+**Причина:** в 3066b9d (#WARNINGS-FIX) для debounce добавлена вторая аннотация
+`@OptIn(FlowPreview::class)` отдельной строкой под `@Composable`. `@OptIn` не
+`@Repeatable` — две аннотации на одной функции запрещены. Правильно — объединять
+маркеры в ОДНУ аннотацию.
+
+**Фикс:** `@OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class)`
+одной строкой + `@Composable` + `fun VideoScreen(`. Свип по всем .kt — других
+стековых @OptIn нет.
