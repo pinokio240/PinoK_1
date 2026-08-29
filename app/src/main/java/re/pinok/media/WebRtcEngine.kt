@@ -99,17 +99,26 @@ class WebRtcEngine(
     private val candTypeCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private val candTcpCount = java.util.concurrent.atomic.AtomicInteger(0)
 
+    // #CALLS-RX-DEBUG (2026-08-30, скриншот 00:17): пар=0/reqS=0 при 10 локальных
+    // кандидатах (host=5 srflx=1 relay=4 tcp=2) = пары НЕ ИЗ ЧЕГО строить —
+    // удалённые кандидаты до нас не доехали/не применились. Счётчик принятых
+    // удалённых кандидатов попадает в снапшот («прин:N») — скриншот покажет,
+    // приходил ли от собеседника хоть один кандидат.
+    private val remoteCandCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     @Volatile
     private var lastPairStats: String? = null
 
-    /** Экранный снимок ICE: «канд: host=1 srflx=1 relay=0 • пар=3 • reqS=12 resR=0 reqR=0». */
+    /** Экранный снимок ICE: «канд: host=1 srflx=1 relay=0 • прин:3 sdpR:+ • пар=3 • reqS=12 resR=0 reqR=0». */
     fun iceUiSnapshot(): String {
         val order = listOf("host", "srflx", "prflx", "relay")
         val known = order.mapNotNull { t -> candTypeCounts[t]?.let { "$t=$it" } }
         val extra = candTypeCounts.keys.filter { it !in order }.map { "$it=${candTypeCounts[it]}" }
         val candPart = if (known.isEmpty() && extra.isEmpty()) "канд: 0" else "канд: ${(known + extra).joinToString(" ")}" + (if (candTcpCount.get() > 0) " tcp=${candTcpCount.get()}" else "")
+        // #CALLS-RX-DEBUG: принятые удалённые кандидаты + применён ли удалённый SDP.
+        val rx = "прин:${remoteCandCount.get()} sdpR:${if (hasRemoteDescription()) "+" else "-"}"
         val pairs = lastPairStats
-        return if (pairs == null) candPart else "$candPart • $pairs"
+        return listOfNotNull(candPart, rx, pairs).joinToString(" • ")
     }
 
     /** Установлен ли remote description (или он ждёт в буфере до создания PC). */
@@ -269,6 +278,9 @@ class WebRtcEngine(
 
     fun addRemoteIceCandidate(sdpMid: String?, sdpMLineIndex: Int, sdp: String) {
         post {
+            // #CALLS-RX-DEBUG: считаем ВСЕ входящие кандидаты (и добавленные, и
+            // буферизованные до remote description) — для экранного «прин:N».
+            remoteCandCount.incrementAndGet()
             val candidate = IceCandidate(sdpMid, sdpMLineIndex, sdp)
             if (peerConnection?.remoteDescription != null) {
                 peerConnection?.addIceCandidate(candidate)
@@ -397,6 +409,7 @@ class WebRtcEngine(
         // #CALLS-ICE-STATS-UI: новый звонок — новая статистика (см. комментарий к полям).
         candTypeCounts.clear()
         candTcpCount.set(0)
+        remoteCandCount.set(0)
         lastPairStats = null
         val iceServers = this.iceServers.ifEmpty {
             listOf(

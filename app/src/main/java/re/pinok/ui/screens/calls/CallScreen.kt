@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -222,6 +223,12 @@ fun CallScreen(
     // #CALLS-ICE-STATS-UI (2026-08-30): снимок ICE (типы кандидатов + агрегат
     // candidate-pair reqS/resR/reqR) — обновляется поллингом из iceUiSnapshot().
     var diagStats by remember { mutableStateOf("") }
+    // #CALLS-RX-DEBUG (2026-08-30, скриншот 00:17): скриншот показал пар=0/reqS=0
+    // при 10 локальных кандидатах — кандидаты собеседника НЕ ДОЕХАЛИ. Но на экране
+    // не было видно, какие команды сигналинга мы вообще получали. Теперь считаем
+    // все входящие команды по именам: строка «Принято: candidate×3, connection×2…»
+    // покажет, приходил ли «candidate» и что ещё приходит от сервера/собеседника.
+    val rxCommands = remember { mutableStateMapOf<String, Int>() }
     // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): счётчик ПОДРЯД идущих ошибок сервера
     // (type:"error" на наши transmit-data). Сервер отвергает данные, когда разговор
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
@@ -623,6 +630,8 @@ fun CallScreen(
         signaling.messages.collect { msg ->
             AppLog.i("CallScreen", "signaling: command=${msg.command} sdp=${msg.sdp?.take(40)} cand=${msg.candidate?.take(40)}")
             diagEvent = msg.command
+            // #CALLS-RX-DEBUG: считаем входящие команды для экранной строки «Принято:».
+            rxCommands[msg.command] = (rxCommands[msg.command] ?: 0) + 1
             when (msg.command) {
                 re.pinok.realtime.CallSignalingClient.CMD_ANSWER,
                 re.pinok.realtime.CallSignalingClient.CMD_OFFER -> {
@@ -1117,12 +1126,14 @@ fun CallScreen(
     }
 
     // #CALLS-ICE-STATS-UI: поллинг снимка ICE раз в секунду, пока звонок не активен.
+    // (RINGING тоже обновляем — diag-блок с 00:17 виден и там; собранных кандидатов
+    // до accept не будет, но «прин:0 sdpR:-» сразу покажет, что PC ещё не создан.)
     // dumpIceStatsNow() на watchdog'ах обновляет агрегат асинхронно (getStats-callback) —
     // поллинг гарантирует появление статистики на экране без доп. recompose-крючков.
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(1_000)
-            if (phase == CallPhase.ACTIVE || phase == CallPhase.RINGING) continue
+            if (phase == CallPhase.ACTIVE) continue
             diagStats = engine.iceUiSnapshot()
         }
     }
@@ -1462,8 +1473,9 @@ fun CallScreen(
                 }
 
                 // #CALLS-DIAG (2026-08-29): тех-строки диагностики — видны пока звонок
-                // НЕ активен (соединяемся/ошибка/завершён). Скриншот экрана заменяет logcat.
-                if (phase != CallPhase.ACTIVE && phase != CallPhase.RINGING) {
+                // НЕ активен (в т.ч. в RINGING — там важен nudge/отсутствие offer).
+                // Скриншот экрана заменяет logcat.
+                if (phase != CallPhase.ACTIVE) {
                     Spacer(Modifier.height(20.dp))
                     Text(
                         text = "Диагностика: WS $diagWs • $diagPc • ICE $diagIce",
@@ -1477,6 +1489,21 @@ fun CallScreen(
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
                     )
+                    // #CALLS-RX-DEBUG (2026-08-30): какие команды сигналинга ПРИХОДИЛИ
+                    // (топ-6 по частоте). «candidate×N» отсутствует при N локальных
+                    // кандидатах = собеседник кандидаты не шлёт/не доходят — его сторона.
+                    if (rxCommands.isNotEmpty()) {
+                        val rxLine = rxCommands.entries
+                            .sortedByDescending { it.value }
+                            .take(6)
+                            .joinToString(", ") { "${it.key}×${it.value}" }
+                        Text(
+                            text = "Принято: $rxLine",
+                            color = Color.White.copy(alpha = 0.45f),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     // #CALLS-ICE-STATS-UI (2026-08-30): решающая строка медиа-диагностики —
                     // типы собранных кандидатов (relay=0 при TURN = аллокация не удалась) и
                     // агрегат candidate-pair (reqS>0/resR=0/reqR=0 = собеседник не отвечает
