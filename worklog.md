@@ -4586,3 +4586,24 @@ Stage Summary:
 - Сигналинг-этап входящих теперь считается закрытым (ack'и сервера это доказывают); открытый фронт — применение answer на стороне звонящего. Первый в истории механизм ретрансмита answer для входящих + решающая диагностика (ICE stats) при провале.
 - Имя/аватар: двойной баг (FORM-кодирование «+» + гонка навигации) закрыт на обоих уровнях (route + экран).
 - Сборка/тест на устройстве пользователя (в песочнице нет Android SDK): git pull → assembleDebug → входящий звонок → смотреть REANSWER #N, ICE stats при неудаче, CALLER_INFO.
+
+---
+Task ID: CALLS-ICE-WATCHDOG
+Agent: Z.ai Code (main)
+Task: Симптом «у того кто звонит уже начинается секундный отсчет, но пинок не поднимает трубку» — разбор и фикс входящего звонка.
+
+Work Log:
+- Перечитан весь входящий путь: CallScreen.kt (полностью), WebRtcEngine.kt (полностью), CallSignalingClient.kt, SovaApp.kt (ветка INCOMING_CALL 1224-1318), NotificationActionReceiver (accept-действий нет).
+- Установлено: единственный путь accept — кнопка «Принять» (vchatJoinConversation + WS accept-call). Таймер у звонящего = сервер считает звонок отвечённым ⇒ accept/сигналинг РАБОТАЮТ, doReanswer (59391ed) тоже дошёл до звонящего. Остаточная проблема — медиа: ICE на стороне PinoK не доходит до CONNECTED (phase != ACTIVE).
+- Найдена доказанная дыра: для состояния «answer отправлен, ICE не подключился» не существовало НИКАКОГО таймаута (IN-Watchdog 45с убивал только при !answerSent) — вечное «Соединение…» у нас и вечный таймер у звонящего (никто не клал трубку).
+- Найдена доказанная дыра в ICE-серверах: TURN URL с ?transport=udp целиком пропускался — TCP-вариант не добавлялся (Chrome имеет udp+tcp пару); на LTE/за жёстким NAT ICE умирал без fallback.
+- CallScreen #CALLS-ICE-WATCHDOG: (1) ICE-Watchdog входящего (key=phase+answerSent): +15с → dumpIceStatsNow+doReanswer, +35с → doReanswer, +60с → hangup("timeout")+failText «Медиа-соединение не установлено (ICE)»; (2) восстановление при ICE FAILED (входящий, answerSent): ≤2 × (doReanswer + возврат в CONNECTING), затем hangup; (3) engine-FAILED → failText вместо безликого «Ошибка соединения».
+- WebRtcEngine #CALLS-ICE-WATCHDOG: dumpIceStatsNow() (публичный снимок candidate-pair по требованию); setIceServers — для transport=udp добавляется tcp-вариант того же сервера (replace, без дубля transport-параметра).
+- звонки.md §21 (полный разбор + что смотреть в логе), HISTORY.md (2026-08-29 (8)), worklog.md.
+- Проверки: все новые ссылки объявлены до использования (failText/answerSent/iceConnected/doReanswer — до engine/watchdog'ей); iceFailRetries ограничивает цикл FAILED↔CONNECTING (2 ретрая, затем hangup); LaunchedEffect(phase, answerSent.value) перезапускается при FAILED→CONNECTING; дубликатов им нет.
+
+Stage Summary:
+- Вечное «Соединение…» при отправленном answer невозможно по построению: максимум ~60с до hangup с внятной причиной на экране; у звонящего таймер останавливается.
+- Добавлены 2 механизма восстановления (doReanswer по watchdog и по ICE FAILED) и TURN TCP-fallback — реальный шанс дозвониться на LTE.
+- Решающая диагностика: ICE stats теперь снимается и по таймеру, не только при FAILED. Следующий лог однозначно покажет, кто молчит (reqS>0/resR=0/reqR=0 — звонящий не применяет answer; reqR>0 — проблема в наших ответах).
+- Коммит/пуш: fix(calls) #CALLS-ICE-WATCHDOG — см. git log.

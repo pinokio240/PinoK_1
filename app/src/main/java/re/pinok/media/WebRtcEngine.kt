@@ -310,11 +310,16 @@ class WebRtcEngine(
                 )
                 // #CALLS-FIX: как в VK (PeerConnectionClient.m109a) — добавляем
                 // TURN ?transport=tcp вариант (tcpCandidatePolicy=ENABLED).
-                // #CALLS-OUT-FIX (2026-08-27): НЕ дублируем transport-параметр.
-                // Если url уже содержит "?transport=udp" — склейка "$url?transport=tcp"
-                // давала некорректный URL с ДВУМЯ transport (?transport=udp?transport=tcp)
-                // — libjingle такой сервер молча отбрасывал.
+                // #CALLS-OUT-FIX (2026-08-27): НЕ склеиваем "$url?transport=tcp" вслепую —
+                // для URL, уже содержащего transport=, это давало ДВА transport-параметра
+                // (?transport=udp?transport=tcp), и libjingle такой сервер молча отбрасывал.
+                // #CALLS-ICE-WATCHDOG (2026-08-29): для ?transport=udp добавляем TCP-вариант
+                // ТОГО ЖЕ сервера (замена transport=udp → transport=tcp) — как в Chrome
+                // (udp+tcp пара на 3478). Раньше URL с transport= пропускался — TCP-fallback
+                // не добавлялся вовсе, и на LTE/за жёстким NAT (UDP заблокирован) ICE умирал
+                // в CHECKING→FAILED при успешной аллокации по UDP-ветке не бывало.
                 val tcpUrl = when {
+                    url.contains("transport=udp") -> url.replace("transport=udp", "transport=tcp")
                     url.contains("transport=") -> null
                     url.contains('?') -> "$url&transport=tcp"
                     else -> "$url?transport=tcp"
@@ -505,6 +510,15 @@ class WebRtcEngine(
             peerConnection?.addIceCandidate(candidate)
         }
     }
+
+    /**
+     * #CALLS-ICE-WATCHDOG (2026-08-29): публичный снимок candidate-pair статистики.
+     * Вызывается из CallScreen на watchdog'ах «answer ушёл, ICE не подключился» и
+     * при ICE FAILED — решающий диагноз «наши проверки уходят, ответы не приходят»
+     * (requestsSent/responsesReceived) vs «проверки собеседника к нам не доходят»
+     * (requestsReceived=0 на всех парах).
+     */
+    fun dumpIceStatsNow() = dumpIceStats()
 
     /**
      * #CALLS-ICE-REANSWER (2026-08-29): снимок candidate-pair статистики при ICE FAILED.

@@ -10743,3 +10743,33 @@ SovaApp.kt (+4), звонки.md (§8.2, §16, §19, §20.4), HISTORY.md, worklo
 `ICE stats: …` при неудаче (решающий диагноз); `ICE: CONNECTED` — цель.
 Экран: имя/аватар должны подтянуться в течение ~1с после открытия; заголовок
 без «+». Скриншот diag при неудаче: `ans×N` покажет, сколько раз повторялся answer.
+
+---
+
+## 2026-08-29 (8) — Task ID: CALLS-ICE-WATCHDOG
+
+**Симптом:** после 59391ed «у того кто звонит уже начинается секундный отсчет,
+но пинок не поднимает трубку» — таймер звонящего идёт (наш accept ушёл, сервер
+считает звонок отвечённым, doReanswer из 59391ed сработал), но медиа-фаза на
+PinoK не доходит до ACTIVE.
+
+**Корень:** для состояния «answer отправлен, ICE не подключился» не было НИКАКОГО
+таймаута (IN-Watchdog 45с работал только при !answerSent) — вечное «Соединение…»
+с обеих сторон. При ICE FAILED — без reanswer, без причины на экране, без hangup.
+
+**Фиксы (#CALLS-ICE-WATCHDOG):**
+1. ICE-Watchdog входящего: +15с → ICE stats + doReanswer; +35с → doReanswer;
+   +60с → hangup + «Медиа-соединение не установлено (ICE)» (таймер звонящего
+   наконец остановится).
+2. ICE FAILED (входящий, answer отправлен): до 2 восстановлений
+   (doReanswer + возврат в CONNECTING), затем hangup.
+3. failText на engine-FAILED вместо безликого «Ошибка соединения».
+4. dumpIceStatsNow() — публичный снимок candidate-pair по требованию.
+5. TURN TCP-fallback: ?transport=udp → добавляется tcp-вариант того же сервера
+   (раньше такие URL пропускались целиком — TCP-fallback не было вовсе).
+
+**Файлы:** CallScreen.kt (+55), WebRtcEngine.kt (+17), звонки.md (§21), HISTORY.md, worklog.md.
+
+**Сборка:** git pull → assembleDebug → входящий звонок. В логе решающее:
+`ICE stats: …` (reqS/resR/reqR — кто молчит), `ICE: CONNECTED` — цель,
+`ICE-Watchdog: …` — работа таймаутов, `relay …tcp` — задействован TCP-fallback.

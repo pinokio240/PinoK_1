@@ -227,6 +227,12 @@ fun CallScreen(
                 phase = it
                 // #CALLS-ICE-REANSWER: ICE CONNECTED — дальше answer не повторяем.
                 if (it == CallPhase.ACTIVE) iceConnected.value = true
+                // #CALLS-ICE-WATCHDOG (2026-08-29): ICE FAILED без установленного failText
+                // показывал безликое «Ошибка соединения», а звонящий с запущенным таймером
+                // оставался висеть навсегда (никто не клал трубку). Теперь: причина на экране.
+                if (it == CallPhase.FAILED && failText == null) {
+                    failText = if (incoming) "Медиа-соединение не установлено (ICE)" else "Не удалось установить соединение (ICE)"
+                }
             },
             onLocalSdpReady = { sdp ->
                 // #CALLS: отправляем наш SDP (offer для исходящего, answer для входящего).
@@ -991,6 +997,62 @@ fun CallScreen(
             diagReoffer = "nudge WS (ring)"
             AppLog.w("CallScreen", "IN-Watchdog: 7с в RINGING без offer — перерегистрация WS (nudge)")
             sigRestart?.invoke(false)
+        }
+    }
+
+    // #CALLS-ICE-WATCHDOG (2026-08-29, симптом «у звонящего таймер идёт, а PinoK не
+    // поднимает трубку»): accept/join уходят (сервер отмечает звонок отвечённым —
+    // у звонящего стартует таймер), но МЕДИА (ICE) на нашей стороне не подключается —
+    // и для состояния «answer отправлен, ICE не подключился» НЕ БЫЛО никакого
+    // таймаута вовсе (старый IN-Watchdog на 45с срабатывал только при
+    // !answerSent). Звонок висел «Соединение…» вечно, звонящий — со своим таймером.
+    // Теперь: +15с → снимок ICE stats + doReanswer; +35с → ещё doReanswer;
+    // +60с → сами кладём трубку (и у звонящего таймер остановится).
+    LaunchedEffect(phase, answerSent.value) {
+        if (!incoming || !answerSent.value || phase != CallPhase.CONNECTING) return@LaunchedEffect
+        kotlinx.coroutines.delay(15_000L)
+        if (phase == CallPhase.CONNECTING && !iceConnected.value) {
+            AppLog.w("CallScreen", "ICE-Watchdog: 15с после answer без ICE — stats + doReanswer")
+            engine.dumpIceStatsNow()
+            doReanswer("watchdog-ans-15s")
+        }
+        kotlinx.coroutines.delay(20_000L)
+        if (phase == CallPhase.CONNECTING && !iceConnected.value) {
+            AppLog.w("CallScreen", "ICE-Watchdog: 35с после answer без ICE — повторный doReanswer")
+            engine.dumpIceStatsNow()
+            doReanswer("watchdog-ans-35s")
+        }
+        kotlinx.coroutines.delay(25_000L)
+        if (phase == CallPhase.CONNECTING && !iceConnected.value) {
+            AppLog.w("CallScreen", "ICE-Watchdog: 60с после answer без ICE — обрываем звонок")
+            engine.dumpIceStatsNow()
+            failText = "Медиа-соединение не установлено (ICE)"
+            signaling.hangup("timeout")
+            engine.endCall()
+            signaling.stop()
+            phase = CallPhase.FAILED
+        }
+    }
+
+    // #CALLS-ICE-WATCHDOG: ICE FAILED при входящем с уже отправленным answer —
+    // до 2 попыток восстановления (reanswer заставляет собеседника пересобрать
+    // соединение — его агент начинает проверки, наши получают ответы), затем
+    // hangup, чтобы звонящий не висел с идущим таймером вечно.
+    var iceFailRetries by remember { mutableStateOf(0) }
+    LaunchedEffect(phase) {
+        if (phase != CallPhase.FAILED || !incoming || !answerSent.value || iceConnected.value) return@LaunchedEffect
+        if (iceFailRetries < 2) {
+            iceFailRetries++
+            AppLog.w("CallScreen", "ICE FAILED (входящий): попытка восстановления #$iceFailRetries — doReanswer + stats")
+            engine.dumpIceStatsNow()
+            doReanswer("ice-failed")
+            failText = null
+            phase = CallPhase.CONNECTING
+        } else {
+            AppLog.w("CallScreen", "ICE FAILED (входящий): ретраи исчерпаны — hangup")
+            signaling.hangup("timeout")
+            engine.endCall()
+            signaling.stop()
         }
     }
 
