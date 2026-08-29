@@ -86,6 +86,32 @@ class WebRtcEngine(
     private val iceStateGen = java.util.concurrent.atomic.AtomicLong(0)
     private val iceRecoveryTimeoutMs = 10_000L
 
+    // #CALLS-ICE-STATS-UI (2026-08-30, скриншот «ICE FAILED • ans×2, трубка не
+    // поднимается с обоих сторон»): пользователь диагностирует звонки СКРИНШОТАМИ,
+    // а решающая статистика уходила только в logcat. Теперь движок копит:
+    //  1) типы собранных ЛОКАЛЬНЫХ кандидатов (host/srflx/prflx/relay) — relay=0
+    //     при настроенном TURN мгновенно означает «аллокация TURN не удалась»;
+    //  2) агрегат candidate-pair из dumpIceStats (reqS/resR/reqR) — отвечает на
+    //     вопрос «проверки уходят без ответа» vs «проверки собеседника не доходят».
+    // Всё это попадает в экранную строку «Медиа:» (CallScreen, поллинг iceUiSnapshot).
+    // Не сбрасываем в endCall — снимок должен пережить hangup для скриншота FAILED-экрана;
+    // очистка только при создании НОВОГО PeerConnection.
+    private val candTypeCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val candTcpCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    @Volatile
+    private var lastPairStats: String? = null
+
+    /** Экранный снимок ICE: «канд: host=1 srflx=1 relay=0 • пар=3 • reqS=12 resR=0 reqR=0». */
+    fun iceUiSnapshot(): String {
+        val order = listOf("host", "srflx", "prflx", "relay")
+        val known = order.mapNotNull { t -> candTypeCounts[t]?.let { "$t=$it" } }
+        val extra = candTypeCounts.keys.filter { it !in order }.map { "$it=${candTypeCounts[it]}" }
+        val candPart = if (known.isEmpty() && extra.isEmpty()) "канд: 0" else "канд: ${(known + extra).joinToString(" ")}" + (if (candTcpCount.get() > 0) " tcp=${candTcpCount.get()}" else "")
+        val pairs = lastPairStats
+        return if (pairs == null) candPart else "$candPart • $pairs"
+    }
+
     /** Установлен ли remote description (или он ждёт в буфере до создания PC). */
     fun hasRemoteDescription(): Boolean =
         peerConnection?.remoteDescription != null || pendingRemoteSdp != null
@@ -339,7 +365,11 @@ class WebRtcEngine(
             servers.add(PeerConnection.IceServer.builder(STUN_URL).createIceServer())
         }
         iceServers = servers
-        AppLog.i(TAG, "setIceServers: ${servers.size} servers (stun=${params.stunServer?.urls}, turn=${params.turnServer?.urls})")
+        // #CALLS-ICE-STATS-UI: пустые креденшелы TURN = аллокация 401 = relay-кандидатов
+        // не будет (на экране «канд: … relay=0») — логируем сразу, не дожидаясь stats.
+        val turn = params.turnServer
+        val credsOk = !turn?.username.isNullOrBlank() && !turn?.credential.isNullOrBlank()
+        AppLog.i(TAG, "setIceServers: ${servers.size} servers (stun=${params.stunServer?.urls}, turn=${turn?.urls}, creds=${if (credsOk) "есть" else "НЕТ/пустые"})")
     }
 
     fun release() {
@@ -364,6 +394,10 @@ class WebRtcEngine(
     private fun ensureInitialized() { if (factory == null) initialize() }
 
     private fun createPeerConnection() {
+        // #CALLS-ICE-STATS-UI: новый звонок — новая статистика (см. комментарий к полям).
+        candTypeCounts.clear()
+        candTcpCount.set(0)
+        lastPairStats = null
         val iceServers = this.iceServers.ifEmpty {
             listOf(
                 PeerConnection.IceServer.builder(STUN_URL).createIceServer(),
@@ -384,6 +418,14 @@ class WebRtcEngine(
         }
         val observer = object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
+                // #CALLS-ICE-STATS-UI: классифицируем локального кандидата.
+                // Формат sdp: "candidate:<foundation> <component> <proto> <prio> <ip> <port> typ <type> ..."
+                val tokens = candidate.sdp.split(" ")
+                val typ = tokens.getOrNull(7) ?: "?"
+                val proto = tokens.getOrNull(2) ?: "?"
+                if (typ != "?") candTypeCounts.merge(typ, 1, Int::plus)
+                if (proto == "tcp") candTcpCount.incrementAndGet()
+                AppLog.d(TAG, "локальный кандидат: $typ/$proto ${candidate.sdp.take(48)}")
                 onIceCandidateReady(candidate)
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
@@ -422,7 +464,11 @@ class WebRtcEngine(
                 }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                // #CALLS-ICE-STATS-UI: сбор должен доходить до COMPLETE; застревание в
+                // GATHERING = висящие TURN-аллокации (креденшелы/недоступность сервера).
+                AppLog.i(TAG, "ICE gathering: $state (${iceUiSnapshot()})")
+            }
             override fun onAddStream(stream: MediaStream) {}
             override fun onRemoveStream(stream: MediaStream) {}
             override fun onDataChannel(channel: DataChannel) {}
@@ -542,8 +588,16 @@ class WebRtcEngine(
                         }
                     }
                     val sb = StringBuilder()
+                    var pairs = 0
+                    var sumReqS = 0L
+                    var sumResR = 0L
+                    var sumReqR = 0L
                     for (stat in report.statsMap.values) {
                         if (stat.type == "candidate-pair") {
+                            pairs++
+                            sumReqS += (stat.members["requestsSent"]?.toString()?.toLongOrNull() ?: 0L)
+                            sumResR += (stat.members["responsesReceived"]?.toString()?.toLongOrNull() ?: 0L)
+                            sumReqR += (stat.members["requestsReceived"]?.toString()?.toLongOrNull() ?: 0L)
                             val localId = stat.members["localCandidateId"]?.toString()
                             val remoteId = stat.members["remoteCandidateId"]?.toString()
                             sb.append("[")
@@ -560,7 +614,10 @@ class WebRtcEngine(
                         }
                     }
                     val s = sb.toString()
-                    AppLog.w(TAG, if (s.isEmpty()) "ICE stats: нет candidate-pair в отчёте" else "ICE stats: $s")
+                    // #CALLS-ICE-STATS-UI: агрегат для экранной строки «Медиа:» — читается
+                    // CallScreen'ом через iceUiSnapshot() (скриншот вместо logcat).
+                    lastPairStats = "пар=$pairs • reqS=$sumReqS resR=$sumResR reqR=$sumReqR"
+                    AppLog.w(TAG, if (s.isEmpty()) "ICE stats: нет candidate-pair в отчёте (${lastPairStats})" else "ICE stats: $s (${lastPairStats})")
                 } catch (e: Exception) {
                     AppLog.w(TAG, "ICE stats parse error: ${e.message}")
                 }

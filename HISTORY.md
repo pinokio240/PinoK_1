@@ -10801,3 +10801,38 @@ watchdog'и; ans×4 исчерпывался молча — и всё это о�
 
 **Сборка:** git pull → assembleDebug. Смотреть: `err×N` на экране, `ZOMBIE:` в логе,
 `onMessage: command=… eff=…` (INFO) для незаматченных уведомлений, `ICE stats: …`.
+
+---
+
+## 2026-08-30 (1) — Task ID: CALLS-ICE-STATS-UI
+
+**Симптом (скриншот 23:57 после ed95ab9):** «трубка не поднимается с обоих
+сторон». Входящий: «Соединение…», `WS подключён • PC есть • ICE FAILED`,
+`ack:transmit-data • участник 595859469344 • conv ✓ • offer ✓ • answer ✓ •
+ans×2` — сигналинг исправен, watchdog отработал (повторный answer), но медиа
+не связалось. Решающая ICE-статистика уходила только в logcat — на экране был
+безликий «ICE FAILED».
+
+**Корень диагностики:** пользователь работает скриншотами; reqS/resR/reqR и
+типы кандидатов (наличие relay) на экране не отображались; у исходящего не
+было вообще никаких таймаутов на «offer без ICE».
+
+**Фиксы (#CALLS-ICE-STATS-UI):**
+1. Экранная строка «Медиа:» (CallScreen, поллинг 1с iceUiSnapshot):
+   `канд: host=… srflx=… relay=… • пар=N • reqS=… resR=… reqR=…`;
+   переживает hangup — скриншот FAILED-экрана несёт диагноз.
+2. WebRtcEngine: подсчёт локальных кандидатов по типам (+tcp), лог
+   `ICE gathering` (INFO), creds-признак в setIceServers, агрегат
+   candidate-pair в dumpIceStats → lastPairStats.
+3. OUT-watchdog для исходящего: 15с/35с — снимки stats, 45с — hangup+FAILED
+   (re-offer со звонящей стороны не делаем — опасен для собеседника).
+
+**Шпаргалка по «Медиа:»:** relay=0 при TURN → аллокация не удалась;
+reqS>0/resR=0/reqR=0 → собеседник молчит по медиа; reqR>0 → его проверки
+доходят (проблема в наших ответах); пар=0 → проверки не стартовали.
+
+**Файлы:** WebRtcEngine.kt (+58), CallScreen.kt (+52), звонки.md (§23), HISTORY.md, worklog.md.
+
+**Сборка:** git pull → assembleDebug. Скриншот экрана звонка теперь
+достаточен для диагноза; в logcat-фильтр добавить `| tag:CallScreen`
+(watchdog/reanswer маркеры идут с этим тегом).

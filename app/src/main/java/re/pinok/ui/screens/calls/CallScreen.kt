@@ -219,6 +219,9 @@ fun CallScreen(
     var diagIce by remember { mutableStateOf("—") }
     var diagPc by remember { mutableStateOf("PC нет") }
     var diagPid by remember { mutableStateOf("участник —") }
+    // #CALLS-ICE-STATS-UI (2026-08-30): снимок ICE (типы кандидатов + агрегат
+    // candidate-pair reqS/resR/reqR) — обновляется поллингом из iceUiSnapshot().
+    var diagStats by remember { mutableStateOf("") }
     // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): счётчик ПОДРЯД идущих ошибок сервера
     // (type:"error" на наши transmit-data). Сервер отвергает данные, когда разговор
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
@@ -1083,6 +1086,47 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-ICE-STATS-UI (2026-08-30, скриншот «ICE FAILED • ans×2 — трубка не
+    // поднимается с обоих сторон»): симметричный watchdog для ИСХОДЯЩЕГО звонка.
+    // Раньше у звонящей стороны не было НИКАКИХ таймаутов на «offer ушёл, ICE не
+    // подключился» — если собеседник молчит по медиа, исходящий висел вечно.
+    // Ретраить offer со звонящей стороны опасно (внезапный re-offer может сломать
+    // собеседника) — поэтому только снимки статистики (15с/35с) и терминация на 45с.
+    LaunchedEffect(phase) {
+        if (incoming || phase != CallPhase.CONNECTING) return@LaunchedEffect
+        kotlinx.coroutines.delay(15_000L)
+        if (phase == CallPhase.CONNECTING && !iceConnected.value) {
+            AppLog.w("CallScreen", "OUT-Watchdog: 15с после offer без ICE — снимок stats")
+            engine.dumpIceStatsNow()
+        }
+        kotlinx.coroutines.delay(20_000L)
+        if (phase == CallPhase.CONNECTING && !iceConnected.value) {
+            AppLog.w("CallScreen", "OUT-Watchdog: 35с без ICE — повторный снимок stats")
+            engine.dumpIceStatsNow()
+        }
+        kotlinx.coroutines.delay(10_000L)
+        if (phase == CallPhase.CONNECTING && !iceConnected.value) {
+            AppLog.w("CallScreen", "OUT-Watchdog: 45с без ICE — обрываем звонок")
+            engine.dumpIceStatsNow()
+            failText = "Не удалось установить соединение"
+            signaling.hangup("timeout")
+            engine.endCall()
+            signaling.stop()
+            phase = CallPhase.FAILED
+        }
+    }
+
+    // #CALLS-ICE-STATS-UI: поллинг снимка ICE раз в секунду, пока звонок не активен.
+    // dumpIceStatsNow() на watchdog'ах обновляет агрегат асинхронно (getStats-callback) —
+    // поллинг гарантирует появление статистики на экране без доп. recompose-крючков.
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1_000)
+            if (phase == CallPhase.ACTIVE || phase == CallPhase.RINGING) continue
+            diagStats = engine.iceUiSnapshot()
+        }
+    }
+
     // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): единый поллинг-сторож зомби-состояний
     // входящего. Скриншот показал немыслимое: фаза «Соединение…» при «PC нет • ICE
     // CLOSED» и «ошибка сервера» — движок давно мёртв, собеседник вышел, а экран висел
@@ -1433,6 +1477,18 @@ fun CallScreen(
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
                     )
+                    // #CALLS-ICE-STATS-UI (2026-08-30): решающая строка медиа-диагностики —
+                    // типы собранных кандидатов (relay=0 при TURN = аллокация не удалась) и
+                    // агрегат candidate-pair (reqS>0/resR=0/reqR=0 = собеседник не отвечает
+                    // на проверки; reqR>0 = его проверки доходят, проблема в наших ответах).
+                    if (diagStats.isNotBlank()) {
+                        Text(
+                            text = "Медиа: $diagStats",
+                            color = Color.White.copy(alpha = 0.45f),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             }
         }
