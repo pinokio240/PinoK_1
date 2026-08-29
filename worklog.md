@@ -4607,3 +4607,24 @@ Stage Summary:
 - Добавлены 2 механизма восстановления (doReanswer по watchdog и по ICE FAILED) и TURN TCP-fallback — реальный шанс дозвониться на LTE.
 - Решающая диагностика: ICE stats теперь снимается и по таймеру, не только при FAILED. Следующий лог однозначно покажет, кто молчит (reqS>0/resR=0/reqR=0 — звонящий не применяет answer; reqR>0 — проблема в наших ответах).
 - Коммит/пуш: fix(calls) #CALLS-ICE-WATCHDOG — см. git log.
+
+---
+Task ID: CALLS-ZOMBIE
+Agent: Z.ai Code (main)
+Task: Скриншот 23:45 — окно повисло в «Соединение…» (PC нет • ICE CLOSED • ошибка сервера • ans×4), на обратной стороне повесили трубку. Разбор и фикс зомби-состояний.
+
+Work Log:
+- Разбор скриншота: имя/аватар работают (#CALLS-NAME-FIX ✓); сигналинг полный (WS подключён, conv/offer/answer ✓); ans×4 — лимит doReanswer исчерпан; «ошибка сервера» — сервер отвергает transmit-data (participant собеседника не существует — она вышла); PC нет + ICE CLOSED при фазе CONNECTING — движок мёртв, экран в зомби-фазе.
+- Корень: (а) server-error (type:"error") обрабатывался косметически (только diagEvent) — звонок не терминализировался; (б) не было сторожа «CONNECTING при закрытом PC»; (в) FAILED↔CONNECTING-ретраи перезапускали watchdog'и (потенциально бесконечное «Соединение…»).
+- CallScreen #CALLS-ZOMBIE: srvErrCount (подряд идущие server-error); 2 подряд при incoming+answerSent+!iceConnected+CONNECTING → hangup+endCall+stop+FAILED «Собеседник завершил вызов (данные не доставляются)»; diag + err×N.
+- CallScreen: гвард FAILED-retry — при srvErrCount≥2 ретраи запрещены (иначе retry оживлял зомби).
+- CallScreen: поллинг-сторож (1с): CONNECTING без PC ≥3с → терминал «Звонок оборван»; абсолютный дедлайн 90с в CONNECTING без ICE → терминал.
+- CallSignalingClient: +10 алиасов завершения (conversation-closed, call-closed, cancelled/canceled, participant-leaved, left, declined/decline и др.); нераспознанные уведомления DEBUG→INFO — следующий лог покажет точное имя незаматченного hangup.
+- звонки.md §22, HISTORY.md (2026-08-29 (9)), worklog.md.
+- Проверки: баланс скобок 0/0; srvErrCount/zombieSince объявлены до использования; терминалы идемпотентны (endCall/stop на закрытом — безвредны); все зомби-пути ограничены по времени (3с/90с).
+
+Stage Summary:
+- Зомби-CONNECTING невозможен по построению: любое мёртвое состояние (PC закрыт / сервер отвергает данные / 90с без ICE) терминализируется с внятной причиной на экране.
+- Диагностический шаг: нераспознанные WS-уведомления теперь INFO — следующий лог однозначно покажет, каким именем сервер сообщает о hangup звонящего.
+- Открытым остаётся корневой вопрос медиа: почему relay↔relay ICE не связывается (22:29); TCP-fallback (3f41e87) — первый кандидат на решение; следующий лог с ICE stats даст ответ.
+- Коммит/пуш: fix(calls) #CALLS-ZOMBIE.

@@ -219,6 +219,10 @@ fun CallScreen(
     var diagIce by remember { mutableStateOf("—") }
     var diagPc by remember { mutableStateOf("PC нет") }
     var diagPid by remember { mutableStateOf("участник —") }
+    // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): счётчик ПОДРЯД идущих ошибок сервера
+    // (type:"error" на наши transmit-data). Сервер отвергает данные, когда разговор
+    // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
+    var srvErrCount by remember { mutableStateOf(0) }
 
     val engine = remember {
         WebRtcEngine(
@@ -686,6 +690,27 @@ fun CallScreen(
                     val pids = msg.json.get("participantIds")?.takeIf { it.isJsonArray }?.asJsonArray?.toString()
                     AppLog.i("CallScreen", "сервер ack: ${msg.command} response=$resp participantIds=$pids")
                     diagEvent = if (msg.command == "error") "ошибка сервера" else "ack:$resp"
+                    // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): «ошибка сервера» при
+                    // входящем с отправленным answer и без ICE = разговор мёртв
+                    // (собеседник вышел — его participant больше нет; скриншот: ans×4,
+                    // «на обратной стороне трубку повесили», а экран висел «Соединение…»).
+                    // 2 ошибки подряд → терминалим звонок сами, а не спамим в никуда.
+                    if (msg.command == "error") {
+                        srvErrCount++
+                        AppLog.w("CallScreen", "сервер отверг команду (подряд: $srvErrCount): ${msg.json}")
+                        if (incoming && answerSent.value && !iceConnected.value &&
+                            phase == CallPhase.CONNECTING && srvErrCount >= 2
+                        ) {
+                            AppLog.w("CallScreen", "ZOMBIE: 2+ ошибки сервера подряд в CONNECTING без ICE — разговор мёртв, терминалим")
+                            failText = "Собеседник завершил вызов (данные не доставляются)"
+                            signaling.hangup("timeout")
+                            engine.endCall()
+                            signaling.stop()
+                            phase = CallPhase.FAILED
+                        }
+                    } else {
+                        srvErrCount = 0
+                    }
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_ACCEPTED_CALL,
                 re.pinok.realtime.CallSignalingClient.CMD_ACCEPTED_OUTGOING -> {
@@ -1041,7 +1066,9 @@ fun CallScreen(
     var iceFailRetries by remember { mutableStateOf(0) }
     LaunchedEffect(phase) {
         if (phase != CallPhase.FAILED || !incoming || !answerSent.value || iceConnected.value) return@LaunchedEffect
-        if (iceFailRetries < 2) {
+        // #CALLS-ZOMBIE: при 2+ ошибках сервера подряд разговор мёртв — ретраить нельзя
+        // (иначе FAILED-retry «оживит» зомби обратно в CONNECTING и цикл повторится).
+        if (iceFailRetries < 2 && srvErrCount < 2) {
             iceFailRetries++
             AppLog.w("CallScreen", "ICE FAILED (входящий): попытка восстановления #$iceFailRetries — doReanswer + stats")
             engine.dumpIceStatsNow()
@@ -1053,6 +1080,51 @@ fun CallScreen(
             signaling.hangup("timeout")
             engine.endCall()
             signaling.stop()
+        }
+    }
+
+    // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): единый поллинг-сторож зомби-состояний
+    // входящего. Скриншот показал немыслимое: фаза «Соединение…» при «PC нет • ICE
+    // CLOSED» и «ошибка сервера» — движок давно мёртв, собеседник вышел, а экран висел
+    // в CONNECTING вечно. Причины: (1) движок закрыт (endCall из любой ветки), а фазу
+    // никто не терминализировал; (2) FAILED↔CONNECTING-ретраи перезапускали 60с-watchdog
+    // (потенциально бесконечно). Теперь — два железных предохранителя:
+    //  • PC закрыт в CONNECTING ≥3с → терминалим (звонок уже физически мёртв);
+    //  • CONNECTING с отправленным answer без ICE ≥90с ПОДРЯД (независимо от ретраев)
+    //    → терминалим с внятной причиной.
+    var zombieSince by remember { mutableStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1_000)
+            if (!incoming) continue
+            if (phase == CallPhase.CONNECTING && answerSent.value && !iceConnected.value) {
+                val now = System.currentTimeMillis()
+                if (zombieSince == 0L) zombieSince = now
+                val heldMs = now - zombieSince
+                val pcGone = !engine.hasPeerConnection()
+                when {
+                    pcGone && heldMs >= 3_000L -> {
+                        AppLog.w("CallScreen", "ZOMBIE: CONNECTING ${heldMs / 1000}с без ICE при закрытом PC — терминалим")
+                        failText = "Звонок оборван (соединение потеряно)"
+                        signaling.hangup("timeout")
+                        engine.endCall()
+                        signaling.stop()
+                        phase = CallPhase.FAILED
+                        zombieSince = 0L
+                    }
+                    heldMs >= 90_000L -> {
+                        AppLog.w("CallScreen", "ZOMBIE: абсолютный дедлайн 90с в CONNECTING без ICE — терминалим")
+                        failText = "Не удалось установить соединение"
+                        signaling.hangup("timeout")
+                        engine.endCall()
+                        signaling.stop()
+                        phase = CallPhase.FAILED
+                        zombieSince = 0L
+                    }
+                }
+            } else {
+                zombieSince = 0L
+            }
         }
     }
 
@@ -1356,7 +1428,7 @@ fun CallScreen(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Сигналинг: $diagEvent • $diagPid • conv ${if (activeCallId.value.isNullOrBlank()) "—" else "✓"} • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}${if (diagAnswer.isBlank()) "" else " • $diagAnswer"}",
+                        text = "Сигналинг: $diagEvent • $diagPid • conv ${if (activeCallId.value.isNullOrBlank()) "—" else "✓"} • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}${if (diagAnswer.isBlank()) "" else " • $diagAnswer"}${if (srvErrCount > 0) " • err×$srvErrCount" else ""}",
                         color = Color.White.copy(alpha = 0.45f),
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,

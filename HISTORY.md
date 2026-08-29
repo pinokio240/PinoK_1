@@ -10773,3 +10773,31 @@ PinoK не доходит до ACTIVE.
 **Сборка:** git pull → assembleDebug → входящий звонок. В логе решающее:
 `ICE stats: …` (reqS/resR/reqR — кто молчит), `ICE: CONNECTED` — цель,
 `ICE-Watchdog: …` — работа таймаутов, `relay …tcp` — задействован TCP-fallback.
+
+---
+
+## 2026-08-29 (9) — Task ID: CALLS-ZOMBIE
+
+**Симптом (скриншот 23:45 после 3f41e87):** окно повисло в «Соединение…»,
+диагностика: `WS подключён • PC нет • ICE CLOSED`, `ошибка сервера • conv ✓ •
+offer ✓ • answer ✓ • ans×4`; на обратной стороне трубку повесили. Имя/аватар
+работают, сигналинг полный — но экран не заметил, что разговор давно мёртв.
+
+**Корень:** серверные ошибки (type:"error" на transmit-data — participant
+собеседника уже не существует) обрабатывались только как diagEvent; не было
+сторожа «CONNECTING при закрытом PC»; FAILED↔CONNECTING-ретраи перезапускали
+watchdog'и; ans×4 исчерпывался молча — и всё это оставляло вечное «Соединение…».
+
+**Фиксы (#CALLS-ZOMBIE):**
+1. 2 подряд ошибки сервера при входящем (answerSent, !iceConnected, CONNECTING)
+   → терминал «Собеседник завершил вызов (данные не доставляются)»; на diag — err×N.
+2. FAILED-retry запрещён при srvErrCount≥2 (ретрай не оживляет зомби).
+3. Поллинг-сторож: CONNECTING без PC ≥3с → терминал; абсолютный дедлайн 90с
+   в CONNECTING без ICE → терминал (независимо от перезапусков ретраев).
+4. CallSignalingClient: +10 алиасов завершения; нераспознанные уведомления
+   DEBUG→INFO (следующий лог покажет точное имя незаматченного hangup).
+
+**Файлы:** CallScreen.kt (+76), CallSignalingClient.kt (+13/-5), звонки.md (§22), HISTORY.md, worklog.md.
+
+**Сборка:** git pull → assembleDebug. Смотреть: `err×N` на экране, `ZOMBIE:` в логе,
+`onMessage: command=… eff=…` (INFO) для незаматченных уведомлений, `ICE stats: …`.

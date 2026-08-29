@@ -361,10 +361,15 @@ class CallSignalingClient(
                 // #CALLS-FIX (2026-08-24): завершение звонка собеседником — сервер шлёт
                 // notification "hangup" / "call-ended" / "participant-left" / "conversation-ended".
                 // Маппим их в единый CMD_REMOTE_HANGUP, чтобы CallScreen перевёл экран в ENDED.
+                // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): звонящий повесил трубку, а экран
+                // остался в «Соединение…» — какое-то из уведомлений о завершении не сматчилось.
+                // Добавлены алиасы; нераспознанные уведомления логируются на INFO (см. ниже),
+                // чтобы следующий лог показал точное имя.
                 val effective2 = when (effective) {
                     "hangup", "hungup", "call-ended", "conversation-ended", "closed-conversation",
-                    "closed", "ended", "participant-left", "participant-removed",
-                    "call-rejected", "rejected" -> CMD_REMOTE_HANGUP
+                    "conversation-closed", "call-closed", "closed", "ended", "cancelled", "canceled",
+                    "call-cancelled", "call-canceled", "participant-left", "participant-removed",
+                    "participant-leaved", "left", "call-rejected", "rejected", "declined", "decline" -> CMD_REMOTE_HANGUP
                     else -> effective
                 }
                 if (effective2 == "connection") {
@@ -376,7 +381,9 @@ class CallSignalingClient(
                 } else if (effective2 == CMD_ACCEPTED_CALL || effective2 == CMD_ACCEPTED_OUTGOING) {
                     AppLog.i(TAG, "ACCEPTED_CALL: $text")
                 } else {
-                    AppLog.d(TAG, "onMessage: command=$command eff=$effective body=${text.take(300)}")
+                    // #CALLS-ZOMBIE: INFO, а не DEBUG — нераспознанные уведомления (напр.
+                    // незнакомое имя hangup) обязаны попадать в лог пользователя.
+                    AppLog.i(TAG, "onMessage: command=$command eff=$effective body=${text.take(300)}")
                 }
                 if (effective2 == CMD_OFFER || effective2 == CMD_ANSWER) {
                     val sdp = json.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
