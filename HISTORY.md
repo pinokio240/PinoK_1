@@ -10397,3 +10397,63 @@ PiP снова показывает старый клип.
 **Фикс:** `@OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class)`
 одной строкой + `@Composable` + `fun VideoScreen(`. Свип по всем .kt — других
 стековых @OptIn нет.
+
+## 2026-08-29 (3) — Task ID: CALLS-REOFFER — главный фикс зависания «Соединение…»: переотправка offer на registered-peer
+
+**Контекст:** после OPTIN-FIX сборка прошла, тестовый звонок сделан — экранная
+диагностика (#CALLS-DIAG) сработала и сразу показала затык: «WS подключён •
+PC есть • ICE —», «Сигналинг: accepted-call». Лог (фильтр
+WebRtcEngine|CallSignaling|SovaApp) дал полную хронологию.
+
+**Хронология из лога (20:31:2x):**
+- 24.540 — offer создан (setLocalDescription SUCCESS), WS ещё НЕ открыт → offer в кэше;
+- 24.691 — WS открыт; 24.708 — connection (participants: мы CREATOR/ACCEPTED, собеседник CALLED);
+- 24.720 — offer отправлен (sequence 1) участнику 595859469344; 24.722…730 — 10 ICE-кандидатов + accept-call (seq 12);
+- **25.316 — REGISTERED_PEER собеседника (platform WEB)** — т.е. peer собеседника
+  появился на сервере на ~600мс ПОЗЖЕ нашего offer;
+- 31.868 — второй REGISTERED_PEER того же участника (platform ANDROID — у
+  собеседника звонит и телефон: VK Me);
+- 32.487 — accepted-call (собеседник ответил с WEB) — и ПОСЛЕ ЭТОГО ТИШИНА:
+  answer не пришёл, ICE не стартовал (state NEW → колбэк не звался → «ICE —»).
+
+**Причина:** сервер ВЫБРАСЫВАЕТ transmit-data, адресованный участнику, у
+которого ещё нет активного WS-peer'а. Наш offer и кандидаты уехали до
+registered-peer — доши до собеседника НИЧЕГО. Собеседник принял звонок, но
+offer'а у него нет — answer слать нечем. Звонок висел в «Соединение…».
+
+**Почему не срабатывала старая логика:** обработчик registered-peer отправлял
+кэшированный offer только при `remoteParticipantId == null`, а тот заполнялся
+из connection.participants за секунду ДО registered-peer — переотправка
+пропускалась всегда. (Эталон calls-sdk, звонки.md §8.3: на registered-peer
+offer отправляется/переотправляется.)
+
+**Фикс (#CALLS-REOFFER, CallScreen.kt):**
+1. `doReoffer(reason)` — переотправка offer (pendingLocalSdp или
+   engine.lastLocalSdp) + ВСЕХ локальных кандидатов (новый кэш
+   allLocalCandidates, наполняется в onIceCandidateReady за весь звонок).
+2. registered-peer → doReoffer ВСЕГДА (не только при первом знакомстве с pid);
+   guard: только исходящий и пока `answerReceived == false`.
+3. Повторный answer игнорируется (собеседник может ответить вторым устройством
+   — WEB+ANDROID; PC уже stable, второй answer уронил бы setRemoteDescription).
+4. Кандидаты собеседника кэшируются по «!engine.hasPeerConnection()» вместо
+   «фаза RINGING»: в исходящем PC есть СРАЗУ, и кандидаты, пришедшие до смены
+   фазы, раньше падали в кэш кнопки «Принять», которой у исходящего нет.
+5. Watchdog CONNECTING (исходящий): 20с без answer → последний re-offer;
+   60с → hangup + FAILED «Не удалось установить соединение» (раньше — вечное
+   «Соединение…», т.к. 45с-таймаут живёт только в RINGING).
+6. В экранной диагностике: «offer×N» — видно, сколько раз переотправлялся offer.
+
+**Ожидание после фикса:** REGISTERED_PEER (25.3) → REOFFER #1 → у собеседника
+появляется offer → после accept-call приходит answer → ICE → ACTIVE.
+
+**Отдельная проблема из того же лога (не звонковая цепочка исходящего):**
+`events_queue subscribe вернул null … входящие звонки недоступны` — long-poll
+очередь входящих не поднялась (SovaApp:1357/1377). ВХОДЯЩИЕ звонки остаются
+недоступны — отдельная задача.
+
+**Файлы:** CallScreen.kt (+76/-13), звонки.md (§8.3 registered-peer, §16,
+§19), HISTORY.md, worklog.md.
+
+**Сборка:** компиляция на стороне пользователя (нет Android SDK в песочнице):
+`git pull` → `:app:assembleDebug`, проверить отсутствие новых warnings, затем
+тестовый звонок; при неудаче — скриншот diag-строк (теперь там «offer×N»).

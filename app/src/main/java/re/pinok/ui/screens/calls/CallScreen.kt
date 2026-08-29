@@ -141,6 +141,14 @@ fun CallScreen(
     // #CALLS-OUTGOING: кэш нашего offer/candidates до получения participantId.
     val pendingLocalSdp = remember { mutableStateOf<org.webrtc.SessionDescription?>(null) }
     val pendingLocalCandidates = remember { mutableStateOf<MutableList<org.webrtc.IceCandidate>>(mutableListOf()) }
+    // #CALLS-REOFFER (2026-08-29): флаг «answer уже получен» + ПОЛНЫЙ кэш локальных
+    // ICE-кандидатов за звонок. Offer/кандидаты, отправленные ДО registered-peer
+    // собеседника, сервер ВЫБРАСЫВАЕТ (у него ещё нет активного WS-peer'а) —
+    // поэтому на registered-peer переотправляем offer + все кандидаты заново.
+    val answerReceived = remember { mutableStateOf(false) }
+    val allLocalCandidates = remember { mutableStateOf(mutableListOf<org.webrtc.IceCandidate>()) }
+    var reofferCount by remember { mutableStateOf(0) }
+    var diagReoffer by remember { mutableStateOf("") }
     // #CALLS: call_id активного звонка — для кнопки «Ссылка» (vchat.createJoinLink).
     val activeCallId = remember { mutableStateOf<String?>(null) }
     // #CALLS-DIAG (2026-08-29): экранная диагностика — состояние WS/PC/ICE и последнее
@@ -172,6 +180,11 @@ fun CallScreen(
             },
             onIceCandidateReady = { candidate ->
                 // #CALLS: отправляем ICE candidate собеседнику.
+                // #CALLS-REOFFER: каждый локальный кандидат копится в allLocalCandidates
+                // за весь звонок — пригодится при повторной отправке offer (registered-peer
+                // / watchdog): ранее отправленные кандидаты сервер мог выбросить вместе
+                // с первым offer'ом.
+                allLocalCandidates.value.add(candidate)
                 val pid = remoteParticipantId.value
                 if (pid != null) {
                     signaling.sendCandidate(pid, candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
@@ -181,6 +194,34 @@ fun CallScreen(
             },
             onIceStateChanged = { diagIce = it },
         )
+    }
+
+    // #CALLS-REOFFER (2026-08-29): повторная отправка offer + всех локальных ICE-кандидатов.
+    // Лог 20:31: offer ушёл в 24.720, REGISTERED_PEER собеседника пришёл только в 25.316 —
+    // сервер выбросил offer (некому доставлять), answer не пришёл вовсе, звонок висел
+    // в «Соединение…». Эталон Chrome (calls-sdk, звонки.md §13) переотправляет offer
+    // на каждый registered-peer, пока не получит answer — делаем то же самое.
+    val doReoffer: (String) -> Unit = { reason ->
+        if (direction != CallDirection.OUTGOING) {
+            AppLog.i("CallScreen", "REOFFER пропущен ($reason): не исходящий")
+        } else if (answerReceived.value) {
+            AppLog.i("CallScreen", "REOFFER пропущен ($reason): answer уже получен")
+        } else {
+            val pid = remoteParticipantId.value
+            val sdp = pendingLocalSdp.value ?: engine.lastLocalSdp()
+            if (pid.isNullOrBlank() || sdp == null) {
+                AppLog.w("CallScreen", "REOFFER невозможен ($reason): pid=$pid, sdp=${sdp != null}")
+            } else {
+                pendingLocalSdp.value = null
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                allLocalCandidates.value.forEach { c ->
+                    signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
+                }
+                reofferCount++
+                diagReoffer = "offer×$reofferCount"
+                AppLog.i("CallScreen", "REOFFER #$reofferCount ($reason): offer + ${allLocalCandidates.value.size} кандидатов → $pid")
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -402,6 +443,14 @@ fun CallScreen(
                             msg.sdpType == "offer"
                         val type = if (isOffer) org.webrtc.SessionDescription.Type.OFFER
                         else org.webrtc.SessionDescription.Type.ANSWER
+                        // #CALLS-REOFFER: повторный answer (собеседник ответил вторым
+                        // устройством — у него может быть WEB+ANDROID peer) игнорируем:
+                        // PC уже в stable, второй answer уронит setRemoteDescription.
+                        // Первый answer выигрывает.
+                        if (!isOffer && answerReceived.value) {
+                            AppLog.w("CallScreen", "повторный answer проигнорирован (уже применён)")
+                            return@collect
+                        }
                         if (engine.hasPeerConnection()) {
                             // #CALLS-OUT-FIX (2026-08-27): PC уже создан — answer/offer
                             // применяем СРАЗУ. Раньше answer лишь кэшировался в
@@ -410,7 +459,10 @@ fun CallScreen(
                             // звонок вечно висел «Звоним…».
                             AppLog.i("CallScreen", "applying remote ${type.name.lowercase()} immediately (PC ready)")
                             engine.setRemoteSdp(sdp, type)
-                            if (!isOffer) phase = CallPhase.CONNECTING
+                            if (!isOffer) {
+                                answerReceived.value = true
+                                phase = CallPhase.CONNECTING
+                            }
                         } else {
                             // Входящий до «Принять»: PC ещё нет — кэшируем; применит accept.
                             pendingOffer.value = sdp to if (isOffer) "offer" else "answer"
@@ -423,7 +475,12 @@ fun CallScreen(
                     msg.candidate?.let { c ->
                         // #CALLS-FIX: если звонок уже принят (PC создан) — применяем
                         // кандидата сразу, иначе кэшируем до accept.
-                        if (phase == CallPhase.RINGING) {
+                        // #CALLS-REOFFER (2026-08-29): условие — «PC ещё не создан», а НЕ
+                        // фаза RINGING. В исходящем PC есть СРАЗУ, а фаза может ещё быть
+                        // RINGING — кандидаты собеседника, пришедшие до смены фазы,
+                        // раньше падали в кэш, который читает только кнопка «Принять»
+                        // (у исходящего её нет) — и терялись.
+                        if (!engine.hasPeerConnection()) {
                             pendingCandidates.value.add(Triple(msg.candidateSdpMid, msg.candidateSdpMLineIndex ?: 0, c))
                         } else {
                             engine.addRemoteIceCandidate(msg.candidateSdpMid, msg.candidateSdpMLineIndex ?: 0, c)
@@ -444,20 +501,17 @@ fun CallScreen(
                     // когда собеседник зарегистрировался в conversation. participantId
                     // здесь — ID участника, НА КОТОРЫЙ слать offer/ICE (не наш WS peerId).
                     val pid = msg.participantId
-                    if (!pid.isNullOrBlank() && remoteParticipantId.value == null) {
-                        remoteParticipantId.value = pid
-                        AppLog.i("CallScreen", "registered-peer: participantId=$pid")
-                        // Отправляем кэшированные offer + ICE candidates собеседнику.
-                        val cached = pendingLocalSdp.value
-                        if (cached != null) {
-                            pendingLocalSdp.value = null
-                            signaling.sendSdp(pid, cached.description, cached.type.name.lowercase())
-                            AppLog.i("CallScreen", "кэшированный offer отправлен ($pid)")
+                    if (!pid.isNullOrBlank()) {
+                        if (remoteParticipantId.value == null) {
+                            remoteParticipantId.value = pid
+                            AppLog.i("CallScreen", "registered-peer: participantId=$pid")
                         }
-                        pendingLocalCandidates.value.forEach { c ->
-                            signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
-                        }
-                        pendingLocalCandidates.value.clear()
+                        // #CALLS-REOFFER (2026-08-29): переотправляем offer+кандидаты
+                        // ВСЕГДА, а не только когда participantId узнали впервые.
+                        // Раньше условие «remoteParticipantId == null» почти всегда ложно
+                        // (pid заполняется из connection.participants за секунду ДО
+                        // registered-peer) — переотправка не срабатывала никогда.
+                        doReoffer("registered-peer")
                     }
                 }
                 "connection" -> {
@@ -614,6 +668,29 @@ fun CallScreen(
                 engine.endCall()
                 signaling.stop()
                 phase = CallPhase.ENDED
+            }
+        }
+    }
+
+    // #CALLS-REOFFER (2026-08-29): watchdog CONNECTING для исходящего. Раньше при
+    // переходе в CONNECTING (собеседник принял) таймаутов не оставалось вовсе —
+    // если answer потерялся, экран висел «Соединение…» вечно. Теперь: 20с без answer
+    // → последний повторный offer; 60с → рвём с понятной ошибкой.
+    LaunchedEffect(phase) {
+        if (phase == CallPhase.CONNECTING && !incoming) {
+            kotlinx.coroutines.delay(20_000L)
+            if (phase == CallPhase.CONNECTING && !incoming && !answerReceived.value) {
+                AppLog.i("CallScreen", "Watchdog: 20с в CONNECTING без answer — повторный offer")
+                doReoffer("watchdog-20s")
+            }
+            kotlinx.coroutines.delay(40_000L)
+            if (phase == CallPhase.CONNECTING && !incoming && !answerReceived.value) {
+                AppLog.w("CallScreen", "Watchdog: 60с в CONNECTING без answer — обрываем звонок")
+                failText = "Не удалось установить соединение"
+                signaling.hangup("timeout")
+                engine.endCall()
+                signaling.stop()
+                phase = CallPhase.FAILED
             }
         }
     }
@@ -854,7 +931,7 @@ fun CallScreen(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Сигналинг: $diagEvent • $diagPid",
+                        text = "Сигналинг: $diagEvent • $diagPid${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}",
                         color = Color.White.copy(alpha = 0.45f),
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,

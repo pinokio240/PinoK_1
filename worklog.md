@@ -4483,3 +4483,21 @@ Work Log:
 Stage Summary:
 - Коммит #OPTIN-FIX: VideoScreen.kt — одна объединённая @OptIn (снимает и FlowPreview-warning, и ошибку «not repeatable»).
 - Инцидент песочницы задокументирован (второй раз: chmod/755+.gitignore был в WARNINGS-FIX; теперь откат .git). Проверять git log перед/после работ.
+
+---
+Task ID: CALLS-REOFFER
+Agent: main (Z.ai Code)
+Task: Исходящий звонок висит в «Соединение…»: WS подключён, PC есть, ICE —, сигналинг accepted-call, answer не приходит (лог + скриншот diag от пользователя).
+
+Work Log:
+- Разобрал хронологию лога 20:31: offer отправлен 24.720, REGISTERED_PEER собеседника 25.316 (WEB) и 31.868 (ANDROID), accepted-call 32.487, после — тишина. Вывод: сервер выбрасывает transmit-data до регистрации peer'а получателя; наш offer/кандидаты не дошли, answer шлить нечем.
+- Нашёл причину молчания старой логики: registered-peer-обработчик отправлял кэш только при remoteParticipantId==null, а pid заполнялся из connection.participants секундой раньше — переотправка всегда пропускалась.
+- CallScreen.kt #CALLS-REOFFER: doReoffer(reason) (offer из pendingLocalSdp/engine.lastLocalSdp + allLocalCandidates); вызов на каждый registered-peer; guard direction==OUTGOING && !answerReceived; повторный answer игнорируется; кэш кандидатов по !engine.hasPeerConnection() вместо фазы RINGING; watchdog CONNECTING 20с→re-offer / 60с→FAILED; diag «offer×N».
+- Проверки: rg-маркеры, баланс скобок (0/0), return@collect валиден в inline collect.
+- Обновил звонки.md (§8.3 registered-peer, §16 timeline #CALLS-REOFFER, §19 diag+маркеры), HISTORY.md (сессия 2026-08-29 (3)).
+
+Stage Summary:
+- Исправлен ГЛАВНЫЙ механизм зависания исходящих звонков: offer теперь доходит до собеседника (переотправка на registered-peer, как в эталоне calls-sdk).
+- Бонус-фиксы: потеря ICE-кандидатов в исходящем до смены фазы; вечное «Соединение…» без таймаута; двойной answer от второго устройства собеседника.
+- Зафиксирована отдельная проблема: events_queue subscribe вернул null → входящие звонки недоступны (SovaApp:1357/1377) — отдельная задача.
+- Компиляция на стороне пользователя (нет Android SDK): git pull → assembleDebug → тестовый звонок → при неудаче скриншот diag (теперь с «offer×N»).
