@@ -4522,3 +4522,24 @@ Stage Summary:
 - «Отклонить» больше не теряется при неподнятому сигналинге (HTTP-fallback).
 - Прим.: startup-предупреждение «events_queue subscribe вернул null» из этого же лога осталось (LP 115 при этом дошёл через основной queue) — не блокер, отдельная тема.
 - Сборка/тест на стороне пользователя: входящий звонок → «Принять» → ожидание ICE: CONNECTED.
+
+---
+Task ID: CALLS-IN-OFFER
+Agent: main (Z.ai Code)
+Task: Входящий звонок (скриншот 21:26): «Звонок завершён», diag «WS выкл • PC нет • ICE CLOSED», сигналинг «remote-hangup • участник 595859469344» — звонящий сам сбросил через ~37с, answer не дошёл/не был создан.
+
+Work Log:
+- Восстановил хронологию: ICE CLOSED доказывает, что PC существовал («Принять» было нажато, сигналинг работал) — звонящий повесил трубку, не дождавшись answer.
+- Нашёл гонку кэша: offer жил в UI (pendingOffer) и читался только кнопкой «Принять» ПОСЛЕ engine.acceptCall; offer, прилетевший в окно нажатия, затирался (pendingOffer.value=null) → answer не создавался вовсе.
+- Нашёл потенциальный пустой conversationId в WS URL: call_id доставался только в ветке payload="-1"; при payload с params (events_queue) WS уходил с conversationId= (пусто).
+- Нашёл ловушку queuev4: клиент остаётся в очереди «calls» после исходящего; при входящем тот же LP 115 прыгал RINGING→CONNECTING без «Принять».
+- WebRtcEngine #CALLS-IN-OFFER: pendingRemoteSdp-буфер (setRemoteSdp без PC → буфер; acceptCall/startCall → applyBufferedRemoteSdp сразу после создания PC), hasRemoteDescription(); очистка буфера в endCall/release. UI-кэши pendingOffer/pendingCandidates удалены.
+- CallScreen: messagesGetCurrentCalls ВСЕГДА для входящего (convId для WS/join/hangup); offerReceived/answerSent-флаги; guard повторного offer после answer; watchdog входящего CONNECTING (8с → nudge-перерегистрация WS, 20с → warn, 45с без answer → FAILED «Данные звонка не получены»); queuev4-collect гейт на OUTGOING; diag «offer ✓/— • answer ✓/— • nudge WS».
+- Проверки: rg на остатки удалённых состояний (только комментарии), баланс скобок 0/0 по обоим файлам, дифф просмотрен полностью; kotlinc в песочнице нет — компиляция у пользователя.
+- Обновил звонки.md (§10 маршрут, §15 п.17–18, §16 timeline, §19 diag/маркеры, §20.1 разбор 21:26), HISTORY.md (5).
+
+Stage Summary:
+- Входящий путь больше не зависит от момента прихода offer: движок буферизует remote SDP/ICE и применяет при создании PC — гонка с «Принять» устранена по построению.
+- Добавлен первый watchdog для входящего: nudge-перерегистрация WS через 8с без offer (сервер разошлёт registered-peer, звонящий переотправит offer) и честный FAILED через 45с вместо вечного «Соединение…».
+- Диагностика на экране теперь различает «offer не дошёл» (offer —) и «answer не ушёл» (offer ✓ answer —) и «ICE/сеть» (оба ✓ + ICE FAILED).
+- Коммит + push на origin/PinoK; сборка/тест на устройстве пользователя (git pull → assembleDebug).

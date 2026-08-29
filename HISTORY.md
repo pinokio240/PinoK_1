@@ -10505,3 +10505,84 @@ VKApiClient.kt (+8/-1), звонки.md (§16, §19, новый §20), HISTORY.m
 позвонить с другого устройства, принять, смотреть «ICE: CONNECTED» и диалог.
 Если params опять висят — в логе теперь будет `getCallParams: vchat null
 (attempt 1, convId=…)` через 10с (вместо тишины).
+
+---
+
+## 2026-08-29 (5) — Task ID: CALLS-IN-OFFER — входящий звонок: звонящий сам сбрасывал звонок (remote-hangup через ~37с)
+
+**Скриншот 21:26 (входящий):** «Звонок завершён», диагностика
+`WS выкл • PC нет • ICE CLOSED`, сигналинг `remote-hangup • участник
+595859469344`. Важно: ICE CLOSED появился — значит PC существовал и был
+закрыт endCall'ом из remote-hangup-обработчика → «Принять» было нажато,
+сигналинг работал, но звонящий повесил трубку сам, не дождавшись answer.
+
+**Хронология сбоя:** входящий звонок → наш WS регистрируется → offer звонящего
+должен прилететь ДО «Принять» (и переотправляться на registered-peer) →
+пользователь жмёт «Принять» → должен уйти answer. Если offer к этому моменту
+потерян — answer создавать не из чего, и звонящий через свой таймаут (~37с)
+сбрасывает звонок → remote-hangup → «Звонок завершён».
+
+**Причины (все устранены в #CALLS-IN-OFFER):**
+
+**Причина 1 (гонка кэша offer):** offer кэшировался в UI-состоянии
+`pendingOffer` и читался ТОЛЬКО кнопкой «Принять» — причём ПОСЛЕ
+`engine.acceptCall`. Offer, прилетевший в окно между `engine.acceptCall`,
+чтением кэша и `pendingOffer.value = null`, затирался и терялся навсегда:
+answer не создавался вовсе. Кандидаты — аналогично (кэш `pendingCandidates`
+чистился в кнопке).
+
+**Причина 2 (пустой conversationId в WS URL):** call_id доставался только
+в ветке `payload="-1"` (vchat fallback). Если payload содержал готовые params
+(канал events_queue перезаписывал pendingIncomingCallPayload), WS уходил с
+`conversationId=` (пусто) — сервер мог не считать нас полноценным peer'ом
+conversation: registered-peer звонящему не уходил, его offer до нас не доходил.
+
+**Причина 3 (нет watchdog'а входящего CONNECTING):** при потере offer экран
+висел «Соединение…» неограниченно — до remote-hangup от звонящего.
+
+**Причина 4 (ловушка queuev4):** queuev4Client остаётся подписан на очередь
+«calls» после исходящего звонка; при входящем он получает то же событие LP 115,
+и collect в CallScreen прыгал RINGING→CONNECTING без нажатия «Принять»
+(экран «Соединение…» без кнопок, accept-call никто не отправлял). В 21:26
+PC был создан (ICE CLOSED), значит основной была причина 1/2, но ловушка
+устранена тоже.
+
+**Фиксы (#CALLS-IN-OFFER):**
+1. WebRtcEngine: буфер `pendingRemoteSdp` — `setRemoteSdp` при отсутствии PC
+   буферизует SDP; `acceptCall`/`startCall` применяют буфер сразу после
+   создания PC (`applyBufferedRemoteSdp` на signaling thread, до
+   onCallPhaseChanged(CONNECTING)). Кандидаты уже буферизовались движком
+   (pendingRemoteIce → drain после setRemoteDescription). UI-кэши pendingOffer/
+   pendingCandidates УДАЛЕНЫ — гонка устранена по построению.
+2. WebRtcEngine: `hasRemoteDescription()` — «offer получен/применён или ждёт
+   в буфере», используется watchdog'ом.
+3. CallScreen входящий: `messagesGetCurrentCalls()` вызывается ВСЕГДА (не
+   только в fallback) — conversationId (call_id) теперь есть в WS URL,
+   vchatJoinConversation и hangup-fallback при любом варианте payload.
+4. CallScreen: флаги `offerReceived`/`answerSent` (+ в onLocalSdpReady) —
+   для watchdog'а и экранной диагностики; guard повторного offer после
+   отправки answer (звонящий мог не увидеть наш answer).
+5. CallScreen: watchdog входящего CONNECTING — 8с без offer → nudge
+   (перерегистрация WS: stop+start с сохранёнными params; сервер снова
+   рассылает registered-peer → звонящий по семантике §8.3 переотправляет
+   offer), 20с → warn в лог, 45с без answer → FAILED «Данные звонка не
+   получены (offer не пришёл)» + hangup("timeout") — больше не ждём
+   remote-hangup вечно.
+6. CallScreen: collect queuev4-события гейтится на `direction == OUTGOING`.
+7. Diag-строка: `Сигналинг: <событие> • участник <id> • offer ✓/— • answer
+   ✓/—` (+ «nudge WS» при срабатывании) — следующий скриншот однозначно
+   покажет место обрыва: offer —/answer — → offer не дошёл; offer ✓/answer —
+   → наш answer не ушёл (смотреть setRemoteSdp в логе); offer ✓/answer ✓ +
+   ICE FAILED → сеть/TURN.
+
+**Файлы:** CallScreen.kt (+118/-79), WebRtcEngine.kt (+70/-13),
+звонки.md (§10, §15.17–18, §16, §19, §20.1), HISTORY.md, worklog.md.
+
+**Сборка:** на стороне пользователя: git pull → assembleDebug → тест входящего:
+(1) позвонить с веба, дождаться «Входящий звонок…» ≥5с, нажать «Принять»;
+(2) ожидаем в логе `remote offer → engine` → `setRemoteSdp SUCCESS` →
+`setLocalDescription(answer) SUCCESS` → `ICE: CONNECTED` и разговор;
+(3) если offer не пришёл вообще — через 8с увидим `IN-Watchdog: 8с без offer —
+перерегистрация WS (nudge)`, звонящий должен переотправить offer; если и
+после nudge тишина — через 45с экран честно скажет «Данные звонка не получены»
+вместо вечного «Соединение…», а diag-строка покажет `offer —`.

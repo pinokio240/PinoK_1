@@ -69,6 +69,19 @@ class WebRtcEngine(
     /** true, если PeerConnection жив (создан и не закрыт). */
     fun hasPeerConnection(): Boolean = pcCreated
 
+    // #CALLS-IN-OFFER (2026-08-29): буфер удалённого SDP, пришедшего ДО создания PC
+    // (входящий: offer звонящего прилетает, пока экран «Входящий звонок…» — PC ещё нет).
+    // Применяется сразу после создания PC в acceptCall/startCall. Раньше кэш жил в
+    // CallScreen (pendingOffer) и читался кнопкой «Принять» — offer, прилетевший МЕЖДУ
+    // чтением кэша и созданием PC, затирался (pendingOffer.value = null) и терялся:
+    // answer не создавался, звонящий висел и сбрасывал звонок (лог 21:26, remote-hangup).
+    @Volatile
+    private var pendingRemoteSdp: SessionDescription? = null
+
+    /** Установлен ли remote description (или он ждёт в буфере до создания PC). */
+    fun hasRemoteDescription(): Boolean =
+        peerConnection?.remoteDescription != null || pendingRemoteSdp != null
+
     // #CALLS-FIX: отдельный signaling thread для всех операций PeerConnection.
     // Создание PC/audio source с main-потока → нативный SIGABRT в libjingle
     // ("front() called on an empty vector").
@@ -134,6 +147,7 @@ class WebRtcEngine(
             localAudioTrack?.let { track ->
                 peerConnection?.addTrack(track, listOf("stream0"))
             }
+            applyBufferedRemoteSdp()
             if (isInitiator) createOffer()
         }
     }
@@ -150,7 +164,21 @@ class WebRtcEngine(
             localAudioTrack?.let { track ->
                 peerConnection?.addTrack(track, listOf("stream0"))
             }
+            // #CALLS-IN-OFFER: offer звонящего, буферизованный до «Принять»,
+            // применяем здесь же (на signaling thread, в порядке очереди) —
+            // setRemoteDescription → onSetSuccess → createAnswer → answer уйдёт.
+            applyBufferedRemoteSdp()
             onCallPhaseChanged(CallPhase.CONNECTING)
+        }
+    }
+
+    /** #CALLS-IN-OFFER: применить буферизованный remote SDP (вызов на signaling thread). */
+    private fun applyBufferedRemoteSdp() {
+        val buffered = pendingRemoteSdp
+        if (buffered != null) {
+            pendingRemoteSdp = null
+            AppLog.i(TAG, "применяю буферизованный ${buffered.type} (PC готов, len=${buffered.description.length})")
+            applyRemoteSdp(buffered)
         }
     }
 
@@ -160,6 +188,7 @@ class WebRtcEngine(
             peerConnection?.close()
             peerConnection = null
             pcCreated = false
+            pendingRemoteSdp = null
             localAudioTrack = null
             audioSource?.dispose()
             audioSource = null
@@ -169,21 +198,37 @@ class WebRtcEngine(
         }
     }
 
+    /**
+     * #CALLS-IN-OFFER (2026-08-29): единая точка приёма удалённого SDP.
+     * Если PC ещё НЕ создан (входящий: offer прилетел до «Принять») — SDP
+     * буферизуется и будет применён сразу после создания PC в acceptCall/startCall.
+     * Если PC уже создан — применяется немедленно (offer → createAnswer в onSetSuccess).
+     * Так исчезает гонка CallScreen «кэш pendingOffer vs кнопка Принять».
+     */
     fun setRemoteSdp(sdp: String, type: SessionDescription.Type) {
         post {
-            val sessionDesc = SessionDescription(type, sdp)
-            AppLog.i(TAG, "setRemoteSdp: type=$type sdpLen=${sdp.length}")
-            peerConnection?.setRemoteDescription(SdpObserverAdapter(
-                onSetSuccess = {
-                    AppLog.i(TAG, "setRemoteSdp SUCCESS, pending=${pendingRemoteIce["remote"]?.size ?: 0}")
-                    drainPendingIceCandidates()
-                    // #CALLS-FIX: как в VK — createAnswer ТОЛЬКО после успешной
-                    // установки remote SDP (onSetSuccess), не сразу.
-                    if (type == SessionDescription.Type.OFFER) createAnswer()
-                },
-                onError = { err -> AppLog.e(TAG, "setRemoteSdp error: $err") }
-            ), sessionDesc)
+            if (peerConnection == null) {
+                pendingRemoteSdp = SessionDescription(type, sdp)
+                AppLog.i(TAG, "setRemoteSdp: PC ещё нет — ${type.name.lowercase()} буферизован (len=${sdp.length})")
+            } else {
+                applyRemoteSdp(SessionDescription(type, sdp))
+            }
         }
+    }
+
+    /** Применение remote SDP (только на signaling thread, PC уже создан). */
+    private fun applyRemoteSdp(sessionDesc: SessionDescription) {
+        AppLog.i(TAG, "setRemoteSdp: type=${sessionDesc.type} sdpLen=${sessionDesc.description.length}")
+        peerConnection?.setRemoteDescription(SdpObserverAdapter(
+            onSetSuccess = {
+                AppLog.i(TAG, "setRemoteSdp SUCCESS, pending=${pendingRemoteIce["remote"]?.size ?: 0}")
+                drainPendingIceCandidates()
+                // #CALLS-FIX: как в VK — createAnswer ТОЛЬКО после успешной
+                // установки remote SDP (onSetSuccess), не сразу.
+                if (sessionDesc.type == SessionDescription.Type.OFFER) createAnswer()
+            },
+            onError = { err -> AppLog.e(TAG, "setRemoteSdp error: $err") }
+        ), sessionDesc)
     }
 
     fun addRemoteIceCandidate(sdpMid: String?, sdpMLineIndex: Int, sdp: String) {
@@ -288,6 +333,7 @@ class WebRtcEngine(
             peerConnection?.close()
             peerConnection = null
             pcCreated = false
+            pendingRemoteSdp = null
             localAudioTrack = null
             audioSource?.dispose()
             audioSource = null

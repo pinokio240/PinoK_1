@@ -141,11 +141,17 @@ fun CallScreen(
     // #CALLS: participantId собеседника (из offer/candidate в сигналинге).
     // Нужен для отправки answer SDP и ICE candidates обратно.
     val remoteParticipantId = remember { mutableStateOf<String?>(null) }
-    // #CALLS: кэш offer + ICE candidates — приходят сразу после подключения WS,
-    // ДО нажатия «Принять». PeerConnection создаётся только при accept, поэтому
-    // offer/candidates применяем после создания PC.
-    val pendingOffer = remember { mutableStateOf<Pair<String, String>?>(null) } // (sdp, type)
-    val pendingCandidates = remember { mutableStateOf<MutableList<Triple<String?, Int, String>>>(mutableListOf()) }
+    // #CALLS-IN-OFFER (2026-08-29, лог 21:26): флаги «offer получен» / «answer отправлен» —
+    // для watchdog'а входящего и экранной диагностики. Раньше offer кэшировался в
+    // pendingOffer и читался ТОЛЬКО кнопкой «Принять»: offer, прилетевший в момент
+    // нажатия, затирался (pendingOffer.value = null) — answer не создавался вовсе,
+    // звонящий повисал и сбрасывал звонок (remote-hangup через ~37с).
+    val offerReceived = remember { mutableStateOf(false) }
+    val answerSent = remember { mutableStateOf(false) }
+    // #CALLS-IN-OFFER: параметры последнего signaling.start — для nudge-перерегистрации
+    // WS (входящий: если offer не пришёл, перерегистрация заставит сервер снова
+    // разослать registered-peer → звонящий переотправит offer — семантика §8.3 звонки.md).
+    var sigRestart: (() -> Unit)? by remember { mutableStateOf(null) }
     // #CALLS-OUTGOING: кэш нашего offer/candidates до получения participantId.
     val pendingLocalSdp = remember { mutableStateOf<org.webrtc.SessionDescription?>(null) }
     val pendingLocalCandidates = remember { mutableStateOf<MutableList<org.webrtc.IceCandidate>>(mutableListOf()) }
@@ -176,10 +182,12 @@ fun CallScreen(
                 // #CALLS: отправляем наш SDP (offer для исходящего, answer для входящего).
                 // Если participantId ещё неизвестен (исходящий: приходит из connection
                 // ПОСЛЕ createOffer) — кэшируем и отправим при получении participantId.
+                // #CALLS-IN-OFFER: факт отправки answer — для watchdog'а входящего.
+                if (sdp.type == SessionDescription.Type.ANSWER) answerSent.value = true
                 val pid = remoteParticipantId.value
                 if (pid != null) {
                     AppLog.i("CallScreen", "sending local SDP type=${sdp.type} to participant=$pid")
-                AppLog.i("CallScreen", "FULL_LOCAL_${sdp.type} SDP:\n${sdp.description}")
+                    AppLog.i("CallScreen", "FULL_LOCAL_${sdp.type} SDP:\n${sdp.description}")
                     signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
                 } else {
                     pendingLocalSdp.value = sdp
@@ -242,37 +250,48 @@ fun CallScreen(
             AppLog.i("CallScreen", "Incoming call, payload.len=${incomingPayload?.length ?: 0}")
             var params = incomingParams
             var callConvId: String? = null
+            // #CALLS-IN-OFFER (2026-08-29): conversationId (call_id) нужен ВСЕГДА —
+            // он идёт в WS URL (conversationId=), vchat.joinConversation и hangup-fallback.
+            // Раньше call_id доставали только когда payload="-1": если payload содержал
+            // params (events_queue), WS уходил с ПУСТЫМ conversationId — сервер мог не
+            // считать нас полноценным peer'ом conversation → registered-peer звонящему
+            // не уходил, его offer до нас не доходил, answer отправлять было не на что.
+            try {
+                val calls = app.apiClient.messagesGetCurrentCalls()
+                AppLog.i("CallScreen", "messagesGetCurrentCalls: items=${calls.size}")
+                calls.firstOrNull()?.let { call ->
+                    val convId = call.get("conversation_id")?.takeIf { it.isJsonPrimitive }?.asString
+                        ?: call.get("id")?.takeIf { it.isJsonPrimitive }?.asString
+                        ?: call.get("call_id")?.takeIf { it.isJsonPrimitive }?.asString
+                    callConvId = convId
+                    AppLog.i("CallScreen", "current call: convId=$convId")
+                }
+            } catch (e: Exception) {
+                AppLog.w("CallScreen", "getCurrentCalls error: ${e.message}")
+            }
             if (params == null) {
                 // payload = "-1" — полные conversation params нужно получить через
                 // vchat API по conversationId (vchat.getConversationParams).
-                // conversationId берём из messages.getCurrentCalls (активный звонок).
                 AppLog.w("CallScreen", "payload не содержит conversation params — пробуем vchat API")
                 try {
-                    val calls = app.apiClient.messagesGetCurrentCalls()
-                    AppLog.i("CallScreen", "messagesGetCurrentCalls: items=${calls.size}")
-                    calls.firstOrNull()?.let { call ->
-                        AppLog.i("CallScreen", "current call json=${call}")
-                        // ищем conversation_id / id в объекте звонка
-                        val convId = call.get("conversation_id")?.takeIf { it.isJsonPrimitive }?.asString
-                            ?: call.get("id")?.takeIf { it.isJsonPrimitive }?.asString
-                            ?: call.get("call_id")?.takeIf { it.isJsonPrimitive }?.asString
-                        callConvId = convId
-                        if (!convId.isNullOrBlank()) {
-                            // Полностью автоматическая цепочка (как браузер):
-                            // session_key из prefs → vchat.getConversationParams,
-                            // при 102 (session expired) — авто-получение свежего
-                            // через get_anonym_token → auth.anonymLogin → повтор.
-                            // См. SovaApp.getCallConversationParams.
-                            val (sessionKey, vchatResp) = app.getCallConversationParams(convId)
-                            AppLog.i("CallScreen", "getCallParams: sessionKey=${sessionKey?.take(12) ?: "null"}… vchat=${if (vchatResp != null) "OK" else "null"}")
-                            if (vchatResp != null) {
-                                params = re.pinok.media.ConversationParamsDecoder.decodeParamsJson(vchatResp)
-                                if (params != null) {
-                                    AppLog.i("CallScreen",
-                                        "vchat params: endpoint=${params.endpoint.take(40)}… token=${params.token.take(8)}…")
-                                }
+                    val conv = callConvId
+                    if (!conv.isNullOrBlank()) {
+                        // Полностью автоматическая цепочка (как браузер):
+                        // session_key из prefs → vchat.getConversationParams,
+                        // при 102 (session expired) — авто-получение свежего
+                        // через get_anonym_token → auth.anonymLogin → повтор.
+                        // См. SovaApp.getCallConversationParams.
+                        val (sessionKey, vchatResp) = app.getCallConversationParams(conv)
+                        AppLog.i("CallScreen", "getCallParams: sessionKey=${sessionKey?.take(12) ?: "null"}… vchat=${if (vchatResp != null) "OK" else "null"}")
+                        if (vchatResp != null) {
+                            params = re.pinok.media.ConversationParamsDecoder.decodeParamsJson(vchatResp)
+                            if (params != null) {
+                                AppLog.i("CallScreen",
+                                    "vchat params: endpoint=${params.endpoint.take(40)}… token=${params.token.take(8)}…")
                             }
                         }
+                    } else {
+                        AppLog.w("CallScreen", "call_id не получен — vchat fallback невозможен")
                     }
                 } catch (e: Exception) {
                     AppLog.e("CallScreen", "vchat fallback error", e)
@@ -299,6 +318,12 @@ fun CallScreen(
                 engine.setIceServers(resolvedParams)
                 AppLog.i("CallScreen", "Signaling start: conversationId=$convId userId=$uid (okUid=$okUid)")
                 signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
+                // #CALLS-IN-OFFER: сохраняем параметры для nudge-перерегистрации WS
+                // (watchdog входящего: offer не пришёл → переподключаем WS).
+                sigRestart = {
+                    signaling.stop()
+                    signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
+                }
                 AppLog.i("CallScreen", "Signaling started — ждём accept/decline от пользователя")
                 // #CALLS-IN-FIX: «Принять» ждёт эти params — сообщаем в самом конце,
                 // когда activeCallId/ICE-серверы/сигналинг уже готовы.
@@ -422,9 +447,13 @@ fun CallScreen(
         app.queuev4Client.events.collect { ev ->
             AppLog.i("CallScreen", "queuev4 event: queue=${ev.queueId} payload=${ev.payload}")
             val code = ev.payload["code"] as? Long
-            if (code == 115L || ev.queueId == "calls") {
-                // Входящий/ответ собеседника — переводим в CONNECTING.
-                // SDP/ICE обмен пока не реализован (WebRTC signaling через WebSocket — TODO).
+            // #CALLS-IN-OFFER: только для ИСХОДЯЩЕГО. Для входящего этот collect —
+            // ловушка: queuev4Client остаётся подписан на очередь «calls» после любого
+            // исходящего звонка и при входящем получает то же событие LP 115 — фаза
+            // прыгала RINGING→CONNECTING без нажатия «Принять» (экран «Соединение…»
+            // без кнопок, accept-call никто не отправлял). Состояния входящего
+            // меняет только WS-сигналинг.
+            if (direction == CallDirection.OUTGOING && (code == 115L || ev.queueId == "calls")) {
                 if (phase == CallPhase.RINGING || phase == CallPhase.CONNECTING) {
                     phase = CallPhase.CONNECTING
                 }
@@ -465,40 +494,32 @@ fun CallScreen(
                             AppLog.w("CallScreen", "повторный answer проигнорирован (уже применён)")
                             return@collect
                         }
-                        if (engine.hasPeerConnection()) {
-                            // #CALLS-OUT-FIX (2026-08-27): PC уже создан — answer/offer
-                            // применяем СРАЗУ. Раньше answer лишь кэшировался в
-                            // pendingOffer, который читается ТОЛЬКО в кнопке «Принять»
-                            // входящего звонка → в исходящем answer не применялся вовсе,
-                            // звонок вечно висел «Звоним…».
-                            AppLog.i("CallScreen", "applying remote ${type.name.lowercase()} immediately (PC ready)")
-                            engine.setRemoteSdp(sdp, type)
-                            if (!isOffer) {
-                                answerReceived.value = true
-                                phase = CallPhase.CONNECTING
-                            }
-                        } else {
-                            // Входящий до «Принять»: PC ещё нет — кэшируем; применит accept.
-                            pendingOffer.value = sdp to if (isOffer) "offer" else "answer"
-                            AppLog.i("CallScreen", "remote ${msg.sdpType} кэширован (${sdp.take(30)}…) participant=$remoteParticipantId")
+                        // #CALLS-IN-OFFER: повторный offer после отправки answer игнорируем
+                        // (звонящий мог не увидеть наш answer и переотправить offer).
+                        if (isOffer && answerReceived.value) {
+                            AppLog.w("CallScreen", "повторный offer проигнорирован (answer уже отправлен)")
+                            return@collect
+                        }
+                        if (isOffer) offerReceived.value = true
+                        // #CALLS-IN-OFFER: решение «применить сейчас или буферизовать до
+                        // accept» принял на себя движок (setRemoteSdp: PC нет → буфер,
+                        // применится в acceptCall; PC есть → сразу). Гонки с кнопкой
+                        // «Принять» больше нет.
+                        AppLog.i("CallScreen", "remote ${type.name.lowercase()} → engine (участник=${remoteParticipantId.value}, len=${sdp.length})")
+                        engine.setRemoteSdp(sdp, type)
+                        if (!isOffer) {
+                            answerReceived.value = true
+                            phase = CallPhase.CONNECTING
                         }
                     }
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_CANDIDATE -> {
                     msg.participantId?.let { remoteParticipantId.value = it }
                     msg.candidate?.let { c ->
-                        // #CALLS-FIX: если звонок уже принят (PC создан) — применяем
-                        // кандидата сразу, иначе кэшируем до accept.
-                        // #CALLS-REOFFER (2026-08-29): условие — «PC ещё не создан», а НЕ
-                        // фаза RINGING. В исходящем PC есть СРАЗУ, а фаза может ещё быть
-                        // RINGING — кандидаты собеседника, пришедшие до смены фазы,
-                        // раньше падали в кэш, который читает только кнопка «Принять»
-                        // (у исходящего её нет) — и терялись.
-                        if (!engine.hasPeerConnection()) {
-                            pendingCandidates.value.add(Triple(msg.candidateSdpMid, msg.candidateSdpMLineIndex ?: 0, c))
-                        } else {
-                            engine.addRemoteIceCandidate(msg.candidateSdpMid, msg.candidateSdpMLineIndex ?: 0, c)
-                        }
+                        // #CALLS-IN-OFFER: движок сам буферизует кандидата, если
+                        // remoteDescription ещё не установлен (pendingRemoteIce → drain
+                        // после setRemoteSdp) — кэш «до accept» в UI больше не нужен.
+                        engine.addRemoteIceCandidate(msg.candidateSdpMid, msg.candidateSdpMLineIndex ?: 0, c)
                     }
                 }
                 re.pinok.realtime.CallSignalingClient.CMD_CALL_ERROR -> {
@@ -709,6 +730,40 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-IN-OFFER (2026-08-29, лог 21:26): watchdog CONNECTING для ВХОДЯЩЕГО.
+    // Раньше при потере offer (сервер выбросил transmit-data до нашей регистрации /
+    // регистрация не дошла до звонящего) мы молча висели «Соединение…», пока звонящий
+    // сам не сбрасывал звонок (~37с, remote-hangup). Теперь:
+    //  8с без offer → nudge: перерегистрация WS (сервер снова разошлёт registered-peer,
+    //                  звонящий переотправит offer — семантика §8.3 звонки.md);
+    // 20с без offer → warn в лог;
+    // 45с без answer → обрываем сами с понятной ошибкой (не ждём remote-hangup).
+    var inNudgeDone by remember { mutableStateOf(false) }
+    LaunchedEffect(phase) {
+        if (phase == CallPhase.CONNECTING && incoming) {
+            kotlinx.coroutines.delay(8_000L)
+            if (phase == CallPhase.CONNECTING && incoming && !engine.hasRemoteDescription() && !inNudgeDone) {
+                inNudgeDone = true
+                diagReoffer = "nudge WS"
+                AppLog.w("CallScreen", "IN-Watchdog: 8с без offer — перерегистрация WS (nudge)")
+                sigRestart?.invoke()
+            }
+            kotlinx.coroutines.delay(12_000L)
+            if (phase == CallPhase.CONNECTING && incoming && !engine.hasRemoteDescription()) {
+                AppLog.w("CallScreen", "IN-Watchdog: 20с — offer так и не получен")
+            }
+            kotlinx.coroutines.delay(25_000L)
+            if (phase == CallPhase.CONNECTING && incoming && !answerSent.value) {
+                AppLog.w("CallScreen", "IN-Watchdog: 45с без answer — обрываем звонок")
+                failText = "Данные звонка не получены (offer не пришёл)"
+                signaling.hangup("timeout")
+                engine.endCall()
+                signaling.stop()
+                phase = CallPhase.FAILED
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -888,19 +943,15 @@ fun CallScreen(
                                                     )
                                                 }
                                             }
+                                            // #CALLS-IN-OFFER: PC создаётся здесь; offer, буферизованный
+                                            // движком (пришёл до «Принять»), применяется САМ в acceptCall
+                                            // (setRemoteDescription → createAnswer → answer уйдёт).
+                                            // Раньше offer читался из pendingOffer ПОСЛЕ engine.acceptCall:
+                                            // если он прилетал в этот момент — затирался (pendingOffer=null),
+                                            // answer не создавался, звонящий сбрасывал звонок.
                                             engine.acceptCall(call)
-                                            val offer = pendingOffer.value
-                                            if (offer != null) {
-                                                val type = if (offer.second == "offer") org.webrtc.SessionDescription.Type.OFFER
-                                                else org.webrtc.SessionDescription.Type.ANSWER
-                                                engine.setRemoteSdp(offer.first, type)
-                                            }
-                                            pendingOffer.value = null
-                                            pendingCandidates.value.forEach { (mid, idx, cand) ->
-                                                engine.addRemoteIceCandidate(mid, idx, cand)
-                                            }
-                                            pendingCandidates.value.clear()
                                             signaling.acceptCall(isVideo = false)
+                                            AppLog.i("CallScreen", "Принять: accept-call отправлен, offerReceived=${offerReceived.value}")
                                             phase = CallPhase.CONNECTING
                                         }
                                     },
@@ -1007,7 +1058,7 @@ fun CallScreen(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Сигналинг: $diagEvent • $diagPid${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}",
+                        text = "Сигналинг: $diagEvent • $diagPid • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}",
                         color = Color.White.copy(alpha = 0.45f),
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
