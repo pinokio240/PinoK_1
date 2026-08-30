@@ -11015,3 +11015,21 @@ decline→REJECTED) — из-за этого сервер не закрывал 
 длинных звонках); (3) WS закрывался через 6 мс после hangup — ответ сервера терялся.
 Фиксы: reason нормализуется в enum (HUNGUP/FAILED/CANCELED/REJECTED), pong на ping,
 stop() с грейсом 300 мс. Разбор — звонки.md §32.
+
+### 2026-08-30 (продолжение 7) — направление PinoK (caller) → официальный VK (callee): статический разбор «звонок с пинок не проходит» — 4 фикса (#CALLS-OUT-QUEUE-FIX, #CALLS-OUT-ACCEPTED-PHASE, #CALLS-HANGUP-STATE-ENUM, #CALLS-OUT-DIAG)
+Обратное направление после #CALLS-SDP-OBJECT не тестировалось ни разу (последний тест
+роли caller — §27, когда offer уходил строкой). Лога к сообщению пользователя нет (прошлый
+истёк — tmpfiles хранит ~1 час), разбор статический. Главный дефект: collect queuev4 для
+ИСХОДЯЩЕГО переводил фазу RINGING→CONNECTING по условию `code == 115L || queueId == "calls"`,
+где вторая половина ловила и СОБСТВЕННОЕ событие созданного нами звонка — фаза прыгала
+в CONNECTING в момент набора («Соединение…» вместо «Звоним…»), и watchdog 60с → FAILED
+убивал звонок ДО того, как собеседник брал трубку. Теперь фазу исходящего из queuev4 не
+меняем вовсе; авторитетный сигнал принятия — notification accepted-call из сигналинга
+(доказан логом 20:31) — только он переключает RINGING→CONNECTING. Уточнена семантика
+hangup по эталону Conversation.hangup: любое состояние до ACTIVE (сторожа «timeout»,
+кнопка «Завершить» в CONNECTING) → CANCELED; HUNGUP — только из ACTIVE; FAILED — только
+явные техошибки. Добавлена диагностика исходящей цепочки: OUTGOING-SETUP (серверная
+регистрация звонка: getCurrentCalls сразу после messages.startCall) и итоговая строка
+OUTGOING-SETUP OK (callId/conv/uid/peerId/turn). Проверены и отклонены ложные гипотезы:
+peerId=VK-id собеседника в WS URL (сервер принимает любые transport-label, маршрутизация
+по participantId) и цепочка сессии (соответствует эталону §5). Разбор — звонки.md §33.

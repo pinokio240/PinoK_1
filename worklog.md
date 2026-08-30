@@ -4853,3 +4853,24 @@ Stage Summary:
 - Первый успешный звонок PinoK↔официальный клиент: цепочка из 5 фиксов закрыла сигналинг полностью (строка→объект SDP → answer-first → hangup-формат → числовой id → enum reason).
 - Завершение звонка: reason в UPPERCASE-enum, pong, грейс закрытия. Следующий тест: reason":"HUNGUP" в wire, ack на hangup без SERVER_ERROR, мгновенное завершение у собеседника, длинный звонок 3–5 мин (ping→pong), decline (REJECTED) и cancel (CANCELED).
 - Артефакты: logs-dl/test6/, звонки.md §32, коммит #CALLS-HANGUP-ENUM.
+
+---
+Task ID: CALLS-OUT-DIRECTION
+Agent: main (Z.ai Code)
+Task: «Звонок с пинок на официальный вк не проходит» — статический разбор пути ИСХОДЯЩЕГО звонка (лога нет: ссылка wEw4sPe2yWTU истекла), найти и починить дефекты роли caller
+
+Work Log:
+- Ссылка tmpfiles истекла («File Not Found») — разбор предыдущего лога уже был закрыт коммитом ec1290c (§32); новая жалоба — ОБРАТНОЕ направление (PinoK caller → официальный callee), никогда не тестировавшееся после #CALLS-SDP-OBJECT.
+- Сверил весь путь исходящего с эталоном и доказанными фактами: VKApiClient (startCall/startConversation externalIds/payload — ок), SovaApp (ensureCallsSessionKey/getCallConversationParams — ок), CallScreen (offer/reoffer-механика — ок), CallSignalingClient (sendSdp объект, числовой participantId — доказаны тестом 6).
+- Из test6 FULL_CONNECTION извлёк структуру participants: participantId адресата = okcdn uid собеседника, state CALLED/ACCEPTED, transport официального — отдельный WEB_TRANSPORT snowflake → отклонил гипотезу «peerId=VK-id собеседника в WS URL опасен».
+- НАЙДЕН главный дефект (#CALLS-OUT-QUEUE-FIX): collect queuev4 для OUTGOING переводил фазу RINGING→CONNECTING по `code == 115L || ev.queueId == "calls"` — вторая половина ловила СОБСТВЕННОЕ событие созданного звонка → «Соединение…» уже при наборе + watchdog 60с → FAILED до взятия трубки собеседником. Симптом совпадает с жалобой.
+- Фиксы в CallScreen.kt: #CALLS-OUT-QUEUE-FIX (фазу исходящего из queuev4 не меняем — только лог), #CALLS-OUT-ACCEPTED-PHASE (RINGING→CONNECTING только на notification accepted-call из сигналинга, доказан логом 20:31), #CALLS-OUT-DIAG (getCurrentCalls сразу после startCall — видна серверная регистрация звонка; итоговая строка OUTGOING-SETUP OK: callId/conv/uid/peerId/turn).
+- Фиксы в CallSignalingClient.kt: #CALLS-HANGUP-STATE-ENUM — по эталону Conversation.hangup «timeout» сторожей (все срабатывают до ACTIVE) → CANCELED, FAILED — только явные техошибки; кнопка «Завершить» шлёт reason по фазе (ACTIVE→HUNGUP, иначе→CANCELED).
+- Проверки: braces/parens delta=0 в обоих файлах.
+- Документация: звонки.md §33 (разбор + план теста с чек-пунктами), HISTORY.md.
+
+Stage Summary:
+- Роль caller приведена к эталонной семантике фаз: «Звоним…» до accepted-call, «Соединение…» после; 60с-abort больше не может убить звонок до взятия трубки.
+- Диагностика OUTGOING-SETUP даст по следующему логу однозначный ответ, на каком звене обрывается исходящий: регистрация звонка на сервере (getCurrentCalls) → registered-peer (push доставлен, официальный открыл сигналинг) → accepted-call (взял трубку) → offer/answer → ICE.
+- Следующий тест (пересборка Cyber): звонок С PinoK на официальный; чек-пункты в звонки.md §33. Если getCurrentCalls=0/registered-peer нет — проблема выше сигналинга (push не доставляется), попросить скриншот экрана официального.
+- Артефакты: звонки.md §33, коммит #CALLS-OUT-DIRECTION в PinoK.

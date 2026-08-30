@@ -204,9 +204,15 @@ class CallSignalingClient(
         // Наши lowercase-строки не проходят схему → сервер не завершает разговор,
         // собеседник висит в звонке («огрехи при завершении»). Нормализуем здесь,
         // чтобы все вызовы (ZOMBIE «timeout», пользовательский hangup) уходили верно.
+        // #CALLS-HANGUP-STATE-ENUM (30.08, уточнение §32): семантика эталона
+        // (Conversation.hangup) — state ACTIVE → HUNGUP, ЛЮБОЕ другое состояние →
+        // CANCELED. Все наши сторожа срабатывают ДО ACTIVE: 45с без ответа (RINGING),
+        // 60с без answer (CONNECTING), ZOMBIE (CONNECTING) — их «timeout» по эталону
+        // это CANCELED (сброс вызова), а не FAILED. FAILED остаётся для явных
+        // технических ошибок ("failed"/"error").
         val wire = when (reason.lowercase()) {
-            "timeout", "failed", "error" -> "FAILED"
-            "cancel", "canceled", "cancelled" -> "CANCELED"
+            "timeout", "cancel", "canceled", "cancelled" -> "CANCELED"
+            "failed", "error" -> "FAILED"
             "reject", "rejected", "decline", "declined" -> "REJECTED"
             else -> "HUNGUP"
         }

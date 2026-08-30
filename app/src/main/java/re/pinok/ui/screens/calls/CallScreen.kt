@@ -522,6 +522,16 @@ fun CallScreen(
                     } else {
                         AppLog.w("CallScreen", "queueSubscribe returned null — входящий звонок не будет обработан")
                     }
+                    // #CALLS-OUT-DIAG (30.08, «звонок с пинок на официальный вк не проходит»):
+                    // сверяем, что сервер ЗАРЕГИСТРИРОВАЛ звонок — если getCurrentCalls пуст,
+                    // официальный клиент не получит push, не зазвонит и registered-peer
+                    // не придёт никогда (45с → CANCELED «no answer» — это будет ВИДНО из лога).
+                    try {
+                        val calls = app.apiClient.messagesGetCurrentCalls()
+                        AppLog.i("CallScreen", "OUTGOING-SETUP: callId=$callId, getCurrentCalls=${calls.size} шт.")
+                    } catch (e: Exception) {
+                        AppLog.w("CallScreen", "OUTGOING-SETUP: getCurrentCalls error: ${e.message}")
+                    }
                     // #CALLS-OUTGOING (2026-08-24): продолжаем исходящий звонок —
                     // получаем conversation params (vchat) и запускаем WebRTC-сигналинг
                     // как initiator (createOffer → отправка offer через WS).
@@ -580,7 +590,10 @@ fun CallScreen(
                             else -> vkUid
                         }
                         engine.setIceServers(params)
-                        AppLog.i("CallScreen", "Outgoing signaling start: conversationId=$wsConversationId userId=$uid")
+                        // #CALLS-OUT-DIAG: одна итоговая строка всей цепочки исходящего —
+                        // callId (сообщения.startCall) / conv (startConversation→WS) / uid
+                        // (okcdn) / turn — по ней в логе мгновенно видно, какое звено пропало.
+                        AppLog.i("CallScreen", "OUTGOING-SETUP OK: callId=$callId conv=$wsConversationId uid=$uid peerId=$peerId turn=${params.turnServer?.urls?.firstOrNull() ?: "нет"}")
                         signaling.start(userId = uid, conversationId = wsConversationId, params = params, peerId = peerId)
                         // Создаём PeerConnection + offer (isInitiator=true) →
                         // onLocalSdpReady отправит offer через signaling.sendSdp.
@@ -612,16 +625,25 @@ fun CallScreen(
         app.queuev4Client.events.collect { ev ->
             AppLog.i("CallScreen", "queuev4 event: queue=${ev.queueId} payload=${ev.payload}")
             val code = ev.payload["code"] as? Long
-            // #CALLS-IN-OFFER: только для ИСХОДЯЩЕГО. Для входящего этот collect —
-            // ловушка: queuev4Client остаётся подписан на очередь «calls» после любого
-            // исходящего звонка и при входящем получает то же событие LP 115 — фаза
-            // прыгала RINGING→CONNECTING без нажатия «Принять» (экран «Соединение…»
-            // без кнопок, accept-call никто не отправлял). Состояния входящего
-            // меняет только WS-сигналинг.
-            if (direction == CallDirection.OUTGOING && (code == 115L || ev.queueId == "calls")) {
-                if (phase == CallPhase.RINGING || phase == CallPhase.CONNECTING) {
-                    phase = CallPhase.CONNECTING
-                }
+            // #CALLS-IN-OFFER: для входящего этот collect — ловушка: queuev4Client остаётся
+            // подписан на очередь «calls» после любого исходящего звонка и при входящем
+            // получает то же событие LP 115 — фаза прыгала RINGING→CONNECTING без нажатия
+            // «Принять». Состояния входящего меняет только WS-сигналинг.
+            // #CALLS-OUT-QUEUE-FIX (30.08, «звонок с пинок на официальный вк не проходит»):
+            // для ИСХОДЯЩЕГО фазу из queuev4 больше НЕ меняем вовсе. Прежнее условие
+            // (code == 115L || queueId == "calls") ловило и СОБСТВЕННОЕ событие созданного
+            // нами звонка — нашу же очередь «calls» сервер доставляет и звонящему. Фаза
+            // прыгала RINGING→CONNECTING в момент НАБОРА: экран показывал «Соединение…»
+            // вместо «Звоним…», и запускались watchdog'и CONNECTING — 60с → FAILED
+            // «Не удалось установить соединение» ДО того, как собеседник вообще успевал
+            // взять трубку (у эталона между registered-peer и accepted-call бывает 7с+,
+            // а взять трубку — ещё дольше). Авторитетный сигнал принятия у исходящего —
+            // notification accepted-call из сигналинга (доказан логом 20:31:
+            // registered-peer 25.316 → accepted-call 32.487) — переключает фазу он
+            // (#CALLS-OUT-ACCEPTED-PHASE).
+            if (direction == CallDirection.OUTGOING) {
+                AppLog.i("CallScreen",
+                    "queuev4: событие при исходящем (code=$code queue=${ev.queueId}) — фазу не меняем, ждём accepted-call")
             }
         }
     }
@@ -744,6 +766,14 @@ fun CallScreen(
                     // registered-peer тоже выбрасывался — переотправляем offer ещё раз.
                     // Для входящего это эхо нашего собственного accept — doReoffer пропустит.
                     AppLog.i("CallScreen", "accepted-call: собеседник принял звонок — reoffer")
+                    // #CALLS-OUT-ACCEPTED-PHASE: для исходящего это ЕДИНСТВЕННЫЙ
+                    // авторитетный момент «собеседник взял трубку» — только здесь
+                    // RINGING→CONNECTING (queuev4 больше фазу не меняет,
+                    // #CALLS-OUT-QUEUE-FIX). Для входящего это эхо НАШЕГО accept —
+                    // фаза уже CONNECTING, не трогаем.
+                    if (direction == CallDirection.OUTGOING && phase == CallPhase.RINGING) {
+                        phase = CallPhase.CONNECTING
+                    }
                     if (remoteParticipantId.value == null) {
                         msg.participantId?.let { remoteParticipantId.value = it }
                     }
@@ -1470,7 +1500,9 @@ fun CallScreen(
                                 label = "Завершить",
                                 color = Color(0xFFE53935),
                                 onClick = {
-                                    signaling.hangup()
+                                    // #CALLS-HANGUP-STATE-ENUM: эталон Conversation.hangup —
+                                    // ACTIVE → HUNGUP, иное состояние (CONNECTING и т.п.) → CANCELED.
+                                    signaling.hangup(if (phase == CallPhase.ACTIVE) "hungup" else "cancel")
                                     engine.endCall()
                                     signaling.stop()
                                     phase = CallPhase.ENDED
