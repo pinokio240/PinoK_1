@@ -10967,3 +10967,24 @@ CALLS-категория включается сама при звонке, WARN
 embedded-SDP. Обе «свежие» ciber-ссылки вернули старый лог 14:42 (md5 совпал) —
 разбор по одной стороне; в следующий раз экспортировать Cyber заново.
 Разбор — звонки.md §29.
+
+### 2026-08-30 (продолжение 4) — тест 16:03 (официальный → PinoK): эталон изучен по JS официального веб-клиента OK; три фикса (#CALLS-ANSWER-FIRST, #CALLS-PARTICIPANT-U, #CALLS-HANGUP-FORMAT)
+Тест 4 (Redmi официальный caller → Cyber PinoK callee, одна Wi-Fi-сеть): offer + 4
+trickle-кандидата официального ДОШЛИ и применились (pending=4 → setRemoteSdp SUCCESS) —
+доставка trickle доказана, гипотеза §29 «trickle сервер не пропускает» опровергнута.
+PinoK ушёл кандидатами (38.4с) на ~3с РАНЬШЕ answer (41.4с, 3с ожидания gathering) —
+и именно это убивает звонок: у официального caller-а транспорт уже открыт, remote
+description пуст, addIceCandidate до setRemoteDescription отклоняется, а обработчик
+ошибки у эталона закрывает ВЕСЬ транспорт → наш поздний answer применять некому →
+0 STUN-проверок → CHECKING→FAILED. Та же механика объясняет тесты 2 и 3.
+Решающий прорыв: скачаны исходники официального веб-клиента OK (OK/videochat/
+Signaling/Transport/DirectTransport/Utils со st-ok.cdn-vk.ru): запросы {command,
+sequence,…} без stamp; participantId СОСТАВНОЙ «u<id>» (composeId); фильтр приёма
+composeMessageId(delivered)===_participantId (сервер добавляет participant:{id,idType}
+— байт-арифметика кадра 405Б сошлась ТОЧНО); callee шлёт answer СРАЗУ после setLocal,
+кандидаты trickle ПОСЛЕ; ошибки приёма → close() транспорта. Фиксы: #CALLS-ANSWER-FIRST
+(немедленная отправка SDP, механизм NON-TRICKLE удалён), #CALLS-PARTICIPANT-U
+(«u<id>»), #CALLS-HANGUP-FORMAT (hangup = {reason} без conversationId — сервер
+отвергал наш hangup целиком: base64 в SERVER_ERROR обоих тестов = префикс
+conversationId; скорректирован вывод §28 — дроп SDP-строки был тихим).
+Разбор — звонки.md §30.

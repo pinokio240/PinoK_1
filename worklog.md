@@ -4795,3 +4795,22 @@ Stage Summary:
 - Сигналинг закрыт полностью (offer+answer обе стороны). Последнее звено — кандидаты: канал «кандидаты внутри SDP» доказанно проходит сервер, поэтому ICE больше не зависит от trickle.
 - ВАЖНО для следующего теста: обе ciber-ссылки дали старый файл — экспортировать Cyber ЗАНОВО; смотреть «OFFER/ANSWER → отправка (gathering COMPLETE): зашито кандидатов=N», прин:>0 у обоих, ICE CONNECTED.
 - Артефакты: logs-dl/test3/{redmi1.txt,ciber.txt(старый),ciber2.txt(старый)}, звонки.md §29, коммит #CALLS-NON-TRICKLE.
+
+---
+Task ID: CALLS-ANSWER-FIRST
+Agent: main (Z.ai Code)
+Task: Разбор теста 4 16:03–16:05 (Redmi официальный caller → Cyber PinoK callee, «трубка не поднялась») — найти причину и починить
+
+Work Log:
+- Скачал свежие логи (tmpfiles, md5 новые): logs-dl/test4/{redmi1.txt 1МБ, ciber.txt 163КБ}. redmi1.txt — системный logcat без WebRTC-строк (только AudioTrack zero-data 31–51с); вся картина на ciber.txt.
+- Ciber: offer официального (4084Б, объект) дошёл, 4 trickle-кандидата дошли и применились (pending=4) — ДОСТАВКА TRICKLE ДОКАЗАНА, гипотеза §29 «trickle не проходят» опровергнута. Ciber ушёл кандидатами (38.43–38.62) на ~3с РАНЬШЕ answer (41.41) из-за #CALLS-NON-TRICKLE; ICE CHECKING→FAILED за 16с; собеседник не прислал НИ ОДНОГО STUN-пакета; topology-changed SERVER; ICE-Watchdog 60с → hangup; SERVER_ERROR «Invalid message format» — base64 = ПРЕФИКС conversationId → отвергнут наш hangup (то же в тесте 2; вывод §28 про SDP скорректирован).
+- ПРОРЫВ: скачал и разобрал исходники официального веб-клиента OK (st-ok.cdn-vk.ru: Signaling_1kwo9k36.js, DirectTransport_lhsgo501.js, Utils_paphie5o.js): запросы без stamp; participantId составной «u<id>» (composeId); фильтр приёма composeMessageId(delivered)===_participantId (конверт доставки содержит participant:{id,idType} — байт-арифметика кадра 405Б сошлась точно); callee шлёт answer СРАЗУ после setLocal, кандидаты trickle ПОСЛЕ; _addIceCandidate(...).catch(close) — ошибка приёма закрывает весь транспорт.
+- КОРНЕВАЯ ПРИЧИНА: порядок «кандидаты раньше answer» → у открытого транспорта caller-а addIceCandidate до setRemoteDescription отклоняется → транспорт закрыт → поздний answer применять некому → 0 STUN → FAILED. Симметрично объясняет тесты 2, 3, 4.
+- Фиксы: #CALLS-ANSWER-FIRST (WebRtcEngine: sendLocalSdpNow вместо scheduleLocalSdpSend/embed/flush, механизм NON-TRICKLE удалён); #CALLS-PARTICIPANT-U (composeParticipantId → «u<id>» в sendSdp/sendCandidate); #CALLS-HANGUP-FORMAT (hangup/decline = {reason} без conversationId).
+- Документация: звонки.md §30, HISTORY.md.
+
+Stage Summary:
+- Найдена единая корневая причина всех зависших звонков (тесты 2–4): нарушение порядка «SDP первыми, trickle после» — эталонный клиент закрывает транспорт при addIceCandidate без remote description.
+- Эталон официального клиента теперь известен из его JS (форма запросов, составной id, порядок отправки, фильтр приёма) — PinoK приведён к нему тремя фиксами.
+- Следующий тест после пересборки: «ANSWER → отправка немедленно» ≤0.5с после accept; participantId=u… в wire; реакция официального (STUN к нам, ICE CONNECTED); SERVER_ERROR не должен появляться.
+- Артефакты: logs-dl/test4/, звонки.md §30, коммиты #CALLS-ANSWER-FIRST + #CALLS-PARTICIPANT-U + #CALLS-HANGUP-FORMAT.

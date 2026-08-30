@@ -168,16 +168,32 @@ class CallSignalingClient(
 
     /** Отклонить входящий звонок. @return true — команда реально ушла в WS. */
     fun declineCall(): Boolean {
-        val params = mutableMapOf<String, Any>("reason" to "declined")
-        if (conversationId.isNotBlank()) params["conversationId"] = conversationId
-        return send(CMD_HANGUP, params)
+        // #CALLS-HANGUP-FORMAT (тест 4, 16:04:54; тест 2, 14:43): hangup — ТОЛЬКО {reason}.
+        // conversationId в hangup сервер отвергает целиком: SERVER_ERROR
+        // "Invalid message format: <base64>" — base64 декодируется в префикс
+        // conversationId (e1e6bf41… в тесте 2, db347444… в тесте 4). Эталон шлёт
+        // this.send("hangup", {reason}) — без лишних полей (OK/videochat/Signaling.js).
+        return send(CMD_HANGUP, mapOf("reason" to "declined"))
     }
 
     /** Завершить звонок. @return true — команда реально ушла в WS. */
     fun hangup(reason: String = "hungup"): Boolean {
-        val params = mutableMapOf<String, Any>("reason" to reason)
-        if (conversationId.isNotBlank()) params["conversationId"] = conversationId
-        return send(CMD_HANGUP, params)
+        // #CALLS-HANGUP-FORMAT: только {reason} — см. комментарий в declineCall().
+        return send(CMD_HANGUP, mapOf("reason" to reason))
+    }
+
+    /**
+     * #CALLS-PARTICIPANT-U (тест 4, 16:03–16:05): эталонный клиент адресует transmit-data
+     * СОСТАВНЫМ id — OK/videochat/Utils.js composeId(): USER → "u<id>", GROUP → "g<id>"
+     * (sendSdp шлёт this._participantId, а это composeParticipantId(participant)).
+     * Тот же составной id — ключ фильтра _handleTransmittedData на приёмнике:
+     * composeMessageId(delivered) === transport._participantId, иначе тихий дроп.
+     * Наши raw "595859469344" сервер маршрутизирует (тест 3: offer дошёл до WEB_SOCKET-пира),
+     * но для полной симметрии с эталоном шлём "u<id>". Уже составной — оставляем как есть.
+     */
+    private fun composeParticipantId(raw: String): String {
+        val t = raw.trim()
+        return if (Regex("^[ug][0-9]+$").matches(t)) t else "u$t"
     }
 
     /** Отправить SDP (answer для входящего, offer для исходящего).
@@ -197,7 +213,7 @@ class CallSignalingClient(
             addProperty("sdp", sdp)
         }
         val data = JsonObject().apply { add("sdp", sdpObj) }
-        return send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
+        return send(CMD_TRANSMIT_DATA, mapOf("participantId" to composeParticipantId(participantId), "data" to data))
     }
 
     /** Отправить ICE candidate. @return true — команда реально ушла в WS. */
@@ -208,7 +224,7 @@ class CallSignalingClient(
             sdpMLineIndex?.let { addProperty("sdpMLineIndex", it) }
         }
         val data = JsonObject().apply { add("candidate", c) }
-        return send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
+        return send(CMD_TRANSMIT_DATA, mapOf("participantId" to composeParticipantId(participantId), "data" to data))
     }
 
     // ─── Внутреннее ─────────────────────────────────────────────
