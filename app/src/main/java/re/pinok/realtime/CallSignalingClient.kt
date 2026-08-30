@@ -184,10 +184,19 @@ class CallSignalingClient(
      *  @return true — команда реально ушла в WS (#CALLS-ACK-REOFFER: false = потеряна,
      *  вызывающему ответ нужен ретрай — answer терять нельзя). */
     fun sendSdp(participantId: String, sdp: String, type: String): Boolean {
-        val data = JsonObject().apply {
-            addProperty("sdp", sdp)
+        // #CALLS-SDP-OBJECT (тест 14:42–14:45): сервер ОК молча выбрасывает transmit-data,
+        // где data.sdp — СТРОКА ({"sdp":"v=0…","type":"offer"}): 1353Б аудио-only offer не
+        // дошёл ни разу (как и прежний 4.1КБ), при этом объектные candidate из тех же
+        // батчей доходили всегда. Offer официального клиента (WEB_TRANSPORT-пир) пришёл
+        // как data.sdp = {"type":"offer","sdp":"…"} — ОБЪЕКТ — и был доставлен и
+        // распарсен (setRemoteSdp SUCCESS). Значит порог не в размере, а в ФОРМЕ:
+        // сервер валидирует data.sdp как объект. Шлём объектной формой; наш приёмник
+        // понимает обе (sdpObj ?: строка).
+        val sdpObj = JsonObject().apply {
             addProperty("type", type)
+            addProperty("sdp", sdp)
         }
+        val data = JsonObject().apply { add("sdp", sdpObj) }
         return send(CMD_TRANSMIT_DATA, mapOf("participantId" to participantId, "data" to data))
     }
 
