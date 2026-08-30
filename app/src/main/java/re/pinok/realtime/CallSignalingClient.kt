@@ -15,6 +15,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import re.pinok.media.ConversationParamsDecoder
 import re.pinok.util.AppLog
 import java.util.concurrent.atomic.AtomicLong
@@ -320,9 +321,13 @@ class CallSignalingClient(
                     }
                 }
             }
-            val ok = ws.send(payload.toString())
-            // INFO (не DEBUG): факт отправки/потери команд — главный диагностический след
-            AppLog.i(TAG, "send: command=$command seq=$seq ok=$ok")
+            val text = payload.toString()
+            val ok = ws.send(text)
+            // INFO (не DEBUG): факт отправки/потери команд — главный диагностический след.
+            // #CALLS-BINARY-FRAME (2026-08-30): + размер кадра — тест 13:06 показал, что
+            // сервер не доставляет БОЛЬШИЕ transmit-data (offer ~4.1 КБ), доставляя мелкие
+            // (кандидаты ~464 Б) из тех же батчей; размер — главный подозреваемый.
+            AppLog.i(TAG, "send: command=$command seq=$seq ok=$ok size=${text.toByteArray(Charsets.UTF_8).size}Б")
             AppLog.d(TAG, "send payload: $payload")
             return ok
         } catch (e: Exception) {
@@ -340,8 +345,31 @@ class CallSignalingClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            handleTextFrame(text)
+        }
+
+        /** #CALLS-BINARY-FRAME (2026-08-30, тест 13:06): OkHttp молча игнорирует бинарные
+         *  кадры, если не переопределить этот вариант onMessage. Если сервер пересылает
+         *  БОЛЬШИЕ данные (наш offer ~4.1 КБ) бинарём, а мелкие — текстом, то offer
+         *  терялся БЕЗ ЕДИНОГО СЛЕДА в логе. Теперь бинарный кадр логируется и
+         *  декодируется как UTF-8 в общий JSON-обработчик. */
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            val text = try { bytes.utf8() } catch (_: Exception) { null }
+            if (text != null) {
+                AppLog.w(TAG, "⚠ BINARY кадр ${bytes.size}Б (раньше молча терялся) — обрабатываю как UTF-8")
+                handleTextFrame(text)
+            } else {
+                AppLog.w(TAG, "⚠ BINARY кадр ${bytes.size}Б — не UTF-8, НЕ распарсить (первый раз за звонок)")
+            }
+        }
+
+        private fun handleTextFrame(text: String) {
             try {
-                val json = JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val json = JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject ?: run {
+                    // #CALLS-BINARY-FRAME: не-JSON кадр раньше исчезал молча — логируем.
+                    AppLog.w(TAG, "onMessage: не-JSON кадр ${text.toByteArray(Charsets.UTF_8).size}Б: ${text.take(120)}")
+                    return
+                }
                 // #CALLS-ACK-REOFFER (2026-08-29): ack'и/ошибки сервера — {type:"response"|"error",
                 // sequence:N, response:"transmit-data"|"accept-call", participantIds:[…]}. Раньше
                 // молча игнорировались — успех/отказ доставки наших offer/answer/accept был невиден.
@@ -383,7 +411,8 @@ class CallSignalingClient(
                 } else {
                     // #CALLS-ZOMBIE: INFO, а не DEBUG — нераспознанные уведомления (напр.
                     // незнакомое имя hangup) обязаны попадать в лог пользователя.
-                    AppLog.i(TAG, "onMessage: command=$command eff=$effective body=${text.take(300)}")
+                    // #CALLS-BINARY-FRAME: + размер кадра — смотрите комментарий в send().
+                    AppLog.i(TAG, "onMessage: command=$command eff=$effective size=${text.toByteArray(Charsets.UTF_8).size}Б body=${text.take(300)}")
                 }
                 if (effective2 == CMD_OFFER || effective2 == CMD_ANSWER) {
                     val sdp = json.get("data")?.takeIf { it.isJsonObject }?.asJsonObject

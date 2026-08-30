@@ -516,10 +516,17 @@ class WebRtcEngine(
     }
 
     private fun createOffer() {
-        // #CALLS-FIX: как в VK (PeerConnectionClient.b): OfferToReceiveVideo=true.
+        // #CALLS-AUDIO-OFFER (2026-08-30, тест 13:06): ОТКАЗ от OfferToReceiveVideo=true.
+        // Раньше «как в VK (PeerConnectionClient.b)» — но VK это видео-звонки, а PinoK
+        // аудио-only: recvonly video m-line раздувала offer до ~4.1 КБ JSON. Лог теста
+        // 13:06: сервер АКCEPTИЛ transmit-data с offer (5 попыток за 45 с, до и после
+        // accept, через 2 WS-сессии вызываемого), но НЕ доставлял его — при этом все
+        // 50 кандидатов (~464 Б) из тех же батчей дошли. Offer перестал помещаться в
+        // канал доставки сервера (порог похоже ~4 КБ на кадр/данные). Аудио-only SDP
+        // ~1.5 КБ — с запасом меньше любого правдоподобного лимита.
         val constraints = MediaConstraints()
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createOffer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let {
@@ -541,10 +548,11 @@ class WebRtcEngine(
     }
 
     private fun createAnswer() {
-        // #CALLS-FIX: как в VK (PeerConnectionClient.b): OfferToReceiveVideo=true.
+        // #CALLS-AUDIO-OFFER (2026-08-30): симметрично createOffer — аудио-only answer,
+        // без recvonly video m-line (см. комментарий в createOffer).
         val constraints = MediaConstraints()
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createAnswer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let {
