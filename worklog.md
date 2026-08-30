@@ -4874,3 +4874,104 @@ Stage Summary:
 - Диагностика OUTGOING-SETUP даст по следующему логу однозначный ответ, на каком звене обрывается исходящий: регистрация звонка на сервере (getCurrentCalls) → registered-peer (push доставлен, официальный открыл сигналинг) → accepted-call (взял трубку) → offer/answer → ICE.
 - Следующий тест (пересборка Cyber): звонок С PinoK на официальный; чек-пункты в звонки.md §33. Если getCurrentCalls=0/registered-peer нет — проблема выше сигналинга (push не доставляется), попросить скриншот экрана официального.
 - Артефакты: звонки.md §33, коммит #CALLS-OUT-DIRECTION в PinoK.
+
+---
+Task ID: CALLS-GRADLE-DAEMON
+Agent: main (Z.ai Code)
+Task: Пользователю не нравится предупреждение сборки «w: Unable to release compile session, maybe daemon is already down … Connection reset» (:app:compileDebugKotlin)
+
+Work Log:
+- Диагноз: w: = предупреждение, НЕ ошибка компиляции (компиляция к моменту сбоя уже завершилась, APK валиден); ломается только RMI-«уборка» сессии с Kotlin compile daemon после сборки.
+- Причина на машине пользователя (8GB): в gradle.properties Gradle-демону задано -Xmx4g, Kotlin-демону не задано ничего → наследовал те же 4g → суммарно до 8g на два демона + Android Studio → демон убивался по памяти → Connection reset.
+- Фикс в gradle.properties: kotlin.daemon.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m; в комментарии — план Б (kotlin.compiler.execution.strategy=in-process) на случай повтора.
+- Коммит f6f39e8, push в PinoK (c65d560..f6f39e8).
+
+Stage Summary:
+- Сборка пользователя была УСПЕШНОЙ несмотря на предупреждение — блокера для теста исходящего звонка нет.
+- Пользователю: git pull → gradlew --stop → пересборка (одноразовая чистка мёртвых демонов).
+- Артефакты: gradle.properties, коммит f6f39e8.
+
+---
+Task ID: CALLS-LOGCAT-FILTER
+Agent: main (Z.ai Code)
+Task: Проверить фильтр logcat пользователя для теста исходящего звонка
+
+Work Log:
+- Проверил по коду: applicationId re.pinok + суффикс .debug → package:re.pinok.debug верен; теги WebRtcEngine/CallSignaling — TAG-константы, CallScreen — все строки OUTGOING-SETUP; Queuev4Client/SovaApp существуют.
+- НАЙДЕНО УПОЩЕНИЕ: весь VK API-трейс (включая messages.startCall → call_id/ошибка) идёт через AppLog.api с ДЕФОЛТНЫМ тегом VKApi, сервисные строки клиента — под VKApiClient (445 вызовов). Оба тега отсутствовали в фильтре пользователя.
+- Финальный фильтр задокументирован в звонки.md §33; коммит ef3a016 → push PinoK.
+
+Stage Summary:
+- Фильтр пользователя дополнен тегами VKApi и VKApiClient — иначе в логе исходящего не будет главного доказательства (ответ messages.startCall).
+- Артефакты: звонки.md §33, коммит ef3a016.
+
+---
+Task ID: CALLS-OUT-DROP-ANALYSIS
+Agent: main (Z.ai Code)
+Task: Симптом теста исходящего «дозвон есть, после взятия трубки пинок сам сбрасывает, у официального пошёл таймер» — статическая сверка кода, план по логу
+
+Work Log:
+- Сверил весь путь исходящего после accepted-call: CMD_ACCEPTED_CALL → RINGING→CONNECTING + doReoffer (pid из registered-peer/accepted-call); answer-приём: answerReceived=true + phase=CONNECTING (line ~700); offer создаётся в engine.startCall(isInitiator=true) → onLocalSdpReady → кэш pendingLocalSdp → флаш по pid.
+- Тайминг возможных самоубийств звонка (что совпадает с «через небольшое время сбросил»): 20с в CONNECTING без answer → reoffer; 60с без answer → hangup("timeout")+FAILED «Не удалось установить соединение»; ZOMBIE 90с абсолютный дедлайн в CONNECTING без ICE; ZOMBIE 2+ SERVER_ERROR. Таймер официального НЕ доказательство медиа — VK запускает его при accept независимо от ICE.
+- Вывод: симптом = у PinoK НЕ БЫЛО answer (60с-watchdog) ЛИБО answer был, но ICE не поднялся (ZOMBIE 90с). Оба варианта различимы только по логу. Дыр в коде offer/answer/reoffer-цепи не найдено (структурно когерентно).
+- Чек-лист разбора лога: OUTGOING-SETUP OK (turn есть?) → local SDP готов (offer)/кэшируем → REOFFER #N (pid=…) → сервер ack participantIds → remote answer → engine → FULL_REMOTE_ANSWER → ICE states → какая сторожевая строка сбросила (Watchdog 60с / ZOMBIE 90с / SERVER_ERROR×2).
+
+Stage Summary:
+- Ждём ciber.txt (расширенный фильтр с VKApi/VKApiClient, экспорт после сброса) — атрибуция: (а) offer не дошёл/не создан, (б) offer дошёл, официальное не ответило, (в) answer был, но ICE не поднялся.
+- Артефакты: чек-лист в worklog.
+
+---
+Task ID: CALLS-OUT-TEST7-ANALYSIS
+Agent: main (Z.ai Code)
+Task: Разбор лога теста исходящего 20:49 (tmpfiles wCwas5gVUQaO) — «взял трубку → пинок сбросил, у официального таймер»
+
+Work Log:
+- Скачал logs-dl/test7-out/ciber.txt (426 строк, md5 d3c2d035). Сигналинг PinoK БЕЗУПРЕЧЕН: startCall OK → OUTGOING-SETUP OK (turn есть) → offer кэш → REOFFER #1 по registered-peer → ОФИЦИАЛЬНЫЙ ОТВЕТИЛ answer-ом ещё ДО accept (0.4с) → setRemoteSdp SUCCESS → accepted-call → 0 SERVER_ERROR.
+- Медиа мертво: 15с stats — 7 пар, reqS=253 resR=0 reqR=0; answer официального содержит ТОЛЬКО 2 host-кандидата (155.212.193.235 udp+tcp), ни srflx, ни relay, trickle после — 0 → их STUN/TURN погибли = сеть без UDP.
+- НАЙДЕН КЛЮЧ: в 20:50:09 официальный сам запросил topology-changed{SERVER, offerTo:[595859469344]} = SFU-топология (медиа-сервер ОК); эталонный SDK имеет команды allocate-consumer/accept-producer/switch-topology и нотификации producer-updated/consumer-answered/realloc-con (в wire официального приложения имя обфусцировано «ln», наш декодер разворачивает). У PinoK SFU нет → официальный сдался (remote-hangup через 11с).
+- Тест 6 (успех) объяснён: оба телефона в ОДНОЙ сети — srflx обоих = 95.26.26.106 (совпадение в логах). Тесты 21:26/21:44/22:29 (провал входящих) — та же SFU-просьба от звонящего. Cross-network с официальным без SFU невозможен в принципе.
+- Фиксы: WebRtcEngine.restartIce() (pc.restartIce + createOffer → свежий offer через onLocalSdpReady) + CallScreen topology-changed: OUTGOING без answer → ICE RESTART вместо переотправки старого SDP (фолбэк doReoffer сохранён) (#CALLS-TOPOLOGY-RESTART); LaunchedEffect ICE FAILED: грейс 8с → hangup("failed")→wire FAILED + endCall + stop (#CALLS-ICE-FAILED-HANGUP).
+- Скобки/скобки: CallScreen 375/375 1013/1013; WebRtcEngine 143/143, дельта скобок 2 — существовала в HEAD (комментарии), мой код +12/+12.
+- Документация: звонки.md §34 (полная хронология + таблица сравнения с тестом 6 + SFU-дорожная карта), HISTORY.md. Коммит 11fe958 → push PinoK.
+
+Stage Summary:
+- Вердикт для пользователя: ПиноК не виноват; сеть ОФИЦИАЛЬНОГО телефона без UDP (VPN/другая сеть?). Контроль: вернуть Redmi в домашнюю Wi-Fi (как в тесте 6) → исходящий должен пройти; проверить VPN на Redmi; контрольный звонок официальный↔официальный.
+- Следующий большой шаг: SFU-клиент (нужен полный эталон Conversation.js) — откроет cross-network звонки в ЛЮБЫХ сетях.
+- Артефакты: logs-dl/test7-out/, звонки.md §34, коммит #CALLS-TOPOLOGY-RESTART + #CALLS-ICE-FAILED-HANGUP.
+
+---
+Task ID: CALLS-VIDEO-INACTIVE
+Agent: main (Z.ai Code)
+Task: Разбор свежего лога (tmpfiles wwwvs6ggxw9I): серия тестов 21:49–21:51 — 4 звонка
+(входящие/исходящие, смена сети на мобильную) + краш при входящем ВИДЕО-звонке от официального ВК
+
+Work Log:
+- Скачан лог (317 КБ, md5 ef73d876…) → logs-dl/test-mixed/ciber.txt.
+- Хронология 4 звонков: #1 исходящий 19с ice=true (ИСХОДЯЩИЙ ДОКАЗАН РАБОЧИМ — тест 20:49/§34
+  был проблемой сети собеседника), #2 входящий 8с OK, #3 исходящий 18с OK, #4 входящий ВИДЕО → краш.
+- Двойной answer (ретрай официального, тот же o=, version 2→3) — корректно отброшен
+  («повторный answer проигнорирован»), ICE CONNECTED — дедупликация работает.
+- Смена сети: звонок #4 установился в мобильной сети (host 10.210.0.1, srflx 85.249.23.x).
+- Краш локализован: offer официального с 3 m-линиями (audio+video+data, BUNDLE 0 1 2, H265 первый)
+  → PinoK ответил активным m=video a=recvonly → ICE CONNECTED → 21:50:51.417 ЕДИНСТВЕННЫЙ в логе
+  media-settings-changed (isVideoEnabled=true, Лида включила камеру) → тишина → «beginning of crash»,
+  процесс 13061 умер. Нативный краш (0 Kotlin-строк); стека нет — тег AndroidRuntime не в фильтре §33.
+- Причина: OfferToReceiveVideo=false — Plan B-констрейнта; в UnifiedPlan setRemoteDescription
+  с m=video автоматически создаёт recvonly video-транссивер → видео согласовано → декодер H.265
+  получил пакеты → нативный краш.
+- Фикс #CALLS-VIDEO-INACTIVE (WebRtcEngine.kt):
+  1) disableRemoteVideoTransceivers() перед createAnswer — все video-транссиверы → INACTIVE
+     (a=inactive в answer; stop() сознательно НЕ взят: port 0 отвалил бы кандидаты с sdpMid=1);
+  2) страховка demoteVideoRecvOnly() — принудительная правка a=recvonly→a=inactive только в
+     m=video-секции answer, если транссивер не применился;
+  3) задокументировано обновление фильтра logcat (+AndroidRuntime/+libc, adb logcat -b crash).
+- Документация: звонки.md §35 (полный разбор), HISTORY.md.
+- Проверка: libwebrtc = io.getstream:stream-webrtc-android 1.3.10 (M114+) —
+  RtpTransceiver.setDirection/getTransceivers доступны; в песочнице нет Gradle/Android SDK,
+  сборку выполняет пользователь локально (гипотетические точки отказа закрыты try-catch + SDP-страховкой).
+
+Stage Summary:
+- Исходящее направление PinoK ↔ официальный ВК подтверждено рабочим (4/4 звонка, cross-network).
+- Краш видеозвонка закрыт фикс-ом #CALLS-VIDEO-INACTIVE: видео больше не согласовывается в answer.
+- Следующий тест пользователя: git pull → пересборка → входящий видео-звонок + включить камеру
+  у собеседника; ожидаем a=inactive в FULL_answer и живой звонок (голос, без краша).

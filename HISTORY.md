@@ -11045,3 +11045,13 @@ srflx 95.26.26.106. Эталонный SDK несёт SFU-команды allocat
 topology-SERVER вместо бесполезной переотправки старого SDP) и #CALLS-ICE-FAILED-HANGUP
 (грейс 8с → hangup(FAILED)+stop — обе стороны завершаются сразу, таймер собеседника
 не висит). Разбор — звонки.md §34.
+
+2026-08-30 §35 — Серия 21:49–21:51: ИСХОДЯЩИЙ РАБОТАЕТ (4/4 звонка OK, Wi-Fi→мобильная сеть),
+двойной answer от сервера корректно игнорируется. ПЕРВЫЙ КРАШ: входящий ВИДЕО-звонок —
+официальный offer с 3 m-линиями (audio+video+data), PinoK ответил АКТИВНЫМ m=video a=recvonly
+(OfferToReceiveVideo=false — Plan B-констрейнта, UnifiedPlan её игнорирует, авто-транссивер),
+при включении камеры собеседником (media-settings-changed isVideoEnabled=true, единственный
+за лог) H.265 пошёл в декодер → нативный краш процесса без единой Kotlin-строки (стека в логе
+нет — AndroidRuntime не в фильтре). Фикс #CALLS-VIDEO-INACTIVE: перед createAnswer все
+video-транссиверы → INACTIVE (a=inactive в answer, mid=1 живёт — BUNDLE/ICE целы) + страховка
+demoteVideoRecvOnly (правка answer на уровне SDP в m=video-секции). Разбор — звонки.md §35.

@@ -10,7 +10,9 @@ import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
+import org.webrtc.RtpTransceiver
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
@@ -288,7 +290,12 @@ class WebRtcEngine(
                 drainPendingIceCandidates()
                 // #CALLS-FIX: как в VK — createAnswer ТОЛЬКО после успешной
                 // установки remote SDP (onSetSuccess), не сразу.
-                if (sessionDesc.type == SessionDescription.Type.OFFER) createAnswer()
+                if (sessionDesc.type == SessionDescription.Type.OFFER) {
+                    // #CALLS-VIDEO-INACTIVE (2026-08-30, краш 21:50): видео выключаем
+                    // ДО createAnswer — иначе ответ уходит с активным m=video.
+                    disableRemoteVideoTransceivers()
+                    createAnswer()
+                }
             },
             onError = { err -> AppLog.e(TAG, "setRemoteSdp error: $err") }
         ), sessionDesc)
@@ -600,28 +607,82 @@ class WebRtcEngine(
         }
     }
 
+    /**
+     * #CALLS-VIDEO-INACTIVE (2026-08-30, краш на входящем ВИДЕО-звонке, лог 21:50):
+     * PinoK аудио-only, но в UnifiedPlan при setRemoteDescription(offer с m=video)
+     * libwebrtc АВТОМАТИЧЕСКИ создаёт recvonly video-транссивер — и answer уходил
+     * с АКТИВНЫМ m=video (a=recvonly), хотя OfferToReceiveVideo=false (эта
+     * констрейнта работает только в Plan B и здесь игнорируется).
+     * Итог краша: официальное приложение отправляло offer с 3 m-линиями
+     * (audio+video+data), PinoK отвечал recvonly video; когда собеседник включал
+     * камеру (media-settings-changed isVideoEnabled=true), видео-пакеты шли в
+     * декодер (H265 — первый кодек в offer официального клиента) и процесс умирал
+     * НАТИВНО — в логе ни одной Kotlin-строки, только «beginning of crash».
+     * Фикс: перед createAnswer переводим все video-транссиверы в INACTIVE —
+     * answer получает a=inactive для m=video: видео вообще не согласовывается,
+     * декодер не инициализируется, mid=1 остаётся (не мешает BUNDLE и ICE).
+     * stop() не используем — отклонённая m-линия (port 0) может отвалить
+     * кандидаты, пришедшие с sdpMid=1.
+     */
+    private fun disableRemoteVideoTransceivers() {
+        peerConnection?.transceivers?.forEach { tr ->
+            if (tr.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {
+                try {
+                    tr.direction = RtpTransceiver.RtpTransceiverDirection.INACTIVE
+                    AppLog.i(TAG, "video-транссивер → INACTIVE (m=video будет a=inactive в answer)")
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "не удалось выключить video-транссивер: ${e.message}")
+                }
+            }
+        }
+    }
+
     private fun createAnswer() {
         // #CALLS-AUDIO-OFFER (2026-08-30): симметрично createOffer — аудио-only answer,
         // без recvonly video m-line (см. комментарий в createOffer).
+        // #CALLS-VIDEO-INACTIVE: реальное выключение видео — в
+        // disableRemoteVideoTransceivers() (вызывается перед этим методом), т.к.
+        // OfferToReceiveVideo=false в UnifiedPlan НЕ работает.
         val constraints = MediaConstraints()
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createAnswer(SdpObserverAdapter(
             onSuccess = { sdp ->
-                sdp?.let {
+                sdp?.let { desc ->
+                    // #CALLS-VIDEO-INACTIVE (страховка): если транссивер по какой-то
+                    // причине остался recvonly (setDirection не сработал/не применился),
+                    // вырезаем активное видео на уровне SDP: a=recvonly → a=inactive
+                    // ТОЛЬКО в секции m=video (аудио у PinoK всегда sendrecv — не заденем).
+                    val fixedDesc = demoteVideoRecvOnly(desc.description)
+                    val answer = if (fixedDesc != desc.description) {
+                        AppLog.w(TAG, "#CALLS-VIDEO-INACTIVE: answer содержал активный m=video (recvonly) — принудительно a=inactive")
+                        SessionDescription(desc.type, fixedDesc)
+                    } else desc
                     // #CALLS-FIX: как в VK — answer отправляем ТОЛЬКО после установки
                     // localDescription (onSetSuccess).
                     peerConnection?.setLocalDescription(SdpObserverAdapter(
                         onSetSuccess = {
                             AppLog.i(TAG, "setLocalDescription(answer) SUCCESS")
-                            sendLocalSdpNow(it)
+                            sendLocalSdpNow(answer)
                         },
                         onError = { err -> AppLog.e(TAG, "setLocalDescription error: $err") }
-                    ), it)
+                    ), answer)
                 }
             },
             onError = { err -> AppLog.e(TAG, "createAnswer error: $err") }
         ), constraints)
+    }
+
+    /**
+     * #CALLS-VIDEO-INACTIVE: a=recvonly → a=inactive в секциях m=video.
+     * Секции режем по границам "m=" (lookahead, разделители сохраняются).
+     */
+    private fun demoteVideoRecvOnly(sdp: String): String {
+        if (!sdp.contains("a=recvonly")) return sdp
+        return sdp.split("(?=m=)".toRegex())
+            .joinToString("") { sec ->
+                if (sec.startsWith("m=video")) sec.replace("a=recvonly", "a=inactive") else sec
+            }
     }
 
     private fun drainPendingIceCandidates() {
