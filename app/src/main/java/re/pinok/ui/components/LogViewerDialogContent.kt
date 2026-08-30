@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
@@ -75,6 +76,18 @@ import java.util.Locale
 
 private data class Lvl(val label: String, val char: String, val color: Color)
 
+// #LOG-CALLS-FILTER (2026-08-30): теги звонковой цепочки для фильтра «Звонки» и
+// копирования сегмента звонка. Пользователь присылает лог вместо скриншотов
+// (файлы в чат не доходят — только текст), поэтому в фильтр включены ВСЕ
+// смежные теги: сам звонковый стек + SovaApp (session_key/anonymLogin) +
+// VKApiClient (vchat-HTTP, ошибки транспорта).
+private val CALL_TAGS = listOf(
+    "/CallScreen:", "/CallSignaling:", "/WebRtcEngine:", "/Queuev4Client:",
+    "/SovaApp:", "/VKApiClient:",
+)
+
+private fun isCallLine(line: String): Boolean = CALL_TAGS.any { line.contains(it) }
+
 /**
  * Full-screen dialog with the in-app log viewer + UTF-8 export action.
  *
@@ -110,6 +123,8 @@ fun LogViewerDialogContent(onDismiss: () -> Unit) {
     var logLines by remember { mutableStateOf(AppLog.snapshot()) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
+    // #LOG-CALLS-FILTER: чип «Звонки» — только теги звонковой цепочки.
+    var callsOnly by remember { mutableStateOf(false) }
 
     // Auto-refresh every 2s while open.
     LaunchedEffect(Unit) {
@@ -119,7 +134,7 @@ fun LogViewerDialogContent(onDismiss: () -> Unit) {
         }
     }
 
-    val filtered = remember(logLines, enabledLevels, searchQuery) {
+    val filtered = remember(logLines, enabledLevels, searchQuery, callsOnly) {
         val query = searchQuery.trim()
         logLines.filter { line ->
             val firstSpace = line.indexOf(' ')
@@ -128,6 +143,8 @@ fun LogViewerDialogContent(onDismiss: () -> Unit) {
             val lvlChar = afterTs.firstOrNull() ?: '?'
             val levelOk = lvlChar.toString() in enabledLevels
             if (!levelOk) return@filter false
+            // #LOG-CALLS-FILTER (2026-08-30): чип «Звонки» — только звонковая цепочка
+            if (callsOnly && !isCallLine(line)) return@filter false
             // Поиск по tag/text (case-insensitive)
             if (query.isNotEmpty()) {
                 line.contains(query, ignoreCase = true)
@@ -213,6 +230,37 @@ fun LogViewerDialogContent(onDismiss: () -> Unit) {
                     }
                     IconButton(
                         onClick = {
+                            // #LOG-CALLS-FILTER (2026-08-30): копирование отфильтрованных строк
+                            // в буфер — пользователь вставляет лог прямо в чат ТЕКСТОМ
+                            // (txt-файлы через шлюз не доходят). С чипом «Звонки» копируется
+                            // компактный сегмент звонка вместо мегабайтного полного дампа.
+                            scope.launch {
+                                logLines = AppLog.snapshot()
+                                val text = filtered.joinToString("\n")
+                                if (text.isBlank()) {
+                                    exportStatus = "Нечего копировать — лог пуст"
+                                } else {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                                        as? android.content.ClipboardManager
+                                    if (cm != null) {
+                                        cm.setPrimaryClip(ClipData.newPlainText("PinoK logs", text))
+                                        exportStatus = "Скопировано ${filtered.size} строк — вставь в чат"
+                                    } else {
+                                        exportStatus = "Clipboard недоступен"
+                                    }
+                                }
+                            }
+                        },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = iconTint,
+                        ),
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Копировать логи",
+                            tint = iconTint)
+                    }
+                    IconButton(
+                        onClick = {
                             AppLog.clear()
                             logLines = emptyList()
                         },
@@ -288,6 +336,27 @@ fun LogViewerDialogContent(onDismiss: () -> Unit) {
                             color = if (enabledLevels.size == levels.size)
                                 MaterialTheme.colorScheme.onPrimaryContainer
                             else MaterialTheme.colorScheme.onSurface,
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        labelColor = MaterialTheme.colorScheme.onSurface,
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                )
+                // #LOG-CALLS-FILTER (2026-08-30): чип «Звонки» — только теги звонковой
+                // цепочки (CallScreen/CallSignaling/WebRtcEngine/Queuev4Client/SovaApp/
+                // VKApiClient). Включает и W/E из этих тегов — они всегда в буфере.
+                FilterChip(
+                    selected = callsOnly,
+                    onClick = { callsOnly = !callsOnly },
+                    label = {
+                        Text(
+                            "Звонки",
+                            fontWeight = FontWeight.Bold,
+                            color = if (callsOnly) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurface,
                         )
                     },
                     colors = FilterChipDefaults.filterChipColors(
