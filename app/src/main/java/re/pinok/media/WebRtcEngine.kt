@@ -380,7 +380,9 @@ class WebRtcEngine(
         // #CALLS-ICE-STATS-UI: пустые креденшелы TURN = аллокация 401 = relay-кандидатов
         // не будет (на экране «канд: … relay=0») — логируем сразу, не дожидаясь stats.
         val turn = params.turnServer
-        val credsOk = !turn?.username.isNullOrBlank() && !turn?.credential.isNullOrBlank()
+        // Явный null-check (не turn?.credential): после проверки username компилятор
+        // smart-cast'ит turn в non-null и ругался «Unnecessary safe call» на credential.
+        val credsOk = turn != null && !turn.username.isNullOrBlank() && !turn.credential.isNullOrBlank()
         AppLog.i(TAG, "setIceServers: ${servers.size} servers (stun=${params.stunServer?.urls}, turn=${turn?.urls}, creds=${if (credsOk) "есть" else "НЕТ/пустые"})")
     }
 
