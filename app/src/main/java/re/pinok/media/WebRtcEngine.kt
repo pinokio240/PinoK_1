@@ -52,9 +52,27 @@ class WebRtcEngine(
     // #CALLS-FIX (2026-08-24): последний отправленный локальный SDP (offer/answer).
     // При topology-changed сервер просит отправить offer заново — берём его отсюда
     // (в CallScreen кэш pendingLocalSdp очищается после первой отправки).
+    // #CALLS-NON-TRICKLE: теперь хранит SDP УЖЕ С ЗАШИТЫМИ кандидатами — ретрай
+    // (REOFFER/REANSWER в CallScreen) уезжает вместе с полным набором кандидатов.
     @Volatile
     private var lastLocalSdp: SessionDescription? = null
     fun lastLocalSdp(): SessionDescription? = lastLocalSdp
+
+    // #CALLS-NON-TRICKLE (2026-08-30, тест 15:38): trickle-кандидаты через сервер ОК
+    // НЕДОСТАВЛЯЮТСЯ — сигналинг теперь полный (offer ✓ answer ✓, фикс #CALLS-SDP-OBJECT),
+    // но на звонящем 0 × eff=candidate: 250 STUN-проверок на единственный зашитый в
+    // answer host-кандидат собеседника — 0 ответов, reqR=0 (его пул пуст: наши trickle
+    // тоже не дошли) → CHECKING→FAILED за 15с. При этом кандидаты, ЗАШИТЫЕ В SDP
+    // (answer содержал 2 host), сервер ПРОПУСТИЛ и они применились. Решение: ждём
+    // завершения ICE gathering (не дольше gatherSendTimeoutMs) и шлём SDP со ВСЕМИ
+    // локальными кандидатами, долитыми в текст (a=candidate:… в m-section). Trickle
+    // (onIceCandidateReady → sendCandidate) остаётся резервным каналом.
+    private val localCandidates = mutableListOf<IceCandidate>()
+    @Volatile
+    private var sdpAwaitingGather: SessionDescription? = null
+    @Volatile
+    private var gatherFlushed = false
+    private val gatherSendTimeoutMs = 3_000L
     // #CALLS-FIX: реальные ICE-серверы из conversation params (turn_server/stun_server).
     // Хардкод videostun.okcdn.ru/turn:calls.okcdn.ru не даёт ICE CONNECTED.
     @Volatile
@@ -228,6 +246,9 @@ class WebRtcEngine(
     fun endCall() {
         // инвалидирует возможный DISCONNECTED-таймер
         iceStateGen.incrementAndGet()
+        // #CALLS-NON-TRICKLE: ждущий отправки SDP больше не актуален (иначе таймаут
+        // после закрытия PC отправит SDP мёртвого звонка).
+        sdpAwaitingGather = null
         post {
             localAudioTrack?.setEnabled(false)
             peerConnection?.close()
@@ -413,6 +434,10 @@ class WebRtcEngine(
         candTcpCount.set(0)
         remoteCandCount.set(0)
         lastPairStats = null
+        // #CALLS-NON-TRICKLE: новый PC — новый набор кандидатов и чистое состояние отправки.
+        localCandidates.clear()
+        sdpAwaitingGather = null
+        gatherFlushed = false
         val iceServers = this.iceServers.ifEmpty {
             listOf(
                 PeerConnection.IceServer.builder(STUN_URL).createIceServer(),
@@ -441,6 +466,8 @@ class WebRtcEngine(
                 if (typ != "?") candTypeCounts.merge(typ, 1, Int::plus)
                 if (proto == "tcp") candTcpCount.incrementAndGet()
                 AppLog.d(TAG, "локальный кандидат: $typ/$proto ${candidate.sdp.take(48)}")
+                // #CALLS-NON-TRICKLE: копим для зашивки в текст SDP.
+                localCandidates.add(candidate)
                 onIceCandidateReady(candidate)
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
@@ -483,6 +510,10 @@ class WebRtcEngine(
                 // #CALLS-ICE-STATS-UI: сбор должен доходить до COMPLETE; застревание в
                 // GATHERING = висящие TURN-аллокации (креденшелы/недоступность сервера).
                 AppLog.i(TAG, "ICE gathering: $state (${iceUiSnapshot()})")
+                // #CALLS-NON-TRICKLE: сбор завершён — отсылаем ждущий SDP с зашитыми кандидатами.
+                if (state == PeerConnection.IceGatheringState.COMPLETE) {
+                    flushSdpAwaitingGather("gathering COMPLETE")
+                }
             }
             override fun onAddStream(stream: MediaStream) {}
             override fun onRemoveStream(stream: MediaStream) {}
@@ -537,8 +568,7 @@ class WebRtcEngine(
                     peerConnection?.setLocalDescription(SdpObserverAdapter(
                         onSetSuccess = {
                             AppLog.i(TAG, "setLocalDescription(offer) SUCCESS")
-                            lastLocalSdp = it
-                            onLocalSdpReady(it)
+                            scheduleLocalSdpSend(it)
                         },
                         onError = { err -> AppLog.e(TAG, "setLocalDescription error: $err") }
                     ), it)
@@ -563,8 +593,7 @@ class WebRtcEngine(
                     peerConnection?.setLocalDescription(SdpObserverAdapter(
                         onSetSuccess = {
                             AppLog.i(TAG, "setLocalDescription(answer) SUCCESS")
-                            lastLocalSdp = it
-                            onLocalSdpReady(it)
+                            scheduleLocalSdpSend(it)
                         },
                         onError = { err -> AppLog.e(TAG, "setLocalDescription error: $err") }
                     ), it)
@@ -578,6 +607,46 @@ class WebRtcEngine(
         pendingRemoteIce.remove("remote")?.forEach { candidate ->
             peerConnection?.addIceCandidate(candidate)
         }
+    }
+
+    /**
+     * #CALLS-NON-TRICKLE: SDP готов (localDescription установлен) — НЕ шлём сразу,
+     * а ждём завершения ICE gathering (не дольше gatherSendTimeoutMs): COMPLETE →
+     * flushSdpAwaitingGather, таймаут → шлём с собранным (минимум host). Вызов
+     * только на signaling thread (post от onIceGatheringChange уже на нём).
+     */
+    private fun scheduleLocalSdpSend(sdp: SessionDescription) {
+        sdpAwaitingGather = sdp
+        gatherFlushed = false
+        signalingHandler?.postDelayed({
+            if (sdpAwaitingGather === sdp) {
+                AppLog.w(TAG, "${sdp.type}: gathering не завершился за ${gatherSendTimeoutMs / 1000}с — шлю с собранным (${localCandidates.size} канд.)")
+                flushSdpAwaitingGather("таймаут")
+            }
+        }, gatherSendTimeoutMs)
+    }
+
+    /** #CALLS-NON-TRICKLE: долить локальных кандидатов в текст SDP.
+     * SDP аудио-only, m-section одна и длится до конца текста — append в конец корректен
+     * (проверено тестом 15:38: зашитые в answer 2 кандидата сервер пропустил и применились). */
+    private fun embedLocalCandidates(sdp: String): String {
+        if (localCandidates.isEmpty()) return sdp
+        val sb = StringBuilder(sdp)
+        if (!sb.endsWith("\r\n")) sb.append("\r\n")
+        localCandidates.forEach { c -> sb.append("a=").append(c.sdp).append("\r\n") }
+        return sb.toString()
+    }
+
+    /** #CALLS-NON-TRICKLE: отправка ждущего SDP с зашитыми кандидатами (signaling thread). */
+    private fun flushSdpAwaitingGather(reason: String) {
+        val sdp = sdpAwaitingGather ?: return
+        if (gatherFlushed) return
+        gatherFlushed = true
+        sdpAwaitingGather = null
+        val embedded = SessionDescription(sdp.type, embedLocalCandidates(sdp.description))
+        AppLog.i(TAG, "${sdp.type} → отправка ($reason): зашито кандидатов=${localCandidates.size}, len=${sdp.description.length}→${embedded.description.length}")
+        lastLocalSdp = embedded
+        onLocalSdpReady(embedded)
     }
 
     /**

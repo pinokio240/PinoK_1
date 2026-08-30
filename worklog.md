@@ -4775,3 +4775,23 @@ Stage Summary:
 - Истинная причина «Соединение…» найдена и починена: SDP нужно отправлять ОБЪЕКТОМ {"type","sdp"} как официальный клиент, а не строкой. Один фикс покрывает offer И answer, обе роли.
 - Артефакты: logs-dl/test2/{ciber,redmi1}.txt, звонки.md §28, коммит #CALLS-SDP-OBJECT в PinoK.
 - Следующий тест: пересборка обеих трубок с головы; чек-пункты — "data":{"sdp":{"type":"offer" в отправке, eff=offer у вызываемого, ICE CONNECTED, голос.
+
+---
+Task ID: CALLS-NON-TRICKLE
+Agent: main (Z.ai Code)
+Task: Разбор логов теста 15:38 (сборка f151c16) — сигналинг работает, ICE падает; починить доставку кандидатов
+
+Work Log:
+- Скачал 3 ссылки tmpfiles: обе ciber вернули СТАРЫЙ файл 14:42 (md5 8268f853… идентичен test2/ciber.txt — экспорт перезалился), redmi1.txt новый (15:38+, обрезок без CALL START).
+- Подтверждён #CALLS-SDP-OBJECT: offer объектной формой ×5, eff=answer ×4 на звонящем, setRemoteSdp: type=ANSWER SUCCESS → Remote audio track → ICE CHECKING. Сигналинг полный в обе стороны.
+- Новая проблема: 0 × eff=candidate на звонящем — trickle не дошёл ни в одну сторону; у вызываемого пул пуст (reqR=0). В тесте 14:42 звонящий→вызываемый trickle доходил (40 шт.) — доставка нестабильна (churn WS: 3 × REGISTERED_PEER за 2с).
+- В answer зашиты ровно 2 host-кандидата 155.212.192.207 (мобильная сеть вызываемого, извне недоступны); приметы переписывания SDP сервером: setup:passive (на actpass libwebrtc отвечает active!), trickle renomination, приоритеты 658217562/281532720 — не libwebrtc.
+- 7 пар, 250 проверок, resR=0 reqR=0 → FAILED за 15с. Финальный отчёт пар=0 (статистика сбрасывается).
+- Фикс #CALLS-NON-TRICKLE (WebRtcEngine): scheduleLocalSdpSend — SDP ждёт gathering COMPLETE (макс 3с, таймаут → шлём с собранным); embedLocalCandidates — все локальные кандидаты зашиваются в текст SDP (append a=candidate:… в конец, одна audio m-section); lastLocalSdp теперь хранит embedded-версию (REOFFER/REANSWER уносят кандидатов); trickle остаётся резервом; сброс состояния в createPeerConnection/endCall.
+- Документация: звонки.md §29, HISTORY.md.
+- Проверки: braces 0, parens −2 (= HEAD, скобки в комментариях — безвредно).
+
+Stage Summary:
+- Сигналинг закрыт полностью (offer+answer обе стороны). Последнее звено — кандидаты: канал «кандидаты внутри SDP» доказанно проходит сервер, поэтому ICE больше не зависит от trickle.
+- ВАЖНО для следующего теста: обе ciber-ссылки дали старый файл — экспортировать Cyber ЗАНОВО; смотреть «OFFER/ANSWER → отправка (gathering COMPLETE): зашито кандидатов=N», прин:>0 у обоих, ICE CONNECTED.
+- Артефакты: logs-dl/test3/{redmi1.txt,ciber.txt(старый),ciber2.txt(старый)}, звонки.md §29, коммит #CALLS-NON-TRICKLE.
