@@ -4700,3 +4700,20 @@ Stage Summary:
 - Локальная копия = origin/PinoK = 5d264d5 + один новый коммит UI-фиксов; стэш-бэкап stash@{0}.
 - CallScreen.kt: #CALLS-UI-SHIFT (контент +5% вверх) и #CALLS-DIAG-FIT (диаг-блок ≤120dp, скролл) — обрезание текстов при «Соединение…» устранено, аватарка поднята.
 - Ключевой результат теста 30.08 для следующей сессии: сервер ДОСТАВЛЯЕТ offer и кандидаты принимающей стороне (candidate×40 в RINGING); зона поиска — «ошибка сервера» на исходящем (logcat tag:CallSignaling в момент err×N) и тайминг «Принять».
+
+---
+Task ID: CALLS-LOG-MARK
+Agent: main (Z.ai Code)
+Task: Пользователь сообщил, что отладочные флаги на экране звонка не видны — основной канал диагностики теперь логи. Подготовить лог-канал: проверить покрытие, добавить маркеры сегмента звонка, задокументировать протокол съёма лога.
+
+Work Log:
+- Проверил AppLog (ring 4000, persist 2MB, категории; дефолт = только AUTH/SYSTEM/NETWORK; WARN/ERROR пишутся всегда) и LogViewerDialogContent (экспорт детального дампа → share URI, уровни, поиск).
+- Подтвердил: категория CALLS принудительно включается в SovaApp.startCallSignaling (строка 1333); теги CallScreen/CallSignaling/WebRtcEngine/Queuev4Client замаплены в CALLS (AppLog.categoryForTag).
+- Подтвердил покрытие: CallSignaling логирует ВСЕ входящие фреймы (onMessage command/eff/body) и все отправки (send command/seq/ok); CallScreen логирует серверную ошибку С ПОЛНЫМ payload в WARN («сервер отверг команду: msg.json») — ключ к гипотезе «ошибка сервера» из теста 30.08.
+- Добавил #CALLS-LOG-MARK в CallScreen.kt: CALL START (входящий/исходящий, peer, payload.len) в начале LaunchedEffect(Unit); CALL END (phase, dur, srvErr, offer, answer, ice) в onDispose DisposableEffect; startTime перенесён выше (было ниже по коду — дублировал бы объявление; единственное объявление, использование в таймере длительности сохранено).
+- Проверки: braces/parens delta=0; startTime объявлен 1 раз; новые «!!»=0; состояния offerReceived/answerSent/iceConnected/srvErrCount объявлены до маркера (161-166/239) — скоуп ок.
+- звонки.md §26 дополнен «Протокол логи вместо флагов» (как снять лог с трубки: жук → ⬇ → поделиться; adb-альтернатива с фильтром тегов).
+
+Stage Summary:
+- Лог-канал готов: после пересборки (голова = новый коммит) каждый звонок в экспортированном логе выделен маркерами CALL START/END; payload серверной ошибки попадает в WARN гарантированно.
+- Пользователю: git pull → assembleDebug на обеих трубках → звонок → жук → экспорт → прислать файл. Экранные флаги после 46577d8 тоже больше не обрезаются (fix предыдущего коммита), но логи — приоритетный канал.

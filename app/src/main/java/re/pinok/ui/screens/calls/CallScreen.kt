@@ -386,6 +386,13 @@ fun CallScreen(
     }
 
     LaunchedEffect(Unit) {
+        // #CALLS-LOG-MARK (2026-08-30): маркер начала звонка — по нему в экспортированном
+        // логе мгновенно находится сегмент звонка (когда экранные флаги не видны/
+        // не успевают — пользователь присылает лог вместо скриншота).
+        AppLog.i(
+            "CallScreen",
+            "════════ CALL START: ${if (incoming) "входящий" else "исходящий"} peer=$peerId name=$peerName payload=${incomingPayload?.length ?: 0} ════════"
+        )
         engine.initialize()
         // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
         if (!micGranted) micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
@@ -901,8 +908,15 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-LOG-MARK (2026-08-30): время старта экрана — для длительности в CALL END.
+    val startTime = remember { System.currentTimeMillis() }
     DisposableEffect(Unit) {
         onDispose {
+            // #CALLS-LOG-MARK: маркер конца звонка — сегмент в логе = между START и END.
+            AppLog.i(
+                "CallScreen",
+                "════════ CALL END: phase=$phase dur=${(System.currentTimeMillis() - startTime) / 1000}с srvErr=$srvErrCount offer=${offerReceived.value} answer=${answerSent.value} ice=${iceConnected.value} ════════"
+            )
             engine.release()
             signaling.stop()
         }
@@ -940,7 +954,6 @@ fun CallScreen(
         }
     }
 
-    val startTime = remember { System.currentTimeMillis() }
     LaunchedEffect(phase) {
         if (phase == CallPhase.ACTIVE) {
             kotlinx.coroutines.delay(1000)
