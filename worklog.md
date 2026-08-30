@@ -4814,3 +4814,24 @@ Stage Summary:
 - Эталон официального клиента теперь известен из его JS (форма запросов, составной id, порядок отправки, фильтр приёма) — PinoK приведён к нему тремя фиксами.
 - Следующий тест после пересборки: «ANSWER → отправка немедленно» ≤0.5с после accept; participantId=u… в wire; реакция официального (STUN к нам, ICE CONNECTED); SERVER_ERROR не должен появляться.
 - Артефакты: logs-dl/test4/, звонки.md §30, коммиты #CALLS-ANSWER-FIRST + #CALLS-PARTICIPANT-U + #CALLS-HANGUP-FORMAT.
+
+---
+Task ID: CALLS-PARTICIPANT-U-REVERT
+Agent: main (Z.ai Code)
+Task: Разбор теста 5 17:17 (Redmi официальный caller → Cyber PinoK callee, «при поднятии трубки на пинок произошел сброс звонка») — найти причину сброса и починить
+
+Work Log:
+- Скачал свежие логи tmpfiles (md5 новые, дубликатов нет): logs-dl/test5/{ciber.txt 68КБ/357 строк, redmi1.txt 1МБ/5615 строк (системный logcat официального, WebRTC-строк нет)}.
+- Расшифровал 5 base64 из SERVER_ERROR: префикс conversationId (b490f8b8…) + порядковый номер = server-side id НАШИХ сообщений; 5 уникальных id ↔ 5 отправок 1:1, плюс дубли тех же id.
+- Ciber: offer официального (4083Б, объект) + его 4 trickle-кандидата дошли и применились (буфер → pending=4 → setRemoteSdp SUCCESS); #CALLS-ANSWER-FIRST работает: answer 3613Б ушёл через 3 мс после setLocal, кандидаты следом.
+- НО все 5 transmit-data отвергнуты: SERVER_ERROR "Invalid message format" ~20 мс на каждую; ZOMBIE-сторож верно терминировал через 190 мс после accept; hangup {reason:timeout} сервер принял (#CALLS-HANGUP-FORMAT ✓).
+- Кросс-тест 4 vs 5 (единственная переменная — префикс «u»): тест 4, id число — 15+ transmit-data, 0 ошибок; тест 5, id "u<id>" — 5 из 5 отвергнуты. Вывод: composeId "u<id>" из JS эталона — форма WEB_TRANSPORT-диалекта; наш ws2/WEB_SOCKET (peerId=0) валидирует participantId как число.
+- Фикс #CALLS-PARTICIPANT-U-REVERT: composeParticipantId = raw.trim() (числовой id), полный комментарий-обоснование в коде; приёмник/остальные фиксы §30 не тронуты.
+- Документация: звонки.md §31 (с таблицей кросс-теста и планом), HISTORY.md.
+- Проверки: braces/parens delta=0.
+
+Stage Summary:
+- «Сброс при поднятии трубки» — это наш ZOMBIE-сторож, корректно убивший мёртвый звонок: сервер отвергал весь наш исходящий сигналинг из-за составного «u<id>» (ошибочный фикс из §30, взятый из веб-диалекта эталона).
+- Возврат к числовому participantId; answer-first и hangup-формат подтверждены логами как рабочие.
+- Следующий тест: пересборка Cyber; чек-пункты — wire participantId без «u», 0 × SERVER_ERROR, STUN от официального (прин:>0), ICE CONNECTED, голос. Запасная гипотеза при 0 ошибок, но немом ответе: сервер не транслирует ws2→WEB_TRANSPORT — тогда регистрироваться WEB_TRANSPORT-пиром.
+- Артефакты: logs-dl/test5/, звонки.md §31, коммит #CALLS-PARTICIPANT-U-REVERT.

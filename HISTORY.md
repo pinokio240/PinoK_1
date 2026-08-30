@@ -10988,3 +10988,17 @@ composeMessageId(delivered)===_participantId (сервер добавляет pa
 отвергал наш hangup целиком: base64 в SERVER_ERROR обоих тестов = префикс
 conversationId; скорректирован вывод §28 — дроп SDP-строки был тихим).
 Разбор — звонки.md §30.
+
+### 2026-08-30 (продолжение 5) — тест 17:17: «u<id>» в ws2 отвергается сервером — откат на числовой participantId (#CALLS-PARTICIPANT-U-REVERT)
+Тест 5 (Redmi официальный caller → Cyber PinoK callee, первая сборка с фиксами §30):
+порядок отправки теперь эталонный (answer через 3 мс после setLocal, кандидаты следом,
+offer официального + его trickle дошли и применились), НО сервер отверг ВСЕ 5 наших
+transmit-data (answer 3613Б + 4 кандидата): SERVER_ERROR "Invalid message format:
+<base64(id)>" по ~20 мс на отправку; 5 уникальных base64 = префикс conversationId +
+номер (server-side id сообщения) + дубли тех же id. Наш ZOMBIE-сторож верно терминировал
+звонок через 190 мс после accept («сброс при поднятии трубки»); hangup {reason:"timeout"}
+сервер принял (#CALLS-HANGUP-FORMAT ✓). Кросс-тест с тестом 4 (числовой id: 15+
+transmit-data — 0 ошибок; отвергнут только старый hangup) однозначен: composeId "u<id>"
+из JS эталона — форма ВЕБ-диалекта WEB_TRANSPORT, а наш ws2/WEB_SOCKET (peerId=0) ждёт
+в participantId ЧИСЛО. Фикс: composeParticipantId = raw (число). Остальное из §30 в силе.
+Разбор — звонки.md §31.

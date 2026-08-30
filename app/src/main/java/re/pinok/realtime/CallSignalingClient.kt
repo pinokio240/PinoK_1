@@ -183,18 +183,21 @@ class CallSignalingClient(
     }
 
     /**
-     * #CALLS-PARTICIPANT-U (тест 4, 16:03–16:05): эталонный клиент адресует transmit-data
-     * СОСТАВНЫМ id — OK/videochat/Utils.js composeId(): USER → "u<id>", GROUP → "g<id>"
-     * (sendSdp шлёт this._participantId, а это composeParticipantId(participant)).
-     * Тот же составной id — ключ фильтра _handleTransmittedData на приёмнике:
-     * composeMessageId(delivered) === transport._participantId, иначе тихий дроп.
-     * Наши raw "595859469344" сервер маршрутизирует (тест 3: offer дошёл до WEB_SOCKET-пира),
-     * но для полной симметрии с эталоном шлём "u<id>". Уже составной — оставляем как есть.
+     * Адрес получателя transmit-data в НАШЕМ диалекте (ws2, peerId=0, WEB_SOCKET) —
+     * ЧИСЛОВОЙ внутренний id участника ("595859469344").
+     *
+     * #CALLS-PARTICIPANT-U-REVERT (тест 5, 17:17:41–44): составной "u<id>" (composeId из
+     * OK/videochat/Utils.js — это форма ВЕБ-диалекта WEB_TRANSPORT) в ws2 сервер
+     * ОТВЕРГАЕТ ПОЛНОСТЬЮ: answer (3613Б, seq=2) и все 4 trickle-кандидата (seq=3–6) →
+     * SERVER_ERROR "Invalid message format: <base64(id)>" через ~20 мс после каждой
+     * отправки → ZOMBIE → hangup «timeout» через 190 мс после accept. В тесте 4
+     * (16:03, сборка ДО #CALLS-PARTICIPANT-U) те же сообщения с ЧИСЛОВЫМ id сервер
+     * принял без единой ошибки (10 кандидатов + answer; отвергнут был только hangup
+     * со старым форматом — #CALLS-HANGUP-FORMAT). Составной id в конверте ДОСТАВКИ —
+     * забота сервера (он сам собирает participant:{id,idType} для получателя);
+     * в поле routing-адреса participantId ws2-схема ждёт число.
      */
-    private fun composeParticipantId(raw: String): String {
-        val t = raw.trim()
-        return if (Regex("^[ug][0-9]+$").matches(t)) t else "u$t"
-    }
+    private fun composeParticipantId(raw: String): String = raw.trim()
 
     /** Отправить SDP (answer для входящего, offer для исходящего).
      *  @return true — команда реально ушла в WS (#CALLS-ACK-REOFFER: false = потеряна,
