@@ -11033,3 +11033,15 @@ hangup по эталону Conversation.hangup: любое состояние д
 OUTGOING-SETUP OK (callId/conv/uid/peerId/turn). Проверены и отклонены ложные гипотезы:
 peerId=VK-id собеседника в WS URL (сервер принимает любые transport-label, маршрутизация
 по participantId) и цепочка сессии (соответствует эталону §5). Разбор — звонки.md §33.
+
+2026-08-30 §34 — РАЗГАДКА «исходящий не проходит» (тест 20:49): сигналинг PinoK безупречен
+(startCall→registered-peer→offer доставлен→answer применён→accepted-call, 0 SERVER_ERROR),
+сорвался МЕДИА: у собеседника (официальный, другая сеть) UDP полностью заблокирован —
+в answer только 2 host-кандидата без srflx/relay, наш агент 253 проверки → 0 ответов;
+их клиент сам запросил topology-changed{SERVER} = SFU (медиа-сервер ОК), которого у PinoK
+нет → они сбросили через 11с. Тест 6 (успех) был в ОДНОЙ сети — доказано совпадением
+srflx 95.26.26.106. Эталонный SDK несёт SFU-команды allocate-consumer/accept-producer —
+дорожная карта. Фиксы: #CALLS-TOPOLOGY-RESTART (ICE restart + свежий offer на
+topology-SERVER вместо бесполезной переотправки старого SDP) и #CALLS-ICE-FAILED-HANGUP
+(грейс 8с → hangup(FAILED)+stop — обе стороны завершаются сразу, таймер собеседника
+не висит). Разбор — звонки.md §34.

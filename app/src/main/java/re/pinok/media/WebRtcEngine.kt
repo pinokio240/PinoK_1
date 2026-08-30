@@ -568,6 +568,38 @@ class WebRtcEngine(
         ), constraints)
     }
 
+    /**
+     * #CALLS-TOPOLOGY-RESTART (2026-08-30, лог 20:49, тест исходящего): перезапуск
+     * ICE-агента и ПОЛНЫЙ новый offer-цикл: createOffer → setLocal → onLocalSdpReady.
+     *
+     * Зачем: topology-changed{SERVER} приходит, когда P2P-нога НЕ СОБРАЛАСЬ у
+     * собеседника (тест 20:49: его answer содержал только 2 host-кандидата — ни
+     * srflx, ни relay; наш агент послал 253 проверки — 0 ответов). Повторная отправка
+     * СТАРОГО offer не создаёт новый транспорт: у него те же ice-ufrag/pwd и те же
+     * мёртвые кандидаты. restartIce() даёт новые ufrag/pwd и свежую сборку кандидатов
+     * (включая relay) — это последний шанс поднять медиа до того, как собеседник
+     * сдастся (в тесте 20:49 он сбросил через 11с после topology-changed).
+     *
+     * @return true — restart запущен, свежий offer уйдёт через onLocalSdpReady.
+     */
+    fun restartIce(): Boolean {
+        val pc = peerConnection ?: run {
+            AppLog.w(TAG, "restartIce: PeerConnection нет — некому рестартовать")
+            return false
+        }
+        return try {
+            AppLog.i(TAG, "ICE RESTART: новый ufrag/pwd + свежая сборка кандидатов")
+            pc.restartIce()
+            // createOffer при pending negotiation-needed даст offer с новыми
+            // ice-credentials; setLocal + sendLocalSdpNow отправят его собеседнику.
+            createOffer()
+            true
+        } catch (e: Exception) {
+            AppLog.e(TAG, "restartIce error: ${e.message}")
+            false
+        }
+    }
+
     private fun createAnswer() {
         // #CALLS-AUDIO-OFFER (2026-08-30): симметрично createOffer — аудио-only answer,
         // без recvonly video m-line (см. комментарий в createOffer).

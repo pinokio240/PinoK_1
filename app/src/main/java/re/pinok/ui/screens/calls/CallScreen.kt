@@ -890,15 +890,32 @@ fun CallScreen(
                     // (все три лога входящих: 21:26, 21:44, 22:29). offerTo пуст — но звонящий
                     // при смене topology может сбросить своё SDP-состояние: повторяем answer
                     // + кандидатов, чтобы он мог пересобрать соединение.
+                    // #CALLS-TOPOLOGY-RESTART (2026-08-30, лог 20:49, тест исходящего):
+                    // topology-changed{SERVER} = P2P-нога НЕ СОБРАЛАСЬ У СОБЕСЕДНИКА (его
+                    // answer содержал только 2 host-кандидата без srflx/relay, наш агент
+                    // послал 253 проверки — 0 ответов). Повторная отправка СТАРОГО offer
+                    // (было) не создаёт новый транспорт: те же ufrag/pwd, те же мёртвые
+                    // кандидаты. Делаем ICE RESTART — свежий offer + новые кандидаты уйдут
+                    // через onLocalSdpReady автоматически (pid уже известен).
+                    var topologyRestarted = false
                     if (topology == "SERVER") {
                         doReanswer("topology-SERVER")
-                        if (direction == CallDirection.OUTGOING && (offerTo == null || offerTo.size() == 0)) {
+                        if (direction == CallDirection.OUTGOING && !answerReceived.value) {
+                            topologyRestarted = engine.restartIce()
+                            if (topologyRestarted) {
+                                AppLog.i("CallScreen", "topology-changed: ICE RESTART — свежий offer уйдёт автоматически")
+                            }
+                        }
+                        if (!topologyRestarted && direction == CallDirection.OUTGOING &&
+                            (offerTo == null || offerTo.size() == 0)
+                        ) {
                             // #CALLS-FIX (2026-08-24): сервер ждёт повторную отправку offer
-                            // в новом режиме даже без offerTo (звонки.md §11).
+                            // в новом режиме даже без offerTo (звонки.md §11). Фолбэк, если
+                            // restart невозможен (PC нет).
                             doReoffer("topology-SERVER")
                         }
                     }
-                    if (offerTo != null && offerTo.size() > 0) {
+                    if (!topologyRestarted && offerTo != null && offerTo.size() > 0) {
                         val pid = offerTo[0].takeIf { it.isJsonPrimitive }?.asLong
                         if (pid != null && pid > 0L) {
                             if (remoteParticipantId.value == null) {
@@ -1026,6 +1043,27 @@ fun CallScreen(
                 engine.endCall()
                 signaling.stop()
                 phase = CallPhase.FAILED
+            }
+        }
+    }
+
+    // #CALLS-ICE-FAILED-HANGUP (2026-08-30, лог 20:49, тест исходящего): ICE FAILED при
+    // обменянных SDP = разговор мёртв (в тесте: 253 наши проверки — 0 ответов, у
+    // собеседника 0 входящих). Раньше фаза падала в FAILED, но мы НЕ сообщали об этом
+    // собеседнику и НЕ закрывали сигналинг: официальный клиент держал таймер ~10с, пока
+    // сам не сдался (remote-hangup), а без его сброса ждали бы ZOMBIE 90с. Теперь: грейс
+    // 8с (окно для topology-restart из #CALLS-TOPOLOGY-RESTART), затем hangup(FAILED)
+    // + stop — обе стороны завершаются сразу и честно.
+    LaunchedEffect(phase) {
+        if (phase == CallPhase.FAILED &&
+            (answerSent.value || answerReceived.value) && !iceConnected.value
+        ) {
+            kotlinx.coroutines.delay(8_000L)
+            if ((phase == CallPhase.FAILED || phase == CallPhase.CONNECTING) && !iceConnected.value) {
+                AppLog.w("CallScreen", "ICE FAILED: 8с грейс без восстановления — hangup(FAILED) + stop")
+                signaling.hangup("failed")
+                engine.endCall()
+                signaling.stop()
             }
         }
     }
