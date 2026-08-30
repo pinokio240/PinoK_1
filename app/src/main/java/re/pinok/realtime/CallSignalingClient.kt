@@ -30,7 +30,10 @@ import java.util.concurrent.atomic.AtomicLong
  *  - Исходящие команды: { command: "accept-call"|"hangup"|"transmit-data"|...,
  *                          sequence: <int>, ...params }
  *      accept-call → mediaSettings: { isAudioEnabled, isVideoEnabled, ... }
- *      hangup      → reason
+ *      hangup      → reason — ТОЛЬКО значение enum эталона hangupType, UPPERCASE:
+ *                    CANCELED|REJECTED|REMOVED|HUNGUP|MISSED|BUSY|FAILED (#CALLS-HANGUP-REASON-ENUM)
+ *  - Сервер пингует текстовым кадром "ping" каждые ~5 с — отвечаем текстовым "pong"
+ *    (#CALLS-WS-PONG), как эталон.
  *      transmit-data → { participantId, data: { sdp | candidate } }
  *  - Входящие: JSON { command: ... } (accept-call/offer/answer/candidate/hangup)
  *
@@ -129,8 +132,18 @@ class CallSignalingClient(
         running = false
         connectJob?.cancel()
         connectJob = null
-        try { webSocket?.close(1000, "client stop") } catch (_: Exception) {}
+        val ws = webSocket
         webSocket = null
+        // #CALLS-HANGUP-GRACE (тест 6, 17:56:18): после hangup мы закрывали WS ЧЕРЕЗ 6 мс —
+        // кадр сервер успевал получить (он отвечал ошибкой), но его ответ/ack мы уже
+        // теряли (cancel connectLoop → close). 300 мс хватает, чтобы увидеть в логе
+        // ответ сервера на hangup — главный признак «сервер завершил разговор».
+        if (ws != null) {
+            scope.launch {
+                delay(300)
+                try { ws.close(1000, "client stop") } catch (_: Exception) {}
+            }
+        }
     }
 
     fun isRunning(): Boolean = running
@@ -173,13 +186,31 @@ class CallSignalingClient(
         // "Invalid message format: <base64>" — base64 декодируется в префикс
         // conversationId (e1e6bf41… в тесте 2, db347444… в тесте 4). Эталон шлёт
         // this.send("hangup", {reason}) — без лишних полей (OK/videochat/Signaling.js).
-        return send(CMD_HANGUP, mapOf("reason" to "declined"))
+        // #CALLS-HANGUP-REASON-ENUM (тест 6, 17:56): отказ от входящего у эталона —
+        // hangup(REJECTED) (Conversation.js: DECLINE_INCOMING → signaling.hangup(hangupType.REJECTED)).
+        return send(CMD_HANGUP, mapOf("reason" to "REJECTED"))
     }
 
     /** Завершить звонок. @return true — команда реально ушла в WS. */
     fun hangup(reason: String = "hungup"): Boolean {
         // #CALLS-HANGUP-FORMAT: только {reason} — см. комментарий в declineCall().
-        return send(CMD_HANGUP, mapOf("reason" to reason))
+        // #CALLS-HANGUP-REASON-ENUM (тест 6, 17:56:18.172): сервер отверг наш hangup в ЛЮБОЙ
+        // форме — reason "timeout" (тесты 2, 5), "hungup" (тест 6), "declined" — всегда
+        // SERVER_ERROR "Invalid message format" (hangup не принят НИ РАЗУ за все тесты;
+        // в тесте 5 шестой уникальный id b490f8b81230943007 — это он). Причина: у эталона
+        // reason — ВЕРХНЕРЕГИСТРОВОЕ значение enum hangupType (Enums_gxwn5e2j.js):
+        // CANCELED|REJECTED|REMOVED|HUNGUP|MISSED|BUSY|FAILED. Завершение активного
+        // звонка = HUNGUP, отмена исходящего до ответа = CANCELED (Conversation.hangup).
+        // Наши lowercase-строки не проходят схему → сервер не завершает разговор,
+        // собеседник висит в звонке («огрехи при завершении»). Нормализуем здесь,
+        // чтобы все вызовы (ZOMBIE «timeout», пользовательский hangup) уходили верно.
+        val wire = when (reason.lowercase()) {
+            "timeout", "failed", "error" -> "FAILED"
+            "cancel", "canceled", "cancelled" -> "CANCELED"
+            "reject", "rejected", "decline", "declined" -> "REJECTED"
+            else -> "HUNGUP"
+        }
+        return send(CMD_HANGUP, mapOf("reason" to wire))
     }
 
     /**
@@ -392,6 +423,16 @@ class CallSignalingClient(
         }
 
         private fun handleTextFrame(text: String) {
+            // #CALLS-WS-PONG (тест 6, 17:56:00–15): сервер каждые ~5 с шлёт текстовый кадр
+            // "ping"; эталон отвечает текстовым "pong" (Signaling._onMessage:
+            // if(e.data==="ping"){this.socket.send("pong");return}). Мы молчали — при
+            // длинных звонках сервер может счесть соединение неактивным
+            // (activityTimeout=120000) и оборвать сигналинг.
+            if (text == "ping") {
+                try { webSocket?.send("pong") } catch (_: Exception) {}
+                AppLog.d(TAG, "ping → pong")
+                return
+            }
             try {
                 val json = JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject ?: run {
                     // #CALLS-BINARY-FRAME: не-JSON кадр раньше исчезал молча — логируем.

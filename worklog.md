@@ -4835,3 +4835,21 @@ Stage Summary:
 - Возврат к числовому participantId; answer-first и hangup-формат подтверждены логами как рабочие.
 - Следующий тест: пересборка Cyber; чек-пункты — wire participantId без «u», 0 × SERVER_ERROR, STUN от официального (прин:>0), ICE CONNECTED, голос. Запасная гипотеза при 0 ошибок, но немом ответе: сервер не транслирует ws2→WEB_TRANSPORT — тогда регистрироваться WEB_TRANSPORT-пиром.
 - Артефакты: logs-dl/test5/, звонки.md §31, коммит #CALLS-PARTICIPANT-U-REVERT.
+
+---
+Task ID: CALLS-HANGUP-ENUM
+Agent: main (Z.ai Code)
+Task: Разбор теста 6 17:55 (успешный звонок! + «огрехи при завершении звонка») — починить завершение
+
+Work Log:
+- Скачал logs-dl/test6/ciber.txt (свежий md5, 386 строк). Звонок УСПЕШЕН: offer+4 канд. дошли, accept → setRemoteSdp SUCCESS → answer ушёл с ЧИСЛОВЫМ participantId (фикс 96634cc в wire ✓), 10 кандидатов — ack на все, ICE CHECKING→CONNECTED за 0.44 с, разговор 23 с, ноль SERVER_ERROR в звонке.
+- Огрех 1: hangup {"reason":"hungup"} отвергнут: SERVER_ERROR "Invalid message format: d27074551110511217" (префикс conversationId + номер). Ретроспектива: декодировал ВСЕ id ошибок теста 5 — там 6 уникальных, 6-й = hangup → hangup не принят НИ РАЗУ (тесты 2, 4, 5, 6). Единственная непроверенная переменная — значение reason: enum эталона hangupType UPPERCASE (HUNGUP/CANCELED/REJECTED/...), у нас lowercase.
+- Огрех 2: сервер шлёт "ping" каждые 5 с — эталон отвечает "pong" (Signaling._onMessage), мы молчали. Огрех 3: WS закрывался через 6 мс после hangup — ответ сервера терялся.
+- Фиксы в CallSignalingClient: #CALLS-HANGUP-REASON-ENUM (нормализация reason: HUNGUP/FAILED/CANCELED/REJECTED по карте), #CALLS-WS-PONG (ping→pong до JSON-парсера), #CALLS-HANGUP-GRACE (stop() закрывает WS через 300 мс — ack виден в логе). Шапка протокола обновлена.
+- Документация: звонки.md §32, HISTORY.md.
+- Проверки: braces/parens delta=0.
+
+Stage Summary:
+- Первый успешный звонок PinoK↔официальный клиент: цепочка из 5 фиксов закрыла сигналинг полностью (строка→объект SDP → answer-first → hangup-формат → числовой id → enum reason).
+- Завершение звонка: reason в UPPERCASE-enum, pong, грейс закрытия. Следующий тест: reason":"HUNGUP" в wire, ack на hangup без SERVER_ERROR, мгновенное завершение у собеседника, длинный звонок 3–5 мин (ping→pong), decline (REJECTED) и cancel (CANCELED).
+- Артефакты: logs-dl/test6/, звонки.md §32, коммит #CALLS-HANGUP-ENUM.

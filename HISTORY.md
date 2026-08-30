@@ -11002,3 +11002,16 @@ transmit-data — 0 ошибок; отвергнут только старый h
 из JS эталона — форма ВЕБ-диалекта WEB_TRANSPORT, а наш ws2/WEB_SOCKET (peerId=0) ждёт
 в participantId ЧИСЛО. Фикс: composeParticipantId = raw (число). Остальное из §30 в силе.
 Разбор — звонки.md §31.
+
+### 2026-08-30 (продолжение 6) — 🎉 тест 17:55: ПЕРВЫЙ УСПЕШНЫЙ ЗВОНОК PinoK ↔ официальный клиент (23 с, ICE CONNECTED за 0.5 с); добиты огрехи завершения (#CALLS-HANGUP-REASON-ENUM, #CALLS-WS-PONG, #CALLS-HANGUP-GRACE)
+Откат числового participantId (96634cc) закрыл вопрос сигналинга: answer + 10 trickle-кандидатов
+приняты сервером без единой ошибки, ICE CONNECTED через 0.44 с после CHECKING, разговор 23 с.
+Остаточные огрехи при завершении: (1) hangup отвергнут сервером "Invalid message format" —
+выяснено по ретроспективе всех тестов (2, 4, 5, 6), что hangup не был принят НИ РАЗУ: значение
+reason у нас lowercase ("timeout"/"hungup"/"declined"), а схема ждёт enum эталона hangupType
+UPPERCASE (CANCELED|REJECTED|REMOVED|HUNGUP|MISSED|BUSY|FAILED; Conversation.hangup: ACTIVE→HUNGUP,
+decline→REJECTED) — из-за этого сервер не закрывал разговор и собеседник висел в звонке;
+(2) сервер пингует "ping" каждые 5 с — эталон отвечает "pong", мы молчали (риск обрыва на
+длинных звонках); (3) WS закрывался через 6 мс после hangup — ответ сервера терялся.
+Фиксы: reason нормализуется в enum (HUNGUP/FAILED/CANCELED/REJECTED), pong на ping,
+stop() с грейсом 300 мс. Разбор — звонки.md §32.
