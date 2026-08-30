@@ -9,11 +9,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -48,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -1199,10 +1203,14 @@ fun CallScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentAlignment = Alignment.Center,
         ) {
+            // #CALLS-UI-SHIFT (2026-08-30): контент поднят на 5% высоты экрана выше центра
+            // (запрос пользователя после теста 30.08): аватарка выше, внизу больше места
+            // для блока диагностики, который при «Соединение…» обрезался нижней навигацией.
+            val shiftUp = (LocalConfiguration.current.screenHeightDp * 0.10f).dp
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                modifier = Modifier.fillMaxWidth().padding(32.dp).padding(bottom = shiftUp),
             ) {
                 // Avatar
                 Box(
@@ -1477,44 +1485,52 @@ fun CallScreen(
                 // Скриншот экрана заменяет logcat.
                 if (phase != CallPhase.ACTIVE) {
                     Spacer(Modifier.height(20.dp))
-                    Text(
-                        text = "Диагностика: WS $diagWs • $diagPc • ICE $diagIce",
-                        color = Color.White.copy(alpha = 0.45f),
-                        fontSize = 11.sp,
-                        textAlign = TextAlign.Center,
-                    )
-                    Text(
-                        text = "Сигналинг: $diagEvent • $diagPid • conv ${if (activeCallId.value.isNullOrBlank()) "—" else "✓"} • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}${if (diagAnswer.isBlank()) "" else " • $diagAnswer"}${if (srvErrCount > 0) " • err×$srvErrCount" else ""}",
-                        color = Color.White.copy(alpha = 0.45f),
-                        fontSize = 11.sp,
-                        textAlign = TextAlign.Center,
-                    )
-                    // #CALLS-RX-DEBUG (2026-08-30): какие команды сигналинга ПРИХОДИЛИ
-                    // (топ-6 по частоте). «candidate×N» отсутствует при N локальных
-                    // кандидатах = собеседник кандидаты не шлёт/не доходят — его сторона.
-                    if (rxCommands.isNotEmpty()) {
-                        val rxLine = rxCommands.entries
-                            .sortedByDescending { it.value }
-                            .take(6)
-                            .joinToString(", ") { "${it.key}×${it.value}" }
+                    // #CALLS-DIAG-FIT (2026-08-30): блок диагностики ограничен 120dp и
+                    // прокручивается — при «Соединение…» все строки (Диагностика/Сигналинг/
+                    // Принято/Медиа) гарантированно видимы и не обрезаются нижней навигацией.
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).verticalScroll(rememberScrollState()),
+                    ) {
                         Text(
-                            text = "Принято: $rxLine",
+                            text = "Диагностика: WS $diagWs • $diagPc • ICE $diagIce",
                             color = Color.White.copy(alpha = 0.45f),
                             fontSize = 11.sp,
                             textAlign = TextAlign.Center,
                         )
-                    }
-                    // #CALLS-ICE-STATS-UI (2026-08-30): решающая строка медиа-диагностики —
-                    // типы собранных кандидатов (relay=0 при TURN = аллокация не удалась) и
-                    // агрегат candidate-pair (reqS>0/resR=0/reqR=0 = собеседник не отвечает
-                    // на проверки; reqR>0 = его проверки доходят, проблема в наших ответах).
-                    if (diagStats.isNotBlank()) {
                         Text(
-                            text = "Медиа: $diagStats",
+                            text = "Сигналинг: $diagEvent • $diagPid • conv ${if (activeCallId.value.isNullOrBlank()) "—" else "✓"} • offer ${if (offerReceived.value) "✓" else "—"} • answer ${if (answerSent.value) "✓" else "—"}${if (diagReoffer.isBlank()) "" else " • $diagReoffer"}${if (diagAnswer.isBlank()) "" else " • $diagAnswer"}${if (srvErrCount > 0) " • err×$srvErrCount" else ""}",
                             color = Color.White.copy(alpha = 0.45f),
                             fontSize = 11.sp,
                             textAlign = TextAlign.Center,
                         )
+                        // #CALLS-RX-DEBUG (2026-08-30): какие команды сигналинга ПРИХОДИЛИ
+                        // (топ-6 по частоте). «candidate×N» отсутствует при N локальных
+                        // кандидатах = собеседник кандидаты не шлёт/не доходят — его сторона.
+                        if (rxCommands.isNotEmpty()) {
+                            val rxLine = rxCommands.entries
+                                .sortedByDescending { it.value }
+                                .take(6)
+                                .joinToString(", ") { "${it.key}×${it.value}" }
+                            Text(
+                                text = "Принято: $rxLine",
+                                color = Color.White.copy(alpha = 0.45f),
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        // #CALLS-ICE-STATS-UI (2026-08-30): решающая строка медиа-диагностики —
+                        // типы собранных кандидатов (relay=0 при TURN = аллокация не удалась) и
+                        // агрегат candidate-pair (reqS>0/resR=0/reqR=0 = собеседник не отвечает
+                        // на проверки; reqR>0 = его проверки доходят, проблема в наших ответах).
+                        if (diagStats.isNotBlank()) {
+                            Text(
+                                text = "Медиа: $diagStats",
+                                color = Color.White.copy(alpha = 0.45f),
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
