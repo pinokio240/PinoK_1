@@ -11132,3 +11132,43 @@ API сверять с classes.jar зависимости, а не с памят�
 
 Сборка и тест — на устройстве (SDK в песочнице нет); использованы только уже
 проверенные в проекте API. Детали — CALLS_MAP §0.2, worklog calls-2026-08-31-log2120-triage-fixes.
+
+---
+
+## 2026-08-31 (ночь, позднее) — Тест фиксов 22:55–22:59: таймер ОК, видео рендерится, но SurfaceView не виден + Wi-Fi пар=0; 4 фикса (#CALLS-VIDEO-TEXVIEW / #CALLS-PC-RESTART / #CALLS-ICE-EARLYSTATS / #CALLS-NATIVE-LOG)
+
+Запрос: скриншоты 225721 (Wi-Fi: «Звонок завершён», диагностика «WS выкл • PC нет • ICE CLOSED», сигналинг remote-hangup) + 225921 (мобильная сеть: таймер 0:48 идёт, экран чёрный) + лог ciber.txt (3495 строк, 22:54–23:00).
+
+Подтверждено логом (фиксы прошлой итерации работают):
+- Таймер идёт (0:48 на скриншоте) — #CALLS-TIMER-FIX подтверждён.
+- drain добавил всех 4 удалённых кандидатов в обоих звонках, FALSE не было — кандидаты не теряются (#CALLS-ICE-DRAIN-LOG).
+- Мобильный звонок: ICE CONNECTED за 2с, videoFrames 0→2094, renderActive=true, «ПЕРВЫЙ КАДР отрисован на поверхности ✓» — медиа-тракт end-to-end рабочий.
+
+Два оставшихся дефекта:
+1. **Wi-Fi «оба за одним NAT»**: offer/answer/кандидаты доставлены, но ICE CHECKING →
+   16с тишины → FAILED с пар=0 • reqS=0 resR=0 reqR=0: агент не образовал ни одной пары
+   и не отправил ни одной проверки (при этом сбор кандидатов успешен — STUN/TURN доступны;
+   LTE тем же кодом подключается за 2с). 4×REANSWER тем же answer бесполезны.
+2. **Чёрный экран при доказанном рендере**: SurfaceViewRenderer с zOrderMediaOverlay
+   нарисовал первый кадр (RendererEvents proof), но экран/скриншот чёрные — аппаратная
+   поверхность не попадает в композицию окна/скриншота на HOTWAV Cyber 15 (MTK).
+
+Фиксы (API все сверены по classes.jar 1.3.10):
+1. **#CALLS-VIDEO-TEXVIEW** — новый `VideoTextureRenderer.kt`: TextureView + публичный
+   org.webrtc.EglRenderer (VideoSink): init(EglBase.Context, CONFIG_PLAIN, null-drawer),
+   createEglSurface(Surface), releaseEglSurface(Runnable), setLayoutAspectRatio,
+   RendererEvents-эмуляция внутри. TextureView композитится GPU вместе с окном — без
+   punch-through/z-order, виден в скриншотах. CallScreen переведён на него (разметка и
+   cleanup сохранены).
+2. **#CALLS-PC-RESTART** — `WebRtcEngine.recreateAndReanswer()`: при ICE FAILED входящего
+   пересоздаём PC, применяем сохранённый offer (поле lastRemoteOffer), отвечаем НОВЫМ
+   answer — новые ice-ufrag/pwd = ICE-restart у собеседника (RFC 5245 §9). Первая попытка
+   восстановления в CallScreen теперь рестарт (вместо бесполезного REANSWER).
+3. **#CALLS-ICE-EARLYSTATS** — снимок candidate-pair stats на 5-й секунде CHECKING:
+   следующий лог различит «пары формировались и умерли» vs «не создавались вовсе».
+4. **#CALLS-NATIVE-LOG** — Logging.enableLogToDebugOutput(LS_INFO) в initialize():
+   нативные логи libwebrtc (формирование пар, привязка портов) в logcat с тегом «logging»
+   (добавить в фильтр захвата).
+
+Сборка и тест — на устройстве (SDK в песочнице нет). Детали — CALLS_MAP §0.2/§11.2.3,
+worklog calls-2026-08-31-ciber2-texview-pcrestart.

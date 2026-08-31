@@ -62,6 +62,17 @@
 - ✅ ФИКС #CALLS-ICE-DRAIN-LOG (WebRtcEngine): drain логирует результат addIceCandidate (boolean) — след. Wi-Fi-тест различит «кандидаты терялись в drain» vs «сетевой уровень».
 - Побочное: vchat.joinConversation снова в WAF-блоке по обоим IP (не мешает: accept-call ушёл, звонки соединялись). «Пинок не просит разрешение на свою камеру» — Этап 2, ещё не реализован (по умолчанию камера НЕ передаётся — так задумано).
 
+🧪 **31.08 ночь 22:55–22:59 (лог upload/ciber.txt, 3495 строк + скриншоты 225721/225921) — тест ПОСЛЕ фиксов #CALLS-TIMER-FIX/#CALLS-VIDEO-ZORDER/#CALLS-ICE-DRAIN-LOG:**
+- ✅ Таймер РАБОТАЕТ (скриншот 225921: 0:48 на живом звонке; фикс #CALLS-TIMER-FIX подтверждён).
+- ✅ #CALLS-ICE-DRAIN-LOG отработал: все удалённые кандидаты добавлены (drain «добавлен» ×4 в обоих звонках; FALSE не было) — кандидаты НЕ теряются.
+- ❌ Wi-Fi (22:55, оба за одним NAT): offer/answer/кандидаты доставлены (наши 6 inline ACKнуты сервером; их 4: srflx 95.26.29.238 + 3 relay), ICE CHECKING → **16с абсолютной тишины → FAILED; пар=0 • reqS=0 resR=0 reqR=0** — агент НЕ образовал НИ ОДНОЙ пары и НЕ отправил НИ ОДНОЙ проверки, при этом: сбор кандидатов УСПЕШЕН (host+srflx+4 relay за 1.5с — STUN/TURN доступен!), та же схема на LTE — CONNECTED за 2с. 4×REANSWER тем же answer бесполезны; topology-changed→SERVER в +10с; звонящий сдался (remote-hangup, dur=117с, ice=false).
+- ❌ Мобильная сеть (22:58): ICE CONNECTED за 2с, peerCam=true, videoFrames 0→2094, renderActive=true, **«ПЕРВЫЙ КАДР отрисован на поверхности ✓» (RendererEvents)** — кадры ДОШЛИ ДО ПОВЕРХНОСТИ SurfaceView — а экран/скриншот ЧЁРНЫЙ. Значит дело НЕ в punch-through/прозрачности: аппаратный слой SurfaceView на HOTWAV Cyber 15 (MTK, Android 13) не попадает в композицию окна/скриншота даже НАД окном (zOrderMediaOverlay).
+- ✅ ФИКС #CALLS-VIDEO-TEXVIEW (VideoTextureRenderer.kt — НОВЫЙ класс + CallScreen): TextureView-рендерер на базе org.webrtc.EglRenderer (в артефакте 1.3.10 TextureViewRenderer отсутствует, но EglRenderer публичен: init(EglBase.Context,int[],GlDrawer) / createEglSurface(Surface) / releaseEglSurface(Runnable) / onFrame — сверено парсингом constant pool classes.jar; GlDrawer=null — ровно то, что передаёт SurfaceViewRenderer.init(ctx,events)). TextureView — обычный view-узел: композитится GPU вместе с окном, без punch-through и z-order, попадает в скриншоты. RendererEvents-эмуляция (первый кадр/резолюция) — внутри класса.
+- ✅ ФИКС #CALLS-PC-RESTART (WebRtcEngine.recreateAndReanswer + CallScreen ICE FAILED): REANSWER тем же answer доказанно бессмыслен при пар=0. Пересоздаём PC, применяем СОХРАНЁННЫЙ offer (поле lastRemoteOffer), отвечаем НОВЫМ answer: новые ice-ufrag/pwd = ICE-restart у собеседника (RFC 5245 §9) — свежий check-list и permissions на его TURN-аллокации. Аудио source/track переиспользуются.
+- ✅ ФИКС #CALLS-ICE-EARLYSTATS (WebRtcEngine): снимок candidate-pair stats на 5-й секунде CHECKING — следующий лог различит «пары формировались и умерли» (пар>0, reqS>0) vs «пары не создавались вовсе» (пар=0).
+- ✅ #CALLS-NATIVE-LOG (WebRtcEngine.initialize): Logging.enableLogToDebugOutput(LS_INFO) — нативные логи libwebrtc (формирование пар, привязка портов, pruning) в logcat; тег в logcat — **«logging»** (добавить в фильтр захвата!).
+- Ожидание от след. теста: видео видно на мобильной (и в скриншоте); по Wi-Fi либо звонок проходит после PC-restart (новые ufrag/pwd заставят пира перепроверить), либо в логе есть EARLYSTATS+нативные строки «logging» — решающая диагностика.
+
 | Направление / сценарий | Статус | Доказательство |
 |---|---|---|
 | Входящий (официальный → PinoK) | ✅ РАБОТАЕТ (30.08) / ❌ 31.08 вечер — см. warning выше | тест 6 17:55 (23с разговора, ICE за 0.5с) + серия 21:50 (#2, #4) |
@@ -377,7 +388,7 @@ pcap: `logs/call2.pcap`.
    (a=inactive), декодер не стартует — answer остаётся БИТ-В-БИТ как в работавшей серии
    30.08 (kill-switch = точный откат wire-формата одним тумблером). Первый выживший кодек →
    **H264(100/101)** — HW-декодер на подавляющем большинстве Android; VP8/VP9 — SW-фолбэк.
-3. ✅ **Рендер**: **SurfaceViewRenderer** через `AndroidView`. ⚠️ ИСПРАВЛЕНО (2026-08-31):
+3. ✅ **Рендер**: **VideoTextureRenderer (TextureView)** через `AndroidView`. ⚠️ ИСПРАВЛЕНО (2026-08-31):
    план изначально называл TextureViewRenderer, но в артефакте
    `io.getstream:stream-webrtc-android:1.3.10` его НЕТ (проверено по classes.jar: из
    рендереров только SurfaceViewRenderer / SurfaceEglRenderer / EglRenderer /
@@ -385,18 +396,22 @@ pcap: `logs/call2.pcap`.
    'TextureViewRenderer'».
    ✅ #CALLS-VIDEO-BG (звонок 21:22 LTE): containerColor Scaffold при активном видео →
    Transparent. ОКАЗАЛОСЬ НЕДОСТАТОЧНО (см. ниже).
-   ✅ #CALLS-VIDEO-ZORDER (2026-08-31, лог 22:28 mobile — РЕШАЮЩИЙ ФИКС): звонок
-   соединился, таймер… застыл (см. #CALLS-TIMER-FIX), видео НЕ ВИДНО, при этом в логе
-   videoFrames 0→35→83→…→321+ (декодирование идёт!), renderActive=true, ошибок нет.
-   Причина: punch-through SurfaceView (поверхность ЗА окном) в иерархии
-   NavHost(fade-переходы)+вложенные Scaffold'ы+нижняя навигация НЕ пробивается —
-   прозрачный containerColor это не вылечил. Итог: **`setZOrderMediaOverlay(true)`**
-   (поверхность ПОВЕРХ окна; суперкласс SurfaceView сверен по classes.jar), раскладка
-   «видео = верхние 55% контента (align TopCenter) / панель статуса+кнопок прижата к
-   низу (align BottomCenter)» — контролы вне границ поверхности, не перекрываются.
-   + **#CALLS-VIDEO-DIAG**: RendererEvents в init() — `onFirstFrameRendered` пишет в лог
-   «ПЕРВЫЙ КАДР отрисован ✓» (доказательство доставки кадров ДО ПОВЕРХНОСТИ:
-   framesDecoded из getStats доказывает только декодирование).
+   ✅ #CALLS-VIDEO-ZORDER (лог 22:28 mobile): setZOrderMediaOverlay(true) + раскладка
+   «видео = верхние 55% (TopCenter) / панель прижата к низу». НЕДОСТАТОЧНО (см. ниже).
+   ✅ **#CALLS-VIDEO-TEXVIEW (22:58 mobile — РЕШАЮЩИЙ ФИКС)**: в логе 22:58 кадры
+   декодировались (0→2094), renderActive=true и **«ПЕРВЫЙ КАДР отрисован на поверхности ✓»**
+   (RendererEvents) — кадры реально доходили до SurfaceView — а экран/скриншот ЧЁРНЫЙ.
+   Аппаратная поверхность SurfaceView (HOTWAV Cyber 15, MTK, Android 13) не попадает в
+   композицию окна/скриншота даже с zOrderMediaOverlay. Решение: собственный
+   **VideoTextureRenderer** (VideoTextureRenderer.kt) — TextureView + org.webrtc.EglRenderer
+   (VideoSink): обычный view-узел, композитится GPU вместе с окном — без punch-through,
+   без z-order, виден в скриншотах. API сверено парсингом constant pool classes.jar 1.3.10:
+   EglRenderer(String), init(EglBase$Context,[I,GlDrawer)V — GlDrawer=null (ровно как
+   SurfaceViewRenderer.init(ctx,events)), createEglSurface(Surface)V,
+   releaseEglSurface(Runnable)V, setLayoutAspectRatio(F)V, onFrame(VideoFrame)V;
+   RendererEvents-эмуляция (первый кадр/резолюция) — внутри класса.
+   Разметка «видео сверху / панель снизу» и cleanup (removeSink + releaseRenderer ровно
+   один раз в onDispose) сохранены.
    Сверка API по classes.jar 1.3.10 (скачан с Maven Central): SurfaceViewRenderer
    extends android.view.SurfaceView; init(EglBase$Context, RendererCommon$RendererEvents)V;
    RendererEvents = onFirstFrameRendered()V + onFrameResolutionChanged(III)V.

@@ -70,6 +70,7 @@ import re.pinok.data.model.CallMediaType
 import re.pinok.data.model.CallPhase
 import re.pinok.data.model.CallParticipant
 import re.pinok.data.model.VkCall
+import re.pinok.media.VideoTextureRenderer
 import re.pinok.media.WebRtcEngine
 import re.pinok.util.AppLog
 import org.webrtc.SessionDescription
@@ -1268,9 +1269,18 @@ fun CallScreen(
         // (иначе FAILED-retry «оживит» зомби обратно в CONNECTING и цикл повторится).
         if (iceFailRetries < 2 && srvErrCount < 2) {
             iceFailRetries++
-            AppLog.w("CallScreen", "ICE FAILED (входящий): попытка восстановления #$iceFailRetries — doReanswer + stats")
             engine.dumpIceStatsNow()
-            doReanswer("ice-failed")
+            // #CALLS-PC-RESTART (2026-08-31, лог ciber.txt 22:55): первая попытка — ПОЛНЫЙ
+            // рестарт (пересоздание PC + answer с новыми ice-ufrag/pwd): повтор REANSWER
+            // того же answer доказанно бесполезен при пар=0 (4 REANSWER в логе не помогли).
+            // Новые креденшелы в answer = ICE-restart у собеседника (RFC 5245 §9).
+            val restarted = engine.recreateAndReanswer()
+            if (restarted) {
+                AppLog.w("CallScreen", "ICE FAILED (входящий): попытка восстановления #$iceFailRetries — ПЕРЕСОЗДАНИЕ PC (#CALLS-PC-RESTART)")
+            } else {
+                AppLog.w("CallScreen", "ICE FAILED (входящий): попытка восстановления #$iceFailRetries — doReanswer + stats (PC-restart невозможен)")
+                doReanswer("ice-failed")
+            }
             failText = null
             phase = CallPhase.CONNECTING
         } else {
@@ -1378,13 +1388,14 @@ fun CallScreen(
         peerVideoEnabled && videoFrames > 0 &&
         (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
 
-    // #CALLS-VIDEO-BG / #CALLS-VIDEO-ZORDER (обновлено 2026-08-31, лог 22:28 mobile):
-    // прозрачный containerColor (первый фикс от звонка 21:22 LTE) оказался НЕДОСТАТОЧЕН —
-    // punch-through SurfaceView (поверхность ЗА окном) в нашей иерархии не пробивается
-    // (кадры декодировались, renderActive=true — а экран чёрный). Итоговое решение —
-    // setZOrderMediaOverlay(true) + раскладка «видео сверху / панель снизу» (см. ниже).
-    // Прозрачность сохранена: она больше не критична, но и не мешает (фон под видео
-    // всё равно закрывается поверхностью, а зона панели остаётся тёмной от шелла).
+    // #CALLS-VIDEO-TEXVIEW (2026-08-31, лог ciber.txt 22:58 mobile): SurfaceViewRenderer
+    // (setZOrderMediaOverlay, #CALLS-VIDEO-ZORDER) ПРОДОВОЖИЛ показывать чёрный экран
+    // даже при доказанном рендере («ПЕРВЫЙ КАДР отрисован ✓», videoFrames 0→2094):
+    // отдельная аппаратная поверхность на этом устройстве (HOTWAV Cyber 15 / MTK) не
+    // попадает в композицию окна/скриншота. Решение — TextureView-рендерер
+    // (VideoTextureRenderer на EglRenderer, API сверено по classes.jar 1.3.10):
+    // обычный view-узел, композитится через GPU вместе с окном, без punch-through
+    // и z-order. Разметка «видео сверху / панель снизу» сохранена.
     LaunchedEffect(videoRenderActive) {
         AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled)")
     }
@@ -1416,57 +1427,51 @@ fun CallScreen(
             // SurfaceViewRenderer (extends android.view.SurfaceView — сверено javap-разбором
             // classes.jar 2026-08-31).
             //
-            // #CALLS-VIDEO-ZORDER (2026-08-31, лог 22:28 mobile): НАСТОЯЩАЯ причина чёрного
-            // экрана при работающем видео. В логе кадры ДЕКОДИРОВАЛИСЬ (videoFrames 0→35→83→
-            // …→321+), renderActive=true, ошибок рендерера нет — а на экране чёрный цвет.
-            // Причина: поверхность SurfaceView по умолчанию рисуется ЗА окном и требует
-            // punch-through (прозрачности всех слоёв окна над ней). В нашей иерархии
-            // (NavHost с fade-переходами + вложенные Scaffold'ы + нижняя навигация)
-            // transparent region не пробивается — экран остаётся чёрным. Прозрачный
-            // containerColor самого CallScreen (фикс #CALLS-VIDEO-BG) это НЕ вылечил.
-            // Решение: setZOrderMediaOverlay(true) — поверхность рисуется ПОВЕРХ окна,
-            // punch-through не нужен вовсе. Плата: поверхность перекрывает контент окна
-            // в СВОИХ границах, поэтому (1) видео занимает верхнюю зону ~55% контента,
-            // (2) панель статуса/кнопок прижимается к низу (align BottomCenter ниже) —
-            // в границы поверхности она не попадает.
+            // #CALLS-VIDEO-TEXVIEW (2026-08-31): SurfaceViewRenderer даже с
+            // setZOrderMediaOverlay(true) давал чёрный экран при ДОКАЗАННОМ рендере
+            // (onFirstFrameRendered ✓, videoFrames 0→2094, ошибок нет). Аппаратная
+            // поверхность не пробивается сквозь иерархию NavHost+Scaffold'ы+нижняя
+            // навигация и/или не попадает в скриншот — обе причины лечатся TextureView:
+            // он композитится GPU вместе с окном. Сам класс PinoK — VideoTextureRenderer
+            // (VideoTextureRenderer.kt) на базе org.webrtc.EglRenderer, API сверено
+            // по classes.jar 1.3.10 (init(EglBase.Context,int[],GlDrawer),
+            // createEglSurface(Surface), releaseEglSurface(Runnable), onFrame).
             // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
             // кадров нет, остаётся плейсхолдер (аватар + статус).
             if (videoRenderActive && remoteVideoTrack != null) {
                 val track = remoteVideoTrack!!
-                var renderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
+                var renderer by remember { mutableStateOf<VideoTextureRenderer?>(null) }
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .fillMaxHeight(0.55f)
                         .align(Alignment.TopCenter),
                     factory = { ctx ->
-                        org.webrtc.SurfaceViewRenderer(ctx).apply {
+                        VideoTextureRenderer(ctx).apply {
                             // eglBaseContext() возвращает NULLABLE EglBase.Context? —
                             // init() требует non-null, поэтому проверяем явно.
                             runCatching {
-                                setZOrderMediaOverlay(true) // ← ключевая строка #CALLS-VIDEO-ZORDER
                                 val egl = engine.eglBaseContext()
                                     ?: error("EGL-контекст движка недоступен")
                                 // #CALLS-VIDEO-DIAG: RendererEvents — доказательство РЕАЛЬНОГО
-                                // рендера. onFirstFrameRendered в логе = кадры дошли ДО ПОВЕРХНОСТИ
+                                // рендера. onFirstFrameRendered в логе = кадры дошли ДО РЕНДЕРА
                                 // (getStats framesDecoded доказывает только декодирование).
                                 init(egl, object : org.webrtc.RendererCommon.RendererEvents {
                                     override fun onFirstFrameRendered() {
-                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован на поверхности ✓")
+                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован ✓ (TextureView)")
                                     }
                                     override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
                                         AppLog.d("CallScreen", "video renderer: кадр ${videoWidth}x$videoHeight rot=$rotation")
                                     }
                                 })
-                                setEnableHardwareScaler(true)
                             }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
                             renderer = this
                         }
                     },
                 )
                 // #CALLS-VIDEO-RX: cleanup обязателен (§11.2.6) — removeSink + release,
-                // иначе утечка GL-текстур и краш следующего звонка. release() у
-                // SurfaceViewRenderer бросает при повторном вызове — релизим РОВНО ОДИН
+                // иначе утечка GL-текстур и краш следующего звонка. releaseRenderer()
+                // бросает при повторном вызове — релизим РОВНО ОДИН
                 // раз здесь (onDispose), onRelease у AndroidView не используем.
                 DisposableEffect(track, renderer) {
                     val r = renderer
@@ -1477,7 +1482,7 @@ fun CallScreen(
                     onDispose {
                         if (r != null) {
                             runCatching { track.removeSink(r) }
-                            runCatching { r.release() }
+                            runCatching { r.releaseRenderer() }
                         }
                     }
                 }
@@ -1489,10 +1494,11 @@ fun CallScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(32.dp)
-                    // #CALLS-VIDEO-ZORDER: при активном видео панель ПРИЖИМАЕТСЯ К НИЗУ —
-                    // видео (SurfaceViewRenderer, zOrderMediaOverlay=true) занимает верхнюю
-                    // зону 55% и рисуется ПОВЕРХ окна: всё, что попадёт в его границы,
-                    // будет перекрыто поверхностью. Внизу панель вне границ видео — видна.
+                    // #CALLS-VIDEO-TEXVIEW: при активном видео панель ПРИЖИМАЕТСЯ К НИЗУ —
+                    // видео (VideoTextureRenderer, TextureView) занимает верхнюю зону 55%;
+                    // в границах видео панель была бы ЗА рендерером (TextureView — обычный
+                    // узел окна, рисуется в порядке композиции). Внизу панель вне границ
+                    // видео — видна.
                     .align(if (videoRenderActive) Alignment.BottomCenter else Alignment.Center)
                     .padding(bottom = if (videoRenderActive) 8.dp else shiftUp),
             ) {

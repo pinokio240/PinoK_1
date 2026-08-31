@@ -5139,3 +5139,26 @@ Stage Summary:
 - Ожидание от след. теста: таймер тикает; при кадрах видео видно в верхней половине, контролы снизу; в логе «ПЕРВЫЙ КАДР отрисован ✓»; по Wi-Fi — либо звонок проходит, либо в логе явное «addIceCandidate вернул FALSE» (след. шаг — перенос drain/ретрай) или сетевой отказ.
 - Побочное: vchat.joinConversation снова заблокирован WAF по обоим IP (обходится — accept-call ушёл, звонки соединялись); «Пинок не просит разрешение на свою камеру» — это Этап 2, ещё не реализован (так и задумано: камера не передаётся по умолчанию).
 - Не собирается в песочнице (нет Android SDK) — все использованные API сверены с classes.jar 1.3.10.
+
+---
+Task ID: calls-2026-08-31-ciber2-texview-pcrestart
+Agent: Z.ai (main)
+Task: разбор НОВОГО лога ciber.txt (3495 строк, 22:54–23:00; звонки со скриншотов 225721/225921): таймер ОК, но Wi-Fi — пар=0/reqS=0 → remote-hangup; мобильная сеть — кадры декодируются и ПЕРВЫЙ КАДР отрисован, а экран чёрный. Фиксы.
+
+Work Log:
+- Установил по worklog, что прошлый разбор касался СТАРОГО ciber.txt (5826 строк, 22:25/22:28); текущий файл — новая версия (3495 строк), звонки 22:55 (Wi-Fi) и 22:58 (мобильная), со скриншотов пользователя.
+- Подтверждено: таймер идёт (0:48) — #CALLS-TIMER-FIX работает; drain добавил всех 4 удалённых кандидата в обоих звонках (FALSE нет) — #CALLS-ICE-DRAIN-LOG отработал.
+- Wi-Fi 22:55: offer/answer доставлены (наши 6 inline ACKнуты), ICE CHECKING → 16с тишины → FAILED «пар=0 • reqS=0 resR=0 reqR=0»; сбор кандидатов успешен (STUN/TURN доступны), LTE тем же кодом — CONNECTED за 2с; 4×REANSWER бесполезны. Против 21:21-лога (reqS=307) — теперь пары вообще не формируются.
+- Мобильная 22:58: ICE CONNECTED за 2с, videoFrames 0→2094, renderActive=true, «ПЕРВЫЙ КАДР отрисован на поверхности ✓» — SurfaceView РЕАЛЬНО рисовал кадры, а экран/скриншот чёрные → аппаратная поверхность не попадает в композицию окна/скриншота (HOTWAV Cyber 15, MTK, Android 13) даже с setZOrderMediaOverlay.
+- Сверка API по classes.jar 1.3.10 (парсинг constant pool, javap в песочнице отсутствует): EglRenderer — ctor(String)/(String,VideoFrameDrawer), init(EglBase$Context,[I,GlDrawer)V, createEglSurface(Surface)V, releaseEglSurface(Runnable)V, setLayoutAspectRatio(F)V, setSize/setMirror/setFpsReduction, onFrame(VideoFrame)V; VideoSink.onFrame ✓; SurfaceEglRenderer — это SurfaceHolder.Callback (для SurfaceView, НЕ TextureView) — отклонён; Logging.enableLogToDebugOutput(Severity)V + LS_INFO ✓; EglBase.CONFIG_PLAIN ✓.
+- НОВЫЙ ФАЙЛ VideoTextureRenderer.kt: TextureView + EglRenderer (VideoSink), RendererEvents-эмуляция (первый кадр/резолюция) внутри, onSurfaceTextureDestroyed → releaseEglSurface{st.release()}, return false; releaseRenderer() ровно один раз.
+- CallScreen.kt: видео-блок переведён с SurfaceViewRenderer на VideoTextureRenderer (убраны setZOrderMediaOverlay/setEnableHardwareScaler; разметка «видео 55% сверху / панель снизу» и DisposableEffect-cleanup сохранены); ICE FAILED (входящий) — первая попытка восстановления теперь recreateAndReanswer(), fallback — doReanswer.
+- WebRtcEngine.kt: поле lastRemoteOffer (сохранение в applyRemoteSdp, очистка в createPeerConnection); recreateAndReanswer() — close старого PC → сброс remoteVideoTrack (fix собственного бага: без сброса DisposableEffect подключил бы sink к release'нутому рендереру при появлении нового трека) → новый PC → addTrack → applyRemoteSdp(offer) → новый answer (новые ufrag/pwd = ICE-restart у пира по RFC 5245 §9); CHECKING → #CALLS-ICE-EARLYSTATS (dumpIceStats на 5-й секунде, генерационная защита, FAILED инвалидирует); FAILED теперь тоже инвалидирует EARLYSTATS; #CALLS-NATIVE-LOG — Logging.enableLogToDebugOutput(LS_INFO) в initialize() (нативные логи libwebrtc в logcat, тег «logging»).
+- Доки: CALLS_MAP §0.2 (новый блок 22:55–22:59) + §11.2.3 (переписан п.3 «Рендер»); HISTORY — новая запись.
+- Самопроверка: git-дифф просмотрен, баланс скобок/строковых литералов в 3 файлах — 0 расхождений; все использованные символы сверены с classes.jar.
+
+Stage Summary:
+- Четыре фикса: #CALLS-VIDEO-TEXVIEW (TextureView-рендерер — чёрный экран при доказанном рендере), #CALLS-PC-RESTART (пересоздание PC + answer с новыми креденшелами как первая реакция на ICE FAILED), #CALLS-ICE-EARLYSTATS (ранний снимок пар в CHECKING), #CALLS-NATIVE-LOG (нативные логи libwebrtc, тег «logging» — добавить в фильтр).
+- Ожидание от след. теста: мобильная — видео ВИДНО на экране и в скриншоте; Wi-Fi — либо соединение после PC-restart, либо решающая диагностика (EARLYSTATS пар + нативные строки «logging» покажут уровень отказа: формирование пар vs сетевые пути).
+- «Пинок не просит разрешение на свою камеру» — НЕ баг: Этап 2 (согласие на свою камеру) ещё не реализован, приём видео разрешение CAMERA не требует.
+- Не собирается в песочнице (нет Android SDK) — сборка/тест на устройстве за пользователем.

@@ -136,6 +136,16 @@ class WebRtcEngine(
     @Volatile
     private var pendingRemoteSdp: SessionDescription? = null
 
+    // #CALLS-PC-RESTART (2026-08-31, лог ciber.txt 22:55 Wi-Fi): последний применённый
+    // удалённый OFFER. При ICE FAILED входящего (пар=0/reqS=0 — пары вообще не
+    // формируются) повторные REANSWER бессмысленны: тот же PC, те же ufrag/pwd, те же
+    // мёртвые порты. Единственный доступный отвечающему рестарт — пересоздать PC и
+    // ответить на ЭТОТ ЖЕ offer НОВЫМ answer: новые ice-ufrag/pwd в answer — по RFC
+    // это сигнал ICE-restart, агент собеседника обязан пересобрать check-list и
+    // кандидатов. Оффер хранится до первого createPeerConnection следующего звонка.
+    @Volatile
+    private var lastRemoteOffer: SessionDescription? = null
+
     // #CALLS-DROP-GRACE (2026-08-29): DISCONNECTED часто транзиентен (смена Wi-Fi↔LTE,
     // краткая потеря пакетов) — ICE восстанавливается сам. Раньше первый же
     // DISCONNECTED мгновенно переводил экран в ENDED — живые разговоры обрывались.
@@ -229,6 +239,18 @@ class WebRtcEngine(
             signalingThread = HandlerThread("webrtc-signaling").also { it.start() }
             signalingHandler = Handler(signalingThread!!.looper)
         }
+        // #CALLS-NATIVE-LOG (2026-08-31, лог ciber.txt 22:55 Wi-Fi): в Wi-Fi-сценарии
+        // «оба за одним роутером» наш агент имел кандидатов с обеих сторон, дошёл до
+        // CHECKING и 16с МОЛЧАЛ: пар=0, reqS=0 (ни одной проверки) — тогда как LTE тем же
+        // кодом подключался за 2с. Kotlin-логи не видят НИЖЕ JNI: не видно формирование
+        // пар (P2PTransportChannel::CreateConnections), привязку портов к сети, pruning.
+        // Включаем НАТИВНОЕ логирование libwebrtc в logcat — следующий Wi-Fi-лог покажет,
+        // агент считает пары и от чего они отмирает. Тег в logcat — "logging" (не
+        // org.webrtc.*): в фильтр захвата добавить logging:I. Сверено по classes.jar
+        // 1.3.10: Logging.enableLogToDebugOutput(Severity)V, Severity.LS_INFO есть.
+        runCatching {
+            org.webrtc.Logging.enableLogToDebugOutput(org.webrtc.Logging.Severity.LS_INFO)
+        }.onFailure { AppLog.w(TAG, "native log enable: ${it.message}") }
         // #CALLS-FIX: factory создаётся на нашем signaling thread — тогда
         // libjingle считает этот поток signaling thread, и все операции
         // PeerConnection (createPeerConnection/audio source) выполняются на нём.
@@ -356,6 +378,8 @@ class WebRtcEngine(
     /** Применение remote SDP (только на signaling thread, PC уже создан). */
     private fun applyRemoteSdp(sessionDesc: SessionDescription) {
         AppLog.i(TAG, "setRemoteSdp: type=${sessionDesc.type} sdpLen=${sessionDesc.description.length}")
+        // #CALLS-PC-RESTART: сохраняем offer для возможного рестарта (см. recreateAndReanswer).
+        if (sessionDesc.type == SessionDescription.Type.OFFER) lastRemoteOffer = sessionDesc
         peerConnection?.setRemoteDescription(SdpObserverAdapter(
             onSetSuccess = {
                 AppLog.i(TAG, "setRemoteSdp SUCCESS, pending=${pendingRemoteIce["remote"]?.size ?: 0}")
@@ -525,6 +549,8 @@ class WebRtcEngine(
         gatheredCandidates.clear()
         inlineIceSent = false
         sdpSendGen.incrementAndGet()
+        // #CALLS-PC-RESTART: оффер прошлого звонка не должен утечь в новый
+        lastRemoteOffer = null
         val iceServers = this.iceServers.ifEmpty {
             listOf(
                 PeerConnection.IceServer.builder(STUN_URL).createIceServer(),
@@ -577,7 +603,24 @@ class WebRtcEngine(
                         iceStateGen.incrementAndGet()
                         onCallPhaseChanged(CallPhase.ACTIVE)
                     }
+                    PeerConnection.IceConnectionState.CHECKING -> {
+                        // #CALLS-ICE-EARLYSTATS (2026-08-31, лог ciber.txt 22:55 Wi-Fi):
+                        // 16с тишины между CHECKING и FAILED, пар=0 — неясно, пары вообще
+                        // ФОРМИРОВАЛИСЬ (и умерли) или НЕ СОЗДАВАЛИСЬ вовсе. Снимок stats на
+                        // 5-й секунде CHECKING отвечает на это в СЛЕДУЮЩЕМ логе: пар>0 при
+                        // reqS>0 — проверки уходят и гибнут (сетевой уровень); пар=0 —
+                        // агент не создаёт пар (уровень libwebrtc/кандидатов).
+                        val gen = iceStateGen.get()
+                        signalingHandler?.postDelayed({
+                            if (gen == iceStateGen.get() && peerConnection != null) {
+                                AppLog.w(TAG, "#CALLS-ICE-EARLYSTATS: 5с в CHECKING — снимок пар")
+                                dumpIceStats()
+                            }
+                        }, 5_000L)
+                    }
                     PeerConnection.IceConnectionState.FAILED -> {
+                        // инвалидирует висящий EARLYSTATS-таймер (генерация изменилась)
+                        iceStateGen.incrementAndGet()
                         onCallPhaseChanged(CallPhase.FAILED)
                         // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): при FAILED снимаем
                         // getStats — candidate-pair статистика показывает, УХОДИЛИ ЛИ наши
@@ -854,6 +897,55 @@ class WebRtcEngine(
             }
             kept.joinToString(sep) + if (endsWithSep) sep else ""
         }
+    }
+
+    /**
+     * #CALLS-PC-RESTART (2026-08-31, лог ciber.txt 22:55 Wi-Fi): ПОЛНЫЙ рестарт со
+     * стороны ОТВЕЧАЮЩЕГО. Доказано логом: Wi-Fi «оба за одним NAT» — у агента есть
+     * кандидаты с обеих сторон (наши 6 inline доставлены, их 4 добавлены drain'ом),
+     * но 16с тишины и FAILED с пар=0/reqS=0/reqR=0; повторные REANSWER тем же answer
+     * (те же ufrag/pwd, те же порты) бессмысленны — 4 шт. в этом же логе не помогли.
+     * Делаем единственное доступное отвечающему: закрываем PC, создаём новый, применяем
+     * СОХРАНЁННЫЙ offer, отвечаем НОВЫМ answer — новые ice-ufrag/pwd по RFC 5245 §9
+     * обязывают агента собеседника сделать ICE-restart (свежий check-list, свежие
+     * кандидаты, свежие permissions на его TURN-аллокации под наши НОВЫЕ relay-IP).
+     * Аудио source/track живут на уровне factory — переиспользуются в новом PC.
+     *
+     * @return true — рестарт запущен (новый answer уйдёт через onLocalSdpReady).
+     */
+    fun recreateAndReanswer(): Boolean {
+        val offer = lastRemoteOffer ?: run {
+            AppLog.w(TAG, "#CALLS-PC-RESTART: сохранённого offer нет — рестарт невозможен")
+            return false
+        }
+        post {
+            AppLog.w(TAG, "#CALLS-PC-RESTART: пересоздаю PC + answer с новыми ice-ufrag/pwd (рестарт ICE со стороны отвечающего)")
+            // инвалидируем все висящие таймеры старого PC (EARLYSTATS/DISCONNECTED)
+            iceStateGen.incrementAndGet()
+            // #CALLS-VIDEO-TEXVIEW-INTERACT: сбрасываем трек ДО close() (как в endCall) —
+            // иначе при появлении НОВОГО трека DisposableEffect(track, renderer) в CallScreen
+            // подключил бы sink к СТАРОМУ (уже release'нутому) рендереру: AndroidView не
+            // пересоздаётся при смене только трека, а рендерер в onDispose освобождается.
+            // null → videoRenderActive=false → блок видео уходит из композиции → следующий
+            // трек создаст СВЕЖИЙ VideoTextureRenderer.
+            if (remoteVideoTrackRef != null) {
+                remoteVideoTrackRef = null
+                onRemoteVideoTrack?.invoke(null)
+            }
+            peerConnection?.close()
+            peerConnection = null
+            pcCreated = false
+            pendingRemoteIce.clear()
+            createPeerConnection()
+            localAudioTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+            }
+            // Полный цикл: setRemote(offer) → onSetSuccess → prepareVideoTransceivers →
+            // createAnswer → setLocal → sendLocalSdpNow(1.5с inline) → onLocalSdpReady →
+            // CallScreen отправит через sendAnswerReliably (флаги обновит сам).
+            applyRemoteSdp(offer)
+        }
+        return true
     }
 
     /**
