@@ -11277,7 +11277,19 @@ class VKApiClient(
                 }
                 val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
                 if (json?.has("error") == true || json?.has("error_code") == true) {
-                    AppLog.w("VKApiClient", "vchat.joinConversation error: $json")
+                    val msg = json.toString()
+                    if (msg.contains("is blocked") || msg.contains("PERMISSION_DENIED")) {
+                        // #CALLS-WAF (2026-08-31): антифрод VK ограничил метод для
+                        // устройства/IP — «Method ... is blocked for <id> from IP <ip>».
+                        // Это СЕРВЕРНОЕ ограничение (WAF), не баг клиента: при нём
+                        // SERVER-топология (SFU) для PinoK недоступна, а DIRECT-звонки
+                        // может не пускать тот же WAF (нет FULL_CONNECTION/registered-peer,
+                        // 0 ответов ICE у пира). Диагностика: сменить сеть (Wi-Fi ↔
+                        // мобильная, другой IP) и повторить; обычно отпускает само.
+                        AppLog.e("VKApiClient", "#CALLS-WAF: сервер ограничил vchat.joinConversation (антифрод по IP/устройству): $msg")
+                    } else {
+                        AppLog.w("VKApiClient", "vchat.joinConversation error: $json")
+                    }
                     return@use null
                 }
                 json?.get("response")?.takeIf { it.isJsonObject }?.asJsonObject ?: json

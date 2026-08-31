@@ -5072,3 +5072,24 @@ Stage Summary:
 - Компилятора в песочнице нет (нет Android SDK) — реальный Gradle-билд по-прежнему делает пользователь; статус честный: статическая сверка по артефакту, не сборка.
 - Урок: незнакомый API libwebrtc сверять с jar зависимости до написания кода.
 - Риск на тесте: SurfaceView за непрозрачным фоном может не пробиться на некоторых устройствах — рычаги задокументированы в CALLS_MAP §11.2.3.
+
+---
+Task ID: calls-2026-08-31-failure-analysis
+Agent: Z.ai (main)
+Task: разбор лога пользователя (все звонки умерли после Этапа 1) — входящий видео ×2 + исходящий аудио ×2
+
+Work Log:
+- Разобран лог 20:48–20:53 (1671 строк): крашей нет, сигналинг ACKнут.
+- Входящий ×2: answer отправлен и доставлен серверу (SERVER_RESPONSE по всем transmit-data), answer SDP извлечён из лога и проверен ПОСТРОЧНО — m=video консистентен (100/101/96/97/98/99/103/104/107, все rtpmap/fmtp на месте, H265 вырезан чисто, a=recvonly). СБОЙ: пир 0 ответов на ICE (reqS=12 resR=0, reqR=0 — пиричик сам не слал чеков) ВКЛЮЧАЯ relay↔relay через TURN VK; через 10.4с сервер topology-changed DIRECT→SERVER; SFU-offer НЕ приходит вовсе; наши REANSWER бесполезны; ICE FAILED → remote-hangup.
+- Исходящий ×2: startCall OK (callId возвращён), getCurrentCalls=0 шт., ensureCallsSessionKey: auth.anonymLogin не вернул session_key → fallback на СТАРЫЙ session_key из prefs; getCallParams OK; WS открыт (ping→pong 15с); FULL_CONNECTION/registered-peer НЕ ПРИХОДЯТ → participantId неизвестен → offer ЗАКЭШИРОВАН и ни разу не отправлен (seq=1 свободен до hangup) → OUT-Watchdog отмена.
+- Найден WAF-блок: vchat.joinConversation → «PERMISSION_DENIED: Method vchat.joinConversation is blocked for 512002378693 from IP 95.26.29.238» — антифрод VK по IP/устройству; код join не менялся с 26.08 (git log -S).
+- git diff --stat 95480ea..8c5432f: только WebRtcEngine/CallScreen/SovaPrefs/SettingsScreen/FeedScreen — сигналинг/auth/queue/API НЕ тронуты; в исходящем отказ происходит ДО участия медиа-кода Этапа 1.
+- Патч 1 (WebRtcEngine.createAnswer): stripH265 теперь ТОЛЬКО в режиме RECEIVE; при callsVideoRx=OFF answer бит-в-бит как в работавшей серии 30.08 (a=inactive, без strip).
+- Патч 2 (VKApiClient.vchatJoinConversation): WAF-блок распознаётся и логируется как #CALLS-WAF (ERROR) с расшифровкой и диагностикой.
+- CALLS_MAP §0.2: добавлен warning-блок 31.08 с таймлайнами и гипотезой; HISTORY не дополнял (разбор в worklog+CALLS_MAP).
+
+Stage Summary:
+- Вывод: код Этапа 1 НЕ является причиной (доказательства: дифф-скоуп; wire-поведение идентично вчерашнему успеху до момента, где действовать должен другой конец; отказ в исходящем — до любого медиа-кода).
+- Главный подозреваемый: антифрод VK (WAF) по IP 95.26.29.x / устройству — joinConversation заблокирован явно, остальное похоже на теневые ограничения той же системы (нет FULL_CONNECTION, нет форварда медиа-сессии, нет SFU-offer).
+- Решающие тесты: (1) мобильная сеть вместо Wi-Fi; (2) звонил ли телефон пира при исходящем; (3) официальный клиент на том же Wi-Fi; (4) новый IP/выждать.
+- Патчи отправлены в origin/PinoK одним коммитом.

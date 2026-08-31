@@ -710,12 +710,17 @@ class WebRtcEngine(
         peerConnection?.createAnswer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let { desc ->
-                    // #CALLS-VIDEO-RX (§11.2.2): H265 (+ его rtx) вырезаем из answer
-                    // ВСЕГДА, когда в answer есть m=video: стек краша 21:50 не снят,
-                    // виновник не доказан — H265 первый кодек официального клиента.
+                    // #CALLS-VIDEO-RX (§11.2.2): H265 (+ его rtx) вырезаем из answer —
+                    // ТОЛЬКО в режиме RECEIVE (видео реально согласуется и пойдёт в
+                    // декодер). В режиме OFF видео не согласуется (a=inactive), декодер
+                    // не стартует — strip не нужен, и answer остаётся БИТ-В-БИТ как в
+                    // работавшей серии 21:49–21:51 (#CALLS-VIDEO-INACTIVE). Так
+                    // kill-switch callsVideoRx=OFF = точный откат на вчера-рабочий
+                    // wire-формат одним тумблером, без пересборки.
                     // После strip первым выжившим становится H264 (HW-декодер почти
                     // везде), VP8/VP9 остаются SW-фолбэком.
-                    var fixedDesc = stripH265(desc.description)
+                    var fixedDesc = if (videoRxEnabled) stripH265(desc.description)
+                                    else desc.description
                     // #CALLS-VIDEO-INACTIVE (страховка, только videoRx=OFF): если
                     // транссивер по какой-то причине остался recvonly (setDirection
                     // не сработал/не применился), вырезаем активное видео на уровне
@@ -724,7 +729,7 @@ class WebRtcEngine(
                     // НЕ применяем — ответ обязан остаться a=recvonly.
                     if (!videoRxEnabled) fixedDesc = demoteVideoRecvOnly(fixedDesc)
                     val answer = if (fixedDesc != desc.description) {
-                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (strip H265${if (videoRxEnabled) "" else " + a=inactive"}) — len ${desc.description.length}→${fixedDesc.length}")
+                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (${if (videoRxEnabled) "strip H265" else "a=inactive (strip не применён)"}) — len ${desc.description.length}→${fixedDesc.length}")
                         SessionDescription(desc.type, fixedDesc)
                     } else desc
                     // #CALLS-FIX: как в VK — answer отправляем ТОЛЬКО после установки
