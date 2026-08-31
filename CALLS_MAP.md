@@ -349,9 +349,16 @@ pcap: `logs/call2.pcap`.
    Вызывается ВСЕГДА при наличии m=video в answer (и в OFF — безвредно); demote
    recvonly→inactive остаётся страховкой только для OFF. Первый выживший кодек →
    **H264(100/101)** — HW-декодер на подавляющем большинстве Android; VP8/VP9 — SW-фолбэк.
-3. ✅ **Рендер** (уточнение к плану): **TextureViewRenderer** (не SurfaceViewRenderer —
-   тот «пробивает дырку» в окно и в Compose-иерархии требует спец z-order; TextureView —
-   обычный view) через `AndroidView`, первый ребёнок Box — ПОД аватаром/кнопками.
+3. ✅ **Рендер**: **SurfaceViewRenderer** через `AndroidView`, первый ребёнок Box — ПОД
+   аватаром/кнопками. ⚠️ ИСПРАВЛЕНО (2026-08-31): план изначально называл
+   TextureViewRenderer, но в артефакте `io.getstream:stream-webrtc-android:1.3.10` его
+   НЕТ (проверено по classes.jar: из рендереров только SurfaceViewRenderer /
+   SurfaceEglRenderer / EglRenderer / VideoFileRenderer) — отсюда краш компиляции
+   «Unresolved reference 'TextureViewRenderer'». Surface-поверхность рисуется ЗА окном
+   (zOrderOnTop=false по умолчанию) — для фуллскрина под UI это то, что нужно; тот же
+   паттерн (SurfaceViewRenderer в AndroidView) использует Compose-SDK самого Stream.
+   Если видео на устройстве окажется не видно под непрозрачным фоном — рычаг:
+   `setZOrderMediaOverlay(true)` или прозрачный containerColor при активном видео.
    Общий `EglBase.Context` с PeerConnectionFactory — **НАЙДЕН и закрыт скрытый баг**:
    раньше `eglBase` создавался локально в `initialize()` и релизился СРАЗУ после
    создания factory — для аудио это не мешало, но видео-декодер с терминированным

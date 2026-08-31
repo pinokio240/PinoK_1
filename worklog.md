@@ -5053,3 +5053,22 @@ Stage Summary:
   так и не снят — kill-switch callsVideoRx закрывает сценарий без пересборки.
 - Следующий шаг: пользователь пересобирает и тестирует (чеклист §11.5 шаг 1); после
   успеха — Этап 2 (согласие на свою камеру, §11.3).
+
+---
+Task ID: calls-video-rx-compile-fix
+Agent: Z.ai (main)
+Task: устранить 18 ошибок компиляции Этапа 1 приёма видео (RECVONLY, TextureViewRenderer, каскад в CallScreen)
+
+Work Log:
+- Скачал io.getstream:stream-webrtc-android:1.3.10 с Maven Central, распаковал classes.jar — ground truth по API вместо «проверки по памяти».
+- Установлено: TextureViewRenderer в артефакте ОТСУТСТВУЕТ (рендереры: SurfaceViewRenderer, SurfaceEglRenderer, EglRenderer, VideoFileRenderer); SurfaceViewRenderer implements VideoSink, методы init/setEnableHardwareScaler/release на месте; enum RtpTransceiverDirection = SEND_RECV/SEND_ONLY/RECV_ONLY/INACTIVE.
+- WebRtcEngine.kt: RECVONLY → RECV_ONLY (prepareVideoTransceivers) + правка 4 комментариев (RECVONLY/TextureViewRenderer).
+- CallScreen.kt: блок удалённого видео переписан на SurfaceViewRenderer; закрыта скрытая ошибка nullable EGL (eglBaseContext(): EglBase.Context? vs init(non-null)) — явная проверка с error() внутри runCatching.
+- Сверена вся обвязка Этапа 1: onRemoteVideoTrack (engine конструктор + 3 invoke), pollVideoFramesDecoded, setVideoRxEnabled, kill-switch callsVideoRx (SovaPrefs:433/1028, SettingsScreen:370, FeedScreen snapshot:463), remoteVideoTrack: VideoTrack? (CallScreen:249) — расхождений нет.
+- Документация: CALLS_MAP.md §11.2.3 и звонки.md §37 — TextureViewRenderer заменён на SurfaceViewRenderer с пометкой «ИСПРАВЛЕНО»; HISTORY.md — новая запись 2026-08-31.
+
+Stage Summary:
+- Все 18 ошибок пользователя + 1 скрытая (nullable EGL) устранены; каждый использованный символ сверен с фактическим classes.jar 1.3.10.
+- Компилятора в песочнице нет (нет Android SDK) — реальный Gradle-билд по-прежнему делает пользователь; статус честный: статическая сверка по артефакту, не сборка.
+- Урок: незнакомый API libwebrtc сверять с jar зависимости до написания кода.
+- Риск на тесте: SurfaceView за непрозрачным фоном может не пробиться на некоторых устройствах — рычаги задокументированы в CALLS_MAP §11.2.3.

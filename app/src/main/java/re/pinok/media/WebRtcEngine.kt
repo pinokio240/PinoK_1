@@ -135,7 +135,7 @@ class WebRtcEngine(
     // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2): приём видео собеседника.
     // OFF (false) — старое поведение #CALLS-VIDEO-INACTIVE: video-транссиверы → INACTIVE,
     // видео не согласуется (a=inactive), декодер не стартует.
-    // RECEIVE (true) — video-транссиверы → RECVONLY (принимаем, НЕ отправляем: mid=1
+    // RECEIVE (true) — video-транссиверы → RECV_ONLY (принимаем, НЕ отправляем: mid=1
     // живёт, BUNDLE/ICE кандидаты с sdpMid=1 не отваливаются) + H265 вырезается из
     // answer (стек краша 21:50 не снят, виновник не доказан — H265 первый кодек
     // официального; после strip первым выжившим становится H264).
@@ -145,7 +145,7 @@ class WebRtcEngine(
     fun setVideoRxEnabled(enabled: Boolean) { videoRxEnabled = enabled }
 
     // #CALLS-VIDEO-RX: EglBase живёт столько же, сколько factory — видео-декодер и
-    // рендерер CallScreen (TextureViewRenderer) делят этот EGL-контекст. Раньше
+    // рендерер CallScreen (SurfaceViewRenderer) делят этот EGL-контекст. Раньше
     // eglBase создавался локально и релизился сразу после создания factory — для
     // аудио это не мешало (кодеки видео не использовались), но декодер видео с
     // терминированным контекстом не работает.
@@ -330,7 +330,7 @@ class WebRtcEngine(
                 if (sessionDesc.type == SessionDescription.Type.OFFER) {
                     // #CALLS-VIDEO-INACTIVE (2026-08-30, краш 21:50) → #CALLS-VIDEO-RX:
                     // направление видео задаётся ДО createAnswer. videoRx=RECEIVE →
-                    // RECVONLY (принимаем, не отправляем), videoRx=OFF → INACTIVE
+                    // RECV_ONLY (принимаем, не отправляем), videoRx=OFF → INACTIVE
                     // (старое поведение: видео не согласуется, декодер не стартует).
                     prepareVideoTransceivers()
                     createAnswer()
@@ -568,7 +568,7 @@ class WebRtcEngine(
                     AppLog.i(TAG, "Remote audio track")
                 } else if (track is VideoTrack) {
                     // #CALLS-VIDEO-RX (§11.2.3): удалённое видео появилось — отдаём UI
-                    // (CallScreen подключит TextureViewRenderer через addSink и покажет).
+                    // (CallScreen подключит SurfaceViewRenderer через addSink и покажет).
                     remoteVideoTrackRef = track
                     AppLog.i(TAG, "Remote video track (id=${track.id()}, state=${track.state()})")
                     onRemoteVideoTrack?.invoke(track)
@@ -676,13 +676,15 @@ class WebRtcEngine(
      * НАТИВНО — в логе ни одной Kotlin-строки, только «beginning of crash».
      * Фикс: перед createAnswer задать video-транссиверам направление (см.
      * prepareVideoTransceivers): videoRx=OFF → INACTIVE (видео не согласуется,
-     * mid=1 остаётся — не мешает BUNDLE и ICE), videoRx=RECEIVE → RECVONLY
+     * mid=1 остаётся — не мешает BUNDLE и ICE), videoRx=RECEIVE → RECV_ONLY
      * (Этап 1 приёма видео, CALLS_MAP §11.2).
      * stop() не используем — отклонённая m-линия (port 0) может отвалить
      * кандидаты, пришедшие с sdpMid=1.
      */
     private fun prepareVideoTransceivers() {
-        val target = if (videoRxEnabled) RtpTransceiver.RtpTransceiverDirection.RECVONLY
+        // ВАЖНО: в Java-API org.webrtc константа называется RECV_ONLY (через подчёркивание),
+        // НЕ RECVONLY (kRecvOnly — это нативный C++; в Kotlin-биндинге 'RECVONLY' не существует).
+        val target = if (videoRxEnabled) RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
                      else RtpTransceiver.RtpTransceiverDirection.INACTIVE
         peerConnection?.transceivers?.forEach { tr ->
             if (tr.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {

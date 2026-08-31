@@ -1354,9 +1354,13 @@ fun CallScreen(
             val shiftUp = (LocalConfiguration.current.screenHeightDp * 0.10f).dp
 
             // ══ #CALLS-VIDEO-RX (Этап 1, §11.2.3): удалённое видео собеседника ══
-            // TextureViewRenderer (НЕ SurfaceViewRenderer — тот «пробивает дырку» в окно и
-            // в Compose-иерархии требует спец z-order; TextureView — обычный view, ложится
-            // ПОД аватар/кнопки как первый ребёнок Box). Первый ребёнок Box → под контентом.
+            // stream-webrtc-android 1.3.10 (проверено по classes.jar артефакта):
+            // TextureViewRenderer в этой сборке ОТСУТСТВУЕТ, есть только
+            // SurfaceViewRenderer (extends SurfaceView, implements VideoSink).
+            // Поверхность рисуется ЗА окном (zOrderOnTop=false по умолчанию) —
+            // для фуллскрин-видео ПОД аватаром/кнопками это ровно то, что нужно
+            // (тот же паттерн — SurfaceViewRenderer в AndroidView — использует
+            // Compose-SDK самого Stream).
             // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
             // кадров нет, остаётся плейсхолдер (аватар + статус).
             val videoRenderActive = remoteVideoTrack != null && videoRxEnabled &&
@@ -1364,13 +1368,17 @@ fun CallScreen(
                 (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
             if (videoRenderActive && remoteVideoTrack != null) {
                 val track = remoteVideoTrack!!
-                var renderer by remember { mutableStateOf<org.webrtc.TextureViewRenderer?>(null) }
+                var renderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
-                        org.webrtc.TextureViewRenderer(ctx).apply {
+                        org.webrtc.SurfaceViewRenderer(ctx).apply {
+                            // eglBaseContext() возвращает NULLABLE EglBase.Context? —
+                            // init() требует non-null, поэтому проверяем явно.
                             runCatching {
-                                init(engine.eglBaseContext(), null)
+                                val egl = engine.eglBaseContext()
+                                    ?: error("EGL-контекст движка недоступен")
+                                init(egl, null)
                                 setEnableHardwareScaler(true)
                             }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
                             renderer = this
@@ -1379,7 +1387,7 @@ fun CallScreen(
                 )
                 // #CALLS-VIDEO-RX: cleanup обязателен (§11.2.6) — removeSink + release,
                 // иначе утечка GL-текстур и краш следующего звонка. release() у
-                // TextureViewRenderer бросает при повторном вызове — релизим РОВНО ОДИН
+                // SurfaceViewRenderer бросает при повторном вызове — релизим РОВНО ОДИН
                 // раз здесь (onDispose), onRelease у AndroidView не используем.
                 DisposableEffect(track, renderer) {
                     val r = renderer

@@ -11072,3 +11072,30 @@ H265+rtx из answer — первый выживший кодек H264), Texture
 cleanup removeSink/release в onDispose. Скрытый баг: eglBase релизился сразу после создания
 factory — видео-декодер оставался бы без EGL-контекста; теперь живёт вместе с factory.
 FeedScreen initial-Snapshot дополнен (класс бага #100/#110/#189). Разбор — звонки.md §37.
+
+### 2026-08-31 — фикс компиляции Этапа 1: RECV_ONLY вместо RECVONLY + SurfaceViewRenderer вместо TextureViewRenderer (#CALLS-VIDEO-RX-COMPILE)
+
+Первая сборка Этапа 1 пользователем упала: 18 ошибок компиляции в WebRtcEngine.kt
+и CallScreen.kt. Причина: код писался без компилятора (Android SDK в песочнице нет),
+и API libwebrtc был «проверен» по памяти, а не по артефакту. Урок записан: незнакомый
+API сверять с classes.jar зависимости, а не с памятью.
+
+Фиксы:
+1. `RtpTransceiverDirection.RECVONLY` → **RECV_ONLY** (Java-биндинг org.webrtc называет
+   константу через подчёркивание; RECVONLY/kRecvOnly — это нативный C++). Константы
+   enum'а в 1.3.10: SEND_RECV / SEND_ONLY / RECV_ONLY / INACTIVE (проверено по jar).
+2. `TextureViewRenderer` → **SurfaceViewRenderer**: в `io.getstream:stream-webrtc-android:1.3.10`
+   TextureViewRenderer ОТСУТСТВУЕТ — скачан AAR с Maven Central, в classes.jar из
+   рендереров только SurfaceViewRenderer / SurfaceEglRenderer / EglRenderer /
+   VideoFileRenderer. SurfaceViewRenderer extends SurfaceView, implements VideoSink
+   (addSink/removeSink типобезопасны), имеет init(EglBase.Context, RendererEvents) /
+   setEnableHardwareScaler / release — все использования сверки по jar. Поверхность
+   ЗА окном (zOrderOnTop=false по умолчанию) — фуллскрин под UI; тот же паттерн у
+   Compose-SDK Stream. Рычаг на случай невидимого видео: setZOrderMediaOverlay(true)
+   или прозрачный containerColor.
+3. Скрытая ошибка, до которой компилятор пользователя не дошёл (погас в каскаде):
+   `engine.eglBaseContext()` возвращает NULLABLE `EglBase.Context?` (eglBase может быть
+   не создан), а init() требует non-null — в factory добавлена явная проверка с
+   error() → runCatching → лог.
+4. Документация приведена к истине: CALLS_MAP.md §11.2.3, звонки.md §37 — упоминания
+   TextureViewRenderer заменены с пометкой «ИСПРАВЛЕНО».
