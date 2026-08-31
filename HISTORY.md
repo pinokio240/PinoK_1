@@ -11099,3 +11099,36 @@ API сверять с classes.jar зависимости, а не с памят�
    error() → runCatching → лог.
 4. Документация приведена к истине: CALLS_MAP.md §11.2.3, звонки.md §37 — упоминания
    TextureViewRenderer заменены с пометкой «ИСПРАВЛЕНО».
+
+---
+
+## 2026-08-31 (ночь) — Решающий эксперимент Wi-Fi vs LTE: три точные причины отказов звонков + 4 фикса (#CALLS-INLINE-ICE / #CALLS-VIDEO-BG / #CALLS-TOKEN-REFRESH / #CALLS-OUT-SK2-FALLBACK)
+
+Запрос: «Звонок на пинок с официального ВК через общий маршрутизатор — зависло на соединении. При смене на мобильную сеть звонок прошёл, но пинок не показывает видео. Обратный звонок с пинок на офф клиент ВК не проходит» + лог 21:20–21:26 (3 звонка, 3051 строка).
+
+Разбор лога:
+- Входящий видео Wi-Fi: answer ACK, но reqS=307 resR=0 reqR=0 — пир не прислал НИ ОДНОЙ STUN-проверки (даже после 3 REANSWER) → FAILED.
+- Входящий видео LTE: ТЕМ ЖЕ КОДОМ ICE CONNECTED за 0.7с, аудио работает; пир включил камеру (media-settings-changed 21:22:57) — видео не показалось.
+- Исходящий: startCall OK, но кэш $-токен протух → auth.anonymLogin 401 «Token is outdated» → sk2=null → vchat.startConversation ПРОПУЩЕН → conversation не начата → нет FULL_CONNECTION → offer навсегда в кэше (CALL END: offer=false).
+
+Вывод: код Этапа 1 оправдан полностью — на LTE всё работает тем же кодом. Системные дефекты найдены наши:
+1. **Залп trickle-кандидатов** в первые 200мс после answer — у эталона (OK/videochat
+   DirectTransport) addIceCandidate до применения answer закрывает ВЕСЬ транспорт
+   (catch→close) → пир никогда не получал наши кандидаты → на его TURN-аллокации нет
+   permissions для наших relay-IP → relay-пути мертвы; строгий NAT Wi-Fi добивает
+   direct-пути (LTE спасает peer-reflexive). ФИКС **#CALLS-INLINE-ICE**: кандидаты
+   зашиваются ВНУТРЬ SDP (одна посылка, гонка невозможна; loopback/tcp отфильтрованы —
+   ~3.7КБ < порога доставки сервера ~4КБ), trickle — только для кандидатов после
+   отправки; lastLocalSdp всегда с кандидатами (REANSWER/REOFFER автоматически с ними).
+2. **Протухший кэш $-токена** молча валил цепочку исходящего (свежий запрашивался
+   только при ПУСТОМ кэше). ФИКС **#CALLS-TOKEN-REFRESH**: провал на кэше → свежий
+   токен через messages.getCallToken → повтор anonymLogin. +
+   **#CALLS-OUT-SK2-FALLBACK**: при sk2=null startConversation с session_key из prefs
+   (раньше целиком пропускался — conversation не начиналась, вызов не доставлялся).
+3. **Непрозрачный containerColor Scaffold** (0xFF1A1A2E) поверх области
+   SurfaceViewRenderer (поверхность ЗА окном) — видео физически не могло быть видно.
+   ФИКС **#CALLS-VIDEO-BG**: при активном видео фон Scaffold/TopAppBar прозрачный
+   (контролы рисуются в окне, которое выше поверхности); + лог videoFrames/renderActive.
+
+Сборка и тест — на устройстве (SDK в песочнице нет); использованы только уже
+проверенные в проекте API. Детали — CALLS_MAP §0.2, worklog calls-2026-08-31-log2120-triage-fixes.

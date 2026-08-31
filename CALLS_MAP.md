@@ -43,6 +43,17 @@
 - Диагностика: сменить IP (Wi-Fi ↔ мобильная / перезагрузка роутера), проверить официальный клиент на том же Wi-Fi, спросить у пира звонил ли телефон.
 - Патч: kill-switch `callsVideoRx=OFF` теперь даёт answer БИТ-В-БИТ как в работавшей серии 30.08 (strip H265 только в RECEIVE).
 
+🔎 **31.08 ночь 21:20–21:26 (лог upload/Pasted Content_1788200986644.txt) — решающий эксперимент Wi-Fi vs мобильная: найдены ТОЧНЫЕ причины, вместо WAF-гипотезы — наши системные дефекты:**
+- Входящий видео по Wi-Fi: answer ACKнут, но reqS=307 resR=0 **reqR=0** — пир не прислал НИ ОДНОЙ STUN-проверки даже после 3 REANSWER → ICE FAILED → topology-changed→SERVER (SFU-offer нет).
+- Входящий видео по МОБИЛЬНОЙ (тот же код, те же стороны): **ICE CONNECTED за 0.7с, аудио работает** → сигналинг/согласование Этапа 1 в порядке; решает сеть.
+- РАЗГАДКА Wi-Fi-отказа: answer уходил первым, но 10 trickle-кандидатов — залпом в первые 200мс; у эталона (OK/videochat DirectTransport) addIceCandidate до применения answer (async setRemoteDescription) роняет ВЕСЬ транспорт (catch→close). Пир так и не получил наши кандидаты → на его TURN-аллокации нет permissions для наших relay-IP → relay↔relay глохнет; строгий NAT Wi-Fi добивает direct-пути (LTE спасает peer-reflexive от наших проверок).
+- ✅ ФИКС #CALLS-INLINE-ICE (WebRtcEngine): кандидаты зашиваются ВНУТРЬ SDP (одна посылка — гонка невозможна; loopback/tcp отфильтрованы — answer ~3.7КБ < порога доставки ~4КБ), trickle — только для кандидатов после отправки; lastLocalSdp всегда с кандидатами → REANSWER/REOFFER уезжают с ними.
+- Исходящий аудио: `messages.startCall` OK, НО `ensureCallsSessionKey` → кэш $-токен ПРОТУХ → auth.anonymLogin 401 «Token is outdated» → sk2=null → **vchat.startConversation ПРОПУЩЕН** → conversation не начата → нет FULL_CONNECTION → offer в кэше навсегда (CALL END: offer=false answer=false ice=false).
+- ✅ ФИКС #CALLS-TOKEN-REFRESH (SovaApp): провал на кэш-токене → свежий $-токен через messages.getCallToken → повтор auth.anonymLogin.
+- ✅ ФИКС #CALLS-OUT-SK2-FALLBACK (CallScreen): при sk2=null startConversation идёт с session_key из prefs (начать conversation важнее свежести ключа).
+- Видео «звонок прошёл, но видео не показывает» (LTE): камера пира включена (media-settings-changed isVideoEnabled=true в 21:22:57), НО Scaffold красил контент непрозрачным 0xFF1A1A2E ПОВЕРХ области SurfaceViewRenderer (поверхность ЗА окном) — видео физически не могло быть видно.
+- ✅ ФИКС #CALLS-VIDEO-BG (CallScreen): при активном видео containerColor Scaffold/TopAppBar → Transparent; + лог videoFrames/renderActive (различение «кадры не идут» vs «рендер перекрыт»).
+
 | Направление / сценарий | Статус | Доказательство |
 |---|---|---|
 | Входящий (официальный → PinoK) | ✅ РАБОТАЕТ (30.08) / ❌ 31.08 вечер — см. warning выше | тест 6 17:55 (23с разговора, ICE за 0.5с) + серия 21:50 (#2, #4) |
@@ -354,8 +365,9 @@ pcap: `logs/call2.pcap`.
    кодек и главный подозреваемый): `stripH265()` — munge answer: находит payload'ы H265
    по `a=rtpmap:<pt> H265/` + rtx-потомков по `a=fmtp:<pt> … apt=<h265>`, вырезает их
    из списка `m=video` и удаляет все `a=rtpmap/a=fmtp/a=rtcp-fb` строки этих payload'ов.
-   Вызывается ВСЕГДА при наличии m=video в answer (и в OFF — безвредно); demote
-   recvonly→inactive остаётся страховкой только для OFF. Первый выживший кодек →
+   Вызывается ТОЛЬКО в режиме RECEIVE (#CALLS-WAF 557fc9b): в OFF видео не согласуется
+   (a=inactive), декодер не стартует — answer остаётся БИТ-В-БИТ как в работавшей серии
+   30.08 (kill-switch = точный откат wire-формата одним тумблером). Первый выживший кодек →
    **H264(100/101)** — HW-декодер на подавляющем большинстве Android; VP8/VP9 — SW-фолбэк.
 3. ✅ **Рендер**: **SurfaceViewRenderer** через `AndroidView`, первый ребёнок Box — ПОД
    аватаром/кнопками. ⚠️ ИСПРАВЛЕНО (2026-08-31): план изначально называл
@@ -365,8 +377,12 @@ pcap: `logs/call2.pcap`.
    «Unresolved reference 'TextureViewRenderer'». Surface-поверхность рисуется ЗА окном
    (zOrderOnTop=false по умолчанию) — для фуллскрина под UI это то, что нужно; тот же
    паттерн (SurfaceViewRenderer в AndroidView) использует Compose-SDK самого Stream.
-   Если видео на устройстве окажется не видно под непрозрачным фоном — рычаг:
-   `setZOrderMediaOverlay(true)` или прозрачный containerColor при активном видео.
+   ✅ РЫЧАГ СРАБОТАЛ И ПРИМЕНЁН (2026-08-31, #CALLS-VIDEO-BG): непрозрачный
+   containerColor Scaffold (0xFF1A1A2E) перекрывал поверхность (звонок 21:22 LTE:
+   камера пира включена, кадры предположительно шли — видео НЕ ВИДНО). Теперь при
+   активном видео containerColor Scaffold и TopAppBar = Transparent (контролы
+   рисуются в окне, которое ВЫШЕ поверхности — поверх видео остаются видимы).
+   `setZOrderMediaOverlay(true)` не потребовался.
    Общий `EglBase.Context` с PeerConnectionFactory — **НАЙДЕН и закрыт скрытый баг**:
    раньше `eglBase` создавался локально в `initialize()` и релизился СРАЗУ после
    создания factory — для аудио это не мешало, но видео-декодер с терминированным

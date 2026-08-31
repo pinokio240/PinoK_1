@@ -47,6 +47,14 @@ class WebRtcEngine(
         private const val TAG = "WebRtcEngine"
         private val STUN_URL = "stun:videostun.okcdn.ru:19302"
         private val TURN_URL = "turn:calls.okcdn.ru:3478?transport=udp"
+
+        /**
+         * #CALLS-INLINE-ICE: сколько ждём сбора кандидатов после setLocal перед
+         * отправкой SDP. В логе 21:21 все кандидаты (host/srflx/4 relay/2 tcp)
+         * собираются за ~170мс; 1.5с покрывает даже медленный TURN с запасом.
+         * Кандидаты, пришедшие позже, уходят trickle'ом (см. onIceCandidate).
+         */
+        private const val INLINE_ICE_WAIT_MS = 1500L
     }
 
     private var factory: PeerConnectionFactory? = null
@@ -63,6 +71,18 @@ class WebRtcEngine(
     private var lastLocalSdp: SessionDescription? = null
     fun lastLocalSdp(): SessionDescription? = lastLocalSdp
 
+    // #CALLS-INLINE-ICE: кандидаты, собранные с момента планирования отправки SDP.
+    // Живут ТОЛЬКО на signaling thread (onIceCandidate и postDelayed — оба там).
+    // После отправки SDP с зашитыми кандидатами список очищается, а новые кандидаты
+    // уходят trickle'ом через onIceCandidateReady (см. onIceCandidate).
+    private val gatheredCandidates = ArrayList<IceCandidate>(16)
+
+    @Volatile
+    private var inlineIceSent = false
+
+    /** Генерация запланированной отправки SDP — отмена поста при рестарте/новом SDP. */
+    private val sdpSendGen = java.util.concurrent.atomic.AtomicLong(0)
+
     // #CALLS-ANSWER-FIRST (2026-08-30, тест 4 16:03–16:05): ПОРЯДОК отправки решает всё.
     // Прежний #CALLS-NON-TRICKLE (ждать gathering ≤3с, зашивать кандидатов в текст SDP)
     // опровергнут тестом 4: trickle-кандидаты через сервер ДОСТАВЛЯЮТСЯ (4 trickle от
@@ -78,6 +98,21 @@ class WebRtcEngine(
     // CHECKING→FAILED (тесты 2 и 4, обе роли). Эталонный callee шлёт answer СРАЗУ после
     // setLocal (case "have-remote-offer" → _createAnswer().then(sendSdp)), кандидаты —
     // trickle'ом ПОСЛЕ. Повторяем этот порядок: sendLocalSdpNow() без задержек.
+    //
+    // #CALLS-INLINE-ICE (2026-08-31, лог 21:20–21:26 — финальная эволюция схемы):
+    // входящий по Wi-Fi: reqS=307 resR=0 reqR=0 — обоюдная тишина STUN, включая
+    // relay↔relay через TURN VK; при этом LTE↔LTE тем же кодом — CONNECTED за 0.7с.
+    // Разбор: answer уходил первым, но 10 trickle-кандидатов уезжали залпом в первые
+    // 200мс — у эталонного клиента (OK/videochat DirectTransport) addIceCandidate,
+    // пришедший ДО применения answer (async setRemoteDescription ещё не отработал),
+    // роняет ВЕСЬ транспорт: catch(this.close.bind(this)). Пир так и не получил наши
+    // кандидаты → на его TURN-аллокации не создались permissions для наших relay-IP →
+    // наши relay-проверки глохли у его сервера, его проверок не было вовсе (reqR=0).
+    // Wi-Fi (строгий NAT) умирает полностью (0/307), LTE спасает peer-reflexive.
+    // РЕШЕНИЕ: кандидаты зашиваются ВНУТРЬ SDP (одна посылка — гонка невозможна),
+    // trickle остаётся только для кандидатов, собранных ПОСЛЕ отправки. Ретраи
+    // (REANSWER/REOFFER в CallScreen) уезжают с кандидатами автоматически —
+    // lastLocalSdp теперь всегда содержит зашитых кандидатов.
     // #CALLS-FIX: реальные ICE-серверы из conversation params (turn_server/stun_server).
     // Хардкод videostun.okcdn.ru/turn:calls.okcdn.ru не даёт ICE CONNECTED.
     @Volatile
@@ -485,6 +520,11 @@ class WebRtcEngine(
         candTcpCount.set(0)
         remoteCandCount.set(0)
         lastPairStats = null
+        // #CALLS-INLINE-ICE: новый PC — буфер кандидатов и режим отправки заново;
+        // генерация++ отменяет висящий пост отправки прошлого звонка.
+        gatheredCandidates.clear()
+        inlineIceSent = false
+        sdpSendGen.incrementAndGet()
         val iceServers = this.iceServers.ifEmpty {
             listOf(
                 PeerConnection.IceServer.builder(STUN_URL).createIceServer(),
@@ -512,10 +552,17 @@ class WebRtcEngine(
                 val proto = tokens.getOrNull(2) ?: "?"
                 if (typ != "?") candTypeCounts.merge(typ, 1, Int::plus)
                 if (proto == "tcp") candTcpCount.incrementAndGet()
-                AppLog.d(TAG, "локальный кандидат: $typ/$proto ${candidate.sdp.take(48)}")
-                // #CALLS-ANSWER-FIRST: кандидаты уходят trickle'ом СРАЗУ (SDP уже в пути —
-                // отправка стартует из setLocalDescription без ожидания gathering).
-                onIceCandidateReady(candidate)
+                // #CALLS-INLINE-ICE: до отправки SDP кандидаты копятся в буфере
+                // (уйдут ВНУТРИ SDP); после — trickle'ом через onIceCandidateReady.
+                // Так порядок «SDP первым, кандидаты следом» гарантирован, и у эталонного
+                // клиента невозможно попасть в addIceCandidate-до-remoteDesc.
+                if (inlineIceSent) {
+                    AppLog.d(TAG, "локальный кандидат (trickle): $typ/$proto ${candidate.sdp.take(48)}")
+                    onIceCandidateReady(candidate)
+                } else {
+                    gatheredCandidates.add(candidate)
+                    AppLog.d(TAG, "локальный кандидат (буфер→inline): $typ/$proto ${candidate.sdp.take(48)}")
+                }
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onSignalingChange(state: PeerConnection.SignalingState) {}
@@ -816,16 +863,74 @@ class WebRtcEngine(
     }
 
     /**
-     * #CALLS-ANSWER-FIRST: SDP готов (localDescription установлен) — отправка НЕМЕДЛЕННО,
-     * без ожидания gathering. Кандидаты уходят trickle'ом следом (onIceCandidate →
-     * onIceCandidateReady → sendCandidate) — порядок как у эталонного клиента:
-     * offer/answer первыми, trickle после. Вызов на signaling thread (setLocal
-     * onSetSuccess уже там).
+     * #CALLS-INLINE-ICE (2026-08-31): SDP готов (localDescription установлен) — ждём
+     * [INLINE_ICE_WAIT_MS], собираем локальных кандидатов и отправляем SDP ОДНИМ
+     * сообщением, с зашитыми a=candidate (см. buildSdpWithCandidates). Гонка
+     * «кандидаты раньше answer» у эталонного клиента становится невозможной.
+     * Кандидаты, собранные ПОСЛЕ отправки, уходят trickle'ом (onIceCandidate).
+     * Вызов на signaling thread (setLocal onSetSuccess уже там).
      */
     private fun sendLocalSdpNow(sdp: SessionDescription) {
-        AppLog.i(TAG, "${sdp.type} → отправка немедленно (кандидаты — trickle следом)")
-        lastLocalSdp = sdp
-        onLocalSdpReady(sdp)
+        val gen = sdpSendGen.incrementAndGet()
+        val scheduledAt = System.currentTimeMillis()
+        gatheredCandidates.clear()
+        inlineIceSent = false
+        AppLog.i(TAG, "${sdp.type}: отправка через ${INLINE_ICE_WAIT_MS}мс — кандидаты уйдут ВНУТРИ SDP (#CALLS-INLINE-ICE)")
+        signalingHandler?.postDelayed({
+            if (gen != sdpSendGen.get()) return@postDelayed // отменено: рестарт/новый SDP
+            if (peerConnection == null) return@postDelayed  // звонок завершён за время ожидания
+            val (finalSdp, inlined, skipped) = buildSdpWithCandidates(sdp.description, gatheredCandidates)
+            gatheredCandidates.clear()
+            inlineIceSent = true
+            AppLog.i(TAG, "${sdp.type} → отправка (inline кандидатов: $inlined, отфильтровано loopback/tcp: $skipped; сбор ${System.currentTimeMillis() - scheduledAt}мс)")
+            val toSend = SessionDescription(sdp.type, finalSdp)
+            lastLocalSdp = toSend
+            onLocalSdpReady(toSend)
+        }, INLINE_ICE_WAIT_MS)
+    }
+
+    /**
+     * #CALLS-INLINE-ICE: зашить ICE-кандидатов в текст SDP по своим m-секциям.
+     * Секцию определяем по sdpMLineIndex (если индекс больше числа секций — в последнюю:
+     * BUNDLE делает все секции одним транспортом, позиция не критична).
+     * Loopback (127.0.0.1/::1) и tcp-кандидатов НЕ зашиваем: они бесполезны на провода
+     * и раздували бы frame до порога доставки сервера (~4КБ: в логе 13:06 offer 4.1КБ
+     * был принят сервером, но НЕ доставлен; answer 3.4КБ — доставлен). После strip
+     * H265 answer ~3.1КБ + ~5 полезных кандидатов ~0.6КБ ≈ 3.7КБ — с запасом.
+     *
+     * @return (SDP с кандидатами, сколько зашито, сколько отфильтровано)
+     */
+    private fun buildSdpWithCandidates(sdp: String, candidates: List<IceCandidate>): Triple<String, Int, Int> {
+        if (candidates.isEmpty()) return Triple(sdp, 0, 0)
+        val sep = if (sdp.contains("\r\n")) "\r\n" else "\n"
+        val lines = sdp.split(sep).toMutableList()
+        val mIdx = mutableListOf<Int>()
+        lines.forEachIndexed { i, l -> if (l.startsWith("m=")) mIdx.add(i) }
+        if (mIdx.isEmpty()) return Triple(sdp, 0, 0)
+
+        val useful = candidates.filterNot { c ->
+            val isTcp = c.sdp.split(" ").getOrNull(2) == "tcp"
+            val isLoopback = c.sdp.contains(" 127.0.0.1 ") || c.sdp.contains(" ::1 ")
+            isTcp || isLoopback
+        }
+        val skipped = candidates.size - useful.size
+        if (useful.isEmpty()) return Triple(sdp, 0, skipped)
+
+        // Группируем по m-секции; вставляем С КОНЦА, чтобы индексы не поехали.
+        val bySection = useful.groupBy { c ->
+            if (c.sdpMLineIndex in mIdx.indices) c.sdpMLineIndex else mIdx.size - 1
+        }
+        var inserted = 0
+        for (sec in mIdx.indices.reversed()) {
+            val list = bySection[sec] ?: continue
+            val insertAtRaw = if (sec + 1 < mIdx.size) mIdx[sec + 1] else lines.size
+            // Если SDP заканчивается разделителем, split даёт пустой хвост — вставляем перед ним.
+            val insertAt = if (insertAtRaw > 0 && lines[insertAtRaw - 1].isEmpty()) insertAtRaw - 1 else insertAtRaw
+            val candLines = list.map { "a=" + it.sdp }
+            lines.addAll(insertAt, candLines)
+            inserted += candLines.size
+        }
+        return Triple(lines.joinToString(sep), inserted, skipped)
     }
 
     /**

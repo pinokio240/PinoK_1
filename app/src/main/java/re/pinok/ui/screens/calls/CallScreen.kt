@@ -567,6 +567,18 @@ fun CallScreen(
                         // #CALLS-FIX: форсируем свежие credentials — получаем okcdn uid
                         // (584520805550) из auth.anonymLogin, нужен для WS userId.
                         val sk2 = app.ensureCallsSessionKey(force = true)
+                        // #CALLS-OUT-SK2-FALLBACK (2026-08-31, лог 21:26): ensureCallsSessionKey
+                        // вернул null (кэш $-токен протух → auth.anonymLogin 401), и весь блок
+                        // system.getInfo + startConversation ПРОПУСКАЛСЯ: conversation не
+                        // начиналась → сервер не рассылал registered-peer/FULL_CONNECTION →
+                        // offer навсегда в кэше («local SDP готов, participantId неизвестен»),
+                        // звонок умирал через 15с (CALL END: offer=false). Теперь при null
+                        // берём session_key из prefs: начать conversation важнее свежести ключа
+                        // (свежесть чинится отдельно — #CALLS-TOKEN-REFRESH в SovaApp).
+                        val skConv = sk2 ?: app.prefs.data.first().callsSessionKey.takeIf { it.isNotBlank() }
+                        if (sk2.isNullOrBlank() && !skConv.isNullOrBlank()) {
+                            AppLog.w("CallScreen", "#CALLS-OUT-SK2-FALLBACK: session_key из prefs для startConversation (свежий получить не удалось)")
+                        }
                         // #CALLS-FIX (2026-08-24): для ИСХОДЯЩЕГО нужна активная conversation —
                         // vchat.startConversation (иначе сервер сразу conversation-ended).
                         // ВАЖНО (эталон Chrome 2026-08-24 + CALLS_MAP §6): conversationId для
@@ -575,16 +587,16 @@ fun CallScreen(
                         // закрывает conversation: conversation-ended (INITIALLY_CLOSED).
                         val outgoingConvId = java.util.UUID.randomUUID().toString()
                         var wsConversationId = outgoingConvId
-                        if (!sk2.isNullOrBlank()) {
+                        if (!skConv.isNullOrBlank()) {
                             // #CALLS-FIX (2026-08-24): эталон Chrome desktop вызывает
                             // system.getInfo ПЕРЕД startConversation.
                             val sysResp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                app.apiClient.vchatSystemGetInfo(sk2)
+                                app.apiClient.vchatSystemGetInfo(skConv)
                             }
                             AppLog.i("CallScreen", "vchat.system.getInfo: ${if (sysResp != null) "OK (${sysResp.keySet().size} полей)" else "null"}")
                             AppLog.i("CallScreen", "startConversation: conversationId=$outgoingConvId (свой UUID, не call_id=$callId)")
                             val scResp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                app.apiClient.vchatStartConversation(outgoingConvId, sk2, peerId)
+                                app.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId)
                             }
                             if (scResp != null) {
                                 AppLog.i("CallScreen", "vchat.startConversation OK (${scResp.keySet().size} полей)")
@@ -598,6 +610,10 @@ fun CallScreen(
                             } else {
                                 AppLog.w("CallScreen", "vchat.startConversation вернул null")
                             }
+                        } else {
+                            // #CALLS-OUT-SK2: без session_key conversation не начнётся —
+                            // собеседник не получит вызов. Явно фиксируем причину в логе.
+                            AppLog.e("CallScreen", "#CALLS-OUT-SK2: session_key недоступен (anonymLogin и prefs пусты) — startConversation пропущен, собеседник НЕ получит вызов")
                         }
                         val (sk, vchatResp) = app.getCallConversationParams(wsConversationId)
                         val params = vchatResp?.let { re.pinok.media.ConversationParamsDecoder.decodeParamsJson(it) }
@@ -1009,12 +1025,25 @@ fun CallScreen(
     LaunchedEffect(remoteVideoTrack, peerVideoEnabled, videoRxEnabled) {
         val active = remoteVideoTrack != null && peerVideoEnabled && videoRxEnabled
         if (!active) {
+            if (videoFrames != -1) {
+                AppLog.i("CallScreen", "#CALLS-VIDEO-RX: поллинг кадров остановлен (active=false)")
+            }
             videoFrames = -1
             return@LaunchedEffect
         }
         videoFrames = 0
+        // #CALLS-VIDEO-BG (2026-08-31, звонок 21:22 LTE): камера собеседника включена,
+        // но видео не показалось — по логу невозможно было отличить «кадры не декодируются»
+        // от «кадры есть, но рендерер перекрыт фоном». Логируем каждое изменение счётчика.
+        var lastLogged = Int.MIN_VALUE
         while (true) {
-            engine.pollVideoFramesDecoded { f -> videoFrames = f }
+            engine.pollVideoFramesDecoded { f ->
+                videoFrames = f
+                if (f != lastLogged) {
+                    lastLogged = f
+                    AppLog.i("CallScreen", "videoFrames: $f (track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled, phase=$phase)")
+                }
+            }
             kotlinx.coroutines.delay(2000)
         }
     }
@@ -1332,17 +1361,39 @@ fun CallScreen(
         }
     }
 
+    // ══ #CALLS-VIDEO-RX (Этап 1, §11.2.3): готовность удалённого видео ══
+    // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
+    // кадров нет, остаётся плейсхолдер (аватар + статус).
+    // Вычисление перенесено НАД Scaffold: containerColor должен становиться
+    // прозрачным, когда видео рендерится (см. #CALLS-VIDEO-BG ниже).
+    val videoRenderActive = remoteVideoTrack != null && videoRxEnabled &&
+        peerVideoEnabled && videoFrames > 0 &&
+        (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
+
+    // #CALLS-VIDEO-BG (2026-08-31, звонок 21:22 LTE): Scaffold красил контент непрозрачным
+    // 0xFF1A1A2E ПОВЕРХ области SurfaceViewRenderer — а его поверхность рисуется ЗА окном
+    // (zOrderOnTop=false по умолчанию), поэтому видео было НЕВИДИМО даже при
+    // декодирующихся кадрах (аудио работало, камера собеседника включена — «видео не
+    // показывает»). TextureViewRenderer в stream-webrtc-android 1.3.10 ОТСУТСТВУЕТ
+    // (проверено по classes.jar — коммит 8c5432f), поэтому чиним прозрачностью: при
+    // активном видео фон Scaffold/TopAppBar прозрачный — окно не закрашивает область
+    // поверхности, а контролы поверх видео остаются видимы (рисуются в окне, которое
+    // ВЫШЕ поверхности — тем же паттерном пользуется Compose-SDK самого Stream).
+    LaunchedEffect(videoRenderActive) {
+        AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled)")
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(peerName, color = Color.White) },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF1A1A2E),
+                    containerColor = if (videoRenderActive) Color.Transparent else Color(0xFF1A1A2E),
                     titleContentColor = Color.White,
                 ),
             )
         },
-        containerColor = Color(0xFF1A1A2E),
+        containerColor = if (videoRenderActive) Color.Transparent else Color(0xFF1A1A2E),
     ) { padding ->
         Box(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -1358,14 +1409,10 @@ fun CallScreen(
             // TextureViewRenderer в этой сборке ОТСУТСТВУЕТ, есть только
             // SurfaceViewRenderer (extends SurfaceView, implements VideoSink).
             // Поверхность рисуется ЗА окном (zOrderOnTop=false по умолчанию) —
-            // для фуллскрин-видео ПОД аватаром/кнопками это ровно то, что нужно
-            // (тот же паттерн — SurfaceViewRenderer в AndroidView — использует
-            // Compose-SDK самого Stream).
+            // поэтому фон Scaffold при активном видео прозрачный (#CALLS-VIDEO-BG
+            // выше — иначе непрозрачный фон окна перекрывает поверхность).
             // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
             // кадров нет, остаётся плейсхолдер (аватар + статус).
-            val videoRenderActive = remoteVideoTrack != null && videoRxEnabled &&
-                peerVideoEnabled && videoFrames > 0 &&
-                (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
             if (videoRenderActive && remoteVideoTrack != null) {
                 val track = remoteVideoTrack!!
                 var renderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }

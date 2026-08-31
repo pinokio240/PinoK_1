@@ -1409,47 +1409,71 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
             //    Для vchat нужен session_key ПРАВИЛЬНОГО формата (-w-fl..., 156), который
             //    даёт auth.anonymLogin С auth_token = $Ksd-токен (version=3). Без auth_token
             //    сервер даёт ключ -w-vF... (134), который vchat не принимает.
-            var callToken = snap.callsCallToken.takeIf { it.isNotBlank() && it.startsWith("$") }
-            if (callToken.isNullOrBlank()) {
-                // #CALLS-FIX (2026-08-24): если $Ksd нет в prefs — НЕ используем getAnonymToken
-                // (он даёт anonym.eyJ..., который сервер НЕ принимает: AUTH_LOGIN).
-                // Вместо этого получаем $Ksd через messages.getCallToken — как браузер.
-                // Для этого нужен VK access_token + cookieHeader (remixsid/httoken).
+            //
+            //    #CALLS-TOKEN-REFRESH (2026-08-31, лог 21:26 исходящий): $-токен из prefs
+            //    ПРОТУХ (auth.anonymLogin → 401 «AUTH_LOGIN : Token is outdated»), при этом
+            //    раньше свежий токен запрашивался ТОЛЬКО если кэш ПУСТ — при непустом, но
+            //    протухшем кэше цепочка умирала: session_key не возвращался, у исходящего
+            //    пропускался startConversation (см. #CALLS-OUT-SK2-FALLBACK в CallScreen),
+            //    собеседник не получал вызов. Теперь провал на кэш-токене → принудительно
+            //    обновляем токен через messages.getCallToken (VK-сессия жива — входящие
+            //    работают) и повторяем auth.anonymLogin со свежим токеном.
+
+            // Локальный помощник: anonymLogin по всем application_key.
+            suspend fun anonymLoginWith(tok: String): String? {
+                val deviceId = exchangeAuthRepository.deviceId()
+                for (apiKey in listOf("CGMMEJLGDIHBABABA", "7793118", "android_web", "0")) {
+                    val sk = withContext(Dispatchers.IO) {
+                        apiClient.vchatAnonymLogin(tok, apiKey, deviceId)
+                    }
+                    if (!sk.isNullOrBlank()) return sk
+                }
+                return null
+            }
+            // Локальный помощник: свежий $Ksd через messages.getCallToken.
+            // #CALLS-FIX (2026-08-24): НЕ getAnonymToken (даёт anonym.eyJ…, который сервер
+            // НЕ принимает: AUTH_LOGIN), а именно messages.getCallToken — как браузер.
+            // Нужны VK access_token + cookieHeader (remixsid/httoken).
+            suspend fun freshCallToken(): String? {
                 val token = tokenStorage.load()
                 val accessToken = token?.accessToken
                 val cookieHeader = try {
                     re.pinok.auth.exchange.RemixsidCapturer.buildVkCookieHeader()
                 } catch (_: Exception) { null }
-                if (!accessToken.isNullOrBlank() && !cookieHeader.isNullOrBlank()) {
-                    val ct: String? = withContext(Dispatchers.IO) {
-                        apiClient.getCallToken(accessToken, cookieHeader)
-                    }
-                    if (!ct.isNullOrBlank()) {
-                        callToken = ct
-                        prefs.setCallsCallToken(ct)
-                        AppLog.i("SovaApp", "ensureCallsSessionKey: получен \$Ksd через getCallToken (len=${ct.length})")
-                    }
+                if (accessToken.isNullOrBlank() || cookieHeader.isNullOrBlank()) return null
+                val ct: String? = withContext(Dispatchers.IO) {
+                    apiClient.getCallToken(accessToken, cookieHeader)
                 }
-            }
-            if (callToken.isNullOrBlank()) {
-                // Fallback: getAnonymToken (может не сработать, но попробуем)
-                callToken = withContext(Dispatchers.IO) { apiClient.getAnonymToken() }
-                if (!callToken.isNullOrBlank()) {
-                    AppLog.w("SovaApp", "ensureCallsSessionKey: fallback getAnonymToken (может не сработать: ${callToken.take(12)}…)")
+                if (!ct.isNullOrBlank()) {
+                    prefs.setCallsCallToken(ct)
+                    AppLog.i("SovaApp", "ensureCallsSessionKey: получен \$Ksd через getCallToken (len=${ct.length})")
                 }
+                return ct
             }
-            if (callToken.isNullOrBlank()) {
-                AppLog.w("SovaApp", "ensureCallsSessionKey: callToken пуст (нет $-токена)")
-                return null
-            }
-            AppLog.i("SovaApp", "ensureCallsSessionKey: callToken=${callToken.take(12)}…")
-            val deviceId = exchangeAuthRepository.deviceId()
+
+            var callToken = snap.callsCallToken.takeIf { it.isNotBlank() && it.startsWith("$") }
             var sessionKey: String? = null
-            for (apiKey in listOf("CGMMEJLGDIHBABABA", "7793118", "android_web", "0")) {
-                sessionKey = withContext(Dispatchers.IO) {
-                    apiClient.vchatAnonymLogin(callToken, apiKey, deviceId)
+            if (!callToken.isNullOrBlank()) {
+                AppLog.i("SovaApp", "ensureCallsSessionKey: callToken=${callToken.take(12)}… (кэш)")
+                sessionKey = anonymLoginWith(callToken)
+                if (sessionKey.isNullOrBlank()) {
+                    AppLog.w("SovaApp", "ensureCallsSessionKey: кэш-токен отклонён (401 Token is outdated?) — обновляю через messages.getCallToken (#CALLS-TOKEN-REFRESH)")
                 }
-                if (!sessionKey.isNullOrBlank()) break
+            }
+            if (sessionKey.isNullOrBlank()) {
+                val fresh = freshCallToken()
+                if (!fresh.isNullOrBlank()) {
+                    callToken = fresh
+                    sessionKey = anonymLoginWith(fresh)
+                }
+            }
+            if (sessionKey.isNullOrBlank() && callToken.isNullOrBlank()) {
+                // Fallback: getAnonymToken (может не сработать, но попробуем)
+                val anon = withContext(Dispatchers.IO) { apiClient.getAnonymToken() }
+                if (!anon.isNullOrBlank()) {
+                    AppLog.w("SovaApp", "ensureCallsSessionKey: fallback getAnonymToken (может не сработать: ${anon.take(12)}…)")
+                    sessionKey = anonymLoginWith(anon)
+                }
             }
             if (sessionKey.isNullOrBlank()) {
                 AppLog.w("SovaApp", "ensureCallsSessionKey: auth.anonymLogin не вернул session_key")
