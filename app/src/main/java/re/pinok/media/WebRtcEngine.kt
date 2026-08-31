@@ -16,6 +16,7 @@ import org.webrtc.RtpTransceiver
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.VideoTrack
 import re.pinok.data.model.CallPhase
 import re.pinok.data.model.VkCall
 import re.pinok.util.AppLog
@@ -39,6 +40,8 @@ class WebRtcEngine(
     private val onIceCandidateReady: (IceCandidate) -> Unit,
     /** #CALLS-DIAG (2026-08-29): сырое имя ICE-состояния для экранной диагностики. */
     private val onIceStateChanged: ((String) -> Unit)? = null,
+    /** #CALLS-VIDEO-RX: удалённый VideoTrack появился (или null — звонок завершён). */
+    private val onRemoteVideoTrack: ((VideoTrack?) -> Unit)? = null,
 ) {
     companion object {
         private const val TAG = "WebRtcEngine"
@@ -129,6 +132,31 @@ class WebRtcEngine(
     @Volatile
     private var lastPairStats: String? = null
 
+    // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2): приём видео собеседника.
+    // OFF (false) — старое поведение #CALLS-VIDEO-INACTIVE: video-транссиверы → INACTIVE,
+    // видео не согласуется (a=inactive), декодер не стартует.
+    // RECEIVE (true) — video-транссиверы → RECVONLY (принимаем, НЕ отправляем: mid=1
+    // живёт, BUNDLE/ICE кандидаты с sdpMid=1 не отваливаются) + H265 вырезается из
+    // answer (стек краша 21:50 не снят, виновник не доказан — H265 первый кодек
+    // официального; после strip первым выжившим становится H264).
+    @Volatile
+    private var videoRxEnabled: Boolean = false
+
+    fun setVideoRxEnabled(enabled: Boolean) { videoRxEnabled = enabled }
+
+    // #CALLS-VIDEO-RX: EglBase живёт столько же, сколько factory — видео-декодер и
+    // рендерер CallScreen (TextureViewRenderer) делят этот EGL-контекст. Раньше
+    // eglBase создавался локально и релизился сразу после создания factory — для
+    // аудио это не мешало (кодеки видео не использовались), но декодер видео с
+    // терминированным контекстом не работает.
+    private var eglBase: EglBase? = null
+
+    fun eglBaseContext(): EglBase.Context? = eglBase?.eglBaseContext
+
+    // #CALLS-VIDEO-RX: последний полученный удалённый VideoTrack (onAddTrack).
+    @Volatile
+    private var remoteVideoTrackRef: VideoTrack? = null
+
     /** Экранный снимок ICE: «канд: host=1 srflx=1 relay=0 • прин:3 sdpR:+ • пар=3 • reqS=12 resR=0 reqR=0». */
     fun iceUiSnapshot(): String {
         val order = listOf("host", "srflx", "prflx", "relay")
@@ -186,7 +214,11 @@ class WebRtcEngine(
                 .setUseHardwareAcousticEchoCanceler(false)
                 .setUseHardwareNoiseSuppressor(false)
                 .createAudioDeviceModule()
+            // #CALLS-VIDEO-RX: сохраняем EglBase в поле (см. комментарий к полю) —
+            // контекст нужен и factory (кодеки), и рендереру CallScreen.
+            this@WebRtcEngine.eglBase?.release()
             val eglBase = org.webrtc.EglBase.create()
+            this@WebRtcEngine.eglBase = eglBase
             val eglContext = eglBase.eglBaseContext
             factory = PeerConnectionFactory.builder()
                 .setOptions(PeerConnectionFactory.Options())
@@ -196,7 +228,6 @@ class WebRtcEngine(
                 ))
                 .setVideoDecoderFactory(org.webrtc.DefaultVideoDecoderFactory(eglContext))
                 .createPeerConnectionFactory()
-            eglBase.release()
             AppLog.i(TAG, "WebRTC initialized")
         }
     }
@@ -249,6 +280,12 @@ class WebRtcEngine(
         // инвалидирует возможный DISCONNECTED-таймер
         iceStateGen.incrementAndGet()
         post {
+            // #CALLS-VIDEO-RX: сбрасываем ссылку на удалённое видео ДО close() —
+            // UI (CallScreen) снимет sink и скроет рендерер.
+            if (remoteVideoTrackRef != null) {
+                remoteVideoTrackRef = null
+                onRemoteVideoTrack?.invoke(null)
+            }
             localAudioTrack?.setEnabled(false)
             peerConnection?.close()
             peerConnection = null
@@ -291,9 +328,11 @@ class WebRtcEngine(
                 // #CALLS-FIX: как в VK — createAnswer ТОЛЬКО после успешной
                 // установки remote SDP (onSetSuccess), не сразу.
                 if (sessionDesc.type == SessionDescription.Type.OFFER) {
-                    // #CALLS-VIDEO-INACTIVE (2026-08-30, краш 21:50): видео выключаем
-                    // ДО createAnswer — иначе ответ уходит с активным m=video.
-                    disableRemoteVideoTransceivers()
+                    // #CALLS-VIDEO-INACTIVE (2026-08-30, краш 21:50) → #CALLS-VIDEO-RX:
+                    // направление видео задаётся ДО createAnswer. videoRx=RECEIVE →
+                    // RECVONLY (принимаем, не отправляем), videoRx=OFF → INACTIVE
+                    // (старое поведение: видео не согласуется, декодер не стартует).
+                    prepareVideoTransceivers()
                     createAnswer()
                 }
             },
@@ -413,6 +452,11 @@ class WebRtcEngine(
 
     fun release() {
         post {
+            // #CALLS-VIDEO-RX: полный teardown — видео-трек, затем (после factory) EGL.
+            if (remoteVideoTrackRef != null) {
+                remoteVideoTrackRef = null
+                onRemoteVideoTrack?.invoke(null)
+            }
             localAudioTrack?.setEnabled(false)
             peerConnection?.close()
             peerConnection = null
@@ -424,6 +468,9 @@ class WebRtcEngine(
             pendingRemoteIce.clear()
             factory?.dispose()
             factory = null
+            // #CALLS-VIDEO-RX: EGL-контекст освобождаем ПОСЛЕ factory (см. поле eglBase).
+            eglBase?.release()
+            eglBase = null
         }
         signalingThread?.quitSafely()
         signalingThread = null
@@ -516,7 +563,16 @@ class WebRtcEngine(
             override fun onDataChannel(channel: DataChannel) {}
             override fun onRenegotiationNeeded() {}
             override fun onAddTrack(receiver: org.webrtc.RtpReceiver, streams: Array<out MediaStream>) {
-                if (receiver.track() is AudioTrack) AppLog.i(TAG, "Remote audio track")
+                val track = receiver.track()
+                if (track is AudioTrack) {
+                    AppLog.i(TAG, "Remote audio track")
+                } else if (track is VideoTrack) {
+                    // #CALLS-VIDEO-RX (§11.2.3): удалённое видео появилось — отдаём UI
+                    // (CallScreen подключит TextureViewRenderer через addSink и покажет).
+                    remoteVideoTrackRef = track
+                    AppLog.i(TAG, "Remote video track (id=${track.id()}, state=${track.state()})")
+                    onRemoteVideoTrack?.invoke(track)
+                }
             }
         }
         // #CALLS-FIX: как в VK (PeerConnectionClient.b): DtlsSrtpKeyAgreement
@@ -618,20 +674,23 @@ class WebRtcEngine(
      * камеру (media-settings-changed isVideoEnabled=true), видео-пакеты шли в
      * декодер (H265 — первый кодек в offer официального клиента) и процесс умирал
      * НАТИВНО — в логе ни одной Kotlin-строки, только «beginning of crash».
-     * Фикс: перед createAnswer переводим все video-транссиверы в INACTIVE —
-     * answer получает a=inactive для m=video: видео вообще не согласовывается,
-     * декодер не инициализируется, mid=1 остаётся (не мешает BUNDLE и ICE).
+     * Фикс: перед createAnswer задать video-транссиверам направление (см.
+     * prepareVideoTransceivers): videoRx=OFF → INACTIVE (видео не согласуется,
+     * mid=1 остаётся — не мешает BUNDLE и ICE), videoRx=RECEIVE → RECVONLY
+     * (Этап 1 приёма видео, CALLS_MAP §11.2).
      * stop() не используем — отклонённая m-линия (port 0) может отвалить
      * кандидаты, пришедшие с sdpMid=1.
      */
-    private fun disableRemoteVideoTransceivers() {
+    private fun prepareVideoTransceivers() {
+        val target = if (videoRxEnabled) RtpTransceiver.RtpTransceiverDirection.RECVONLY
+                     else RtpTransceiver.RtpTransceiverDirection.INACTIVE
         peerConnection?.transceivers?.forEach { tr ->
             if (tr.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {
                 try {
-                    tr.direction = RtpTransceiver.RtpTransceiverDirection.INACTIVE
-                    AppLog.i(TAG, "video-транссивер → INACTIVE (m=video будет a=inactive в answer)")
+                    tr.direction = target
+                    AppLog.i(TAG, "video-транссивер → $target (videoRx=${if (videoRxEnabled) "RECEIVE" else "OFF"})")
                 } catch (e: Exception) {
-                    AppLog.w(TAG, "не удалось выключить video-транссивер: ${e.message}")
+                    AppLog.w(TAG, "не удалось задать направление video-транссиверу: ${e.message}")
                 }
             }
         }
@@ -640,22 +699,30 @@ class WebRtcEngine(
     private fun createAnswer() {
         // #CALLS-AUDIO-OFFER (2026-08-30): симметрично createOffer — аудио-only answer,
         // без recvonly video m-line (см. комментарий в createOffer).
-        // #CALLS-VIDEO-INACTIVE: реальное выключение видео — в
-        // disableRemoteVideoTransceivers() (вызывается перед этим методом), т.к.
-        // OfferToReceiveVideo=false в UnifiedPlan НЕ работает.
+        // #CALLS-VIDEO-RX: реальное управление видео — в prepareVideoTransceivers()
+        // (вызывается перед этим методом), т.к. OfferToReceiveVideo=false в
+        // UnifiedPlan НЕ работает.
         val constraints = MediaConstraints()
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createAnswer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let { desc ->
-                    // #CALLS-VIDEO-INACTIVE (страховка): если транссивер по какой-то
-                    // причине остался recvonly (setDirection не сработал/не применился),
-                    // вырезаем активное видео на уровне SDP: a=recvonly → a=inactive
-                    // ТОЛЬКО в секции m=video (аудио у PinoK всегда sendrecv — не заденем).
-                    val fixedDesc = demoteVideoRecvOnly(desc.description)
+                    // #CALLS-VIDEO-RX (§11.2.2): H265 (+ его rtx) вырезаем из answer
+                    // ВСЕГДА, когда в answer есть m=video: стек краша 21:50 не снят,
+                    // виновник не доказан — H265 первый кодек официального клиента.
+                    // После strip первым выжившим становится H264 (HW-декодер почти
+                    // везде), VP8/VP9 остаются SW-фолбэком.
+                    var fixedDesc = stripH265(desc.description)
+                    // #CALLS-VIDEO-INACTIVE (страховка, только videoRx=OFF): если
+                    // транссивер по какой-то причине остался recvonly (setDirection
+                    // не сработал/не применился), вырезаем активное видео на уровне
+                    // SDP: a=recvonly → a=inactive ТОЛЬКО в секции m=video (аудио у
+                    // PinoK всегда sendrecv — не заденем). В режиме RECEIVE demote
+                    // НЕ применяем — ответ обязан остаться a=recvonly.
+                    if (!videoRxEnabled) fixedDesc = demoteVideoRecvOnly(fixedDesc)
                     val answer = if (fixedDesc != desc.description) {
-                        AppLog.w(TAG, "#CALLS-VIDEO-INACTIVE: answer содержал активный m=video (recvonly) — принудительно a=inactive")
+                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (strip H265${if (videoRxEnabled) "" else " + a=inactive"}) — len ${desc.description.length}→${fixedDesc.length}")
                         SessionDescription(desc.type, fixedDesc)
                     } else desc
                     // #CALLS-FIX: как в VK — answer отправляем ТОЛЬКО после установки
@@ -685,6 +752,56 @@ class WebRtcEngine(
             }
     }
 
+    /**
+     * #CALLS-VIDEO-RX (§11.2.2): удалить H265 (и его rtx) из секций m=video.
+     * Payload-типы H265 ищем по a=rtpmap:<pt> H265/<rate>, rtx-потомки — по
+     * a=fmtp:<rtx-pt> … apt=<h265-pt>. Удаляем их из списка m=video и вычищаем
+     * все a=rtpmap/a=fmtp/a=rtcp-fb строки, ссылающиеся на эти payload'ы.
+     * Остальные кодеки (H264/VP8/VP9/red/ulpfec и их rtx) не трогаем.
+     * Секции режем по границам "m=" (lookahead, разделители сохраняются).
+     */
+    private fun stripH265(sdp: String): String {
+        if (!sdp.contains("m=video")) return sdp
+        val reH265Rtpmap = Regex("a=rtpmap:(\\d+) H265/")
+        val reRtxApt = Regex("a=fmtp:(\\d+) .*apt=(\\d+)")
+        return sdp.split("(?=m=)".toRegex()).joinToString("") { sec ->
+            if (!sec.startsWith("m=video")) return@joinToString sec
+            val pts = LinkedHashSet<String>()
+            reH265Rtpmap.findAll(sec).forEach { pts.add(it.groupValues[1]) }
+            reRtxApt.findAll(sec).forEach { m -> if (m.groupValues[2] in pts) pts.add(m.groupValues[1]) }
+            if (pts.isEmpty()) return@joinToString sec
+            val sep = if (sec.contains("\r\n")) "\r\n" else "\n"
+            val endsWithSep = sec.endsWith(sep)
+            val body = if (endsWithSep) sec.removeSuffix(sep) else sec
+            // payload из строки a=rtpmap:NN / a=fmtp:NN / a=rtcp-fb:NN — без якоря '$'
+            // (одиночный '$' в Kotlin-строке — ошибка компиляции), строка и так одна.
+            val ptPrefixRe = Regex("^a=(?:rtpmap|fmtp|rtcp-fb):(\\d+)")
+            val kept = ArrayList<String>(body.split(sep).size)
+            for (line in body.split(sep)) {
+                val pt = ptPrefixRe.find(line)?.groupValues?.get(1)
+                when {
+                    line.startsWith("m=video ") -> {
+                        val parts = line.split(" ")
+                        if (parts.size > 3) {
+                            val keptPts = parts.drop(3).filter { it !in pts }
+                            if (keptPts.isEmpty()) {
+                                // аномалия: после удаления не осталось кодеков — секцию
+                                // не трогаем (у официального всегда есть H264/VP8/VP9)
+                                AppLog.w(TAG, "stripH265: в m=video после удаления H265 не осталось кодеков — секция не изменена")
+                                kept.add(line)
+                            } else {
+                                kept.add((parts.take(3) + keptPts).joinToString(" "))
+                            }
+                        } else kept.add(line)
+                    }
+                    pt != null && pt in pts -> { /* строка H265/rtx — удаляем */ }
+                    else -> kept.add(line)
+                }
+            }
+            kept.joinToString(sep) + if (endsWithSep) sep else ""
+        }
+    }
+
     private fun drainPendingIceCandidates() {
         pendingRemoteIce.remove("remote")?.forEach { candidate ->
             peerConnection?.addIceCandidate(candidate)
@@ -712,6 +829,36 @@ class WebRtcEngine(
      * (requestsReceived=0 на всех парах).
      */
     fun dumpIceStatsNow() = dumpIceStats()
+
+    /**
+     * #CALLS-VIDEO-RX (§11.2.4): framesDecoded по inbound-rtp видео — для UI-стража
+     * «камера собеседника включена, а кадров нет» (плейсхолдер) и диагностики.
+     * Колбэк приходит с потока getStats (signaling) — присваивание Compose-состоянию
+     * из CallScreen потокобезопасно. best=-1: PC нет или видео inbound-rtp нет вообще
+     * (пакеты не ходят); 0+: суммарно декодированные кадры.
+     */
+    fun pollVideoFramesDecoded(callback: (Int) -> Unit) {
+        val pc = peerConnection ?: run { callback(-1); return }
+        runCatching {
+            pc.getStats { report ->
+                try {
+                    var best = -1
+                    for (stat in report.statsMap.values) {
+                        if (stat.type != "inbound-rtp") continue
+                        val kind = stat.members["kind"]?.toString()
+                            ?: stat.members["mediaType"]?.toString()
+                        if (kind != "video") continue
+                        val frames = stat.members["framesDecoded"]?.toString()?.toIntOrNull() ?: 0
+                        if (frames > best) best = frames
+                    }
+                    callback(best)
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "video stats parse error: ${e.message}")
+                    callback(-1)
+                }
+            }
+        }.onFailure { AppLog.w(TAG, "video stats API error: ${it.message}"); callback(-1) }
+    }
 
     /**
      * #CALLS-ICE-REANSWER (2026-08-29): снимок candidate-pair статистики при ICE FAILED.

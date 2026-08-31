@@ -430,6 +430,7 @@ class SovaPrefs(context: Context) {
             callsSessionKey = p[Keys.CALLS_SESSION_KEY] ?: "",
             callsSessionUid = p[Keys.CALLS_SESSION_UID] ?: 0L,
             callsCallToken = p[Keys.CALLS_CALL_TOKEN] ?: "",
+            callsVideoRx = p[Keys.CALLS_VIDEO_RX] ?: true,
         )
     }
 
@@ -727,6 +728,8 @@ class SovaPrefs(context: Context) {
     suspend fun setCallsSessionUid(v: Long)            = put(Keys.CALLS_SESSION_UID, v)
     /** #CALLS: $Ksd-токен (calls_token_with_url) — auth_token для auth.anonymLogin v3. */
     suspend fun setCallsCallToken(v: String)           = put(Keys.CALLS_CALL_TOKEN, v)
+    /** #CALLS-VIDEO-RX (Этап 1): kill-switch приёма видео собеседника (default true). */
+    suspend fun setCallsVideoRx(v: Boolean)            = put(Keys.CALLS_VIDEO_RX, v)
     /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
     suspend fun setEmailNotifyFreq(v: Int)              = put(Keys.EMAIL_NOTIFY_FREQ, v)
 
@@ -1018,6 +1021,11 @@ class SovaPrefs(context: Context) {
         val callsSessionUid: Long,
         /** #CALLS: $Ksd-токен (calls_token_with_url) — auth_token для auth.anonymLogin v3. */
         val callsCallToken: String,
+        /** #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2.5): приём видео собеседника
+         *  во входящем видео-звонке (recvonly). Kill-switch: при нативном краше
+         *  декодера на конкретном устройстве выключается в Настройки → Звонки
+         *  БЕЗ пересборки (fallback — прежнее поведение a=inactive). Default true. */
+        val callsVideoRx: Boolean,
     )
 
     private object Keys {
@@ -1206,6 +1214,8 @@ class SovaPrefs(context: Context) {
         val CALLS_SESSION_KEY       = stringPreferencesKey("calls_session_key")
         val CALLS_SESSION_UID       = longPreferencesKey("calls_session_uid")
         val CALLS_CALL_TOKEN        = stringPreferencesKey("calls_call_token")
+        /** #CALLS-VIDEO-RX (Этап 1): приём видео собеседника (kill-switch краша декодера). */
+        val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
     }
 
     // Fix #189: defaults для Auth Domains Config.

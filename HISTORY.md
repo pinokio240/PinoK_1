@@ -11063,3 +11063,12 @@ answer), §4 дополнена всеми наблюдёнными уведом
 §11 — план видео: Этап 1 приём (RECVONLY + strip H265 + рендер + kill-switch), Этап 2
 согласие на камеру (по умолчанию НЕ передаём; кнопка+диалог+permission → SEND_RECV →
 reoffer; отзыв → RECVONLY), Этап 3 исходящий видео. Разбор — звонки.md §36.
+
+2026-08-31 §37 — Этап 1 приёма видео реализован (#CALLS-VIDEO-RX, план — CALLS_MAP §11.2):
+prepareVideoTransceivers (videoRx OFF→INACTIVE | RECEIVE→RECVONLY), stripH265 (вырезание
+H265+rtx из answer — первый выживший кодек H264), TextureViewRenderer через AndroidView
+под контентом, onRemoteVideoTrack-колбэк, поллинг framesDecoded (рендер только при кадрах>0,
+иначе плейсхолдер с причиной), kill-switch callsVideoRx (SovaPrefs+Настройки, default ON),
+cleanup removeSink/release в onDispose. Скрытый баг: eglBase релизился сразу после создания
+factory — видео-декодер оставался бы без EGL-контекста; теперь живёт вместе с factory.
+FeedScreen initial-Snapshot дополнен (класс бага #100/#110/#189). Разбор — звонки.md §37.

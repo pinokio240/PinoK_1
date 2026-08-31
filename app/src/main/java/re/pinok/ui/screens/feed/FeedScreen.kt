@@ -457,6 +457,10 @@ fun FeedScreen(
             callsSessionKey = "",
             callsSessionUid = 0L,
             callsCallToken = "",
+            // #CALLS-VIDEO-RX (Этап 1): callsVideoRx добавлен в Snapshot — FeedScreen
+            // тоже должен передавать initial-значение (тот же класс бага, что
+            // Fix #100 / #110 / #189 / #monet-hybrid). Default true — как в SovaPrefs.
+            callsVideoRx = true,
             audioQuality = re.pinok.data.local.AudioQuality.Q192,
         )
     )

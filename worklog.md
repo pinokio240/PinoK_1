@@ -5008,3 +5008,48 @@ Stage Summary:
   наша камера НЕ передаётся без явного одобрения, независимо от её физического состояния.
 - Код в этом коммите не менялся (только документация); реализация — после подтверждения
   пользователем (Этап 1 первым).
+
+---
+Task ID: CALLS-VIDEO-STAGE1
+Agent: main (Z.ai Code)
+Task: Этап 1 плана §11 — приём видео собеседника во входящем видео-звонке (#CALLS-VIDEO-RX)
+
+Work Log:
+- Сессия началась с «переехавшего» репо: локальная ветка PinoK отстала от origin/PinoK
+  (30b82d0 → ff до 95480ea), незакоммиченный шум (mode-bits + .gitignore) ушёл в stash
+  «backup: gitignore+mode-noise перед ff до 95480ea». Фикс #CALLS-VIDEO-INACTIVE и план §11
+  на месте после ff.
+- WebRtcEngine.kt: disableRemoteVideoTransceivers() → prepareVideoTransceivers()
+  (videoRxEnabled: OFF→INACTIVE | RECEIVE→RECVONLY); stripH265() — munge answer
+  (payload'ы H265 по rtpmap + rtx по fmtp apt=, удаление из m=video и attr-строк);
+  onRemoteVideoTrack-колбэк + remoteVideoTrackRef (endCall/release → null);
+  pollVideoFramesDecoded (getStats inbound-rtp framesDecoded); EglBase — поле вместо
+  локальной переменной (release в release() ПОСЛЕ factory?.dispose()), eglBaseContext().
+- CallScreen.kt: state (remoteVideoTrack/peerVideoEnabled/isVideoCall/videoFrames/
+  videoRxEnabled), onRemoteVideoTrack, prefs-чтение callsVideoRx в LaunchedEffect(Unit)
+  (до первого answer), маркер m=video в offer → isVideoCall + бейдж «Входящий
+  видеозвонок…», ветка media-settings-changed → peerVideoEnabled, поллинг кадров (2с),
+  UI: TextureViewRenderer через AndroidView первым ребёнком Box (под контентом),
+  рендер только при videoFrames>0; плейсхолдер с причиной; аватар/имя скрываются при
+  видео; DisposableEffect onDispose → removeSink + release (ровно один release).
+- SovaPrefs.kt: callsVideoRx (boolean, default true) — Snapshot/Keys/маппинг/setter.
+- SettingsScreen.kt: CallsTab → секция «Видео», тумблер «Приём видео собеседника».
+- FeedScreen.kt: initial Snapshot получил callsVideoRx=true (класс бага #100/#110/#189).
+- Kotlin-компилятор в песочнице недоступен (нет Android SDK, gradle скачался но SDK
+  не найден) — проверка глазом: дифф на шаблоны $, smart-cast, имена API libwebrtc
+  (TextureViewRenderer/init/setEnableHardwareScaler), единственная точка WebRtcEngine(.
+  Исправлено по ходу: Regex с одиночным '$' в Kotlin-строке → якорь убран
+  (ptPrefixRe + проверка вхождения payload во множество).
+- Документация: CALLS_MAP.md §11.2 все пункты ✅ + §11.5 статус «ЖДЁТ ТЕСТА»;
+  звонки.md §37; HISTORY.md §37.
+
+Stage Summary:
+- Этап 1 реализован по плану §11.2 (6/6 пунктов); отклонение от плана ОДНО и
+  задокументировано: TextureViewRenderer вместо SurfaceViewRenderer (Compose z-order).
+- Скрытый баг EGL-контекста найден и закрыт до первого теста — иначе видео-декодер
+  получил бы терминированный контекст.
+- Незакрытые риски для теста: (а) munge answer (strip) может не понравиться setLocal —
+  стандартная практика, но проверится только звонком; (б) краш-стек H265-подозреваемого
+  так и не снят — kill-switch callsVideoRx закрывает сценарий без пересборки.
+- Следующий шаг: пользователь пересобирает и тестирует (чеклист §11.5 шаг 1); после
+  успеха — Этап 2 (согласие на свою камеру, §11.3).

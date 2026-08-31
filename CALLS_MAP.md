@@ -337,24 +337,42 @@ pcap: `logs/call2.pcap`.
 | текущий фикс | #CALLS-VIDEO-INACTIVE: все video-транссиверы → INACTIVE (звонок стабильно аудио) |
 | данные стороны (datachannel mid:2) | согласуется у официального; наш onDataChannel игнорирует — безопасно |
 
-### 11.2 Этап 1 — ПРИЁМ видео («видеоответ», recvonly)
-1. **Режим вместо «всегда OFF»**: `disableRemoteVideoTransceivers()` параметризуется флагом
-   `videoRx = OFF (текущее) | RECEIVE`. В RECEIVE — транссивер `direction = RECVONLY`
-   (НЕ stop(): mid=1 живёт, BUNDLE/ICE кандидаты с sdpMid=1 не отваливаются).
-2. **H.265 ЗАПРЕТИТЬ в answer** (стек краша не снят — виновник не доказан; H.265 первый
-   кодек и главный подозреваемый): munge answer — удалить payload 39/40 (rtpmap/fmtp H265+rtx)
-   и вычистить их из списка `m=video`. Первый выживший кодек → **H264(100/101)** — HW-декодер
-   на подавляющем большинстве Android; VP8/VP9 остаются как SW-фолбэк.
-3. **Рендер**: CallScreen — `SurfaceViewRenderer` (AndroidView в Compose) — оверлей на весь экран
-   с возможностью свернуть в карточку 1:1. Общий `EglBase.Context` с PeerConnectionFactory.
-   `onAddTrack`: `if (receiver.track() is VideoTrack) videoTrack.addSink(renderer)`.
-4. **Состояния UI**: `media-settings-changed isVideoEnabled:false` или нет пакетов >3с →
-   плейсхолдер «Камера собеседника выключена» (аватар); ICE DISCONNECTED → заморозить кадр.
-5. **Kill-switch**: настройка `callsVideoRx` (по умолчанию ON после этапа 1) — при краше
-   декодера на конкретном устройстве пользователь выключает приём видео БЕЗ пересборки
-   (fallback → текущее поведение INACTIVE).
-6. **Cleanup обязателен**: `videoTrack.removeSink()` + `renderer.release()` в endCall/dispose —
-   иначе утечка GL-текстур и повторный краш при следующем звонке.
+### 11.2 Этап 1 — ПРИЁМ видео («видеоответ», recvonly) — ✅ РЕАЛИЗОВАН 2026-08-31 (#CALLS-VIDEO-RX)
+1. ✅ **Режим вместо «всегда OFF»**: `disableRemoteVideoTransceivers()` заменён на
+   `prepareVideoTransceivers()` + `@Volatile videoRxEnabled` (`setVideoRxEnabled`).
+   RECEIVE → транссивер `direction = RECVONLY` (НЕ stop(): mid=1 живёт, BUNDLE/ICE
+   кандидаты с sdpMid=1 не отваливаются); OFF → INACTIVE (прежнее поведение).
+2. ✅ **H.265 ЗАПРЕТЕН в answer** (стек краша не снят — виновник не доказан; H.265 первый
+   кодек и главный подозреваемый): `stripH265()` — munge answer: находит payload'ы H265
+   по `a=rtpmap:<pt> H265/` + rtx-потомков по `a=fmtp:<pt> … apt=<h265>`, вырезает их
+   из списка `m=video` и удаляет все `a=rtpmap/a=fmtp/a=rtcp-fb` строки этих payload'ов.
+   Вызывается ВСЕГДА при наличии m=video в answer (и в OFF — безвредно); demote
+   recvonly→inactive остаётся страховкой только для OFF. Первый выживший кодек →
+   **H264(100/101)** — HW-декодер на подавляющем большинстве Android; VP8/VP9 — SW-фолбэк.
+3. ✅ **Рендер** (уточнение к плану): **TextureViewRenderer** (не SurfaceViewRenderer —
+   тот «пробивает дырку» в окно и в Compose-иерархии требует спец z-order; TextureView —
+   обычный view) через `AndroidView`, первый ребёнок Box — ПОД аватаром/кнопками.
+   Общий `EglBase.Context` с PeerConnectionFactory — **НАЙДЕН и закрыт скрытый баг**:
+   раньше `eglBase` создавался локально в `initialize()` и релизился СРАЗУ после
+   создания factory — для аудио это не мешало, но видео-декодер с терминированным
+   EGL-контекстом не работает. Теперь `eglBase` живёт вместе с factory (release в
+   `release()` ПОСЛЕ `factory?.dispose()`), наружу — `eglBaseContext()`.
+   Колбэк `onRemoteVideoTrack(track|null)` (onAddTrack; endCall/release отдают null).
+4. ✅ **Состояния UI**: `media-settings-changed isVideoEnabled` → `peerVideoEnabled`;
+   поллинг `framesDecoded` inbound-rtp каждые 2с (`pollVideoFramesDecoded`) — рендер
+   стартует ТОЛЬКО при кадрах > 0, пока кадров нет — плейсхолдер (аватар + статус:
+   «Приём видео выключен (Настройки → Звонки)» / «Камера собеседника выключена» /
+   «Ждём видео собеседника…»). Бейдж «Входящий видеозвонок…» по `m=video` в offer.
+   Аватар и имя скрываются, когда видео рендерится (как в VK).
+5. ✅ **Kill-switch**: настройка `callsVideoRx` (SovaPrefs, default ON) — тумблер
+   Настройки → Звонки → Видео «Приём видео собеседника»; читается в CallScreen сразу
+   после композиции (до первого answer); при OFF — прежнее поведение INACTIVE БЕЗ пересборки.
+6. ✅ **Cleanup обязателен**: DisposableEffect.onDispose → `videoTrack.removeSink()` +
+   `renderer.release()` (release ровно ОДИН раз — повторный бросает); `endCall()/release()`
+   сбрасывают remoteVideoTrackRef → колбэк null → UI уходит из if-блока и чистит рендер.
+   Иначе — утечка GL-текстур и повторный краш при следующем звонке.
+   **Обновление Snapshot**: FeedScreen initial-конструктор получил `callsVideoRx = true`
+   (тот же класс бага, что Fix #100/#110/#189 — Snapshot расширился).
 
 ### 11.3 Этап 2 — СОГЛАСИЕ НА СВОЮ КАМЕРУ (мы callee → звонящий)
 1. **По умолчанию направление RECVONLY** — наше видео НЕ уходит (семантика «он наше не видит»).
@@ -382,11 +400,11 @@ pcap: `logs/call2.pcap`.
 3. У вызываемого официального — их consent UI (не наша зона).
 
 ### 11.5 Порядок работ + тест-чеклист
-| Шаг | Что | Проверка |
-|---|---|---|
-| 1 | videoRx=RECEIVE + strip H265 + рендер + kill-switch | видео-звонок от Лида: видео видно, 0 крашей; FULL_answer — H264 первым в m=video, нет rtpmap:39 |
-| 2 | consent-кнопка + reoffer SEND_RECV | Лида видит наше видео ТОЛЬКО после кнопки; отзыв — кадр пропадает у неё |
-| 3 | исходящий видео (§11.4) | startCall с видео-параметром; вызываемый видит запрос видео |
+| Шаг | Что | Проверка | Статус |
+|---|---|---|---|
+| 1 | videoRx=RECEIVE + strip H265 + рендер + kill-switch | видео-звонок от Лида: видео видно, 0 крашей; FULL_answer — H264 первым в m=video, нет rtpmap:39 | ✅ реализовано 2026-08-31, ЖДЁТ ТЕСТА |
+| 2 | consent-кнопка + reoffer SEND_RECV | Лида видит наше видео ТОЛЬКО после кнопки; отзыв — кадр пропадает у неё | следующий |
+| 3 | исходящий видео (§11.4) | startCall с видео-параметром; вызываемый видит запрос видео | — |
 - Метрики: ICE CONNECTED; видео рендерится <2с после включения камеры собеседника; 0 нативных
   крашей; reoffer принимается с 1-й попытки; отзыв согласия останавливает поток кадров.
 - Диагностика: держать наготове `adb logcat -b crash -d > crash.txt` (стек H265-подозреваемого);

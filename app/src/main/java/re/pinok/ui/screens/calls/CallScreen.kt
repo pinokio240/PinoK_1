@@ -57,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -238,6 +239,19 @@ fun CallScreen(
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
     var srvErrCount by remember { mutableStateOf(0) }
 
+    // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2): приём видео собеседника.
+    //  - remoteVideoTrack — от движка (onAddTrack, signaling-поток — присваивание
+    //    Compose-состоянию потокобезопасно);
+    //  - peerVideoEnabled — из сигналинга (media-settings-changed isVideoEnabled);
+    //  - isVideoCall — маркер «m=video в offer» (§8.8; connection.mediaSettings НЕ маркирует);
+    //  - videoFrames — framesDecoded inbound-rtp (страж «камера включена, а кадров нет»);
+    //  - videoRxEnabled — kill-switch из настроек (callsVideoRx, default true).
+    var remoteVideoTrack by remember { mutableStateOf<org.webrtc.VideoTrack?>(null) }
+    var peerVideoEnabled by remember { mutableStateOf(false) }
+    var isVideoCall by remember { mutableStateOf(false) }
+    var videoFrames by remember { mutableStateOf(-1) }
+    var videoRxEnabled by remember { mutableStateOf(false) }
+
     val engine = remember {
         WebRtcEngine(
             context = context,
@@ -287,7 +301,21 @@ fun CallScreen(
                 }
             },
             onIceStateChanged = { diagIce = it },
+            // #CALLS-VIDEO-RX (§11.2.3): удалённый VideoTrack появился (или null при
+            // endCall/release) — UI сам подключит/отпустит рендерер.
+            onRemoteVideoTrack = { track -> remoteVideoTrack = track },
         )
+    }
+
+    // #CALLS-VIDEO-RX: kill-switch читаем сразу после композиции — до первого answer
+    // (входящий: answer создаётся по кнопке «Принять», т.е. заведомо позже;
+    // исходящий answer'а не имеет вовсе). До загрузки флаг = false (безопасный
+    // аудио-only — прежнее поведение a=inactive).
+    LaunchedEffect(Unit) {
+        val rx = runCatching { app.prefs.data.first().callsVideoRx }.getOrDefault(true)
+        videoRxEnabled = rx
+        engine.setVideoRxEnabled(rx)
+        AppLog.i("CallScreen", "videoRx (kill-switch из настроек) = $rx")
     }
 
     // #CALLS-ACK-REOFFER (2026-08-29): флаш кэша, когда participantId стал известен
@@ -690,7 +718,15 @@ fun CallScreen(
                             AppLog.w("CallScreen", "повторный offer проигнорирован (answer уже отправлен/получен)")
                             return@collect
                         }
-                        if (isOffer) offerReceived.value = true
+                        if (isOffer) {
+                            offerReceived.value = true
+                            // #CALLS-VIDEO-RX (§8.8/§11.1): маркер видео-звонка — наличие
+                            // m=video в offer (connection.mediaSettings НЕ маркирует).
+                            if (sdp.contains("m=video")) {
+                                isVideoCall = true
+                                AppLog.i("CallScreen", "offer содержит m=video — ВИДЕО-звонок")
+                            }
+                        }
                         // #CALLS-IN-OFFER: решение «применить сейчас или буферизовать до
                         // accept» принял на себя движок (setRemoteSdp: PC нет → буфер,
                         // применится в acceptCall; PC есть → сразу). Гонки с кнопкой
@@ -804,6 +840,17 @@ fun CallScreen(
                         // #CALLS-ICE-REANSWER: звонящий (пере)зарегистрировался — возможно,
                         // его клиент перезапустился/сбросил состояние: повторяем answer.
                         doReanswer("registered-peer")
+                    }
+                }
+                "media-settings-changed" -> {
+                    // #CALLS-VIDEO-RX (§11.2.4): собеседник включил/выключил камеру.
+                    // Форма: {command:"media-settings-changed", mediaSettings:{isVideoEnabled,…}}
+                    val ms = msg.json.get("mediaSettings")?.takeIf { it.isJsonObject }?.asJsonObject
+                    val v = ms?.get("isVideoEnabled")?.takeIf { it.isJsonPrimitive }?.asBoolean
+                        ?: msg.json.get("isVideoEnabled")?.takeIf { it.isJsonPrimitive }?.asBoolean
+                    if (v != null && v != peerVideoEnabled) {
+                        peerVideoEnabled = v
+                        AppLog.i("CallScreen", "media-settings-changed: isVideoEnabled=$v (собеседник ${if (v) "включил" else "выключил"} камеру)")
                     }
                 }
                 "connection" -> {
@@ -952,6 +999,23 @@ fun CallScreen(
                 }
                 else -> { /* прочие события игнорируем */ }
             }
+        }
+    }
+
+    // #CALLS-VIDEO-RX (§11.2.4): поллинг framesDecoded удалённого видео (каждые 2с).
+    // Видео считаем «живым» (рендерим) только когда кадры реально декодируются;
+    // пока кадров нет — плейсхолдер. Callback приходит с потока getStats —
+    // присваивание Compose-состоянию потокобезопасно.
+    LaunchedEffect(remoteVideoTrack, peerVideoEnabled, videoRxEnabled) {
+        val active = remoteVideoTrack != null && peerVideoEnabled && videoRxEnabled
+        if (!active) {
+            videoFrames = -1
+            return@LaunchedEffect
+        }
+        videoFrames = 0
+        while (true) {
+            engine.pollVideoFramesDecoded { f -> videoFrames = f }
+            kotlinx.coroutines.delay(2000)
         }
     }
 
@@ -1288,50 +1352,98 @@ fun CallScreen(
             // (запрос пользователя после теста 30.08): аватарка выше, внизу больше места
             // для блока диагностики, который при «Соединение…» обрезался нижней навигацией.
             val shiftUp = (LocalConfiguration.current.screenHeightDp * 0.10f).dp
+
+            // ══ #CALLS-VIDEO-RX (Этап 1, §11.2.3): удалённое видео собеседника ══
+            // TextureViewRenderer (НЕ SurfaceViewRenderer — тот «пробивает дырку» в окно и
+            // в Compose-иерархии требует спец z-order; TextureView — обычный view, ложится
+            // ПОД аватар/кнопки как первый ребёнок Box). Первый ребёнок Box → под контентом.
+            // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
+            // кадров нет, остаётся плейсхолдер (аватар + статус).
+            val videoRenderActive = remoteVideoTrack != null && videoRxEnabled &&
+                peerVideoEnabled && videoFrames > 0 &&
+                (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
+            if (videoRenderActive && remoteVideoTrack != null) {
+                val track = remoteVideoTrack!!
+                var renderer by remember { mutableStateOf<org.webrtc.TextureViewRenderer?>(null) }
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        org.webrtc.TextureViewRenderer(ctx).apply {
+                            runCatching {
+                                init(engine.eglBaseContext(), null)
+                                setEnableHardwareScaler(true)
+                            }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
+                            renderer = this
+                        }
+                    },
+                )
+                // #CALLS-VIDEO-RX: cleanup обязателен (§11.2.6) — removeSink + release,
+                // иначе утечка GL-текстур и краш следующего звонка. release() у
+                // TextureViewRenderer бросает при повторном вызове — релизим РОВНО ОДИН
+                // раз здесь (onDispose), onRelease у AndroidView не используем.
+                DisposableEffect(track, renderer) {
+                    val r = renderer
+                    if (r != null) {
+                        runCatching { track.addSink(r) }
+                            .onFailure { AppLog.e("CallScreen", "video addSink: ${it.message}") }
+                    }
+                    onDispose {
+                        if (r != null) {
+                            runCatching { track.removeSink(r) }
+                            runCatching { r.release() }
+                        }
+                    }
+                }
+            }
+
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.fillMaxWidth().padding(32.dp).padding(bottom = shiftUp),
             ) {
-                // Avatar
-                Box(
-                    modifier = Modifier
-                        .size(120.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    // #CALLS-NAME-FIX: локальная копия — делегированное свойство
-                    // не смарт-кастится после null-проверки.
-                    val ph = peerPhoto
-                    if (ph != null) {
-                        AsyncImage(
-                            model = ph,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize().clip(CircleShape),
-                        )
-                    } else {
-                        Text(peerName.take(1).uppercase(), fontSize = 40.sp, color = Color.White)
+                // #CALLS-VIDEO-RX: пока видео собеседника рендерится — аватар и имя
+                // скрываем (как в VK: видео фулл-скрин, элементы поверх).
+                if (!videoRenderActive) {
+                    // Avatar
+                    Box(
+                        modifier = Modifier
+                            .size(120.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        // #CALLS-NAME-FIX: локальная копия — делегированное свойство
+                        // не смарт-кастится после null-проверки.
+                        val ph = peerPhoto
+                        if (ph != null) {
+                            AsyncImage(
+                                model = ph,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                            )
+                        } else {
+                            Text(peerName.take(1).uppercase(), fontSize = 40.sp, color = Color.White)
+                        }
                     }
+
+                    Spacer(Modifier.height(24.dp))
+
+                    // Имя звонящего/собеседника — крупно (как в VK)
+                    Text(
+                        text = peerName,
+                        color = Color.White,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    Spacer(Modifier.height(8.dp))
                 }
-
-                Spacer(Modifier.height(24.dp))
-
-                // Имя звонящего/собеседника — крупно (как в VK)
-                Text(
-                    text = peerName,
-                    color = Color.White,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                )
-
-                Spacer(Modifier.height(8.dp))
 
                 // Phase text (статус)
                 Text(
                     text = when (phase) {
-                        CallPhase.RINGING -> if (incoming) "Входящий звонок…" else "Звоним…"
+                        CallPhase.RINGING -> if (incoming) (if (isVideoCall) "Входящий видеозвонок…" else "Входящий звонок…") else "Звоним…"
                         CallPhase.CONNECTING -> "Соединение…"
                         CallPhase.ACTIVE -> formatDuration(callDuration)
                         CallPhase.ENDED -> if (noAnswer) "Абонент не отвечает" else "Звонок завершён"
@@ -1344,6 +1456,24 @@ fun CallScreen(
                 )
 
                 Spacer(Modifier.height(8.dp))
+
+                // #CALLS-VIDEO-RX (§11.2.4): статус видео собеседника — видно, ПОЧЕМУ
+                // видео нет (выключено в настройках / камера выключена сигналингом /
+                // ждём первые кадры). Сам рендер стартует при videoFrames > 0.
+                if (isVideoCall && !videoRenderActive &&
+                    (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
+                ) {
+                    Text(
+                        text = when {
+                            !videoRxEnabled -> "Приём видео выключен (Настройки → Звонки)"
+                            !peerVideoEnabled -> "Камера собеседника выключена"
+                            else -> "Ждём видео собеседника…"
+                        },
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                }
 
                 if (phase == CallPhase.CONNECTING) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))

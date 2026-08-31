@@ -359,6 +359,20 @@ private fun CallsTab(
             }
         }
 
+        // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2.5): kill-switch приёма видео.
+        // При краше видео-декодера на конкретном устройстве пользователь выключает
+        // приём БЕЗ пересборки — движок вернётся к прежнему поведению (a=inactive).
+        item { SectionHeader("Видео") }
+        item {
+            ToggleRow(
+                title = "Приём видео собеседника",
+                subtitle = "Показывать видео во входящих видео-звонках. Выключите, если звонок крашится",
+                checked = s.callsVideoRx,
+            ) { v ->
+                scope.launch { app.prefs.setCallsVideoRx(v) }
+            }
+        }
+
         // #CALLS-AUTO (2026-08-23): session_key и queue-credential получаются
         // автоматически (как браузер): get_anonym_token → auth.anonymLogin →
         // session_key; queue.subscribe → queue-credential. Ручной ввод убран.
