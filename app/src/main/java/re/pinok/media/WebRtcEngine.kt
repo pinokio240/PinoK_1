@@ -856,9 +856,21 @@ class WebRtcEngine(
         }
     }
 
+    /**
+     * #CALLS-ICE-DRAIN-LOG (2026-08-31, лог 22:25 Wi-Fi): сброс буферизованных удалённых
+     * кандидатов после setRemoteDescription. addIceCandidate возвращает Boolean —
+     * раньше результат ИГНОРИРОВАЛСЯ: при сбое кандидат молча терялся, ICE агент
+     * оставался без пар и после таймаута падал в FAILED с «пар=0 • reqS=0»
+     * (точно такой отчёт в логе 22:25:59). Теперь каждый сброс логируется.
+     */
     private fun drainPendingIceCandidates() {
         pendingRemoteIce.remove("remote")?.forEach { candidate ->
-            peerConnection?.addIceCandidate(candidate)
+            val ok = peerConnection?.addIceCandidate(candidate) ?: false
+            if (ok) {
+                AppLog.i(TAG, "drain: remote candidate добавлен (${candidate.sdp.take(48)})")
+            } else {
+                AppLog.w(TAG, "drain: addIceCandidate вернул FALSE — кандидат НЕ добавлен: ${candidate.sdp.take(48)}")
+            }
         }
     }
 

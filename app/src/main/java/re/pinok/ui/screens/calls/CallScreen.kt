@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1094,10 +1095,17 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-TIMER-FIX (2026-08-31, лог 22:28): раньше корутина ОБНОВЛЯЛА callDuration
+    // РОВНО ОДИН РАЗ (delay(1000) → присвоить → завершиться) и никогда не просыпалась
+    // снова — таймер навсегда застывал на первой секунде ACTIVE (симптом «0:05» на
+    // скриншоте при dur=215с в логе). Теперь цикл: тик каждую секунду до смены фазы
+    // (LaunchedEffect(phase) отменяет корутину при уходе с ACTIVE — утечки нет).
     LaunchedEffect(phase) {
         if (phase == CallPhase.ACTIVE) {
-            kotlinx.coroutines.delay(1000)
-            callDuration = (System.currentTimeMillis() - startTime) / 1000
+            while (true) {
+                callDuration = (System.currentTimeMillis() - startTime) / 1000
+                kotlinx.coroutines.delay(1000)
+            }
         }
     }
 
@@ -1370,15 +1378,13 @@ fun CallScreen(
         peerVideoEnabled && videoFrames > 0 &&
         (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
 
-    // #CALLS-VIDEO-BG (2026-08-31, звонок 21:22 LTE): Scaffold красил контент непрозрачным
-    // 0xFF1A1A2E ПОВЕРХ области SurfaceViewRenderer — а его поверхность рисуется ЗА окном
-    // (zOrderOnTop=false по умолчанию), поэтому видео было НЕВИДИМО даже при
-    // декодирующихся кадрах (аудио работало, камера собеседника включена — «видео не
-    // показывает»). TextureViewRenderer в stream-webrtc-android 1.3.10 ОТСУТСТВУЕТ
-    // (проверено по classes.jar — коммит 8c5432f), поэтому чиним прозрачностью: при
-    // активном видео фон Scaffold/TopAppBar прозрачный — окно не закрашивает область
-    // поверхности, а контролы поверх видео остаются видимы (рисуются в окне, которое
-    // ВЫШЕ поверхности — тем же паттерном пользуется Compose-SDK самого Stream).
+    // #CALLS-VIDEO-BG / #CALLS-VIDEO-ZORDER (обновлено 2026-08-31, лог 22:28 mobile):
+    // прозрачный containerColor (первый фикс от звонка 21:22 LTE) оказался НЕДОСТАТОЧЕН —
+    // punch-through SurfaceView (поверхность ЗА окном) в нашей иерархии не пробивается
+    // (кадры декодировались, renderActive=true — а экран чёрный). Итоговое решение —
+    // setZOrderMediaOverlay(true) + раскладка «видео сверху / панель снизу» (см. ниже).
+    // Прозрачность сохранена: она больше не критична, но и не мешает (фон под видео
+    // всё равно закрывается поверхностью, а зона панели остаётся тёмной от шелла).
     LaunchedEffect(videoRenderActive) {
         AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled)")
     }
@@ -1407,25 +1413,51 @@ fun CallScreen(
             // ══ #CALLS-VIDEO-RX (Этап 1, §11.2.3): удалённое видео собеседника ══
             // stream-webrtc-android 1.3.10 (проверено по classes.jar артефакта):
             // TextureViewRenderer в этой сборке ОТСУТСТВУЕТ, есть только
-            // SurfaceViewRenderer (extends SurfaceView, implements VideoSink).
-            // Поверхность рисуется ЗА окном (zOrderOnTop=false по умолчанию) —
-            // поэтому фон Scaffold при активном видео прозрачный (#CALLS-VIDEO-BG
-            // выше — иначе непрозрачный фон окна перекрывает поверхность).
+            // SurfaceViewRenderer (extends android.view.SurfaceView — сверено javap-разбором
+            // classes.jar 2026-08-31).
+            //
+            // #CALLS-VIDEO-ZORDER (2026-08-31, лог 22:28 mobile): НАСТОЯЩАЯ причина чёрного
+            // экрана при работающем видео. В логе кадры ДЕКОДИРОВАЛИСЬ (videoFrames 0→35→83→
+            // …→321+), renderActive=true, ошибок рендерера нет — а на экране чёрный цвет.
+            // Причина: поверхность SurfaceView по умолчанию рисуется ЗА окном и требует
+            // punch-through (прозрачности всех слоёв окна над ней). В нашей иерархии
+            // (NavHost с fade-переходами + вложенные Scaffold'ы + нижняя навигация)
+            // transparent region не пробивается — экран остаётся чёрным. Прозрачный
+            // containerColor самого CallScreen (фикс #CALLS-VIDEO-BG) это НЕ вылечил.
+            // Решение: setZOrderMediaOverlay(true) — поверхность рисуется ПОВЕРХ окна,
+            // punch-through не нужен вовсе. Плата: поверхность перекрывает контент окна
+            // в СВОИХ границах, поэтому (1) видео занимает верхнюю зону ~55% контента,
+            // (2) панель статуса/кнопок прижимается к низу (align BottomCenter ниже) —
+            // в границы поверхности она не попадает.
             // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
             // кадров нет, остаётся плейсхолдер (аватар + статус).
             if (videoRenderActive && remoteVideoTrack != null) {
                 val track = remoteVideoTrack!!
                 var renderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.55f)
+                        .align(Alignment.TopCenter),
                     factory = { ctx ->
                         org.webrtc.SurfaceViewRenderer(ctx).apply {
                             // eglBaseContext() возвращает NULLABLE EglBase.Context? —
                             // init() требует non-null, поэтому проверяем явно.
                             runCatching {
+                                setZOrderMediaOverlay(true) // ← ключевая строка #CALLS-VIDEO-ZORDER
                                 val egl = engine.eglBaseContext()
                                     ?: error("EGL-контекст движка недоступен")
-                                init(egl, null)
+                                // #CALLS-VIDEO-DIAG: RendererEvents — доказательство РЕАЛЬНОГО
+                                // рендера. onFirstFrameRendered в логе = кадры дошли ДО ПОВЕРХНОСТИ
+                                // (getStats framesDecoded доказывает только декодирование).
+                                init(egl, object : org.webrtc.RendererCommon.RendererEvents {
+                                    override fun onFirstFrameRendered() {
+                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован на поверхности ✓")
+                                    }
+                                    override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
+                                        AppLog.d("CallScreen", "video renderer: кадр ${videoWidth}x$videoHeight rot=$rotation")
+                                    }
+                                })
                                 setEnableHardwareScaler(true)
                             }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
                             renderer = this
@@ -1454,7 +1486,15 @@ fun CallScreen(
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxWidth().padding(32.dp).padding(bottom = shiftUp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(32.dp)
+                    // #CALLS-VIDEO-ZORDER: при активном видео панель ПРИЖИМАЕТСЯ К НИЗУ —
+                    // видео (SurfaceViewRenderer, zOrderMediaOverlay=true) занимает верхнюю
+                    // зону 55% и рисуется ПОВЕРХ окна: всё, что попадёт в его границы,
+                    // будет перекрыто поверхностью. Внизу панель вне границ видео — видна.
+                    .align(if (videoRenderActive) Alignment.BottomCenter else Alignment.Center)
+                    .padding(bottom = if (videoRenderActive) 8.dp else shiftUp),
             ) {
                 // #CALLS-VIDEO-RX: пока видео собеседника рендерится — аватар и имя
                 // скрываем (как в VK: видео фулл-скрин, элементы поверх).

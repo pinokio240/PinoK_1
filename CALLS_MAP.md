@@ -54,6 +54,14 @@
 - Видео «звонок прошёл, но видео не показывает» (LTE): камера пира включена (media-settings-changed isVideoEnabled=true в 21:22:57), НО Scaffold красил контент непрозрачным 0xFF1A1A2E ПОВЕРХ области SurfaceViewRenderer (поверхность ЗА окном) — видео физически не могло быть видно.
 - ✅ ФИКС #CALLS-VIDEO-BG (CallScreen): при активном видео containerColor Scaffold/TopAppBar → Transparent; + лог videoFrames/renderActive (различение «кадры не идут» vs «рендер перекрыт»).
 
+🔬 **31.08 вечер 22:25–22:32 (лог upload/ciber.txt) — AFTER #CALLS-INLINE-ICE: медиа-тракт ПРОВЕРЕН ДО КОДЕРОВ, найдены и починены 2 UI-бага + усилена диагностика ICE:**
+- Входящий видео по Wi-Fi (оба телефона за ОДНИМ NAT 95.26.29.238): offer БЕЗ inline-кандидатов; 4 удалённых кандидата (srflx+3×relay) пришли ДО создания PC → PENDING-буфер → drain после setRemoteSdp SUCCESS (pending=4); answer ушёл С inline-кандидатами (#CALLS-INLINE-ICE работает). НО: ICE CHECKING → FAILED через 16с, stats «нет candidate-pair (пар=0 • reqS=0 resR=0 reqR=0)» — агент НЕ ОТПРАВИЛ НИ ОДНОЙ проверки. drain-boolean раньше игнорировался — терялись ли кандидаты, неизвестно.
+- Входящий видео на МОБИЛЬНОЙ сети (тот же код): ICE CONNECTED за ~2с, фаза ACTIVE, peerCam=true, **videoFrames 0→35→83→…→321+ (видео ДЕКОДИРУЕТСЯ end-to-end: ICE+DTLS+SRTP+декодер)**, renderActive=true, ошибок нет — а на экране чёрный цвет → punch-through SurfaceView НЕ пробивается и в этой иерархии.
+- ✅ ФИКС #CALLS-TIMER-FIX (CallScreen): таймер ЗАСТЫВАЛ на «0:05» навсегда — LaunchedEffect(phase) обновлял callDuration ОДИН раз и завершался (delay → присвоить → конец корутины). Теперь цикл каждую секунду.
+- ✅ ФИКС #CALLS-VIDEO-ZORDER + #CALLS-VIDEO-DIAG (CallScreen): setZOrderMediaOverlay(true) (поверхность ПОВЕРХ окна — punch-through не нужен); видео = верхние 55% контента, панель статуса/кнопок прижата к низу; RendererEvents → лог «ПЕРВЫЙ КАДР отрисован ✓» (доказательство доставки кадров в surface). Прозрачность #CALLS-VIDEO-BG сохранена (не мешает).
+- ✅ ФИКС #CALLS-ICE-DRAIN-LOG (WebRtcEngine): drain логирует результат addIceCandidate (boolean) — след. Wi-Fi-тест различит «кандидаты терялись в drain» vs «сетевой уровень».
+- Побочное: vchat.joinConversation снова в WAF-блоке по обоим IP (не мешает: accept-call ушёл, звонки соединялись). «Пинок не просит разрешение на свою камеру» — Этап 2, ещё не реализован (по умолчанию камера НЕ передаётся — так задумано).
+
 | Направление / сценарий | Статус | Доказательство |
 |---|---|---|
 | Входящий (официальный → PinoK) | ✅ РАБОТАЕТ (30.08) / ❌ 31.08 вечер — см. warning выше | тест 6 17:55 (23с разговора, ICE за 0.5с) + серия 21:50 (#2, #4) |
@@ -369,20 +377,29 @@ pcap: `logs/call2.pcap`.
    (a=inactive), декодер не стартует — answer остаётся БИТ-В-БИТ как в работавшей серии
    30.08 (kill-switch = точный откат wire-формата одним тумблером). Первый выживший кодек →
    **H264(100/101)** — HW-декодер на подавляющем большинстве Android; VP8/VP9 — SW-фолбэк.
-3. ✅ **Рендер**: **SurfaceViewRenderer** через `AndroidView`, первый ребёнок Box — ПОД
-   аватаром/кнопками. ⚠️ ИСПРАВЛЕНО (2026-08-31): план изначально называл
-   TextureViewRenderer, но в артефакте `io.getstream:stream-webrtc-android:1.3.10` его
-   НЕТ (проверено по classes.jar: из рендереров только SurfaceViewRenderer /
-   SurfaceEglRenderer / EglRenderer / VideoFileRenderer) — отсюда краш компиляции
-   «Unresolved reference 'TextureViewRenderer'». Surface-поверхность рисуется ЗА окном
-   (zOrderOnTop=false по умолчанию) — для фуллскрина под UI это то, что нужно; тот же
-   паттерн (SurfaceViewRenderer в AndroidView) использует Compose-SDK самого Stream.
-   ✅ РЫЧАГ СРАБОТАЛ И ПРИМЕНЁН (2026-08-31, #CALLS-VIDEO-BG): непрозрачный
-   containerColor Scaffold (0xFF1A1A2E) перекрывал поверхность (звонок 21:22 LTE:
-   камера пира включена, кадры предположительно шли — видео НЕ ВИДНО). Теперь при
-   активном видео containerColor Scaffold и TopAppBar = Transparent (контролы
-   рисуются в окне, которое ВЫШЕ поверхности — поверх видео остаются видимы).
-   `setZOrderMediaOverlay(true)` не потребовался.
+3. ✅ **Рендер**: **SurfaceViewRenderer** через `AndroidView`. ⚠️ ИСПРАВЛЕНО (2026-08-31):
+   план изначально называл TextureViewRenderer, но в артефакте
+   `io.getstream:stream-webrtc-android:1.3.10` его НЕТ (проверено по classes.jar: из
+   рендереров только SurfaceViewRenderer / SurfaceEglRenderer / EglRenderer /
+   VideoFileRenderer) — отсюда краш компиляции «Unresolved reference
+   'TextureViewRenderer'».
+   ✅ #CALLS-VIDEO-BG (звонок 21:22 LTE): containerColor Scaffold при активном видео →
+   Transparent. ОКАЗАЛОСЬ НЕДОСТАТОЧНО (см. ниже).
+   ✅ #CALLS-VIDEO-ZORDER (2026-08-31, лог 22:28 mobile — РЕШАЮЩИЙ ФИКС): звонок
+   соединился, таймер… застыл (см. #CALLS-TIMER-FIX), видео НЕ ВИДНО, при этом в логе
+   videoFrames 0→35→83→…→321+ (декодирование идёт!), renderActive=true, ошибок нет.
+   Причина: punch-through SurfaceView (поверхность ЗА окном) в иерархии
+   NavHost(fade-переходы)+вложенные Scaffold'ы+нижняя навигация НЕ пробивается —
+   прозрачный containerColor это не вылечил. Итог: **`setZOrderMediaOverlay(true)`**
+   (поверхность ПОВЕРХ окна; суперкласс SurfaceView сверен по classes.jar), раскладка
+   «видео = верхние 55% контента (align TopCenter) / панель статуса+кнопок прижата к
+   низу (align BottomCenter)» — контролы вне границ поверхности, не перекрываются.
+   + **#CALLS-VIDEO-DIAG**: RendererEvents в init() — `onFirstFrameRendered` пишет в лог
+   «ПЕРВЫЙ КАДР отрисован ✓» (доказательство доставки кадров ДО ПОВЕРХНОСТИ:
+   framesDecoded из getStats доказывает только декодирование).
+   Сверка API по classes.jar 1.3.10 (скачан с Maven Central): SurfaceViewRenderer
+   extends android.view.SurfaceView; init(EglBase$Context, RendererCommon$RendererEvents)V;
+   RendererEvents = onFirstFrameRendered()V + onFrameResolutionChanged(III)V.
    Общий `EglBase.Context` с PeerConnectionFactory — **НАЙДЕН и закрыт скрытый баг**:
    раньше `eglBase` создавался локально в `initialize()` и релизился СРАЗУ после
    создания factory — для аудио это не мешало, но видео-декодер с терминированным

@@ -5115,3 +5115,27 @@ Stage Summary:
 - Код Этапа 1 ОПРАВДАН полностью: на мобильной сети входящий подключается за 0.7с тем же кодом (аудио работает). WAF-гипотеза 20:48 для той сессии не опровергнута, но главные системные дефекты — наши: залп trickle-кандидатов + пропуск startConversation при протухшем токене + непрозрачный фон поверх рендерера.
 - Ожидаемое поведение после фиксов: входящий по Wi-Fi — answer с inline-кандидатами (пир создаёт permissions на своей TURN-аллокации, relay-путь поднимается); исходящий — свежий токен (#CALLS-TOKEN-REFRESH) или prefs-фолбэк → startConversation → registered-peer → offer доставлен; видео — фон прозрачный, при кадрах видно; если кадров нет — «videoFrames: 0» в логе укажет на транспорт/кодек, а не на UI.
 - Не проверяемо в песочнице (нет Android SDK) — сборка и тест на устройстве за пользователем; в коде использованы только уже проверенные в проекте API (SessionDescription/IceCandidate/Handler.postDelayed/local suspend fun).
+
+---
+Task ID: calls-2026-08-31-ciber-log-timer-video-ice
+Agent: Z.ai (main)
+Task: разбор лога ciber.txt (22:25–22:32: входящий по Wi-Fi завис на соединении; входящий на мобильной сети — подключился, таймер застыл на 0:05, видео не видно; официальное приложение показывает свою камеру) + исправления
+
+Work Log:
+- Разобран лог upload/ciber.txt (5826 строк, 2 входящих видео-звонка; исходящего в логе нет).
+- Звонок 1 (22:25, Wi-Fi, оба телефона за ОДНИМ NAT 95.26.29.238): offer 3615Б без inline-кандидатов; 4 удалённых кандидата (srflx+3×relay, sdpMid=0) пришли ДО создания PC → PENDING-буфер; setRemoteSdp SUCCESS pending=4 → drain; answer с 6 inline-кандидатами; ICE CHECKING → через 16с FAILED. dumpIceStats: «нет candidate-pair в отчёте (пар=0 • reqS=0 resR=0 reqR=0)» — агент вообще не начал проверок. CALL END dur=84с ice=false. REANSWER #1–#4 не помогли.
+- Звонок 2 (22:28, PinoK на мобильной сети): ТЕМ ЖЕ КОДОМ ICE CONNECTED за 2с; фаза ACTIVE; peerCam=true (media-settings); videoFrames 0→35→83→128→176→225→273→321+ — ВИДЕО ДЕКОДИРУЕТСЯ; renderActive=true; ошибок рендера/addSink нет. На экране — чёрный цвет. CALL END dur=215с ice=true.
+- НАЙДЕН БАГ ТАЙМЕРА (симптом «0:05»): LaunchedEffect(phase) обновлял callDuration ОДИН раз (delay(1000) → присвоить → корутина завершилась) и никогда больше; (now − startTime) на тике = 5с при startTime=открытие экрана (звонок). Совпадение со скриншотом 1:1.
+- УСТАНОВЛЕНА ПРИЧИНА чёрного видео: punch-through SurfaceView (поверхность ЗА окном) в иерархии NavHost(fade-переходы)+вложенные Scaffold+нижняя навигация не пробивается; прозрачный containerColor CallScreen (#CALLS-VIDEO-BG) НЕ помог — getStats framesDecoded доказывает только декодирование, а не доставку в surface.
+- Сверка API по фактическому артефакту (урок RECV_ONLY): скачан stream-webrtc-android-1.3.10.aar с Maven Central, разобран classes.jar: PeerConnection.addIceCandidate → (Lorg/webrtc/IceCandidate;)Z (boolean!); SurfaceViewRenderer extends android.view.SurfaceView, init(EglBase$Context, RendererCommon$RendererEvents)V; RendererEvents = onFirstFrameRendered()V + onFrameResolutionChanged(III)V. setZOrderMediaOverlay унаследован от SurfaceView.
+- ФИКС 1 #CALLS-TIMER-FIX (CallScreen.kt): цикл while(true)+delay(1000) в LaunchedEffect(phase) — тик каждую секунду, отмена при смене фазы.
+- ФИКС 2 #CALLS-VIDEO-ZORDER + #CALLS-VIDEO-DIAG (CallScreen.kt): setZOrderMediaOverlay(true) — поверхность ПОВЕРХ окна, punch-through не нужен; видео = верхние 55% контента (align TopCenter), панель статуса/кнопок прижата к низу (align BottomCenter, bottom-padding 8dp вместо shiftUp) — контролы вне границ поверхности; RendererEvents с логом onFirstFrameRendered («ПЕРВЫЙ КАДР отрисован ✓») и onFrameResolutionChanged — на след. тесте однозначно различит «кадры не дошли до surface» vs «дошли».
+- ФИКС 3 #CALLS-ICE-DRAIN-LOG (WebRtcEngine.kt): drainPendingIceCandidates теперь логирует результат addIceCandidate (boolean раньше игнорировался): «drain: remote candidate добавлен» / «addIceCandidate вернул FALSE — НЕ добавлен». Следующий Wi-Fi-тест покажет, теряются ли кандидаты в drain (главная гипотеза пар=0/reqS=0) или это сетевой уровень.
+- Комментированы устаревшие блоки #CALLS-VIDEO-BG (CallScreen.kt ~1381, ~1414).
+
+Stage Summary:
+- Код Этапа 1 снова оправдан: медиа-тракт работает end-to-end (кандидаты/ICE/DTLS/декодирование 300+ кадров) на мобильной сети тем же кодом, что падал по Wi-Fi.
+- Три фикса: таймер (точный механизм из лога), видимость видео (z-order + раскладка), диагностика ICE-drain (лог boolean).
+- Ожидание от след. теста: таймер тикает; при кадрах видео видно в верхней половине, контролы снизу; в логе «ПЕРВЫЙ КАДР отрисован ✓»; по Wi-Fi — либо звонок проходит, либо в логе явное «addIceCandidate вернул FALSE» (след. шаг — перенос drain/ретрай) или сетевой отказ.
+- Побочное: vchat.joinConversation снова заблокирован WAF по обоим IP (обходится — accept-call ушёл, звонки соединялись); «Пинок не просит разрешение на свою камеру» — это Этап 2, ещё не реализован (так и задумано: камера не передаётся по умолчанию).
+- Не собирается в песочнице (нет Android SDK) — все использованные API сверены с classes.jar 1.3.10.
