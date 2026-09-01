@@ -116,10 +116,16 @@ class VideoTextureRenderer(context: Context) :
         // часть устройств даёт 1x1/некорректный буфер → GL рисует «в никуда» → чёрный
         // экран при доставляющихся кадрах. TextureView сам выставляет размер по вью
         // в draw(), но мы страхуемся ДО создания EGL-поверхности.
-        st.setDefaultBufferSize(width.coerceAtLeast(2), height.coerceAtLeast(2))
+        // ВНИМАНИЕ: у SurfaceTexture есть ТОЛЬКО setter setDefaultBufferSize —
+        // геттера defaultBufferSize НЕ существует (иначе ошибка компиляции
+        // «Unresolved reference 'defaultBufferSize'»), поэтому выставленный
+        // размер запоминаем локально для лога.
+        val bufW = width.coerceAtLeast(2)
+        val bufH = height.coerceAtLeast(2)
+        st.setDefaultBufferSize(bufW, bufH)
         runCatching { eglRenderer.createEglSurface(Surface(st)) }
             .onFailure { AppLog.e(TAG, PREFIX + "createEglSurface: ${it.message}") }
-        AppLog.i(TAG, PREFIX + "surface доступен ${width}x$height (буфер ${st.defaultBufferSize.width}x${st.defaultBufferSize.height}) → EGL-поверхность создана")
+        AppLog.i(TAG, PREFIX + "surface доступен ${width}x$height (буфер ${bufW}x${bufH}) → EGL-поверхность создана")
     }
 
     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {

@@ -890,9 +890,17 @@ class WebRtcEngine(
         signalingHandler?.postDelayed({ pumpDummyFrame() }, 100L)
     }
 
-    private fun fillPlane(plane: java.nio.ByteBuffer, value: Byte) {
+    /**
+     * Заполнение плоскости YUV константой. Значение задаётся в unsigned-диапазоне
+     * 0..255 и переводится в signed Byte внутри (128.toByte() == -128, те же биты
+     * 0x80 — нейтральная хрома).
+     * ВАЖНО: параметр НЕ Byte — литерал 128 не влезает в signed -128..127, и Kotlin
+     * НЕ конвертирует его автоматически (ошибка «actual Int, expected Byte»);
+     * 16 (Y-чёрный) влезает и компилируется молча — рассинхрон типов.
+     */
+    private fun fillPlane(plane: java.nio.ByteBuffer, value: Int) {
         plane.rewind()
-        while (plane.hasRemaining()) plane.put(value)
+        while (plane.hasRemaining()) plane.put(value.toByte())
     }
 
     private fun stopDummyVideo() {
