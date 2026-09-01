@@ -1428,9 +1428,12 @@ fun CallScreen(
     // нет проблем с видео.
     // #CALLS-HW-DIAG: логируем isHardwareAccelerated — если false, это дополнительное
     // объяснение проблем с TextureView (SurfaceView это чинит в любом случае).
-LaunchedEffect(videoRenderActive) {
-        val view = LocalView.current
-        val hw = runCatching { view.isHardwareAccelerated }.getOrDefault(false)
+    // LocalView.current — @Composable-геттер: читается ТОЛЬКО в композиции (строкой ниже);
+    // внутри LaunchedEffect/runCatching — ошибка компиляции "@Composable invocations…".
+    // В корутину уходит уже захваченная hwView.
+    val hwView = LocalView.current
+    LaunchedEffect(videoRenderActive) {
+        val hw = runCatching { hwView.isHardwareAccelerated }.getOrDefault(false)
         AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled, hwAccel=$hw)")
     }
 

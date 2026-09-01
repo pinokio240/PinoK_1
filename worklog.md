@@ -5324,3 +5324,18 @@ Work Log:
 
 Файлов изменено: 3 (WebRtcEngine.kt, CallScreen.kt, VideoTextureRenderer.kt — не трогал).
 Сборка/тест — за пользователем.
+
+---
+Task ID: 1 (repo-sync + hw-diag fix)
+Agent: Z.ai Code (Sergey)
+Task: проверить поступившие изменения 76ebd0f5..28d2a65f, починить остаточный compile-блокер
+
+Work Log:
+- Pull fast-forward 76ebd0f5 → 28d2a65f (28d2a65f = «вынести LocalView.current из runCatching»).
+- Проверка 28d2a65f: фикс неполный — `val view = LocalView.current` остался ВНУТРИ тела LaunchedEffect (CallScreen.kt:1432). LocalView.current — @Composable-геттер (androidx.compose.runtime.CompositionLocal.current объявлен @Composable): вызов в suspend-лямбде = compile error "@Composable invocations are only allowed within the body of a @Composable function". Из runCatching вынесен, из LaunchedEffect — нет.
+- Фикс #CALLS-HW-DIAG-2: чтение поднято в композицию (`val hwView = LocalView.current` до эффекта), в корутине — runCatching { hwView.isHardwareAccelerated }; заодно выправлен съехавший в колонку 0 LaunchedEffect (артефакт хотфикса 76ebd0f5).
+- Поведение диагностики не менялось: тот же лог renderActive/frames/hwAccel, hwAccel теперь реально будет читаться, а не блокироваться компилятором.
+
+Stage Summary:
+- CallScreen.kt: LocalView.current вынесен из LaunchedEffect в композицию (hwView), индентация LaunchedEffect восстановлена. Больше @Composable-вызовов в не-композабл лямбдах в файле нет (grep: единственное использование LocalView).
+- К HEAD теперь: DefaultVideoDecoderFactory всегда + SurfaceViewRenderer (85e83909) + корректный #CALLS-HW-DIAG (этот коммит). Сборка — за пользователем.
