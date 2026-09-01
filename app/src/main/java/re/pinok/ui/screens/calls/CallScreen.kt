@@ -1476,7 +1476,17 @@ fun CallScreen(
                         .align(Alignment.TopCenter),
                     factory = { ctx ->
                         SurfaceViewRenderer(ctx).apply {
-                            setZOrderMediaOverlay(true)
+                            // #CALLS-SURFACE-ZTOP (2026-09-01, лог 17:01): было
+                            // setZOrderMediaOverlay(true) — sublayer -1/-2 = ПОВЕРХНОСТЬ
+                            // ВСЁ РАВНО СЗАДИ ОКНА (mediaOverlay влияет только на порядок
+                            // МЕЖДУ SurfaceView). Рендер доказанно рисовал
+                            // (onFirstFrameRendered ✓, hwAccel=true, 350 кадров), но
+                            // экран чёрный: любой непрозрачный предок (фон NavHost/темы)
+                            // перекрывает поверхность. setZOrderOnTop — sublayer +1,
+                            // поверхность НАД окном → видна независимо от фонов.
+                            // Панель управления вне границ видео (ниже 55%) — не
+                            // перекрывается.
+                            setZOrderOnTop(true)
                             runCatching {
                                 val egl = engine.eglBaseContext()
                                     ?: error("EGL-контекст движка недоступен")

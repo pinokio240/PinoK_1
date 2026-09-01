@@ -5339,3 +5339,18 @@ Work Log:
 Stage Summary:
 - CallScreen.kt: LocalView.current вынесен из LaunchedEffect в композицию (hwView), индентация LaunchedEffect восстановлена. Больше @Composable-вызовов в не-композабл лямбдах в файле нет (grep: единственное использование LocalView).
 - К HEAD теперь: DefaultVideoDecoderFactory всегда + SurfaceViewRenderer (85e83909) + корректный #CALLS-HW-DIAG (этот коммит). Сборка — за пользователем.
+
+---
+Task ID: 2 (log 16:54–17:03: сеть Wi-Fi→LTE→Wi-Fi, 4 звонка — 2 корня видео)
+Agent: Z.ai Code (Sergey)
+Task: разбор ciber.txt (сборка calls-2026.09.01-3), фикс чёрного экрана и отсутствия видео в исходящих
+
+Work Log:
+- Сеть по NetworkObserver: 16:54 Wi-Fi 192.168.0.100 (net 241) → 17:00:08 LTE 10.207.176.11 (net 242, CGNAT) → 17:03:17 Wi-Fi (net 243). Ответ на вопрос пользователя: у PinoK сеть видна и логируется.
+- Звонки: #1 входящий Wi-Fi — CANCELED (не взят); #2 исходящий Wi-Fi — CONNECTED 16:58:49, HUNGUP 16:59:07, БЕЗ видео; #3 входящий LTE — CONNECTED 17:00:58, видео-кадры 0→350 (~25fps), SurfaceViewRenderer: ПЕРВЫЙ КАДР ✓ + 960x544 rot=270, hwAccel=true — но экран ЧЁРНЫЙ; #4 исходящий LTE — CONNECTED 17:02:36, peer включил камеру 17:02:41, видео НЕТ, аудио ок.
+- КОРЕНЬ A (исходящие без видео): offer a=sendonly при транссивере SEND_RECV. Виновник — легаси-констрейнт OfferToReceiveVideo=false в createOffer: в UnifiedPlan он вырезает recv-половину у транссиверов с локальным сендером (не «игнорируется», как было в комментариях). Ответ VK без video-отдачи → onAddTrack только audio → videoFrames не пишутся (оба исходящих звонка — Wi-Fi и LTE). Фикс #CALLS-OUT-SENDRECV-2: легаси-констрейнты удалены из createOffer И createAnswer (направление задаёт только prepareVideoTransceivers; лишнюю recvonly m-линию UnifiedPlan не добавит — видео-транссивер всегда есть от заглушки).
+- КОРЕНЬ B (чёрный экран при рисующих кадрах): setZOrderMediaOverlay(true) ставит sublayer -1 — поверхность ВСЁ РАВНО сзади окна (mediaOverlay упорядочивает только SurfaceView между собой); непрозрачный предок (фон NavHost/темы) перекрывал её. Рендер был исправен (onFirstFrameRendered ✓). Фикс #CALLS-SURFACE-ZTOP: setZOrderOnTop(true) — sublayer +1, поверхность над окном; панель управления вне границ видео.
+
+Stage Summary:
+- WebRtcEngine.kt: createOffer/createAnswer без OfferToReceive* (≈исходящие получат sendrecv → remote video track); CallScreen.kt: setZOrderOnTop(true). Проверка после сборки: в исходящих m=video offer = sendrecv; в логе «ПЕРВЫЙ КАДР отрисован» теперь должен совпадать с видимой картинкой.
+- Незакрытые хвосты видео: видео стартует только при кадрах (videoFrames>0) — ок; H265 в offer режется корректно (динамически, 39/40 были H265/rtx в нашем оффере); энкодер-заглушка стабилен в этом логе.

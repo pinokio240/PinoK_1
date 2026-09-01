@@ -747,17 +747,18 @@ class WebRtcEngine(
     }
 
     private fun createOffer() {
-        // #CALLS-AUDIO-OFFER (2026-08-30, тест 13:06): ОТКАЗ от OfferToReceiveVideo=true.
-        // Раньше «как в VK (PeerConnectionClient.b)» — но VK это видео-звонки, а PinoK
-        // аудио-only: recvonly video m-line раздувала offer до ~4.1 КБ JSON. Лог теста
-        // 13:06: сервер АКCEPTИЛ transmit-data с offer (5 попыток за 45 с, до и после
-        // accept, через 2 WS-сессии вызываемого), но НЕ доставлял его — при этом все
-        // 50 кандидатов (~464 Б) из тех же батчей дошли. Offer перестал помещаться в
-        // канал доставки сервера (порог похоже ~4 КБ на кадр/данные). Аудио-only SDP
-        // ~1.5 КБ — с запасом меньше любого правдоподобного лимита.
+        // #CALLS-AUDIO-OFFER (2026-08-30, тест 13:06): размер offer держим < ~4 КБ
+        // (порог доставки сигналинг-канала). ЛЕГАСИ-констрейнты OfferToReceive*
+        // УДАЛЕНЫ (#CALLS-OUT-SENDRECV-2, 2026-09-01, лог 17:02): OfferToReceiveVideo=false
+        // в UnifiedPlan НЕ «игнорируется», а ВЫРЕЗАЕТ recv-половину у транссиверов с
+        // локальным сендером: транссивер был SEND_RECV (лог 17:02:32.991), а offer
+        // ушёл a=sendonly (лог 17:02:34) → официальный клиент отвечал без отдачи видео
+        // → в ИСХОДЯЩИХ звонках (Wi-Fi 16:58 и LTE 17:02) у PinoK нет remote video track
+        // вовсе (videoFrames не пишутся, onAddTrack только audio). Направление теперь
+        // задаЁт ТОЛЬКО prepareVideoTransceivers() (вызов до createOffer в startCall).
+        // Дополнительную recvonly m-линию UnifiedPlan не добавит: видео-транссивер
+        // всегда существует (заглушка addTrack) — размер offer под контролем.
         val constraints = MediaConstraints()
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createOffer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let { orig ->
@@ -940,11 +941,10 @@ class WebRtcEngine(
         // #CALLS-AUDIO-OFFER (2026-08-30): симметрично createOffer — аудио-only answer,
         // без recvonly video m-line (см. комментарий в createOffer).
         // #CALLS-VIDEO-RX: реальное управление видео — в prepareVideoTransceivers()
-        // (вызывается перед этим методом), т.к. OfferToReceiveVideo=false в
-        // UnifiedPlan НЕ работает.
+        // (вызывается перед этим методом). #CALLS-OUT-SENDRECV-2 (01.09): легаси
+        // OfferToReceive* убраны и здесь — они избыточны (направление задаЁт
+        // транссивер), а в offer-пути тот же легаси активно ВРЕДИЛ (см. createOffer).
         val constraints = MediaConstraints()
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createAnswer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let { desc ->
