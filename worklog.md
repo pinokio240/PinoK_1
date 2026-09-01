@@ -5253,3 +5253,20 @@ Work Log:
 
 Stage Summary:
 - Единственная ошибка компиляции устранена переносом объявления; поведение #CALLS-SDP-DUP-GUARD не изменено. Сборка за пользователем (в песочнице нет Android SDK)
+
+---
+Task ID: log-1231-analysis
+Agent: main (Z.ai Code)
+Task: Разбор upload/Pasted Content_1788255829967.txt («всё хуже», 12:31–12:42)
+
+Work Log:
+- Процесс 12728 (12:31:57–12:32:29) = новый билд 106d0281: фильтр резал только мусор (127.0.0.1/::1/0.0.0.0/::/tcp), дедуп не блокировал reanswer («SDP отправлен (reanswer:topology-SERVER)»), EARLYSTATS пар=24/reqS=103/resR=0/reqR=0 — same-NAT провал идентичен прежним; REMOTE_HANGUP HUNGUP от пира на ~28с
+- Процесс 13022 (12:32:41+) = ЧУЖОЙ/СТАРЫЙ билд: «remote offer кэширован», send {reason:"hungup",conversationId} lowercase, CallSignalingClient.kt:266/305, WebRtcEngine.kt:329/409 — нет ни в одной ветке (git log --all -S пусто); сервер даёт ему «Invalid message format: c90d1c1a1014514218» (баг из 96634cc8, давно исправлен). 5 быстрых звонков 12:32:53–12:38:20 — все от этого билда
+- SovaApp/VKApiClient в 13022 совпадают с текущими → общий ствол, звонковая часть древняя. Вероятно второй телефон/старый APK
+- Пир во всех звонках — Chrome (srflx raddr 0.0.0.0 rport 9 = mDNS), за тем же роутером 95.26.26.169
+
+Stage Summary:
+- Регрессии от 7f6dbbf/106d0281 НЕТ; «хуже» = смешение двух билдов в логе
+- topology→SERVER(~12с) случается и у старого билда в same-NAT → это серверное решение для пары «один внешний IP», не следствие нашего кода
+- same-NAT: пир не начинает проверки вообще (reqR=0 c 7-й секунды); different-network (LTE↔web вчера) — проверяет мгновенно
+- Следующий шаг: реверс JS веб-клиента OK (topology-changed, условия старта проверок) + контрольный тест Wi-Fi→LTE оба мобильных
