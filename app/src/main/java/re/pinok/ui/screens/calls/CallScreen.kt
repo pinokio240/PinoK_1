@@ -314,10 +314,17 @@ fun CallScreen(
     // исходящий answer'а не имеет вовсе). До загрузки флаг = false (безопасный
     // аудио-only — прежнее поведение a=inactive).
     LaunchedEffect(Unit) {
-        val rx = runCatching { app.prefs.data.first().callsVideoRx }.getOrDefault(true)
+        val s = runCatching { app.prefs.data.first() }.getOrNull()
+        val rx = s?.callsVideoRx ?: true
         videoRxEnabled = rx
         engine.setVideoRxEnabled(rx)
-        AppLog.i("CallScreen", "videoRx (kill-switch из настроек) = $rx")
+        // #CALLS-SYMMETRIC: чёрная видеозаглушка наружу (sendrecv без камеры, Этап 2-заготовка).
+        val tx = s?.callsVideoTx ?: true
+        engine.setVideoTxEnabled(tx)
+        // #CALLS-SWDECODE: принудительный SW-декодер (диагностика чёрного экрана).
+        val sw = s?.callsVideoSwDecode ?: false
+        engine.setVideoSwDecodeEnabled(sw)
+        AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, swDecode=$sw (из настроек)")
     }
 
     // #CALLS-ACK-REOFFER (2026-08-29): флаш кэша, когда participantId стал известен

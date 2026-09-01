@@ -431,6 +431,12 @@ class SovaPrefs(context: Context) {
             callsSessionUid = p[Keys.CALLS_SESSION_UID] ?: 0L,
             callsCallToken = p[Keys.CALLS_CALL_TOKEN] ?: "",
             callsVideoRx = p[Keys.CALLS_VIDEO_RX] ?: true,
+            // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
+            // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
+            callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: true,
+            // #CALLS-SWDECODE (01.09): принудительный SW-декодер — диагностика
+            // чёрного экрана при доказанном рендере (TextureView, 1354 кадра).
+            callsVideoSwDecode = p[Keys.CALLS_VIDEO_SW_DECODE] ?: false,
         )
     }
 
@@ -730,6 +736,10 @@ class SovaPrefs(context: Context) {
     suspend fun setCallsCallToken(v: String)           = put(Keys.CALLS_CALL_TOKEN, v)
     /** #CALLS-VIDEO-RX (Этап 1): kill-switch приёма видео собеседника (default true). */
     suspend fun setCallsVideoRx(v: Boolean)            = put(Keys.CALLS_VIDEO_RX, v)
+    // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv без камеры).
+    suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
+    // #CALLS-SWDECODE: принудительный программный декодер видео.
+    suspend fun setCallsVideoSwDecode(v: Boolean)      = put(Keys.CALLS_VIDEO_SW_DECODE, v)
     /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
     suspend fun setEmailNotifyFreq(v: Int)              = put(Keys.EMAIL_NOTIFY_FREQ, v)
 
@@ -1026,6 +1036,18 @@ class SovaPrefs(context: Context) {
          *  декодера на конкретном устройстве выключается в Настройки → Звонки
          *  БЕЗ пересборки (fallback — прежнее поведение a=inactive). Default true. */
         val callsVideoRx: Boolean,
+        /** #CALLS-SYMMETRIC (01.09, Этап 2-заготовка): отправлять чёрную видеозаглушку
+         *  (320×180@10fps, БЕЗ камеры и разрешения CAMERA) — answer m=video становится
+         *  sendrecv, звонок симметричен как у офиц. клиента. Гипотеза: официальный
+         *  клиент в same-NAT Wi-Fi не начинает ICE-проверки против recvonly-ответа.
+         *  Default true (первый шаг Этапа 2; при включении камеры заменится на неё). */
+        val callsVideoTx: Boolean,
+        /** #CALLS-SWDECODE (01.09): принудительный SoftwareVideoDecoderFactory вместо
+         *  DefaultVideoDecoderFactory — решающая диагностика чёрного экрана при
+         *  декодирующемся видео (HW-текстуры MTK vs композиция). Вступает после
+         *  перезапуска приложения (фабрика создаётся один раз на процесс).
+         *  Default false. */
+        val callsVideoSwDecode: Boolean,
     )
 
     private object Keys {
@@ -1216,6 +1238,8 @@ class SovaPrefs(context: Context) {
         val CALLS_CALL_TOKEN        = stringPreferencesKey("calls_call_token")
         /** #CALLS-VIDEO-RX (Этап 1): приём видео собеседника (kill-switch краша декодера). */
         val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
+        val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
+        val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
     }
 
     // Fix #189: defaults для Auth Domains Config.

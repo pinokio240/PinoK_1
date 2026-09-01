@@ -461,6 +461,9 @@ fun FeedScreen(
             // тоже должен передавать initial-значение (тот же класс бага, что
             // Fix #100 / #110 / #189 / #monet-hybrid). Default true — как в SovaPrefs.
             callsVideoRx = true,
+            // #CALLS-SYMMETRIC / #CALLS-SWDECODE (01.09): initial-значения — как в SovaPrefs.
+            callsVideoTx = true,
+            callsVideoSwDecode = false,
             audioQuality = re.pinok.data.local.AudioQuality.Q192,
         )
     )

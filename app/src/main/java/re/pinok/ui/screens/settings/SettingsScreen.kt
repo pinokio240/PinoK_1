@@ -372,6 +372,29 @@ private fun CallsTab(
                 scope.launch { app.prefs.setCallsVideoRx(v) }
             }
         }
+        // #CALLS-SYMMETRIC (01.09): чёрная видеозаглушка наружу — симметричный звонок
+        // (Этап 2-заготовка, БЕЗ камеры и разрешения CAMERA). Гипотеза: офиц. клиент
+        // в Wi-Fi same-NAT не начинает ICE-проверки против recvonly-ответа.
+        item {
+            ToggleRow(
+                title = "Отправлять видеозаглушку",
+                subtitle = "Симметричный звонок: чёрные кадры вместо камеры (у собеседника — чёрный тайл). Помогает, если собеседник не подключается",
+                checked = s.callsVideoTx,
+            ) { v ->
+                scope.launch { app.prefs.setCallsVideoTx(v) }
+            }
+        }
+        // #CALLS-SWDECODE (01.09): решающая диагностика чёрного экрана при
+        // доказанном рендере (TextureView отрисовал 1354 кадра — экран чёрный).
+        item {
+            ToggleRow(
+                title = "Программный декодер видео",
+                subtitle = "Диагностика чёрного экрана: программное декодирование вместо аппаратного. Вступает после перезапуска приложения",
+                checked = s.callsVideoSwDecode,
+            ) { v ->
+                scope.launch { app.prefs.setCallsVideoSwDecode(v) }
+            }
+        }
 
         // #CALLS-AUTO (2026-08-23): session_key и queue-credential получаются
         // автоматически (как браузер): get_anonym_token → auth.anonymLogin →

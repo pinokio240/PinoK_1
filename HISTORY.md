@@ -11172,3 +11172,24 @@ API сверять с classes.jar зависимости, а не с памят�
 
 Сборка и тест — на устройстве (SDK в песочнице нет). Детали — CALLS_MAP §0.2/§11.2.3,
 worklog calls-2026-08-31-ciber2-texview-pcrestart.
+
+---
+
+## 2026-09-01 (утро) — Тест 44e3047 (09:50–09:53): EARLYSTATS решает Wi-Fi-загадку (пир молчит на STUN), «лимит 4КБ» опровергнут, TextureView рендерит 57с; симметричный звонок (гипотеза пользователя) + SW-декодер (#CALLS-SYMMETRIC / #CALLS-SWDECODE / #CALLS-VIDEO-TEXVIEW-2)
+
+Запрос пользователя: лог 1502 строк (2 звонка 09:50 Wi-Fi / 09:52 мобильная) + вопрос-гипотеза: «разве видео не должно передаваться как и аудио в обе стороны?».
+
+Факты из лога:
+- Wi-Fi same-NAT (09:50): EARLYSTATS на 5-й секунде CHECKING — **пар=24, reqS=103, resR=0, reqR=0** — наш агент сформировал все пары и отправил 103 проверки (вкл. relay↔relay), НО: 0 ответов, 0 входящих проверок. При этом answer ушёл одним сообщением (4310Б, ACK), TURN-аллокации создались (UDP до TURN ходит). Пир получил answer и НЕ начал проверок вовсе → это поведение официального клиента в same-NAT против нашего ответа, не наш дефект проводки.
+- «Лимит ~4КБ» опровергнут: мобильная сеть (09:52) — ответ 4474Б (ещё больше) — пир применил, ICE CONNECTED за 2с.
+- Мобильная (09:52): media-settings isVideoEnabled=true → videoFrames 0→1354 (24fps, 57с), renderActive=true, «ПЕРВЫЙ КАДР отрисован ✓ (TextureView)» — рендер шёл до remote-hangup; экран по-прежнему чёрный у пользователя.
+- Гэп наблюдаемости: в дампе 0 строк тега PinoK/VideoTextureRenderer — новый тег не попал в фильтр logcat пользователя.
+
+Ответ на вопрос пользователя: да, в полном видеозвонке аудио+видео ходят в обе стороны одновременно (каждое направление — свой RTP-поток); аудио у PinoK УЖЕ sendrecv и работает (мобильная) — двунаправленность транспорту не мешает. Но Wi-Fi падает ДО медиа (сам ICE — двусторонние STUN-пинги); recvonly-видео — легально (RFC 3264), RTCP всё равно двусторонний. Тем не менее гипотеза сделана ПРОВЕРЯЕМОЙ:
+
+Фиксы:
+1. **#CALLS-SYMMETRIC** — чёрная видеозаглушка наружу: createVideoSource + capturerObserver.push (320×180@10fps, БЕЗ камеры/CAMERA, API сверено по classes.jar 1.3.10: PCF.createVideoSource(Z), createVideoTrack(String,VideoSource), getCapturerObserver(), onFrameCaptured, JavaI420Buffer.allocate(II), VideoFrame(Buffer,I,J)), prepareVideoTransceivers → SEND_RECV/SEND_ONLY/RECV_ONLY/INACTIVE по флагам; track переиспользуется в recreateAndReanswer; старт/стоп в startCall/acceptCall/endCall/release. Тумблер «Отправлять видеозаглушку» (callsVideoTx, default ON). Это заготовка Этапа 2. Если Wi-Fi заработает с sendrecv — гипотеза подтверждена.
+2. **#CALLS-SWDECODE** — тумблер «Программный декодер видео» (callsVideoSwDecode, default OFF, после перезапуска): SoftwareVideoDecoderFactory vs DefaultVideoDecoderFactory(egl) — решает «HW-текстуры MTK vs композиция» при чёрном экране; в getStats добавлен лог decoderImplementation/framesReceived входящего видео.
+3. **#CALLS-VIDEO-TEXVIEW-2** — рендерер логирует через тег «CallScreen» ([TexView]-префикс — видность в фильтре пользователя), лог каждые 150 кадров, createEglSurface в runCatching, **setDefaultBufferSize(≥2×2) ДО createEglSurface** (страх «GL рисует в никуда» при буфере 1×1) и в onSurfaceTextureSizeChanged.
+
+Сборка и тест — на устройстве (SDK в песочнице нет). Детали — CALLS_MAP §0.2, worklog calls-2026-09-01-symmetric-swdecode.

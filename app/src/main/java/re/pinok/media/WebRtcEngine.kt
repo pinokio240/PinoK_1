@@ -189,6 +189,32 @@ class WebRtcEngine(
 
     fun setVideoRxEnabled(enabled: Boolean) { videoRxEnabled = enabled }
 
+    // #CALLS-SYMMETRIC (01.09): отправлять наружу чёрную видеозаглушку (Этап 2-заготовка,
+    // БЕЗ камеры). answer m=video становится sendrecv — звонок симметричен. Гипотеза
+    // пользователя: официальный клиент в Wi-Fi same-NAT не начинает ICE-проверки
+    // против recvonly-ответа (лог 01.09 09:50: наш answer доставлен и ACKнут, 24 пары,
+    // reqS=103 — а от пира 0 проверок и 0 ответов; на LTE тот же код — CONNECTED за 2с).
+    @Volatile
+    private var videoTxEnabled: Boolean = false
+
+    fun setVideoTxEnabled(enabled: Boolean) { videoTxEnabled = enabled }
+
+    // #CALLS-SWDECODE (01.09): принудительный SoftwareVideoDecoderFactory — решающая
+    // диагностика чёрного экрана при доказанном рендере (TextureView отрисовал
+    // 1354 кадра за 57с — экран чёрный). Если со SW-декодером видео появится —
+    // проблема в HW-текстурах декодера (shared EGL-контекст на этом MTK).
+    @Volatile
+    private var videoSwDecodeEnabled: Boolean = false
+
+    fun setVideoSwDecodeEnabled(enabled: Boolean) { videoSwDecodeEnabled = enabled }
+
+    // #CALLS-SYMMETRIC: фиктивный источник видео (чёрные кадры 320×180@10fps).
+    // Живёт на signaling thread; создается один раз, переиспользуется при рестартах PC.
+    @Volatile
+    private var dummyVideoRunning = false
+    private var dummyVideoSource: org.webrtc.VideoSource? = null
+    private var localVideoTrack: org.webrtc.VideoTrack? = null
+
     // #CALLS-VIDEO-RX: EglBase живёт столько же, сколько factory — видео-декодер и
     // рендерер CallScreen (SurfaceViewRenderer) делят этот EGL-контекст. Раньше
     // eglBase создавался локально и релизился сразу после создания factory — для
@@ -277,13 +303,21 @@ class WebRtcEngine(
             val eglBase = org.webrtc.EglBase.create()
             this@WebRtcEngine.eglBase = eglBase
             val eglContext = eglBase.eglBaseContext
+            // #CALLS-SWDECODE: фабрика декодеров выбирается ОДИН раз на процесс —
+            // смена тумблера вступает после перезапуска приложения.
+            val decoderFactory = if (videoSwDecodeEnabled) {
+                AppLog.w(TAG, "#CALLS-SWDECODE: SoftwareVideoDecoderFactory (принудительный SW-декодер)")
+                org.webrtc.SoftwareVideoDecoderFactory()
+            } else {
+                org.webrtc.DefaultVideoDecoderFactory(eglContext)
+            }
             factory = PeerConnectionFactory.builder()
                 .setOptions(PeerConnectionFactory.Options())
                 .setAudioDeviceModule(audioDeviceModule)
                 .setVideoEncoderFactory(org.webrtc.DefaultVideoEncoderFactory(
                     eglContext, true /* enableIntelVp8Encoder */, true /* enableH264HighProfile */
                 ))
-                .setVideoDecoderFactory(org.webrtc.DefaultVideoDecoderFactory(eglContext))
+                .setVideoDecoderFactory(decoderFactory)
                 .createPeerConnectionFactory()
             AppLog.i(TAG, "WebRTC initialized")
         }
@@ -296,6 +330,11 @@ class WebRtcEngine(
             createLocalAudioTrack()
             createPeerConnection()
             localAudioTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+            }
+            // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv) — до применения offer.
+            startDummyVideoIfNeeded()
+            localVideoTrack?.let { track ->
                 peerConnection?.addTrack(track, listOf("stream0"))
             }
             applyBufferedRemoteSdp()
@@ -313,6 +352,11 @@ class WebRtcEngine(
             createLocalAudioTrack()
             createPeerConnection()
             localAudioTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+            }
+            // #CALLS-SYMMETRIC: видеозаглушка наружу — до применения buffered offer.
+            startDummyVideoIfNeeded()
+            localVideoTrack?.let { track ->
                 peerConnection?.addTrack(track, listOf("stream0"))
             }
             // #CALLS-IN-OFFER: offer звонящего, буферизованный до «Принять»,
@@ -351,6 +395,8 @@ class WebRtcEngine(
             localAudioTrack = null
             audioSource?.dispose()
             audioSource = null
+            // #CALLS-SYMMETRIC: глушим помпу заглушки после close() PC.
+            stopDummyVideo()
             pendingRemoteIce.clear()
             onCallPhaseChanged(CallPhase.ENDED)
             AppLog.i(TAG, "Call ended")
@@ -524,6 +570,8 @@ class WebRtcEngine(
             localAudioTrack = null
             audioSource?.dispose()
             audioSource = null
+            // #CALLS-SYMMETRIC: полный teardown — глушим помпу заглушки.
+            stopDummyVideo()
             pendingRemoteIce.clear()
             factory?.dispose()
             factory = null
@@ -774,18 +822,90 @@ class WebRtcEngine(
     private fun prepareVideoTransceivers() {
         // ВАЖНО: в Java-API org.webrtc константа называется RECV_ONLY (через подчёркивание),
         // НЕ RECVONLY (kRecvOnly — это нативный C++; в Kotlin-биндинге 'RECVONLY' не существует).
-        val target = if (videoRxEnabled) RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
-                     else RtpTransceiver.RtpTransceiverDirection.INACTIVE
+        // #CALLS-SYMMETRIC (01.09): с видеозаглушкой (videoTx) m=video отвечает SEND_RECV —
+        // звонок симметричен, как у офиц. клиента (см. гипотезу в комментарии к полю).
+        val canTx = videoTxEnabled && localVideoTrack != null
+        val target = when {
+            canTx && videoRxEnabled -> RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+            canTx                   -> RtpTransceiver.RtpTransceiverDirection.SEND_ONLY
+            videoRxEnabled          -> RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+            else                    -> RtpTransceiver.RtpTransceiverDirection.INACTIVE
+        }
         peerConnection?.transceivers?.forEach { tr ->
             if (tr.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {
                 try {
                     tr.direction = target
-                    AppLog.i(TAG, "video-транссивер → $target (videoRx=${if (videoRxEnabled) "RECEIVE" else "OFF"})")
+                    AppLog.i(TAG, "video-транссивер → $target (videoTx=${if (canTx) "ON" else "OFF"}, videoRx=${if (videoRxEnabled) "RECEIVE" else "OFF"})")
                 } catch (e: Exception) {
                     AppLog.w(TAG, "не удалось задать направление video-транссиверу: ${e.message}")
                 }
             }
         }
+    }
+
+    // ══════════ #CALLS-SYMMETRIC: видеозаглушка наружу ══════════
+
+    /**
+     * #CALLS-SYMMETRIC (2026-09-01, лог 09:50 Wi-Fi): создать фиктивный источник видео
+     * и помпу чёрных кадров (320×180@10fps, YUV-инъекция БЕЗ камеры и без разрешения
+     * CAMERA). answer m=video → sendrecv: звонок становится симметричным, как у
+     * официального клиента. Решает гипотезу пользователя: офиц. клиент мог не начинать
+     * ICE-проверки против асимметричного recvonly-ответа в same-NAT Wi-Fi (наш answer
+     * доставлен и ACKнут, пар=24/reqS=103 — от пира 0 проверок и 0 ответов).
+     * Одновременно — заготовка Этапа 2: при включении камеры источник заменяется.
+     * API сверено по classes.jar 1.3.10: PCF.createVideoSource(Z)V,
+     * PCF.createVideoTrack(String,VideoSource), VideoSource.getCapturerObserver(),
+     * CapturerObserver.onFrameCaptured(VideoFrame), JavaI420Buffer.allocate(II),
+     * VideoFrame(Buffer,int,long).
+     */
+    private fun startDummyVideoIfNeeded() {
+        if (!videoTxEnabled) {
+            AppLog.i(TAG, "#CALLS-SYMMETRIC: выключено в настройках (callsVideoTx=false) — m=video ответит ${if (videoRxEnabled) "recvonly" else "inactive"}")
+            return
+        }
+        if (dummyVideoSource != null) return
+        val f = factory ?: return
+        dummyVideoRunning = true
+        val src = f.createVideoSource(false)
+        dummyVideoSource = src
+        localVideoTrack = f.createVideoTrack("video0", src)
+        AppLog.i(TAG, "#CALLS-SYMMETRIC: видеозаглушка создана (video0: 320x180@10fps, чёрные кадры — БЕЗ камеры)")
+        pumpDummyFrame()
+    }
+
+    /** Помпа чёрных кадров: 10fps на signaling thread (кадр ~86КБ — копейки). */
+    private fun pumpDummyFrame() {
+        if (!dummyVideoRunning) return
+        try {
+            val buffer = org.webrtc.JavaI420Buffer.allocate(320, 180)
+            fillPlane(buffer.dataY, 16)   // чёрный в limited-range
+            fillPlane(buffer.dataU, 128)
+            fillPlane(buffer.dataV, 128)
+            dummyVideoSource?.capturerObserver?.onFrameCaptured(
+                org.webrtc.VideoFrame(buffer, 0, System.nanoTime())
+            )
+        } catch (e: Exception) {
+            AppLog.w(TAG, "#CALLS-SYMMETRIC: кадр заглушки не отправлен: ${e.message}")
+        }
+        signalingHandler?.postDelayed({ pumpDummyFrame() }, 100L)
+    }
+
+    private fun fillPlane(plane: java.nio.ByteBuffer, value: Byte) {
+        plane.rewind()
+        while (plane.hasRemaining()) plane.put(value)
+    }
+
+    private fun stopDummyVideo() {
+        val wasRunning = dummyVideoRunning
+        dummyVideoRunning = false
+        localVideoTrack = null
+        val src = dummyVideoSource
+        dummyVideoSource = null
+        if (src != null) {
+            runCatching { src.dispose() }
+                .onFailure { AppLog.w(TAG, "#CALLS-SYMMETRIC: dispose источника: ${it.message}") }
+        }
+        if (wasRunning) AppLog.i(TAG, "#CALLS-SYMMETRIC: видеозаглушка остановлена")
     }
 
     private fun createAnswer() {
@@ -809,7 +929,7 @@ class WebRtcEngine(
                     // wire-формат одним тумблером, без пересборки.
                     // После strip первым выжившим становится H264 (HW-декодер почти
                     // везде), VP8/VP9 остаются SW-фолбэком.
-                    var fixedDesc = if (videoRxEnabled) stripH265(desc.description)
+                    var fixedDesc = if (videoRxEnabled || videoTxEnabled) stripH265(desc.description)
                                     else desc.description
                     // #CALLS-VIDEO-INACTIVE (страховка, только videoRx=OFF): если
                     // транссивер по какой-то причине остался recvonly (setDirection
@@ -817,9 +937,9 @@ class WebRtcEngine(
                     // SDP: a=recvonly → a=inactive ТОЛЬКО в секции m=video (аудио у
                     // PinoK всегда sendrecv — не заденем). В режиме RECEIVE demote
                     // НЕ применяем — ответ обязан остаться a=recvonly.
-                    if (!videoRxEnabled) fixedDesc = demoteVideoRecvOnly(fixedDesc)
+                    if (!videoRxEnabled && !videoTxEnabled) fixedDesc = demoteVideoRecvOnly(fixedDesc)
                     val answer = if (fixedDesc != desc.description) {
-                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (${if (videoRxEnabled) "strip H265" else "a=inactive (strip не применён)"}) — len ${desc.description.length}→${fixedDesc.length}")
+                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (${if (videoRxEnabled || videoTxEnabled) "strip H265" else "a=inactive (strip не применён)"}) — len ${desc.description.length}→${fixedDesc.length}")
                         SessionDescription(desc.type, fixedDesc)
                     } else desc
                     // #CALLS-FIX: как в VK — answer отправляем ТОЛЬКО после установки
@@ -938,6 +1058,10 @@ class WebRtcEngine(
             pendingRemoteIce.clear()
             createPeerConnection()
             localAudioTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+            }
+            // #CALLS-SYMMETRIC: заглушка живёт на уровне factory — переиспользуем в новом PC.
+            localVideoTrack?.let { track ->
                 peerConnection?.addTrack(track, listOf("stream0"))
             }
             // Полный цикл: setRemote(offer) → onSetSuccess → prepareVideoTransceivers →
@@ -1121,6 +1245,15 @@ class WebRtcEngine(
                                 .append(" reqR=").append(stat.members["requestsReceived"])
                                 .append(" resS=").append(stat.members["responsesSent"])
                                 .append(" | ")
+                        } else if (stat.type == "inbound-rtp") {
+                            // #CALLS-SWDECODE (01.09): decoderImplementation покажет,
+                            // какой декодер реально пашет (HW MTK vs OpenH264) —
+                            // соотнести с чёрным экраном/тумблером SW-декодера.
+                            val k = stat.members["kind"]?.toString()
+                                ?: stat.members["mediaType"]?.toString()
+                            if (k == "video") {
+                                AppLog.i(TAG, "video RX stats: decoder=${stat.members["decoderImplementation"]} framesDecoded=${stat.members["framesDecoded"]} framesReceived=${stat.members["framesReceived"]} keyFrames=${stat.members["keyFramesDecoded"]}")
+                            }
                         }
                     }
                     val s = sb.toString()
