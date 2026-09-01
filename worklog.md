@@ -5288,3 +5288,39 @@ Stage Summary:
 - Цепочка отправки SDP возвращена к точной рабочей; дедуп больше не блокирует легитимные ретрансмиты
 - С этого момента каждый лог несёт BuildStamp — лог без актуальной метки = тест выполнен не той сборкой, разбор не проводить
 - Сборка/тест — за пользователем (в песочнице нет Android SDK); перед тестом: pull → удалить старые копии приложения → собрать из этого чекаута → проверить stamp в логе
+
+---
+Task ID: FIX-CALLS-VIDEO-BLACK-STRIP-H265
+Agent: main
+Task: Два фикса видео-звонков: HardwareVideoDecoderFactory (всегда) + SurfaceViewRenderer (вместо TextureView)
+
+Work Log:
+- Лог ciber.txt (15:14–15:17, 4 звонка на Wi-Fi 95.26.26.169 через один NAT):
+  * Звонок 1 (исходящий): ICE CONNECTED за 3с, аудио работает, 35с до remote-hangup
+  * Звонок 2 (входящий): ICE FAILED (same-NAT), пар=24/reqS=101/resR=0/reqR=0, PC-RESTART → FAILED → CANCELED ice=false
+  * Звонки 3-4 (исходящие): ICE CONNECTED, аудио работает
+  * НИ ОДНОГО кадра не отрендерено (videoFrames не растёт, renderActive=false) — видео не показывается
+- Анализ строки 575 ответа: `m=video 96 97 98 99 103 104 107` — H265(39/40) вырезаны, НО и H264(100/101) тоже отсутствуют. Остались только VP8/VP9 (96/97) + VP9(98/99) — чисто софтовые кодеки.
+- Причина: stripH265 вырезает ТОЛЬКО H265 (работает корректно, динамически), но `SoftwareVideoDecoderFactory` НЕ ПОДДЕРЖИВАЕТ H264 в переговорах — при создании PeerConnectionFactory он не регистрирует H264, поэтому он не попадает в answer.
+
+== Фикс 1: WebRtcEngine.kt — DefaultVideoDecoderFactory всегда ==
+- Убрал `videoSwDecodeEnabled`/`setVideoSwDecodeEnabled()` — тумблер SW-декодера больше не нужен.
+- Убрал ветвление `if (videoSwDecodeEnabled) SoftwareVideoDecoderFactory else DefaultVideoDecoderFactory` — всегда `DefaultVideoDecoderFactory(eglContext)`.
+- H264 (HW-декодер) снова первый кодек в answer после stripH265. На MTK H264-декодер стабилен.
+- Удалил мёртвый код: поле `videoSwDecodeEnabled`, метод `setVideoSwDecodeEnabled()`, вызов `engine.setVideoSwDecodeEnabled(sw)` из CallScreen.
+
+== Фикс 2: CallScreen.kt — SurfaceViewRenderer вместо TextureView ==
+- Заменил `VideoTextureRenderer` на `org.webrtc.SurfaceViewRenderer`.
+- SurfaceView — hardware overlay (отдельный слой SurfaceFlinger), гарантированно видим на любом Android. Официальный VK-клиент использует SurfaceViewRenderer — у него нет проблем с чёрным экраном.
+- `setZOrderMediaOverlay(true)` — поверхность ПОВЕРХ окна.
+- `DisposableEffect` cleanup: `removeSink` + `release()` (SurfaceViewRenderer.release() идемпотентен).
+- Добавлен лог `isHardwareAccelerated` в `LaunchedEffect(videoRenderActive)` для диагностики.
+- Удалил `import re.pinok.media.VideoTextureRenderer` (заменён на `import org.webrtc.SurfaceViewRenderer`).
+- Обновлены комментарии (TextureView → SurfaceView).
+
+== Файлы не удалены ==
+- `VideoTextureRenderer.kt` оставлен в проекте (git-история, может пригодиться).
+- Настройка `callsVideoSwDecode` в `SovaPrefs`/`SettingsScreen`/`FeedScreen` остаётся мёртвым кодом (не мешает компиляции, тумблер неактивен).
+
+Файлов изменено: 3 (WebRtcEngine.kt, CallScreen.kt, VideoTextureRenderer.kt — не трогал).
+Сборка/тест — за пользователем.

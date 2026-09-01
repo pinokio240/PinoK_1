@@ -199,15 +199,6 @@ class WebRtcEngine(
 
     fun setVideoTxEnabled(enabled: Boolean) { videoTxEnabled = enabled }
 
-    // #CALLS-SWDECODE (01.09): принудительный SoftwareVideoDecoderFactory — решающая
-    // диагностика чёрного экрана при доказанном рендере (TextureView отрисовал
-    // 1354 кадра за 57с — экран чёрный). Если со SW-декодером видео появится —
-    // проблема в HW-текстурах декодера (shared EGL-контекст на этом MTK).
-    @Volatile
-    private var videoSwDecodeEnabled: Boolean = false
-
-    fun setVideoSwDecodeEnabled(enabled: Boolean) { videoSwDecodeEnabled = enabled }
-
     // #CALLS-SYMMETRIC: фиктивный источник видео (чёрные кадры 320×180@10fps).
     // Живёт на signaling thread; создается один раз, переиспользуется при рестартах PC.
     @Volatile
@@ -303,21 +294,19 @@ class WebRtcEngine(
             val eglBase = org.webrtc.EglBase.create()
             this@WebRtcEngine.eglBase = eglBase
             val eglContext = eglBase.eglBaseContext
-            // #CALLS-SWDECODE: фабрика декодеров выбирается ОДИН раз на процесс —
-            // смена тумблера вступает после перезапуска приложения.
-            val decoderFactory = if (videoSwDecodeEnabled) {
-                AppLog.w(TAG, "#CALLS-SWDECODE: SoftwareVideoDecoderFactory (принудительный SW-декодер)")
-                org.webrtc.SoftwareVideoDecoderFactory()
-            } else {
-                org.webrtc.DefaultVideoDecoderFactory(eglContext)
-            }
+            // #CALLS-HW-DECODER (2026-09-01): ВСЕГДА DefaultVideoDecoderFactory.
+            // SoftwareVideoDecoderFactory НЕ поддерживает H264 в переговорах — answer
+            // уходит только с VP8/VP9, что на MTK даёт чёрный экран (TextureView не
+            // композитится, а VP8/VP9 через SW-декодер не дают аппаратного слоя).
+            // stripH265 вырезает H265 — H264 остаётся первым HW-кодеком, стабильным
+            // на подавляющем большинстве Android-устройств.
             factory = PeerConnectionFactory.builder()
                 .setOptions(PeerConnectionFactory.Options())
                 .setAudioDeviceModule(audioDeviceModule)
                 .setVideoEncoderFactory(org.webrtc.DefaultVideoEncoderFactory(
                     eglContext, true /* enableIntelVp8Encoder */, true /* enableH264HighProfile */
                 ))
-                .setVideoDecoderFactory(decoderFactory)
+                .setVideoDecoderFactory(org.webrtc.DefaultVideoDecoderFactory(eglContext))
                 .createPeerConnectionFactory()
             AppLog.i(TAG, "WebRTC initialized")
         }
@@ -1081,12 +1070,12 @@ class WebRtcEngine(
             AppLog.w(TAG, "#CALLS-PC-RESTART: пересоздаю PC + answer с новыми ice-ufrag/pwd (рестарт ICE со стороны отвечающего)")
             // инвалидируем все висящие таймеры старого PC (EARLYSTATS/DISCONNECTED)
             iceStateGen.incrementAndGet()
-            // #CALLS-VIDEO-TEXVIEW-INTERACT: сбрасываем трек ДО close() (как в endCall) —
+            // #CALLS-PC-RESTART: сбрасываем трек ДО close() (как в endCall) —
             // иначе при появлении НОВОГО трека DisposableEffect(track, renderer) в CallScreen
             // подключил бы sink к СТАРОМУ (уже release'нутому) рендереру: AndroidView не
             // пересоздаётся при смене только трека, а рендерер в onDispose освобождается.
             // null → videoRenderActive=false → блок видео уходит из композиции → следующий
-            // трек создаст СВЕЖИЙ VideoTextureRenderer.
+            // трек создаст СВЕЖИЙ SurfaceViewRenderer.
             if (remoteVideoTrackRef != null) {
                 remoteVideoTrackRef = null
                 onRemoteVideoTrack?.invoke(null)

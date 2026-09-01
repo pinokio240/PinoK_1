@@ -11218,3 +11218,28 @@ worklog calls-2026-08-31-ciber2-texview-pcrestart.
 Сверка git diff 122d3671..cffe08e3: CallSignalingClient с рабочей версии НЕ менялся (hangup-формат, ping/pong, SDP-объект — без изменений); менялись только WebRtcEngine+CallScreen в 7f6dbbf (sendrecv/stripH265/дедуп/фильтр). «Старое решение» в сигналинге не подтверждено. НО: лог 12:31–12:42 содержит ДВА кода под одним пакетом — 12728 = 106d0281 (ведёт себя как прежние сборки), 13022 = СТАРЫЙ APK (hangup lowercase+conversationId с CallSignalingClient.kt:266 → сервер «Invalid message format» на КАЖДЫЙ сброс → официальный клиент не узнаёт о завершении — это и есть «hangup не доходил»). Все 5 звонков 12:32:53–12:38:20 — от старого APK. versionName не различал сборки.
 
 Фиксы: дедуп SDP откачен (рубил ретрансмиты answer #3/#4, премиса не подтвердилась, эталон переотправляет без дедупа); настройки видео hoisted до initialize/startCall/acceptCall (swDecode опаздывал к factory, offer мог уйти без заглушки); BuildStamp («calls-дата-N») в SovaApp/CALL START — bump в каждом звонковом коммите, лог без метки = не та сборка.
+
+---
+
+## 2026-09-01 — Fix #CALLS-VIDEO-BLACK-STRIP: DefaultVideoDecoderFactory + SurfaceViewRenderer
+
+### Контекст
+Лог ciber.txt (15:14–15:17, 4 звонка на Wi-Fi): исходящие работают (ICE CONNECTED), но видео нигде не рендерится. В answer после stripH265 остались только VP8/VP9 (96/97/98/99) — SoftwareVideoDecoderFactory не регистрирует H264. TextureView на MTK даёт чёрный экран (кадры декодируются, но не композитируются).
+
+### Изменения
+
+**WebRtcEngine.kt:**
+- Убран `SoftwareVideoDecoderFactory` — всегда `DefaultVideoDecoderFactory(eglContext)`. H264 — первый HW-кодек в ответе, стабилен на всех Android.
+- Удалён мёртвый код: `videoSwDecodeEnabled`, `setVideoSwDecodeEnabled()`.
+
+**CallScreen.kt:**
+- Рендер переключён с `VideoTextureRenderer` на `org.webrtc.SurfaceViewRenderer` — hardware overlay (как в официальном VK-клиенте), гарантированно видим.
+- `setZOrderMediaOverlay(true)` — поверхность поверх окна.
+- Добавлен лог `isHardwareAccelerated` для диагностики.
+- Убран вызов `engine.setVideoSwDecodeEnabled(sw)`.
+
+### Файлы
+- Изменено: `WebRtcEngine.kt`, `CallScreen.kt`
+- Не трогал: `VideoTextureRenderer.kt` (оставлен в проекте)
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

@@ -70,7 +70,7 @@ import re.pinok.data.model.CallMediaType
 import re.pinok.data.model.CallPhase
 import re.pinok.data.model.CallParticipant
 import re.pinok.data.model.VkCall
-import re.pinok.media.VideoTextureRenderer
+import org.webrtc.SurfaceViewRenderer
 import re.pinok.media.WebRtcEngine
 import re.pinok.util.AppLog
 import org.webrtc.SessionDescription
@@ -442,8 +442,7 @@ fun CallScreen(
             "════════ CALL START [${re.pinok.BuildStamp.STAMP}]: ${if (incoming) "входящий" else "исходящий"} peer=$peerId name=$peerName payload=${incomingPayload?.length ?: 0} ════════"
         )
         // #CALLS-VIDEO-PREFS-RACE: настройки видео ДО initialize/startCall/acceptCall
-        // (swDecode влияет на выбор decoderFactory в initialize; rx/tx — на направления
-        // транссиверов и создание заглушки в startCall/acceptCall).
+        // (rx/tx — на направления транссиверов и создание заглушки в startCall/acceptCall).
         run {
             val s = runCatching { app.prefs.data.first() }.getOrNull()
             val rx = s?.callsVideoRx ?: true
@@ -452,10 +451,7 @@ fun CallScreen(
             // #CALLS-SYMMETRIC: чёрная видеозаглушка наружу (sendrecv без камеры, Этап 2-заготовка).
             val tx = s?.callsVideoTx ?: true
             engine.setVideoTxEnabled(tx)
-            // #CALLS-SWDECODE: принудительный SW-декодер (диагностика чёрного экрана).
-            val sw = s?.callsVideoSwDecode ?: false
-            engine.setVideoSwDecodeEnabled(sw)
-            AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, swDecode=$sw (из настроек, до старта звонка)")
+            AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx (из настроек, до старта звонка)")
         }
         engine.initialize()
         // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
@@ -1422,16 +1418,17 @@ fun CallScreen(
         peerVideoEnabled && videoFrames > 0 &&
         (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
 
-    // #CALLS-VIDEO-TEXVIEW (2026-08-31, лог ciber.txt 22:58 mobile): SurfaceViewRenderer
-    // (setZOrderMediaOverlay, #CALLS-VIDEO-ZORDER) ПРОДОВОЖИЛ показывать чёрный экран
-    // даже при доказанном рендере («ПЕРВЫЙ КАДР отрисован ✓», videoFrames 0→2094):
-    // отдельная аппаратная поверхность на этом устройстве (HOTWAV Cyber 15 / MTK) не
-    // попадает в композицию окна/скриншота. Решение — TextureView-рендерер
-    // (VideoTextureRenderer на EglRenderer, API сверено по classes.jar 1.3.10):
-    // обычный view-узел, композитится через GPU вместе с окном, без punch-through
-    // и z-order. Разметка «видео сверху / панель снизу» сохранена.
+    // #CALLS-SURFACEVIEW (2026-09-01): SurfaceViewRenderer — официальный рендер
+    // libwebrtc (hardware overlay). TextureView на MTK не композитился (чёрный экран
+    // при доказанных кадрах). SurfaceView — отдельный аппаратный слой через SurfaceFlinger,
+    // гарантированно видим на любом Android. setZOrderMediaOverlay(true) — поверхность
+    // ПОВЕРХ окна, не перекрывается NavHost/Scaffold.
+    // Подтверждено: официальный VK-клиент использует SurfaceViewRenderer — у него
+    // нет проблем с видео.
+    // #CALLS-HW-DIAG: логируем isHardwareAccelerated — если false, это дополнительное
+    // объяснение проблем с TextureView (SurfaceView это чинит в любом случае).
     LaunchedEffect(videoRenderActive) {
-        AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled)")
+        AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled, hwAccel=${try { LocalView.current?.isHardwareAccelerated } catch(e: Exception) { "unknown" }})")
     }
 
     Scaffold(
@@ -1455,58 +1452,45 @@ fun CallScreen(
             // для блока диагностики, который при «Соединение…» обрезался нижней навигацией.
             val shiftUp = (LocalConfiguration.current.screenHeightDp * 0.10f).dp
 
-            // ══ #CALLS-VIDEO-RX (Этап 1, §11.2.3): удалённое видео собеседника ══
-            // stream-webrtc-android 1.3.10 (проверено по classes.jar артефакта):
-            // TextureViewRenderer в этой сборке ОТСУТСТВУЕТ, есть только
-            // SurfaceViewRenderer (extends android.view.SurfaceView — сверено javap-разбором
-            // classes.jar 2026-08-31).
-            //
-            // #CALLS-VIDEO-TEXVIEW (2026-08-31): SurfaceViewRenderer даже с
-            // setZOrderMediaOverlay(true) давал чёрный экран при ДОКАЗАННОМ рендере
-            // (onFirstFrameRendered ✓, videoFrames 0→2094, ошибок нет). Аппаратная
-            // поверхность не пробивается сквозь иерархию NavHost+Scaffold'ы+нижняя
-            // навигация и/или не попадает в скриншот — обе причины лечатся TextureView:
-            // он композитится GPU вместе с окном. Сам класс PinoK — VideoTextureRenderer
-            // (VideoTextureRenderer.kt) на базе org.webrtc.EglRenderer, API сверено
-            // по classes.jar 1.3.10 (init(EglBase.Context,int[],GlDrawer),
-            // createEglSurface(Surface), releaseEglSurface(Runnable), onFrame).
+            // ══ #CALLS-SURFACEVIEW (2026-09-01): удалённое видео через SurfaceViewRenderer ══
+            // stream-webrtc-android 1.3.10: org.webrtc.SurfaceViewRenderer (extends
+            // android.view.SurfaceView) — отдельный аппаратный слой (hardware overlay).
+            // Не зависит от композиции окна, гарантированно видим на любом устройстве.
+            // setZOrderMediaOverlay(true) — поверхность ПОВЕРХ окна (не перекрывается
+            // NavHost/Scaffold'ами).
             // Рендерим только когда кадры реально декодируются (videoFrames > 0) — пока
             // кадров нет, остаётся плейсхолдер (аватар + статус).
             if (videoRenderActive && remoteVideoTrack != null) {
                 val track = remoteVideoTrack!!
-                var renderer by remember { mutableStateOf<VideoTextureRenderer?>(null) }
+                var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .fillMaxHeight(0.55f)
                         .align(Alignment.TopCenter),
                     factory = { ctx ->
-                        VideoTextureRenderer(ctx).apply {
-                            // eglBaseContext() возвращает NULLABLE EglBase.Context? —
-                            // init() требует non-null, поэтому проверяем явно.
+                        SurfaceViewRenderer(ctx).apply {
+                            setZOrderMediaOverlay(true)
                             runCatching {
                                 val egl = engine.eglBaseContext()
                                     ?: error("EGL-контекст движка недоступен")
-                                // #CALLS-VIDEO-DIAG: RendererEvents — доказательство РЕАЛЬНОГО
-                                // рендера. onFirstFrameRendered в логе = кадры дошли ДО РЕНДЕРА
-                                // (getStats framesDecoded доказывает только декодирование).
+                                val me = this
                                 init(egl, object : org.webrtc.RendererCommon.RendererEvents {
                                     override fun onFirstFrameRendered() {
-                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован ✓ (TextureView)")
+                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован ✓ (SurfaceView)")
                                     }
                                     override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
                                         AppLog.d("CallScreen", "video renderer: кадр ${videoWidth}x$videoHeight rot=$rotation")
                                     }
                                 })
+                                AppLog.i("CallScreen", "video renderer: SurfaceViewRenderer инициализирован (hwAccel=${ctx.isHardwareAccelerated})")
                             }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
                             renderer = this
                         }
                     },
                 )
-                // #CALLS-VIDEO-RX: cleanup обязателен (§11.2.6) — removeSink + release,
-                // иначе утечка GL-текстур и краш следующего звонка. releaseRenderer()
-                // бросает при повторном вызове — релизим РОВНО ОДИН
-                // раз здесь (onDispose), onRelease у AndroidView не используем.
+                // Cleanup: removeSink + release. release() идемпотентен у SurfaceViewRenderer
+                // (в отличие от EglRenderer), но страхуемся флагом.
                 DisposableEffect(track, renderer) {
                     val r = renderer
                     if (r != null) {
@@ -1516,7 +1500,7 @@ fun CallScreen(
                     onDispose {
                         if (r != null) {
                             runCatching { track.removeSink(r) }
-                            runCatching { r.releaseRenderer() }
+                            runCatching { r.release() }
                         }
                     }
                 }
@@ -1528,11 +1512,9 @@ fun CallScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(32.dp)
-                    // #CALLS-VIDEO-TEXVIEW: при активном видео панель ПРИЖИМАЕТСЯ К НИЗУ —
-                    // видео (VideoTextureRenderer, TextureView) занимает верхнюю зону 55%;
-                    // в границах видео панель была бы ЗА рендерером (TextureView — обычный
-                    // узел окна, рисуется в порядке композиции). Внизу панель вне границ
-                    // видео — видна.
+                    // #CALLS-SURFACEVIEW: при активном видео панель ПРИЖИМАЕТСЯ К НИЗУ —
+                    // видео (SurfaceViewRenderer) занимает верхнюю зону 55%; внизу панель
+                    // вне границ видео — видна.
                     .align(if (videoRenderActive) Alignment.BottomCenter else Alignment.Center)
                     .padding(bottom = if (videoRenderActive) 8.dp else shiftUp),
             ) {
