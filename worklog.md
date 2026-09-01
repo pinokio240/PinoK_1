@@ -5201,3 +5201,25 @@ Stage Summary:
 - 4/4 ошибки компиляции устранены без изменения поведения: лог рендерера показывает те же значения буфера, заглушка шлёт те же биты YUV.
 - Урок дополнен: у Java-API проверять не только существование метода, но и существование ГЕТТЕРА при property-доступе из Kotlin (setter есть — getter нет), и помнить про литералы вне диапазона Byte (128 → ошибка, 16 → молчаливый успех).
 - Сборка/тест на устройстве за пользователем (в песочнице нет Android SDK).
+
+---
+Task ID: calls-2026-09-01-3calls-fixes
+Agent: Z.ai (main)
+Task: разбор двух логов 01.09 11:23-11:29 (Wi-Fi тишина / LTE-видео краш / исходящий LTE упал) + фиксы.
+
+Work Log:
+- Лог 1 (1390 строк): звонок 1 входящий Wi-Fi 11:25 — answer sendrecv с SSRC (симметрия на SDP-уровне работает), EARLYSTATS пар=24 reqS=103 resR=0 reqR=0 — гипотеза пользователя ОПРОВЕРГНУТА; topology-changed(SERVER, offerTo=[], connectTo=[]) на 9-й секунде = следствие (в успешном LTE-звонке отсутствует). Звонок 2 входящий LTE 11:26: CONNECTED 2с, frames=30, TextureView surface 1080x756, ПЕРВЫЙ КАДР ✓ 11:27:09.224 → crash в окне до 11:27:11.9 (записи crash-буфера отфильтрованы фильтром пользователя); swDecode=true применялся → НЕ HW-декодер; стек нужен из `adb logcat -b crash -d`.
+- Лог 2 (598 строк, исходящий 11:29): оффер m=video a=sendonly (addTrack→SEND_ONLY, prepareVideoTransceivers был только во входящем пути) + H265 в списке → VK выбрал H265, initEncode c2.mtk.hevc.encoder для заглушки. Оффер ТРИЖДЫ (seq=2 flush 11:29:09.117 → seq=3 REOFFER registered-peer +113мс → seq=4 topology 11:29:22.751, одинаковая o=-), answer дважды (11:25 seq=2/3). Пир ответил (host 155.212.197.168 — серверная нода VK) и умер на повторных setRemoteDescription: reqS=256 resR=0 reqR=0 → FAILED → hangup(FAILED).
+- Trickle НЕ срабатывал ни разу (0 строк "(trickle)") — все кандидаты inline; SDP чистые (фильтр работал), но trickle-ветка фильтра не имела.
+- ФИКС 1 #CALLS-OUT-SENDRECV (WebRtcEngine.startCall): prepareVideoTransceivers() до createOffer.
+- ФИКС 2 #CALLS-OFFER-STRIPH265 (createOffer): stripH265 оффера (зеркально answer-пути 940), setLocalDescription+sendLocalSdpNow с фиксированным SDP.
+- ФИКС 3 #CALLS-SDP-DUP-GUARD (CallScreen): remember-карта sdpSendCounts + sendSdpDedup(via) — choke-point для onLocalSdpReady/flush/reoffer/reanswer/topology; максимум 2 отправки одного SDP (ретранслимт кейса 20:31 сохранён), 3-я+ блок; новый SDP (новый ufrag после PC-restart/restartIce) — другой хеш, проходит.
+- ФИКС 4 #CALLS-CAND-FILTER-2 (onIceCandidate): фильтр tcp/127.0.0.1/::1/0.0.0.0/:: ДО веток buffer/trickle + лог «ОТФИЛЬТРОВАН».
+- Доки: CALLS_MAP §0.2 блок 01.09 11:23-11:29; HISTORY запись.
+- Самопроверка: баланс скобок WebRtcEngine 248/248, CallScreen 440/440; оставшиеся signaling.sendSdp только в sendAnswerReliably (ретраи по ACK — by design) и внутри sendSdpDedup; SessionDescription/remember импортированы.
+
+Stage Summary:
+- Исходящий путь починен по трём независимым дефектам (sendonly, H265-оффер, тройная отправка) — даже при живом пире видео нам не пришло бы.
+- Wi-Fi same-NAT: наш код больше ничего не может дать — нужен контрольный VK↔VK на том же роутере (роутер/AP-isolation vs клиент VK).
+- Краш LTE: НЕ HW-декодер (swDecode применялся) — стек в crash-буфере (живёт до перезагрузки); подозреваемые: EglRenderer-GL (первые кадры прошли), VP8-HW энкодер заглушки параллельно с декодом, MTK-кодек-драйвер.
+- Не собирается в песочнице — сборка/тест за пользователем.

@@ -337,6 +337,13 @@ class WebRtcEngine(
             localVideoTrack?.let { track ->
                 peerConnection?.addTrack(track, listOf("stream0"))
             }
+            // #CALLS-OUT-SENDRECV (2026-09-01, лог 11:29 исходящий): m=video уходил
+            // a=sendonly — addTrack создаёт транссивер с SEND_ONLY, а
+            // prepareVideoTransceivers() вызывался только во ВХОДЯЩЕМ пути (перед
+            // createAnswer после setRemoteDescription). Готовим транссиверы ЯВНО и
+            // здесь: оффер m=video = sendrecv при videoRx=ON, иначе собеседник отвечает
+            // recvonly и не пришлёт видео даже при живом ICE.
+            prepareVideoTransceivers()
             applyBufferedRemoteSdp()
             if (isInitiator) createOffer()
         }
@@ -626,6 +633,18 @@ class WebRtcEngine(
                 val proto = tokens.getOrNull(2) ?: "?"
                 if (typ != "?") candTypeCounts.merge(typ, 1, Int::plus)
                 if (proto == "tcp") candTcpCount.incrementAndGet()
+                // #CALLS-CAND-FILTER-2 (2026-09-01, лог 11:29): сбор тянет мусор —
+                // 127.0.0.1/::1 (loopback), 0.0.0.0/:: (any-address), tcp. Inline-фильтр
+                // вырезал их из SDP, но TRICKLE-ветка ушла бы КАК ЕСТЬ — мусорный
+                // кандидат в addIceCandidate пира способен обрушить его ICE-агент.
+                // Фильтруем ДО обеих веток: мусор не покидает процесс ни в каком виде.
+                val addr = tokens.getOrNull(4) ?: ""
+                if (proto == "tcp" || addr == "127.0.0.1" || addr == "::1" ||
+                    addr == "0.0.0.0" || addr == "::"
+                ) {
+                    AppLog.d(TAG, "локальный кандидат ОТФИЛЬТРОВАН (tcp/loopback/any): $typ/$proto ${candidate.sdp.take(40)}")
+                    return
+                }
                 // #CALLS-INLINE-ICE: до отправки SDP кандидаты копятся в буфере
                 // (уйдут ВНУТРИ SDP); после — trickle'ом через onIceCandidateReady.
                 // Так порядок «SDP первым, кандидаты следом» гарантирован, и у эталонного
@@ -752,16 +771,28 @@ class WebRtcEngine(
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
         peerConnection?.createOffer(SdpObserverAdapter(
             onSuccess = { sdp ->
-                sdp?.let {
+                sdp?.let { orig ->
+                    // #CALLS-OFFER-STRIPH265 (2026-09-01, лог 11:29 исходящий): оффер
+                    // содержал H265, и VK-пир выбрал ЕГО для нашей заглушки —
+                    // initEncode c2.mtk.hevc.encoder (пир выбирает кодек из НАШЕГО
+                    // списка). H265 на MTK — источник нативных крашей (история
+                    // #CALLS-VIDEO-INACTIVE). Вырезаем тем же мунгингом, что и в
+                    // answer — выбор сузится до VP8/H264/AV1.
+                    val desc = if (videoRxEnabled || videoTxEnabled) stripH265(orig.description)
+                               else orig.description
+                    val offer = if (desc != orig.description) {
+                        AppLog.i(TAG, "#CALLS-OFFER-STRIPH265: H265 вырезан из offer (len ${orig.description.length}→${desc.length})")
+                        SessionDescription(SessionDescription.Type.OFFER, desc)
+                    } else orig
                     // #CALLS-FIX: как в VK — SDP отправляем ТОЛЬКО после установки
                     // localDescription (onSetSuccess), иначе ICE gathering не стартует.
                     peerConnection?.setLocalDescription(SdpObserverAdapter(
                         onSetSuccess = {
                             AppLog.i(TAG, "setLocalDescription(offer) SUCCESS")
-                            sendLocalSdpNow(it)
+                            sendLocalSdpNow(offer)
                         },
                         onError = { err -> AppLog.e(TAG, "setLocalDescription error: $err") }
-                    ), it)
+                    ), offer)
                 }
                 onCallPhaseChanged(CallPhase.CONNECTING)
             },

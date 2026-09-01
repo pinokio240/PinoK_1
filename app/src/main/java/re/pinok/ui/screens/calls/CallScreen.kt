@@ -281,7 +281,9 @@ fun CallScreen(
                     if (sdp.type == SessionDescription.Type.ANSWER) {
                         sendAnswerReliably(pid, sdp)
                     } else {
-                        signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                        // #CALLS-SDP-DUP-GUARD: единственный choke-point для offer —
+                        // иначе прямой send + reoffer-механизм плодят одинаковые копии.
+                        sendSdpDedup(pid, sdp, "onLocalSdpReady")
                     }
                 } else {
                     pendingLocalSdp.value = sdp
@@ -327,6 +329,32 @@ fun CallScreen(
         AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, swDecode=$sw (из настроек)")
     }
 
+    // #CALLS-SDP-DUP-GUARD (2026-09-01, логи 11:25 входящий/11:29 исходящий): один и
+    // тот же SDP уезжал по 2-3 раза: оффер seq=2 (flush) → seq=3 (REOFFER на
+    // registered-peer через 113мс) → seq=4 (topology-changed); ответ seq=2 → seq=3
+    // (REANSWER на topology) — с ОДИНАКОВОЙ o=- строкой. Повторный
+    // setRemoteDescription того же origin у пира — риск ошибки/сброса его ICE-агента.
+    // Разрешаем МАКСИМУМ 2 отправки одного SDP (первая + один ретранслимт — страх
+    // потери сервером, кейс 20:31); третья и далее блокируются. НОВЫЙ SDP
+    // (PC-restart/restartIce — новые ufrag/pwd) проходит всегда: другой хеш.
+    val sdpSendCounts = remember { java.util.HashMap<String, Int>() }
+    val sendSdpDedup: (String, SessionDescription, String) -> Unit = { pid, sdp, via ->
+        val key = "${sdp.type.name}:${sdp.description.hashCode()}"
+        val n = (sdpSendCounts[key] ?: 0) + 1
+        sdpSendCounts[key] = n
+        when {
+            n == 1 -> {
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                AppLog.i("CallScreen", "SDP отправлен ($via): ${sdp.type}")
+            }
+            n == 2 -> {
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                AppLog.w("CallScreen", "SDP повторно отправлен #$n ($via) — ЛИМИТ, следующий дубль будет заблокирован")
+            }
+            else -> AppLog.w("CallScreen", "SDP-ДУБЛЬ #$n заблокирован ($via): ${sdp.type} уже дважды уходил — НЕ отправляю (дубли рушат setRemoteDescription у пира)")
+        }
+    }
+
     // #CALLS-ACK-REOFFER (2026-08-29): флаш кэша, когда participantId стал известен
     // ПОЗЖЕ готовности SDP/кандидатов (offer пришёл без participantId, pid вернули
     // последующие candidate/connection). Раньше кэшированный answer оставался в кэше
@@ -338,9 +366,9 @@ fun CallScreen(
             if (sdp.type == SessionDescription.Type.ANSWER) {
                 sendAnswerReliably(pid, sdp)
             } else {
-                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                sendSdpDedup(pid, sdp, "flush")
             }
-            AppLog.i("CallScreen", "кэшированный ${sdp.type} отправлен (участник=$pid)")
+            AppLog.i("CallScreen", "кэшированный ${sdp.type} → обработан отправку (участник=$pid)")
         }
         val cachedCnt = pendingLocalCandidates.value.size
         if (cachedCnt > 0) {
@@ -369,7 +397,7 @@ fun CallScreen(
                 AppLog.w("CallScreen", "REOFFER невозможен ($reason): pid=$pid, sdp=${sdp != null}")
             } else {
                 pendingLocalSdp.value = null
-                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                sendSdpDedup(pid, sdp, "reoffer:$reason")
                 allLocalCandidates.value.forEach { c ->
                     signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
                 }
@@ -410,7 +438,7 @@ fun CallScreen(
                     AppLog.i("CallScreen", "REANSWER пропущен ($reason): <3с с последней отправки")
                 } else {
                     lastAnswerSentAt = now
-                    signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                    sendSdpDedup(pid, sdp, "reanswer:$reason")
                     allLocalCandidates.value.forEach { c ->
                         signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
                     }
@@ -1004,8 +1032,7 @@ fun CallScreen(
                                 AppLog.w("CallScreen", "topology-changed: кэш пуст — беру offer из engine (${sdpToSend?.type})")
                             }
                             if (sdpToSend != null) {
-                                signaling.sendSdp(pidStr, sdpToSend.description, sdpToSend.type.name.lowercase())
-                                AppLog.i("CallScreen", "offer отправлен повторно (topology=$topology, $pidStr)")
+                                sendSdpDedup(pidStr, sdpToSend, "topology:$topology")
                             }
                             pendingLocalCandidates.value.forEach { c ->
                                 signaling.sendCandidate(pidStr, c.sdpMid, c.sdpMLineIndex, c.sdp)

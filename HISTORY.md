@@ -11193,3 +11193,22 @@ worklog calls-2026-08-31-ciber2-texview-pcrestart.
 3. **#CALLS-VIDEO-TEXVIEW-2** — рендерер логирует через тег «CallScreen» ([TexView]-префикс — видность в фильтре пользователя), лог каждые 150 кадров, createEglSurface в runCatching, **setDefaultBufferSize(≥2×2) ДО createEglSurface** (страх «GL рисует в никуда» при буфере 1×1) и в onSurfaceTextureSizeChanged.
 
 Сборка и тест — на устройстве (SDK в песочнице нет). Детали — CALLS_MAP §0.2, worklog calls-2026-09-01-symmetric-swdecode.
+
+---
+
+## 2026-09-01 — Разбор трёх звонков 11:23–11:29 (крash LTE-видео, Wi-Fi-тишина, исходящий sendonly+H265+тройной-оффер) + 4 фикса
+
+**Запрос:** «wi-fi проблема осталась, мобильная сеть видео звонок краш» + «звонок в официальный ВК с мобильной сети» (+скриншот «Звонок завершён / ICE CLOSED»).
+
+**Разбор (логи Pasted Content_1788251249948.txt, _1788251560498.txt):**
+1. Входящий Wi-Fi same-NAT: симметричный sendrecv-ответ на SDP-уровне РАБОТАЕТ, но гипотеза «медиа должны ходить в обе стороны» ОПРОВЕРГНУТА — EARLYSTATS: пар=24, reqS=103, resR=0, reqR=0 (пир молчит в обе стороны). topology-changed(SERVER) на 9-й секунде — фолбэк-СЛЕДСТВИЕ, не причина (в успешном LTE-звонке его не было).
+2. Входящий LTE: CONNECTED 2с → видео 544x960 → ПЕРВЫЙ КАДР ✓ на TextureView (11:27:09.224) → НАТИВНЫЙ КРАШ в окне ~2.5с (crash-записи отфильтрованы фильтром пользователя). swDecode=true УЖЕ применялся → краш НЕ HW-декодер. Нужен `adb logcat -b crash -d`.
+3. Исходящий LTE: m=video a=sendonly (addTrack→SEND_ONLY, prepareVideoTransceivers только во входящем пути) + H265 в оффере → VK выбрал H265 (initEncode c2.mtk.hevc.encoder) + оффер уехал ТРИЖДЫ (одинаковая o=-: flush→REOFFER+113мс→topology), ответ дважды. Пир ответил и умер на повторных setRemoteDescription (reqS=256, resR=0, reqR=0).
+
+**Фиксы:**
+1. **#CALLS-OUT-SENDRECV** (WebRtcEngine.startCall): prepareVideoTransceivers() ДО createOffer в исходящем — оффер m=video=sendrecv при videoRx=ON.
+2. **#CALLS-OFFER-STRIPH265** (createOffer): stripH265 для оффера (как в answer) — MTK H265-энкодер для заглушки больше не выберется.
+3. **#CALLS-SDP-DUP-GUARD** (CallScreen): sendSdpDedup — choke-point для ВСЕХ отправок offer (onLocalSdpReady/flush/reoffer/topology) и reanswer; максимум 2 отправки одного SDP (первая+ретранслимт 20:31-кейса), 3-я+ блокируется; PC-restart/restartIce (новый ufrag) проходят.
+4. **#CALLS-CAND-FILTER-2** (onIceCandidate): loopback(127.0.0.1/::1)/any(0.0.0.0/::)/tcp фильтр ДО обеих веток — trickle уходил бы мусор как есть (в сборе есть весь набор).
+
+Ожидание от след. теста: исходящий — sendrecv-оффер без H265, дублей нет, «SDP-ДУБЛЬ заблокирован» в логе при topology; входящий LTE — если краш повторится, дамп crash-буфера покажет стек; Wi-Fi — контрольный тест VK↔VK на том же роутере (кто виноват: роутер/AP-isolation или клиент VK).
