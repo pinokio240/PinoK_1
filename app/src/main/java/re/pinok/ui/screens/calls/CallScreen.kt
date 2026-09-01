@@ -241,33 +241,23 @@ fun CallScreen(
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
     var srvErrCount by remember { mutableStateOf(0) }
 
-    // #CALLS-SDP-DUP-GUARD (2026-09-01, логи 11:25 входящий/11:29 исходящий): один и
-    // тот же SDP уезжал по 2-3 раза: оффер seq=2 (flush) → seq=3 (REOFFER на
-    // registered-peer через 113мс) → seq=4 (topology-changed); ответ seq=2 → seq=3
-    // (REANSWER на topology) — с ОДИНАКОВОЙ o=- строкой. Повторный
-    // setRemoteDescription того же origin у пира — риск ошибки/сброса его ICE-агента.
-    // Разрешаем МАКСИМУМ 2 отправки одного SDP (первая + один ретранслимт — страх
-    // потери сервером, кейс 20:31); третья и далее блокируются. НОВЫЙ SDP
-    // (PC-restart/restartIce — новые ufrag/pwd) проходит всегда: другой хеш.
-    // ВАЖНО: объявлен ДО engine — onLocalSdpReady (val engine ниже) уже вызывает
-    // sendSdpDedup, а Kotlin запрещает forward-reference к локальным val.
-    val sdpSendCounts = remember { java.util.HashMap<String, Int>() }
-    val sendSdpDedup: (String, SessionDescription, String) -> Unit = { pid, sdp, via ->
-        val key = "${sdp.type.name}:${sdp.description.hashCode()}"
-        val n = (sdpSendCounts[key] ?: 0) + 1
-        sdpSendCounts[key] = n
-        when {
-            n == 1 -> {
-                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
-                AppLog.i("CallScreen", "SDP отправлен ($via): ${sdp.type}")
-            }
-            n == 2 -> {
-                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
-                AppLog.w("CallScreen", "SDP повторно отправлен #$n ($via) — ЛИМИТ, следующий дубль будет заблокирован")
-            }
-            else -> AppLog.w("CallScreen", "SDP-ДУБЛЬ #$n заблокирован ($via): ${sdp.type} уже дважды уходил — НЕ отправляю (дубли рушат setRemoteDescription у пира)")
-        }
-    }
+    // #CALLS-SDP-DUP-GUARD-REVERT (2026-09-01, тест после 106d0281): дедуп SDP
+    // («максимум 2 отправки одного SDP») УДАЛЁН, цепочка отправки возвращена к
+    // проверенной (первый успешный звонок 17:55 и 4/4 исходящих — там отправка
+    // была ПРЯМОЙ, без choke-point). Причины:
+    //  1) Дедуп молча БЛОКИРОВАЛ легитимные ретрансмиты: doReanswer лимит 4,
+    //     но 3-я и 4-я копии answer рубились дедупом (n>=3) — а ретрансмит answer
+    //     существует ИМЕННО для случая «пир первую копию не применил» (#CALLS-ICE-REANSWER);
+    //  2) Премиса «пир умирает на повторном setRemoteDescription того же origin»
+    //     НЕ ПОДТВЕРДИЛАСЬ: в логе 12:31 (с дедупом) пир так же молчал (reqR=0 с 7-й
+    //     секунды) — это сетевая проблема same-NAT, не SDP; эталон Chrome (calls-sdk)
+    //     наоборот, переотправляет offer на каждый registered-peer БЕЗ дедупа;
+    //  3) Прямая отправка = точное поведение той цепочки, которая давала успешные
+    //     звонки. Никаких «улучшений» серединной логики — только изолированные фиксы.
+    // НОВАЯ ПРАКТИКА ДИАГНОСТИКИ: BuildStamp.STAMP в CALL START/SovaApp — лог
+    // однозначно доказывает, какой КОД исполнялся (в логе 12:32 два процесса
+    // re.pinok.debug: новый 106d0281 и СТАРЫЙ APK со старым форматом hangup —
+    // «hangup не доходил до официального» был именно у старого APK).
 
     // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2): приём видео собеседника.
     //  - remoteVideoTrack — от движка (onAddTrack, signaling-поток — присваивание
@@ -309,9 +299,9 @@ fun CallScreen(
                     if (sdp.type == SessionDescription.Type.ANSWER) {
                         sendAnswerReliably(pid, sdp)
                     } else {
-                        // #CALLS-SDP-DUP-GUARD: единственный choke-point для offer —
-                        // иначе прямой send + reoffer-механизм плодят одинаковые копии.
-                        sendSdpDedup(pid, sdp, "onLocalSdpReady")
+                        // #CALLS-SDP-DUP-GUARD-REVERT: прямая отправка как в проверенной цепочке.
+                        signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                        AppLog.i("CallScreen", "offer отправлен (onLocalSdpReady)")
                     }
                 } else {
                     pendingLocalSdp.value = sdp
@@ -339,23 +329,14 @@ fun CallScreen(
         )
     }
 
-    // #CALLS-VIDEO-RX: kill-switch читаем сразу после композиции — до первого answer
-    // (входящий: answer создаётся по кнопке «Принять», т.е. заведомо позже;
-    // исходящий answer'а не имеет вовсе). До загрузки флаг = false (безопасный
-    // аудио-only — прежнее поведение a=inactive).
-    LaunchedEffect(Unit) {
-        val s = runCatching { app.prefs.data.first() }.getOrNull()
-        val rx = s?.callsVideoRx ?: true
-        videoRxEnabled = rx
-        engine.setVideoRxEnabled(rx)
-        // #CALLS-SYMMETRIC: чёрная видеозаглушка наружу (sendrecv без камеры, Этап 2-заготовка).
-        val tx = s?.callsVideoTx ?: true
-        engine.setVideoTxEnabled(tx)
-        // #CALLS-SWDECODE: принудительный SW-декодер (диагностика чёрного экрана).
-        val sw = s?.callsVideoSwDecode ?: false
-        engine.setVideoSwDecodeEnabled(sw)
-        AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, swDecode=$sw (из настроек)")
-    }
+    // #CALLS-VIDEO-RX: kill-switch видео. #CALLS-VIDEO-PREFS-RACE (2026-09-01):
+    // раньше настройки читались в ОТДЕЛЬНОМ LaunchedEffect(Unit) ПАРАЛЛЕЛЬНО с
+    // главным (startCall/acceptCall/initialize) — DataStore I/O мог завершиться
+    // ПОЗЖЕ старта звонка, и тогда: (1) offer уходил БЕЗ видеозаглушки и без
+    // prepareVideoTransceivers (videoTxEnabled ещё false), (2) callsVideoSwDecode
+    // опаздывал к createPeerConnectionFactory (фабрика уже с HW-декодером).
+    // Теперь чтение hoisted в НАЧАЛО главного эффекта — ГАРАНТИРОВАННО до
+    // engine.initialize()/startCall/acceptCall (см. начало LaunchedEffect ниже).
 
     // #CALLS-ACK-REOFFER (2026-08-29): флаш кэша, когда participantId стал известен
     // ПОЗЖЕ готовности SDP/кандидатов (offer пришёл без participantId, pid вернули
@@ -368,9 +349,9 @@ fun CallScreen(
             if (sdp.type == SessionDescription.Type.ANSWER) {
                 sendAnswerReliably(pid, sdp)
             } else {
-                sendSdpDedup(pid, sdp, "flush")
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
             }
-            AppLog.i("CallScreen", "кэшированный ${sdp.type} → обработан отправку (участник=$pid)")
+            AppLog.i("CallScreen", "кэшированный ${sdp.type} отправлен (участник=$pid)")
         }
         val cachedCnt = pendingLocalCandidates.value.size
         if (cachedCnt > 0) {
@@ -399,7 +380,7 @@ fun CallScreen(
                 AppLog.w("CallScreen", "REOFFER невозможен ($reason): pid=$pid, sdp=${sdp != null}")
             } else {
                 pendingLocalSdp.value = null
-                sendSdpDedup(pid, sdp, "reoffer:$reason")
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
                 allLocalCandidates.value.forEach { c ->
                     signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
                 }
@@ -440,7 +421,7 @@ fun CallScreen(
                     AppLog.i("CallScreen", "REANSWER пропущен ($reason): <3с с последней отправки")
                 } else {
                     lastAnswerSentAt = now
-                    sendSdpDedup(pid, sdp, "reanswer:$reason")
+                    signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
                     allLocalCandidates.value.forEach { c ->
                         signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
                     }
@@ -458,8 +439,24 @@ fun CallScreen(
         // не успевают — пользователь присылает лог вместо скриншота).
         AppLog.i(
             "CallScreen",
-            "════════ CALL START: ${if (incoming) "входящий" else "исходящий"} peer=$peerId name=$peerName payload=${incomingPayload?.length ?: 0} ════════"
+            "════════ CALL START [${re.pinok.BuildStamp.STAMP}]: ${if (incoming) "входящий" else "исходящий"} peer=$peerId name=$peerName payload=${incomingPayload?.length ?: 0} ════════"
         )
+        // #CALLS-VIDEO-PREFS-RACE: настройки видео ДО initialize/startCall/acceptCall
+        // (swDecode влияет на выбор decoderFactory в initialize; rx/tx — на направления
+        // транссиверов и создание заглушки в startCall/acceptCall).
+        run {
+            val s = runCatching { app.prefs.data.first() }.getOrNull()
+            val rx = s?.callsVideoRx ?: true
+            videoRxEnabled = rx
+            engine.setVideoRxEnabled(rx)
+            // #CALLS-SYMMETRIC: чёрная видеозаглушка наружу (sendrecv без камеры, Этап 2-заготовка).
+            val tx = s?.callsVideoTx ?: true
+            engine.setVideoTxEnabled(tx)
+            // #CALLS-SWDECODE: принудительный SW-декодер (диагностика чёрного экрана).
+            val sw = s?.callsVideoSwDecode ?: false
+            engine.setVideoSwDecodeEnabled(sw)
+            AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, swDecode=$sw (из настроек, до старта звонка)")
+        }
         engine.initialize()
         // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
         if (!micGranted) micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
@@ -1034,7 +1031,8 @@ fun CallScreen(
                                 AppLog.w("CallScreen", "topology-changed: кэш пуст — беру offer из engine (${sdpToSend?.type})")
                             }
                             if (sdpToSend != null) {
-                                sendSdpDedup(pidStr, sdpToSend, "topology:$topology")
+                                signaling.sendSdp(pidStr, sdpToSend.description, sdpToSend.type.name.lowercase())
+                                AppLog.i("CallScreen", "offer отправлен повторно (topology=$topology, $pidStr)")
                             }
                             pendingLocalCandidates.value.forEach { c ->
                                 signaling.sendCandidate(pidStr, c.sdpMid, c.sdpMLineIndex, c.sdp)

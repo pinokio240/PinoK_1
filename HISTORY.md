@@ -11212,3 +11212,9 @@ worklog calls-2026-08-31-ciber2-texview-pcrestart.
 4. **#CALLS-CAND-FILTER-2** (onIceCandidate): loopback(127.0.0.1/::1)/any(0.0.0.0/::)/tcp фильтр ДО обеих веток — trickle уходил бы мусор как есть (в сборе есть весь набор).
 
 Ожидание от след. теста: исходящий — sendrecv-оффер без H265, дублей нет, «SDP-ДУБЛЬ заблокирован» в логе при topology; входящий LTE — если краш повторится, дамп crash-буфера покажет стек; Wi-Fi — контрольный тест VK↔VK на том же роутере (кто виноват: роутер/AP-isolation или клиент VK).
+
+## 2026-09-01 — «Всё стало только хуже»: проверка цепочки рабочая/текущая, ОТКАТ дедупа SDP, гонка настроек видео, маркер сборки (#CALLS-SDP-DUP-GUARD-REVERT / #CALLS-VIDEO-PREFS-RACE / #CALLS-BUILD-STAMP)
+
+Сверка git diff 122d3671..cffe08e3: CallSignalingClient с рабочей версии НЕ менялся (hangup-формат, ping/pong, SDP-объект — без изменений); менялись только WebRtcEngine+CallScreen в 7f6dbbf (sendrecv/stripH265/дедуп/фильтр). «Старое решение» в сигналинге не подтверждено. НО: лог 12:31–12:42 содержит ДВА кода под одним пакетом — 12728 = 106d0281 (ведёт себя как прежние сборки), 13022 = СТАРЫЙ APK (hangup lowercase+conversationId с CallSignalingClient.kt:266 → сервер «Invalid message format» на КАЖДЫЙ сброс → официальный клиент не узнаёт о завершении — это и есть «hangup не доходил»). Все 5 звонков 12:32:53–12:38:20 — от старого APK. versionName не различал сборки.
+
+Фиксы: дедуп SDP откачен (рубил ретрансмиты answer #3/#4, премиса не подтвердилась, эталон переотправляет без дедупа); настройки видео hoisted до initialize/startCall/acceptCall (swDecode опаздывал к factory, offer мог уйти без заглушки); BuildStamp («calls-дата-N») в SovaApp/CALL START — bump в каждом звонковом коммите, лог без метки = не та сборка.

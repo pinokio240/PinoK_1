@@ -595,7 +595,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        AppLog.i("SovaApp", "onCreate: PinoK starting (version=${BuildConfig.VERSION_NAME})")
+        // #CALLS-BUILD-STAMP: метка кода звонковой цепочки — по ней в логе мгновенно
+        // видно, какая СБОРКА исполняется (кейс 12:32: два процесса re.pinok.debug
+        // с разным кодом — новый и старый APK; versionName не различал их).
+        AppLog.i("SovaApp", "onCreate: PinoK starting (version=${BuildConfig.VERSION_NAME}, stamp=${BuildStamp.STAMP})")
 
         // 0. Инициализация файлового лога (персистентный, с rotation)
         AppLog.init(this)

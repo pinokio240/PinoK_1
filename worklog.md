@@ -5270,3 +5270,21 @@ Stage Summary:
 - topology→SERVER(~12с) случается и у старого билда в same-NAT → это серверное решение для пары «один внешний IP», не следствие нашего кода
 - same-NAT: пир не начинает проверки вообще (reqR=0 c 7-й секунды); different-network (LTE↔web вчера) — проверяет мгновенно
 - Следующий шаг: реверс JS веб-клиента OK (topology-changed, условия старта проверок) + контрольный тест Wi-Fi→LTE оба мобильных
+
+---
+Task ID: chain-audit-dedup-revert
+Agent: main (Z.ai Code)
+Task: Проверить цепочку «которая работала» vs текущую (жалоба: «взял старое решение и воткнул»; hangup не доходит до официального; пинок висит в соединении и сам кладёт трубку)
+
+Work Log:
+- git diff 122d3671..cffe08e3 по звонковой цепочке: CallSignalingClient.kt — 0 изменений с рабочей сборки (hangup UPPERCASE {reason}, ping→pong, SDP объектом); менялись только WebRtcEngine (+37) и CallScreen (+43) в 7f6dbbf (prepareVideoTransceivers-в-исходящем, stripH265-оффера, SDP-дедуп, фильтр кандидатов)
+- Перечитан лог 12:31–12:42 (upload/…5829967.txt) своими глазами: процесс 12728 = сборка 106d0281 (формат логов «send: command=… seq=… ok=…»), процесс 13022 = ДРУГОЙ код: «send: {"command":"hangup","sequence":13,"reason":"hungup","conversationId":"…"}» @ CallSignalingClient.kt:266#send, ошибки «Invalid message format» @ :305#onMessage. В текущем коде hangup-лог — строка 219 (format другой), SERVER_ERROR — строка 453; git log --all -S — строк нет ни в одном коммите
+- Вывод: все 5 звонков 12:32:53–12:38:20 (и симптомы пользователя) — от СТАРОГО APK: его hangup отвергается сервером КАЖДЫЙ раз (conversationId в hangup) → официальный клиент не получает сброс («долго доходило или вообще не доходило»); versionName у сборок одинаковый — различить было нечем
+- Правки: (1) #CALLS-SDP-DUP-GUARD-REVERT — дедуп SDP удалён из CallScreen (5 call-sites → прямая signaling.sendSdp, как в проверенной цепочке; дедуп рубил REANSWER #3/#4 и опирался на неподтверждённую премису); (2) #CALLS-VIDEO-PREFS-RACE — чтение callsVideoRx/Tx/SwDecode перенесено в начало главного LaunchedEffect ДО engine.initialize/startCall/acceptCall (раньше DataStore I/O гонял со стартом звонка: offer без заглушки, swDecode опаздывал к factory); (3) #CALLS-BUILD-STAMP — новый BuildStamp.kt («calls-2026.09.01-3»), метка в SovaApp.onCreate и в CALL START
+- Доки: звонки.md §38, HISTORY, worklog
+
+Stage Summary:
+- «Старое решение» в сигналинге НЕ подтверждено (файл байт-в-байт рабочий); реальная причина жалоб = второй (старый) APK на устройстве, у которого hangup отвергается сервером
+- Цепочка отправки SDP возвращена к точной рабочей; дедуп больше не блокирует легитимные ретрансмиты
+- С этого момента каждый лог несёт BuildStamp — лог без актуальной метки = тест выполнен не той сборкой, разбор не проводить
+- Сборка/тест — за пользователем (в песочнице нет Android SDK); перед тестом: pull → удалить старые копии приложения → собрать из этого чекаута → проверить stamp в логе
