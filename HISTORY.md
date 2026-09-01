@@ -12,6 +12,62 @@
 
 ---
 
+## 🚀 Стартовая точка для завтра (2026-09-01 → 2026-09-02)
+
+### Текущая ветка: `PinoK` (origin: github.com/pinokio240/PinoK_1.git)
+### Последний коммит: `f2f6b17d` (fix #CALLS-BUILD-STAMP-4 — метка → calls-2026.09.01-4)
+
+### МАСТЕР-ПЛАН: **[`контейнеры.план.md`](./контейнеры.план.md)** — все этапы, чеклисты, правила. Начинать завтра с него.
+
+### Что сделано за день (2026-09-01), снизу вверх:
+- ✅ `895e71e1` — откат дедупа SDP + гонка настроек видео + BuildStamp (звонки.md §38)
+- ✅ `85e83909` — DefaultVideoDecoderFactory всегда + SurfaceViewRenderer
+- ✅ `658fcec2` — #CALLS-HW-DIAG-2: LocalView.current в композицию (compile-блокер)
+- ✅ `d09888de` — **два корня видео**: (A) исходящие без видео — легаси
+  `OfferToReceiveVideo=false` в UnifiedPlan вырезал recv → offer a=sendonly
+  (#CALLS-OUT-SENDRECV-2); (B) чёрный экран при рендере — setZOrderMediaOverlay
+  ставил поверхность ЗА окном → setZOrderOnTop (#CALLS-SURFACE-ZTOP). Детали: звонки.md §39
+- ✅ `4db02d08` — **Этап 1.1 контейнеризации**: модуль `:contracts`
+  (AppContainer/Capability/NavEntry/SettingsSection/PermissionNeeds) +
+  ContainerRegistry в хосте. Реестр пуст — поведение не изменено
+- ✅ `f2f6b17d` — bump BuildStamp → `calls-2026.09.01-4` (правило нарушалось
+  в 85e83909..d09888de — сборка для теста 2.1 не отличалась бы в логе)
+
+### ⚠️ Что НЕ сделано (TODO на завтра, приоритеты):
+
+**P0 — тест за пользователем (2.1):**
+1. Собрать (HEAD ≥ `f2f6b17d`), проверить stamp `calls-2026.09.01-4` в логе старта.
+2. Матрица 4 звонков (Wi-Fi/LTE × входящий/исходящий) — чеклист в звонки.md §39
+   и контейнеры.план.md §2.1. Критерий: исходящий offer `m=video`=**sendrecv**,
+   входящий — кадры ВИДНЫ на экране (не чёрный).
+3. LMKD-проверка после длинного звонка: `adb logcat -d | grep -iE "lmkd|lowmemory|am_kill"`.
+
+**P0 — контейнеризация (Часть 1, план №1):**
+4. **Этап 1.2 — следующий шаг**: core-слой `:core:common` (AppLog/BuildStamp) →
+   `:core:network` (VKApiClient/LongPoll/CallSignaling) → `:core:media`,
+   по одному модулю за коммит, git mv, поведение без изменений.
+5. Этап 1.3 — контейнер-пионер `:feature:calls` (WebRtcEngine/CallScreen/тумблеры,
+   экспорт NavEntry/CallStarter/SettingsSection/PermissionNeeds).
+6. Этап 1.4 — хост на реестре (NavEntry/SettingsSection из ContainerRegistry,
+   graceful-деградация). Этап 1.5 — photos/audio.
+
+**P1 — фаза 2 видео (2.2, после подтверждения 2.1):**
+7. CAMERA + подмена dummy-источника (`startDummyVideoIfNeeded`) + setVideoTxEnabled +
+   деградация 1280/2000/maintain-framerate. Потом 2.3 LTE/CGNAT, 2.4 гигиена
+   (мёртвый callsVideoSwDecode, VideoTextureRenderer.kt).
+
+### Команды для быстрого старта завтра:
+```bash
+cd /home/z/my-project
+git pull origin PinoK
+git log --oneline -5        # HEAD ≥ f2f6b17d
+rg "Этап 1.2" контейнеры.план.md   # текущий этап
+# Сборка (нужен Android SDK, на машине пользователя):
+./gradlew installDebug
+```
+
+---
+
 ## 🚀 Стартовая точка для завтра (2026-07-28)
 
 ### Текущая ветка: `PinoK` (origin: github.com/pin24/VK_X_mod)
@@ -11241,5 +11297,59 @@ worklog calls-2026-08-31-ciber2-texview-pcrestart.
 ### Файлы
 - Изменено: `WebRtcEngine.kt`, `CallScreen.kt`
 - Не трогал: `VideoTextureRenderer.kt` (оставлен в проекте)
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## 2026-09-01 — Диагностика-2 + два корня видео (#CALLS-HW-DIAG-2, #CALLS-OUT-SENDRECV-2, #CALLS-SURFACE-ZTOP)
+
+### Контекст
+Пользователь: «Wi-Fi звонки в обе стороны прошли, но проблемы с видео остались».
+Лог ciber.txt (сборка calls-2026.09.01-3, 16:54–17:03, сеть Wi-Fi→LTE→Wi-Fi,
+4 звонка). Плюс Compile-блокер от чужих коммитов 76ebd0f5/28d2a65f.
+
+### Изменения
+- `658fcec2` — #CALLS-HW-DIAG-2: 28d2a65f вынес `LocalView.current` из runCatching,
+  но оставил внутри suspend-лямбды LaunchedEffect → та же ошибка «@Composable
+  invocations…». Чтение поднято в композицию (`val hwView`), в корутине —
+  `runCatching { hwView.isHardwareAccelerated }`.
+- `d09888de` — **(A) #CALLS-OUT-SENDRECV-2**: легаси `OfferToReceiveVideo=false`
+  в createOffer в UnifiedPlan вырезает recv-половину у SEND_RECV-транссивера
+  (транссивер SEND_RECV 17:02:32.991, offer a=sendonly 17:02:34) → VK отвечал
+  без видео. Констрейнты удалены из createOffer и createAnswer.
+  **(B) #CALLS-SURFACE-ZTOP**: `setZOrderMediaOverlay(true)` = sublayer −1/−2 —
+  поверхность СЗАДИ окна, непрозрачный предок перекрывал (кадры шли: 350 шт,
+  ~25fps, onFirstFrameRendered ✓, hwAccel=true — но экран чёрный).
+  `setZOrderOnTop(true)` = sublayer +1.
+- `f2f6b17d` — #CALLS-BUILD-STAMP-4: bump метки до `calls-2026.09.01-4`
+  (правило нарушалось в 85e83909..d09888de). Лог с `-4` = код с d09888de и новее.
+
+### Ожидание от следующего теста (2.1)
+Исходящий: offer `m=video` a=**sendrecv**; входящий: кадры ВИДНЫ (не чёрный).
+Матрица Wi-Fi/LTE × вход/исх. Детали: звонки.md §39, контейнеры.план.md.
+
+---
+
+## 2026-09-01 — Этап 1.1 контейнеризации: модуль :contracts + ContainerRegistry (#ARCH-CONTAINERS)
+
+### Контекст
+Решение пользователя: модульная (контейнерная) архитектура разделов —
+контейнеры (звонки, фото, аудио) можно добавлять/удалять без потери функций
+остального приложения. Выбран build-time подход: Gradle-модули + контрактный
+слой + capability-реестр (runtime hot-plug через DexClassLoader отвергнут).
+
+### Изменения (`4db02d08`)
+- Новый модуль `:contracts` (namespace re.pinok.contracts, НОЛЬ внешних зависимостей):
+  `AppContainer`, `Capability`, `NavEntry` (иконки мапит хост — контракты без compose),
+  `SettingsSection`, `PermissionNeeds`.
+- `ContainerRegistry`: register/unregister/byId/capabilities (@Synchronized) +
+  inline reified `find<T>()` через `@PublishedApi capsSnapshot`.
+- `SovaApp.onCreate`: init контейнеров в runCatching + лог счётчика.
+- Правила в KDoc: `:feature:*` → только `:contracts`/`:core:*`, друг от друга — никогда.
+
+### Мастер-план
+Создан **`контейнеры.план.md`**: Часть 1 (этапы 1.1✅–1.5), Часть 2 (2.1–2.5 видео),
+правила процесса, порядок на завтра. Реестр пуст — поведение приложения не изменено.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
