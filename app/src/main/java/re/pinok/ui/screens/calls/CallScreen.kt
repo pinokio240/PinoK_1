@@ -1429,7 +1429,8 @@ fun CallScreen(
     // #CALLS-HW-DIAG: логируем isHardwareAccelerated — если false, это дополнительное
     // объяснение проблем с TextureView (SurfaceView это чинит в любом случае).
 LaunchedEffect(videoRenderActive) {
-        val hw = runCatching { LocalView.current.isHardwareAccelerated }.getOrDefault(false)
+        val view = LocalView.current
+        val hw = runCatching { view.isHardwareAccelerated }.getOrDefault(false)
         AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled, hwAccel=$hw)")
     }
 
