@@ -201,4 +201,7 @@ dependencies {
 
     // #CALLS: WebRTC (org.webrtc.* API) от Stream — голосовые/видеозвонки.
     implementation(libs.webrtc)
+
+    // #ARCH-CONTAINERS (Этап 1.1): контрактный слой контейнеров-разделов.
+    implementation(project(":contracts"))
 }

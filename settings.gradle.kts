@@ -23,4 +23,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "SOVA_2_0"
+
+// #ARCH-CONTAINERS (Этап 1.1): контрактный слой модульной архитектуры.
 include(":app")
+include(":contracts")

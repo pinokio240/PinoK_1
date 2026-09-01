@@ -15,6 +15,7 @@ import coil3.request.crossfade
 import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
 import re.pinok.api.VKApiClient
+import re.pinok.contracts.ContainerRegistry
 import re.pinok.auth.exchange.AccountFileBackup
 import re.pinok.auth.exchange.CookieRefreshWorker
 import re.pinok.auth.exchange.ExchangeAuthApi
@@ -602,6 +603,19 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
 
         // 0. Инициализация файлового лога (персистентный, с rotation)
         AppLog.init(this)
+
+        // #ARCH-CONTAINERS (Этап 1.1): инициализация контейнеров-разделов.
+        // Реестр наполняется статическими регистраторами (сейчас каркас пуст —
+        // контейнеры переедут в :feature:* поэтапно). Изоляция: падение init
+        // одного контейнера не валит хост и остальные контейнеры.
+        ContainerRegistry.containers().forEach { c ->
+            runCatching { c.init(this) }
+                .onFailure { AppLog.e("SovaApp", "container '${c.id}' init failed: ${it.message}") }
+        }
+        AppLog.i(
+            "SovaApp",
+            "ContainerRegistry: контейнеров=${ContainerRegistry.containers().size}, capability=${ContainerRegistry.capabilities().size}"
+        )
 
         // §42.12 P0 #2: проверка доступности Siren-декодера в ffmpeg-kit.
         // Логируем один раз при старте — если декодер недоступен, siren-треки

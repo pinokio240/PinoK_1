@@ -5354,3 +5354,19 @@ Work Log:
 Stage Summary:
 - WebRtcEngine.kt: createOffer/createAnswer без OfferToReceive* (≈исходящие получат sendrecv → remote video track); CallScreen.kt: setZOrderOnTop(true). Проверка после сборки: в исходящих m=video offer = sendrecv; в логе «ПЕРВЫЙ КАДР отрисован» теперь должен совпадать с видимой картинкой.
 - Незакрытые хвосты видео: видео стартует только при кадрах (videoFrames>0) — ок; H265 в offer режется корректно (динамически, 39/40 были H265/rtx в нашем оффере); энкодер-заглушка стабилен в этом логе.
+
+---
+Task ID: 3 (#ARCH-CONTAINERS Этап 1.1 — каркас контейнеризации)
+Agent: Z.ai Code (Sergey)
+Task: каркас модульной архитектуры — модуль :contracts + ContainerRegistry в хосте
+
+Work Log:
+- Новый Gradle-модуль :contracts (com.android.library, AGP 9.1.1 built-in Kotlin, namespace re.pinok.contracts, compileSdk 36 / minSdk 24 = как :app, НОЛЬ внешних зависимостей — только android.jar).
+- gradle/libs.versions.toml: + alias android-library; root build.gradle.kts: + plugin apply false; settings.gradle.kts: include(":contracts"); app: implementation(project(":contracts")).
+- Capability.kt: AppContainer (id/capabilities()/init(Application)/release()), Capability (key = simpleName по умолчанию), NavEntry (title/iconKey/order/route — иконку мапит ХОСТ, контракты без compose), SettingsSection, PermissionNeeds. Контракты БЕЗ androidx/compose — минимальная поверхность для всех :feature:*.
+- ContainerRegistry.kt: register/unregister/containers/byId/capabilities (@Synchronized), inline reified find<T>() через @PublishedApi internal capsSnapshot (public-inline не может звать private — Kotlin restriction, поймал при ревью).
+- SovaApp.onCreate (после AppLog.init): цикл init контейнеров в runCatching (падение одного не валит хост) + лог "ContainerRegistry: контейнеров=N, capability=M" — каркас живой и наблюдаемый в логе с первого старта.
+
+Stage Summary:
+- Правила зафиксированы в KDoc: :feature:* → только :contracts/:core:*, друг от друга — никогда; состояние контейнера изолировано (свои таблицы/префы/подкаталоги); хост строит UI из capability с graceful-деградацией.
+- Реестр пуст — поведение приложения НЕ изменилось (нулевой риск для звонков/сборки). Следующий шаг (Этап 1.3): контейнер-пионер :feature:calls с WebRtcEngine/CallScreen/сигналингом.

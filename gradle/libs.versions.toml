@@ -142,6 +142,8 @@ webrtc = { group = "io.getstream", name = "stream-webrtc-android", version.ref =
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+# #ARCH-CONTAINERS (Этап 1.1): модуль :contracts — Android-библиотека.
+android-library = { id = "com.android.library", version.ref = "agp" }
 # kotlin-android — НЕ применяется (AGP 9+ применяет автоматически),
 # но IDE нужна декларация в каталоге для model resolution.
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
