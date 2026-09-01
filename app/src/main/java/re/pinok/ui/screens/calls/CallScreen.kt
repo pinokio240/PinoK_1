@@ -54,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -1427,8 +1428,9 @@ fun CallScreen(
     // нет проблем с видео.
     // #CALLS-HW-DIAG: логируем isHardwareAccelerated — если false, это дополнительное
     // объяснение проблем с TextureView (SurfaceView это чинит в любом случае).
-    LaunchedEffect(videoRenderActive) {
-        AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled, hwAccel=${try { LocalView.current?.isHardwareAccelerated } catch(e: Exception) { "unknown" }})")
+LaunchedEffect(videoRenderActive) {
+        val hw = runCatching { LocalView.current.isHardwareAccelerated }.getOrDefault(false)
+        AppLog.i("CallScreen", "видео: renderActive=$videoRenderActive (frames=$videoFrames, track=${remoteVideoTrack != null}, peerCam=$peerVideoEnabled, rx=$videoRxEnabled, hwAccel=$hw)")
     }
 
     Scaffold(
@@ -1483,7 +1485,7 @@ fun CallScreen(
                                         AppLog.d("CallScreen", "video renderer: кадр ${videoWidth}x$videoHeight rot=$rotation")
                                     }
                                 })
-                                AppLog.i("CallScreen", "video renderer: SurfaceViewRenderer инициализирован (hwAccel=${ctx.isHardwareAccelerated})")
+                                AppLog.i("CallScreen", "video renderer: SurfaceViewRenderer инициализирован")
                             }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
                             renderer = this
                         }
