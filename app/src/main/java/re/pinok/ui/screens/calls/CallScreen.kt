@@ -241,6 +241,34 @@ fun CallScreen(
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
     var srvErrCount by remember { mutableStateOf(0) }
 
+    // #CALLS-SDP-DUP-GUARD (2026-09-01, логи 11:25 входящий/11:29 исходящий): один и
+    // тот же SDP уезжал по 2-3 раза: оффер seq=2 (flush) → seq=3 (REOFFER на
+    // registered-peer через 113мс) → seq=4 (topology-changed); ответ seq=2 → seq=3
+    // (REANSWER на topology) — с ОДИНАКОВОЙ o=- строкой. Повторный
+    // setRemoteDescription того же origin у пира — риск ошибки/сброса его ICE-агента.
+    // Разрешаем МАКСИМУМ 2 отправки одного SDP (первая + один ретранслимт — страх
+    // потери сервером, кейс 20:31); третья и далее блокируются. НОВЫЙ SDP
+    // (PC-restart/restartIce — новые ufrag/pwd) проходит всегда: другой хеш.
+    // ВАЖНО: объявлен ДО engine — onLocalSdpReady (val engine ниже) уже вызывает
+    // sendSdpDedup, а Kotlin запрещает forward-reference к локальным val.
+    val sdpSendCounts = remember { java.util.HashMap<String, Int>() }
+    val sendSdpDedup: (String, SessionDescription, String) -> Unit = { pid, sdp, via ->
+        val key = "${sdp.type.name}:${sdp.description.hashCode()}"
+        val n = (sdpSendCounts[key] ?: 0) + 1
+        sdpSendCounts[key] = n
+        when {
+            n == 1 -> {
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                AppLog.i("CallScreen", "SDP отправлен ($via): ${sdp.type}")
+            }
+            n == 2 -> {
+                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
+                AppLog.w("CallScreen", "SDP повторно отправлен #$n ($via) — ЛИМИТ, следующий дубль будет заблокирован")
+            }
+            else -> AppLog.w("CallScreen", "SDP-ДУБЛЬ #$n заблокирован ($via): ${sdp.type} уже дважды уходил — НЕ отправляю (дубли рушат setRemoteDescription у пира)")
+        }
+    }
+
     // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2): приём видео собеседника.
     //  - remoteVideoTrack — от движка (onAddTrack, signaling-поток — присваивание
     //    Compose-состоянию потокобезопасно);
@@ -327,32 +355,6 @@ fun CallScreen(
         val sw = s?.callsVideoSwDecode ?: false
         engine.setVideoSwDecodeEnabled(sw)
         AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, swDecode=$sw (из настроек)")
-    }
-
-    // #CALLS-SDP-DUP-GUARD (2026-09-01, логи 11:25 входящий/11:29 исходящий): один и
-    // тот же SDP уезжал по 2-3 раза: оффер seq=2 (flush) → seq=3 (REOFFER на
-    // registered-peer через 113мс) → seq=4 (topology-changed); ответ seq=2 → seq=3
-    // (REANSWER на topology) — с ОДИНАКОВОЙ o=- строкой. Повторный
-    // setRemoteDescription того же origin у пира — риск ошибки/сброса его ICE-агента.
-    // Разрешаем МАКСИМУМ 2 отправки одного SDP (первая + один ретранслимт — страх
-    // потери сервером, кейс 20:31); третья и далее блокируются. НОВЫЙ SDP
-    // (PC-restart/restartIce — новые ufrag/pwd) проходит всегда: другой хеш.
-    val sdpSendCounts = remember { java.util.HashMap<String, Int>() }
-    val sendSdpDedup: (String, SessionDescription, String) -> Unit = { pid, sdp, via ->
-        val key = "${sdp.type.name}:${sdp.description.hashCode()}"
-        val n = (sdpSendCounts[key] ?: 0) + 1
-        sdpSendCounts[key] = n
-        when {
-            n == 1 -> {
-                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
-                AppLog.i("CallScreen", "SDP отправлен ($via): ${sdp.type}")
-            }
-            n == 2 -> {
-                signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
-                AppLog.w("CallScreen", "SDP повторно отправлен #$n ($via) — ЛИМИТ, следующий дубль будет заблокирован")
-            }
-            else -> AppLog.w("CallScreen", "SDP-ДУБЛЬ #$n заблокирован ($via): ${sdp.type} уже дважды уходил — НЕ отправляю (дубли рушат setRemoteDescription у пира)")
-        }
     }
 
     // #CALLS-ACK-REOFFER (2026-08-29): флаш кэша, когда participantId стал известен

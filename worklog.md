@@ -5223,3 +5223,33 @@ Stage Summary:
 - Wi-Fi same-NAT: наш код больше ничего не может дать — нужен контрольный VK↔VK на том же роутере (роутер/AP-isolation vs клиент VK).
 - Краш LTE: НЕ HW-декодер (swDecode применялся) — стек в crash-буфере (живёт до перезагрузки); подозреваемые: EglRenderer-GL (первые кадры прошли), VP8-HW энкодер заглушки параллельно с декодом, MTK-кодек-драйвер.
 - Не собирается в песочнице — сборка/тест за пользователем.
+
+---
+Task ID: crash-log-analysis
+Agent: main (Z.ai Code)
+Task: Изучить crash-секцию upload/Pasted Content_1788251249948.txt (мобильная сеть, звонок с видео)
+
+Work Log:
+- Прочитан весь лог (1390 строк, PID 26142 → 26409, 11:23–11:27) + два одинаковых лога 1788251413008/1560498 (исходящий, PID 27005, 11:28–11:30) + скриншот 11:29:34
+- Grep по FATAL|AndroidRuntime|SIGSEGV|Fatal signal|backtrace — 0 совпадений во всех файлах
+
+Stage Summary:
+- КРАША НЕТ: crash-буфер пуст, маркер "beginning of crash" — просто граница буферов logcat
+- Попытка №2 (входящий, мобильная сеть, DIRECT): УСПЕХ — ICE CONNECTED 0.4с (TURN 193.203.43.x), 30 кадров, первый кадр отрисован 11:27:09 (544x960 rot=270). Далее REMOTE_HANGUP reason=HUNGUP от собеседника (11:27:12) и процесс убит внешне (нет CALL END, нет Activity stopped → SIGKILL, вероятно LMKD; проверить: adb logcat -d | grep -iE "lmkd|lowmemory|am_kill")
+- Попытка №1 (входящий, Wi-Fi same-NAT 95.26.26.169): EARLYSTATS пар=24 reqS=103 resR=0 reqR=0 — односторонний ICE, peer не начал проверок. topology-changed DIRECT→SERVER (offerTo=[]) через ~12с; наш PC-RESTART/реanswer ушли в мёртвую сессию; 60с watchdog → CANCELED
+- Исходящий (мобильная сеть): ответ только с host-кандидатами 155.212.197.168:43210/7684 (похоже на media-server ногу OK); пар=8 reqS=256 resR=0 reqR=0; topology-changed SERVER offerTo=[peer] — наш код переотправил СВОЙ offer (вероятно инверсия смысла offerTo); ICE FAILED → hangup(FAILED)
+- Общий знаменатель провалов: topology=SERVER через ~12с + односторонний ICE. Успех только при оставшейся DIRECT
+- Следующий шаг: разбор официального веб-клиента OK (обработка topology-changed, семантика offerTo/connectTo), подтверждение LMKD
+
+---
+Task ID: hotfix-sendSdpDedup
+Agent: main (Z.ai Code)
+Task: Починить ошибку компиляции у пользователя после pull 122d367..7f6dbbf: CallScreen.kt:286 Unresolved reference 'sendSdpDedup'
+
+Work Log:
+- Причина: в 7f6dbbf вызов sendSdpDedup добавлен в onLocalSdpReady внутри val engine = remember (строка 257), а сам val sendSdpDedup объявлен НИЖЕ (строка 341) — Kotlin запрещает forward-reference к локальным val
+- Фикс: блок sdpSendCounts + sendSdpDedup перенесён до val engine (теперь 244-270), в комментарий добавлено ВАЖНО про порядок; остальные 4 вызова (flush/reoffer/reanswer/topology) остались после объявления — ок
+- Проверка: единственность объявления (rg), все зависимости sendSdpDedup (signaling:143) до объявления, WebRtcEngine-часть 7f6dbbf (prepareVideoTransceivers/stripH265/cand-фильтр) самодостаточна
+
+Stage Summary:
+- Единственная ошибка компиляции устранена переносом объявления; поведение #CALLS-SDP-DUP-GUARD не изменено. Сборка за пользователем (в песочнице нет Android SDK)
