@@ -204,4 +204,7 @@ dependencies {
 
     // #ARCH-CONTAINERS (Этап 1.1): контрактный слой контейнеров-разделов.
     implementation(project(":contracts"))
+
+    // #ARCH-CONTAINERS (Этап 1.2-а): общий core-слой (AppLog, BuildStamp, утилиты).
+    implementation(project(":core:common"))
 }

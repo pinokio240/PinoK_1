@@ -596,6 +596,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // #ARCH-CONTAINERS (Этап 1.2-а): AppLog переехал в :core:common и больше не
+        // читает BuildConfig хоста — передаём идентификацию сборки ДО первого
+        // лог-вызова (раньше verboseToLogcat дефолтился от BuildConfig.DEBUG,
+        // а экспорт/persistent.log писали APPLICATION_ID/VERSION_NAME из :app).
+        AppLog.setAppBuildInfo(
+            appId = BuildConfig.APPLICATION_ID,
+            versionName = BuildConfig.VERSION_NAME,
+            debuggable = BuildConfig.DEBUG,
+        )
         // #CALLS-BUILD-STAMP: метка кода звонковой цепочки — по ней в логе мгновенно
         // видно, какая СБОРКА исполняется (кейс 12:32: два процесса re.pinok.debug
         // с разным кодом — новый и старый APK; versionName не различал их).

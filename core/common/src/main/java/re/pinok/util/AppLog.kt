@@ -2,7 +2,6 @@ package re.pinok.util
 
 import android.content.Context
 import android.util.Log
-import re.pinok.BuildConfig
 import java.io.File
 import java.io.OutputStreamWriter
 import java.io.PrintWriter
@@ -82,7 +81,7 @@ object AppLog {
     /**
      * #LOGCAT-NOISE-FIX (2026-08-03): gate verbose logcat output.
      *
-     * В release-сборке (BuildConfig.DEBUG == false) DEBUG и VERBOSE логи НЕ
+     * В release-сборке (debugBuild == false) DEBUG и VERBOSE логи НЕ
      * пишутся в `adb logcat` — они засоряли logcat «мусором» (per-segment
      * download progress, per-op URL unmask, per-recompose getLocalFile и т.д.).
      * Но ВСЕ записи (включая DEBUG/VERBOSE) по-прежнему попадают в in-memory
@@ -92,11 +91,43 @@ object AppLog {
      *
      * Runtime-переключатель: пользователь может включить verbose logcat в
      * Настройки -> Логирование -> «Подробный лог в logcat» (для глубокой
-     * отладки через adb). Default = BuildConfig.DEBUG (debug-сборка = verbose,
-     * release = тихий).
+     * отладки через adb). Default = режим сборки хоста (debug-сборка = verbose,
+     * release = тихий) — передаётся через [setAppBuildInfo].
+     *
+     * #ARCH-CONTAINERS (Этап 1.2-а): AppLog живёт в :core:common и больше НЕ читает
+     * BuildConfig хоста напрямую — хост (:app, SovaApp.onCreate) передаёт
+     * идентификацию сборки вызовом [setAppBuildInfo] ДО первого лог-вызова.
+     * До инициализации — безопасные release-дефолты (Application.onCreate
+     * стартует раньше любого нашего кода, окно с дефолтами не наблюдаемо).
      */
     @Volatile
-    var verboseToLogcat: Boolean = BuildConfig.DEBUG
+    var verboseToLogcat: Boolean = false
+
+    /** Идентификация приложения для заголовков экспорта/persistent.log ("# App:", "# App ID:"). */
+    @Volatile
+    var appId: String = "re.pinok"
+
+    /** Имя версии для заголовков экспорта/persistent.log ("# Version:"). */
+    @Volatile
+    var versionName: String = "unknown"
+
+    /** DEBUG-сборка хоста (до Этапа 1.2-а читалось напрямую из BuildConfig.DEBUG в :app). */
+    @Volatile
+    var debugBuild: Boolean = false
+
+    /**
+     * #ARCH-CONTAINERS (Этап 1.2-а): хост (:app) передаёт идентификацию сборки
+     * ДО первого лог-вызова (SovaApp.onCreate — раньше эти поля читались
+     * напрямую из BuildConfig хоста). Вызывается один раз при старте процесса,
+     * до любых вызовов AppLog — поэтому безусловно выставляет и
+     * [verboseToLogcat] (прежний default = BuildConfig.DEBUG хоста).
+     */
+    fun setAppBuildInfo(appId: String, versionName: String, debuggable: Boolean) {
+        this.appId = appId
+        this.versionName = versionName
+        this.debugBuild = debuggable
+        verboseToLogcat = debuggable
+    }
 
     /**
      * Runtime-переключатель verbose logcat (вызывается из SettingsScreen LoggingTab).
@@ -655,7 +686,7 @@ object AppLog {
             }
         }
         // #LOGCAT-NOISE-FIX: DEBUG/VERBOSE пишутся в logcat ТОЛЬКО если
-        // verboseToLogcat==true (default = BuildConfig.DEBUG). В release-сборке
+        // verboseToLogcat==true (default = debugBuild хоста). В release-сборке
         // logcat чистый — но buffer + persistent.log содержат всё (для LogViewer).
         // INFO/WARN/ERROR всегда в logcat.
         when (level) {
@@ -775,7 +806,7 @@ object AppLog {
         val entries = synchronized(bufferLock) { buffer.toList() }
         val sb = StringBuilder()
         sb.append("# PinoK detailed log dump — ${Date()}\n")
-        sb.append("# App: ${BuildConfig.APPLICATION_ID} v${BuildConfig.VERSION_NAME} (debug=${BuildConfig.DEBUG})\n")
+        sb.append("# App: $appId v$versionName (debug=$debugBuild)\n")
         sb.append("# Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} ")
         sb.append("(Android API ${android.os.Build.VERSION.SDK_INT}, release ${android.os.Build.VERSION.RELEASE})\n")
         sb.append("# Entries: ${entries.size} (chronological order below)\n")
@@ -840,8 +871,8 @@ object AppLog {
             // Заголовок сессии
             persistWriter?.apply {
                 write("\n# === PinoK session ${Date()} ===\n")
-                write("# Version: ${BuildConfig.VERSION_NAME} (debug=${BuildConfig.DEBUG})\n")
-                write("# App ID: ${BuildConfig.APPLICATION_ID}\n")
+                write("# Version: $versionName (debug=$debugBuild)\n")
+                write("# App ID: $appId\n")
                 write("# Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} " +
                     "(API ${android.os.Build.VERSION.SDK_INT})\n")
                 write("# Encoding: UTF-8\n\n")
