@@ -11569,3 +11569,44 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - :feature:photos: AttachmentRenderer("photos") + NavEntry; хост добавляет ветки в hostRendererComposable/hostDestinationForRoute; video/doc-делегирование — по факту публикации.
 - Экраны ui/screens/calls/* в :app (блокер SovaApp — сервис-слой/data-слой); мёртвые CallsHomeSection/CallsScheduledSection/CallsHistoryScreen — удалить в §2.4.
 - Панель-редактор (#337) контейнерные пункты не редактирует (их нет без контейнера; порядок — capability.order).
+## Этап 1.5-а — Контейнер :feature:photos (2026-09-02, коммит 51cc828c)
+
+Второй контейнер: раздел «Фото» и инлайн-рендер фото-вложений чата уехали из ядра. WIP остановленного агента доаудирован, доделан и закоммичен (Task 12); найдены и исправлены 2 дефекта (ловушка «image-слэш-звёздочка в block-комментарии» — поймана сканером скобок на актуализации KDoc контракта; устаревший KDoc AttachmentRenderer в :contracts — остался на состоянии 1.4). С зарегистрированным PhotosContainer чат рендерит фото КАК СЕЙЧАС; без контейнера — заглушка PhotoAttachmentsStub (осознанная деградация по правилу владения UI).
+
+### Модуль :feature:photos
+- namespace re.pinok.feature.photos, compileSdk 36 / minSdk 24 / Java 21, plugins android.library + kotlin.compose, buildConfig=false. Зависимости: api(:contracts), implementation(:core:common), (:core:media — задел 1.5-б «скачать» из рендера, сегодня 0 импортов), compose-bom/ui/foundation/material3, coil-compose (coil3 3.3.0; GIF/WebP-декодеры не нужны — глобальный ImageLoader строит хост, SingletonImageLoader подхватывается). :feature:* от :app НЕ зависят.
+- PhotosContainer (id="photos") публикует 2 capability → лог старта «ContainerRegistry: контейнеров=2, capability=6» (4 звонковых + 2 фото).
+- PhotosScreen (экран раздела) ОСТАЛСЯ в :app — блокер SovaApp/apiClient (перенос = data-слой/сервис-слой, отдельная работа).
+
+### Capability
+- PhotosNavEntry: «Фото», iconKey "photos" → Icons.Outlined.Image (та же иконка, что была у ядерного пункта), order=20 (после «Звонки»=10), route "photos" — СОВПАДАЕТ с бывшим ядерным (Screen.Photos). Host-маппинги в SovaNavHost добавлены: hostDestinationForRoute ("photos"→Screen.Photos), hostIconForKey ("photos"→Icons.Outlined.Image); NavHost-destination composable("photos"){PhotosScreen()} жив в хосте.
+- PhotosAttachmentRenderer (контракт AttachmentRenderer, без androidx/compose): rendererKey "photos_inline", order=10; canHandle(mime, kind): kind="photo" + mime image-семейство (передаёт хост — у VK-фото mime отсутствует) + конкретные jpeg/png/webp/gif/heic/heif + универсальный mime-звёздочка (надмножество на будущее). kind="video" НЕ публикуется — видео-ветка хоста (VideoAttachmentCard) реестр не спрашивает, false claim дал бы регресс на заглушку.
+- SettingsSection НЕ публикуется (фото-вкладки в настройках нет; StickerPhotoScaleRow — строка ядерной вкладки чата), PermissionNeeds НЕ публикуется (сохранение делает хостовый PhotoViewer через ImageSaver).
+
+### Перенос инлайн-рендера (ChatDetailScreen → PhotosInlineRenderer)
+- Поведение 1:1: сетка 1/2 колонки (4dp), стикер-фото #227/#228 (px→dp без апскейла, кап 160dp×userScale, ContentScale.Fit), обычные #225 (одиночное Fit + heightIn 200dp / сетка Crop, скругление 8dp), «пустые слоты» (url=null) держат место строки (добор Spacer'ов).
+- Данные — ТОЛЬКО примитивы (InlinePhotoItem: url/isStickerLike/naturalWidthPx/naturalHeightPx; флаг стикера считает хост по photo.sizes). Контекст хоста — параметрами/колбэками: stickerScalePct (LocalStickerPhotoScale → Int), onOpen (Fix #244: selection-toggle ИЛИ onPhotoClick(photoUrls, idx) → PhotoViewer), onLongPress (selection).
+- hostRendererComposable (ChatDetailScreen): "photos_inline" → PhotosInlineRenderer; неизвестный ключ → null → заглушка.
+
+### Fallback «контейнера нет»
+- PhotoAttachmentsStub в хосте: «Фото (N)» + подсказка; тап → host-PhotoViewer (сохранение в галерею — ImageSaver в просмотрщике); selection-режим #244 сохранён. Старый inline-код удалён БЕЗ остатков (двойного рендера нет, NPE-путей нет).
+- Превью фото в ПЕРЕСЛАННЫХ сообщениях (компакт-сетка 3dp/140dp) НЕ делегировано — реестр никогда не спрашивало, осталось в :app без изменений.
+
+### Drawer / панель-редактор / Dock
+- Screen.Photos убран из ядерного хардкода ВЕЗДЕ: drawerScreens, sidebarEditableScreens (#337; сохранённые prefs-строки "photos" отбрасываются normalizeRouteOrder), мёртвый companion Screen.drawer. Дублей нет.
+- В Dock/bottombar-списках Photos ОСТАВЛЕН (Правило владения UI: Dock — ядерная собственность): ярлык «Фото» навигирует на destination "photos" и работает независимо от контейнера; mainRoutes хранит "photos" (lastRoute).
+- SovaApp: регистрация PhotosContainer рядом с CallsContainer (runCatching, до init-цикла); ожидаемый лог «контейнеров=2, capability=6».
+
+### Верификация (статическая, в песочнице нет Android SDK)
+- Сканер баланса скобок 11/11 (3 файла :feature:photos, ChatDetailScreen, SovaNavHost, Screen, PanelEditorTab, SovaApp, 2 .kts, AttachmentRenderer). Ловушка: литерал image-слэш-звёздочка в block-комментарии открывает вложенный комментарий Kotlin (весь хвост файла становится комментарием) — поймана сканером, исправлена формулировкой «mime-семейство image-звёздочка» (прецедент зафиксирован и в KDoc PhotosContainer).
+- Импорты :feature:photos ⊆ {android.jar, compose, coil3, :contracts, :core:common} — grep; :app-типов нет; BuildConfig/R. — 0.
+- Дубли деклараций 0 (InlinePhotoItem/PhotosInlineRenderer/PhotosContainer/PhotosNavEntry/PhotosAttachmentRenderer вне модуля не объявляются; PhotoAttachmentsStub — private в :app).
+- mime-таблица canHandle ⊇ все типы удалённого inline-рендера (хост спрашивает image-семейство + kind="photo" → true; удалённый код рендерил любой type=="photo").
+- Сквозной путь (чтением): вложение → attachmentRendererFor → canHandle → rendererKey → hostRendererComposable → PhotosInlineRenderer → onOpen → selection/PhotoViewer; NavEntry("photos", order=20) → containerNavEntries → hostDestinationForRoute → nav.navigate("photos") → PhotosScreen.
+- Ментальный эксперимент «photos снят»: лог «контейнеров=1, capability=4»; пункта «Фото» в drawer нет; чат жив, фото → заглушка (тап → PhotoViewer); ярлык Dock работает; lastRoute="photos" валиден; ядро не падает.
+- BuildStamp НЕ бампанут (calls-2026.09.02-5): звонковая логика не затронута. В коммит — только 11 задачных файлов (чужой .gitignore и Next.js-скаффолд не тронуты).
+
+### Остатки (вводная 1.5-б и далее)
+- :feature:audio (плеер/эквалайзер — музыка.md, EQUALIZER_INTEGRATION_PLAN.md; media-хвост 1.2-в: PlayerConnection/AudioEffectsEngine/EqualizerHelper/FilenameBuilder/Mp4TagWriter/ZipExporter/download-подсистема).
+- PhotosScreen в :app (блокер SovaApp/apiClient — data-слой); video/doc-рендереры (kind="video") — по факту переноса видео-ветки; компакт-сетка фото в превью пересланных — кандидат на делегирование.
+- Экраны ui/screens/calls/* в :app (блокер SovaApp — сервис-слой/data-слой); мёртвые CallsHomeSection/CallsScheduledSection/CallsHistoryScreen — удалить в §2.4.
