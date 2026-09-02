@@ -11408,3 +11408,22 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
   (recreateAndReoffer/recreateAndReanswer), watchdog 7с — фолбэк на старых кредах;
   restartIce на старом PC в SERVER-ветке больше не используется.
 - BuildStamp → calls-2026.09.02-2. Доки: звонки.md §41, контейнеры.план.md (2.1), worklog.
+
+## 2026-09-02 — Тест stamp -2: SERVER-нога падает на двух багах — rejoin со свежим token + PC-RESTART на accepted-call + дедуп answer по o= (#CALLS-SERVER-REJOIN, #CALLS-ACCEPT-PCRESTART, #CALLS-ANSWER-CYCLE)
+
+### Лог ciber.txt (12:45–12:49, 4 звонка) — «проблемы когда соединение идёт с вифи на мобильную или наоборот»
+- Wi-Fi↔Wi-Fi (звонки №3 вход, №4 исход) — CONNECTED 2.4с/2.6с, работает в обе стороны.
+- Ломается только нога, где PinoK на LTE: №1 вход — topology→SERVER → bounce тем же token → «conversation-not-found» ×2 → ZOMBIE; №2 исход — accepted-call → IceRestart на старом PC → ответ пира на НОВЫЙ offer задедуплен («повторный answer проигнорирован») → рассинхрон ufrag → FAILED.
+- Факты: token сигналинга ОДНОРАЗОВЫЙ (регистрация WS-peer'а умирает с сокетом); IceRestart противоречит эталону; булев дедуп answer терял ответ нового SDP-цикла.
+
+### Изменения (сборка calls-2026.09.02-3)
+- `startServerRejoin` (CallScreen): topology→SERVER → getCallConversationParams → СВЕЖИЕ params (новый token/endpoint) → setIceServers → signaling stop/start → повторный accept-call (входящий) → свежий connection → PC-RESTART; фолбэк bounce(); sigUid/sigConvId запоминаются при старте обоих направлений.
+- doReoffer «answer есть, ICE нет»: recreateAndReoffer() (полная пересборка PC) вместо restartIce() — по эталону «IceRestart не делает никто».
+- Дедуп offer/answer по o=-строке SDP (sdpOLine): та же o= = дубль — игнор; другая o= = новый цикл — применяется; сброс флагов цикла при новом offer.
+- ZOMBIE не срабатывает в окне ре-join'а (12с), srvErrCount сбрасывается по свежему connection, watchdog 7с→10с.
+- BuildStamp → calls-2026.09.02-3. Доки: звонки.md §42, контейнеры.план.md (2.1), worklog.
+
+### Тест (stamp calls-2026.09.02-3)
+- Маркеры: «topology-changed(SERVER): #CALLS-SERVER-REJOIN» → «SERVER-REJOIN: свежие params получены» → «WS перерегистрирован» → «свежий connection получен» → PC-RESTART → ICE CONNECTED.
+- «REOFFER→PC-RESTART #1 (accepted-call)» → answer пира ПРИМЕНЯЕТСЯ (нет «повторный answer проигнорирован (уже применён)»).
+- Если LTE не собирается и после ре-join'а — реверс WebTransport-сигналинга (wt_endpoint) / rejoin-цикл до DIRECT.

@@ -5539,3 +5539,23 @@ Stage Summary:
 - След. тест: матрица 2.1 со stamp -2; маркеры: #CALLS-REVWEB-BOUNCE → «свежий connection
   получен» → «пересоздаю PC + НОВЫЙ offer/answer». Если не поможет — след. шаг реверса:
   WebTransport-сигналинг (wt_endpoint) / rejoin-цикл до DIRECT.
+
+---
+Task ID: 6 (разбор лога ciber.txt: SERVER-нога stamp -2 падает на двух багах — rejoin + answer-dedup)
+Agent: Z.ai Code (Sergey)
+Task: пользователь прислал лог ciber.txt («проблемы когда соединение идет с вифи на мобильную или наоборот», stamp calls-2026.09.02-2) — разобрать по фактам и починить LTE-ноги
+
+Work Log:
+- Матрица лога (4 звонка, 12:45–12:49): #1 вх. LTE — FAILED 37с (CHECKING 5с: reqS=103, resR=0/reqR=0 → topology-changed(SERVER) → bounce → reconnect тем же token → conversation-not-found ×2 → ZOMBIE); #2 исх. LTE — FAILED 49с (accepted-call → restartIce на старом PC → ответ пира на НОВЫЙ offer задедуплен «повторный answer проигнорирован» → рассинхрон ufrag → FAILED); #3 вх. Wi-Fi — ✅ CONNECTED 2.4с; #4 исх. Wi-Fi — ✅ CONNECTED (дубль answer корректно задедуплен). Вывод: Wi-Fi↔Wi-Fi работает в обе стороны, ломается только нога с PinoK на LTE.
+- Корни: (1) token одноразовый — bounce() не пере-регистрирует WS-peer (доказано conversation-not-found на тот же token, который 10с назад работал); (2) IceRestart противоречит эталону (реверс 5-b/5-c «не делает никто») + булев дедуп answer терял ответ нового SDP-цикла.
+- Фиксы CallScreen.kt (9 правок, скобки 399/399, parens 889/889 — сканер-автомат):
+  #CALLS-SERVER-REJOIN — startServerRejoin: getCallConversationParams → свежие params (новый token) → setIceServers → signaling stop/start → повторный accept (вх.) → свежий connection → PC-RESTART; фолбэк bounce; sigUid/sigConvId запоминаются при старте обоих направлений.
+  #CALLS-ACCEPT-PCRESTART — doReoffer ветка «answer есть, ICE нет»: recreateAndReoffer() вместо restartIce().
+  #CALLS-ANSWER-CYCLE — дедуп offer/answer по o=-строке SDP (helper sdpOLine), сброс флагов цикла при новом offer (наш onLocalSdpReady и чужой с другой o=).
+  ZOMBIE-гейт 12с в окне ре-join'а + srvErrCount=0 по свежему connection; watchdog 7с→10с.
+- BuildStamp → calls-2026.09.02-3. Доки: звонки.md §42, HISTORY (CRLF-скрипт), контейнеры.план.md §2.1.
+
+Stage Summary:
+- Обе LTE-ноги прошлогодней матрицы получили фактологические фиксы из их же лога: SERVER-нога теперь пере-регистрируется с новым token (эквивалент эталонного полного rejoin'а), accepted-call делает PC-RESTART по эталону, ответ нового SDP-цикла больше не теряется.
+- Тест: stamp calls-2026.09.02-3, маркеры: «#CALLS-SERVER-REJOIN», «свежие params получены», «WS перерегистрирован», «REOFFER→PC-RESTART #1 (accepted-call)»; в логе НЕ должно быть «повторный answer проигнорирован (уже применён)» после нового offer.
+- Если LTE не соберётся даже после ре-join'а — реверс WebTransport-сигналинга (wt_endpoint) / rejoin-цикл до DIRECT (10 попыток, как у ботов).

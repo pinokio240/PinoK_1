@@ -19,10 +19,14 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
-    // -2 (02.09) = #CALLS-REVWEB-SERVER-BOUNCE + #CALLS-REVWEB-SERVER: реверс открытых
-    // реализаций VK-звонков (реверс.звонки-протокол.md) — при topology→SERVER переподключение
-    // сигналинга (bounce → свежий connection = свежие per-connection TURN-креды) + полный
-    // PC-RESTART обеих сторон (recreateAndReoffer/recreateAndReanswer), как в эталоне
-    // (vk_joiner.go closeTransport + p2p.go Reset()); IceRestart на старом PC больше не нужен.
-    const val STAMP: String = "calls-2026.09.02-2"
+    // -3 (02.09) = #CALLS-SERVER-REJOIN + #CALLS-ACCEPT-PCRESTART + #CALLS-ANSWER-CYCLE
+    // (разбор лога ciber.txt 12:45–12:49, stamp -2): (1) topology→SERVER — bounce со СТАРЫМ
+    // token давал conversation-not-found ×2 → ZOMBIE; теперь полный ре-join: свежие params
+    // (getCallConversationParams → новый token) + stop/start сигналинга + повторный accept;
+    // (2) accepted-call при «answer есть, ICE нет» — PC-RESTART (recreateAndReoffer) вместо
+    // IceRestart на старом PC (эталон: IceRestart не делает никто); (3) дедуп answer/offer
+    // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
+    // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
+    // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
+    const val STAMP: String = "calls-2026.09.02-3"
 }

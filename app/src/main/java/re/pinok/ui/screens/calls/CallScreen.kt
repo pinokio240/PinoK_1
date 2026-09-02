@@ -225,11 +225,26 @@ fun CallScreen(
     // сигналинга запущен (однократно за звонок); serverRestartArmed — ждём свежий
     // `connection` (его обработчик применит свежие TURN-креды через setIceServers),
     // после чего выполняется PC-RESTART (engine.recreateAndReoffer/recreateAndReanswer);
-    // serverRestartTick — тик watchdog'а (7с без connection → рестарт на старых кредах).
+    // serverRestartTick — тик watchdog'а (10с без connection → рестарт на старых кредах).
     var serverBounceStarted by remember { mutableStateOf(false) }
     var serverRestartArmed by remember { mutableStateOf(false) }
     var serverRestartTick by remember { mutableStateOf(0) }
     var diagReoffer by remember { mutableStateOf("") }
+    // #CALLS-SERVER-REJOIN (2026-09-02, лог ciber.txt 12:45–12:49): параметры последнего
+    // signaling.start (uid/convId) — нужны ре-join'у при topology→SERVER. Доказано
+    // логом: переподключение WS со СТАРЫМ token даёт «conversation-not-found» ×2
+    // (регистрация WS-peer'а умирает вместе с сокетом, token одноразовый). Ре-join =
+    // СВЕЖИЕ params (getCallConversationParams → новый token) + stop/start сигналинга.
+    var sigUid by remember { mutableStateOf(0L) }
+    var sigConvId by remember { mutableStateOf<String?>(null) }
+    var lastServerRejoinAt by remember { mutableStateOf(0L) }
+    // #CALLS-ANSWER-CYCLE (2026-09-02, лог ciber.txt звонок №2): o=-строки последнего
+    // ПРИМЕНЁННОГО удалённого offer/answer. Дедуп по булеву флагу терял answer нового
+    // SDP-цикла (accepted-call → рестарт → новый offer → answer пира «повторный
+    // answer проигнорирован» → рассинхрон ufrag/pwd → DISCONNECTED→FAILED). Новый
+    // SDP-цикл узнаём по ДРУГОЙ o=-строке (session-id/version меняются).
+    var lastAppliedAnswerOLine by remember { mutableStateOf<String?>(null) }
+    var lastAppliedOfferOLine by remember { mutableStateOf<String?>(null) }
     // #CALLS: call_id активного звонка — для кнопки «Ссылка» (vchat.createJoinLink).
     val activeCallId = remember { mutableStateOf<String?>(null) }
     // #CALLS-DIAG (2026-08-29): экранная диагностика — состояние WS/PC/ICE и последнее
@@ -313,6 +328,10 @@ fun CallScreen(
                         sendAnswerReliably(pid, sdp)
                     } else {
                         // #CALLS-SDP-DUP-GUARD-REVERT: прямая отправка как в проверенной цепочке.
+                        // #CALLS-ANSWER-CYCLE: ушёл НОВЫЙ offer (startCall/PC-RESTART) —
+                        // флаг ответа прошлого цикла больше не описывает сессию: следующий
+                        // answer (другая o=-строка) обязан быть применён, а не задедуплен.
+                        answerReceived.value = false
                         signaling.sendSdp(pid, sdp.description, sdp.type.name.lowercase())
                         AppLog.i("CallScreen", "offer отправлен (onLocalSdpReady)")
                     }
@@ -395,15 +414,21 @@ fun CallScreen(
             if (iceConnected.value) {
                 AppLog.i("CallScreen", "REOFFER пропущен ($reason): answer получен, ICE подключён")
             } else if (iceRestartCount >= 2) {
-                AppLog.w("CallScreen", "REOFFER→ICE-RESTART пропущен ($reason): лимит 2 рестартов")
+                AppLog.w("CallScreen", "REOFFER→PC-RESTART пропущен ($reason): лимит 2 рестартов")
             } else if (System.currentTimeMillis() - lastIceRestartAt < 8000L) {
-                AppLog.i("CallScreen", "REOFFER→ICE-RESTART пропущен ($reason): <8с с прошлого рестарта")
+                AppLog.i("CallScreen", "REOFFER→PC-RESTART пропущен ($reason): <8с с прошлого рестарта")
             } else {
                 iceRestartCount++
                 lastIceRestartAt = System.currentTimeMillis()
                 diagReoffer = "restart×$iceRestartCount"
-                AppLog.w("CallScreen", "REOFFER→ICE-RESTART #$iceRestartCount ($reason): answer есть, ICE нет — новый ufrag/pwd + свежие кандидаты")
-                engine.restartIce()
+                // #CALLS-ACCEPT-PCRESTART (2026-09-02, лог ciber.txt звонок №2, 12:47):
+                // restartIce() на СТАРОМ PC (2806dbac) давал новый offer, но ответ пира
+                // гиб в дедупе («повторный answer проигнорирован»), а IceRestart противоречит
+                // эталону — его не делает никто (реверс 5-b/5-c). Полная пересборка PC —
+                // как при topology→SERVER (recreateAndReoffer): новый PC + новый offer-цикл;
+                // ответ придёт с ДРУГОЙ o=-строкой и будет применён (#CALLS-ANSWER-CYCLE).
+                AppLog.w("CallScreen", "REOFFER→PC-RESTART #$iceRestartCount ($reason): answer есть, ICE нет — новый PC + новый offer (эталон: IceRestart не делает никто)")
+                engine.recreateAndReoffer()
             }
         } else {
             val pid = remoteParticipantId.value
@@ -497,14 +522,66 @@ fun CallScreen(
         }
     }
 
-    // Watchdog: свежий connection не пришёл за 7с (сервер не переconnection'ил нас /
-    // сеть) — рестартуем ногу на СТАРЫХ кредах, лучше чем ничего.
+    // #CALLS-SERVER-REJOIN (2026-09-02, лог ciber.txt звонок №1): при topology→SERVER
+    // bounce() со СТАРЫМ token давал «conversation-not-found» ×2 → ZOMBIE: регистрация
+    // WS-peer'а умирает вместе с сокетом, token одноразовый. Эталон (whitelist-bypass)
+    // делает ПОЛНЫЙ rejoin: свежий session/endpoint/TURN-креды. Наш эквивалент:
+    // getCallConversationParams → СВЕЖИЕ params (новый token) → stop/start сигналинга →
+    // свежий `connection` (обработчик сбросит srvErrCount и запустит PC-RESTART).
+    // Для входящего после перерегистрации — повторный accept-call (сервер мог считать
+    // нас «не принявшими»). Фолбэк при неудаче — прежний bounce() (старые params).
+    val startServerRejoin: () -> Unit = {
+        lastServerRejoinAt = System.currentTimeMillis()
+        val rejoinUid = sigUid
+        val rejoinConvId = sigConvId
+        if (rejoinUid <= 0L || rejoinConvId.isNullOrBlank()) {
+            AppLog.w("CallScreen", "SERVER-REJOIN: нет uid/convId ($rejoinUid/$rejoinConvId) — фолбэк bounce")
+            signaling.bounce()
+        } else {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                runCatching {
+                    val (_, vchatResp) = app.getCallConversationParams(rejoinConvId)
+                    val fresh = vchatResp?.let { re.pinok.media.ConversationParamsDecoder.decodeParamsJson(it) }
+                    if (fresh != null && fresh.token.isNotBlank() && fresh.endpoint.isNotBlank()) {
+                        AppLog.w("CallScreen", "SERVER-REJOIN: свежие params получены (token=${fresh.token.take(8)}…, turn=${fresh.turnServer?.urls?.firstOrNull() ?: "нет"}) — перерегистрация WS")
+                        engine.setIceServers(fresh)
+                        signaling.stop()
+                        kotlinx.coroutines.delay(200)
+                        signaling.start(userId = rejoinUid, conversationId = rejoinConvId, params = fresh, peerId = peerId)
+                        var waited = 0
+                        while (!signaling.isWsReady() && waited < 10_000) {
+                            kotlinx.coroutines.delay(250); waited += 250
+                        }
+                        if (signaling.isWsReady()) {
+                            AppLog.w("CallScreen", "SERVER-REJOIN: WS перерегистрирован (${waited}мс) — жду свежий connection для PC-RESTART")
+                            if (direction == CallDirection.INCOMING) {
+                                AppLog.i("CallScreen", "SERVER-REJOIN: повторный accept-call")
+                                signaling.acceptCall(isVideo = isVideoCall)
+                            }
+                        } else {
+                            AppLog.w("CallScreen", "SERVER-REJOIN: WS не поднялся за 10с")
+                        }
+                    } else {
+                        AppLog.w("CallScreen", "SERVER-REJOIN: свежие params не получены — фолбэк bounce (старые params)")
+                        signaling.bounce()
+                    }
+                }.onFailure { e ->
+                    AppLog.w("CallScreen", "SERVER-REJOIN error: ${e.message} — фолбэк bounce")
+                    signaling.bounce()
+                }
+            }
+        }
+    }
+
+    // Watchdog: свежий connection не пришёл за 10с (ре-join не удался / сеть) —
+    // рестартуем ногу на СТАРЫХ кредах, лучше чем ничего. 10с (было 7с): ре-join
+    // включает getCallConversationParams (сеть) + переподключение WS.
     LaunchedEffect(serverRestartTick) {
         if (serverRestartTick == 0) return@LaunchedEffect
-        kotlinx.coroutines.delay(7000)
+        kotlinx.coroutines.delay(10_000)
         if (serverRestartArmed) {
             serverRestartArmed = false
-            AppLog.w("CallScreen", "SERVER: свежий connection не пришёл за 7с — PC-RESTART на старых кредах (фолбэк)")
+            AppLog.w("CallScreen", "SERVER: свежий connection не пришёл за 10с — PC-RESTART на старых кредах (фолбэк)")
             runServerTopologyRestart()
         }
     }
@@ -604,6 +681,10 @@ fun CallScreen(
                 activeCallId.value = convId
                 // #CALLS-FIX: реальные STUN/TURN из conversation params — без них ICE FAILED.
                 engine.setIceServers(resolvedParams)
+                // #CALLS-SERVER-REJOIN: запоминаем параметры старта — ре-join при
+                // topology→SERVER возьмёт отсюда uid/convId.
+                sigUid = uid
+                sigConvId = convId
                 AppLog.i("CallScreen", "Signaling start: conversationId=$convId userId=$uid (okUid=$okUid)")
                 signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
                 // #CALLS-ACK-REOFFER (2026-08-29): сохраняем параметры для nudge-перерегистрации WS
@@ -746,6 +827,9 @@ fun CallScreen(
                         // callId (сообщения.startCall) / conv (startConversation→WS) / uid
                         // (okcdn) / turn — по ней в логе мгновенно видно, какое звено пропало.
                         AppLog.i("CallScreen", "OUTGOING-SETUP OK: callId=$callId conv=$wsConversationId uid=$uid peerId=$peerId turn=${params.turnServer?.urls?.firstOrNull() ?: "нет"}")
+                        // #CALLS-SERVER-REJOIN: запоминаем параметры старта для ре-join'а.
+                        sigUid = uid
+                        sigConvId = wsConversationId
                         signaling.start(userId = uid, conversationId = wsConversationId, params = params, peerId = peerId)
                         // Создаём PeerConnection + offer (isInitiator=true) →
                         // onLocalSdpReady отправит offer через signaling.sendSdp.
@@ -827,20 +911,31 @@ fun CallScreen(
                             msg.sdpType == "offer"
                         val type = if (isOffer) org.webrtc.SessionDescription.Type.OFFER
                         else org.webrtc.SessionDescription.Type.ANSWER
-                        // #CALLS-REOFFER: повторный answer (собеседник ответил вторым
-                        // устройством — у него может быть WEB+ANDROID peer) игнорируем:
-                        // PC уже в stable, второй answer уронит setRemoteDescription.
-                        // Первый answer выигрывает.
-                        if (!isOffer && answerReceived.value) {
-                            AppLog.w("CallScreen", "повторный answer проигнорирован (уже применён)")
+                        // #CALLS-ANSWER-CYCLE (2026-09-02, лог ciber.txt звонок №2): дедуп
+                        // answer'ов по o=-строке SDP, а НЕ по булеву флагу. Та же o=
+                        // (session-id/version) = дубль (второе устройство/ретрансмиссия) —
+                        // игнорируем (PC в stable, второй answer уронил бы setRemoteDescription).
+                        // ДРУГАЯ o= = ответ на наш НОВЫЙ offer (PC-RESTART accepted-call /
+                        // SERVER-PC-RESTART) — обязан примениться, иначе рассинхрон ufrag/pwd
+                        // → DISCONNECTED→FAILED (точно этот сценарий в логе 12:47).
+                        if (!isOffer && answerReceived.value && sdpOLine(sdp) == lastAppliedAnswerOLine) {
+                            AppLog.w("CallScreen", "повторный answer проигнорирован (та же o=-строка — дубль)")
                             return@collect
                         }
-                        // #CALLS-IN-OFFER/#CALLS-ACK-REOFFER: повторный offer ПОСЛЕ отправки/получения
-                        // answer игнорируем (звонящий мог не увидеть наш answer и переотправить offer;
-                        // повторный setRemoteDescription(offer) в have-local-offer упал бы).
-                        if (isOffer && (answerReceived.value || answerSent.value)) {
-                            AppLog.w("CallScreen", "повторный offer проигнорирован (answer уже отправлен/получен)")
+                        // #CALLS-IN-OFFER/#CALLS-ACK-REOFFER/#CALLS-ANSWER-CYCLE: повторный offer
+                        // игнорируем ТОЛЬКО если это точный дубль уже применённого (та же o=).
+                        // Свежий offer перезапущенной ноги собеседника (ре-join при
+                        // topology→SERVER) несёт ДРУГУЮ o= — применяем (движок сам ответит).
+                        if (isOffer && (answerReceived.value || answerSent.value) &&
+                            sdpOLine(sdp) == lastAppliedOfferOLine
+                        ) {
+                            AppLog.w("CallScreen", "повторный offer проигнорирован (та же o=-строка — дубль)")
                             return@collect
+                        }
+                        if (isOffer && sdpOLine(sdp) != lastAppliedOfferOLine) {
+                            // новый SDP-цикл от собеседника — флаги прошлого цикла сбрасываем
+                            answerReceived.value = false
+                            answerSent.value = false
                         }
                         if (isOffer) {
                             offerReceived.value = true
@@ -859,7 +954,10 @@ fun CallScreen(
                         engine.setRemoteSdp(sdp, type)
                         if (!isOffer) {
                             answerReceived.value = true
+                            lastAppliedAnswerOLine = sdpOLine(sdp)
                             phase = CallPhase.CONNECTING
+                        } else {
+                            lastAppliedOfferOLine = sdpOLine(sdp)
                         }
                     }
                 }
@@ -903,7 +1001,15 @@ fun CallScreen(
                     if (msg.command == "error") {
                         srvErrCount++
                         AppLog.w("CallScreen", "сервер отверг команду (подряд: $srvErrCount): ${msg.json}")
-                        if (incoming && answerSent.value && !iceConnected.value &&
+                        // #CALLS-SERVER-REJOIN (2026-09-02, лог ciber.txt): conversation-not-found
+                        // в окне ре-join'а — ожидаемый шум (старый WS умер вместе с token).
+                        // Не терминалим, пока ре-join/PC-RESTART в работе (12с с начала ре-join'а
+                        // или пока ждём свежий connection).
+                        val rejoinWindow = serverRestartArmed ||
+                            (System.currentTimeMillis() - lastServerRejoinAt) < 12_000L
+                        if (rejoinWindow) {
+                            AppLog.i("CallScreen", "ZOMBIE отложен: идёт SERVER-REJOIN (окно 12с)")
+                        } else if (incoming && answerSent.value && !iceConnected.value &&
                             phase == CallPhase.CONNECTING && srvErrCount >= 2
                         ) {
                             AppLog.w("CallScreen", "ZOMBIE: 2+ ошибки сервера подряд в CONNECTING без ICE — разговор мёртв, терминалим")
@@ -1001,6 +1107,9 @@ fun CallScreen(
                         // применены setIceServers'ом выше. Теперь пересобираем ногу целиком:
                         // новый PC (подхватит свежие креды) + новый SDP-цикл (эталон:
                         // whitelist-bypass — rejoin после closeTransport).
+                        // #CALLS-SERVER-REJOIN: свежая регистрация — счётчик ошибок СТАРОГО
+                        // WS-пира (conversation-not-found и пр.) больше не в счёт ZOMBIE.
+                        srvErrCount = 0
                         if (serverRestartArmed) {
                             serverRestartArmed = false
                             AppLog.w("CallScreen", "SERVER: свежий connection получен — запускаю PC-RESTART (креды обновлены)")
@@ -1089,7 +1198,7 @@ fun CallScreen(
                         // на СТАРОМ PC (2806dbac) оставлял СТАРЫЕ iceServers, вшитые в конфиг.
                         // Новый порядок: bounce() сигналинга → ждём свежий `connection`
                         // (обработчик применит креды и запустит PC-RESTART) →
-                        // recreateAndReoffer()/recreateAndReanswer(). Watchdog 7с — фолбэк.
+                        // recreateAndReoffer()/recreateAndReanswer(). Watchdog 10с — фолбэк.
                         val canRestart = (direction == CallDirection.OUTGOING && !iceConnected.value) ||
                             (direction == CallDirection.INCOMING && answerSent.value && !iceConnected.value)
                         if (canRestart) {
@@ -1097,11 +1206,17 @@ fun CallScreen(
                                 serverBounceStarted = true
                                 serverRestartArmed = true
                                 serverRestartTick++
+                                // #CALLS-SERVER-REJOIN (2026-09-02, лог ciber.txt звонок №1):
+                                // прежний bounce() переподключал WS со СТАРЫМ token — сервер
+                                // отвечал «conversation-not-found» ×2 (token одноразовый,
+                                // регистрация peer'а умирает с сокетом) и звонок терминалился
+                                // ZOMBIE. Ре-join: свежие params (новый token/endpoint) +
+                                // stop/start — эквивалент эталонного полного rejoin'а.
                                 AppLog.w(
                                     "CallScreen",
-                                    "topology-changed(SERVER): #CALLS-REVWEB-BOUNCE — переподключаю сигналинг ради свежего connection (TURN-креды), PC-RESTART выполню по connection"
+                                    "topology-changed(SERVER): #CALLS-SERVER-REJOIN — полная перерегистрация со СВЕЖИМИ params (старый token одноразовый), PC-RESTART выполню по свежему connection"
                                 )
-                                signaling.bounce()
+                                startServerRejoin()
                             } else if (serverRestartArmed) {
                                 AppLog.i("CallScreen", "topology-changed(SERVER): повторный сигнал — bounce уже идёт, жду свежий connection")
                             } else {
@@ -2022,3 +2137,12 @@ private fun formatDuration(seconds: Long): String {
     val s = seconds % 60
     return "${m}:${s.toString().padStart(2, '0')}"
 }
+
+/**
+ * #CALLS-ANSWER-CYCLE (2026-09-02, лог ciber.txt 12:45–12:49): o=-строка SDP
+ * (session-id + version) — идентификатор SDP-цикла переговоров. Ретрансмиссия того же
+ * SDP несёт ту же o=-строку; новый цикл (после PC-RESTART/рестарта ноги собеседника) —
+ * другую (минимум version инкрементируется). По ней отличаем дубль от нового ответа.
+ */
+private fun sdpOLine(sdp: String): String? =
+    sdp.lineSequence().firstOrNull { it.startsWith("o=") }?.trim()?.take(100)
