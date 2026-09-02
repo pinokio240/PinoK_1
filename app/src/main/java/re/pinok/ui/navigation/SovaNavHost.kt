@@ -274,6 +274,22 @@ fun SovaNavHost(
         }
     }
 
+    // #ARCH-CONTAINERS (Этап 1.3): исходящий звонок через контейнер :feature:calls.
+    // CallStarter.startCall (контейнер, регистрируется в SovaApp) ставит
+    // pendingOutgoingCall*; здесь открываем экран звонка (тот же паттерн, что
+    // incoming выше). До Этапа 1.4 (кнопки на find<CallStarter>()) событие
+    // никто не ставит — блок ведёт себя как no-op.
+    LaunchedEffect(app.pendingOutgoingCallPeerId) {
+        val peerId = app.pendingOutgoingCallPeerId
+        if (peerId > 0L) {
+            AppLog.i("SovaNavHost", "OUTGOING_CALL: navigating to CallScreen peerId=$peerId (CallStarter)")
+            nav.navigate(Screen.Call.buildRoute(peerId, "", null, incoming = false)) {
+                launchSingleTop = true
+            }
+            app.consumeOutgoingCall()
+        }
+    }
+
     // §42 #PUSH-NOTIFICATIONS: навигация при тапе на VK-уведомление
     // (лайк/комментарий/репост/ответ/подписка/упоминание/подарок/запись на стене).
     // MainActivity.handleDeepLinkIntent устанавливает pendingDeepLink,

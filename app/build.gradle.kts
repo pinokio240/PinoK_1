@@ -214,6 +214,11 @@ dependencies {
 
     // #ARCH-CONTAINERS (Этап 1.2-в): медиа-хелперы (AudioRouteLogger,
     // PlaybackPositionStore, DocumentFileStorage и др.). Плеер/download-менеджеры
-    // и аудиофокус WebRtcEngine пока в :app (см. контейнеры.план.md, Этап 1.3).
+    // пока в :app (см. контейнеры.план.md, Этап 1.5).
     implementation(project(":core:media"))
+
+    // #ARCH-CONTAINERS (Этап 1.3): контейнер-пионер звонков (WebRtcEngine,
+    // VideoTextureRenderer, CallModels, CallsContainer). Пакеты прежние —
+    // потребители в :app (CallScreen и пр.) резолвятся без правок кода.
+    implementation(project(":feature:calls"))
 }

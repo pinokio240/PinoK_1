@@ -19,6 +19,11 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -4 (02.09) = #ARCH-CONTAINERS Этап 1.3: звонковое ядро переехало в контейнер
+    // :feature:calls (WebRtcEngine, VideoTextureRenderer, CallModels, CallsContainer).
+    // Поведение звонков НЕ менялось (чистый перенос + регистрация контейнера в
+    // реестре, UI-хардкод хоста не тронут) — штамп бамплен, чтобы звонковый лог
+    // пользователя однозначно отличал сборку с контейнером от предыдущей (stamp -3).
     // -3 (02.09) = #CALLS-SERVER-REJOIN + #CALLS-ACCEPT-PCRESTART + #CALLS-ANSWER-CYCLE
     // (разбор лога ciber.txt 12:45–12:49, stamp -2): (1) topology→SERVER — bounce со СТАРЫМ
     // token давал conversation-not-found ×2 → ZOMBIE; теперь полный ре-join: свежие params
@@ -28,5 +33,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.02-3"
+    const val STAMP: String = "calls-2026.09.02-4"
 }

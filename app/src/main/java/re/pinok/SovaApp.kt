@@ -140,6 +140,31 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         pendingIncomingCallPhoto = null
     }
 
+    // ═══ #ARCH-CONTAINERS (Этап 1.3): pending ИСХОДЯЩЕГО звонка (CallStarter) ═══
+    // Хук для CallsStarterImpl (контейнер :feature:calls): хост не может нави-
+    // гировать из SovaApp напрямую (NavController живёт в SovaNavHost), поэтому
+    // ставим pending-событие — SovaNavHost подхватывает и открывает экран звонка
+    // (тот же паттерн, что pendingIncomingCallPayload выше). До Этапа 1.4
+    // startCall() никто не вызывает (кнопки — хардкод) — поведение не меняется.
+    @Volatile
+    var pendingOutgoingCallPeerId: Long = 0L
+        private set
+    @Volatile
+    var pendingOutgoingCallVideo: Boolean = false
+        private set
+
+    /** Запросить исходящий звонок через контейнер (CallStarter.startCall). */
+    fun requestOutgoingCall(peerId: Long, video: Boolean) {
+        pendingOutgoingCallVideo = video
+        pendingOutgoingCallPeerId = peerId
+    }
+
+    /** Забрать pending-событие исходящего звонка (после навигации). */
+    fun consumeOutgoingCall() {
+        pendingOutgoingCallPeerId = 0L
+        pendingOutgoingCallVideo = false
+    }
+
     /**
      * P3.3: FoldersRepository — клиентское хранилище папок диалогов.
      * JSON в SovaPrefs.msgFoldersData (source of truth для UI).
@@ -618,9 +643,22 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         // 0. Инициализация файлового лога (персистентный, с rotation)
         AppLog.init(this)
 
+        // #ARCH-CONTAINERS (Этап 1.3): регистрация контейнера-пионера звонков
+        // (:feature:calls). Хук запуска звонка хост даёт через конструктор
+        // (ноль :app-типов в контракте CallStarter): ставим pending-событие,
+        // SovaNavHost открывает экран звонка. Реестр ДО init-цикла ниже.
+        // Ожидаемый лог: контейнеров=1, capability=4.
+        runCatching {
+            ContainerRegistry.register(
+                re.pinok.feature.calls.CallsContainer(
+                    startCallHook = { peerId, video -> requestOutgoingCall(peerId, video) },
+                )
+            )
+        }.onFailure { AppLog.e("SovaApp", "calls container register failed: ${it.message}") }
+
         // #ARCH-CONTAINERS (Этап 1.1): инициализация контейнеров-разделов.
-        // Реестр наполняется статическими регистраторами (сейчас каркас пуст —
-        // контейнеры переедут в :feature:* поэтапно). Изоляция: падение init
+        // Реестр наполняется статическими регистраторами выше (Этап 1.3:
+        // контейнер-пионер звонков). Изоляция: падение init
         // одного контейнера не валит хост и остальные контейнеры.
         ContainerRegistry.containers().forEach { c ->
             runCatching { c.init(this) }
