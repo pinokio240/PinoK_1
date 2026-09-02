@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuOpen
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Extension
@@ -192,6 +193,10 @@ private fun hostDestinationForRoute(route: String): Screen? = when (route) {
     // #ARCH-CONTAINERS (Этап 1.5-а): «Фото» — контейнер :feature:photos;
     // destination (Screen.Photos → PhotosScreen) остаётся в NavHost хоста.
     Screen.Photos.route -> Screen.Photos // "photos"
+    // #ARCH-CONTAINERS (Этап 1.5-б): «Эквалайзер» — контейнер :feature:audio;
+    // destination (Screen.Equalizer → EqualizerScreen) остаётся в NavHost хоста
+    // (открывается и из плеера — onOpenFullEqualizer — независимо от контейнера).
+    Screen.Equalizer.route -> Screen.Equalizer // "equalizer"
     else -> null
 }
 
@@ -206,6 +211,9 @@ private fun hostIconForKey(iconKey: String): ImageVector = when (iconKey) {
     // #ARCH-CONTAINERS (Этап 1.5-а): та же иконка, что была у ядерного пункта
     // «Фото» (Screen.Photos: Icons.Outlined.Image).
     "photos" -> Icons.Outlined.Image
+    // #ARCH-CONTAINERS (Этап 1.5-б): та же иконка, что была у ядерного пункта
+    // «Эквалайзер» (Screen.Equalizer: Icons.Filled.Equalizer).
+    "equalizer" -> Icons.Filled.Equalizer
     else -> Icons.Outlined.Extension
 }
 
@@ -631,11 +639,11 @@ fun SovaNavHost(
         // скачанным аудио/видео без переключения в guest-режим. Маршрут
         // Screen.OfflineManager уже зарегистрирован ниже в NavHost.
         Screen.OfflineManager,
-        // Этап 2 (#Equalizer): кнопка эквалайзера в боковой панели —
-        // открывает полноэкранный EqualizerScreen (5 вкладок: пресеты,
-        // полосы, bass+virt, reverb, loudness). Упрощённый EQ остаётся
-        // в аудиоплеере (BottomSheet).
-        Screen.Equalizer,
+        // #ARCH-CONTAINERS (Этап 1.5-б): Screen.Equalizer убран из ядерного
+        // хардкода — пункт «Эквалайзер» приходит из реестра (NavEntry контейнера
+        // :feature:audio, route "equalizer", см. containerNavEntries в
+        // drawerContent). Без контейнера пункта нет, остальное живо; экран
+        // остаётся доступен из плеера (onOpenFullEqualizer) — destination ниже.
     )
 
     // ── Fix #337: редактор панелей ──────────────────────────────────────
@@ -645,16 +653,16 @@ fun SovaNavHost(
         // #OFFLINE-DUPLICATE-FIX (2026-08-01): OfflineManager убран из
         //   sidebarEditableScreens — он рендерится в фикс. хвосте drawer
         //   вместе с Settings. Раньше был дубль: и в скролл-списке, и в хвосте.
-        // #ARCH-CONTAINERS (Этап 1.4/1.5-а): Screen.CallsHistory и Screen.Photos
-        //   убраны — контейнерные пункты панели (NavEntry) НЕ редактируются
-        //   панель-редактором (их нет без контейнера; порядок задаёт
-        //   capability.order). Сохранённые в prefs order-строки "calls_history"/
-        //   "photos" отбрасываются normalizeRouteOrder как неизвестные.
+        // #ARCH-CONTAINERS (Этап 1.4/1.5-а/1.5-б): Screen.CallsHistory,
+        //   Screen.Photos и Screen.Equalizer убраны — контейнерные пункты
+        //   панели (NavEntry) НЕ редактируются панель-редактором (их нет без
+        //   контейнера; порядок задаёт capability.order). Сохранённые в prefs
+        //   order-строки "calls_history"/"photos"/"equalizer" отбрасываются
+        //   normalizeRouteOrder как неизвестные.
 listOf(
             Screen.Friends, Screen.Groups, Screen.Search,
             Screen.Bookmarks, Screen.Documents, Screen.Clips,
             Screen.Services, Screen.Notifications, Screen.Logs,
-            Screen.Equalizer,
         )
     }
     // #SIDEBAR-BOTTOM-UNION (2026-08-01): пользователь просил, чтобы кнопки
@@ -667,6 +675,9 @@ listOf(
         //   нижняя панель — ядерная собственность хоста (Правило владения UI);
         //   «Фото» на нижней панели — кнопка-ярлык на destination "photos"
         //   (работает независимо от контейнера, destination в NavHost хоста).
+        // #ARCH-CONTAINERS (Этап 1.5-б): Screen.Equalizer здесь ОСТАВЛЕН —
+        //   та же логика: ярлык «Эквалайзер» на нижней панели навигирует на
+        //   destination "equalizer" и работает независимо от контейнера.
         dockScreens + listOf(
             Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
             Screen.Bookmarks, Screen.Documents, Screen.Clips,

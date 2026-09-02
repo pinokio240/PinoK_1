@@ -226,4 +226,10 @@ dependencies {
     // «Фото» + AttachmentRenderer "photos_inline") и компосабл-рендерер
     // фото-вложений PhotosInlineRenderer (хост-маппинг в ChatDetailScreen).
     implementation(project(":feature:photos"))
+
+    // #ARCH-CONTAINERS (Этап 1.5-б): контейнер аудио — AudioContainer (NavEntry
+    // «Эквалайзер» + SettingsSection "settings_audio" + AttachmentRenderer
+    // "audio_inline") и компосабл-рендерер аудио-вложений AudioInlineRenderer
+    // (хост-маппинг в ChatDetailScreen).
+    implementation(project(":feature:audio"))
 }

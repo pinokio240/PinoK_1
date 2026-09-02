@@ -155,9 +155,6 @@ private enum class SettingsTab(
     // #OFFLINE-TAB: управление офлайн-кэшем аудио — путь, формат (M4A/MP3),
     // «Очистить всё», «Загрузить всё» (sequential queue, Fix #265).
     OFFLINE("Офлайн", Icons.Outlined.CloudOff),
-    // Этап 2 (#Equalizer): вкл/выкл отдельных эффектов эквалайзера.
-    // Скрывает соответствующие вкладки в полноэкранном EqualizerScreen.
-    EQUALIZER("Эквалайзер", Icons.Outlined.Equalizer),
     VIDEO("Видео", Icons.Outlined.VideoLibrary),
     NETWORK("Сеть", Icons.Outlined.Cloud),
     // Fix #298: вкладка «Уведомления» — быстрый доступ к push-настройкам
@@ -177,6 +174,14 @@ private enum class SettingsTab(
     // фиче-модулю) — см. hostSettingsContentFor(). Без контейнера вкладки нет,
     // ядерные вкладки не меняются. Дублей быть не должно: одна секция — одна
     // вкладка (ядро в enum больше не рисует).
+    // #ARCH-CONTAINERS (Этап 1.5-б): ядерная вкладка EQUALIZER («Эквалайзер»)
+    // убрана из enum по той же схеме — вкладка приходит из реестра
+    // (SettingsSection контейнера :feature:audio, route "settings_audio",
+    // order 80 — до «Звонки»). Контент рендерит ХОСТ: EqualizerTab остаётся
+    // в :app (EqualizerFeatureFlags читает SovaApp/EqualizerHelper — data-слой
+    // фиче-модулю недоступен). ВИДИМОЕ ОТЛИЧИЕ (механизм 1.4): контейнерные
+    // секции всегда ПОСЛЕ ядерных вкладок — «Эквалайзер» теперь после «Автор»,
+    // а не между «Офлайн» и «Видео» (как «Звонки» в drawer на 1.4).
 }
 
 @Composable
@@ -293,11 +298,13 @@ private sealed class SettingsPage(val key: String, val label: String, val icon: 
 /**
  * route SettingsSection → иконка (контракты без compose — иконку мапит хост,
  * как NavEntry.iconKey в drawer). "settings_calls" → иконка прежней ядерной
- * вкладки «Звонки» (Icons.Filled.Call) — UI выглядит как раньше.
- * Неизвестный route → нейтральная иконка (расширение) — НЕ падаем.
+ * вкладки «Звонки» (Icons.Filled.Call), "settings_audio" → иконка прежней
+ * ядерной вкладки «Эквалайзер» (Icons.Outlined.Equalizer) — UI выглядит как
+ * раньше. Неизвестный route → нейтральная иконка (расширение) — НЕ падаем.
  */
 private fun hostSettingsIconFor(route: String): ImageVector = when (route) {
     "settings_calls" -> Icons.Filled.Call
+    "settings_audio" -> Icons.Outlined.Equalizer
     else -> Icons.Outlined.Extension
 }
 
@@ -310,6 +317,11 @@ private fun hostSettingsIconFor(route: String): ImageVector = when (route) {
 private fun hostSettingsContentFor(route: String): (@Composable (SovaPrefs.Snapshot, SovaApp, CoroutineScope) -> Unit)? =
     when (route) {
         "settings_calls" -> { s, app, scope -> CallsTab(s, app, scope) }
+        // #ARCH-CONTAINERS (Этап 1.5-б): контент вкладки «Эквалайзер» —
+        // компосабл EqualizerTab остаётся в :app (EqualizerFeatureFlags/
+        // EqualizerHelper — SovaApp + data.model, фиче-модулю недоступны);
+        // параметров вкладка не принимает — лямбда игнорирует s/app/scope.
+        "settings_audio" -> { _, _, _ -> EqualizerTab() }
         else -> null
     }
 
@@ -370,7 +382,6 @@ fun SettingsScreen(
                     SettingsTab.MESSAGES -> MessagesTab(s, app, scope)
                     SettingsTab.MUSIC -> MusicTab(s, app, scope, context)
                     SettingsTab.OFFLINE -> OfflineTab(s, app, scope, context)
-                    SettingsTab.EQUALIZER -> EqualizerTab()
                     SettingsTab.VIDEO -> VideoTab(s, app, scope, context)
                     SettingsTab.NETWORK -> NetworkTab(s, app, scope)
                     SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings)

@@ -52,3 +52,12 @@ include(":feature:calls")
 // перенесён из ChatDetailScreen). Экран раздела PhotosScreen пока в :app
 // (блокер SovaApp/data-слой — см. контейнеры.план.md, Этап 1.5).
 include(":feature:photos")
+// #ARCH-CONTAINERS (Этап 1.5-б): контейнер аудио — NavEntry «Эквалайзер»
+// (route "equalizer" — бывший ядерный пункт drawer) + SettingsSection
+// («Эквалайзер», route "settings_audio" — контент остаётся в :app) +
+// AttachmentRenderer ("audio_inline": инлайн-рендер аудио-вложений чата,
+// перенесён из ChatDetailScreen). Плеер/эквалайзер-экраны и движки
+// (PlayerConnection/PlayerService/AudioEffectsEngine/EqualizerHelper) пока
+// в :app — блокер data-слой (SovaApp/data.model) — см. контейнеры.план.md,
+// Этап 1.5-б.
+include(":feature:audio")

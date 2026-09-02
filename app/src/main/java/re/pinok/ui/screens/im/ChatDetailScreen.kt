@@ -159,6 +159,7 @@ import re.pinok.data.model.MessageReaction
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.feature.audio.AudioInlineRenderer
 import re.pinok.feature.photos.InlinePhotoItem
 import re.pinok.feature.photos.PhotosInlineRenderer
 import re.pinok.ui.anim.LocalAnimScale
@@ -213,9 +214,13 @@ private val REACTION_EMOJIS = listOf(
 private const val TYPING_TIMEOUT_MS = 6_000L
 
 // Fix #244: multi-select — передаём состояние выбора во вложенные Composable
-// (PhotoGrid, VideoAttachmentCard, VoiceMessageBubble, AudioAttachmentRow,
-// LinkAttachmentCard, DocAttachmentCard, WallAttachmentCard, ReplyBadge,
-// PollAttachmentRow) через CompositionLocal, чтобы не раздувать сигнатуры.
+// (PhotoGrid, VideoAttachmentCard, VoiceMessageBubble, LinkAttachmentCard,
+// DocAttachmentCard, WallAttachmentCard, ReplyBadge, PollAttachmentRow) через
+// CompositionLocal, чтобы не раздувать сигнатуры.
+// #ARCH-CONTAINERS (1.5-а/1.5-б): фото/аудио-вложения делегируются контейнерам
+// (PhotosInlineRenderer/AudioInlineRenderer) — контейнер CompositionLocal хоста
+// не знает, selection решает ХОСТ: колбэки onOpen/onPlay/onLongPress, которые
+// ветка host-маппинга собирает с sel (тот же контракт — поведение прежнее).
 //
 // До фикса: каждое вложение имело .clickable { ... } без проверки selectionMode
 // и без onLongPress. Child clickable поглощал DOWN-событие → parent bubble
@@ -282,6 +287,40 @@ private fun hostRendererComposable(
                 items = items,
                 stickerScalePct = stickerScalePct,
                 onOpen = onPhotoOpen,
+                onLongPress = onLongPress,
+            )
+        }
+        else -> null
+    }
+
+/**
+ * #ARCH-CONTAINERS (Этап 1.5-б): host-маппинг rendererKey → компосабл для
+ * АУДИО-вложений — вторая запись реестра рендереров, форма данных другая
+ * (одно вложение = одна строка, не список) → отдельная функция по образцу
+ * [hostRendererComposable]. "audio_inline" → [AudioInlineRenderer] из
+ * :feature:audio (инлайн-рендер строки аудио-вложения #59 перенесён туда;
+ * ветка «контейнера нет» — заглушка AudioAttachmentsStub, осознанная
+ * деградация по плану — воспроизведение при этом живо: тап → onAudioClick,
+ * т.е. PlayerConnection хоста, рендерер только UI). Контекст хоста
+ * прокидывается параметрами/колбэками — контейнер хост-типов не знает:
+ * selection-режим (Fix #244), запуск трека (onAudioClick → PlayerConnection)
+ * остаются в хосте; данные передаются примитивами (title/artist/durationSec —
+ * поля data.model.Track, распакованные хостом).
+ */
+private fun hostAudioRendererComposable(
+    rendererKey: String,
+    textColor: Color,
+    onPlay: () -> Unit,
+    onLongPress: () -> Unit,
+): (@Composable (title: String, artist: String, durationSec: Int) -> Unit)? =
+    when (rendererKey) {
+        "audio_inline" -> { title, artist, durationSec ->
+            AudioInlineRenderer(
+                title = title,
+                artist = artist,
+                durationSec = durationSec,
+                textColor = textColor,
+                onPlay = onPlay,
                 onLongPress = onLongPress,
             )
         }
@@ -4211,17 +4250,49 @@ private fun MessageBubble(
                     }
                 }
                 // #59: Аудио-вложения — кликабельная строка с play.
+                // #ARCH-CONTAINERS (Этап 1.5-б): инлайн-рендер аудио-вложений
+                // перенесён в :feature:audio (AudioInlineRenderer, rendererKey
+                // "audio_inline"). Сначала реестр: контейнер есть И rendererKey
+                // известен хосту → делегируем (поведение 1:1 с прежним
+                // AudioAttachmentRow); иначе — осознанная деградация по плану:
+                // заглушка AudioAttachmentsStub (тап → onAudioClick — хостовый
+                // плеер PlayerConnection, воспроизведение не зависит от
+                // рендерера). mime у VK-аудио отсутствует — передаём семейство
+                // "audio/*" и kind="audio" (в коде — ок; в block-комментариях
+                // литерал слэш-звёздочки запрещён — вложенный комментарий).
                 val audioAttachments = message.attachments
                     ?.filter { it.type == "audio" && it.audio != null }
                 if (!audioAttachments.isNullOrEmpty()) {
+                    val audioRenderer = attachmentRendererFor(kind = "audio", mimeType = "audio/*")
                     for (aa in audioAttachments) {
                         aa.audio?.let { track ->
-                            AudioAttachmentRow(
-                                track = track,
-                                textColor = textColor,
-                                // P2.2: запуск трека в PlayerConnection.
-                                onClick = { onAudioClick(track) },
-                            )
+                            val audioDelegate = audioRenderer?.let { renderer ->
+                                hostAudioRendererComposable(
+                                    rendererKey = renderer.rendererKey,
+                                    textColor = textColor,
+                                    onPlay = {
+                                        // Fix #244: в selection mode — toggle, не запускаем плеер.
+                                        if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                                        else onAudioClick(track)
+                                    },
+                                    onLongPress = { sel?.onLongPress?.invoke() },
+                                )
+                            }
+                            if (audioDelegate != null) {
+                                // Данные для рендера — только примитивы
+                                // (поля Track распаковывает хост).
+                                audioDelegate(track.title, track.artist, track.duration)
+                            } else {
+                                AudioAttachmentsStub(
+                                    title = track.title,
+                                    textColor = textColor,
+                                    onClick = {
+                                        if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                                        else onAudioClick(track)
+                                    },
+                                    onLongPress = { sel?.onLongPress?.invoke() },
+                                )
+                            }
                         }
                     }
                 }
@@ -5373,59 +5444,51 @@ private fun ForwardedMessageBlock(
 // #59: Дополнительные типы вложений в сообщениях
 // ══════════════════════════════════════════════════════════════════════
 
-/** Аудио-вложение — компактная строка с play кнопкой. */
+/**
+ * Заглушка аудио-вложения (fallback без контейнера :feature:audio, Этап 1.5-б)
+ * по образцу PhotoAttachmentsStub: компактная строка «Аудио: название» с ▶.
+ * Воспроизведение живо и без рендерера: тап → onAudioClick (хостовый
+ * PlayerConnection, P2.2). Selection-режим (Fix #244) сохранён: тап в
+ * selection — toggle, long-press — как у обычных вложений.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AudioAttachmentRow(
-    track: re.pinok.data.model.Track,
+private fun AudioAttachmentsStub(
+    title: String,
     textColor: Color,
-    // P2.2: тап по аудио-вложению → запустить в PlayerConnection.
-    onClick: () -> Unit = {},
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
-    // Fix #244: состояние выбора для вложения.
-    val sel = LocalAttachmentSelection.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(textColor.copy(alpha = 0.08f))
-            .combinedClickable(
-                onClick = {
-                    if (sel != null && sel.selectionMode) sel.onToggleSelection()
-                    else onClick()
-                },
-                onLongClick = { sel?.onLongPress?.invoke() },
-            )
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             Icons.Filled.PlayArrow,
-            contentDescription = "Воспроизвести",
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
             tint = textColor.copy(alpha = 0.7f),
-            modifier = Modifier.size(24.dp),
         )
         Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Column {
             Text(
-                text = track.title,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
+                text = "Аудио: $title",
+                style = MaterialTheme.typography.bodyMedium,
                 color = textColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = track.artist,
+                text = "Нажмите, чтобы воспроизвести",
                 style = MaterialTheme.typography.labelSmall,
-                color = textColor.copy(alpha = 0.6f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                color = textColor.copy(alpha = 0.7f),
             )
         }
-        val min = track.duration / 60
-        val sec = track.duration % 60
-        Text("$min:${"%02d".format(sec)}", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.5f))
     }
 }
 

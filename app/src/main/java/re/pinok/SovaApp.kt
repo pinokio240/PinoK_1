@@ -662,10 +662,26 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         // уехал из ChatDetailScreen в PhotosInlineRenderer (feature-модуль);
         // без контейнера чат показывает заглушку «скачать файл» (осознанная
         // деградация по плану).
-        // Ожидаемый лог: контейнеров=2, capability=6.
         runCatching {
             ContainerRegistry.register(re.pinok.feature.photos.PhotosContainer())
         }.onFailure { AppLog.e("SovaApp", "photos container register failed: ${it.message}") }
+
+        // #ARCH-CONTAINERS (Этап 1.5-б): контейнер аудио (:feature:audio) —
+        // NavEntry «Эквалайзер» (route "equalizer" — бывший ядерный пункт drawer)
+        // + SettingsSection «Эквалайзер» (route "settings_audio" — бывшая ядерная
+        // вкладка настроек, контент EqualizerTab рендерит хост) + AttachmentRenderer
+        // "audio_inline": инлайн-рендер аудио-вложений чата уехал из
+        // ChatDetailScreen в AudioInlineRenderer (feature-модуль); без контейнера
+        // чат показывает заглушку аудио-вложения (тап → плеер хоста — воспро-
+        // изведение не зависит от рендерера). Плеер/эквалайзер-движки пока в :app
+        // (блокер data-слой — см. контейнеры.план.md, Этап 1.5-б).
+        // Ожидаемый лог: контейнеров=3, capability=10
+        // (звонки 4: NavEntry+SettingsSection+PermissionNeeds+CallStarter;
+        //  фото 2: NavEntry+AttachmentRenderer;
+        //  аудио 4: NavEntry+SettingsSection+AttachmentRenderer+PermissionNeeds).
+        runCatching {
+            ContainerRegistry.register(re.pinok.feature.audio.AudioContainer())
+        }.onFailure { AppLog.e("SovaApp", "audio container register failed: ${it.message}") }
 
         // #ARCH-CONTAINERS (Этап 1.1): инициализация контейнеров-разделов.
         // Реестр наполняется статическими регистраторами выше (Этап 1.3:
