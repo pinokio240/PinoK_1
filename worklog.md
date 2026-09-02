@@ -6054,3 +6054,194 @@ Stage Summary:
   (тап → просмотрщик, сохранение, selection), сетка 1/2 колонки, «пустые» вложения не ломают строку;
   опционально закомментировать регистрацию PhotosContainer → пункт «Фото» исчезает, фото в чате —
   заглушка «Фото (N)», тап открывает просмотрщик, ядро живо (обратная сборка — вернуть строку).
+
+---
+Task ID: 13 (Этап 1.5-б: контейнер :feature:audio)
+Agent: general-purpose (sandbox sub agent, Task 13)
+Task: создать контейнер :feature:audio (последний этап плана контейнеризации, Часть 1):
+модуль + AudioContainer + host-маппинги по образцу звонков (1.4) и фото (1.5-а);
+разведка по музыка.md / EQUALIZER_INTEGRATION_PLAN.md ДО кода; полное владение
+плеером/эквалайзером задокументировать как блокированное data-слоем. Верификация
+статическая (SDK нет): grep-замыкания, чтение diff'ов, сканер скобок, ментальный
+эксперимент «audio снят».
+
+Work Log:
+- РАЗВЕДКА (факты до кода):
+  1) музыка.md — исследование VK-web-плеера (архитектура/аудиоUnmask/API): к коду
+     PinoK прямого отношения на этом этапе не имеет (порт audioUnmaskSource уже
+     в :app api/AudioUrlUnmasker); §13–14 — таблица «web concept → Android
+     equivalent» и Android-улучшения (реальный 5-band Equalizer + BassBoost +
+     Virtualizer — УЖЕ реализовано в :app: AudioEffectsEngine/EqualizerHelper,
+     см. EQUALIZER_INTEGRATION_PLAN.md «Текущее состояние»).
+  2) EQUALIZER_INTEGRATION_PLAN.md — план расширения эквалайзера (5 этапов:
+     AudioEffectsEngine [СДЕЛАНО], расширенный UI EqualizerScreen [СДЕЛАНО],
+     SpectrumVisualizer, Room-пресеты CustomPresetStore [СДЕЛАНО: gson+файл],
+     auto-apply/FGS). Все компоненты живут в :app и зависят от SovaApp/
+     data.model.EqualizerPreset — фиче-модулю недоступны (проверено импортами).
+  3) Настройки: в SettingsTab enum ДВЕ аудио-вкладки: MUSIC («Музыка»: качество
+     API-запросов, фоновое воспроизведение, качество MP3, авто-загрузка — тумблеры
+     SovaPrefs, потребляемые apiClient/PlayerConnection/TrackDownloadManager
+     в :app) и EQUALIZER («Эквалайзер»: 5 тумблеров EqualizerFeatureFlags —
+     видимость эффектов). Кандидат контейнера — EQUALIZER (домен «эквалайзер»
+     из плана этапа); MUSIC осталась ядерной (домен download-подсистемы/качества,
+     заблокированной data-слоем; перенос ownership вкладки без домена = осколок).
+  4) Чат: аудио-вложения (type="audio") рендерил AudioAttachmentRow (#59,
+     private в ChatDetailScreen) — тело использует ТОЛЬКО track.title/artist/
+     duration + textColor + onClick → ЧИСТЫЙ перенос по паттерну photos
+     (примитивы + лямбды). ВОЙСЫ (VoiceMessageBubble, type="doc"+isVoiceMessage)
+     тянут data.model.Attachment.Doc + VoicePlaybackController (:app-класс,
+     MediaPlayer-обёртка) → НЕ перенесены, ветка voice осталась host-inline
+     (реестр для voice не спрашивается — false claim дал бы регресс).
+  5) Экран аудио ВНЕ Dock: ЕСТЬ — ядерная кнопка «Эквалайзер» в drawer
+     (Screen.Equalizer → полноэкранный EqualizerScreen, Этап 2 #Equalizer) +
+     пункт в sidebarEditableScreens (#337) и bottomBarEditableScreens. => NavEntry
+     публикуем (раздел-экран вне Dock, тот же случай что Звонки/Фото); Dock
+     «Музыка» (Screen.Music в dock-списке) — ядро навсегда, не тронуто.
+  6) PermissionNeeds по фактам: MODIFY_AUDIO_SETTINGS (эквалайзер, normal-
+     permission манифеста, комментарий в AndroidManifest); RECORD_AUDIO НЕ
+     публикуем (запись войсов — чат хоста: ChatDetailScreen + VoiceRecorder из
+     :core:media), BLUETOOTH_CONNECT НЕ публикуем (маршрутизация PlayerService).
+- МОДУЛЬ :feature:audio (по образцу :feature:photos): plugins android.library +
+  kotlin.compose (рендерер — compose); namespace re.pinok.feature.audio;
+  compileSdk 36 / minSdk 24 / Java 21; buildConfig=false (прецедент);
+  Зависимости: api(:contracts), implementation(:core:common) [AppLog],
+  compose-bom/ui/foundation/material3 + material-icons-extended (Icons.Filled.
+  PlayArrow — тот же артефакт, что у хоста; не полагаемся на транзитивность
+  material3). :core:media НЕ подключён (0 потребителей: воспроизведение делегируется
+  хосту через onPlay, записи в модуле нет). settings.gradle.kts: include +
+  комментарий #ARCH-CONTAINERS; app/build.gradle.kts: implementation(:feature:audio).
+- AudioContainer (id="audio"), 4 capability (лог старта «контейнеров=3, capability=10»):
+  1) AudioNavEntry — «Эквалайзер», iconKey "equalizer", route "equalizer" (тот же,
+     что у бывшего ядерного пункта), order=30 (после Звонки=10, Фото=20);
+  2) AudioSettingsSection — «Эквалайзер», route "settings_audio" (новый стабильный
+     ключ по образцу "settings_calls"), order=80 (до Звонки=90);
+  3) AudioAttachmentRenderer — kind="audio", mime-семейство audio-звёздочка +
+     конкретные audio-типы + */* (задел), rendererKey "audio_inline", order=10;
+     kind="voice"/"video" — false (ветки хоста, реестр не спрашивается);
+  4) AudioPermissions — [MODIFY_AUDIO_SETTINGS] (декларативно; потребители — Этап 2+).
+  init/release — no-op с логом (идемпотентно): рендер/экраны живут композицией
+  хоста, эквалайзер-движки — синглтоны :app.
+- AudioInlineRenderer (feature-модуль): тело бывшего AudioAttachmentRow 1:1
+  (строка: ▶ 24dp, название bodySmall/Medium, артист labelSmall/60%, длительность
+  «M:SS» labelSmall/50%, фон textColor/8%, скругление 8dp), сигнатура ТОЛЬКО
+  примитивы+лямбды: (title, artist, durationSec, textColor, onPlay, onLongPress).
+  ОТЛИЧИЕ от прежнего host-кода (по образцу PhotosInlineRenderer): selection-
+  логика Fix #244 (LocalAttachmentSelection) осталась в хосте — ветка host-маппинга
+  оборачивает колбэки; контейнер CompositionLocal хоста не знает.
+- ХОСТ:
+  1) ChatDetailScreen: AudioAttachmentRow УДАЛЕН (1:1 уехал в AudioInlineRenderer);
+     ветка type=="audio" → attachmentRendererFor("audio/*","audio") +
+     hostAudioRendererComposable (вторая host-функция: форма данных другая — одно
+     вложение = строка, не список; ветка "audio_inline") → делегирование; fallback
+     БЕЗ контейнера — AudioAttachmentsStub (по образцу PhotoAttachmentsStub:
+     «Аудио: title» + подсказка; тап → onAudioClick — воспроизведение через
+     PlayerConnection хоста ЖИВО и без рендерера; selection Fix #244 сохранён);
+     комментарий Fix #244 актуализирован (фото/аудио делегируются, selection
+     решает хост). VOICE-ветка не тронута.
+  2) SettingsScreen: EQUALIZER убран из SettingsTab enum (when-ветка тоже) —
+     вкладка идёт из реестра; hostSettingsIconFor("settings_audio") →
+     Icons.Outlined.Equalizer (иконка прежней вкладки); hostSettingsContentFor
+     ("settings_audio") → EqualizerTab() (контент остаётся в :app: EqualizerFeatureFlags
+     читает SovaApp.get()/EqualizerHelper — data-слой). Дублей нет: одна секция —
+     одна вкладка. ВИДИМОЕ ОТЛИЧИЕ (механизм 1.4, как «Звонки» в drawer):
+     «Эквалайзер» теперь ПОСЛЕ «Автор» (контейнерные секции всегда после ядерных),
+     а не между «Офлайн» и «Видео».
+  3) SovaNavHost: hostDestinationForRoute("equalizer") → Screen.Equalizer;
+     hostIconForKey("equalizer") → Icons.Filled.Equalizer; Screen.Equalizer убран
+     из drawerScreens и sidebarEditableScreens (prefs-строки "equalizer"
+     отбрасываются normalizeRouteOrder как неизвестные — прецедент photos);
+     в bottomBarEditableScreens ОСТАВЛЕН (Dock/нижняя панель — ядро; ярлык
+     навигирует на destination независимо от контейнера); destination
+     composable(Screen.Equalizer.route) и onOpenFullEqualizer (из плеера) —
+     не тронуты; mainRoutes не содержит "equalizer" (экран с own TopAppBar,
+     lastRoute-семантика не задействована).
+  4) PanelEditorTab: Screen.Equalizer убран из SIDEBAR_EDITABLE_SCREENS,
+     оставлен в BOTTOMBAR_EDITABLE_SCREENS (зеркало SovaNavHost).
+  5) SovaApp: регистрация AudioContainer рядом с Calls/Photos (runCatching,
+     до init-цикла); комментарий «Ожидаемый лог: контейнеров=3, capability=10»
+     (4 звонковых + 2 фото + 4 аудио — сходится с capabilities() всех трёх).
+- BuildStamp НЕ бампал: calls-2026.09.02-5 (звонковая логика не затронута).
+- Верификация (каждая выполнена):
+  1) Сканер баланса скобок — 12 прогонов OK: 2 новых .kt, 2 .kts модуля,
+     settings.gradle.kts, app/build.gradle.kts, SovaApp, SovaNavHost,
+     SettingsScreen, PanelEditorTab, ChatDetailScreen. Ловушка «audio/*-литерал
+     в block-комментарии» учтена заранее (прецедент 1.5-а): в комментариях —
+     «audio-звёздочка», литерал только в строках кода.
+  2) Импорты :feature:audio ⊆ {android.jar, compose, :contracts, :core:common} —
+     grep 27 импортов: Application/Manifest, 6×contracts, AppLog, 19×compose.
+     re.pinok.{data,ui,api,service,media}, SovaApp, BuildConfig — 0.
+  3) Дубли деклараций 0: AudioContainer/AudioNavEntry/AudioSettingsSection/
+     AudioAttachmentRenderer/AudioPermissions/AudioInlineRenderer объявлены
+     только в :feature:audio; AudioAttachmentsStub — private в :app;
+     AudioAttachmentRow удалена без остатков (grep — только историч. упоминания
+     в комментариях).
+  4) Ключи согласованы, без дублей: "equalizer" (NavEntry ↔ hostDestinationForRoute
+     ↔ hostIconForKey; destination composable существует); "settings_audio"
+     (SettingsSection ↔ hostSettingsIconFor ↔ hostSettingsContentFor; в enum — 0);
+     "audio_inline" (rendererKey ↔ hostAudioRendererComposable);
+     SettingsTab.EQUALIZER — 0 упоминаний (enum чист).
+  5) Сквозные пути (чтением): (а) drawer: NavEntry("equalizer", order=30) →
+     containerNavEntries(sorted) → hostDestinationForRoute → nav.navigate
+     ("equalizer") → composable → EqualizerScreen (иконка/имя прежние);
+     (б) настройки: SettingsSection("settings_audio", order=80) → pages
+     (13 ядерных + Эквалайзер + Звонки) → hostSettingsContentFor → EqualizerTab →
+     EqualizerFeatureFlags (тумблеры работают как раньше);
+     (в) чат: type=="audio" → attachmentRendererFor → AudioAttachmentRenderer.
+     canHandle → "audio_inline" → hostAudioRendererComposable → AudioInlineRenderer
+     (title/artist/duration) → onPlay: selection-toggle ИЛИ onAudioClick(track) →
+     PlayerConnection хоста.
+  6) Ментальный эксперимент «audio снят» (регистрация закомментирована, проверка
+     чтением кода): лог «контейнеров=2, capability=6»; (а) drawer — пункта
+     «Эквалайзер» нет (ядерные + Звонки + Фото на месте, фикс. хвост цел);
+     (б) настройки — вкладки «Эквалайзер» нет (13 ядерных + «Звонки»; тумблеры
+     видимости эффектов недостижимы — осознанная деградация, как callsVideo*);
+     (в) чат — AudioAttachmentsStub с реальным названием трека, тап играет
+     (PlayerConnection не зависит от рендерера), selection/context-menu работают;
+     (г) полный EqualizerScreen доступен из плеера (onOpenFullEqualizer) и с
+     ярлыка нижней панели — destination в NavHost хоста; (д) упрощённый EQ в
+     AudioPlayerScreen не тронут; (е) NPE-путей нет: все обращения к реестру
+     null-safe, unknown route/rendererKey → скрытие/заглушка + лог; ядро не падает.
+  7) git status: стейдж только задачных файлов (чужой M .gitignore и Next.js-
+     скаффолд не тронуты).
+- Коммит arch(containers) + push origin PinoK.
+
+Stage Summary:
+- Этап 1.5-б закрыт: :feature:audio — третий контейнер, ЧАСТЬ 1 ПЛАНА
+  КОНТЕНЕЙРИЗАЦИИ (1.1–1.5) ЗАВЕРШЕНА (с оговорками-остатками по data-слою).
+  Публикует NavEntry «Эквалайзер» (route "equalizer", бывший ядерный пункт
+  drawer), SettingsSection «Эквалайзер» (route "settings_audio", бывшая ядерная
+  вкладка; контент — host-маппинг), AttachmentRenderer "audio_inline" (инлайн-
+  рендер аудио-вложений чата перенесён 1:1) и PermissionNeeds [MODIFY_AUDIO_
+  SETTINGS]. С зарегистрированным контейнером UI прежнее (кроме документированных
+  позиций: вкладка настроек «Эквалайзер» — в конец списка вкладок, пункт drawer
+  «Эквалайзер» — в контейнерную группу после «Фото»); без контейнера — ядро живо
+  (заглушка аудио-вложения с рабочим воспроизведением, плеер и EQ-экран доступны).
+  Лог старта: «контейнеров=3, capability=10», stamp calls-2026.09.02-5.
+- ЗАБЛОКИРОВАНО data-слоем (перенос после выделения data/сервис-слоя, прямой
+  список разведки): PlayerConnection (data.model Track/PlayerState/EqualizerPreset
+  + service.PlayerService); PlayerService (Service + notification + R.);
+  AudioEffectsEngine/EqualizerHelper (SovaApp.get() + data.model.EqualizerPreset);
+  EqualizerFeatureFlags (SovaApp.get() + EqualizerHelper.engine());
+  CustomPresetStore (SovaApp.get() + gson); EqualizerScreen/AudioPlayerScreen/
+  AudioQueueScreen/MusicScreen/MusicLibraryScreens/GlobalMiniPlayer (PlayerConnection);
+  AudioAttachmentList (Feed/Profile/Community — PlayerConnection напрямую);
+  FilenameBuilder/Mp4TagWriter/ZipExporter (data.model.Track);
+  TrackDownloadManager/MusicDownloadService/download-менеджеры (Track, R.*,
+  MainActivity). Ветка voice-сообщений чата (VoiceMessageBubble +
+  VoicePlaybackController) — host-inline, кандидат на делегирование после
+  выделения плеера.
+- Остатки (в Часть 2 и гигиену): (1) фото: PhotosScreen в :app (SovaApp/apiClient),
+  компакт-сетка превью пересланных — кандидат на делегирование, :core:media в
+  :feature:photos пока без потребителей; (2) звонки: экраны ui/screens/calls/* в
+  :app (SovaApp), мёртвые CallsHomeSection/CallsScheduledSection/CallsHistoryScreen
+  — удалить (§2.4); (3) audio: voice-рендерер и плеер-домен — по факту data-слоя;
+  (4) video/doc-рендереры AttachmentRenderer — по факту переноса видео-ветки;
+  (5) PermissionNeeds — потребители в хосте (Этап 2+).
+- Риск для сборки: низкий (новый модуль по образцу :feature:photos + host-правки
+  UI-веток по готовым маппингам). На машине пользователя: собрать, лог старта
+  (контейнеров=3, capability=10, stamp calls-2026.09.02-5), smoke: drawer
+  (11 ядерных + Звонки + Фото + Эквалайзер), настройки (15 вкладок: 13 ядерных +
+  «Эквалайзер» + «Звонки» в конце), тумблеры эффектов на вкладке «Эквалайзер»,
+  полноэкранный EQ из drawer И из плеера, аудио-вложение в чате (строка как
+  раньше, тап играет), опционально закомментировать регистрацию AudioContainer →
+  пункта/вкладки нет, аудио-вложение — заглушка с рабочим тапом, ядро живо.
