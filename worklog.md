@@ -5842,3 +5842,108 @@ Stage Summary:
 - Риск для сборки: минимальный (перенос 100% + новые файлы + 3 точечные host-правки);
   на машине пользователя: собрать, лог старта (контейнеров=1, capability=4,
   stamp calls-2026.09.02-4), звонок по старой матрице §2.1 (поведение движка не менялось).
+---
+Task ID: 11 (Этап 1.4: хост на реестре — панель/настройки/кнопки звонка из ContainerRegistry)
+Agent: general-purpose (sandbox sub agent, Task 11)
+Task: перевести хост :app на реестр контейнеров: drawer из find<NavEntry>() (хардкод «Звонки» убрать, без дублей), настройки — вкладки из find<SettingsSection>() (ядерная вкладка CALLS убрать, TabRow+Pager из одного списка), кнопки звонка — только через find<CallStarter>() (null → не рисуются), контракт AttachmentRenderer + хук в чат-пайплайне (graceful), BuildStamp → calls-2026.09.02-5. Верификация статическая (SDK нет): grep, чтение diff, сканер скобок, ментальный эксперимент «контейнер снят»
+
+Work Log:
+- Ветка PinoK подтверждена (HEAD 3ccb99e9 — docs Task 10). find<T>() в реестре — inline reified, возвращает СПИСОК
+  (capsSnapshot().filterIsInstance<T>()), поэтому цикл по контейнерам не понадобился: find<NavEntry>()/
+  find<SettingsSection>()/find<CallStarter>() напрямую; сортировка .sortedBy { order } на месте вызова.
+- Шаг A — drawer (SovaNavHost.kt): Screen.CallsHistory убран из ТРЁХ мест хардкода: drawerScreens (рендер-список),
+  sidebarEditableScreens (canonical панель-редактора #337 — сохранённые prefs-строки «calls_history» отбрасываются
+  normalizeRouteOrder как неизвестные) и мёртвый companion Screen.drawer (grep показал: в рендере не участвует ни
+  разу). Ядерные пункты НЕ тронуты (Dock, Friends…Equalizer, фикс. хвост Офлайн→Настройки→«Выйти из приложения»).
+  Динамика: containerNavEntries = remember { find<NavEntry>().sortedBy(order) } рендерится NavigationDrawerItem'ами
+  ПОСЛЕ скролл-группы ядерных, перед фикс. хвостом; navigation-опции те же (popUpTo(startDestinationId)+saveState/
+  launchSingleTop/restoreState). Host-маппинги: hostDestinationForRoute(route) ("calls_history"→Screen.CallsHistory,
+  неизвестный → null → AppLog.w «пункт скрыт», не рендерим — graceful); hostIconForKey(iconKey) ("calls"→
+  Icons.Filled.Call — та же иконка, что была; неизвестный → Icons.Outlined.Extension, не падаем).
+  currentTitle и ширина drawer (longestDrawerText) дополнительно учитывают контейнерные заголовки (route
+  «calls_history» больше не в allScreens — иначе заголовок падал бы в «PinoK»).
+- Шаг B — настройки (SettingsScreen.kt): SettingsTab.CALLS («Звонки», иконка Call) убран из enum и из when пейджера;
+  компосабл CallsTab ОСТАВЛЕН в :app (SovaPrefs/SovaApp недоступны фиче-модулю). Введён sealed class SettingsPage
+  { Core(tab) — ключ "core:<ENUM>", Container(section) — ключ "container:<route>" } (сумма типов, KDoc);
+  pages = ядерные (enum, порядок прежний) + containerSections = remember { find<SettingsSection>().sortedBy(order) }.
+  PrimaryScrollableTabRow И HorizontalPager строятся из ОДНОГО pages → индексы pager'а всегда согласованы;
+  rememberPagerState(pageCount = { pages.size }). Контент НЕ захватывается в pages (иначе remember закэшировал бы
+  устаревший Snapshot s) — резолвится при рендере: Core → when(tab) (14 ядерных веток прежние), Container →
+  hostSettingsContentFor(route) («settings_calls» → CallsTab(s, app, scope); неизвестный route → заглушка
+  «Раздел предоставлен контейнером…» + AppLog.w). hostSettingsIconFor: «settings_calls» → Icons.Filled.Call
+  (иконка прежней вкладки), неизвестный → Extension. Итог: вкладка «Звонки» на том же месте (последней, после
+  «Автор»), тот же контент, ноль дублей.
+- Шаг C — кнопки звонка: grep всех мест запуска — 4 кнопки в SovaNavHost (FeedScreen onCallClick, FriendsScreen
+  onCallClick, ChatDetailScreen onCallClick, CallsMainScreen onNavigateToCall) + 2 инфраструктурных LaunchedEffect
+  (incoming/outgoing). Экраны переведены на nullable onCallClick: ((Long,String,String?)->Unit)? = null — кнопка
+  обёрнута в if (onCallClick != null) (условие композиции; FeedScreen 1 кнопка, FriendsScreen FriendRow 1 кнопка,
+  ChatDetailScreen шапка 1 кнопка; пасс-тру FriendRow тип согласован). В SovaNavHost: callStarter = remember {
+  find<CallStarter>().firstOrNull() }; callClick (явный тип для коэрции лямбды в Unit) = callStarter?.let { starter
+  -> { pid, title, photo -> OutgoingCallMeta.stash(title, photo); starter.startCall(pid, video = false) } } —
+  video=true нигде не предлагается (фаза 2, §2.2). CallsMainScreen.onNavigateToCall → через callStarter; стартера
+  нет → только AppLog.w (экран без контейнера недостижим — нет drawer-пункта).
+- Шаг C-долг (title/photo): контракт CallStarter их не передаёт, а старая навигация передавала → регресс «Звонок»
+  вместо имени закрыт двумя хост-путями: (1) OutgoingCallMeta (private object в SovaNavHost.kt, @Volatile
+  title/photo): host-сайт кнопки кладёт мета СИНХРОННО до startCall, LaunchedEffect(pendingOutgoingCallPeerId)
+  читает consume() при навигации → имя/аватар на экране звонка появляются мгновенно, как раньше; (2) CallScreen:
+  LaunchedEffect(incoming) → LaunchedEffect(incoming, peerId) с веткой исходящего — при заглушке имени
+  («Звонок»/blank) профиль подтягивается напрямую usersGetByIds(peerId) (раньше self-fetch был только у входящих;
+  заодно починен redial из истории звонков, который и до 1.4 показывал «Звонок»). Сквозной путь проверен чтением:
+  кнопка → callClick → CallsStarterImpl.startCall → hook requestOutgoingCall (SovaApp: pendingOutgoingCallPeerId/
+  Video) → LaunchedEffect в SovaNavHost → nav.navigate(Screen.Call.buildRoute(peerId, meta, incoming=false)) →
+  CallScreen (движок стартует сам, поведение прежнее). Stale-комментарий SovaApp «до 1.4 никто не вызывает»
+  актуализирован.
+- Шаг D — AttachmentRenderer: :contracts AttachmentRenderer.kt (ТОЛЬКО интерфейсы, без androidx/compose):
+  Capability + canHandle(mimeType, kind) + rendererKey + order (KDoc с потоком хоста). В чат-пайплайне
+  (ChatDetailScreen.kt) helper attachmentRendererFor(kind, mime) = find<AttachmentRenderer>().sortedBy(order)
+  .firstOrNull { canHandle } + hostRendererComposable(rendererKey) → компосабл (на 1.4 таблица ПУСТА — закомм.
+  ветка «photos» на 1.5-а). Хук в фото-блоке MessageBubble: renderer найден И rendererKey известен хосту →
+  photoDelegate(urls); иначе — встроенный рендер хоста КАК СЕЙЧАС (весь существующий блок не тронут). Ни один
+  контейнер ещё не публикует рендереры → путь всегда host-inline, поведение чата не изменено. Заглушка «скачать
+  файл» не вводилась — для типов, которые хост не рендерит инлайн, всё осталось как было (doc/link/gift/...).
+- BuildStamp → calls-2026.09.02-5 (комментарий -5 над -4): правлена звонковая UI-цепочка (кнопки звонка +
+  доставка title/photo).
+- Верификация (каждая выполнена):
+  1) Сканер баланса скобок — 10/10 OK: AttachmentRenderer, SovaNavHost, Screen, SettingsScreen, FeedScreen,
+     FriendsScreen, ChatDetailScreen, CallScreen, SovaApp, BuildStamp.
+  2) Grep-дубли: «Screen.CallsHistory» в навигации — только объявление объекта, NavHost-destination (был и был),
+     host-маппинг и комментарии; в drawer-списках — 0. «SettingsTab.CALLS» — 0. Второго места, рисующего
+     звонковую вкладку/пункт из хардкода, НЕТ.
+  3) Grep startCall(:app) — ровно 4 кнопочных вызова через callStarter/callClick (Feed/Friends/Chat/CallsHistory)
+     + engine.startCall внутри CallScreen (WebRTC, не навигация); прямые nav.navigate(Screen.Call.buildRoute) —
+     только 2 LaunchedEffect'а (incoming payload / outgoing pending) — инфраструктура.
+  4) Pager-синхронизация: TabRow и Pager итерируют ОДИН список pages (forEachIndexed / pages[page]); ключи
+     уникальны (core:<ENUM> / container:<route>); pageCount = { pages.size }.
+  5) Ментальный эксперимент «контейнер снят с реестра» (регистрация в SovaApp.onCreate закомментирована,
+     проверка чтением кода): реестр пуст (лог «контейнеров=0, capability=0») →
+     а) drawer: containerNavEntries пуст → пункта «Звонки» НЕТ, ядерные пункты и фикс. хвост на месте;
+     б) настройки: containerSections пуст → pages = 14 ядерных вкладок, вкладки «Звонки» НЕТ ( CallsTab мёртвым
+     кодом не остаётся — просто не вызывается), pager-индексы согласованы;
+     в) кнопки: callStarter=null → callClick=null → FeedScreen/FriendsScreen/ChatDetailScreen получают null →
+     кнопка звонка НЕ рендерится в трёх местах; redial из истории — экран недостижим;
+     г) входящие звонки НЕ зависят от реестра (LP115 → pendingIncomingCall* → CallScreen) — живы;
+     д) чат: attachmentRendererFor → null → inline-рендер фото как сейчас;
+     е) падений нет: все обращения к реестру null-safe, unknown route/rendererKey ведут к скрытию/заглушке+лог.
+  6) git status: стейдж только 10 задачных файлов (чужой .gitignore и Next.js-скаффолд не тронуты).
+- Коммит b7199915 (arch), push origin PinoK OK (3ccb99e9..b7199915).
+
+Stage Summary:
+- Этап 1.4 закрыт: хост строит панель/настройки/кнопки звонка из реестра; с зарегистрированным CallsContainer UI
+  прежнее (один пункт «Звонки», одна вкладка, кнопки работают, сквозной путь до Screen.Call с именем/аватаром);
+  снятие контейнера убирает все три элемента, ядро не меняется. ЕДИНСТВЕННОЕ видимое отличие — позиция пункта
+  «Звонки» в drawer: он теперь после ядерных скролл-групп (после «Эквалайзер»), а не между «Документы» и «Клипы»
+  (правило сортировки Этапа 1.4: ядерные в неизменном порядке, затем контейнерные по order); в настройках вкладка
+  осталась на прежнем месте (последней). Панель-редактор (#337) контейнерные пункты не редактирует (их нет без
+  контейнера; порядок задаёт capability.order).
+- :contracts пополнен AttachmentRenderer — задел 1.5-а готов: хук в фото-пайплайне чата живёт, host-маппинг
+  rendererKey→компосабл пуст (одна закомментированная строка «photos»).
+- Остатки для 1.5: (1) :feature:photos — публикует AttachmentRenderer (photos) + NavEntry; хост добавляет ветку в
+  hostRendererComposable/hostDestinationForRoute и, при желании, PhotoGrid-делегат; (2) перенос экранов
+  ui/screens/calls/* — по-прежнему блокирован SovaApp (звонковый сервис-слой/data-слой — отдельная работа);
+  (3) CallsHomeSection/CallsScheduledSection/CallsHistoryScreen — по-прежнему мёртвые (0 потребителей) — удалить
+  в гигиене §2.4; (4) video/doc-делегирование AttachmentRenderer — по факту публикации контейнером.
+- Риск для сборки: низкий (host-правки UI + новый контракт без зависимостей; :contracts не тянет compose).
+  На машине пользователя: собрать, лог старта (контейнеров=1, capability=4, stamp calls-2026.09.02-5), smoke:
+  drawer (11 ядерных + «Звонки»), настройки (15 вкладок, «Звонки» последняя с тумблерами callsVideo*), звонок из
+  чата/друзей/ленты (имя/аватар собеседника на экране), redial из истории (имя подтягивается через ~0.3с),
+  фото/файлы в чате — как раньше.
