@@ -11452,3 +11452,30 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - `:core:network` (1.2-б): VKApiClient, LongPollClient/LongPollKeepAlive, CallSignalingClient, Queuev4Client, VkNotificationsNotifier.
 - `:core:media` (1.2-в): аудиофокус, AudioRouteLogger, медиа-кэш.
 - Сборка/запуск — за пользователем: лог старта (`onCreate: PinoK starting ... stamp=calls-2026.09.02-3`) и экспорт логов должны выглядеть как раньше.
+---
+
+## 2026-09-02 — Этап 1.2-б модульной архитектуры: модуль :core:network — сигналинг звонков (#ARCH-CONTAINERS)
+
+### Коммит: `30d6b64a` (arch(containers), ветка PinoK, push origin OK) — чистый перенос без правок кода
+
+### Что сделано
+- Создан Gradle-модуль `:core:network` по образцу `:core:common` (только `alias(libs.plugins.android.library)`, namespace `re.pinok.network`, compileSdk 36, minSdk 24, Java 21). Зависимости: `implementation(project(":core:common"))`, okhttp, gson, kotlinx-coroutines-android (okio.ByteString — транзитивно с okhttp; okhttp-logging не используется перенесённым кодом).
+- Замыкания разобраны для всех 17 кандидатов (`api/VKApiClient` + 16 файлов `realtime/`). Чистое — только у пары сигналинга звонков; перенесено `git mv` (100% similarity, пакеты НЕ менялись): `re.pinok.realtime.CallSignalingClient` (WS-сигналинг VK-звонков: ping/pong, transmit-data, bounce/перерегистрация, дедуп по o=) и его компаньон `re.pinok.media.ConversationParamsDecoder` (декодер payload LP 115: base64+LZ4 → JSON; парсер ответа vchat.getConversationParams; чистый object: gson + java.util.Base64).
+- `settings.gradle.kts`: `include(":core:network")` после `:core:common`; `app/build.gradle.kts`: `implementation(project(":core:network"))`. Потребители в `:app` (CallScreen, WebRtcEngine — FQN) резолвятся без правок кода.
+
+### Осталось в `:app` (блокеры — вводная для 1.3+)
+- `VKApiClient` — SovaApp, ExchangeAuthRepository, SovaPrefs, TokenStorage, 25× data.model.*, mods.* — КОРНЕВОЙ блокер (data-слой): LongPollClient/Queuev4Client/notifier-хвост переносятся только после выделения data-слоя.
+- `LongPollClient` — ctor apiClient: VKApiClient (+VKApiClient.LongPollServer), ctor prefs: SovaPrefs?, объявляет sealed LongPollEvent (ChatDetailScreen/MessagesScreen).
+- `LongPollKeepAliveService` — android.app.Service с R.*, SovaApp, deep-link PendingIntent на MainActivity/AuthActivity → этап 1.3: capability контейнера (foreground-сервис + канал уведомлений).
+- `Queuev4Client` (VKApiClient + data.model.QueueCredential/QueueEvent), `VkNotificationsNotifier` (R.*, SovaPrefs.Snapshot, VKApiClient.NotificationItem, PendingIntent на MainActivity/NotificationActionReceiver), `ChannelWebSocketClient` (STUB, 0 вызовов: LongPollEvent + неиспользуемый apiClient: VKApiClient).
+- notifier-хвост realtime/: MessageNotifier/ReplyResultNotifier (R.*, MainActivity), NotificationsPoller/SecurityAlertsPoller (SovaApp/VKApiClient/SovaPrefs), SecurityAlertNotifier (VKApiClient + MainActivity), SnNotifyFilter/VkUrlDeepLinker (VKApiClient), UnreadMessagesCounter/ClipsCounter (SovaApp в сигнатурах), NotificationActionReceiver (SovaApp.get).
+
+### Верификация (в песочнице НЕТ Android SDK — только статика)
+- grep: дубли деклараций CallSignalingClient/ConversationParamsDecoder в `:app` — 0; в `core/network` нет ссылок на :app-классы / BuildConfig / R.* (только AppLog из :core:common и внутренние); internal в переносе нет.
+- пара CallSignalingClient ↔ ConversationParamsDecoder ушла вместе (импорт резолвится внутри модуля).
+- сканер баланса скобок: 2 перенесённых .kt + 3 правленых .kts — OK 5/5; git mv — 100% similarity; BuildStamp НЕ бампался (calls-2026.09.02-3); в коммит — только задачные файлы (Next.js-скаффолд и чужой .gitignore не тронуты).
+
+### Следствие для плана
+- Для 1.3 (:feature:calls): CallSignalingClient уже в `:core:network` — в контейнер переносятся только WebRtcEngine/CallScreen/SovaPrefs-тумблеры.
+- Открытый вопрос архитектуры: сетевой транспорт не отделяется от data-слоя — перед дальнейшей выноской (1.2-в / core-слой) нужна развязка данных (:core:data или интерфейсы prefs/api).
+
