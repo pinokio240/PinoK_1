@@ -207,4 +207,8 @@ dependencies {
 
     // #ARCH-CONTAINERS (Этап 1.2-а): общий core-слой (AppLog, BuildStamp, утилиты).
     implementation(project(":core:common"))
+
+    // #ARCH-CONTAINERS (Этап 1.2-б): сетевой слой (сигналинг звонков, декодер
+    // conversation params). Остальной сетевой слой пока в :app (см. контейнеры.план.md).
+    implementation(project(":core:network"))
 }

@@ -29,3 +29,8 @@ include(":app")
 include(":contracts")
 // #ARCH-CONTAINERS (Этап 1.2-а): общий core-слой (AppLog, BuildStamp, утилиты).
 include(":core:common")
+// #ARCH-CONTAINERS (Этап 1.2-б): сетевой слой — CallSignalingClient (WS-сигналинг
+// звонков) + ConversationParamsDecoder (декодер payload'а звонков, компаньон).
+// VKApiClient/LongPoll*/Queuev4Client/VkNotificationsNotifier остались в :app
+// (замыкание на data-слой/UI — см. контейнеры.план.md, Этап 1.2).
+include(":core:network")
