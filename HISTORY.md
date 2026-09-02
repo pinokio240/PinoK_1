@@ -12,7 +12,8 @@
 
 ---
 
-## 🚀 Стартовая точка для завтра (2026-09-01 → 2026-09-02)
+## 🚀 Стартовая точка для завтра (2026-09-01 → 2026-09-02 — hotfix a5a26926: 9 фейлов сборки пользователя = неверные координаты androidx.annotation в каталоге версий (Этап 1.2-в): name "androidx-annotation" → "annotation" (артефакт androidx-annotation не существует; реальный — androidx.annotation:annotation 1.9.1). Резолв падал до компиляции Kotlin, каскад :core:media → 8 задач :app.
+2026-09-02)
 
 ### Текущая ветка: `PinoK` (origin: github.com/pinokio240/PinoK_1.git)
 ### Последний коммит: fix(calls) — #CALLS-ACCEPT-RESTART: выживание при topology→SERVER (см. git log -1)

@@ -6245,3 +6245,18 @@ Stage Summary:
   полноэкранный EQ из drawer И из плеера, аудио-вложение в чате (строка как
   раньше, тап играет), опционально закомментировать регистрацию AudioContainer →
   пункта/вкладки нет, аудио-вложение — заглушка с рабочим тапом, ядро живо.
+
+---
+Task ID: 14 (hotfix: 9 фейлов сборки пользователя — координаты androidx-annotation)
+Agent: Z.ai Code (Sergey)
+Task: пользователь прислал лог сборки (Pasted Content, E:\ANDROID_APP\PinoK_1): FAILURE: Build completed with 9 failures — починить
+
+Work Log:
+- Разбор лога: единственный корень всех 9 фейлов — ModuleVersionNotFoundException: androidx.annotation:androidx-annotation:1.9.1 (артефакт с таким name НЕ существует; реальный — androidx.annotation:annotation). Упало :core:media:compileDebugKotlin (debugCompileClasspath) + каскад 8 задач :app (processDebugNavigationResources, mergeDebugAssets, desugarDebugFileDependencies, checkDebugAarMetadata, mergeDebugResources, processDebugMainManifest, checkDebugDuplicateClasses, mergeDebugNativeLibs) через debugRuntimeClasspath. Резолв падал ДО компиляции Kotlin — иных ошибок компиляции в логе нет.
+- Источник: gradle/libs.versions.toml:49, алиас androidx-annotation из Этапа 1.2-в (a666b7ee) — name = "androidx-annotation" вместо "annotation".
+- Фикс a5a26926: name = "annotation", версия 1.9.1 сохранена (существует; core-ktx 1.17.0 тянет annotation 1.9.x транзитивно — кэш Gradle тёплый). Потребитель алиаса: только :core:media (VideoPipController @RequiresApi).
+- Push origin PinoK OK (dd4f50fb..a5a26926). BuildStamp не тронут (звонковая логика не затронута, calls-2026.09.02-5).
+
+Stage Summary:
+- 9 фейлов = 1 координатная опечатка в каталоге версий; после a5a26926 резолв должен пройти, далее обычная компиляция (модули :feature:audio/photos и :contracts в присланном логе уже собирались).
+- Если при пересборке вылезут НОВЫЕ ошибки Kotlin (резолв больше не маскирует компиляцию) — присылать лог, разбор по фактам.
