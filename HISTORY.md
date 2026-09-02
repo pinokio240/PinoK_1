@@ -12,7 +12,9 @@
 
 ---
 
-## 🚀 Стартовая точка для завтра (2026-09-01 → 2026-09-02 — hotfix a5a26926: 9 фейлов сборки пользователя = неверные координаты androidx.annotation в каталоге версий (Этап 1.2-в): name "androidx-annotation" → "annotation" (артефакт androidx-annotation не существует; реальный — androidx.annotation:annotation 1.9.1). Резолв падал до компиляции Kotlin, каскад :core:media → 8 задач :app.
+## 🚀 Стартовая точка для завтра (2026-09-01 → 2026-09-02 — Этап А null-политики #NULL-EXPLICIT 1102e216: запрет !! (устранён вне calls-зоны: SettingsScreen/ShareToChatSheet/Video*/Notifications/Offline/PostDetail + api/auth/realtime), хост-врезки контейнеров без ?. и ?:, политика в CODING_STYLE.md. Calls-файлы не тронуты (тест calls-2026.09.02-5 в силе). Legacy ?. / ?: 6625 вхождений — Этапы Б/В.
+2026-09-02 — Контейнеризация Часть 1 ЗАВЕРШЕНА (этапы 1.1–1.5, агенты 7 шт.): 8 Gradle-модулей, реестр контейнеров=3/capability=10; hotfix a5a26926 — координаты androidx.annotation:annotation (9 фейлов резолва = одна опечатка каталога).
+2026-09-02 — hotfix a5a26926: 9 фейлов сборки пользователя = неверные координаты androidx.annotation в каталоге версий (Этап 1.2-в): name "androidx-annotation" → "annotation" (артефакт androidx-annotation не существует; реальный — androidx.annotation:annotation 1.9.1). Резолв падал до компиляции Kotlin, каскад :core:media → 8 задач :app.
 2026-09-02)
 
 ### Текущая ветка: `PinoK` (origin: github.com/pinokio240/PinoK_1.git)

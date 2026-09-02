@@ -6260,3 +6260,41 @@ Work Log:
 Stage Summary:
 - 9 фейлов = 1 координатная опечатка в каталоге версий; после a5a26926 резолв должен пройти, далее обычная компиляция (модули :feature:audio/photos и :contracts в присланном логе уже собирались).
 - Если при пересборке вылезут НОВЫЕ ошибки Kotlin (резолв больше не маскирует компиляцию) — присылать лог, разбор по фактам.
+
+---
+Task ID: 15 (Этап А null-политики: CODING_STYLE + все !! вне calls-логики)
+Agent: субагент (opus), интеграция — Z.ai Code
+Task: решение пользователя «избавиться от !. !!. ?. ?? — всё явное, исключения обоснованны»: политика + устранение !! в UI-скринах
+
+Work Log:
+- Факты-аудит: !! = 29 вхождений/24 строки/14 файлов; ?. / ?: = 6625 вхождений (app 6223, core 278, feature 124); в НОВОМ коде сессии (контейнеры/рендереры/реестр) операторов 0.
+- CODING_STYLE.md: раздел «Явная null-политика (#NULL-EXPLICIT)» — запрет !!; ?. / ?: в новом коде; заменой — явные проверки/захват val; исключение с inline // NULL-ЯВНО; чек-лист ревью.
+- Устранены все !! вне calls-зоны (8 файлов): SettingsScreen ×7 (checkNotNull по инварианту NOTIFY_DEFAULTS; захват val silentUntil), ShareToChatSheet ×2, VideoScreen, NotificationSettingsScreen, OfflineManagerScreen, PostDetailScreen, VideoPlayerScreen, PlaylistAttachmentCard (последние три — частично комментарии).
+- Уточнение фактов: 3 из «25» были комментариями; литерал "!!-!!!!!!!!" в CallsWebViewScreen — строка cookie.
+
+Stage Summary:
+- Этап А (UI-часть) готов: rg !! в правленых файлах = 0, сканер скобок OK, поведение не менялось. Calls-файлы не тронуты.
+
+---
+Task ID: 16 (Этап А null-политики: !! в api/auth/realtime + хост-врезки контейнеров)
+Agent: субагент (opus, прерван без отчёта), верификация и приёмка — Z.ai Code
+Task: остатки !! в api/realtime/auth + удаление ?. / ?: из врезок этапов 1.3–1.5
+
+Work Log:
+- Агент был прерван ПОСЛЕ правок, ДО отчёта. Интеграторская приёмка: git diff показывает все файлы зоны изменёнными; rg !! (VKApiClient/Queuev4Client/ExchangeAuthRepository) = 0; сканер скобок OK (6 файлов); единственный ?. в окне метки #ARCH-CONTAINERS (SovaNavHost:1348, title ?: "Диалог") — легаси вне диффа, не тронут.
+
+Stage Summary:
+- Зона агента принята: VKApiClient/Queuev4Client/ExchangeAuthRepository чисты от !!; хост-врезки (SovaNavHost containerNavEntries/host-маппинги/callStarter, ChatDetailScreen attachmentRendererFor/hostRendererComposable, SettingsScreen контейнерная секция) без ?. / ?:.
+
+---
+Task ID: WRAP-2026-09-02-2 (сводка дня: контейнеризация 1.1–1.5 + hotfix + Этап А null-политики)
+Agent: Z.ai Code (Sergey)
+Task: фиксация состояния на конец дня
+
+Work Log:
+- Часть 1 (контейнеризация) ЗАВЕРШЕНА: 8 модулей (:app, :contracts, :core:common/network/media, :feature:calls/photos/audio), реестр «контейнеров=3, capability=10».
+- Коммиты дня: 8d6a9e66 (фиксы LTE) → a5c14cf3..2d22127f (1.2–1.4) → 51cc828c/301aad30 (1.5-а) → 2fa73ee0/dd4f50fb (1.5-б) → a5a26926 (hotfix androidx.annotation:annotation) → 0e3fa0fc (доки) → 1102e216 (null-политика Этап А). Всё в origin/PinoK.
+- Открыто на завтра: (1) сборка пользователем после a5a26926+1102e216 (резолв-фикс маскировал компиляцию :core:media/:app — возможны НОВЫЕ ошибки Kotlin, лог прислать); (2) тест звонков calls-2026.09.02-3+ (матрица §2.1); (3) Этап Б null-политики: !! в calls-файлах (CallScreen ×2 кода) + ?. / ?: в перенесённых файлах (core 278, feature 124) — ПОСЛЕ теста звонков; (4) Этап В: legacy app 6223 вхождений, по одному разделу за коммит; (5) остатки контейнеризации после выделения data-слоя (экраны звонков/плеера в :app).
+
+Stage Summary:
+- День закрыт: план контейнеризации выполнен целиком, один hotfix по логу сборки, null-политика введена и применена к новому коду + !! устранён вне тестируемой зоны. Держать правило: каждый следующий шаг — за фактом (лог сборки/лог звонка).
