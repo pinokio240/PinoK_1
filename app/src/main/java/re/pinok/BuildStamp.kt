@@ -19,8 +19,10 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
-    // -1 (02.09) = #CALLS-ACCEPT-RESTART + #CALLS-TOPOLOGY-PCRESTART + грейс 30с
-    // (выживание при topology→SERVER: рестарт-оффер после answer ноды, PC-RESTART
-    // входящего на SERVER, FAILED-грейс 8с→30с).
-    const val STAMP: String = "calls-2026.09.02-1"
+    // -2 (02.09) = #CALLS-REVWEB-SERVER-BOUNCE + #CALLS-REVWEB-SERVER: реверс открытых
+    // реализаций VK-звонков (реверс.звонки-протокол.md) — при topology→SERVER переподключение
+    // сигналинга (bounce → свежий connection = свежие per-connection TURN-креды) + полный
+    // PC-RESTART обеих сторон (recreateAndReoffer/recreateAndReanswer), как в эталоне
+    // (vk_joiner.go closeTransport + p2p.go Reset()); IceRestart на старом PC больше не нужен.
+    const val STAMP: String = "calls-2026.09.02-2"
 }

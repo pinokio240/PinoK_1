@@ -1101,6 +1101,54 @@ class WebRtcEngine(
     }
 
     /**
+     * #CALLS-REVWEB-SERVER (2026-09-02, реверс открытых реализаций VK-звонков —
+     * whitelist-bypass/p2p.go Reset(), vk_joiner.go topology-changed→closeTransport):
+     * ПОЛНЫЙ PC-RESTART со стороны ЗВОНЯЩЕГО при topology→SERVER.
+     * Эталонная философия: IceRestart на испорченной сессии НЕ ДЕЛАЕТ никто —
+     * сессия пересоздаётся целиком (новый PC → новый offer). Отличие от restartIce():
+     * тот рестартит СТАРЫЙ PC, чей конфиг вшит при создании со СТАРЫМИ iceServers;
+     * здесь новый PC подхватывает СВЕЖИЕ TURN-креды, обновлённые setIceServers из
+     * нового `connection` (после bounce сигналинга — per-connection creds).
+     * Аудио source/track и видеозаглушка живут на уровне factory — переиспользуются.
+     *
+     * @return true — рестарт запущен (новый offer уйдёт через onLocalSdpReady).
+     */
+    fun recreateAndReoffer(): Boolean {
+        if (peerConnection == null) {
+            AppLog.w(TAG, "recreateAndReoffer: PeerConnection нет — некому пересоздавать")
+            return false
+        }
+        post {
+            AppLog.w(TAG, "#CALLS-REVWEB-SERVER: пересоздаю PC + НОВЫЙ offer (свежие TURN-креды, новые ufrag/pwd)")
+            // инвалидируем висящие таймеры старого PC (EARLYSTATS/DISCONNECTED)
+            iceStateGen.incrementAndGet()
+            // сброс трека ДО close() — как в recreateAndReanswer (см. комментарий там):
+            // свежий SurfaceViewRenderer для нового remote-трека.
+            if (remoteVideoTrackRef != null) {
+                remoteVideoTrackRef = null
+                onRemoteVideoTrack?.invoke(null)
+            }
+            peerConnection?.close()
+            peerConnection = null
+            pcCreated = false
+            pendingRemoteIce.clear()
+            createPeerConnection()
+            localAudioTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+            }
+            localVideoTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+            }
+            // направление video-транссивера по текущим флагам (как в startCall),
+            // затем полный оффер-цикл: createOffer → setLocal → sendLocalSdpNow
+            // (inline-кандидаты) → onLocalSdpReady → CallScreen отправит offer.
+            prepareVideoTransceivers()
+            createOffer()
+        }
+        return true
+    }
+
+    /**
      * #CALLS-ICE-DRAIN-LOG (2026-08-31, лог 22:25 Wi-Fi): сброс буферизованных удалённых
      * кандидатов после setRemoteDescription. addIceCandidate возвращает Boolean —
      * раньше результат ИГНОРИРОВАЛСЯ: при сбое кандидат молча терялся, ICE агент

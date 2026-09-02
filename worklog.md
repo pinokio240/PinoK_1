@@ -5456,3 +5456,86 @@ Stage Summary:
 - След. тест: stamp calls-2026.09.02-1, ждать в логах REOFFER→ICE-RESTART /
   ICE RESTART на topology / PC-RESTART; если нода молчит и на свежий offer —
   реверс веб-клиента OK (приоритет).
+
+---
+Task ID: 5-b
+Agent: general-purpose (GitHub VK-calls reversal hunt)
+Task: найти и разобрать открытые реверсы протокола звонков VK (vk-desktop, туннели)
+
+Work Log:
+- Склонированы shallow-клоны в /tmp/vkrev/: danyadev/vk-desktop, ih8sn0wxd/kittenproxy,
+  kobzevvv/vk-calls-tunnel (все 3 ок). vk-desktop: звонков НЕТ — проверены HEAD, ВСЯ
+  история (504 коммита, pickaxe по RTCPeerConnection/iceServers — 0), все теги 0.0.3…1.0.0-alpha.0:
+  только service-строки «присоединился к звонку». Заявка задачи не подтвердилась.
+- Через Sourcegraph-поиск (grep.app/gh code search недоступны) найдены и склонированы
+  РЕАЛЬНЫЕ источники: kulikov0/whitelist-bypass (headless-джойнер звонков VK на pion +
+  WebTransport — единственная открытая реализация SFU-сигналинга VK), icyfalc0n/maxcalls
+  (звонки MAX = тот же OK/VK-протокол + ДОКУМЕНТАЦИЯ docs/api/calls.md, singaling.md),
+  anton48/vk-turn-proxy-ios (captcha-free anon-flow), TheAirBlow/Turnable.
+- Разобраны: сигналинг (ws2 + wt_endpoint WebTransport), команды/уведомления
+  (accept-call, transmit-data, change-media-settings, update-media-modifiers,
+  change-options, remove-participant; connection/settings-update/registered-peer/
+  topology-changed/transmitted-data/hungup/closed-conversation; ping/pong текстом),
+  auth-цепочки (login.vk.ru act=web_token → calls.getSettings(public_key) →
+  messages.getCallToken → OK fb.do auth.anonymLogin → vchat.join/StartConversation;
+  anon-варианты: calls.getAnonymousToken под капчей, api.vk.me client_id 8093730
+  messages.getAnonymCallToken без капчи), TURN-креды (turn_server{urls,username,credential}
+  в ответе fb.do И в notification connection→conversationParams, per-connection),
+  LP-115 conversation_params→"tkn".
+- ГЛАВНОЕ по проблеме §40: ни один проект не реализует SERVER-ногу — все ОБХОДЯТ её:
+  при topology-changed(SERVER) закрывают сигналинг-транспорт и делают ПОЛНЫЙ rejoin
+  (новый session_key, endpoint/wt_endpoint, НОВЫЕ TURN-креды, новый PC+offer) до
+  восстановления DIRECT; IceRestart никто не делает. SERVER-flap'ы у них провоцируются
+  изменением числа треков (screenshare/dual-track). Аудио-трек шлют всегда
+  (kittenproxy — anullsrc тишина 48k stereo). Медиа-нода = SFU-сигналинг + TURN-аллокатор,
+  НЕ медиа-пир; медиа всегда P2P/TURN клиент↔клиент. Offer — только после
+  registered-peer/settings-update; кандидаты — после offer; ICE-буфер до setRemote.
+- Полный отчёт: /tmp/vkrev/FINDINGS.md (репо не тронуты, коммитов нет).
+
+Stage Summary:
+- ice_servers: fb.do ответ vchat.* → turn_server/stun_server + endpoint/wt_endpoint;
+  свежие креды также приходят в connection→conversationParams.turn{urls,username,credential}.
+- topology-SERVER: открытых реализаций ноги нет; паттерн выживания = rejoin-fresh-until-DIRECT
+  (не restartIce), свежие TURN-креды на каждый коннект, минимизировать число треков.
+- WEB_TRANSPORT в ответе ноды = сигналинг через wt_endpoint (HTTP/3 WebTransport,
+  capabilities=2F7F&clientType=VK&tgt=join&compression=deflate-raw), WS ws2 — фоллбэк.
+- SDP: без мунжа; {sdp:{type,sdp}, animojiVersion:2} через transmit-data (строгий порядок
+  command/sequence/participantId/data); кодеки дефолтные Opus/VP8; DC офиц. клиента:
+  producerNotification/producerCommand/producerScreenShare/consumerScreenShare.
+- Для следующего теста PinoK: на topology-changed → полный PC-restart с НОВЫМИ turn-кредами
+  (переподключение сигналинга) вместо restartIce старого PC; проверить offer после
+  registered-peer и кандидаты после offer; аудио sendrecv присутствует всегда.
+
+---
+Task ID: 5-c/5-d/5-e/5-f (реверс открытых реализаций VK-звонков + реверс-фиксы SERVER-топологии)
+Agent: Z.ai Code (Sergey)
+Task: по требованию пользователя («зачем гадать — берись за реверс официального веб-клиента»): реверс протокола звонков VK по открытым реализациям, сравнение с PinoK, реверс-обоснованные фиксы topology→SERVER
+
+Work Log:
+- Разведка: worklog/звонки.md §40, скриншот Screenshot_20260902_074704.png (remote-hangup,
+  WS выкл • PC нет • ICE CLOSED), vk.com = 418 (kittenx), GitHub доступен.
+- Task 5-b (субагент): vk-desktop звонков НЕ содержит (504 коммита pickaxe = 0). Найдены
+  настоящие источники: kulikov0/whitelist-bypass (SFU-сигналинг + topology-changed),
+  icyfalc0n/maxcalls (доки), kittenproxy, vk-calls-tunnel. Отчёт: /tmp/vkrev/FINDINGS.md
+  → скопирован в репо как реверс.звонки-протокол.md.
+- Сверка эталона с кодом: ping/pong ✓, setIceServers из connection ✓, pendingICE ✓,
+  аудио всегда ✓; ГЛАВНЫЙ РАЗРЫВ — при topology→SERVER: restartIce на СТАРОМ PC (старые
+  iceServers вшиты в конфиг), креды per-connection не обновляются, эталон делает
+  closeTransport → свежий connection → новый PC + новый offer.
+- Код: CallSignalingClient.bounce() (закрыть WS, connectLoop переустановит);
+  WebRtcEngine.recreateAndReoffer() (PC-RESTART звонящего, симметрично recreateAndReanswer);
+  CallScreen: topology-SERVER → bounce → по свежему connection PC-RESTART обеих сторон,
+  watchdog 7с — фолбэк на старых кредах; повторный topology-changed — ретрансмиты.
+  BuildStamp → calls-2026.09.02-2.
+- Доки: звонки.md §41 (эталонная таблица + изменения + что ждать), реверс.звонки-протокол.md,
+  контейнеры.план.md §2.1 (stamp -2, маркеры лога), HISTORY (CRLF-запись).
+- Проверки: фигурные скобки 455/455, 251/251, 155/155; дельта круглых = HEAD (в строках/комментариях).
+
+Stage Summary:
+- «Ответ ноды молчит на ICE» объяснён: нода — SFU-сигналинг + TURN-аллокатор, НЕ медиа-пир;
+  чекать она и не должна. Реальная нога — клиент↔клиент после accept (нужен свежий SDP-цикл).
+- SERVER-топология по эталону: полная пересборка сессии со свежими per-connection TURN-кредами,
+  НИКАКОГО IceRestart на старом PC. Реализовано в PinoK (stamp calls-2026.09.02-2).
+- След. тест: матрица 2.1 со stamp -2; маркеры: #CALLS-REVWEB-BOUNCE → «свежий connection
+  получен» → «пересоздаю PC + НОВЫЙ offer/answer». Если не поможет — след. шаг реверса:
+  WebTransport-сигналинг (wt_endpoint) / rejoin-цикл до DIRECT.

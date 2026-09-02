@@ -220,8 +220,15 @@ fun CallScreen(
     // #CALLS-ACCEPT-RESTART (2026-09-02): счётчик/кулдаун ICE-рестартов offer-цикла
     var iceRestartCount by remember { mutableStateOf(0) }
     var lastIceRestartAt by remember { mutableStateOf(0L) }
-    // #CALLS-TOPOLOGY-PCRESTART: одноразовый полный PC-RESTART на topology=SERVER (входящий)
-    var topologyPcRestart by remember { mutableStateOf(false) }
+    // #CALLS-REVWEB-SERVER-BOUNCE (2026-09-02, реверс открытых реализаций VK-звонков):
+    // состояние пересборки ноги при topology→SERVER. serverBounceStarted — bounce
+    // сигналинга запущен (однократно за звонок); serverRestartArmed — ждём свежий
+    // `connection` (его обработчик применит свежие TURN-креды через setIceServers),
+    // после чего выполняется PC-RESTART (engine.recreateAndReoffer/recreateAndReanswer);
+    // serverRestartTick — тик watchdog'а (7с без connection → рестарт на старых кредах).
+    var serverBounceStarted by remember { mutableStateOf(false) }
+    var serverRestartArmed by remember { mutableStateOf(false) }
+    var serverRestartTick by remember { mutableStateOf(0) }
     var diagReoffer by remember { mutableStateOf("") }
     // #CALLS: call_id активного звонка — для кнопки «Ссылка» (vchat.createJoinLink).
     val activeCallId = remember { mutableStateOf<String?>(null) }
@@ -455,6 +462,50 @@ fun CallScreen(
                     AppLog.i("CallScreen", "REANSWER #$reanswerCount ($reason): answer + ${allLocalCandidates.value.size} кандидатов → $pid")
                 }
             }
+        }
+    }
+
+    // #CALLS-REVWEB-SERVER (2026-09-02, реверс открытых реализаций): пересборка ноги
+    // при topology→SERVER. Эталон: whitelist-bypass при topology!=DIRECT закрывает
+    // транспорт (vk_joiner.go) → свежий `connection` (СВЕЖИЕ per-connection TURN-креды)
+    // → полный пересоздание PC + новый SDP-цикл (p2p.go Reset()). IceRestart на старом
+    // PC не делает никто: старый PC несёт СТАРЫЕ iceServers (вшиты в конфиг при
+    // создании) и старое состояние сессии. Порядок у нас: topology-changed(SERVER) →
+    // bounce() сигналинга → в обработчике `connection` (креды уже применены
+    // setIceServers'ом) → runServerTopologyRestart().
+    val runServerTopologyRestart: () -> Unit = {
+        if (iceConnected.value) {
+            AppLog.i("CallScreen", "SERVER: ICE уже подключён — PC-RESTART пропущен")
+        } else {
+            // guard от doReoffer/doReanswer-рестартов в окне 8с после пересборки
+            lastIceRestartAt = System.currentTimeMillis()
+            if (direction == CallDirection.OUTGOING) diagReoffer = "srv-offer" else diagAnswer = "srv-ans"
+            val ok = if (direction == CallDirection.OUTGOING) {
+                engine.recreateAndReoffer()
+            } else {
+                engine.recreateAndReanswer()
+            }
+            AppLog.w(
+                "CallScreen",
+                "SERVER: PC-RESTART (ok=$ok, ${if (direction == CallDirection.OUTGOING) "новый offer" else "новый answer"})"
+            )
+            if (!ok) {
+                // PC нет/не смог — фолбэк на прежние механизмы (ретрансмиты с гейтами)
+                if (direction == CallDirection.OUTGOING) doReoffer("server-topology")
+                else doReanswer("server-topology")
+            }
+        }
+    }
+
+    // Watchdog: свежий connection не пришёл за 7с (сервер не переconnection'ил нас /
+    // сеть) — рестартуем ногу на СТАРЫХ кредах, лучше чем ничего.
+    LaunchedEffect(serverRestartTick) {
+        if (serverRestartTick == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(7000)
+        if (serverRestartArmed) {
+            serverRestartArmed = false
+            AppLog.w("CallScreen", "SERVER: свежий connection не пришёл за 7с — PC-RESTART на старых кредах (фолбэк)")
+            runServerTopologyRestart()
         }
     }
 
@@ -945,6 +996,16 @@ fun CallScreen(
                                 AppLog.w("CallScreen", "WS connection без TURN/STUN в conversationParams")
                             }
                         }
+                        // #CALLS-REVWEB-SERVER-BOUNCE: это connection пришло ПОСЛЕ bounce
+                        // (переподключение при topology→SERVER) — свежие TURN-креды уже
+                        // применены setIceServers'ом выше. Теперь пересобираем ногу целиком:
+                        // новый PC (подхватит свежие креды) + новый SDP-цикл (эталон:
+                        // whitelist-bypass — rejoin после closeTransport).
+                        if (serverRestartArmed) {
+                            serverRestartArmed = false
+                            AppLog.w("CallScreen", "SERVER: свежий connection получен — запускаю PC-RESTART (креды обновлены)")
+                            runServerTopologyRestart()
+                        }
                         // #CALLS-OUTGOING (2026-08-24, подтверждено реальным логом):
                         // в connection приходит conversation.participants[] — полный список
                         // участников. Собеседник — тот, чей externalId != наш VK user_id
@@ -1019,46 +1080,44 @@ fun CallScreen(
                     // через onLocalSdpReady автоматически (pid уже известен).
                     var topologyRestarted = false
                     if (topology == "SERVER") {
-                        // #CALLS-TOPOLOGY-PCRESTART (2026-09-02, лог 07:43): входящий,
-                        // answer уже отправлен, ICE не собрался, звонящий молчит
-                        // (reqR=0 даже на relay↔relay). Ретрансмит СТАРОГО answer
-                        // (#CALLS-ICE-REANSWER) лечил «первая копия не применена», но
-                        // при SERVER-топологии звонящий сбрасывает SDP-состояние
-                        // целиком — вместо повтора ОДНОКРАТНО полный PC-RESTART:
-                        // новые ufrag/pwd + свежий answer с INLINE-кандидатами.
-                        if (direction == CallDirection.INCOMING && answerSent.value &&
-                            !iceConnected.value
-                        ) {
-                            if (!topologyPcRestart) {
-                                topologyPcRestart = true
-                                topologyRestarted = engine.recreateAndReanswer()
+                        // #CALLS-REVWEB-SERVER-BOUNCE (2026-09-02, реверс открытых реализаций
+                        // VK-звонков): эталон при topology != DIRECT закрывает сигналинг-транспорт
+                        // ЦЕЛИКОМ (whitelist-bypass vk_joiner.go) — новый `connection` несёт
+                        // СВЕЖИЕ per-connection TURN-креды и перерегистрацию, после чего сессия
+                        // пересоздаётся с нуля (p2p.go Reset(): новый PC + новый offer).
+                        // IceRestart на испорченной сессии не делает никто; прежний restartIce()
+                        // на СТАРОМ PC (2806dbac) оставлял СТАРЫЕ iceServers, вшитые в конфиг.
+                        // Новый порядок: bounce() сигналинга → ждём свежий `connection`
+                        // (обработчик применит креды и запустит PC-RESTART) →
+                        // recreateAndReoffer()/recreateAndReanswer(). Watchdog 7с — фолбэк.
+                        val canRestart = (direction == CallDirection.OUTGOING && !iceConnected.value) ||
+                            (direction == CallDirection.INCOMING && answerSent.value && !iceConnected.value)
+                        if (canRestart) {
+                            if (!serverBounceStarted) {
+                                serverBounceStarted = true
+                                serverRestartArmed = true
+                                serverRestartTick++
                                 AppLog.w(
                                     "CallScreen",
-                                    "topology-changed(SERVER, входящий): PC-RESTART + новый answer (ok=$topologyRestarted)"
+                                    "topology-changed(SERVER): #CALLS-REVWEB-BOUNCE — переподключаю сигналинг ради свежего connection (TURN-креды), PC-RESTART выполню по connection"
                                 )
+                                signaling.bounce()
+                            } else if (serverRestartArmed) {
+                                AppLog.i("CallScreen", "topology-changed(SERVER): повторный сигнал — bounce уже идёт, жду свежий connection")
                             } else {
+                                // bounce уже выполнен (рестарт отработал/фолбэк), сервер прислал
+                                // topology-changed повторно — обычные ретрансмиты с их гейтами.
+                                if (direction == CallDirection.INCOMING) doReanswer("topology-SERVER-2")
+                                else doReoffer("topology-SERVER-2")
+                            }
+                        } else {
+                            if (direction == CallDirection.INCOMING) {
+                                // Ветка не применилась (ICE подключён и т.п.) — прежнее
+                                // поведение: повторить answer (гейты внутри doReanswer).
+                                topologyRestarted = true
                                 doReanswer("topology-SERVER")
                             }
-                        }
-                        // #CALLS-ACCEPT-RESTART: рестарт НЕ только до answer (было),
-                        // но и после: answer ноды медиа-сервера получен, ICE мёртв —
-                        // старый offer бессмыслен (лог 07:46/07:49: resR=0/reqR=0 при
-                        // reqS=250; сервер перевернул topology на SERVER, повтор
-                        // СТАРОГО offer с тем же o=- игнорировался). restartIce()
-                        // шлёт свежий offer с новыми ufrag/pwd автоматически.
-                        if (direction == CallDirection.OUTGOING && !iceConnected.value) {
-                            topologyRestarted = engine.restartIce()
-                            if (topologyRestarted) {
-                                AppLog.i("CallScreen", "topology-changed: ICE RESTART — свежий offer уйдёт автоматически")
-                            }
-                        }
-                        if (!topologyRestarted && direction == CallDirection.OUTGOING &&
-                            (offerTo == null || offerTo.size() == 0)
-                        ) {
-                            // #CALLS-FIX (2026-08-24): сервер ждёт повторную отправку offer
-                            // в новом режиме даже без offerTo (звонки.md §11). Фолбэк, если
-                            // restart невозможен (PC нет).
-                            doReoffer("topology-SERVER")
+                            // OUTGOING с подключённым ICE — ничего (как и прежде).
                         }
                     }
                     if (!topologyRestarted && offerTo != null && offerTo.size() > 0) {

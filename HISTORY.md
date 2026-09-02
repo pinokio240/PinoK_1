@@ -11383,3 +11383,28 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 Если нода молчит и на свежий offer — реверс веб-клиента OK (что шлёт после topology-changed).
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## 2026-09-02 — Реверс открытых реализаций VK-звонков: SERVER-топология = bounce сигналинга + полный PC-RESTART (#CALLS-REVWEB-BOUNCE, #CALLS-REVWEB-SERVER; stamp calls-2026.09.02-2)
+
+### Реверс (решение пользователя: «зачем гадать — берись за реверс веб-клиента»)
+- vk-desktop звонков НЕ содержит (вся история проверена). Настоящие источники:
+  **kulikov0/whitelist-bypass** (headless-джойнер на pion — единственная открытая реализация
+  SFU-сигналинга VK с topology-changed), **icyfalc0n/maxcalls** (доки протокола),
+  **kittenproxy / vk-calls-tunnel**. Полный отчёт: **реверс.звонки-протокол.md**, звонки.md §41.
+- Ключевое: TURN-креды per-connection (дубль в `connection` → conversationParams.turn);
+  «WEB_TRANSPORT» — транспорт СИГНАЛИНГА, не медиа; медиа-нода НЕ медиа-пир (только
+  сигналинг + TURN-аллокатор) — потому и не отвечает на ICE-проверки;
+  **topology-changed(≠DIRECT) → closeTransport → полный rejoin (новые креды, новый PC,
+  новый offer); IceRestart на живой сессии не делает никто**; SERVER-flap провоцируется
+  изменением числа треков.
+
+### Изменения (сборка calls-2026.09.02-2)
+- `CallSignalingClient.bounce()` — переподключение WS сигналинга без смерти звонка.
+- `WebRtcEngine.recreateAndReoffer()` — полный PC-RESTART звонящего со свежими кредами
+  (симметрично recreateAndReanswer).
+- CallScreen topology-changed(SERVER): bounce → по свежему `connection` PC-RESTART
+  (recreateAndReoffer/recreateAndReanswer), watchdog 7с — фолбэк на старых кредах;
+  restartIce на старом PC в SERVER-ветке больше не используется.
+- BuildStamp → calls-2026.09.02-2. Доки: звонки.md §41, контейнеры.план.md (2.1), worklog.

@@ -148,6 +148,25 @@ class CallSignalingClient(
 
     fun isRunning(): Boolean = running
 
+    /**
+     * #CALLS-REVWEB-BOUNCE (2026-09-02, реверс открытых реализаций VK-звонков):
+     * переподключить WS сигналинга, НЕ убивая состояние звонка (running/поток сообщений
+     * живут). Эталон (whitelist-bypass vk_joiner.go, case "topology-changed"): при
+     * topology != DIRECT закрывают транспорт ЦЕЛИКОМ и переподключаются — новый
+     * `connection` несёт СВЕЖИЕ per-connection TURN-креды (vk-calls-tunnel README:
+     * «VK TURN credentials are temporary and session-scoped») + перерегистрацию
+     * участника. connectLoop сам переустановит соединение (backoff 1с после
+     * успешного открытия). Все команды в окне без WS будут отброшены (send вернёт
+     * false) — вызывать только когда медиа-нога всё равно мертва (SERVER, ICE нет).
+     */
+    fun bounce() {
+        if (!running) return
+        val ws = webSocket
+        webSocket = null
+        AppLog.w(TAG, "bounce: закрываю WS сигналинга — переподключение ради свежего connection (TURN-креды/перерегистрация)")
+        try { ws?.close(1000, "bounce") } catch (_: Exception) {}
+    }
+
     /** #CALLS-IN-FIX (2026-08-29): WS сигналинга открыт — команды уходят, а не отбрасываются. */
     fun isWsReady(): Boolean = running && wsOpen
 
