@@ -5559,3 +5559,43 @@ Stage Summary:
 - Обе LTE-ноги прошлогодней матрицы получили фактологические фиксы из их же лога: SERVER-нога теперь пере-регистрируется с новым token (эквивалент эталонного полного rejoin'а), accepted-call делает PC-RESTART по эталону, ответ нового SDP-цикла больше не теряется.
 - Тест: stamp calls-2026.09.02-3, маркеры: «#CALLS-SERVER-REJOIN», «свежие params получены», «WS перерегистрирован», «REOFFER→PC-RESTART #1 (accepted-call)»; в логе НЕ должно быть «повторный answer проигнорирован (уже применён)» после нового offer.
 - Если LTE не соберётся даже после ре-join'а — реверс WebTransport-сигналинга (wt_endpoint) / rejoin-цикл до DIRECT (10 попыток, как у ботов).
+
+---
+Task ID: 7 (Этап 1.2-а: модуль :core:common)
+Agent: general-purpose (sandbox sub agent, Task 7)
+Task: создать Gradle-модуль :core:common и перенести в него общий код (AppLog, BuildStamp, утилиты) — git mv, пакеты не менять, BuildStamp не бампать, статическая верификация (без SDK)
+
+Work Log:
+- Ветка PinoK подтверждена (HEAD 8d6a9e66). Разобраны все 10 кандидатов (util/* + BuildStamp):
+  собраны импорты, grep замыканий на классы :app (SovaApp/SovaPrefs/VKApiClient), R./BuildConfig.
+- Перенесено (git mv, история 100%/94%): BuildStamp.kt (re.pinok), AppLog.kt, ExponentialBackoff.kt,
+  FormatUtils.kt, VkUserAgent.kt, NetworkObserver.kt, NetworkSwitchState.kt (re.pinok.util) →
+  core/common/src/main/java/... (декларации пакетов НЕ тронуты).
+- Остались в :app (замыкание не чистое): Linkify.kt (androidx.compose.ui.text),
+  HevcSupport.kt (androidx.annotation.VisibleForTesting — нет алиаса в каталоге; KDoc-ссылки на
+  SovaApp/VideoPlayerScreen), PermissionManager.kt (androidx.activity/compose.runtime/core).
+- Модуль core/common по образцу contracts: ТОЛЬКО alias(libs.plugins.android.library) (AGP 9.1.1
+  встроенный Kotlin), namespace re.pinok.common, compileSdk 36, minSdk 24, Java 21. Зависимости:
+  implementation(libs.kotlinx.coroutines.android) — для ExponentialBackoff/NetworkObserver.
+- AppLog: убран import re.pinok.BuildConfig (в библиотеке недоступен) → @Volatile поля
+  appId/versionName/debugBuild + setAppBuildInfo(); SovaApp.onCreate инжектит
+  BuildConfig.APPLICATION_ID/VERSION_NAME/DEBUG ДО первого лог-вызова (onCreate стартует раньше
+  любого нашего кода — окно дефолтов не наблюдаемо; поведение: verbose-logcat default = DEBUG,
+  заголовки экспорта/persistent.log — те же строки). BuildStamp НЕ бампался (calls-2026.09.02-3).
+- settings.gradle.kts: include(":core:common") с меткой #ARCH-CONTAINERS (Этап 1.2-а);
+  app/build.gradle.kts: implementation(project(":core:common")) рядом с :contracts.
+- Верификация: grep деклараций перенесённых символов в :app — 0 дублей; grep BuildConfig/R. в
+  core/common — только комментарии; импорты re.pinok.* в core/common — только AppLog (внутри
+  модуля); горячие места SovaApp.kt:611 (BuildStamp/AppLog) и CallScreen.kt:595 (FQN BuildStamp)
+  резолвятся (пакеты прежние); баланс скобок сканером (строки/шаблоны ${}/char/вложенные
+  block-комментарии; self-test на заведомо битом файле) — 11/11 файлов OK.
+- Коммит a5c14cf3 (только задачные файлы; чужой .gitignore и Next.js-скаффолд не тронуты), push OK.
+
+Stage Summary:
+- :core:common готов: 7 файлов, единственная внешняя зависимость kotlinx-coroutines-android,
+  поведение не изменено (перенос + инжект идентификации сборки в AppLog вместо BuildConfig хоста).
+- Остаток этапа 1.2: :core:network (VKApiClient, LongPollClient/KeepAlive, CallSignalingClient,
+  Queuev4Client, VkNotificationsNotifier) и :core:media (аудиофокус, AudioRouteLogger, медиа-кэш).
+- Риск для сборки: минимален; на машине пользователя проверить лог старта (строка onCreate:
+  PinoK starting — формат прежний) и «Настройки → Логирование → экспорт» (заголовки # App: /
+  # Version: прежние); verbose-logcat в debug-сборке включён как раньше.

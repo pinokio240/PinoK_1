@@ -11427,3 +11427,28 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - Маркеры: «topology-changed(SERVER): #CALLS-SERVER-REJOIN» → «SERVER-REJOIN: свежие params получены» → «WS перерегистрирован» → «свежий connection получен» → PC-RESTART → ICE CONNECTED.
 - «REOFFER→PC-RESTART #1 (accepted-call)» → answer пира ПРИМЕНЯЕТСЯ (нет «повторный answer проигнорирован (уже применён)»).
 - Если LTE не собирается и после ре-join'а — реверс WebTransport-сигналинга (wt_endpoint) / rejoin-цикл до DIRECT.
+
+---
+
+## 2026-09-02 — Этап 1.2-а контейнеризации: модуль :core:common (AppLog, BuildStamp, утилиты) (#ARCH-CONTAINERS)
+
+### Коммит: `a5c14cf3` (arch(containers), ветка PinoK, push origin OK) — приложение собираемо, поведение не изменено
+
+### Что сделано
+- Gradle-модуль `:core:common` по образцу `:contracts` (AGP 9.1.1 встроенный Kotlin — только `alias(libs.plugins.android.library)`; namespace `re.pinok.common`, compileSdk 36 / minSdk 24, Java 21). Внешние зависимости — только `kotlinx-coroutines-android` (ExponentialBackoff: delay/ensureActive; NetworkObserver: StateFlow).
+- `git mv` (история 100%/94%, пакеты НЕ переименовывались): `BuildStamp` (пакет `re.pinok`, STAMP = `calls-2026.09.02-3` НЕ бампался) + `AppLog`, `ExponentialBackoff`, `FormatUtils`, `VkUserAgent`, `NetworkObserver`, `NetworkSwitchState` (пакет `re.pinok.util`).
+- Остались в `:app` (замыкание зависимостей не чистое): `Linkify` (androidx.compose.ui.text), `HevcSupport` (androidx.annotation — нет алиаса в каталоге; KDoc-ссылки на SovaApp/VideoPlayerScreen), `PermissionManager` (androidx.activity/compose.runtime/core).
+- `AppLog`: убрана зависимость от BuildConfig хоста (в библиотеке недоступен) → `@Volatile` поля `appId`/`versionName`/`debugBuild` + `setAppBuildInfo()`; хост (`SovaApp.onCreate`, ДО первого лог-вызова) инжектит `BuildConfig.APPLICATION_ID/VERSION_NAME/DEBUG`. Поведение прежнее: verbose-logcat default = DEBUG-сборка, заголовки экспорта/persistent.log — те же строки.
+- `settings.gradle.kts`: `include(":core:common")`; `:app` → `implementation(project(":core:common"))` рядом с `:contracts`.
+
+### Верификация (в песочнице НЕТ Android SDK — только статика)
+- grep: в `:app` не осталось деклараций перенесённых символов (дублей классов/функций в тех же пакетах нет);
+- grep: в `core/common` нет кодовых ссылок на `BuildConfig`/`R.*` (только комментарии) и импортов классов из `:app`;
+- импорты перенесённых файлов: только android.jar/java/kotlinx.coroutines — резолвятся;
+- горячие места: `SovaApp.onCreate` (BuildStamp/AppLog) и `CallScreen` CALL START (`re.pinok.BuildStamp.STAMP`) — FQN/пакеты прежние, резолв через `:app` → `:core:common`;
+- баланс скобок сканером (строки/шаблоны ${}/char/вложенные block-комментарии; self-test на битом файле) — 11/11 затронутых файлов OK.
+
+### Остаток этапа 1.2
+- `:core:network` (1.2-б): VKApiClient, LongPollClient/LongPollKeepAlive, CallSignalingClient, Queuev4Client, VkNotificationsNotifier.
+- `:core:media` (1.2-в): аудиофокус, AudioRouteLogger, медиа-кэш.
+- Сборка/запуск — за пользователем: лог старта (`onCreate: PinoK starting ... stamp=calls-2026.09.02-3`) и экспорт логов должны выглядеть как раньше.
