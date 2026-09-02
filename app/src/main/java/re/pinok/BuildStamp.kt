@@ -19,9 +19,8 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
-    // -4 = d09888de (#CALLS-OUT-SENDRECV-2: offer sendrecv в исходящих +
-    // #CALLS-SURFACE-ZTOP: setZOrderOnTop) + 4db02d08 (Этап 1.1 контейнеров).
-    // Правило нарушено в 85e83909..d09888de (метка осталась -3) — поднята здесь,
-    // чтобы сборка для теста 2.1 отличалась в логе от уже протестированной.
-    const val STAMP: String = "calls-2026.09.01-4"
+    // -1 (02.09) = #CALLS-ACCEPT-RESTART + #CALLS-TOPOLOGY-PCRESTART + грейс 30с
+    // (выживание при topology→SERVER: рестарт-оффер после answer ноды, PC-RESTART
+    // входящего на SERVER, FAILED-грейс 8с→30с).
+    const val STAMP: String = "calls-2026.09.02-1"
 }

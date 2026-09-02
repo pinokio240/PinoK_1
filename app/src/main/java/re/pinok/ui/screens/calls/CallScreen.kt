@@ -217,6 +217,11 @@ fun CallScreen(
     val answerReceived = remember { mutableStateOf(false) }
     val allLocalCandidates = remember { mutableStateOf(mutableListOf<org.webrtc.IceCandidate>()) }
     var reofferCount by remember { mutableStateOf(0) }
+    // #CALLS-ACCEPT-RESTART (2026-09-02): счётчик/кулдаун ICE-рестартов offer-цикла
+    var iceRestartCount by remember { mutableStateOf(0) }
+    var lastIceRestartAt by remember { mutableStateOf(0L) }
+    // #CALLS-TOPOLOGY-PCRESTART: одноразовый полный PC-RESTART на topology=SERVER (входящий)
+    var topologyPcRestart by remember { mutableStateOf(false) }
     var diagReoffer by remember { mutableStateOf("") }
     // #CALLS: call_id активного звонка — для кнопки «Ссылка» (vchat.createJoinLink).
     val activeCallId = remember { mutableStateOf<String?>(null) }
@@ -373,7 +378,26 @@ fun CallScreen(
         if (direction != CallDirection.OUTGOING) {
             AppLog.i("CallScreen", "REOFFER пропущен ($reason): не исходящий")
         } else if (answerReceived.value) {
-            AppLog.i("CallScreen", "REOFFER пропущен ($reason): answer уже получен")
+            // #CALLS-ACCEPT-RESTART (2026-09-02, лог 07:46/07:49): answer УЖЕ получен,
+            // но ICE не подключён — повтор СТАРОГО offer бесполезен (те же ufrag/pwd,
+            // те же мёртвые кандидаты; в логах answer ноды медиа-сервера 155.212.197.x
+            // молчал при наших reqS=250). Вместо повтора — ICE RESTART: новый
+            // оффер-цикл (свежие ufrag/pwd + сборка кандидатов) уйдёт через
+            // onLocalSdpReady автоматически. Именно в этой ветке был потерян
+            // «accepted-call»-рерофер (REOFFER пропущен: answer уже получен).
+            if (iceConnected.value) {
+                AppLog.i("CallScreen", "REOFFER пропущен ($reason): answer получен, ICE подключён")
+            } else if (iceRestartCount >= 2) {
+                AppLog.w("CallScreen", "REOFFER→ICE-RESTART пропущен ($reason): лимит 2 рестартов")
+            } else if (System.currentTimeMillis() - lastIceRestartAt < 8000L) {
+                AppLog.i("CallScreen", "REOFFER→ICE-RESTART пропущен ($reason): <8с с прошлого рестарта")
+            } else {
+                iceRestartCount++
+                lastIceRestartAt = System.currentTimeMillis()
+                diagReoffer = "restart×$iceRestartCount"
+                AppLog.w("CallScreen", "REOFFER→ICE-RESTART #$iceRestartCount ($reason): answer есть, ICE нет — новый ufrag/pwd + свежие кандидаты")
+                engine.restartIce()
+            }
         } else {
             val pid = remoteParticipantId.value
             val sdp = pendingLocalSdp.value ?: engine.lastLocalSdp()
@@ -995,8 +1019,34 @@ fun CallScreen(
                     // через onLocalSdpReady автоматически (pid уже известен).
                     var topologyRestarted = false
                     if (topology == "SERVER") {
-                        doReanswer("topology-SERVER")
-                        if (direction == CallDirection.OUTGOING && !answerReceived.value) {
+                        // #CALLS-TOPOLOGY-PCRESTART (2026-09-02, лог 07:43): входящий,
+                        // answer уже отправлен, ICE не собрался, звонящий молчит
+                        // (reqR=0 даже на relay↔relay). Ретрансмит СТАРОГО answer
+                        // (#CALLS-ICE-REANSWER) лечил «первая копия не применена», но
+                        // при SERVER-топологии звонящий сбрасывает SDP-состояние
+                        // целиком — вместо повтора ОДНОКРАТНО полный PC-RESTART:
+                        // новые ufrag/pwd + свежий answer с INLINE-кандидатами.
+                        if (direction == CallDirection.INCOMING && answerSent.value &&
+                            !iceConnected.value
+                        ) {
+                            if (!topologyPcRestart) {
+                                topologyPcRestart = true
+                                topologyRestarted = engine.recreateAndReanswer()
+                                AppLog.w(
+                                    "CallScreen",
+                                    "topology-changed(SERVER, входящий): PC-RESTART + новый answer (ok=$topologyRestarted)"
+                                )
+                            } else {
+                                doReanswer("topology-SERVER")
+                            }
+                        }
+                        // #CALLS-ACCEPT-RESTART: рестарт НЕ только до answer (было),
+                        // но и после: answer ноды медиа-сервера получен, ICE мёртв —
+                        // старый offer бессмыслен (лог 07:46/07:49: resR=0/reqR=0 при
+                        // reqS=250; сервер перевернул topology на SERVER, повтор
+                        // СТАРОГО offer с тем же o=- игнорировался). restartIce()
+                        // шлёт свежий offer с новыми ufrag/pwd автоматически.
+                        if (direction == CallDirection.OUTGOING && !iceConnected.value) {
                             topologyRestarted = engine.restartIce()
                             if (topologyRestarted) {
                                 AppLog.i("CallScreen", "topology-changed: ICE RESTART — свежий offer уйдёт автоматически")
@@ -1184,16 +1234,18 @@ fun CallScreen(
     // обменянных SDP = разговор мёртв (в тесте: 253 наши проверки — 0 ответов, у
     // собеседника 0 входящих). Раньше фаза падала в FAILED, но мы НЕ сообщали об этом
     // собеседнику и НЕ закрывали сигналинг: официальный клиент держал таймер ~10с, пока
-    // сам не сдался (remote-hangup), а без его сброса ждали бы ZOMBIE 90с. Теперь: грейс
-    // 8с (окно для topology-restart из #CALLS-TOPOLOGY-RESTART), затем hangup(FAILED)
+    // сам не сдался (remote-hangup), а без его сброса ждали бы ZOMBIE 90с. Грейс 30с
+    // (#CALLS-ACCEPT-RESTART, 2026-09-02, лог 07:46/07:49: topology-changed приходит
+    // на 8-18-й секунде, рестарт-цикл + ответ на него требуют ещё ~10с — 8с грейса
+    // убивали звонок раньше, чем SERVER-нога успевала подняться), затем hangup(FAILED)
     // + stop — обе стороны завершаются сразу и честно.
     LaunchedEffect(phase) {
         if (phase == CallPhase.FAILED &&
             (answerSent.value || answerReceived.value) && !iceConnected.value
         ) {
-            kotlinx.coroutines.delay(8_000L)
+            kotlinx.coroutines.delay(30_000L)
             if ((phase == CallPhase.FAILED || phase == CallPhase.CONNECTING) && !iceConnected.value) {
-                AppLog.w("CallScreen", "ICE FAILED: 8с грейс без восстановления — hangup(FAILED) + stop")
+                AppLog.w("CallScreen", "ICE FAILED: 30с грейс без восстановления — hangup(FAILED) + stop")
                 signaling.hangup("failed")
                 engine.endCall()
                 signaling.stop()

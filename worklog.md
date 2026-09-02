@@ -5426,3 +5426,33 @@ Stage Summary:
 - Архитектурное правило зафиксировано на уровне плана и контрактов. Поведения
   кода не менялось (только KDoc/доки) — сборке ничего не угрожает. Реализация —
   Этап 1.4 после core-модулей (1.2) и контейнера-пионера (1.3).
+
+---
+Task ID: 5 (разбор теста 2.1: A/B подтверждены, корень C topology→SERVER)
+Agent: Z.ai Code (Sergey)
+Task: разбор лога 07:43–07:51 (4 звонка, stamp calls-2026.09.01-4), фиксы выживания при SERVER-топологии
+
+Work Log:
+- Матрица: #1 вх. same-NAT — peer НЕ чекал нас (24 пары, reqS=103, reqR=0, даже
+  relay↔relay) → topology SERVER(10с) → FAILED → remote-hangup 60с; #2/#3 исх.
+  Wi-Fi/LTE — answer ноды 155.212.197.138/.164:43210/7684 молчит (reqS=250, resR=0
+  reqR=0), topology SERVER, FAILED, наш hangup(FAILED) через 8с грейса; #4 вх. LTE —
+  РАБОТАЕТ: DIRECT, CONNECTED 2.2с, 254 кадра, ПЕРВЫЙ КАДР ✓ ВИДЕН.
+- Подтверждения d09888de: (A) offer/answer sendrecv + video track LIVE; (B) картинка
+  видна (z-order). 2.1 закрыт частично → корень C.
+- КОРЕНЬ C: наш код не переживает topology→SERVER: (1) accepted-call REOFFER
+  глушился «answer уже получен»; (2) на topology пересылался СТАРЫЙ offer (same o=-);
+  (3) входящему ретранслировался старый answer; (4) грейс 8с убивал звонок раньше
+  SERVER-ноги.
+- Фиксы CallScreen: #CALLS-ACCEPT-RESTART (doReoffer: answer+ICE-нет → engine.restartIce(),
+  лимит 2/кулдаун 8с), topology-SERVER исходящий: restartIce и после answer,
+  #CALLS-TOPOLOGY-PCRESTART входящий: однократный recreateAndReanswer, FAILED-грейс 30с.
+- BuildStamp → calls-2026.09.02-1. Баланс скобок 443/443. Доки: звонки.md §40,
+  HISTORY (закладка + запись), контейнеры.план.md §2.1.
+
+Stage Summary:
+- Все провалы сессии — один корень (SERVER-топология + молчащая нода 155.212.197.x);
+  SDP-переговоры видео теперь корректны в обе стороны, рендер виден.
+- След. тест: stamp calls-2026.09.02-1, ждать в логах REOFFER→ICE-RESTART /
+  ICE RESTART на topology / PC-RESTART; если нода молчит и на свежий offer —
+  реверс веб-клиента OK (приоритет).
