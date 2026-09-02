@@ -648,7 +648,6 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         // (:feature:calls). Хук запуска звонка хост даёт через конструктор
         // (ноль :app-типов в контракте CallStarter): ставим pending-событие,
         // SovaNavHost открывает экран звонка. Реестр ДО init-цикла ниже.
-        // Ожидаемый лог: контейнеров=1, capability=4.
         runCatching {
             ContainerRegistry.register(
                 re.pinok.feature.calls.CallsContainer(
@@ -656,6 +655,17 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
                 )
             )
         }.onFailure { AppLog.e("SovaApp", "calls container register failed: ${it.message}") }
+
+        // #ARCH-CONTAINERS (Этап 1.5-а): контейнер фото (:feature:photos) —
+        // NavEntry «Фото» (route "photos" — бывший ядерный пункт drawer) +
+        // AttachmentRenderer "photos_inline": инлайн-рендер фото-вложений чата
+        // уехал из ChatDetailScreen в PhotosInlineRenderer (feature-модуль);
+        // без контейнера чат показывает заглушку «скачать файл» (осознанная
+        // деградация по плану).
+        // Ожидаемый лог: контейнеров=2, capability=6.
+        runCatching {
+            ContainerRegistry.register(re.pinok.feature.photos.PhotosContainer())
+        }.onFailure { AppLog.e("SovaApp", "photos container register failed: ${it.message}") }
 
         // #ARCH-CONTAINERS (Этап 1.1): инициализация контейнеров-разделов.
         // Реестр наполняется статическими регистраторами выше (Этап 1.3:

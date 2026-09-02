@@ -64,9 +64,12 @@ import re.pinok.ui.navigation.Screen
  * Все редактируемые пункты боковой панели (dynamic-пункты, без фикс. хвоста).
  * Порядок в этом списке = canonical-порядок для initial/reset.
  * #OFFLINE-DUPLICATE-FIX: OfflineManager убран — он в фикс. хвосте drawer.
+ * #ARCH-CONTAINERS (Этап 1.4/1.5-а): CallsHistory и Photos убраны —
+ * контейнерные пункты панели (NavEntry) редактором не редактируются
+ * (список зеркалит sidebarEditableScreens в SovaNavHost).
  */
 private val SIDEBAR_EDITABLE_SCREENS: List<Screen> = listOf(
-    Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
+    Screen.Friends, Screen.Groups, Screen.Search,
     Screen.Bookmarks, Screen.Documents, Screen.Clips,
     Screen.Services, Screen.Notifications, Screen.Logs,
     Screen.Equalizer,
@@ -80,6 +83,9 @@ private val SIDEBAR_EDITABLE_SCREENS: List<Screen> = listOf(
  * #BOTTOM-DEFAULT-4 (2026-08-01): по умолчанию visible только 4 (Профиль,
  * Сообщения, Музыка, Видео), остальные скрыты. Если включить >5 — панель
  * становится горизонтально прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).
+ * #ARCH-CONTAINERS (Этап 1.5-а): Photos здесь ОСТАВЛЕН — Dock/нижняя панель —
+ * ядерная собственность хоста (Правило владения UI); ярлык «Фото» навигирует
+ * на destination "photos" и работает независимо от контейнера.
  */
 private val BOTTOMBAR_EDITABLE_SCREENS: List<Screen> = listOf(
     Screen.Profile, Screen.Messages, Screen.Music, Screen.Video,

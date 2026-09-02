@@ -221,4 +221,9 @@ dependencies {
     // VideoTextureRenderer, CallModels, CallsContainer). Пакеты прежние —
     // потребители в :app (CallScreen и пр.) резолвятся без правок кода.
     implementation(project(":feature:calls"))
+
+    // #ARCH-CONTAINERS (Этап 1.5-а): контейнер фото — PhotosContainer (NavEntry
+    // «Фото» + AttachmentRenderer "photos_inline") и компосабл-рендерер
+    // фото-вложений PhotosInlineRenderer (хост-маппинг в ChatDetailScreen).
+    implementation(project(":feature:photos"))
 }

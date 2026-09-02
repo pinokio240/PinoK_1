@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -188,6 +189,9 @@ private fun normalizeRouteOrder(order: List<String>, canonical: List<Screen>): L
  */
 private fun hostDestinationForRoute(route: String): Screen? = when (route) {
     Screen.CallsHistory.route -> Screen.CallsHistory // "calls_history" — destination уже в NavHost ниже
+    // #ARCH-CONTAINERS (Этап 1.5-а): «Фото» — контейнер :feature:photos;
+    // destination (Screen.Photos → PhotosScreen) остаётся в NavHost хоста.
+    Screen.Photos.route -> Screen.Photos // "photos"
     else -> null
 }
 
@@ -199,6 +203,9 @@ private fun hostDestinationForRoute(route: String): Screen? = when (route) {
  */
 private fun hostIconForKey(iconKey: String): ImageVector = when (iconKey) {
     "calls" -> Icons.Filled.Call
+    // #ARCH-CONTAINERS (Этап 1.5-а): та же иконка, что была у ядерного пункта
+    // «Фото» (Screen.Photos: Icons.Outlined.Image).
+    "photos" -> Icons.Outlined.Image
     else -> Icons.Outlined.Extension
 }
 
@@ -607,7 +614,12 @@ fun SovaNavHost(
         Screen.Feed, Screen.Messages, Screen.Music, Screen.Video, Screen.Profile,
     )
     val drawerScreens: List<Screen> = listOf(
-        Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
+        Screen.Friends, Screen.Groups, Screen.Search,
+        // #ARCH-CONTAINERS (Этап 1.5-а): Screen.Photos убран из ядерного
+        // хардкода — пункт «Фото» приходит из реестра (NavEntry контейнера
+        // :feature:photos, route "photos", см. containerNavEntries в
+        // drawerContent). Без контейнера пункта нет, остальное живо
+        // (NavHost-destination photos — остался ниже).
         Screen.Bookmarks, Screen.Documents,
         // #ARCH-CONTAINERS (Этап 1.4): Screen.CallsHistory убран из ядерного
         // хардкода — пункт «Звонки» приходит из реестра (NavEntry контейнера
@@ -633,13 +645,13 @@ fun SovaNavHost(
         // #OFFLINE-DUPLICATE-FIX (2026-08-01): OfflineManager убран из
         //   sidebarEditableScreens — он рендерится в фикс. хвосте drawer
         //   вместе с Settings. Раньше был дубль: и в скролл-списке, и в хвосте.
-        // #ARCH-CONTAINERS (Этап 1.4): Screen.CallsHistory убран — контейнерные
-        //   пункты панели (NavEntry) НЕ редактируются панель-редактором (их нет
-        //   без контейнера; порядок задаёт capability.order). Сохранённые в
-        //   prefs order-строки "calls_history" отбрасываются normalizeRouteOrder
-        //   как неизвестные.
+        // #ARCH-CONTAINERS (Этап 1.4/1.5-а): Screen.CallsHistory и Screen.Photos
+        //   убраны — контейнерные пункты панели (NavEntry) НЕ редактируются
+        //   панель-редактором (их нет без контейнера; порядок задаёт
+        //   capability.order). Сохранённые в prefs order-строки "calls_history"/
+        //   "photos" отбрасываются normalizeRouteOrder как неизвестные.
 listOf(
-            Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
+            Screen.Friends, Screen.Groups, Screen.Search,
             Screen.Bookmarks, Screen.Documents, Screen.Clips,
             Screen.Services, Screen.Notifications, Screen.Logs,
             Screen.Equalizer,
@@ -651,6 +663,10 @@ listOf(
     //   (включая OfflineManager) — пользователь может поставить любую кнопку
     //   на нижнюю панель (Логи, Офлайн, Поиск и т.д.).
     val bottomBarEditableScreens: List<Screen> = remember {
+        // #ARCH-CONTAINERS (Этап 1.5-а): Screen.Photos здесь ОСТАВЛЕН — Dock/
+        //   нижняя панель — ядерная собственность хоста (Правило владения UI);
+        //   «Фото» на нижней панели — кнопка-ярлык на destination "photos"
+        //   (работает независимо от контейнера, destination в NavHost хоста).
         dockScreens + listOf(
             Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
             Screen.Bookmarks, Screen.Documents, Screen.Clips,
@@ -687,8 +703,8 @@ listOf(
     // сразу попадёт в ленту без повторного логина.
     var showExitAppDialog by remember { mutableStateOf(false) }
     val allScreens: List<Screen> = dockScreens + drawerScreens + listOf(Screen.About)
-    // #ARCH-CONTAINERS (Этап 1.4): заголовок может прийти и из контейнерного
-    // NavEntry (route "calls_history" больше не в ядерном списке — см.
+    // #ARCH-CONTAINERS (Этап 1.4/1.5-а): заголовок может прийти и из контейнерного
+    // NavEntry (routes "calls_history"/"photos" больше не в ядерном списке — см.
     // drawerScreens). Неизвестный роут — как раньше, "PinoK".
     val currentTitle = allScreens.firstOrNull { it.route == currentRoute }?.title
         ?: containerNavEntries

@@ -47,3 +47,8 @@ include(":core:media")
 // CallsContainer (capability-реестр звонков). UI-экраны звонков пока в :app
 // (блокер SovaApp — см. контейнеры.план.md, Этап 1.3/1.4).
 include(":feature:calls")
+// #ARCH-CONTAINERS (Этап 1.5-а): контейнер фото — NavEntry «Фото» (route "photos")
+// + AttachmentRenderer ("photos_inline": инлайн-рендер фото-вложений чата,
+// перенесён из ChatDetailScreen). Экран раздела PhotosScreen пока в :app
+// (блокер SovaApp/data-слой — см. контейнеры.план.md, Этап 1.5).
+include(":feature:photos")

@@ -78,6 +78,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -135,7 +136,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -159,6 +159,8 @@ import re.pinok.data.model.MessageReaction
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.feature.photos.InlinePhotoItem
+import re.pinok.feature.photos.PhotosInlineRenderer
 import re.pinok.ui.anim.LocalAnimScale
 import re.pinok.ui.anim.LocalStickerPhotoScale
 import re.pinok.ui.anim.springScaled
@@ -241,10 +243,11 @@ private fun reactionEmoji(id: Int): String =
 /**
  * Спрашивает реестр: не рендерит ли какой-нибудь контейнер вложение такого типа
  * (контракт [re.pinok.contracts.AttachmentRenderer], хост спрашивает canHandle
- * по mime/типу). На Этапе 1.4 ни один контейнер ещё не публикует рендереры →
- * всегда null → хост рендерит вложения встроенно КАК СЕЙЧАС — поведение чата
- * НЕ меняется (graceful-деградация по плану «Правило владения UI»). Первый
- * делегирующий контейнер — :feature:photos (Этап 1.5-а).
+ * по mime/типу). С Этапа 1.5-а рендерер публикует контейнер :feature:photos
+ * (PhotosAttachmentRenderer: kind="photo", mime image-семейство) → хост
+ * делегирует рендер по rendererKey (см. [hostRendererComposable]). Контейнера
+ * нет (или ключ неизвестен) → заглушка «скачать файл» — graceful-деградация
+ * по плану «Правило владения UI», ядро от контейнера не зависит.
  */
 private fun attachmentRendererFor(kind: String, mimeType: String): re.pinok.contracts.AttachmentRenderer? {
     val renderers = re.pinok.contracts.ContainerRegistry
@@ -256,13 +259,32 @@ private fun attachmentRendererFor(kind: String, mimeType: String): re.pinok.cont
 /**
  * host-маппинг rendererKey → компосабл (тот же паттерн, что NavEntry.route →
  * destination в SovaNavHost): контейнер compose-типов не знает, компосабл
- * живёт в :app и получает ГОТОВЫЕ данные вложения. rendererKey, неизвестный
- * хосту → null → встроенный рендер хоста (не падаем).
- * На 1.4 таблица ПУСТА; на 1.5-а сюда добавится "photos" → PhotoGrid-компосабл.
+ * получает ГОТОВЫЕ данные вложения. rendererKey, неизвестный хосту → null →
+ * заглушка «скачать файл» (не падаем).
+ *
+ * #ARCH-CONTAINERS (Этап 1.5-а): первая запись — "photos_inline" →
+ * [PhotosInlineRenderer] из :feature:photos (инлайн-рендер фото-сетки перенесён
+ * туда; ветка «контейнера нет» — заглушка PhotoAttachmentsStub, осознанная
+ * деградация по плану). Контекст хоста прокидывается параметрами/колбэками —
+ * контейнер хост-типов не знает: selection-режим (Fix #244), PhotoViewer
+ * (onPhotoClick), пользовательский масштаб стикер-фото (Fix #228,
+ * LocalStickerPhotoScale → Int) остаются в хосте.
  */
-private fun hostRendererComposable(rendererKey: String): (@Composable (List<String>) -> Unit)? =
+private fun hostRendererComposable(
+    rendererKey: String,
+    stickerScalePct: Int,
+    onPhotoOpen: (url: String) -> Unit,
+    onLongPress: () -> Unit,
+): (@Composable (List<InlinePhotoItem>) -> Unit)? =
     when (rendererKey) {
-        // "photos" -> { urls -> PhotoGridAttachment(urls) }  // оживёт на 1.5-а (:feature:photos)
+        "photos_inline" -> { items ->
+            PhotosInlineRenderer(
+                items = items,
+                stickerScalePct = stickerScalePct,
+                onOpen = onPhotoOpen,
+                onLongPress = onLongPress,
+            )
+        }
         else -> null
     }
 
@@ -4100,120 +4122,60 @@ private fun MessageBubble(
                     }
                 }
                 // Фото-вложения (полученные от других клиентов).
+                // #ARCH-CONTAINERS (Этап 1.5-а): инлайн-рендер фото-сетки перенесён
+                // в :feature:photos (PhotosInlineRenderer, rendererKey "photos_inline").
+                // Сначала реестр: контейнер есть И rendererKey известен хосту →
+                // делегируем (поведение 1:1 с прежним inline-рендером); иначе —
+                // осознанная деградация по плану: заглушка «скачать файл»
+                // (PhotoAttachmentsStub: тап → хостовый PhotoViewer, сохранение
+                // в галерею — ImageSaver'ом в просмотрщике). mime у VK-фото
+                // отсутствует — передаём семейство "image/*" и kind="photo".
                 val photoAttachments = message.attachments
                     ?.filter { it.type == "photo" && it.photo != null }
-                // #ARCH-CONTAINERS (Этап 1.4): сначала реестр — не рендерит ли
-                // контейнер этот тип (AttachmentRenderer). Нашёлся И его
-                // rendererKey известен хосту → делегируем; иначе — встроенный
-                // рендер хоста КАК СЕЙЧАС (на 1.4 всегда этот путь — рендереров
-                // ещё никто не публикует). mime у VK-фото отсутствует —
-                // передаём семейство "image/*" и kind="photo".
-                val photoRenderer = attachmentRendererFor(kind = "photo", mimeType = "image/*")
-                val photoDelegate = photoRenderer?.let { hostRendererComposable(it.rendererKey) }
-                if (photoDelegate != null && !photoAttachments.isNullOrEmpty()) {
-                    photoDelegate(photoAttachments.mapNotNull { it.photo?.largestUrl })
-                } else if (!photoAttachments.isNullOrEmpty()) {
+                if (!photoAttachments.isNullOrEmpty()) {
                     // P5.1: список URL для полноэкранного просмотрщика (PhotoViewer).
                     val photoUrls = photoAttachments.mapNotNull { it.photo?.largestUrl }
-                    val cols = if (photoAttachments.size == 1) 1 else 2
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        photoAttachments.chunked(cols).forEach { row ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                for (att in row) {
-                                    val photo = att.photo
-                                    val photoUrl = photo?.largestUrl
-                                    if (photo != null && photoUrl != null) {
-                                        val isSingle = cols == 1
-                                        // Fix #227: стикер-фото (квадратное, ≤512px —
-                                        // отправлено через messagesSendStickerAsImage)
-                                        // рендерим в исходном размере, НЕ растягивая на
-                                        // всю ширину бабла. Берём реальные px-размеры из
-                                        // photo.sizes, конвертируем в dp (без апскейла),
-                                        // капаем на 160dp чтобы очень крупные стикеры не
-                                        // перекрывали экран. ContentScale.Fit сохраняет
-                                        // пропорции. Обычные фото — как раньше (fillMaxWidth).
-                                        val isStickerPhoto = isSingle && photo.isStickerLike
-                                        if (isStickerPhoto) {
-                                            val largest = photo.largestSize
-                                            val density = LocalDensity.current.density
-                                            // Fix #228: пользовательский масштаб увеличения
-                                            // (0..40%). 0 — исходный, 40 — +40% к оригиналу.
-                                            val userScalePct = LocalStickerPhotoScale.current
-                                                .coerceIn(0, 40)
-                                            val userScale = 1f + userScalePct / 100f
-                                            // Cap поднимаем пропорционально userScale — иначе
-                                            // при +40% стикер упрётся в 160dp и не увеличится.
-                                            val capDp = (160f * userScale).dp
-                                            val naturalWDp = if (largest != null) (largest.width / density * userScale).toInt().dp else capDp
-                                            val naturalHDp = if (largest != null) (largest.height / density * userScale).toInt().dp else capDp
-                                            // Не апскейлим выше natural×userScale — только
-                                            // даунскейл если natural×userScale > cap.
-                                            val scale = minOf(
-                                                capDp.value / naturalWDp.value,
-                                                capDp.value / naturalHDp.value,
-                                                1f,
-                                            )
-                                            val dispW = (naturalWDp.value * scale).roundToInt().dp
-                                            val dispH = (naturalHDp.value * scale).roundToInt().dp
-                                            AsyncImage(
-                                                model = photoUrl,
-                                                contentDescription = "Стикер",
-                                                modifier = Modifier
-                                                    .size(dispW, dispH)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .combinedClickable(
-                                                        onClick = {
-                                                            // Fix #244: в selection mode — toggle, не открываем PhotoViewer.
-                                                            if (sel != null && sel.selectionMode) sel.onToggleSelection()
-                                                            else {
-                                                                val idx = photoUrls.indexOf(photoUrl).coerceAtLeast(0)
-                                                                onPhotoClick(photoUrls, idx)
-                                                            }
-                                                        },
-                                                        onLongClick = { sel?.onLongPress?.invoke() },
-                                                    ),
-                                                contentScale = ContentScale.Fit,
-                                            )
-                                        } else {
-                                            // Fix #225: для одиночных фото используем
-                                            // ContentScale.Fit, для сетки (cols=2) — Crop.
-                                            AsyncImage(
-                                                model = photoUrl,
-                                                contentDescription = "Фото",
-                                                modifier = Modifier
-                                                    .let { m -> if (isSingle) m.fillMaxWidth() else m.weight(1f) }
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .heightIn(max = 200.dp)
-                                                    .combinedClickable(
-                                                        onClick = {
-                                                            // Fix #244: в selection mode — toggle, не открываем PhotoViewer.
-                                                            if (sel != null && sel.selectionMode) sel.onToggleSelection()
-                                                            else {
-                                                                val idx = photoUrls.indexOf(photoUrl).coerceAtLeast(0)
-                                                                onPhotoClick(photoUrls, idx)
-                                                            }
-                                                        },
-                                                        onLongClick = { sel?.onLongPress?.invoke() },
-                                                    ),
-                                                contentScale = if (isSingle) ContentScale.Fit else ContentScale.Crop,
-                                            )
-                                        }
-                                    }
-                                }
-                                // Заполнить пустые ячейки для ровной сетки
-                                if (row.size < cols) {
-                                    repeat(cols - row.size) {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
-                                }
+                    val photoRenderer = attachmentRendererFor(kind = "photo", mimeType = "image/*")
+                    val photoDelegate = photoRenderer?.let { renderer ->
+                        hostRendererComposable(
+                            rendererKey = renderer.rendererKey,
+                            // Fix #228: масштаб стикер-фото — настройка хоста
+                            // (LocalStickerPhotoScale), контейнеру передаём числом.
+                            stickerScalePct = LocalStickerPhotoScale.current.coerceIn(0, 40),
+                            onPhotoOpen = { url ->
+                                // Fix #244: в selection mode — toggle, не открываем PhotoViewer.
+                                if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                                else onPhotoClick(photoUrls, photoUrls.indexOf(url).coerceAtLeast(0))
+                            },
+                            onLongPress = { sel?.onLongPress?.invoke() },
+                        )
+                    }
+                    if (photoDelegate != null) {
+                        // Данные для рендера — только примитивы (url/флаги/размеры).
+                        // «Пустые слоты» (largestUrl == null) передаются как есть —
+                        // паритет с прежним рендером (битое вложение держит место
+                        // в строке сетки, не отрисовываясь).
+                        photoDelegate(
+                            photoAttachments.map { att ->
+                                val p = att.photo
+                                InlinePhotoItem(
+                                    url = p?.largestUrl,
+                                    isStickerLike = p?.isStickerLike == true,
+                                    naturalWidthPx = p?.largestSize?.width ?: 0,
+                                    naturalHeightPx = p?.largestSize?.height ?: 0,
+                                )
                             }
-                        }
+                        )
+                    } else {
+                        PhotoAttachmentsStub(
+                            count = photoUrls.size,
+                            textColor = textColor,
+                            onClick = {
+                                if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                                else onPhotoClick(photoUrls, 0)
+                            },
+                            onLongPress = { sel?.onLongPress?.invoke() },
+                        )
                     }
                 }
                 // Видео-вложения (превью + иконка Play).
@@ -4657,6 +4619,54 @@ private fun ReactionPicker(
     }
 }
 
+
+/**
+ * #ARCH-CONTAINERS (Этап 1.5-а): заглушка фото-вложений, когда контейнер
+ * :feature:photos НЕ зарегистрирован (или rendererKey хосту неизвестен) —
+ * осознанная деградация по плану («чат при удалённом photos показывает
+ * заглушку «скачать файл»»). Инлайн-превью нет; тап открывает хостовый
+ * PhotoViewer (onPhotoClick), где доступно сохранение в галерею (ImageSaver).
+ * Selection-режим (Fix #244) сохранён: тап в selection — toggle, long-press —
+ * как у обычных вложений.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PhotoAttachmentsStub(
+    count: Int,
+    textColor: Color,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(textColor.copy(alpha = 0.08f))
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Image,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = textColor.copy(alpha = 0.7f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(
+                text = if (count > 1) "Фото ($count)" else "Фото",
+                style = MaterialTheme.typography.bodyMedium,
+                color = textColor,
+            )
+            Text(
+                text = "Нажмите, чтобы открыть — сохранить можно в просмотрщике",
+                style = MaterialTheme.typography.labelSmall,
+                color = textColor.copy(alpha = 0.7f),
+            )
+        }
+    }
+}
 
 /** Карточка видео-вложения в сообщении: превью + ▶ + длительность. */
 @Composable
