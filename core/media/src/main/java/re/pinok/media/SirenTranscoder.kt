@@ -69,7 +69,11 @@ object SirenTranscoder {
     init {
         // Включаем verbose-логи ffmpeg только в debug-сборке.
         // В release — тихо (логи ffmpeg очень шумные, засоряют logcat).
-        if (re.pinok.BuildConfig.DEBUG) {
+        // #ARCH-CONTAINERS (Этап 1.2-в): в :core:media нет BuildConfig хоста —
+        // читаем AppLog.debugBuild (тот же флаг: инжектится из BuildConfig.DEBUG
+        // в SovaApp.onCreate задолго до первого транскода; прецедент Этапа 1.2-а —
+        // AppLog.setAppBuildInfo).
+        if (AppLog.debugBuild) {
             FFmpegKitConfig.setLogLevel(com.arthenica.ffmpegkit.Level.AV_LOG_WARNING)
         } else {
             FFmpegKitConfig.setLogLevel(com.arthenica.ffmpegkit.Level.AV_LOG_QUIET)

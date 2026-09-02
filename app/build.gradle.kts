@@ -211,4 +211,9 @@ dependencies {
     // #ARCH-CONTAINERS (Этап 1.2-б): сетевой слой (сигналинг звонков, декодер
     // conversation params). Остальной сетевой слой пока в :app (см. контейнеры.план.md).
     implementation(project(":core:network"))
+
+    // #ARCH-CONTAINERS (Этап 1.2-в): медиа-хелперы (AudioRouteLogger,
+    // PlaybackPositionStore, DocumentFileStorage и др.). Плеер/download-менеджеры
+    // и аудиофокус WebRtcEngine пока в :app (см. контейнеры.план.md, Этап 1.3).
+    implementation(project(":core:media"))
 }

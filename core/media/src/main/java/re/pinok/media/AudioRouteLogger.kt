@@ -10,7 +10,6 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
-import re.pinok.SovaApp
 import re.pinok.util.AppLog
 
 /**
@@ -48,6 +47,21 @@ object AudioRouteLogger {
     private const val TAG = "AudioRouteLogger"
 
     /**
+     * #ARCH-CONTAINERS (Этап 1.2-в): класс переехал в :core:media и больше
+     * не может читать SovaApp.get() хоста (прецедент Этапа 1.2-а — AppLog).
+     * App-context инжектится из SovaApp.onCreate до первого использования
+     * ([setAppContext]); PlayerService/AudioDeviceCallback стартуют позже
+     * onCreate, поэтому до инжекта методы не доходят.
+     */
+    @Volatile
+    private var appContext: Context? = null
+
+    /** Инжект app-context хостом (аналог AppLog.setAppBuildInfo). */
+    fun setAppContext(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    /**
      * Логирует активный output route + кодек. Вызывается из
      * [re.pinok.service.PlayerService] при срабатывании AudioDeviceCallback.
      *
@@ -56,7 +70,12 @@ object AudioRouteLogger {
      */
     fun logActiveRoute(changedToType: Int = -1) {
         try {
-            val ctx = SovaApp.get()
+            // До инжекта поведение прежнее: SovaApp.get() кидал «SovaApp not
+            // initialized», ловился catch'ем ниже — та же строка в логе.
+            val ctx = appContext ?: run {
+                AppLog.w(TAG, "logActiveRoute failed: SovaApp not initialized")
+                return
+            }
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             if (am == null) {
                 AppLog.w(TAG, "logActiveRoute: AudioManager null")
@@ -122,7 +141,11 @@ object AudioRouteLogger {
      */
     @Suppress("DEPRECATION")  // isBluetoothScoOn deprecated в API 33 без замены; на API 31+ используем communicationDevice
     fun isScoRoute(): Boolean = try {
-        val ctx = SovaApp.get()
+        // До инжекта поведение прежнее: «SovaApp not initialized» → catch → false.
+        val ctx = appContext ?: run {
+            AppLog.w(TAG, "isScoRoute failed: SovaApp not initialized")
+            return false
+        }
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
         val sinks = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
         val hasSco = sinks.any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }

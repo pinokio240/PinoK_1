@@ -34,3 +34,10 @@ include(":core:common")
 // VKApiClient/LongPoll*/Queuev4Client/VkNotificationsNotifier остались в :app
 // (замыкание на data-слой/UI — см. контейнеры.план.md, Этап 1.2).
 include(":core:network")
+// #ARCH-CONTAINERS (Этап 1.2-в): медиа-хелперы — AudioRouteLogger,
+// PlaybackPositionStore (де-факто «медиа-кэш» позиций), DocumentFileStorage,
+// ImageSaver, VideoPipController, VoiceRecorder, GeniusLyricsFetcher,
+// SirenTranscoder. Аудиофокус остаётся в WebRtcEngine (:app) — зона Этапа 1.3.
+// Плеер/download-менеджеры/сервисы остались в :app (data.model/UI/Service —
+// см. контейнеры.план.md, Этап 1.2).
+include(":core:media")

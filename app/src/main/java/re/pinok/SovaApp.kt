@@ -605,6 +605,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
             versionName = BuildConfig.VERSION_NAME,
             debuggable = BuildConfig.DEBUG,
         )
+        // #ARCH-CONTAINERS (Этап 1.2-в): AudioRouteLogger переехал в :core:media и
+        // больше не читает SovaApp.get() — инжектим app-context до первого
+        // лог-вызова (PlayerService/AudioDeviceCallback стартуют позже onCreate;
+        // SirenTranscoder из того же модуля читает AppLog.debugBuild — уже инжекчён выше).
+        re.pinok.media.AudioRouteLogger.setAppContext(this)
         // #CALLS-BUILD-STAMP: метка кода звонковой цепочки — по ней в логе мгновенно
         // видно, какая СБОРКА исполняется (кейс 12:32: два процесса re.pinok.debug
         // с разным кодом — новый и старый APK; versionName не различал их).
