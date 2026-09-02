@@ -11512,3 +11512,25 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - Этап 1.2 (core-слой `:core:common` / `:core:network` / `:core:media`) закрыт полностью.
 - Для 1.3 (:feature:calls): сигналинг уже в `:core:network`; на контейнер переносятся WebRtcEngine (+аудиофокус)/CallScreen/VideoTextureRenderer/SovaPrefs-тумблеры; `:core:media` остаётся без webrtc-зависимости.
 - Сборка/запуск — за пользователем: лог старта (stamp прежний), BT-подключение при плеере (строки AudioRouteLogger прежнего формата), транскод Siren (ffmpeg log level: debug→WARNING, release→QUIET).
+## Этап 1.3 — Контейнер-пионер :feature:calls (2026-09-02, коммит 15052b74)
+
+Первый :feature-контейнер. Перенесено git mv (R100, пакеты НЕ менялись) из :app в :feature:calls:
+- re.pinok.media.WebRtcEngine (аудиофокус внутри; замыкание: android.jar, org.webrtc, AppLog, ConversationParamsDecoder, CallModels) и re.pinok.media.VideoTextureRenderer;
+- re.pinok.data.model.CallModels (VkCall/CallPhase/CallDirection/CallMediaType/CallParticipant/QueueCredential/QueueEvent — файл без единого импорта; потребители :app — VKApiClient/Queuev4Client/SovaApp/CallScreen — резолвятся через implementation(":feature:calls")).
+
+### Контракт и контейнер
+- :contracts — CallStarter (без androidx/compose): startCall(peerId: Long, video: Boolean): Boolean; по факту вызова кнопки звонка лишь навигируют на Screen.Call, поэтому title/photo/навигатор — хук хоста через конструктор контейнера; video — задел под фазу 2 (§2.2).
+- CallsContainer (id="calls", пакет re.pinok.feature.calls): CallsNavEntry (Звонки, iconKey=calls, order=10, route=calls_history — совпадает со Screen.CallsHistory drawer), CallsSettingsSection (Звонки, order=90, route=settings_calls — новый стабильный ключ: у SettingsScreen вкладки — приватный enum без маршрутов), CallsPermissions (RECORD_AUDIO, CAMERA, BLUETOOTH_CONNECT), CallsStarterImpl. init — лог; release — идемпотентный no-op.
+- Модуль: namespace re.pinok.feature.calls, compileSdk 36, minSdk 24, Java 21, plugins android.library + kotlin.compose; зависимости api(:contracts), implementation(:core:common), (:core:network), (:core:media), libs.webrtc (io.getstream stream-webrtc-android 1.3.10 — общий алиас с :app); buildConfig=false (перенесённый код re.pinok.BuildConfig не читает); compose-зависимости — на 1.4 по факту переноса экранов.
+- Хост: SovaApp.onCreate регистрирует контейнер (runCatching, до init-цикла) — лог старта «ContainerRegistry: контейнеров=1, capability=4»; startCallHook → requestOutgoingCall (pendingOutgoingCall* в SovaApp) → LaunchedEffect в SovaNavHost открывает Screen.Call (паттерн pendingIncomingCallPayload; до 1.4 startCall никто не вызывает — поведение не меняется).
+
+### Верификация
+- замыкания импортов перенесённых файлов ⊆ {android.jar, org.webrtc, :core:common, :core:media, :feature:calls};
+- дубли деклараций :app↔:feature:calls — 0; :core:*/:contracts звонковых типов не тянут (AppLog:255 — строковый TAG-маппинг);
+- BuildConfig/R.* в feature-модуле — 0; сканер баланса скобок — 11/11 (4 .kt новых/перенесённых+контейнер, CallStarter, BuildStamp, SovaApp, SovaNavHost, 3 .kts);
+- BuildStamp → calls-2026.09.02-4 (поведение звонков не менялось — штамп для различения сборок пользователем); git mv — rename R100; в коммит — только задачные файлы.
+
+### Остатки (вводная 1.4)
+- ui/screens/calls/* — 12 файлов/4196 строк остались в :app: все 10 живых блокированы SovaApp (CallScreen: httpClient/getCallConversationParams/prefs/apiClient/exchangeAuthRepository/queuev4Client/ensureCallsSessionKey; CallsFriendsSection — UserProfile; CallsWebViewScreen — RemixsidCapturer); CallsHomeSection/CallsScheduledSection — чистые, но мёртвые (0 потребителей) — 1.4 или удалить (§2.4);
+- тумблеры callsVideo*: SovaPrefs-часть в :app всегда (неделимый object), SettingsScreen-секция — до 1.4;
+- детальные блокеры по каждому файлу — контейнеры.план.md, Этап 1.3 «Остатки» и вводные 1.4 (route-константы).

@@ -5735,3 +5735,110 @@ Stage Summary:
   пользователя: собрать, проверить (а) лог старта (stamp не менялся), (б) смену audio route
   при подключении BT-наушников во время плеера (строки AudioRouteLogger в logcat прежнего
   формата), (в) транскод Siren-трека (ffmpeg log level прежний: debug→WARNING, release→QUIET).
+---
+Task ID: 10 (Этап 1.3: контейнер-пионер :feature:calls)
+Agent: general-purpose (sandbox sub agent, Task 10)
+Task: создать первый :feature-контейнер :feature:calls (перенос WebRtcEngine/VideoTextureRenderer/CallModels по git mv без смены пакетов, контракты CallStarter, CallsContainer с 4 capability, регистрация в SovaApp, BuildStamp → calls-2026.09.02-4). Верификация статическая (SDK нет): closure-анализ, grep, сканер скобок
+
+Work Log:
+- Ветка PinoK подтверждена (HEAD b04c6059 — коммиты Task 9). Шаг A — closure-анализ
+  всех кандидатов (импорты целиком + grep тел на re.pinok/BuildConfig/R. + поиск
+  объявлений используемых классов):
+  * data/model/CallModels.kt (82 стр.) — НОЛЬ импортов; транзитивно чисто (VkCall/
+    CallPhase/CallDirection/CallMediaType/CallParticipant/QueueCredential/QueueEvent
+    ни на кого вне файла не ссылаются). ВАЖНО: QueueCredential/QueueEvent — ЗДЕСЬ,
+    потребители VKApiClient/Queuev4Client (:app) резолвятся через зависимость :app→
+    :feature:calls (пакеты прежние). В :core:* ссылок на эти типы НЕТ. → ПЕРЕНОС.
+  * media/WebRtcEngine.kt (1357 стр.) — импорты: android.*, org.webrtc.*,
+    re.pinok.data.model.{CallPhase,VkCall} (уезжают вместе), re.pinok.util.AppLog
+    (:core:common), FQN re.pinok.media.ConversationParamsDecoder (:core:media, тот же
+    пакет). Аудиофокус — внутри (FQN android.media.*, AudioRouteLogger НЕ используется).
+    SovaPrefs в коде нет (только слова «callsVideoTx/Rx» в комментариях/строках лога).
+    → ПЕРЕНОС.
+  * media/VideoTextureRenderer.kt (162 стр.) — android.*, org.webrtc.*, AppLog. → ПЕРЕНОС.
+  * ui/screens/calls/ — ФАКТ: файлов 12 (в вводной было 13), 4196 строк. ВСЕ 10 живых
+    остались в :app: единый блокер re.pinok.SovaApp (CallScreen: app.httpClient/
+    getCallConversationParams/prefs/apiClient/exchangeAuthRepository/queuev4Client/
+    ensureCallsSessionKey — строки 144–814); доп.: CallsFriendsSection → UserProfile
+    (data/model/Models.kt :app), CallsWebViewScreen → RemixsidCapturer (auth/exchange).
+    CallsHomeSection (105 стр.) и CallsScheduledSection (23 стр.) — замыкание ЧИСТОЕ
+    (чистый androidx.compose), но МЁРТВЫЕ: ноль потребителей (grep по файлам и функциям).
+    Решение: не переносить мёртвый код в флагманский контейнер; задокументировано в
+    плане (1.4 вместе с CallsMainScreen или гигиена 2.4 — удалить).
+  * Тумблеры callsVideo* (Rx/Tx/SwDecode): SovaPrefs-часть — в :app (SovaPrefs —
+    неделимый object с DataStore-схемой), SettingsScreen-вкладка CALLS (CallsTab,
+    приватный enum) — в :app до 1.4. Задокументировано в плане.
+- Шаг B: feature/calls/build.gradle.kts (namespace re.pinok.feature.calls, compileSdk 36,
+  minSdk 24, Java 21, plugins android.library + kotlin.compose, buildFeatures.compose=true
+  задел на 1.4, buildConfig=false — ловушка BuildConfig проверена: перенесённый код
+  re.pinok.BuildConfig не читает). Зависимости: api(:contracts), implementation
+  (:core:common), (:core:network), (:core:media), libs.webrtc (io.getstream:stream-
+  webrtc-android:1.3.10 — тот же алиас, что в :app; дублей класса на classpath нет).
+  Compose-зависимости НЕ подключены (перенесённому коду не нужны — добавит 1.4).
+  settings.gradle.kts: include(":feature:calls") + комментарий; app/build.gradle.kts:
+  implementation(":feature:calls") после core-модулей (+ актуализирован stale-коммент
+  про аудиофокус в settings).
+- git mv: 3 файла, R100 (100% similarity), каталоги повторяют пакеты
+  (re/pinok/data/model/, re/pinok/media/); декларации пакетов НЕ тронуты.
+- Шаг C: contracts/CallStarter.kt (без androidx/compose, KDoc): interface
+  CallStarter : Capability { fun startCall(peerId: Long, video: Boolean): Boolean }.
+  Сверено с реальностью: кнопки звонка (:app, ChatDetailScreen шапка + 4 места
+  SovaNavHost) НЕ стартуют звонок сами — навигируют Screen.Call.buildRoute(peerId,
+  title, photo, incoming=false); контракт оставлен минимальным (peerId+video),
+  title/photo/навигатор — хост-хук через конструктор; video=true — задел под §2.2.
+- Шаг D: CallsContainer.kt (пакет re.pinok.feature.calls): id="calls";
+  capabilities() = CallsNavEntry (title=«Звонки», iconKey="calls", order=10,
+  route="calls_history" — совпадает со Screen.CallsHistory), CallsSettingsSection
+  (title=«Звонки», order=90, route="settings_calls" — НОВЫЙ стабильный ключ: у
+  SettingsScreen маршрутов нет вообще, вкладки = приватный enum, маппинг — 1.4),
+  CallsPermissions (RECORD_AUDIO, CAMERA, BLUETOOTH_CONNECT), CallsStarterImpl
+  (делегирует хуку хоста (peerId,video)->Boolean из конструктора; try/catch → false).
+  init(app): AppLog.i; release(): идемпотентный no-op (движок/сигналинг живут циклом
+  экрана, как раньше).
+- Шаг E: SovaApp.onCreate — runCatching-регистрация re.pinok.feature.calls.CallsContainer
+  ДО init-цикла 1.1 (FQN, без нового импорта); startCallHook = { peerId, video ->
+  requestOutgoingCall(peerId, video) }. Добавлены pendingOutgoingCallPeerId/Video +
+  requestOutgoingCall/consumeOutgoingCall (паттерн pendingIncomingCallPayload);
+  SovaNavHost — LaunchedEffect(app.pendingOutgoingCallPeerId): peerId>0 → navigate
+  Screen.Call.buildRoute(peerId,"",null,incoming=false) + consumeOutgoingCall.
+  До 1.4 startCall никто не вызывает → блок no-op, поведение не меняется. Лог старта
+  теперь: «ContainerRegistry: контейнеров=1, capability=4».
+- BuildStamp → calls-2026.09.02-4 (комментарий -4 добавлен над -3): поведение звонков
+  не менялось, штамп — чтобы лог пользователя отличал сборку с контейнером от -3.
+- Верификация (каждая выполнена):
+  1) Импорты перенесённых файлов ⊆ {android.jar, org.webrtc, kotlin, :core:common,
+     :core:media, :feature:calls} — grep показан (WebRtcEngine: 20 org.webrtc-импортов
+     + 3 re.pinok; VTR: 4 org.webrtc; CallModels: 0; CallsContainer: contracts+AppLog).
+  2) Дубли деклараций :app↔:feature:calls — 0 (grep class/object/enum по перенесённым
+     именам в app/ пуст).
+  3) Потребители в :app резолвятся без правок кода: CallScreen (import
+     re.pinok.media.WebRtcEngine + 11 ссылок на CallModels-типы), VKApiClient/Queuev4Client
+     (import re.pinok.data.model.QueueCredential/QueueEvent), SovaApp (KDoc-ссылка
+     на CallModels.QueueCredential) — пакеты прежние, зависимость :app→:feature:calls
+     добавлена.
+  4) :core:*/:contracts не тянут звонковые типы: единственное вхождение «WebRtcEngine»
+     в core — строковый TAG-маппинг AppLog.kt:255 (не код).
+  5) BuildConfig-ловушка: grep BuildConfig/R. по feature/calls — чисто; buildConfig=false.
+  6) Сканер скобок — 11/11 OK (3 перенесённых .kt, CallsContainer, CallStarter,
+     BuildStamp, SovaApp, SovaNavHost, 3 .kts).
+  7) git status: стейдж только задачных файлов (чужой .gitignore и Next.js-скаффолд
+     не тронуты); git mv — rename R100.
+- Коммит 15052b74 (arch), push origin PinoK OK (b04c6059..15052b74).
+
+Stage Summary:
+- :feature:calls готов: 3 перенесённых файла (WebRtcEngine 1357 + VideoTextureRenderer
+  162 + CallModels 82 = 1601 стр. звонкового ядра) + CallsContainer + CallStarter-
+  контракт + gradle-обвязка. Поведение не изменено: UI-хардкод хоста (drawer/настройки/
+  кнопки звонка) не тронут; реестр уже отдаёт 4 capability (контейнеров=1, capability=4).
+- Остаток 1.3→1.4 (вводная): (1) 10 живых экранов ui/screens/calls/* блокированы
+  re.pinok.SovaApp (CallScreen — 8 API SovaApp: httpClient, getCallConversationParams,
+  prefs, apiClient, exchangeAuthRepository, queuev4Client, ensureCallsSessionKey...),
+  CallsFriendsSection — UserProfile, CallsWebViewScreen — RemixsidCapturer → декомпозиция
+  = выделение звонкового сервис-слоя (интерфейс над SovaApp/VKApiClient) или data-слоя;
+  (2) CallsHomeSection/CallsScheduledSection — мёртвые, чистые (решение: 1.4 или удалить);
+  (3) тумблеры callsVideo*: SovaPrefs — в :app всегда, SettingsScreen-секция — 1.4;
+  (4) SettingsSection.route="settings_calls" — хост 1.4 мапит на контент (сейчас
+  вкладки — enum без маршрутов); NavEntry.route="calls_history" уже существует.
+- Риск для сборки: минимальный (перенос 100% + новые файлы + 3 точечные host-правки);
+  на машине пользователя: собрать, лог старта (контейнеров=1, capability=4,
+  stamp calls-2026.09.02-4), звонок по старой матрице §2.1 (поведение движка не менялось).
