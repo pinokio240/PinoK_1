@@ -367,6 +367,10 @@ fun OfflineManagerScreen(
         }
 
         // Fix #167: баннер статуса проверки кэша.
+        // #NULL-EXPLICIT: захват var-делегата lightScanResult в локальный val —
+        // smart-cast делегированного свойства невозможен; проверка и
+        // использование — одна и та же val, поведение прежнее.
+        val lightScanSnapshot = lightScanResult
         if (lightScanRunning || deepScanRunning) {
             val (text, done) = deepScanProgress
             val total = if (deepScanRunning) completedAudio.size else 0
@@ -394,8 +398,8 @@ fun OfflineManagerScreen(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        } else if (lightScanResult != null) {
-            val result = lightScanResult!!
+        } else if (lightScanSnapshot != null) {
+            val result = lightScanSnapshot
             val valid = result.count { it.value == TrackDownloadManager.CacheIntegrity.VALID }
             val corrupted = result.count { it.value == TrackDownloadManager.CacheIntegrity.CORRUPTED }
             val noHash = result.count { it.value == TrackDownloadManager.CacheIntegrity.NO_HASH }

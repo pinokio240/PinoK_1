@@ -58,21 +58,22 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * #NULL-SAFE-HELPER (2026-08-02): smart-cast вместо `?.` цепочки.
+ * #NULL-SAFE-HELPER (2026-08-02): smart-cast вместо цепочки safe-call-операций.
  *
- * Coding style PinoK: ИЗБЕГАЕМ `?.`, `!!`, `?:` — используем локальный `val` + `if (x != null)`.
+ * Coding style PinoK (#NULL-EXPLICIT): неявные null-операторы запрещены
+ * (safe-call, non-null assertion, elvis) — используем локальный `val` + `if (x != null)`.
  *
  * `SovaApp.getOrNull()` возвращает `SovaApp?` (nullable). `networkObserver` — `lateinit`
  * (non-null тип, но доступ до init бросает `UninitializedPropertyAccessException`).
  *
- * БЫЛО (нарушает coding style — две `?.` в одной цепочке):
+ * БЫЛО (нарушает coding style — две safe-call-операции в одной цепочке):
  * ```
  * val recentlySwitched = try {
  *     re.pinok.SovaApp.getOrNull()?.networkObserver?.isRecentlySwitched(30_000L) == true
  * } catch (_: Exception) { false }
  * ```
  *
- * СТАЛО (smart-cast через локальный val, без `?.` / `!!` / `?:`):
+ * СТАЛО (smart-cast через локальный val, без неявных null-операторов):
  * ```
  * val recentlySwitched = isNetworkRecentlySwitched(30_000L)
  * ```
@@ -10387,8 +10388,8 @@ class VKApiClient(
                 // #NULL-SAFE (2026-08-02): этот блок — ОТДЕЛЬНЫЙ от `attempt==0 && authRepo!=null`
                 // (9078→9201), поэтому smart-cast на `authRepo` тут НЕ действует. authRepo
                 // объявлен как `val authRepo = exchangeAuthRepository` (nullable).
-                // Coding style PinoK: ИЗБЕГАЕМ `?.` / `!!` / `?:` — используем локальный
-                // `val ar = authRepo` + `if (ar != null) ar.hasSilentReloginMeans() else true`.
+                // Coding style PinoK (#NULL-EXPLICIT): неявные null-операторы запрещены —
+                // локальный `val ar = authRepo` + `if (ar != null) ar.hasSilentReloginMeans() else true`.
                 // Если authRepo==null, считаем что silent means есть (старое поведение,
                 // безопаснее для пользователя).
                 val hasSilentMeans = try {

@@ -160,6 +160,10 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
             )
         },
     ) { padding ->
+        // #NULL-EXPLICIT: захват var-делегата error в локальный val — smart-cast
+        // делегированного свойства невозможен; проверка и использование — одна
+        // и та же val, поведение прежнее.
+        val loadError = error
         when {
             loading -> {
                 Box(
@@ -169,14 +173,14 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
                     CircularProgressIndicator()
                 }
             }
-            error != null -> {
+            loadError != null -> {
                 Box(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            error!!,
+                            loadError,
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center,
                         )

@@ -4169,15 +4169,24 @@ private fun MessageBubble(
                 // (PhotoAttachmentsStub: тап → хостовый PhotoViewer, сохранение
                 // в галерею — ImageSaver'ом в просмотрщике). mime у VK-фото
                 // отсутствует — передаём семейство "image/*" и kind="photo".
-                val photoAttachments = message.attachments
-                    ?.filter { it.type == "photo" && it.photo != null }
+                val photoAttachments = run {
+                    // #NULL-EXPLICIT: явная проверка вместо safe-call (вложения могут
+                    // отсутствовать у message — nullable по модели).
+                    val atts = message.attachments
+                    if (atts != null) atts.filter { it.type == "photo" && it.photo != null } else null
+                }
                 if (!photoAttachments.isNullOrEmpty()) {
                     // P5.1: список URL для полноэкранного просмотрщика (PhotoViewer).
-                    val photoUrls = photoAttachments.mapNotNull { it.photo?.largestUrl }
+                    val photoUrls = photoAttachments.mapNotNull { att ->
+                        val p = att.photo
+                        if (p != null) p.largestUrl else null
+                    }
                     val photoRenderer = attachmentRendererFor(kind = "photo", mimeType = "image/*")
-                    val photoDelegate = photoRenderer?.let { renderer ->
+                    // #NULL-EXPLICIT: явная проверка вместо safe-call — делегат строится
+                    // только когда реестр отдал рендерер; иначе заглушка ниже.
+                    val photoDelegate = if (photoRenderer != null) {
                         hostRendererComposable(
-                            rendererKey = renderer.rendererKey,
+                            rendererKey = photoRenderer.rendererKey,
                             // Fix #228: масштаб стикер-фото — настройка хоста
                             // (LocalStickerPhotoScale), контейнеру передаём числом.
                             stickerScalePct = LocalStickerPhotoScale.current.coerceIn(0, 40),
@@ -4186,8 +4195,10 @@ private fun MessageBubble(
                                 if (sel != null && sel.selectionMode) sel.onToggleSelection()
                                 else onPhotoClick(photoUrls, photoUrls.indexOf(url).coerceAtLeast(0))
                             },
-                            onLongPress = { sel?.onLongPress?.invoke() },
+                            onLongPress = { if (sel != null) sel.onLongPress() },
                         )
+                    } else {
+                        null
                     }
                     if (photoDelegate != null) {
                         // Данные для рендера — только примитивы (url/флаги/размеры).
@@ -4197,12 +4208,24 @@ private fun MessageBubble(
                         photoDelegate(
                             photoAttachments.map { att ->
                                 val p = att.photo
-                                InlinePhotoItem(
-                                    url = p?.largestUrl,
-                                    isStickerLike = p?.isStickerLike == true,
-                                    naturalWidthPx = p?.largestSize?.width ?: 0,
-                                    naturalHeightPx = p?.largestSize?.height ?: 0,
-                                )
+                                if (p != null) {
+                                    val size = p.largestSize
+                                    InlinePhotoItem(
+                                        url = p.largestUrl,
+                                        isStickerLike = p.isStickerLike,
+                                        naturalWidthPx = if (size != null) size.width else 0,
+                                        naturalHeightPx = if (size != null) size.height else 0,
+                                    )
+                                } else {
+                                    // Пустой слот (фото нет) — держит место в сетке,
+                                    // не отрисовываясь (паритет с прежним рендером).
+                                    InlinePhotoItem(
+                                        url = null,
+                                        isStickerLike = false,
+                                        naturalWidthPx = 0,
+                                        naturalHeightPx = 0,
+                                    )
+                                }
                             }
                         )
                     } else {
@@ -4213,7 +4236,7 @@ private fun MessageBubble(
                                 if (sel != null && sel.selectionMode) sel.onToggleSelection()
                                 else onPhotoClick(photoUrls, 0)
                             },
-                            onLongPress = { sel?.onLongPress?.invoke() },
+                            onLongPress = { if (sel != null) sel.onLongPress() },
                         )
                     }
                 }
@@ -4260,23 +4283,34 @@ private fun MessageBubble(
                 // рендерера). mime у VK-аудио отсутствует — передаём семейство
                 // "audio/*" и kind="audio" (в коде — ок; в block-комментариях
                 // литерал слэш-звёздочки запрещён — вложенный комментарий).
-                val audioAttachments = message.attachments
-                    ?.filter { it.type == "audio" && it.audio != null }
+                val audioAttachments = run {
+                    // #NULL-EXPLICIT: явная проверка вместо safe-call (вложения могут
+                    // отсутствовать у message — nullable по модели).
+                    val atts = message.attachments
+                    if (atts != null) atts.filter { it.type == "audio" && it.audio != null } else null
+                }
                 if (!audioAttachments.isNullOrEmpty()) {
                     val audioRenderer = attachmentRendererFor(kind = "audio", mimeType = "audio/*")
                     for (aa in audioAttachments) {
-                        aa.audio?.let { track ->
-                            val audioDelegate = audioRenderer?.let { renderer ->
+                        // #NULL-EXPLICIT: явная проверка вместо safe-call на вложении.
+                        val track = aa.audio
+                        if (track != null) {
+                            // #NULL-EXPLICIT: явная проверка вместо safe-call — делегат
+                            // строится только когда реестр отдал рендерер; иначе
+                            // заглушка AudioAttachmentsStub ниже.
+                            val audioDelegate = if (audioRenderer != null) {
                                 hostAudioRendererComposable(
-                                    rendererKey = renderer.rendererKey,
+                                    rendererKey = audioRenderer.rendererKey,
                                     textColor = textColor,
                                     onPlay = {
                                         // Fix #244: в selection mode — toggle, не запускаем плеер.
                                         if (sel != null && sel.selectionMode) sel.onToggleSelection()
                                         else onAudioClick(track)
                                     },
-                                    onLongPress = { sel?.onLongPress?.invoke() },
+                                    onLongPress = { if (sel != null) sel.onLongPress() },
                                 )
+                            } else {
+                                null
                             }
                             if (audioDelegate != null) {
                                 // Данные для рендера — только примитивы
@@ -4290,7 +4324,7 @@ private fun MessageBubble(
                                         if (sel != null && sel.selectionMode) sel.onToggleSelection()
                                         else onAudioClick(track)
                                     },
-                                    onLongPress = { sel?.onLongPress?.invoke() },
+                                    onLongPress = { if (sel != null) sel.onLongPress() },
                                 )
                             }
                         }

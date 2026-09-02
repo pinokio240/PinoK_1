@@ -336,7 +336,12 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    val s = snap ?: return
+    // #NULL-EXPLICIT (Этап А null-политики): snapshot ещё не пришёл
+    // (collectAsState initial = null) — до первого значения prefs экран не
+    // рисуем. Ранее `snap ?: return`; теперь ранний выход явно, захват в val
+    // — для smart-cast (делегированное свойство не приводится).
+    val s = snap
+    if (s == null) return
 
     // #ARCH-CONTAINERS (Этап 1.4): ядерные вкладки (enum, порядок прежний) +
     // контейнерные секции после них (по order). Реестр не реактивен — читаем
@@ -3449,12 +3454,25 @@ private fun NotificationsTab(
                     //   - иначе приоритет: API → cache (notifyStates) → default.
                     // Это предотвращает гонку «пользователь тапнул → API применил
                     // старое значение → UI моргнул обратно».
+                    // #NULL-EXPLICIT (замена non-null assertion): k всегда берётся из
+                    // NOTIFY_DEFAULTS.keys, а apiMap/notifyStates проверены
+                    // containsKey — null невозможен по построению; checkNotNull
+                    // даёт понятное сообщение вместо тихого NPE.
                     val merged = NOTIFY_DEFAULTS.keys.associateWith { k ->
                         when {
-                            k in loadingKeys -> notifyStates[k] ?: NOTIFY_DEFAULTS[k]!!
-                            apiMap.containsKey(k) -> apiMap[k]!!
-                            notifyStates.containsKey(k) -> notifyStates[k]!!
-                            else -> NOTIFY_DEFAULTS[k]!!
+                            k in loadingKeys ->
+                                notifyStates[k] ?: checkNotNull(NOTIFY_DEFAULTS[k]) {
+                                    "NOTIFY_DEFAULTS[$k] отсутствует (k из NOTIFY_DEFAULTS.keys) — инвариант нарушен"
+                                }
+                            apiMap.containsKey(k) -> checkNotNull(apiMap[k]) {
+                                "apiMap[$k] отсутствует при containsKey == true — инвариант нарушен"
+                            }
+                            notifyStates.containsKey(k) -> checkNotNull(notifyStates[k]) {
+                                "notifyStates[$k] отсутствует при containsKey == true — инвариант нарушен"
+                            }
+                            else -> checkNotNull(NOTIFY_DEFAULTS[k]) {
+                                "NOTIFY_DEFAULTS[$k] отсутствует (k из NOTIFY_DEFAULTS.keys) — инвариант нарушен"
+                            }
                         }
                     }
                     notifyStates = merged
@@ -3469,7 +3487,11 @@ private fun NotificationsTab(
     }
 
     val now = System.currentTimeMillis() / 1000
-    val isSilentActive = silentUntil != null && (silentUntil == -1L || (silentUntil!! > 0 && silentUntil!! > now))
+    // #NULL-EXPLICIT: захват var-делегата silentUntil в локальный val —
+    // smart-cast делегированного свойства невозможен; состояние читается один
+    // раз за рекомпозицию, поведение прежнее.
+    val silent = silentUntil
+    val isSilentActive = silent != null && (silent == -1L || (silent > 0 && silent > now))
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -3498,10 +3520,10 @@ private fun NotificationsTab(
                             Text(
                                 text = when {
                                     silentLoading -> "Проверка статуса…"
-                                    silentUntil == -1L -> "До отключения вручную"
-                                    silentUntil != null && silentUntil!! > 0 && isSilentActive ->
+                                    silent == -1L -> "До отключения вручную"
+                                    silent != null && silent > 0 && isSilentActive ->
                                         "До ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                            .format(java.util.Date(silentUntil!! * 1000))}"
+                                            .format(java.util.Date(silent * 1000))}"
                                     else -> "Уведомления включены"
                                 },
                                 style = MaterialTheme.typography.bodySmall,

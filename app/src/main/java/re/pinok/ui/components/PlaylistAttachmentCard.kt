@@ -139,7 +139,7 @@ fun PlaylistAttachmentCard(playlist: AudioPlaylist) {
             )
             Spacer(Modifier.height(2.dp))
             // Локальный захват var-делегатов, чтобы smart-cast работал
-            // в when-ветках (без !! и ?:).
+            // в when-ветках (без non-null assertion и elvis).
             val err = error
             val tracks = loadedTracks
             Text(

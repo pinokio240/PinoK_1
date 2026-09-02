@@ -323,18 +323,23 @@ fun ShareToChatSheet(
             }
 
             // Статус / ошибка
+            // #NULL-EXPLICIT: захват var-делегатов в val — smart-cast по
+            // делегированному свойству невозможен; null здесь возможен только
+            // до установки, ветка просто не рисует текст (как и раньше).
             Spacer(Modifier.height(8.dp))
-            if (statusMsg != null) {
+            val statusText = statusMsg
+            if (statusText != null) {
                 Text(
-                    text = statusMsg!!,
+                    text = statusText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 )
             }
-            if (errorMsg != null) {
+            val errorText = errorMsg
+            if (errorText != null) {
                 Text(
-                    text = errorMsg!!,
+                    text = errorText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),

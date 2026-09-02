@@ -73,11 +73,15 @@ class Queuev4Client(
 
     fun start() {
         if (pollJob?.isActive == true) return
-        if (credential == null) {
+        // #NULL-EXPLICIT: credential — var-свойство класса, smart-cast невозможен —
+        // захватываем в локальный val (снимок на момент start()). Инвариант: владелец
+        // обязан вызвать setCredential() до start() — иначе ранний возврат с логом.
+        val cred = credential
+        if (cred == null) {
             AppLog.w(TAG, "No queue credential — call setCredential() first")
             return
         }
-        pollJob = scope.launch { pollLoop(credential!!) }
+        pollJob = scope.launch { pollLoop(cred) }
     }
 
     fun stop() {

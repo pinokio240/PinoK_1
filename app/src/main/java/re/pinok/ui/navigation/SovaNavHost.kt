@@ -326,13 +326,19 @@ fun SovaNavHost(
         ContainerRegistry.find<NavEntry>().sortedBy { it.order }
     }
     val callStarter = remember { ContainerRegistry.find<CallStarter>().firstOrNull() }
-    val callClick: ((peerId: Long, title: String, photo: String?) -> Unit)? =
-        callStarter?.let { starter ->
+    // #NULL-EXPLICIT: явная проверка вместо safe-call — callClick строится только
+    // когда в реестре есть CallStarter; иначе null (кнопки звонка не рендерятся).
+    val callClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = run {
+        val starter = callStarter
+        if (starter != null) {
             { pid: Long, title: String, photo: String? ->
                 OutgoingCallMeta.stash(title, photo)
                 starter.startCall(pid, video = false)
             }
+        } else {
+            null
         }
+    }
 
     // Fix #208: навигация на ChatDetailScreen когда пользователь тапнул по
     // push-уведомлению. MainActivity.handleOpenChatIntent устанавливает
@@ -716,11 +722,21 @@ listOf(
     val allScreens: List<Screen> = dockScreens + drawerScreens + listOf(Screen.About)
     // #ARCH-CONTAINERS (Этап 1.4/1.5-а): заголовок может прийти и из контейнерного
     // NavEntry (routes "calls_history"/"photos" больше не в ядерном списке — см.
-    // drawerScreens). Неизвестный роут — как раньше, "PinoK".
-    val currentTitle = allScreens.firstOrNull { it.route == currentRoute }?.title
-        ?: containerNavEntries
-            .firstOrNull { hostDestinationForRoute(it.route)?.route == currentRoute }?.title
-        ?: "PinoK"
+    // drawerScreens). Неизвестный роут — как раньше, "PinoK". #NULL-EXPLICIT:
+    // явные проверки вместо safe-call/elvis-цепочки (порядок приоритета прежний:
+    // ядерный Screen → контейнерный NavEntry → "PinoK").
+    val currentTitle = run {
+        val core = allScreens.firstOrNull { it.route == currentRoute }
+        if (core != null) {
+            core.title
+        } else {
+            val entry = containerNavEntries.firstOrNull {
+                val dest = hostDestinationForRoute(it.route)
+                dest != null && dest.route == currentRoute
+            }
+            if (entry != null) entry.title else "PinoK"
+        }
+    }
 
     // Экраны со своим TopAppBar — скрываем глобальный заголовок и навбар.
     // #30 (nav fix): добавлены Community, AudioPlayer, AudioQueue — у них есть

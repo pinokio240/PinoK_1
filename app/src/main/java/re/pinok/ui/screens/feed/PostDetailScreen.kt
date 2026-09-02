@@ -1733,7 +1733,7 @@ private fun ReplyItem(
             }
             // Вложения ответа (если есть).
             // §37.12 #328 fix: attachments nullable — smart-cast через локальную val
-            // + isNullOrEmpty() (без !!/?. — пользователь явно просил избегать).
+            // + isNullOrEmpty() (без non-null assertion и ?. — пользователь явно просил избегать).
             val replyAttachments = reply.attachments
             if (!replyAttachments.isNullOrEmpty()) {
                 CommentAttachments(

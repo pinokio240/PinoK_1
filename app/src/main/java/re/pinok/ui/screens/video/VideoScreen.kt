@@ -595,6 +595,10 @@ fun VideoScreen(
                 }
 
                 // #VIDEO-SEARCH: активный поиск → показываем API-результаты.
+                // #NULL-EXPLICIT: захват var-делегата searchError в локальный val —
+                // smart-cast делегированного свойства невозможен; проверка и
+                // использование — одна и та же val, поведение прежнее.
+                val searchErr = searchError
                 if (searchQuery.isNotBlank()) {
                     if (searchLoading) {
                         item {
@@ -602,10 +606,10 @@ fun VideoScreen(
                                 CircularProgressIndicator(color = vkAccent)
                             }
                         }
-                    } else if (searchError != null) {
+                    } else if (searchErr != null) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                                Text(searchError!!, color = vkTextSecondary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                Text(searchErr, color = vkTextSecondary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             }
                         }
                     } else if (searchResults.isNotEmpty()) {

@@ -336,7 +336,8 @@ fun VideoPlayerScreen(
         // VIDEO-FIX (#351): OK-видео игнорирует hasFiles — VK files для OK это placeholder
         // (VK кладёт embed URL ok.ru/videoembed/... в files, это НЕ прямой медиа-URL).
         // isOkVideo использует явный `extId != null` (не isNullOrBlank) — это даёт
-        // compiler smart-cast extId к String внутри `if (isOkVideo)`, без `!!`.
+        // compiler smart-cast extId к String внутри `if (isOkVideo)`, без
+        // non-null assertion (по #NULL-EXPLICIT она запрещена).
         val extId = resolvedVideo.externalId
         val isOkVideo = extId != null && extId.isNotBlank() &&
                 resolvedVideo.videoPlatform == VideoPlatform.OK

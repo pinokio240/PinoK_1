@@ -770,7 +770,7 @@ class ExchangeAuthRepository(
                 AppLog.i(TAG, "refreshSessionCookies: UPDATED — " +
                     "remixsid=${if (remixsidChanged) "rotated(len=${found.remixsid.length})" else "same"}, " +
                     // PinoK style: smart-cast через pChanged / nsidChanged (= newP/newNsid != null, line 717-718).
-                    // Без !! и без избыточной null-проверки — компилятор сам выводит non-null из булева val.
+                    // Без non-null assertion и без избыточной null-проверки — компилятор сам выводит non-null из булева val.
                     "p=${if (pChanged) "rotated(len=${newP.length})" else "same"}, " +
                     "remixnsid=${if (nsidChanged) "rotated(len=${newNsid.length})" else "same"}, " +
                     // §55
