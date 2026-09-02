@@ -70,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import re.pinok.BuildConfig
 import re.pinok.SovaApp
+import re.pinok.contracts.ContainerRegistry
+import re.pinok.contracts.SettingsSection
 import re.pinok.data.local.SovaPrefs
 import re.pinok.data.local.AudioFormat
 import re.pinok.data.local.AudioQuality
@@ -95,6 +97,7 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DashboardCustomize
 import androidx.compose.material.icons.outlined.Equalizer
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MusicNote
@@ -167,7 +170,13 @@ private enum class SettingsTab(
     SECURITY("Защита", Icons.Outlined.Lock),
     LOGGING("Логирование", Icons.Outlined.BugReport),
     AUTHOR("Автор", Icons.Filled.Person),
-    CALLS("Звонки", Icons.Filled.Call),
+    // #ARCH-CONTAINERS (Этап 1.4): ядерная вкладка CALLS («Звонки») убрана из
+    // enum — вкладка настроек звонков приходит из реестра (SettingsSection
+    // контейнера :feature:calls, route "settings_calls", order 90). Контент
+    // рендерит ХОСТ: CallsTab остаётся в :app (SovaPrefs недоступен
+    // фиче-модулю) — см. hostSettingsContentFor(). Без контейнера вкладки нет,
+    // ядерные вкладки не меняются. Дублей быть не должно: одна секция — одна
+    // вкладка (ядро в enum больше не рисует).
 }
 
 @Composable
@@ -257,6 +266,53 @@ private fun AuthorTab(
     }
 }
 
+// ═════════════════════════════════════════════════════════════════════
+//  #ARCH-CONTAINERS (Этап 1.4): объединённый список страниц настроек
+//
+//  Страница = ядерная (enum SettingsTab — собственность хоста, НЕИЗМЕННО)
+//  либо контейнерная (SettingsSection из реестра, появляется ТОЛЬКО пока
+//  контейнер зарегистрирован). Ключ — сумма типов: enum-имя для ядерных,
+//  route-строка для контейнерных. PrimaryScrollableTabRow и HorizontalPager
+//  строятся из ОДНОГО списка pages → индексы pager'а всегда согласованы.
+
+/**
+ * Дескриптор страницы настроек. Контент НЕ захватывается сюда (иначе
+ * remember-страницы закэшировали бы устаревший Snapshot s) — контент
+ * резолвится при рендере: Core → when(tab), Container → hostSettingsContentFor.
+ */
+private sealed class SettingsPage(val key: String, val label: String, val icon: ImageVector?) {
+    /** Ядерная вкладка (enum SettingsTab). */
+    class Core(val tab: SettingsTab) : SettingsPage("core:${tab.name}", tab.label, tab.icon)
+
+    /** Вкладка контейнера (SettingsSection из реестра). */
+    class Container(val section: SettingsSection) : SettingsPage(
+        "container:${section.route}", section.title, hostSettingsIconFor(section.route),
+    )
+}
+
+/**
+ * route SettingsSection → иконка (контракты без compose — иконку мапит хост,
+ * как NavEntry.iconKey в drawer). "settings_calls" → иконка прежней ядерной
+ * вкладки «Звонки» (Icons.Filled.Call) — UI выглядит как раньше.
+ * Неизвестный route → нейтральная иконка (расширение) — НЕ падаем.
+ */
+private fun hostSettingsIconFor(route: String): ImageVector = when (route) {
+    "settings_calls" -> Icons.Filled.Call
+    else -> Icons.Outlined.Extension
+}
+
+/**
+ * route SettingsSection → контент хоста. Компосаблы настроек остаются в :app
+ * (SovaPrefs/SovaApp недоступны фиче-модулю) — хост-маппинг route → компосабл,
+ * тот же паттерн, что NavEntry.route → destination в SovaNavHost.
+ * Неизвестный route → null (страница-заглушка + предупреждение в лог).
+ */
+private fun hostSettingsContentFor(route: String): (@Composable (SovaPrefs.Snapshot, SovaApp, CoroutineScope) -> Unit)? =
+    when (route) {
+        "settings_calls" -> { s, app, scope -> CallsTab(s, app, scope) }
+        else -> null
+    }
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SettingsScreen(
@@ -270,20 +326,35 @@ fun SettingsScreen(
 
     val s = snap ?: return
 
+    // #ARCH-CONTAINERS (Этап 1.4): ядерные вкладки (enum, порядок прежний) +
+    // контейнерные секции после них (по order). Реестр не реактивен — читаем
+    // при построении composition (контракт ContainerRegistry).
+    val containerSections = remember {
+        ContainerRegistry.find<SettingsSection>().sortedBy { it.order }
+    }
     val tabs = SettingsTab.entries
-    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    val pages = remember(containerSections) {
+        buildList {
+            tabs.forEach { add(SettingsPage.Core(it)) }
+            containerSections.forEach { add(SettingsPage.Container(it)) }
+        }
+    }
+    val pagerState = rememberPagerState(pageCount = { pages.size })
 
     Column(modifier = Modifier.fillMaxSize()) {
         PrimaryScrollableTabRow(
             selectedTabIndex = pagerState.currentPage,
             edgePadding = 0.dp,
         ) {
-            tabs.forEachIndexed { index, tab ->
+            pages.forEachIndexed { index, page ->
                 Tab(
                     selected = pagerState.currentPage == index,
                     onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
-                    text = { Text(tab.label, maxLines = 1) },
-                    icon = { Icon(tab.icon, contentDescription = null) },
+                    text = { Text(page.label, maxLines = 1) },
+                    icon = {
+                        // Контейнерные секции могут быть без иконки — не падаем.
+                        if (page.icon != null) Icon(page.icon, contentDescription = null)
+                    },
                 )
             }
         }
@@ -292,23 +363,52 @@ fun SettingsScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
         ) { page ->
-            val tab = tabs[page]
-            when (tab) {
-                SettingsTab.INTERFACE -> InterfaceTab(s, app, scope)
-                SettingsTab.NEWS -> NewsTab(s, app, scope)
-                SettingsTab.MESSAGES -> MessagesTab(s, app, scope)
-                SettingsTab.MUSIC -> MusicTab(s, app, scope, context)
-                SettingsTab.OFFLINE -> OfflineTab(s, app, scope, context)
-                SettingsTab.EQUALIZER -> EqualizerTab()
-                SettingsTab.VIDEO -> VideoTab(s, app, scope, context)
-                SettingsTab.NETWORK -> NetworkTab(s, app, scope)
-                SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings)
-                SettingsTab.PANELS -> PanelEditorTab(s, app, scope)
-                SettingsTab.PRIVACY -> PrivacyTab(s, app, scope)
-                SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices)
-                SettingsTab.LOGGING -> LoggingTab(s, app, scope)
-                SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
-                SettingsTab.CALLS -> CallsTab(s, app, scope)
+            when (val p = pages[page]) {
+                is SettingsPage.Core -> when (p.tab) {
+                    SettingsTab.INTERFACE -> InterfaceTab(s, app, scope)
+                    SettingsTab.NEWS -> NewsTab(s, app, scope)
+                    SettingsTab.MESSAGES -> MessagesTab(s, app, scope)
+                    SettingsTab.MUSIC -> MusicTab(s, app, scope, context)
+                    SettingsTab.OFFLINE -> OfflineTab(s, app, scope, context)
+                    SettingsTab.EQUALIZER -> EqualizerTab()
+                    SettingsTab.VIDEO -> VideoTab(s, app, scope, context)
+                    SettingsTab.NETWORK -> NetworkTab(s, app, scope)
+                    SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings)
+                    SettingsTab.PANELS -> PanelEditorTab(s, app, scope)
+                    SettingsTab.PRIVACY -> PrivacyTab(s, app, scope)
+                    SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices)
+                    SettingsTab.LOGGING -> LoggingTab(s, app, scope)
+                    SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
+                }
+                is SettingsPage.Container -> {
+                    // #ARCH-CONTAINERS (Этап 1.4): контент контейнерной вкладки —
+                    // по host-маппингу route → компосабл (CallsTab остаётся в :app).
+                    val content = hostSettingsContentFor(p.section.route)
+                    if (content == null) {
+                        // Graceful: секция есть, хост-маппинга нет — заглушка, не падаем.
+                        LaunchedEffect(p.section.route) {
+                            AppLog.w(
+                                "SettingsScreen",
+                                "CONTAINERS: SettingsSection route '${p.section.route}' не поддержан хостом — показана заглушка",
+                            )
+                        }
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize().padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            item { SectionHeader(p.section.title) }
+                            item {
+                                Text(
+                                    "Раздел предоставлен контейнером и будет доступен после обновления хоста.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else {
+                        content(s, app, scope)
+                    }
+                }
             }
         }
     }

@@ -23,9 +23,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuOpen
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -68,6 +70,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -83,6 +86,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
+import re.pinok.contracts.CallStarter
+import re.pinok.contracts.ContainerRegistry
+import re.pinok.contracts.NavEntry
 import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.screens.bookmarks.BookmarksScreen
@@ -171,6 +177,59 @@ private fun normalizeRouteOrder(order: List<String>, canonical: List<Screen>): L
     return result
 }
 
+// ═══ #ARCH-CONTAINERS (Этап 1.4): host-маппинги контейнерных capability ═══
+
+/**
+ * route-строка NavEntry → destination хоста. Контейнер не знает Screen-типов
+ * (:contracts без androidx/compose) — маппинг держит хост. Неизвестный route →
+ * null: пункт не рендерится (graceful), хост пишет предупреждение в лог.
+ * Новые контейнеры (1.5+) добавляют сюда одну строку — либо регистрируют
+ * NavHost-destination и расширяют маппинг вместе с ним.
+ */
+private fun hostDestinationForRoute(route: String): Screen? = when (route) {
+    Screen.CallsHistory.route -> Screen.CallsHistory // "calls_history" — destination уже в NavHost ниже
+    else -> null
+}
+
+/**
+ * iconKey → реальная иконка (контракты без compose, иконку мапит хост —
+ * см. KDoc NavEntry). "calls" → та же иконка, что была у ядерного пункта
+ * «Звонки» (Icons.Filled.Call). Неизвестный ключ → нейтральная иконка
+ * (расширение) — НЕ падаем.
+ */
+private fun hostIconForKey(iconKey: String): ImageVector = when (iconKey) {
+    "calls" -> Icons.Filled.Call
+    else -> Icons.Outlined.Extension
+}
+
+/**
+ * #ARCH-CONTAINERS (Этап 1.4): мета исходящего звонка — имя/фото собеседника
+ * из места вызова (шапка диалога, карточка друга). Контракт CallStarter
+ * (startCall(peerId, video)) title/photo не передаёт — их знает только
+ * host-сайт вызова. Порядок: onClick-сайт кладёт мета ЗДЕСЬ (синхронно, до
+ * startCall → pendingOutgoingCallPeerId), LaunchedEffect(pendingOutgoingCall)
+ * ниже читает при навигации на Screen.Call и очищает. Пусто (звонок не из UI,
+ * напр. redial из истории) → CallScreen подтянет профиль сам (usersGetByIds).
+ */
+private object OutgoingCallMeta {
+    @Volatile var title: String = ""
+    @Volatile var photo: String? = null
+
+    /** Заложить мета из host-сайта кнопки звонка (перед startCall). */
+    fun stash(t: String, p: String?) {
+        title = t
+        photo = p
+    }
+
+    /** Забрать и очистить (вызывает LaunchedEffect при навигации на экран звонка). */
+    fun consume(): Pair<String, String?> {
+        val result = title to photo
+        title = ""
+        photo = null
+        return result
+    }
+}
+
 /**
  * #BOTTOM-SCROLL: кастомная кнопка для скроллируемой нижней панели (>5
  * кнопок). НЕ использует [NavigationBarItem] — т.к. в M3 BOM 2025.06
@@ -239,6 +298,27 @@ fun SovaNavHost(
     val scope = rememberCoroutineScope()
     val app = remember { SovaApp.get(nav.context) }
 
+    // #ARCH-CONTAINERS (Этап 1.4): хост строит панель/кнопки звонка из реестра
+    // контейнеров. Реестр не реактивен — UI перечитывает его при следующем
+    // построении composition (контракт ContainerRegistry): сняли контейнер →
+    // пункты/кнопки исчезли, ядро живо (graceful-деградация).
+    //  - containerNavEntries — пункты боковой панели (после ядерных, по order);
+    //  - callStarter — запуск звонка; null → кнопки звонка НЕ рендерятся.
+    //  - callClick — готовый колбэк для ядерных экранов (лента/друзья/чат):
+    //    кладёт title/photo в OutgoingCallMeta (контракт CallStarter их не
+    //    передаёт) и стартует звонок. Явный тип → лямбда приводится к Unit.
+    val containerNavEntries = remember {
+        ContainerRegistry.find<NavEntry>().sortedBy { it.order }
+    }
+    val callStarter = remember { ContainerRegistry.find<CallStarter>().firstOrNull() }
+    val callClick: ((peerId: Long, title: String, photo: String?) -> Unit)? =
+        callStarter?.let { starter ->
+            { pid: Long, title: String, photo: String? ->
+                OutgoingCallMeta.stash(title, photo)
+                starter.startCall(pid, video = false)
+            }
+        }
+
     // Fix #208: навигация на ChatDetailScreen когда пользователь тапнул по
     // push-уведомлению. MainActivity.handleOpenChatIntent устанавливает
     // pendingOpenChatPeerId, здесь мы подхватываем и навигируем. После
@@ -274,16 +354,17 @@ fun SovaNavHost(
         }
     }
 
-    // #ARCH-CONTAINERS (Этап 1.3): исходящий звонок через контейнер :feature:calls.
-    // CallStarter.startCall (контейнер, регистрируется в SovaApp) ставит
-    // pendingOutgoingCall*; здесь открываем экран звонка (тот же паттерн, что
-    // incoming выше). До Этапа 1.4 (кнопки на find<CallStarter>()) событие
-    // никто не ставит — блок ведёт себя как no-op.
+    // #ARCH-CONTAINERS: исходящий звонок через контейнер :feature:calls
+    // (CallStarter.startCall → pendingOutgoingCall*; тот же паттерн, что
+    // incoming выше). title/photo берём из OutgoingCallMeta — их заложил
+    // host-сайт кнопки (контракт CallStarter их не передаёт); пусто →
+    // CallScreen подтянет профиль сам (usersGetByIds).
     LaunchedEffect(app.pendingOutgoingCallPeerId) {
         val peerId = app.pendingOutgoingCallPeerId
         if (peerId > 0L) {
+            val (metaTitle, metaPhoto) = OutgoingCallMeta.consume()
             AppLog.i("SovaNavHost", "OUTGOING_CALL: navigating to CallScreen peerId=$peerId (CallStarter)")
-            nav.navigate(Screen.Call.buildRoute(peerId, "", null, incoming = false)) {
+            nav.navigate(Screen.Call.buildRoute(peerId, metaTitle, metaPhoto, incoming = false)) {
                 launchSingleTop = true
             }
             app.consumeOutgoingCall()
@@ -527,7 +608,11 @@ fun SovaNavHost(
     )
     val drawerScreens: List<Screen> = listOf(
         Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
-        Screen.Bookmarks, Screen.Documents, Screen.CallsHistory,
+        Screen.Bookmarks, Screen.Documents,
+        // #ARCH-CONTAINERS (Этап 1.4): Screen.CallsHistory убран из ядерного
+        // хардкода — пункт «Звонки» приходит из реестра (NavEntry контейнера
+        // :feature:calls, route "calls_history", см. containerNavEntries в
+        // drawerContent). Без контейнера пункта нет, остальное живо.
         Screen.Clips,
         Screen.Services, Screen.Notifications, Screen.Settings, Screen.Logs,
         // #38: кнопка офлайн-менеджера в боковой панели — быстрый доступ к
@@ -548,9 +633,14 @@ fun SovaNavHost(
         // #OFFLINE-DUPLICATE-FIX (2026-08-01): OfflineManager убран из
         //   sidebarEditableScreens — он рендерится в фикс. хвосте drawer
         //   вместе с Settings. Раньше был дубль: и в скролл-списке, и в хвосте.
+        // #ARCH-CONTAINERS (Этап 1.4): Screen.CallsHistory убран — контейнерные
+        //   пункты панели (NavEntry) НЕ редактируются панель-редактором (их нет
+        //   без контейнера; порядок задаёт capability.order). Сохранённые в
+        //   prefs order-строки "calls_history" отбрасываются normalizeRouteOrder
+        //   как неизвестные.
 listOf(
             Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
-            Screen.Bookmarks, Screen.Documents, Screen.CallsHistory, Screen.Clips,
+            Screen.Bookmarks, Screen.Documents, Screen.Clips,
             Screen.Services, Screen.Notifications, Screen.Logs,
             Screen.Equalizer,
         )
@@ -597,7 +687,12 @@ listOf(
     // сразу попадёт в ленту без повторного логина.
     var showExitAppDialog by remember { mutableStateOf(false) }
     val allScreens: List<Screen> = dockScreens + drawerScreens + listOf(Screen.About)
+    // #ARCH-CONTAINERS (Этап 1.4): заголовок может прийти и из контейнерного
+    // NavEntry (route "calls_history" больше не в ядерном списке — см.
+    // drawerScreens). Неизвестный роут — как раньше, "PinoK".
     val currentTitle = allScreens.firstOrNull { it.route == currentRoute }?.title
+        ?: containerNavEntries
+            .firstOrNull { hostDestinationForRoute(it.route)?.route == currentRoute }?.title
         ?: "PinoK"
 
     // Экраны со своим TopAppBar — скрываем глобальный заголовок и навбар.
@@ -732,9 +827,9 @@ listOf(
     val textMeasurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val drawerTextStyle = MaterialTheme.typography.labelLarge
-    val longestDrawerText = remember(allScreens) {
-        // allScreens + «Выйти из приложения» (отдельная кнопка в drawer).
-        val titles = allScreens.map { it.title } + "Выйти из приложения"
+    val longestDrawerText = remember(allScreens, containerNavEntries) {
+        // allScreens + контейнерные NavEntry + «Выйти из приложения» (отдельная кнопка в drawer).
+        val titles = allScreens.map { it.title } + containerNavEntries.map { it.title } + "Выйти из приложения"
         titles.maxByOrNull { it.length } ?: "PinoK"
     }
     val drawerWidth = remember(textMeasurer, longestDrawerText, density.fontScale) {
@@ -831,6 +926,39 @@ listOf(
                                     }
                                 },
                             )
+                        }
+                        // #ARCH-CONTAINERS (Этап 1.4): контейнерные пункты панели —
+                        // из реестра (NavEntry), ПОСЛЕ ядерных (внутри группы —
+                        // по order, см. containerNavEntries). Нет контейнера →
+                        // пунктов нет (graceful); неизвестный хосту route →
+                        // предупреждение в лог и пропуск (не падаем).
+                        containerNavEntries.forEach { entry ->
+                            val dest = hostDestinationForRoute(entry.route)
+                            if (dest == null) {
+                                LaunchedEffect(entry.route) {
+                                    AppLog.w(
+                                        "SovaNavHost",
+                                        "CONTAINERS: NavEntry route '${entry.route}' не зарегистрирован в хосте — пункт «${entry.title}» скрыт",
+                                    )
+                                }
+                            } else {
+                                NavigationDrawerItem(
+                                    label = { Text(entry.title) },
+                                    selected = currentRoute == dest.route,
+                                    onClick = {
+                                        // Те же опции, что у ядерных пунктов (popUpTo+saveState).
+                                        nav.navigate(dest.route) {
+                                            popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    icon = {
+                                        Icon(hostIconForKey(entry.iconKey), contentDescription = null)
+                                    },
+                                )
+                            }
                         }
                     }
                     // Fix #337: фиксированный хвост drawer — всегда в этом порядке,
@@ -1164,9 +1292,10 @@ listOf(
                         onOpenOfflineManager = {
                             nav.navigate(Screen.OfflineManager.route)
                         },
-                        onCallClick = { pid, t, p ->
-                            nav.navigate(Screen.Call.buildRoute(pid, t, p, false))
-                        },
+                        // #ARCH-CONTAINERS (Этап 1.4): запуск звонка — только через
+                        // реестр (CallStarter). callClick == null → кнопка звонка
+                        // в ленте НЕ рендерится (условие композиции).
+                        onCallClick = callClick,
                     )
                 }
                 composable(Screen.Messages.route) {
@@ -1328,9 +1457,9 @@ listOf(
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
                         // #CALLS: кнопка звонка на карточке друга.
-                        onCallClick = { pid, t, p ->
-                            nav.navigate(Screen.Call.buildRoute(pid, t, p, false))
-                        },
+                        // #ARCH-CONTAINERS (Этап 1.4): через CallStarter; null →
+                        // кнопка не рендерится (см. FriendsScreen).
+                        onCallClick = callClick,
                     )
                 }
                 composable(Screen.Groups.route) {
@@ -1374,12 +1503,24 @@ listOf(
                     )
                 }
                 composable(Screen.Documents.route)     { DocumentsScreen() }
-                // #CALLS: история звонков.
+                // #CALLS: история звонков. #ARCH-CONTAINERS (Этап 1.4): пункт
+                // drawer «Звонки» теперь из реестра — без контейнера этот экран
+                // недостижим; сам NavHost-destination остаётся у хоста.
 composable(Screen.CallsHistory.route) {
                     re.pinok.ui.screens.calls.CallsMainScreen(
                         onBack = { nav.popBackStack() },
                         onNavigateToCall = { peerId ->
-                            nav.navigate(Screen.Call.buildRoute(peerId, "", null, false))
+                            // #ARCH-CONTAINERS (Этап 1.4): redial — тоже через
+                            // CallStarter. Стартера нет → только лог: экран в этом
+                            // состоянии недостижим (нет drawer-пункта). title/photo
+                            // здесь нет (секция отдаёт peerId) → CallScreen подтянет
+                            // имя/аватар сам (usersGetByIds, OutgoingCallMeta пуст).
+                            val starter = callStarter
+                            if (starter != null) {
+                                starter.startCall(peerId, video = false)
+                            } else {
+                                AppLog.w("SovaNavHost", "CONTAINERS: CallStarter недоступен — redial из истории звонков пропущен (peerId=$peerId)")
+                            }
                         },
                     )
                 }
@@ -1967,9 +2108,10 @@ composable(Screen.CallsHistory.route) {
                             cameraReturnPhoto = null
                         },
                         // #CALLS: кнопка «Позвонить» в шапке диалога → CallScreen.
-                        onCallClick = { pid, t, p ->
-                            nav.navigate(Screen.Call.buildRoute(pid, t, p, false))
-                        },
+                        // #ARCH-CONTAINERS (Этап 1.4): через CallStarter; null →
+                        // кнопка не рендерится (см. ChatDetailScreen). title/photo
+                        // чата — в OutgoingCallMeta (контракт их не передаёт).
+                        onCallClick = callClick,
                     )
                 }
                 // P3.1: ChatInfoScreen — информация о чате (members / shared media / actions).

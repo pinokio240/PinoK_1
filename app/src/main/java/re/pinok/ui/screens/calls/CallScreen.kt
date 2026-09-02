@@ -1323,22 +1323,42 @@ fun CallScreen(
     // Лог 22:29: экран открылся с заглушкой «Входящий звонок» — refreshIncomingCaller
     // не успел (гонка с навигацией) либо молча не нашёл caller_id. Дублируем логику
     // на экране и ЛОГИРУЕМ результат (раньше отказ был невидим).
-    LaunchedEffect(incoming) {
-        if (!incoming) return@LaunchedEffect
+    //
+    // #ARCH-CONTAINERS (Этап 1.4): исходящий звонок теперь стартует через
+    // CallStarter (контракт не передаёт title/photo — их знает только host-сайт
+    // вызова). Хост доносит мета двумя путями: OutgoingCallMeta в SovaNavHost
+    // (кнопка чата/друзей/ленты — имя/аватар приходят сразу) и ЭТА страховка:
+    // если title — заглушка (напр. redial из истории звонков, где есть только
+    // peerId), подтягиваем профиль по peerId напрямую (usersGetByIds).
+    LaunchedEffect(incoming, peerId) {
         val placeholder = peerName.isBlank() || peerName == "Входящий звонок" || peerName == "Звонок"
         if (!placeholder && !peerPhoto.isNullOrBlank()) return@LaunchedEffect
-        kotlinx.coroutines.delay(300) // даём шанс refreshIncomingCaller опередить
+        kotlinx.coroutines.delay(300) // даём шанс хосту опередить (refreshIncomingCaller / OutgoingCallMeta)
         try {
-            val fetched = withContext(Dispatchers.IO) {
-                val cur = app.apiClient.messagesGetCurrentCalls().firstOrNull()
-                val cid = cur?.get("caller_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong ?: 0L
-                if (cid <= 0L) null else cid to app.apiClient.usersGetByIds(listOf(cid))[cid]
-            }
-            if (fetched == null) {
-                AppLog.w("CallScreen", "CALLER_INFO: не получен (нет активного звонка/caller_id=0)")
+            if (incoming) {
+                val fetched = withContext(Dispatchers.IO) {
+                    val cur = app.apiClient.messagesGetCurrentCalls().firstOrNull()
+                    val cid = cur?.get("caller_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong ?: 0L
+                    if (cid <= 0L) null else cid to app.apiClient.usersGetByIds(listOf(cid))[cid]
+                }
+                if (fetched == null) {
+                    AppLog.w("CallScreen", "CALLER_INFO: не получен (нет активного звонка/caller_id=0)")
+                } else {
+                    val (cid, profile) = fetched
+                    AppLog.i("CallScreen", "CALLER_INFO: id=$cid profile=${if (profile != null) "OK" else "нет"}")
+                    if (profile != null) {
+                        val nm = (profile.firstName + " " + profile.lastName).trim()
+                        if (nm.isNotBlank()) peerName = nm
+                        val ph = profile.photo100
+                        if (!ph.isNullOrBlank()) peerPhoto = ph
+                    }
+                }
             } else {
-                val (cid, profile) = fetched
-                AppLog.i("CallScreen", "CALLER_INFO: id=$cid profile=${if (profile != null) "OK" else "нет"}")
+                // Исходящий: peerId известен всегда — профиль собеседника напрямую.
+                val profile = withContext(Dispatchers.IO) {
+                    app.apiClient.usersGetByIds(listOf(peerId))[peerId]
+                }
+                AppLog.i("CallScreen", "CALLER_INFO(outgoing): peerId=$peerId profile=${if (profile != null) "OK" else "нет"}")
                 if (profile != null) {
                     val nm = (profile.firstName + " " + profile.lastName).trim()
                     if (nm.isNotBlank()) peerName = nm

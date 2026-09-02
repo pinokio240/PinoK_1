@@ -192,7 +192,10 @@ fun FeedScreen(
     // Офлайн-менеджер: кнопка «Офлайн» при отсутствии сети.
     onOpenOfflineManager: () -> Unit = {},
     // #CALLS: кнопка «Позвонить» на карточке друга.
-    onCallClick: (peerId: Long, title: String, photo: String?) -> Unit = { _, _, _ -> },
+    // #ARCH-CONTAINERS (Этап 1.4): nullable — хост передаёт колбэк ТОЛЬКО если
+    // в реестре есть CallStarter (контейнер звонков). null → кнопка НЕ рендерится
+    // (условие композиции, graceful-деградация без контейнера).
+    onCallClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = null,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -1298,12 +1301,16 @@ fun FeedScreen(
                                 }
                             }
                             // #CALLS: кнопка звонка другу (data-testid="friends_call_button").
-                            IconButton(
-                                onClick = { onCallClick(friend.id, friend.fullName, friend.photo100 ?: friend.photo200) },
-                            ) {
-                                Icon(Icons.Filled.Call, contentDescription = "Позвонить",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
+                            // #ARCH-CONTAINERS (Этап 1.4): рисуем только при живом
+                            // CallStarter (onCallClick != null).
+                            if (onCallClick != null) {
+                                IconButton(
+                                    onClick = { onCallClick(friend.id, friend.fullName, friend.photo100 ?: friend.photo200) },
+                                ) {
+                                    Icon(Icons.Filled.Call, contentDescription = "Позвонить",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                             }
                             // Кнопка «Добавить».
                             OutlinedButton(onClick = {

@@ -72,7 +72,9 @@ fun FriendsScreen(
     // Sprint 1, P0-2 (#74): тап на друга → экран чужого профиля.
     onUserClick: (Long) -> Unit = {},
     // #CALLS: кнопка звонка на карточке друга.
-    onCallClick: (peerId: Long, title: String, photo: String?) -> Unit = { _, _, _ -> },
+    // #ARCH-CONTAINERS (Этап 1.4): nullable — хост передаёт колбэк ТОЛЬКО если
+    // в реестре есть CallStarter. null → кнопка НЕ рендерится (условие композиции).
+    onCallClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = null,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -374,7 +376,8 @@ private fun FriendRow(
     // Sprint 1, P0-2 (#74): тап по строке друга → экран профиля.
     onUserClick: (Long) -> Unit = {},
     // #CALLS: кнопка звонка.
-    onCallClick: (peerId: Long, title: String, photo: String?) -> Unit = { _, _, _ -> },
+    // #ARCH-CONTAINERS (Этап 1.4): nullable — см. KDoc FriendsScreen.onCallClick.
+    onCallClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = null,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -450,11 +453,14 @@ private fun FriendRow(
             }
         }
         // #CALLS: кнопка звонка (data-testid="friends_call_button").
-        IconButton(
-            onClick = { onCallClick(friend.id, friend.fullName, friend.photo100 ?: friend.photo200) },
-            modifier = Modifier.size(40.dp),
-        ) {
-            Icon(Icons.Filled.Call, contentDescription = "Позвонить", modifier = Modifier.size(20.dp))
+        // #ARCH-CONTAINERS (Этап 1.4): рисуем только при живом CallStarter.
+        if (onCallClick != null) {
+            IconButton(
+                onClick = { onCallClick(friend.id, friend.fullName, friend.photo100 ?: friend.photo200) },
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(Icons.Filled.Call, contentDescription = "Позвонить", modifier = Modifier.size(20.dp))
+            }
         }
         FilledTonalIconButton(
             onClick = {

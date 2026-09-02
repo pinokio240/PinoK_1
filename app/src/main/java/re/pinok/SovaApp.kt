@@ -140,12 +140,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         pendingIncomingCallPhoto = null
     }
 
-    // ═══ #ARCH-CONTAINERS (Этап 1.3): pending ИСХОДЯЩЕГО звонка (CallStarter) ═══
+    // ═══ #ARCH-CONTAINERS (Этап 1.3, потреблено на Этапе 1.4): pending ИСХОДЯЩЕГО звонка ═══
     // Хук для CallsStarterImpl (контейнер :feature:calls): хост не может нави-
     // гировать из SovaApp напрямую (NavController живёт в SovaNavHost), поэтому
     // ставим pending-событие — SovaNavHost подхватывает и открывает экран звонка
-    // (тот же паттерн, что pendingIncomingCallPayload выше). До Этапа 1.4
-    // startCall() никто не вызывает (кнопки — хардкод) — поведение не меняется.
+    // (тот же паттерн, что pendingIncomingCallPayload выше). С Этапа 1.4 кнопки
+    // звонка (лента/друзья/чат/история) идут через find<CallStarter>() → этот
+    // механизм; title/photo хост доносит через OutgoingCallMeta в SovaNavHost.
     @Volatile
     var pendingOutgoingCallPeerId: Long = 0L
         private set

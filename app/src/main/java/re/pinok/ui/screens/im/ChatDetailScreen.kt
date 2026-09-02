@@ -236,6 +236,36 @@ val LocalAttachmentSelection = staticCompositionLocalOf<AttachmentSelectionState
 private fun reactionEmoji(id: Int): String =
     REACTION_EMOJIS.firstOrNull { it.first == id }?.second ?: "\u2753" // ❓
 
+// ═══ #ARCH-CONTAINERS (Этап 1.4): делегирование рендера вложений контейнеру ═══
+
+/**
+ * Спрашивает реестр: не рендерит ли какой-нибудь контейнер вложение такого типа
+ * (контракт [re.pinok.contracts.AttachmentRenderer], хост спрашивает canHandle
+ * по mime/типу). На Этапе 1.4 ни один контейнер ещё не публикует рендереры →
+ * всегда null → хост рендерит вложения встроенно КАК СЕЙЧАС — поведение чата
+ * НЕ меняется (graceful-деградация по плану «Правило владения UI»). Первый
+ * делегирующий контейнер — :feature:photos (Этап 1.5-а).
+ */
+private fun attachmentRendererFor(kind: String, mimeType: String): re.pinok.contracts.AttachmentRenderer? {
+    val renderers = re.pinok.contracts.ContainerRegistry
+        .find<re.pinok.contracts.AttachmentRenderer>()
+        .sortedBy { it.order }
+    return renderers.firstOrNull { it.canHandle(mimeType, kind) }
+}
+
+/**
+ * host-маппинг rendererKey → компосабл (тот же паттерн, что NavEntry.route →
+ * destination в SovaNavHost): контейнер compose-типов не знает, компосабл
+ * живёт в :app и получает ГОТОВЫЕ данные вложения. rendererKey, неизвестный
+ * хосту → null → встроенный рендер хоста (не падаем).
+ * На 1.4 таблица ПУСТА; на 1.5-а сюда добавится "photos" → PhotoGrid-компосабл.
+ */
+private fun hostRendererComposable(rendererKey: String): (@Composable (List<String>) -> Unit)? =
+    when (rendererKey) {
+        // "photos" -> { urls -> PhotoGridAttachment(urls) }  // оживёт на 1.5-а (:feature:photos)
+        else -> null
+    }
+
 /**
  * Fix #296: проверяет, что сообщение [msg] входит в диапазон «прочитанных
  * до [upToCmid]» для VK LongPoll code 6/7.
@@ -389,7 +419,10 @@ fun ChatDetailScreen(
     // во время камеры SovaNavHost восстановит chat_detail по этим данным.
     onCameraLaunch: (peerId: Long, title: String, photo: String?) -> Unit = { _, _, _ -> },
     // #CALLS: кнопка «Позвонить» в шапке диалога.
-    onCallClick: (peerId: Long, title: String, photo: String?) -> Unit = { _, _, _ -> },
+    // #ARCH-CONTAINERS (Этап 1.4): nullable — хост передаёт колбэк ТОЛЬКО если
+    // в реестре есть CallStarter (контейнер звонков). null → кнопка НЕ рендерится
+    // (условие композиции, graceful-деградация без контейнера).
+    onCallClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = null,
     // Fix #132: колбэк вызывается в начале camera callback (до обработки),
     // чтобы очистить сохранённое состояние. Если камера отработала (успех или
     // отмена) — process death уже не должен возвращать в чат. Очищаем только
@@ -2257,7 +2290,9 @@ fun ChatDetailScreen(
                 },
                 actions = {
                     // #CALLS: кнопка звонка в шапке диалога (data-testid="convo-call-menu-trigger").
-                    if (peerId in 1..1_999_999_999L) {
+                    // #ARCH-CONTAINERS (Этап 1.4): рисуем только при живом CallStarter
+                    // (onCallClick != null) — без контейнера звонков кнопки нет.
+                    if (peerId in 1..1_999_999_999L && onCallClick != null) {
                         IconButton(onClick = { onCallClick(peerId, currentTitle, currentPhoto) }) {
                             Icon(Icons.Filled.Call, contentDescription = "Позвонить")
                         }
@@ -4067,7 +4102,17 @@ private fun MessageBubble(
                 // Фото-вложения (полученные от других клиентов).
                 val photoAttachments = message.attachments
                     ?.filter { it.type == "photo" && it.photo != null }
-                if (!photoAttachments.isNullOrEmpty()) {
+                // #ARCH-CONTAINERS (Этап 1.4): сначала реестр — не рендерит ли
+                // контейнер этот тип (AttachmentRenderer). Нашёлся И его
+                // rendererKey известен хосту → делегируем; иначе — встроенный
+                // рендер хоста КАК СЕЙЧАС (на 1.4 всегда этот путь — рендереров
+                // ещё никто не публикует). mime у VK-фото отсутствует —
+                // передаём семейство "image/*" и kind="photo".
+                val photoRenderer = attachmentRendererFor(kind = "photo", mimeType = "image/*")
+                val photoDelegate = photoRenderer?.let { hostRendererComposable(it.rendererKey) }
+                if (photoDelegate != null && !photoAttachments.isNullOrEmpty()) {
+                    photoDelegate(photoAttachments.mapNotNull { it.photo?.largestUrl })
+                } else if (!photoAttachments.isNullOrEmpty()) {
                     // P5.1: список URL для полноэкранного просмотрщика (PhotoViewer).
                     val photoUrls = photoAttachments.mapNotNull { it.photo?.largestUrl }
                     val cols = if (photoAttachments.size == 1) 1 else 2

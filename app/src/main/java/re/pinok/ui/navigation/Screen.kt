@@ -342,9 +342,13 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     companion object {
         val dock = listOf(Feed, Messages, Music, Video, Profile)
         // Сначала социальные разделы, потом системные.
+        // #ARCH-CONTAINERS (Этап 1.4): CallsHistory убран — пункт «Звонки»
+        // приходит из реестра (NavEntry контейнера, ContainerRegistry.find<NavEntry>()).
+        // Хост рендерит drawer из своих списков в SovaNavHost (этот companion
+        // исторически не используется рендером и оставлен для совместимости).
         val drawer = listOf(
             Friends, Groups, Photos, Search, Bookmarks, Documents,
-            CallsHistory, Services, Notifications, Settings, Logs,
+            Services, Notifications, Settings, Logs,
         )
     }
 }
