@@ -5665,3 +5665,73 @@ Stage Summary:
 - Риск для сборки: минимальный — правок кода нет, только перемещение + gradle-обвязка;
   на машине пользователя: собрать, проверить звонок (сигналинг WS поднимается,
   маркеры #CALLS-SERVER-REJOIN работают как раньше) и лог старта (stamp не менялся).
+---
+Task ID: 9 (Этап 1.2-в: модуль :core:media)
+Agent: general-purpose (sandbox sub agent, Task 9)
+Task: создать Gradle-модуль :core:media и перенести в него самодостаточные медиа-хелперы (минимум по плану: AudioRouteLogger + аудиофокус + медиа-кэш). Перенос только git mv, пакеты НЕ менять, WebRtcEngine НЕ переносить (зона 1.3), BuildStamp не бампать, статическая верификация без SDK
+
+Work Log:
+- Ветка PinoK подтверждена (HEAD d21a209e — коммиты Task 8). Разобраны замыкания всех
+  26 кандидатов media/ (импорты целиком + grep тел на SovaApp/BuildConfig/R.*/data.model/
+  service/ui/api + поиск объявлений используемых :app-классов).
+- Перенесено (git mv; 6×100%, 2×92–98% similarity, пакеты сохранены) — 8 файлов:
+  AudioRouteLogger.kt (МИНИМУМ по плану), PlaybackPositionStore.kt (де-факто
+  «медиа-кэш» позиций воспроизведения — уже принимал init(context)), DocumentFileStorage.kt
+  (SAF/SD), ImageSaver.kt, VideoPipController.kt (@RequiresApi), VoiceRecorder.kt,
+  GeniusLyricsFetcher.kt, SirenTranscoder.kt (ffmpeg-kit).
+- Механические развязки (по прецеденту Task 7 — AppLog.setAppBuildInfo, без смены поведения):
+  1) AudioRouteLogger: SovaApp.get() (2 места) → @Volatile appContext + setAppContext();
+     инжект из SovaApp.onCreate сразу после AppLog.setAppBuildInfo (до первого лог-вызова;
+     PlayerService/AudioDeviceCallback стартуют позже). Fallback-строки лога сохранены
+     ДОСЛОВНО («logActiveRoute failed: SovaApp not initialized» / «isScoRoute failed: ...»)
+     — прежний путь «SovaApp.get() кинул error → catch» воспроизводится 1:1.
+  2) SirenTranscoder: re.pinok.BuildConfig.DEBUG → AppLog.debugBuild (тот же флаг:
+     инжектится из BuildConfig.DEBUG в SovaApp.onCreate задолго до первого транскода).
+- Остались в :app (18 файлов, блокеры задокументированы в контейнеры.план.md):
+  WebRtcEngine (аудиофокус requestAudioFocus + org.webrtc — ЭТАП 1.3), VideoTextureRenderer
+  (org.webrtc.EglRenderer-рендерер звонкового видео, TAG=CallScreen — ЭТАП 1.3),
+  PlayerConnection (PlayerService + data.model + guava), AudioEffectsEngine/EqualizerHelper
+  (SovaApp + data.model.EqualizerPreset), EqualizerFeatureFlags (SovaApp), CustomPresetStore
+  (SovaApp + compose.runtime.Immutable), FilenameBuilder/Mp4TagWriter/ZipExporter
+  (data.model.Track; FilenameBuilder ещё и → TrackDownloadManager.getLocalFile),
+  4 download-сервиса (R.*, MainActivity, android.app.Service), 4 download-менеджера
+  (data.model.DownloadState/Video/Story/Track; ClipVideo/StoryVideo/Track ещё и SovaApp).
+- ФАКТЫ зафиксированы в плане: аудиофокус — НЕ самостоятельный класс (live внутри
+  WebRtcEngine → уйдёт с 1.3; у плеера — ExoPlayer handleAudioFocus=true в PlayerService);
+  «медиа-кэш» как самостоятельный класс отсутствует (позиции — PlaybackPositionStore,
+  download-кэш — внутри менеджеров :app, кэш репозиториев — data-слой api/).
+- Модуль core/media по образцу core/common: ТОЛЬКО alias(libs.plugins.android.library),
+  namespace re.pinok.media, compileSdk 36, minSdk 24, Java 21. Зависимости по факту:
+  implementation(project(":core:common")) + kotlinx-coroutines-android (ImageSaver),
+  okhttp (ImageSaver/GeniusLyricsFetcher), gson (PlaybackPositionStore),
+  androidx.documentfile (DocumentFileStorage), androidx.annotation (НОВЫЙ алиас
+  1.9.1 в каталоге — @RequiresApi VideoPipController), ffmpeg.kit.audio (SirenTranscoder).
+- settings.gradle.kts: include(":core:media") после :core:network (метка #ARCH-CONTAINERS
+  Этап 1.2-в); app/build.gradle.kts: implementation(project(":core:media")) рядом с остальными.
+- BuildStamp НЕ бампался: calls-2026.09.02-3.
+- Верификация: дублей деклараций перенесённых классов в :app — 0; в core/media НЕТ
+  кодовых ссылок на :app (SovaApp/BuildConfig/R.*/data./service./ui.) — только комментарии;
+  потребители в :app (PlayerService, VideoDownloadManager, TrackDownloadManager,
+  Mp4TagWriter, PlayerConnection, SovaApp, PhotoViewer, ChatDetailScreen,
+  VideoPlayerScreen/OkWebViewPlayer, VideoPipActivity, SettingsScreen; AudioEffectsEngine —
+  только KDoc) резолвятся через новую зависимость без правок кода (пакет re.pinok.media
+  прежний, импорты не менялись); сканер баланса скобок — 13/13 (8 .kt + build.gradle.kts +
+  settings/app .kts + TOML + SovaApp.kt); git mv дал rename (R-статус); стейдж только
+  задачных файлов (чужой .gitignore и Next.js-скаффолд не тронуты).
+- Коммит a666b7ee (arch), push origin PinoK OK (d21a209e..a666b7ee).
+
+Stage Summary:
+- :core:media готов: 8 файлов; поведение не изменено (перенос + 2 механические развязки
+  по прецеденту 1.2-а). Этап 1.2 (core-слой :common/:network/:media) закрыт полностью.
+- Для 1.3 (:feature:calls): CallSignalingClient уже в :core:network; WebRtcEngine
+  (с аудиофокусом) и VideoTextureRenderer переезжают КОНСОРЦИУМОМ на 1.3 — в media-модуль
+  их тащить не нужно (:core:media без webrtc-зависимости).
+- Для 1.5: плеерная зона (PlayerConnection, эквалайзер-квартет, FilenameBuilder/
+  Mp4TagWriter/ZipExporter) и download-подсистема (4 менеджера + 4 сервиса) блокированы
+  data.model/SovaApp/R.* — переносить после выделения data-слоя (:core:data или
+  интерфейсы prefs/api); HevcSupport (util/) теперь переносим — алиас androidx-annotation
+  появился в каталоге.
+- Риск для сборки: минимальный — 2 точечные механические правки + gradle-обвязка; на машине
+  пользователя: собрать, проверить (а) лог старта (stamp не менялся), (б) смену audio route
+  при подключении BT-наушников во время плеера (строки AudioRouteLogger в logcat прежнего
+  формата), (в) транскод Siren-трека (ffmpeg log level прежний: debug→WARNING, release→QUIET).

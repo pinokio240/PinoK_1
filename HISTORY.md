@@ -11479,3 +11479,36 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - Для 1.3 (:feature:calls): CallSignalingClient уже в `:core:network` — в контейнер переносятся только WebRtcEngine/CallScreen/SovaPrefs-тумблеры.
 - Открытый вопрос архитектуры: сетевой транспорт не отделяется от data-слоя — перед дальнейшей выноской (1.2-в / core-слой) нужна развязка данных (:core:data или интерфейсы prefs/api).
 
+
+---
+
+## 2026-09-02 — Этап 1.2-в модульной архитектуры: модуль :core:media — медиа-хелперы (#ARCH-CONTAINERS)
+
+### Коммит: `a666b7ee` (arch(containers), ветка PinoK, push origin OK) — перенос + 2 механические развязки по прецеденту 1.2-а
+
+### Что сделано
+- Создан Gradle-модуль `:core:media` по образцу `:core:common` (только `alias(libs.plugins.android.library)`, namespace `re.pinok.media`, compileSdk 36, minSdk 24, Java 21). Зависимости по факту использования: `implementation(project(":core:common"))`, kotlinx-coroutines-android, okhttp, gson, androidx-documentfile, androidx-annotation (НОВЫЙ алиас в каталоге, 1.9.1 — @RequiresApi VideoPipController), ffmpeg-kit (SirenTranscoder).
+- Замыкания разобраны для всех 26 кандидатов `media/`. Перенесено `git mv` (6×100%, 2×92–98% similarity, пакеты НЕ менялись): `AudioRouteLogger` (минимум по плану), `PlaybackPositionStore` (де-факто «медиа-кэш» позиций), `DocumentFileStorage`, `ImageSaver`, `VideoPipController`, `VoiceRecorder`, `GeniusLyricsFetcher`, `SirenTranscoder`.
+- Механическая развязка №1 (прецедент Этапа 1.2-а): `AudioRouteLogger` больше не читает `SovaApp.get()` — `@Volatile appContext` + `setAppContext()`, инжект из `SovaApp.onCreate` сразу после `AppLog.setAppBuildInfo` (до первого лог-вызова; PlayerService/AudioDeviceCallback стартуют позже). Fallback-строки лога сохранены дословно («SovaApp not initialized») — прежний путь «error → catch» воспроизводится 1:1.
+- Механическая развязка №2: `SirenTranscoder`: `re.pinok.BuildConfig.DEBUG` → `AppLog.debugBuild` (тот же флаг — инжектится из BuildConfig.DEBUG в SovaApp.onCreate задолго до первого транскода).
+- `settings.gradle.kts`: `include(":core:media")` после `:core:network`; `:app` → `implementation(project(":core:media"))`. Потребители в `:app` (PlayerService, VideoDownloadManager, TrackDownloadManager, Mp4TagWriter, PlayerConnection, SovaApp, PhotoViewer, ChatDetailScreen, VideoPlayerScreen/OkWebViewPlayer, VideoPipActivity, SettingsScreen) резолвятся без правок кода (пакет `re.pinok.media` прежний, импорты не менялись).
+
+### Факты по плану (аудиофокус / медиа-кэш)
+- АУДИОФОКУС — НЕ самостоятельный класс: он живёт внутри `WebRtcEngine` (requestAudioFocus, API 26+/legacy — остался в `:app`) → уходит в `:feature:calls` на **Этапе 1.3**; у плеера — ExoPlayer `handleAudioFocus=true` в `PlayerService`. Выделение было бы правкой логики — на 1.2-в НЕ делалось.
+- «МЕДИА-КЭШ» как самостоятельный класс отсутствует: позиции воспроизведения — `PlaybackPositionStore` (перенесён), download-кэш/интегритет — внутри download-менеджеров (остались в `:app`), кэш репозиториев — в data-слое `api/`.
+
+### Осталось в `:app` media/ (блокеры — вводная для 1.3/1.5)
+- `WebRtcEngine` (аудиофокус + org.webrtc) и `VideoTextureRenderer` (org.webrtc.EglRenderer-рендерер звонкового видео, потребитель только CallScreen) — **этап 1.3**, переезжают консорциумом с движком; webrtc-зависимость в `:core:media` НЕ заводилась.
+- `PlayerConnection` (PlayerService + data.model + guava MoreExecutors), эквалайзер-квартет `AudioEffectsEngine`/`EqualizerHelper`/`EqualizerFeatureFlags`/`CustomPresetStore` (SovaApp + data.model.EqualizerPreset / compose.runtime.Immutable), `FilenameBuilder`/`Mp4TagWriter`/`ZipExporter` (data.model.Track) — **этап 1.5** после развязки data-слоя.
+- Download-хвост: `TrackDownloadManager` (SovaApp + data.model.Track + MediaCodec/MediaMuxer + javax.crypto), `VideoDownloadManager` (data.model.DownloadState/Status/Video), `ClipVideoDownloadManager`/`StoryVideoDownloadManager` (SovaApp + data.model.Story/Video), 4 сервиса `Clip/Music/Video/StoryVideoDownloadService` (R.*, MainActivity, android.app.Service) — **этап 1.5**.
+- `HevcSupport` (util/, блокер 1.2-а «нет алиаса androidx-annotation») — теперь переносим: алиас добавлен в каталог на 1.2-в.
+
+### Верификация (в песочнице НЕТ Android SDK — только статика)
+- grep: дубли деклараций перенесённых классов в `:app` — 0; в `core/media` НЕТ кодовых ссылок на :app-классы / SovaApp / BuildConfig / R.* (только комментарии).
+- сканер баланса скобок: 8 перенесённых .kt + build.gradle.kts модуля + settings/app .kts + TOML + SovaApp.kt — OK 13/13.
+- git mv — rename-статус (R); BuildStamp НЕ бампался (calls-2026.09.02-3); в коммит — только задачные файлы (Next.js-скаффолд и чужой .gitignore не тронуты).
+
+### Следствие для плана
+- Этап 1.2 (core-слой `:core:common` / `:core:network` / `:core:media`) закрыт полностью.
+- Для 1.3 (:feature:calls): сигналинг уже в `:core:network`; на контейнер переносятся WebRtcEngine (+аудиофокус)/CallScreen/VideoTextureRenderer/SovaPrefs-тумблеры; `:core:media` остаётся без webrtc-зависимости.
+- Сборка/запуск — за пользователем: лог старта (stamp прежний), BT-подключение при плеере (строки AudioRouteLogger прежнего формата), транскод Siren (ffmpeg log level: debug→WARNING, release→QUIET).
