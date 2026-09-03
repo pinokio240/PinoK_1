@@ -6298,3 +6298,19 @@ Work Log:
 
 Stage Summary:
 - День закрыт: план контейнеризации выполнен целиком, один hotfix по логу сборки, null-политика введена и применена к новому коду + !! устранён вне тестируемой зоны. Держать правило: каждый следующий шаг — за фактом (лог сборки/лог звонка).
+
+---
+Task ID: 17 (фикс компиляции :feature:calls по логу сборки пользователя)
+Agent: Z.ai Code (Sergey)
+Task: 4 ошибки Kotlin в WebRtcEngine.setIceServers (nullable-ресивер ConversationParamsDecoder.IceServer?)
+
+Work Log:
+- Лог пользователя: :feature:calls:compileDebugKotlin — 4× «Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type 'ConversationParamsDecoder.IceServer?'» (510:42/511:42/533:46/534:46). Резолв-фикс a5a26926 сработал — компилятор впервые дошёл до Kotlin.
+- Археология по фактам: декодер (turnServer: IceServer?) идентичен initial commit b2f66220; паттерн «val turn = params.turnServer» + прямой turn.username существовал и в app-версии setIceServers (b2f66220:230-259). Баг латентный с initial commit, НЕ привнесён контейнеризацией/чисткой null — все прошлые сборки падали на резолве ДО компиляции.
+- Фикс (минимальный, поведение не менялось): явный guard if (turn == null) { AppLog.w; return@forEach } после захвата val — smart-cast локального val, легаси-элвисы username/credential не тронуты. Комментарий #NULL-ЯВНО (#NULL-EXPLICIT).
+- Сканер скобок OK (WebRtcEngine + BuildStamp); .zscripts/bracket_scanner.py в дереве утерян — использован инлайн state-machine, при случае восстановить файл.
+- BuildStamp calls-2026.09.02-5 → -6 (сборка -5 не собралась ни разу; штамп отличит исправленную сборку в логе).
+- Коммит c6f80bc6 запушен (93514bef..c6f80bc6). Потребители nullable-полей декодера перепроверены grep'ом: только WebRtcEngine (баг) и CallScreen (безопасные ?. в логах).
+
+Stage Summary:
+- :feature:calls:compileDebugKotlin должен пройти; :app:compileDebugKotlin на этом коде ещё НЕ выполнялся ни разу — при новых ошибках Kotlin присылать лог. Далее: assembleDebug + тест звонков по матрице §2.1 (в логе штамп calls-2026.09.02-6).

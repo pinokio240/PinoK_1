@@ -11654,3 +11654,28 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - ЧАСТЬ 1 ВЫПОЛНЕНА: ядро + 3 контейнера (calls/photos/audio), 10 capability, host-маппинги панель/настройки/рендереры/кнопки. Оговорки: экраны разделов (PhotosScreen, ui/screens/calls/*) и плеер/эквалайзер-движки остались в :app — блокер data-слой (SovaApp/apiClient/data.model/Service); выделение data-слоя — отдельная работа (Часть 3-кандидат).
 - Остатки audio (после data-слоя): PlayerConnection, PlayerService, AudioEffectsEngine/EqualizerHelper/EqualizerFeatureFlags/CustomPresetStore, экраны AudioPlayerScreen/EqualizerScreen/AudioQueueScreen/MusicScreen/MusicLibraryScreens/GlobalMiniPlayer/AudioAttachmentList, FilenameBuilder/Mp4TagWriter/ZipExporter, download-менеджеры/сервисы, voice-рендерер чата (Attachment.Doc + VoicePlaybackController).
 - Остатки прочих: photos — PhotosScreen (SovaApp/apiClient), компакт-сетка превью пересланных; calls — экраны ui/screens/calls/* (SovaApp), мёртвые CallsHomeSection/CallsScheduledSection/CallsHistoryScreen (§2.4); video/doc-рендереры AttachmentRenderer; потребители PermissionNeeds.
+
+
+---
+
+## 2026-09-02 — Фикс компиляции :feature:calls по логу сборки пользователя (#NULL-EXPLICIT, Task 17)
+
+### Коммит: fix(calls) c6f80bc6 (ветка PinoK, push origin OK)
+
+### Факт до кода
+- Лог пользователя: :feature:calls:compileDebugKotlin — 4 ошибки «Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type 'ConversationParamsDecoder.IceServer?'» (WebRtcEngine.kt 510:42/511:42/533:46/534:46 — setUsername/setPassword на turn.username/turn.credential).
+- Резолв-фикс a5a26926 сработал: сборка впервые дошла до компиляции Kotlin.
+- Археология: декодер ConversationParamsDecoder (turnServer: IceServer?, username/credential: String?) идентичен initial commit b2f66220; паттерн «val turn = params.turnServer» + прямой вызов turn.username существовал в app-версии setIceServers (b2f66220:230-259). Баг латентный с initial commit — все прошлые сборки падали на резолве зависимостей ДО компиляции Kotlin, компилятор этот код не видел. НЕ следствие контейнеризации и НЕ следствие чистки null (Этап А: WebRtcEngine/декодер не тронуты).
+
+### Что сделано
+- WebRtcEngine.setIceServers: после «val turn = params.turnServer» явный guard if (turn == null) { AppLog.w(...); return@forEach } — smart-cast локального val делает далее валидными легаси-элвисы turn.username ?: "". Поведение не менялось: guard формально недостижим (urls перебираются из params.turnServer). Комментарий #NULL-ЯВНО (#NULL-EXPLICIT) на месте.
+- BuildStamp calls-2026.09.02-5 → calls-2026.09.02-6 (сборка -5 не собралась ни разу; штамп отличит исправленную сборку в логе звонка).
+
+### Верификация
+- Потребители nullable-полей декодера: только WebRtcEngine (баг) и CallScreen (безопасные ?./?: в логах) — grep по .turnServer/.stunServer/.wtEndpoint, иных точек нет.
+- Сканер баланса скобок (инлайн state-machine; .zscripts/bracket_scanner.py в рабочем дереве утерян) — WebRtcEngine.kt OK, BuildStamp.kt OK.
+- git diff только 2 файла (чужой .gitignore не коммитился).
+
+### Остатки/риски
+- :app:compileDebugKotlin на этом коде ещё НИ РАЗУ не выполнялся — возможны НОВЫЕ ошибки Kotlin при следующей сборке; при появлении — лог в работу.
+- Далее: assembleDebug → тест звонков по матрице §2.1, в логе штамп calls-2026.09.02-6.
