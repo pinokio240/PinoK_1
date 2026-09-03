@@ -6342,3 +6342,19 @@ Work Log:
 
 Stage Summary:
 - Счётчик ошибок по логам: 9 (резолв-каскад) → 4 (nullable) → 1 (конфиг compose) → 1 (тип-контракт). :app:compileDebugKotlin — последний модуль в цепочке; после фикса вероятны либо BUILD SUCCESSFUL, либо полный список оставшихся ошибок модуля одним логом. Дальше dex/упаковка — механические. Штамп для теста звонков: calls-2026.09.02-7.
+
+---
+Task ID: 20 (Task пользователя 6742de6c доведён до собираемости — data-слой + фасады)
+Agent: Z.ai Code (Sergey)
+Task: 120+ ошибок компиляции :feature:calls (CallsDependencies ссылался на 5 :app-типов + gson/okhttp не на classpath + нет провайдера)
+
+Work Log:
+- Ревью 6742de6c (перенос 12 экранов звонков + CallsDependencies): состав правильный, но 5/8 членов-типов из :app (VKApiClient/SovaPrefs/Queuev4Client/LongPollClient/ExchangeAuthRepository) — цикл зависимостей запрещает; провайдера LocalCallsDeps в :app нет. Пользователь: «сужать ничего не надо» — члены сохранены все.
+- По фактам: VKApiClient 14304 строк + import re.pinok.SovaApp — перенос невозможен; Queuev4/LongPoll принимают VKApiClient в конструкторе; SovaPrefs импортирует только BuildConfig+AppLog (переносим); ExchangeAuthRepository — SovaPrefs/AppLog/ExponentialBackoff/NetworkObserver (два последних УЖЕ в :core:common); QueueCredential/QueueEvent/UserProfile УЖЕ в :feature:calls (CallModels).
+- Сделано: :core:data (новый модуль) + git mv SovaPrefs (BuildConfig -> параметр debugDefault, инжект из SovaApp:875); git mv ExchangeAuthRepository -> :core:network; git mv PermissionManager -> :feature:calls (пакеты сохранены); фасады CallsApi (16 членов, без дефолтов)/CallsQueue/CallsLongPoll — VKApiClient/Queuev4Client/LongPollClient реализуют override-маркерами (сигнатуры без правок, дефолты легальны); getCallConversationParams -> Pair<String?, JsonObject?> (сигнатура SovaApp:1615); SovaApp : CallsDependencies (override двух методов, члены callsSession*/get*Uid — снапшоты/делегаты); провайдер в MainActivity.setContent вокруг SovaNavHost; 6 вызовов экранов — явные аргументы (= прежние дефолты); :feature:calls += gson/okhttp/coroutines/core-ktx/:core:data; :core:network += :core:data; :app += :core:data.
+- Верификация: сканер 18/19 OK; VKApiClient FAIL 14262 — артефакт сканера (оригинал FAIL 14259, сдвиг ровно на 3 вставленные строки, баланс не изменён); override-маркеры 16+2 (2 — okhttp-колбэки, прежние); SovaPrefs( в :app — единственный конструктор SovaApp:875.
+- Инструмент: paren-scan для позиционирования обёртки в MainActivity (первая попытка упала на сбалансированных скобках самой строки-обёртки — скан от строки SovaNavHost().
+- Коммит d609f275 запушен (6742de6c..d609f275). Штамп calls-2026.09.03-8.
+
+Stage Summary:
+- Все известные ошибки лога 2026-09-03 устранены архитектурно (перенос/фасады), не сужением. Возможны НОВЫЕ ошибки Kotlin (модули впервые компилируются) — лог присылать. Дальше: assembleDebug -> тест звонков (штамп calls-2026.09.03-8).

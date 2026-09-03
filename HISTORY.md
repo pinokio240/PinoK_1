@@ -11718,3 +11718,26 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ### Счётчик ошибок по логам
 - 9 (резолв-каскад TOML) → 4 (nullable-ресивер, код) → 1 (конфиг compose) → 1 (тип-контракт, код). :app — последний модуль; далее dex/упаковка механические. Цель: assembleDebug → тест звонков (штамп calls-2026.09.02-7).
+
+---
+
+## 2026-09-03 — #ARCH-DATA: data-слой (:core:data) + фасады CallsApi — 6742de6c доведён до собираемости (Task 20)
+
+### Коммит: arch(calls) d609f275 (ветка PinoK, push origin OK)
+
+### Факт до кода
+- Коммит пользователя 6742de6c (12 экранов звонков в :feature:calls + CallsDependencies): 5/8 членов-типов из :app — цикл :app -> :feature:calls -> :app запрещён Gradle; gson/okhttp не на classpath; провайдера LocalCallsDeps в :app нет. VKApiClient — 14304 строки + import re.pinok.SovaApp (перенос невозможен).
+
+### Что сделано (состав членов 6742de6c НЕ сужен)
+- :core:data — новый модуль (data-слой, Часть 3-старт): git mv SovaPrefs (+Snapshot), BuildConfig.DEBUG -> параметр debugDefault (инжект из SovaApp).
+- ExchangeAuthRepository -> :core:network; PermissionManager -> :feature:calls (пакеты сохранены).
+- Фасады CallsApi (16 членов)/CallsQueue/CallsLongPoll в :feature:calls; VKApiClient/Queuev4Client/LongPollClient реализуют их override-маркерами без правки сигнатур (дефолты аргументов легальны поверх интерфейса без дефолтов; рантайм — те же объекты).
+- getCallConversationParams -> Pair<String?, JsonObject?> (сигнатура SovaApp:1615).
+- SovaApp реализует CallsDependencies; провайдер CompositionLocalProvider(LocalCallsDeps provides app) в MainActivity.setContent; 6 вызовов экранов — явные аргументы (= прежние дефолты).
+- Build-файлы: :feature:calls += gson/okhttp/coroutines/core-ktx/:core:data; :core:network += :core:data; :app += :core:data. Штамп calls-2026.09.03-8.
+
+### Верификация
+- Сканер 18/19 OK; VKApiClient — артефакт сканера на строковых шаблонах (оригинал падает на той же строке, баланс не изменён); override 16+2 (okhttp-колбэки прежние); единственный конструктор SovaPrefs в :app — SovaApp:875.
+
+### Остатки/риски
+- Модули впервые компилируются — возможны новые ошибки Kotlin; при появлении — лог в работу. Цель: assembleDebug -> тест звонков (штамп calls-2026.09.03-8).
