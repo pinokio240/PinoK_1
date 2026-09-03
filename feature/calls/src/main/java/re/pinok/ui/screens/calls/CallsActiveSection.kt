@@ -42,7 +42,8 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.calls.CallsDependencies
 import re.pinok.util.AppLog
 
 private data class ActiveCallItem(
@@ -68,7 +69,8 @@ fun CallsActiveSection(onNavigateToCall: (Long) -> Unit) {
 
     LaunchedEffect(Unit) {
         try {
-            val raw = SovaApp.get().apiClient.messagesGetCurrentCalls()
+            val deps = LocalCallsDeps.current
+            val raw = deps.apiClient.messagesGetCurrentCalls()
             items = raw.mapNotNull { it.parseActiveCallItem() }
             AppLog.i("CallsActiveSection", "loaded ${items.size} items")
         } catch (e: Exception) {

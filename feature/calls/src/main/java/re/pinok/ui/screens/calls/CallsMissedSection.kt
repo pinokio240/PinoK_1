@@ -26,7 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.google.gson.JsonObject
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
 import re.pinok.util.AppLog
 
 @Composable
@@ -37,11 +37,12 @@ fun CallsMissedSection(onNavigateToCall: (Long) -> Unit) {
 
     LaunchedEffect(Unit) {
         try {
-            val raw = SovaApp.get().apiClient.callsGetHistory(30)
+            val deps = LocalCallsDeps.current
+            val raw = deps.apiClient.callsGetHistory(30)
             var parsed = raw.mapNotNull { it.parseCallItem() }.filter { it.direction.name.startsWith("MISSED") }
             val uniqueIds = parsed.map { it.peerId }.distinct()
             if (uniqueIds.isNotEmpty()) {
-                val names = SovaApp.get().apiClient.usersGetByIds(uniqueIds)
+                val names = deps.apiClient.usersGetByIds(uniqueIds)
                 parsed = parsed.map { item ->
                     val user = names[item.peerId]
                     if (user != null) item.copy(name = "${user.firstName} ${user.lastName}".trim())

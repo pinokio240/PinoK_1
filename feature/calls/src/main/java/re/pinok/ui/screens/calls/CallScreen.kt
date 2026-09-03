@@ -65,7 +65,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import re.pinok.SovaApp
 import re.pinok.data.model.CallDirection
 import re.pinok.data.model.CallMediaType
 import re.pinok.data.model.CallPhase
@@ -75,6 +74,7 @@ import org.webrtc.SurfaceViewRenderer
 import re.pinok.media.WebRtcEngine
 import re.pinok.util.AppLog
 import org.webrtc.SessionDescription
+import re.pinok.feature.calls.CallsDependencies
 
 /**
  * #CALLS: экран активного звонка — входящий, исходящий, разговор.
@@ -92,15 +92,10 @@ fun CallScreen(
     title: String,
     photo: String?,
     incoming: Boolean,
+    deps: CallsDependencies,
     onNavigateBack: () -> Unit,
-    /**
-     * #CALLS: payload LP 115 (conversation params "len:base64") для входящего звонка.
-     * Декодируется в STUN/TURN/token/endpoint и используется для WebSocket-сигналинга
-     * (accept/decline). null для исходящих.
-     */
     incomingPayload: String? = null,
 ) {
-    val app = SovaApp.get()
     val context = LocalContext.current
     val direction = if (incoming) CallDirection.INCOMING else CallDirection.OUTGOING
     var phase by remember { mutableStateOf(if (incoming) CallPhase.RINGING else CallPhase.CONNECTING) }
@@ -141,7 +136,7 @@ fun CallScreen(
     )
 
     // #CALLS: WebSocket-сигналинг для ответа на входящий/исходящий звонок.
-    val signaling = remember { re.pinok.realtime.CallSignalingClient(app.httpClient) }
+    val signaling = remember { re.pinok.realtime.CallSignalingClient(deps.httpClient) }
     // conversation params для входящего (декодированные)
     val incomingParams = remember(incomingPayload) {
         incomingPayload?.let { re.pinok.media.ConversationParamsDecoder.decode(it) }
@@ -540,7 +535,7 @@ fun CallScreen(
         } else {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 runCatching {
-                    val (_, vchatResp) = app.getCallConversationParams(rejoinConvId)
+                    val (_, vchatResp) = deps.getCallConversationParams(rejoinConvId)
                     val fresh = vchatResp?.let { re.pinok.media.ConversationParamsDecoder.decodeParamsJson(it) }
                     if (fresh != null && fresh.token.isNotBlank() && fresh.endpoint.isNotBlank()) {
                         AppLog.w("CallScreen", "SERVER-REJOIN: свежие params получены (token=${fresh.token.take(8)}…, turn=${fresh.turnServer?.urls?.firstOrNull() ?: "нет"}) — перерегистрация WS")
@@ -597,7 +592,7 @@ fun CallScreen(
         // #CALLS-VIDEO-PREFS-RACE: настройки видео ДО initialize/startCall/acceptCall
         // (rx/tx — на направления транссиверов и создание заглушки в startCall/acceptCall).
         run {
-            val s = runCatching { app.prefs.data.first() }.getOrNull()
+            val s = runCatching { deps.prefs.data.first() }.getOrNull()
             val rx = s?.callsVideoRx ?: true
             videoRxEnabled = rx
             engine.setVideoRxEnabled(rx)
@@ -622,7 +617,7 @@ fun CallScreen(
             // считать нас полноценным peer'ом conversation → registered-peer звонящему
             // не уходил, его offer до нас не доходил, answer отправлять было не на что.
             try {
-                val calls = app.apiClient.messagesGetCurrentCalls()
+                val calls = deps.apiClient.messagesGetCurrentCalls()
                 AppLog.i("CallScreen", "messagesGetCurrentCalls: items=${calls.size}")
                 calls.firstOrNull()?.let { call ->
                     val convId = call.get("conversation_id")?.takeIf { it.isJsonPrimitive }?.asString
@@ -646,7 +641,7 @@ fun CallScreen(
                         // при 102 (session expired) — авто-получение свежего
                         // через get_anonym_token → auth.anonymLogin → повтор.
                         // См. SovaApp.getCallConversationParams.
-                        val (sessionKey, vchatResp) = app.getCallConversationParams(conv)
+                        val (sessionKey, vchatResp) = deps.getCallConversationParams(conv)
                         AppLog.i("CallScreen", "getCallParams: sessionKey=${sessionKey?.take(12) ?: "null"}… vchat=${if (vchatResp != null) "OK" else "null"}")
                         if (vchatResp != null) {
                             params = re.pinok.media.ConversationParamsDecoder.decodeParamsJson(vchatResp)
@@ -674,9 +669,9 @@ fun CallScreen(
                 // (напр. 584520805550), НЕ VK user_id (171093180). Токен из
                 // vchat.getConversationParams привязан к okcdn uid — с VK id
                 // сервер отвечает invalid-token.
-                val snap = app.prefs.data.first()
+                val snap = deps.prefs.data.first()
                 val okUid = snap.callsSessionUid
-                val uid = if (okUid > 0L) okUid else app.exchangeAuthRepository.userId()
+                val uid = if (okUid > 0L) okUid else deps.exchangeAuthRepository.userId()
                 val convId = callConvId ?: ""
                 activeCallId.value = convId
                 // #CALLS-FIX: реальные STUN/TURN из conversation params — без них ICE FAILED.
@@ -714,11 +709,11 @@ fun CallScreen(
         } else {
             AppLog.i("CallScreen", "Starting call to peerId=$peerId")
             try {
-                val callId = app.apiClient.messagesStartCall(peerId)
+                val callId = deps.apiClient.messagesStartCall(peerId)
                 AppLog.i("CallScreen", "messagesStartCall returned: $callId")
                 if (callId == null) {
-                    val err = app.apiClient.lastApiError
-                    val errCode = app.apiClient.lastApiErrorCode
+                    val err = deps.apiClient.lastApiError
+                    val errCode = deps.apiClient.lastApiErrorCode
                     AppLog.e("CallScreen", "startCall failed: err=$err code=$errCode")
                     android.widget.Toast.makeText(
                         context,
@@ -731,10 +726,10 @@ fun CallScreen(
                     activeCallId.value = callId
                     // #CALLS: получаем queue-credential через queue.subscribe (SAT-токен)
                     // и запускаем long-poll — ловим LP 115 (собеседник принял/звонит).
-                    val cred = app.apiClient.queueSubscribe()
+                    val cred = deps.apiClient.queueSubscribe()
                     if (cred != null) {
-                        app.queuev4Client.setCredential(cred)
-                        app.queuev4Client.start()
+                        deps.queuev4Client.setCredential(cred)
+                        deps.queuev4Client.start()
                         AppLog.i("CallScreen", "queuev4 started (key=${cred.key.take(8)}… ts=${cred.ts})")
                     } else {
                         AppLog.w("CallScreen", "queueSubscribe returned null — входящий звонок не будет обработан")
@@ -744,7 +739,7 @@ fun CallScreen(
                     // официальный клиент не получит push, не зазвонит и registered-peer
                     // не придёт никогда (45с → CANCELED «no answer» — это будет ВИДНО из лога).
                     try {
-                        val calls = app.apiClient.messagesGetCurrentCalls()
+                        val calls = deps.apiClient.messagesGetCurrentCalls()
                         AppLog.i("CallScreen", "OUTGOING-SETUP: callId=$callId, getCurrentCalls=${calls.size} шт.")
                     } catch (e: Exception) {
                         AppLog.w("CallScreen", "OUTGOING-SETUP: getCurrentCalls error: ${e.message}")
@@ -755,7 +750,7 @@ fun CallScreen(
                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
                         // #CALLS-FIX: форсируем свежие credentials — получаем okcdn uid
                         // (584520805550) из auth.anonymLogin, нужен для WS userId.
-                        val sk2 = app.ensureCallsSessionKey(force = true)
+                        val sk2 = deps.ensureCallsSessionKey(force = true)
                         // #CALLS-OUT-SK2-FALLBACK (2026-08-31, лог 21:26): ensureCallsSessionKey
                         // вернул null (кэш $-токен протух → auth.anonymLogin 401), и весь блок
                         // system.getInfo + startConversation ПРОПУСКАЛСЯ: conversation не
@@ -764,7 +759,7 @@ fun CallScreen(
                         // звонок умирал через 15с (CALL END: offer=false). Теперь при null
                         // берём session_key из prefs: начать conversation важнее свежести ключа
                         // (свежесть чинится отдельно — #CALLS-TOKEN-REFRESH в SovaApp).
-                        val skConv = sk2 ?: app.prefs.data.first().callsSessionKey.takeIf { it.isNotBlank() }
+                        val skConv = sk2 ?: deps.prefs.data.first().callsSessionKey.takeIf { it.isNotBlank() }
                         if (sk2.isNullOrBlank() && !skConv.isNullOrBlank()) {
                             AppLog.w("CallScreen", "#CALLS-OUT-SK2-FALLBACK: session_key из prefs для startConversation (свежий получить не удалось)")
                         }
@@ -780,12 +775,12 @@ fun CallScreen(
                             // #CALLS-FIX (2026-08-24): эталон Chrome desktop вызывает
                             // system.getInfo ПЕРЕД startConversation.
                             val sysResp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                app.apiClient.vchatSystemGetInfo(skConv)
+                                deps.apiClient.vchatSystemGetInfo(skConv)
                             }
                             AppLog.i("CallScreen", "vchat.system.getInfo: ${if (sysResp != null) "OK (${sysResp.keySet().size} полей)" else "null"}")
                             AppLog.i("CallScreen", "startConversation: conversationId=$outgoingConvId (свой UUID, не call_id=$callId)")
                             val scResp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                app.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId)
+                                deps.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId)
                             }
                             if (scResp != null) {
                                 AppLog.i("CallScreen", "vchat.startConversation OK (${scResp.keySet().size} полей)")
@@ -804,22 +799,22 @@ fun CallScreen(
                             // собеседник не получит вызов. Явно фиксируем причину в логе.
                             AppLog.e("CallScreen", "#CALLS-OUT-SK2: session_key недоступен (anonymLogin и prefs пусты) — startConversation пропущен, собеседник НЕ получит вызов")
                         }
-                        val (sk, vchatResp) = app.getCallConversationParams(wsConversationId)
+                        val (sk, vchatResp) = deps.getCallConversationParams(wsConversationId)
                         val params = vchatResp?.let { re.pinok.media.ConversationParamsDecoder.decodeParamsJson(it) }
                         if (params == null) {
                             AppLog.w("CallScreen", "Исходящий: не удалось получить conversation params")
                             phase = CallPhase.FAILED
                             return@launch
                         }
-                        val snap = app.prefs.data.first()
+                        val snap = deps.prefs.data.first()
                         val okUid = snap.callsSessionUid
-                        val vkUid = app.exchangeAuthRepository.userId()
+                        val vkUid = deps.exchangeAuthRepository.userId()
                         // #CALLS-FIX: userId в WS URL — okcdn uid (584520805550), НЕ VK user_id.
                         // Если в prefs лежит VK id (старый баг) — берём okcdn uid из
                         // последнего auth.anonymLogin (lastAnonymUid).
                         val uid = when {
                             okUid > 0L && okUid != vkUid -> okUid
-                            app.apiClient.lastAnonymUid() > 0L -> app.apiClient.lastAnonymUid()
+                            deps.apiClient.lastAnonymUid() > 0L -> deps.apiClient.lastAnonymUid()
                             else -> vkUid
                         }
                         engine.setIceServers(params)
@@ -858,7 +853,7 @@ fun CallScreen(
 
     // #CALLS: слушаем события queuev4 — LP 115 (входящий звонок) и прочие.
     LaunchedEffect(Unit) {
-        app.queuev4Client.events.collect { ev ->
+        deps.queuev4Client.events.collect { ev ->
             AppLog.i("CallScreen", "queuev4 event: queue=${ev.queueId} payload=${ev.payload}")
             val code = ev.payload["code"] as? Long
             // #CALLS-IN-OFFER: для входящего этот collect — ловушка: queuev4Client остаётся
@@ -1127,13 +1122,13 @@ fun CallScreen(
                         val participantsArr = convObj?.get("participants")
                             ?.takeIf { it.isJsonArray }?.asJsonArray
                         if (participantsArr != null && remoteParticipantId.value == null) {
-                            val myVkUid = app.exchangeAuthRepository.userId()
+                            val myVkUid = deps.exchangeAuthRepository.userId()
                             // #CALLS-OUT-FIX (2026-08-27): наш okcdn uid берём из prefs
                             // (callsSessionUid — заполняет ensureCallsSessionKey). Хардкод
                             // 584520805550 был верен только на устройстве разработчика —
                             // на любом другом «я» не распознавалось, и offer уходил
                             // самому себе → звонок вечно «Звоним…».
-                            val myOkUid = runCatching { app.prefs.data.first().callsSessionUid }.getOrDefault(0L)
+                            val myOkUid = runCatching { deps.prefs.data.first().callsSessionUid }.getOrDefault(0L)
                             for (el in participantsArr) {
                                 if (!el.isJsonObject) continue
                                 val p = el.asJsonObject
@@ -1337,9 +1332,9 @@ fun CallScreen(
         try {
             if (incoming) {
                 val fetched = withContext(Dispatchers.IO) {
-                    val cur = app.apiClient.messagesGetCurrentCalls().firstOrNull()
+                    val cur = deps.apiClient.messagesGetCurrentCalls().firstOrNull()
                     val cid = cur?.get("caller_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong ?: 0L
-                    if (cid <= 0L) null else cid to app.apiClient.usersGetByIds(listOf(cid))[cid]
+                    if (cid <= 0L) null else cid to deps.apiClient.usersGetByIds(listOf(cid))[cid]
                 }
                 if (fetched == null) {
                     AppLog.w("CallScreen", "CALLER_INFO: не получен (нет активного звонка/caller_id=0)")
@@ -1356,7 +1351,7 @@ fun CallScreen(
             } else {
                 // Исходящий: peerId известен всегда — профиль собеседника напрямую.
                 val profile = withContext(Dispatchers.IO) {
-                    app.apiClient.usersGetByIds(listOf(peerId))[peerId]
+                    deps.apiClient.usersGetByIds(listOf(peerId))[peerId]
                 }
                 AppLog.i("CallScreen", "CALLER_INFO(outgoing): peerId=$peerId profile=${if (profile != null) "OK" else "нет"}")
                 if (profile != null) {
@@ -1881,11 +1876,11 @@ fun CallScreen(
                                             signaling.declineCall()
                                         } else {
                                             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                                val sk = app.ensureCallsSessionKey()
+                                                val sk = deps.ensureCallsSessionKey()
                                                 val cid = activeCallId.value
                                                 if (sk != null && !cid.isNullOrBlank()) {
                                                     withContext(Dispatchers.IO) {
-                                                        app.apiClient.vchatHangupConversation(cid, sk, reason = "declined")
+                                                        deps.apiClient.vchatHangupConversation(cid, sk, reason = "declined")
                                                     }
                                                 } else {
                                                     AppLog.w("CallScreen", "Отклонить: нет WS и нет convId/sessionKey — decline не отправлен")
@@ -1930,9 +1925,9 @@ fun CallScreen(
                                             }
                                             if (!signaling.isRunning()) {
                                                 // LaunchedEffect не успел/не смог — поднимаем сигналинг сами.
-                                                val snap0 = app.prefs.data.first()
+                                                val snap0 = deps.prefs.data.first()
                                                 val okUid0 = snap0.callsSessionUid
-                                                val uid0 = if (okUid0 > 0L) okUid0 else app.exchangeAuthRepository.userId()
+                                                val uid0 = if (okUid0 > 0L) okUid0 else deps.exchangeAuthRepository.userId()
                                                 engine.setIceServers(resolved)
                                                 AppLog.i("CallScreen", "Принять: сигналинг не был поднят — стартуем (convId=${activeCallId.value})")
                                                 signaling.start(
@@ -1956,10 +1951,10 @@ fun CallScreen(
                                                 return@launch
                                             }
                                             AppLog.i("CallScreen", "Принять: params готовы, ws готов — accept")
-                                            val sk = app.ensureCallsSessionKey()
+                                            val sk = deps.ensureCallsSessionKey()
                                             if (sk != null) {
                                                 withContext(Dispatchers.IO) {
-                                                    app.apiClient.vchatJoinConversation(
+                                                    deps.apiClient.vchatJoinConversation(
                                                         activeCallId.value ?: "", sk, isVideo = false
                                                     )
                                                 }
@@ -2021,11 +2016,11 @@ fun CallScreen(
                                     }
                                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
                                         try {
-                                            val snap = app.prefs.data.first()
+                                            val snap = deps.prefs.data.first()
                                             val sk = snap.callsSessionKey
                                             val link = if (sk.isNotBlank()) {
                                                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                    app.apiClient.vchatCreateJoinLink(cid, sk)
+                                                    deps.apiClient.vchatCreateJoinLink(cid, sk)
                                                 }
                                             } else null
                                             val full = if (!link.isNullOrBlank()) "https://vk.ru/call/join/$link" else null

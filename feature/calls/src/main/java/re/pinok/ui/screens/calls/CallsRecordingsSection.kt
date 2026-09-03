@@ -47,7 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.JsonObject
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 import re.pinok.util.toRelativeTime
@@ -73,7 +73,8 @@ fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
 
     LaunchedEffect(Unit) {
         try {
-            val raw = SovaApp.get().apiClient.messagesGetCallRecordings(30)
+            val deps = LocalCallsDeps.current
+            val raw = deps.apiClient.messagesGetCallRecordings(30)
             items = raw.mapNotNull { it.parseRecordingItem() }
             AppLog.i("CallsRecordingsSection", "loaded ${items.size} items")
         } catch (e: Exception) {

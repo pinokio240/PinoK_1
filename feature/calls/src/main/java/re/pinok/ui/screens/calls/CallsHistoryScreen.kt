@@ -53,7 +53,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.calls.CallsDependencies
 import re.pinok.util.AppLog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,7 +63,7 @@ fun CallsHistoryScreen(
     onCallClick: (peerId: Long, title: String, photo: String?) -> Unit = { _, _, _ -> },
     onBack: () -> Unit = {},
 ) {
-    val app = SovaApp.get()
+    val deps = LocalCallsDeps.current
     val scope = rememberCoroutineScope()
     var currentCalls by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
     var inboundCalls by remember { mutableStateOf<List<JsonObject>>(emptyList()) }

@@ -46,7 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
 import re.pinok.util.AppLog
 import re.pinok.util.toRelativeTime
 import re.pinok.util.toDurationString
@@ -76,11 +76,12 @@ fun CallsHistorySection(onNavigateToCall: (Long) -> Unit) {
 
 LaunchedEffect(Unit) {
         try {
-            val raw = SovaApp.get().apiClient.callsGetHistory(30)
+            val deps = LocalCallsDeps.current
+            val raw = deps.apiClient.callsGetHistory(30)
             var parsed = raw.mapNotNull { it.parseCallItem() }
             val uniquePeers = parsed.map { it.peerId }.distinct()
             if (uniquePeers.isNotEmpty()) {
-                val profiles = try { SovaApp.get().apiClient.usersGetByIds(uniquePeers) } catch (_: Exception) { emptyMap() }
+                val profiles = try { deps.apiClient.usersGetByIds(uniquePeers) } catch (_: Exception) { emptyMap() }
                 parsed = parsed.map { item ->
                     val p = profiles[item.peerId]
                     if (p != null) item.copy(name = "${p.firstName} ${p.lastName}".trim(), photo = p.photo100)

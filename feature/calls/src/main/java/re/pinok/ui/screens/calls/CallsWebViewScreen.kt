@@ -26,7 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
 import re.pinok.auth.exchange.RemixsidCapturer
 import re.pinok.util.AppLog
 
@@ -45,7 +45,7 @@ fun CallsWebViewScreen(
 
     DisposableEffect(Unit) {
         try {
-            val app = SovaApp.get(context)
+            val deps = LocalCallsDeps.current
             val cm = CookieManager.getInstance()
             cm.setAcceptCookie(true)
             if (webView != null) { try { cm.setAcceptThirdPartyCookies(webView, true) } catch (_: Exception) {} }
@@ -63,7 +63,7 @@ fun CallsWebViewScreen(
             }
             // 2) remixsid из storage (если нет в CookieManager)
             if (!cookies.containsKey("remixsid")) {
-                val rid = app.exchangeAuthRepository.remixsid()
+                val rid = deps.exchangeAuthRepository.remixsid()
                 if (!rid.isNullOrBlank()) cookies["remixsid"] = rid
             }
             // 3) статические куки

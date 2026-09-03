@@ -42,7 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import re.pinok.SovaApp
+import re.pinok.feature.calls.LocalCallsDeps
 import re.pinok.data.model.UserProfile
 import re.pinok.util.AppLog
 
@@ -59,7 +59,8 @@ fun CallsFriendsSection(onNavigateToCall: (Long) -> Unit) {
 
     LaunchedEffect(Unit) {
         try {
-            val result = SovaApp.get().apiClient.friendsGetOnline()
+            val deps = LocalCallsDeps.current
+            val result = deps.apiClient.friendsGetOnline()
             items = result
             AppLog.i("CallsFriendsSection", "loaded ${items.size} online friends")
         } catch (e: Exception) {
