@@ -504,6 +504,14 @@ class WebRtcEngine(
         }
         params.turnServer?.urls?.forEach { url ->
             val turn = params.turnServer
+            // #NULL-ЯВНО (#NULL-EXPLICIT): явная проверка вместо прямого разыменования.
+            // Формально ветка недостижима — urls перебираются из params.turnServer
+            // (условие forEach выше), но компилятор не smart-cast'ит свойство чужого
+            // модуля внутри лямбды. Ранний выход с логом вместо !!.
+            if (turn == null) {
+                AppLog.w(TAG, "setIceServers: turnServer == null при обходе urls — пропускаем TURN")
+                return@forEach
+            }
             runCatching {
                 servers.add(
                     PeerConnection.IceServer.builder(url)
