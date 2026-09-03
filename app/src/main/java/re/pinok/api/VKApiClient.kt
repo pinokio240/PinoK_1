@@ -3695,7 +3695,7 @@ class VKApiClient(
     }
 
     /** video.add — добавить видео к себе. */
-    override suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String?): Boolean {
+    suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String? = null): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
             "video_id" to videoId.toString(),
@@ -3788,11 +3788,11 @@ class VKApiClient(
      * @param message текст комментария.
      * @param replyToComment id комментария для ответа (threaded reply), 0 = новый.
      */
-    override suspend fun videoCreateComment(
+    suspend fun videoCreateComment(
         ownerId: Long,
         videoId: Long,
         message: String,
-        replyToComment: Long?,
+        replyToComment: Long? = null,
     ): Long {
         if (isOffline()) return -1L
         val args = mutableMapOf(
@@ -4792,13 +4792,13 @@ class VKApiClient(
      *
      * @param accessKey ключ доступа (для приватных видео/клипов), nullable.
      */
-    override suspend fun likesAdd(
+    suspend fun likesAdd(
         type: String,
         ownerId: Long,
         itemId: Long,
-        reactionId: Int?,
-        accessKey: String?,
-        trackCode: String?,
+        reactionId: Int? = null,
+        accessKey: String? = null,
+        trackCode: String? = null,
     ): Int {
         val args = mutableMapOf(
             "type" to type,
@@ -4830,12 +4830,12 @@ class VKApiClient(
      *
      * §37.12 #326: access_key как отдельный параметр (см. [likesAdd]).
      */
-    override suspend fun likesDelete(
+    suspend fun likesDelete(
         type: String,
         ownerId: Long,
         itemId: Long,
-        accessKey: String?,
-        trackCode: String?,
+        accessKey: String? = null,
+        trackCode: String? = null,
     ): Int {
         val args = mutableMapOf(
             "type" to type,
@@ -4872,7 +4872,7 @@ class VKApiClient(
      * где VK не возвращает `user_likes` в wall.getComments ответе (в отличие
      * от постов, где `likes.user_likes` есть всегда).
      */
-    override suspend fun likesIsLiked(type: String, ownerId: Long, itemId: Long): Boolean? {
+    suspend fun likesIsLiked(type: String, ownerId: Long, itemId: Long): Boolean? {
         if (isOffline()) return null
         val args = mapOf(
             "type" to type,
@@ -5457,7 +5457,7 @@ class VKApiClient(
      * @return `Pair<postId, repostsCount>` — id нового поста и обновлённое
      *         количество репостов оригинала. `Pair(-1L, -1)` при ошибке.
      */
-    override suspend fun wallRepost(object_: String, message: String): Pair<Long, Int> {
+    suspend fun wallRepost(object_: String, message: String = ""): Pair<Long, Int> {
         if (isOffline()) return -1L to -1
         val args = mutableMapOf(
             "object" to object_,
@@ -5489,7 +5489,7 @@ class VKApiClient(
      * - type=link → link_id
      * Раньше отправляли owner_id+id — VK не распознавал, операция всегда падала.
      */
-    override suspend fun faveAdd(type: String, ownerId: Long, itemId: Long): Boolean {
+    suspend fun faveAdd(type: String = "post", ownerId: Long, itemId: Long): Boolean {
         if (isOffline()) return false
         // #FAVE-WEB-TOKEN: у web-токена (vk1.a.*) `fave.add` возвращает error 3
         // "Unknown method passed" — VK разнёс закладки по отдельным методам:
@@ -5522,7 +5522,7 @@ class VKApiClient(
     }
 
     /** Удалить из закладок. См. faveAdd — web-токен требует fave.remove* методы. */
-    override suspend fun faveRemove(type: String, ownerId: Long, itemId: Long): Boolean {
+    suspend fun faveRemove(type: String = "post", ownerId: Long, itemId: Long): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf<String, String>()
         val method = when (type) {
@@ -7205,7 +7205,7 @@ class VKApiClient(
     suspend fun videoGetById(
         ownerId: Long,
         videoId: Long,
-        accessKey: String?,
+        accessKey: String? = null,
     ): Video? {
         if (isOffline()) return null
         val videosParam = buildString {
@@ -7256,9 +7256,9 @@ class VKApiClient(
      */
     suspend fun videoGet(
         ownerId: Long? = null,
-        count: Int,
-        offset: Int,
-        albumId: Long?,
+        count: Int = 30,
+        offset: Int = 0,
+        albumId: Long? = null,
     ): List<Video> {
         if (isOffline()) return emptyList()
         // #VIDEO-FRAME-FIX: extended=1 — иначе нет image[] (превью) и files (URL),

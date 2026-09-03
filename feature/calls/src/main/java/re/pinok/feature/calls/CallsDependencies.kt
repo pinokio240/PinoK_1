@@ -73,17 +73,20 @@ interface CallsApi {
         sessionKey: String,
         isVideo: Boolean,
     ): JsonObject?
+
     suspend fun vchatHangupConversation(
         conversationId: String,
         sessionKey: String,
         reason: String,
     ): Boolean
+
     suspend fun vchatStartConversation(
         conversationId: String,
         sessionKey: String?,
         peerUid: Long,
         callerAppId: Long,
     ): JsonObject?
+
     suspend fun messagesStartCall(peerId: Long, video: Boolean): String?
     suspend fun messagesGetCurrentCalls(): List<JsonObject>
     suspend fun messagesGetInboundCalls(count: Int): List<JsonObject>
@@ -91,33 +94,6 @@ interface CallsApi {
     suspend fun messagesGetCallRecordings(count: Int): List<JsonObject>
     suspend fun messagesGetCallTranscriptions(count: Int): List<JsonObject>
     suspend fun friendsGetOnline(userId: Long?): List<UserProfile>
-    /** Полный набор параметров как в VKApiClient.likesAdd — без дефолтов (см. policy). */
-    suspend fun likesAdd(
-        type: String,
-        ownerId: Long,
-        itemId: Long,
-        reactionId: Int?,
-        accessKey: String?,
-        trackCode: String?,
-    ): Int
-    suspend fun likesDelete(
-        type: String,
-        ownerId: Long,
-        itemId: Long,
-        accessKey: String?,
-        trackCode: String?,
-    ): Int
-    suspend fun likesIsLiked(type: String, ownerId: Long, itemId: Long): Boolean?
-    suspend fun wallRepost(object_: String, message: String): Pair<Long, Int>
-    suspend fun faveAdd(type: String, ownerId: Long, itemId: Long): Boolean
-    suspend fun faveRemove(type: String, ownerId: Long, itemId: Long): Boolean
-    suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String?): Boolean
-    suspend fun videoCreateComment(
-        ownerId: Long,
-        videoId: Long,
-        message: String,
-        replyToComment: Long?,
-    ): Long
 }
 
 /** Фасад Queuev4Client: setCredential/start/events — вызовы экранов (census). */
