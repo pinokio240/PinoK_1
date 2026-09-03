@@ -39,7 +39,7 @@ import kotlin.random.Random
  *  - readTimeout httpClient должен быть ≥ 45с (wait=25 + запас).
  */
 // Task 20: реализует CallsLongPoll (фасад :feature:calls, член без вызовов экранов).
-class LongPollClient : CallsLongPoll(
+class LongPollClient(
     private val httpClient: OkHttpClient,
     private val apiClient: VKApiClient,
     private val networkObserver: NetworkObserver? = null,
@@ -80,7 +80,7 @@ class LongPollClient : CallsLongPoll(
      * null = проверка недоступна, пауза ждёт полное [TOKEN_INVALIDATION_PAUSE_MS].
      */
     private val isTokenValid: (() -> Boolean)? = null,
-) {
+) : CallsLongPoll {
     private val _events = MutableSharedFlow<LongPollEvent>(
         extraBufferCapacity = 128,
         onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,

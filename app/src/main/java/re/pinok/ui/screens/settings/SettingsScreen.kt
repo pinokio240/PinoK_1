@@ -547,7 +547,7 @@ private fun CallsTab(
                                 // (force=true — старый может быть протухшим, PARAM_SESSION_EXPIRED)
                                 // и queue-credential.
                                 val sk = app.ensureCallsSessionKey(force = true)
-                                val cred = app.apiClient.queueSubscribe()
+                                val cred = app.apiClient.queueSubscribe(userId = 0L, queueIdSuffix = null)
                                 if (cred != null) {
                                     app.queuev4Client.setCredential(cred)
                                     app.queuev4Client.start()

@@ -1453,9 +1453,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
             try {
                 // 0) #CALLS-AUTO: получаем session_key (vchat) автоматически,
                 //    если его ещё нет. Как браузер: get_anonym_token → auth.anonymLogin.
-                ensureCallsSessionKey()
+                ensureCallsSessionKey(force = false)
                 // 1) Сначала — автоматический queue.subscribe (свежий credential).
-                val cred = apiClient.queueSubscribe()
+                val cred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = null)
                 if (cred != null) {
                     AppLog.i("SovaApp", "queue.subscribe OK (key=${cred.key.take(8)}… ts=${cred.ts})")
                     queuev4Client.setCredential(cred)
@@ -1467,9 +1467,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
                 //     events_queue<uid> — из queue_connection_events_queue<uid>.
                 try {
                     val uid = exchangeAuthRepository.userId()
-                    var eventsCred = apiClient.queueSubscribe(queueIdSuffix = "nccts$uid")
+                    var eventsCred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = "nccts$uid")
                     if (eventsCred == null) {
-                        eventsCred = apiClient.queueSubscribe(queueIdSuffix = "events_queue$uid")
+                        eventsCred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = "events_queue$uid")
                     }
                     if (eventsCred != null) {
                         AppLog.i("SovaApp", "events_queue.subscribe OK (key=${eventsCred.key.take(8)}… ts=${eventsCred.ts})")
