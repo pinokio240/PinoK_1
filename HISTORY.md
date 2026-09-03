@@ -11741,3 +11741,26 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ### Остатки/риски
 - Модули впервые компилируются — возможны новые ошибки Kotlin; при появлении — лог в работу. Цель: assembleDebug -> тест звонков (штамп calls-2026.09.03-8).
+
+---
+
+## 2026-09-03 — Task 21: откат ExchangeAuthRepository в :app, фасад CallsAuth (330 ошибок)
+
+### Коммит: fix(calls) 164c68be (ветка PinoK, push origin OK)
+
+### Факт до кода
+- Лог 2026-09-03: 330 ошибок, ВСЕ в core/network/.../ExchangeAuthRepository.kt — 46x AuthState, 26x AuthErrorKind, 14x remixsid, 11x ExchangeTokenResult и др.
+- Корень: Task 20 перенёс файл в :core:network, но пакет re.pinok.auth.exchange в :app — кластер 14 файлов; same-package ссылки не требуют import (проверка Task 20 шла по явным import'ам — слепое пятно). Перенос кластера целиком = WorkManager/androidx.browser в core — каскад без границ.
+
+### Что сделано
+- git mv ExchangeAuthRepository.kt обратно в :app (100% rename).
+- Фасад CallsAuth { fun userId(): Long; fun remixsid(): String? } в :feature:calls; ExchangeAuthRepository реализует override-маркерами (userId:1524, remixsid:1563 — тела без правок). Член CallsDependencies.exchangeAuthRepository -> CallsAuth, состав не сужен (census: userId() x4, remixsid() x1).
+- :core:network: снята implementation(:core:data) — после отката никем не нужна.
+- Подтверждения компилятором из упавшего билда: :core:data (SovaPrefs) и :feature:calls (PermissionManager) собрались — упал только :core:network.
+- BuildStamp calls-2026.09.03-9.
+
+### Верификация
+- Сканер скобок 4/4 OK; grep re.pinok.data.local по core/network — пусто.
+
+### Урок
+- Анализ переносимости файла — по всем same-package ссылкам, не только по import. Слепая зона: классы одного пакета не импортируются.

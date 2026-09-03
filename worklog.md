@@ -6358,3 +6358,17 @@ Work Log:
 
 Stage Summary:
 - Все известные ошибки лога 2026-09-03 устранены архитектурно (перенос/фасады), не сужением. Возможны НОВЫЕ ошибки Kotlin (модули впервые компилируются) — лог присылать. Дальше: assembleDebug -> тест звонков (штамп calls-2026.09.03-8).
+
+---
+Task ID: 21 (откат ExchangeAuthRepository + фасад CallsAuth — разбор 330 ошибок)
+Agent: Z.ai Code (Sergey)
+Task: лог 2026-09-03: 330 ошибок, все в core/network/.../ExchangeAuthRepository.kt
+
+Work Log:
+- Диагноз: перенос Task 20 был ошибочен для ЭТОГО файла — пакет re.pinok.auth.exchange в :app это кластер 14 файлов (AuthState/AuthModels/AuthResponseParser/VKAuthException/ExchangeTokenStorage/CookieRefreshWorker/ExternalBrowserAuth/RemixsidCapturer...); same-package ссылки не требуют import — проверка по явным import'ам её не увидела. 46x AuthState, 26x AuthErrorKind, 14x remixsid (storage.*), 11x ExchangeTokenResult и т.д.
+- Решение: git mv файла обратно в :app (позиция 100% rename — тело не менялось с Task 20 кроме CallsAuth-врезок); фасад CallsAuth { userId(): Long; remixsid(): String? } в :feature:calls, ExchangeAuthRepository реализует (override userId:1524, remixsid:1563); член CallsDependencies.exchangeAuthRepository -> CallsAuth (состав не сужен — census userId() x4 + remixsid() x1 CallsWebViewScreen:66); :core:network снята зависимость :core:data (после отката не нужна — grep re.pinok.data.local пуст).
+- Подтверждено компилятором в упавшем билде: :core:data (SovaPrefs) и :feature:calls (PermissionManager + CallScreen-часть) СОБРАЛИСЬ — упал только :core:network.
+- Штамп calls-2026.09.03-9. Сканер 4/4 OK. Коммиты: 164c68be (fix) запушен (4d99778e..164c68be).
+
+Stage Summary:
+- Урок зафиксирован: переносимость файла анализировать по ВСЕМ ссылкам пакета, не только import (в CODING-практику при случае). Следующий лог: либо сборка проходит дальше, либо следующий модуль — присылать целиком.
