@@ -19,6 +19,10 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -9 (03.09) = Task 21: ExchangeAuthRepository возвращён в :app (пакет
+    // auth.exchange — кластер 14 файлов, same-package ссылки не требуют импорта;
+    // перенос одного файла = 330 unresolved), в CallsDependencies член заменён
+    // фасадом CallsAuth (userId()/remixsid()). Поведение звонков не менялось.
     // -8 (03.09) = #ARCH-DATA Task 20: DI-контракт CallsDependencies (6742de6c)
     // сделан собираемым: SovaPrefs -> :core:data (новый модуль), ExchangeAuthRepository
     // -> :core:network, PermissionManager -> :feature:calls (пакеты сохранены);
@@ -60,5 +64,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.03-8"
+    const val STAMP: String = "calls-2026.09.03-9"
 }

@@ -4,7 +4,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import com.google.gson.JsonObject
 import kotlinx.coroutines.flow.SharedFlow
 import okhttp3.OkHttpClient
-import re.pinok.auth.exchange.ExchangeAuthRepository
 import re.pinok.data.local.SovaPrefs
 import re.pinok.data.model.QueueCredential
 import re.pinok.data.model.QueueEvent
@@ -20,8 +19,11 @@ import re.pinok.data.model.UserProfile
  * ТИПОВАЯ ПОЛИТИКА (по фактам лога сборки 2026-09-03): :feature:calls не
  * может видеть :app-типы — цикл зависимостей :app -> :feature:calls ->
  * :app запрещён Gradle. Поэтому:
- *  - SovaPrefs и ExchangeAuthRepository — РЕАЛЬНЫЕ типы: классы перенесены
- *    в :core:data / :core:network (пакеты сохранены, Task 20);
+ *  - SovaPrefs — РЕАЛЬНЫЙ тип: класс перенесён в :core:data (пакет сохранён,
+ *    Task 20; компилятор подтвердил — :core:data/:feature:calls собрались);
+ *  - ExchangeAuthRepository остался в :app: пакет re.pinok.auth.exchange —
+ *    кластер из 14 файлов, same-package ссылки импорта не требуют (перенос
+ *    одного файла = 330 unresolved в логе 2026-09-03); фасад CallsAuth;
  *  - VKApiClient (14k строк, импортирует re.pinok.SovaApp — перенос
  *    невозможен за один шаг), Queuev4Client и LongPollClient (конструкторы
  *    принимают VKApiClient) — объявлены фасад-интерфейсами CallsApi /
@@ -35,7 +37,7 @@ interface CallsDependencies {
     val apiClient: CallsApi
     val prefs: SovaPrefs
     val httpClient: OkHttpClient
-    val exchangeAuthRepository: ExchangeAuthRepository
+    val exchangeAuthRepository: CallsAuth
     val queuev4Client: CallsQueue
     val longPollClient: CallsLongPoll
     val callsSessionKey: String
@@ -95,6 +97,12 @@ interface CallsQueue {
     fun setCredential(cred: QueueCredential)
     fun start()
     val events: SharedFlow<QueueEvent>
+}
+
+/** Фасад ExchangeAuthRepository: userId()/remixsid() — вызовы экранов (census Task 20/21). */
+interface CallsAuth {
+    fun userId(): Long
+    fun remixsid(): String?
 }
 
 /** Фасад LongPollClient: член без вызовов экранов (состав 6742de6c). */
