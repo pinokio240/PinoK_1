@@ -3717,7 +3717,7 @@ class VKApiClient(
     }
 
     /** video.getComments — комментарии к видео. */
-    override suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int): List<re.pinok.data.model.Comment> {
+    suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int = 20): List<re.pinok.data.model.Comment> {
         if (isOffline()) return emptyList()
         val json = call("video.getComments", mapOf(
             "owner_id" to ownerId.toString(),
@@ -7202,7 +7202,7 @@ class VKApiClient(
      * @param accessKey access_key из attachment (необязателен)
      * @return Video с заполненным files, или null если видео недоступно.
      */
-    override suspend fun videoGetById(
+    suspend fun videoGetById(
         ownerId: Long,
         videoId: Long,
         accessKey: String?,
@@ -7254,8 +7254,8 @@ class VKApiClient(
      * video.get — получить список видео пользователя/сообщества.
      * Возвращает Video с заполненными files (прямые URL).
      */
-    override suspend fun videoGet(
-        ownerId: Long?,
+    suspend fun videoGet(
+        ownerId: Long? = null,
         count: Int,
         offset: Int,
         albumId: Long?,

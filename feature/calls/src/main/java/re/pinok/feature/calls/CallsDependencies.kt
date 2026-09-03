@@ -112,9 +112,6 @@ interface CallsApi {
     suspend fun faveAdd(type: String, ownerId: Long, itemId: Long): Boolean
     suspend fun faveRemove(type: String, ownerId: Long, itemId: Long): Boolean
     suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String?): Boolean
-    suspend fun videoGetById(ownerId: Long, videoId: Long, accessKey: String?): re.pinok.data.model.Video?
-    suspend fun videoGet(ownerId: Long?, count: Int, offset: Int, albumId: Long?): List<re.pinok.data.model.Video>
-    suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int): List<re.pinok.data.model.Comment>
     suspend fun videoCreateComment(
         ownerId: Long,
         videoId: Long,
