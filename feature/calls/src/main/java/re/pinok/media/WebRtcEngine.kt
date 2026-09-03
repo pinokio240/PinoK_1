@@ -47,14 +47,6 @@ class WebRtcEngine(
         private const val TAG = "WebRtcEngine"
         private val STUN_URL = "stun:videostun.okcdn.ru:19302"
         private val TURN_URL = "turn:calls.okcdn.ru:3478?transport=udp"
-
-        /**
-         * #CALLS-INLINE-ICE: сколько ждём сбора кандидатов после setLocal перед
-         * отправкой SDP. В логе 21:21 все кандидаты (host/srflx/4 relay/2 tcp)
-         * собираются за ~170мс; 1.5с покрывает даже медленный TURN с запасом.
-         * Кандидаты, пришедшие позже, уходят trickle'ом (см. onIceCandidate).
-         */
-        private const val INLINE_ICE_WAIT_MS = 1500L
     }
 
     private var factory: PeerConnectionFactory? = null
@@ -65,23 +57,10 @@ class WebRtcEngine(
     // #CALLS-FIX (2026-08-24): последний отправленный локальный SDP (offer/answer).
     // При topology-changed сервер просит отправить offer заново — берём его отсюда
     // (в CallScreen кэш pendingLocalSdp очищается после первой отправки).
-    // #CALLS-NON-TRICKLE: теперь хранит SDP УЖЕ С ЗАШИТЫМИ кандидатами — ретрай
-    // (REOFFER/REANSWER в CallScreen) уезжает вместе с полным набором кандидатов.
+    // Чистый SDP без inline-кандидатов (trickle-модель, как в VK web).
     @Volatile
     private var lastLocalSdp: SessionDescription? = null
     fun lastLocalSdp(): SessionDescription? = lastLocalSdp
-
-    // #CALLS-INLINE-ICE: кандидаты, собранные с момента планирования отправки SDP.
-    // Живут ТОЛЬКО на signaling thread (onIceCandidate и postDelayed — оба там).
-    // После отправки SDP с зашитыми кандидатами список очищается, а новые кандидаты
-    // уходят trickle'ом через onIceCandidateReady (см. onIceCandidate).
-    private val gatheredCandidates = ArrayList<IceCandidate>(16)
-
-    @Volatile
-    private var inlineIceSent = false
-
-    /** Генерация запланированной отправки SDP — отмена поста при рестарте/новом SDP. */
-    private val sdpSendGen = java.util.concurrent.atomic.AtomicLong(0)
 
     // #CALLS-ANSWER-FIRST (2026-08-30, тест 4 16:03–16:05): ПОРЯДОК отправки решает всё.
     // Прежний #CALLS-NON-TRICKLE (ждать gathering ≤3с, зашивать кандидатов в текст SDP)
@@ -112,7 +91,8 @@ class WebRtcEngine(
     // РЕШЕНИЕ: кандидаты зашиваются ВНУТРЬ SDP (одна посылка — гонка невозможна),
     // trickle остаётся только для кандидатов, собранных ПОСЛЕ отправки. Ретраи
     // (REANSWER/REOFFER в CallScreen) уезжают с кандидатами автоматически —
-    // lastLocalSdp теперь всегда содержит зашитых кандидатов.
+    // УСТАРЕЛО (2026-09-03, #CALLS-NON-TRICKLE-2): inline-ICE отменён, как в VK web —
+    // SDP уходит сразу и чистым, кандидаты только trickle'ом (onIceCandidateReady).
     // #CALLS-FIX: реальные ICE-серверы из conversation params (turn_server/stun_server).
     // Хардкод videostun.okcdn.ru/turn:calls.okcdn.ru не даёт ICE CONNECTED.
     @Volatile
@@ -519,30 +499,6 @@ class WebRtcEngine(
                         .setPassword(turn.credential ?: "")
                         .createIceServer()
                 )
-                // #CALLS-FIX: как в VK (PeerConnectionClient.m109a) — добавляем
-                // TURN ?transport=tcp вариант (tcpCandidatePolicy=ENABLED).
-                // #CALLS-OUT-FIX (2026-08-27): НЕ склеиваем "$url?transport=tcp" вслепую —
-                // для URL, уже содержащего transport=, это давало ДВА transport-параметра
-                // (?transport=udp?transport=tcp), и libjingle такой сервер молча отбрасывал.
-                // #CALLS-ICE-WATCHDOG (2026-08-29): для ?transport=udp добавляем TCP-вариант
-                // ТОГО ЖЕ сервера (замена transport=udp → transport=tcp) — как в Chrome
-                // (udp+tcp пара на 3478). Раньше URL с transport= пропускался — TCP-fallback
-                // не добавлялся вовсе, и на LTE/за жёстким NAT (UDP заблокирован) ICE умирал
-                // в CHECKING→FAILED при успешной аллокации по UDP-ветке не бывало.
-                val tcpUrl = when {
-                    url.contains("transport=udp") -> url.replace("transport=udp", "transport=tcp")
-                    url.contains("transport=") -> null
-                    url.contains('?') -> "$url&transport=tcp"
-                    else -> "$url?transport=tcp"
-                }
-                tcpUrl?.let { tcp ->
-                    servers.add(
-                        PeerConnection.IceServer.builder(tcp)
-                            .setUsername(turn.username ?: "")
-                            .setPassword(turn.credential ?: "")
-                            .createIceServer()
-                    )
-                }
             }
         }
         // fallback — если params пустые
@@ -596,11 +552,6 @@ class WebRtcEngine(
         candTcpCount.set(0)
         remoteCandCount.set(0)
         lastPairStats = null
-        // #CALLS-INLINE-ICE: новый PC — буфер кандидатов и режим отправки заново;
-        // генерация++ отменяет висящий пост отправки прошлого звонка.
-        gatheredCandidates.clear()
-        inlineIceSent = false
-        sdpSendGen.incrementAndGet()
         // #CALLS-PC-RESTART: оффер прошлого звонка не должен утечь в новый
         lastRemoteOffer = null
         val iceServers = this.iceServers.ifEmpty {
@@ -642,17 +593,10 @@ class WebRtcEngine(
                     AppLog.d(TAG, "локальный кандидат ОТФИЛЬТРОВАН (tcp/loopback/any): $typ/$proto ${candidate.sdp.take(40)}")
                     return
                 }
-                // #CALLS-INLINE-ICE: до отправки SDP кандидаты копятся в буфере
-                // (уйдут ВНУТРИ SDP); после — trickle'ом через onIceCandidateReady.
-                // Так порядок «SDP первым, кандидаты следом» гарантирован, и у эталонного
-                // клиента невозможно попасть в addIceCandidate-до-remoteDesc.
-                if (inlineIceSent) {
-                    AppLog.d(TAG, "локальный кандидат (trickle): $typ/$proto ${candidate.sdp.take(48)}")
-                    onIceCandidateReady(candidate)
-                } else {
-                    gatheredCandidates.add(candidate)
-                    AppLog.d(TAG, "локальный кандидат (буфер→inline): $typ/$proto ${candidate.sdp.take(48)}")
-                }
+                // #CALLS-NON-TRICKLE-2: кандидаты уходят trickle'ом СРАЗУ через
+                // onIceCandidateReady (SDP первым, кандидаты следом — как в VK).
+                AppLog.d(TAG, "локальный кандидат (trickle): $typ/$proto ${candidate.sdp.take(48)}")
+                onIceCandidateReady(candidate)
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onSignalingChange(state: PeerConnection.SignalingState) {}
@@ -770,18 +714,9 @@ class WebRtcEngine(
         peerConnection?.createOffer(SdpObserverAdapter(
             onSuccess = { sdp ->
                 sdp?.let { orig ->
-                    // #CALLS-OFFER-STRIPH265 (2026-09-01, лог 11:29 исходящий): оффер
-                    // содержал H265, и VK-пир выбрал ЕГО для нашей заглушки —
-                    // initEncode c2.mtk.hevc.encoder (пир выбирает кодек из НАШЕГО
-                    // списка). H265 на MTK — источник нативных крашей (история
-                    // #CALLS-VIDEO-INACTIVE). Вырезаем тем же мунгингом, что и в
-                    // answer — выбор сузится до VP8/H264/AV1.
-                    val desc = if (videoRxEnabled || videoTxEnabled) stripH265(orig.description)
-                               else orig.description
-                    val offer = if (desc != orig.description) {
-                        AppLog.i(TAG, "#CALLS-OFFER-STRIPH265: H265 вырезан из offer (len ${orig.description.length}→${desc.length})")
-                        SessionDescription(SessionDescription.Type.OFFER, desc)
-                    } else orig
+                    // #CALLS-OFFER-STRIPH265: убран — offer всегда отправляется как есть
+                    // (VK-совместимость, см. VK Web: мунгинг только в answer).
+                    val offer = orig
                     // #CALLS-FIX: как в VK — SDP отправляем ТОЛЬКО после установки
                     // localDescription (onSetSuccess), иначе ICE gathering не стартует.
                     peerConnection?.setLocalDescription(SdpObserverAdapter(
@@ -965,7 +900,7 @@ class WebRtcEngine(
                     // wire-формат одним тумблером, без пересборки.
                     // После strip первым выжившим становится H264 (HW-декодер почти
                     // везде), VP8/VP9 остаются SW-фолбэком.
-                    var fixedDesc = if (videoRxEnabled || videoTxEnabled) stripH265(desc.description)
+                    var fixedDesc = if (videoRxEnabled) stripH265(desc.description)
                                     else desc.description
                     // #CALLS-VIDEO-INACTIVE (страховка, только videoRx=OFF): если
                     // транссивер по какой-то причине остался recvonly (setDirection
@@ -975,7 +910,7 @@ class WebRtcEngine(
                     // НЕ применяем — ответ обязан остаться a=recvonly.
                     if (!videoRxEnabled && !videoTxEnabled) fixedDesc = demoteVideoRecvOnly(fixedDesc)
                     val answer = if (fixedDesc != desc.description) {
-                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (${if (videoRxEnabled || videoTxEnabled) "strip H265" else "a=inactive (strip не применён)"}) — len ${desc.description.length}→${fixedDesc.length}")
+                        AppLog.w(TAG, "#CALLS-VIDEO-RX: answer изменён (${if (videoRxEnabled) "strip H265 (videoRx)" else "a=inactive (strip не применён)"}) — len ${desc.description.length}→${fixedDesc.length}")
                         SessionDescription(desc.type, fixedDesc)
                     } else desc
                     // #CALLS-FIX: как в VK — answer отправляем ТОЛЬКО после установки
@@ -1056,104 +991,84 @@ class WebRtcEngine(
     }
 
     /**
-     * #CALLS-PC-RESTART (2026-08-31, лог ciber.txt 22:55 Wi-Fi): ПОЛНЫЙ рестарт со
-     * стороны ОТВЕЧАЮЩЕГО. Доказано логом: Wi-Fi «оба за одним NAT» — у агента есть
-     * кандидаты с обеих сторон (наши 6 inline доставлены, их 4 добавлены drain'ом),
-     * но 16с тишины и FAILED с пар=0/reqS=0/reqR=0; повторные REANSWER тем же answer
-     * (те же ufrag/pwd, те же порты) бессмысленны — 4 шт. в этом же логе не помогли.
-     * Делаем единственное доступное отвечающему: закрываем PC, создаём новый, применяем
-     * СОХРАНЁННЫЙ offer, отвечаем НОВЫМ answer — новые ice-ufrag/pwd по RFC 5245 §9
-     * обязывают агента собеседника сделать ICE-restart (свежий check-list, свежие
-     * кандидаты, свежие permissions на его TURN-аллокации под наши НОВЫЕ relay-IP).
-     * Аудио source/track живут на уровне factory — переиспользуются в новом PC.
-     *
-     * @return true — рестарт запущен (новый answer уйдёт через onLocalSdpReady).
+     * #CALLS-UPDATE-ICE-SERVERS: обновить TURN/STUN credentials на текущем PC.
+     * Вызов при новом `connection` (WS переподключение / topology→SERVER).
+     * VK web: каждый connection несёт свежие credentials, adapter.js фильтрует —
+     * оставляет 1 TURN UDP, STUN отсекает.
      */
-    fun recreateAndReanswer(): Boolean {
-        val offer = lastRemoteOffer ?: run {
-            AppLog.w(TAG, "#CALLS-PC-RESTART: сохранённого offer нет — рестарт невозможен")
-            return false
+    fun updateIceServers(turnUrls: List<String>, stunUrls: List<String>, username: String, credential: String) {
+        val servers = mutableListOf<PeerConnection.IceServer>()
+        stunUrls.forEach { url ->
+            runCatching { servers.add(PeerConnection.IceServer.builder(url).createIceServer()) }
         }
-        post {
-            AppLog.w(TAG, "#CALLS-PC-RESTART: пересоздаю PC + answer с новыми ice-ufrag/pwd (рестарт ICE со стороны отвечающего)")
-            // инвалидируем все висящие таймеры старого PC (EARLYSTATS/DISCONNECTED)
-            iceStateGen.incrementAndGet()
-            // #CALLS-PC-RESTART: сбрасываем трек ДО close() (как в endCall) —
-            // иначе при появлении НОВОГО трека DisposableEffect(track, renderer) в CallScreen
-            // подключил бы sink к СТАРОМУ (уже release'нутому) рендереру: AndroidView не
-            // пересоздаётся при смене только трека, а рендерер в onDispose освобождается.
-            // null → videoRenderActive=false → блок видео уходит из композиции → следующий
-            // трек создаст СВЕЖИЙ SurfaceViewRenderer.
-            if (remoteVideoTrackRef != null) {
-                remoteVideoTrackRef = null
-                onRemoteVideoTrack?.invoke(null)
+        turnUrls.forEach { url ->
+            runCatching {
+                servers.add(
+                    PeerConnection.IceServer.builder(url)
+                        .setUsername(username)
+                        .setPassword(credential)
+                        .createIceServer()
+                )
             }
-            peerConnection?.close()
-            peerConnection = null
-            pcCreated = false
-            pendingRemoteIce.clear()
-            createPeerConnection()
-            localAudioTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("stream0"))
-            }
-            // #CALLS-SYMMETRIC: заглушка живёт на уровне factory — переиспользуем в новом PC.
-            localVideoTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("stream0"))
-            }
-            // Полный цикл: setRemote(offer) → onSetSuccess → prepareVideoTransceivers →
-            // createAnswer → setLocal → sendLocalSdpNow(1.5с inline) → onLocalSdpReady →
-            // CallScreen отправит через sendAnswerReliably (флаги обновит сам).
-            applyRemoteSdp(offer)
         }
-        return true
+        if (servers.isEmpty()) return
+        iceServers = servers
+        // VK web: adapter.js фильтрует — оставляет 1 TURN UDP, STUN отсекает.
+        // Здесь просто заменяем конфиг — следующий PC (если пересоздаётся)
+        // подхватит свежие серверы.
+        AppLog.i(TAG, "updateIceServers: ${servers.size} серверов обновлено (turn=${turnUrls.size} stun=${stunUrls.size})")
     }
 
     /**
-     * #CALLS-REVWEB-SERVER (2026-09-02, реверс открытых реализаций VK-звонков —
-     * whitelist-bypass/p2p.go Reset(), vk_joiner.go topology-changed→closeTransport):
-     * ПОЛНЫЙ PC-RESTART со стороны ЗВОНЯЩЕГО при topology→SERVER.
-     * Эталонная философия: IceRestart на испорченной сессии НЕ ДЕЛАЕТ никто —
-     * сессия пересоздаётся целиком (новый PC → новый offer). Отличие от restartIce():
-     * тот рестартит СТАРЫЙ PC, чей конфиг вшит при создании со СТАРЫМИ iceServers;
-     * здесь новый PC подхватывает СВЕЖИЕ TURN-креды, обновлённые setIceServers из
-     * нового `connection` (после bounce сигналинга — per-connection creds).
-     * Аудио source/track и видеозаглушка живут на уровне factory — переиспользуются.
+     * #CALLS-TOPOLOGY-RESTART (2026-08-30, лог 20:49, тест исходящего): перезапуск
+     * ICE-агента и ПОЛНЫЙ новый offer-цикл: createOffer → setLocal → onLocalSdpReady.
      *
-     * @return true — рестарт запущен (новый offer уйдёт через onLocalSdpReady).
+     * Зачем: topology-changed{SERVER} приходит, когда P2P-нога НЕ СОБРАЛАСЬ у
+     * собеседника (тест 20:49: его answer содержал только 2 host-кандидата — ни
+     * srflx, ни relay; наш агент послал 253 проверки — 0 ответов). Повторная отправка
+     * СТАРОГО offer не создаёт новый транспорт: у него те же ice-ufrag/pwd и те же
+     * мёртвые кандидаты. restartIce() даёт новые ufrag/pwd и свежую сборку кандидатов
+     * (включая relay) — это последний шанс поднять медиа до того, как собеседник
+     * сдастся (в тесте 20:49 он сбросил через 11с после topology-changed).
+     *
+     * @return true — restart запущен, свежий offer уйдёт через onLocalSdpReady.
      */
-    fun recreateAndReoffer(): Boolean {
-        if (peerConnection == null) {
-            AppLog.w(TAG, "recreateAndReoffer: PeerConnection нет — некому пересоздавать")
+    fun restartIce(): Boolean {
+        val pc = peerConnection ?: run {
+            AppLog.w(TAG, "restartIce: PeerConnection нет — некому рестартовать")
             return false
         }
-        post {
-            AppLog.w(TAG, "#CALLS-REVWEB-SERVER: пересоздаю PC + НОВЫЙ offer (свежие TURN-креды, новые ufrag/pwd)")
-            // инвалидируем висящие таймеры старого PC (EARLYSTATS/DISCONNECTED)
-            iceStateGen.incrementAndGet()
-            // сброс трека ДО close() — как в recreateAndReanswer (см. комментарий там):
-            // свежий SurfaceViewRenderer для нового remote-трека.
-            if (remoteVideoTrackRef != null) {
-                remoteVideoTrackRef = null
-                onRemoteVideoTrack?.invoke(null)
-            }
-            peerConnection?.close()
-            peerConnection = null
-            pcCreated = false
-            pendingRemoteIce.clear()
-            createPeerConnection()
-            localAudioTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("stream0"))
-            }
-            localVideoTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("stream0"))
-            }
-            // направление video-транссивера по текущим флагам (как в startCall),
-            // затем полный оффер-цикл: createOffer → setLocal → sendLocalSdpNow
-            // (inline-кандидаты) → onLocalSdpReady → CallScreen отправит offer.
-            prepareVideoTransceivers()
+        return try {
+            AppLog.i(TAG, "ICE RESTART: новый ufrag/pwd + свежая сборка кандидатов")
+            pc.restartIce()
+            // createOffer при pending negotiation-needed даст offer с новыми
+            // ice-credentials; setLocal + sendLocalSdpNow отправят его собеседнику.
             createOffer()
+            true
+        } catch (e: Exception) {
+            AppLog.e(TAG, "restartIce error: ${e.message}")
+            false
         }
-        return true
+    }
+
+    /** #CALLS-VK-TOPOLOGY (2026-09-03, VK web pattern): topology-changed{SERVER}.
+     * 5s wait → restartIce() → 20s timeout → если не помогло — вызывает onBounce.
+     * @param onBounce колбэк для сигналинг-bounce (WS переподключение), если restart не помог. */
+    fun handleTopologyServer(onBounce: () -> Unit) {
+        val gen = iceStateGen.incrementAndGet()
+        val genStr = "t$gen"
+        AppLog.w(TAG, "TOPOLOGY→SERVER: запущен таймер 5с → restartIce() [${genStr}]")
+        signalingHandler?.postDelayed({
+            if (gen != iceStateGen.get() || peerConnection == null) return@postDelayed
+            AppLog.w(TAG, "TOPOLOGY→SERVER: 5s wait done — restartIce() [${genStr}]")
+            restartIce()
+            val gen2 = iceStateGen.get()
+            signalingHandler?.postDelayed({
+                if (gen2 != iceStateGen.get() || peerConnection == null) return@postDelayed
+                AppLog.w(TAG, "TOPOLOGY→SERVER: 20s после restart — ICE не помогло, bounce [${genStr}]")
+                onBounce()
+            }, 20_000L)
+        }, 5_000L)
     }
 
     /**
@@ -1175,74 +1090,15 @@ class WebRtcEngine(
     }
 
     /**
-     * #CALLS-INLINE-ICE (2026-08-31): SDP готов (localDescription установлен) — ждём
-     * [INLINE_ICE_WAIT_MS], собираем локальных кандидатов и отправляем SDP ОДНИМ
-     * сообщением, с зашитыми a=candidate (см. buildSdpWithCandidates). Гонка
-     * «кандидаты раньше answer» у эталонного клиента становится невозможной.
-     * Кандидаты, собранные ПОСЛЕ отправки, уходят trickle'ом (onIceCandidate).
+     * #CALLS-NON-TRICKLE-2 (2026-09-03): SDP отправляется СРАЗУ после setLocal —
+     * без ожидания сбора кандидатов и зашивания их в SDP (схема #CALLS-INLINE-ICE
+     * снята веткой «answer первым, кандидаты trickle'ом следом», как в VK).
      * Вызов на signaling thread (setLocal onSetSuccess уже там).
      */
     private fun sendLocalSdpNow(sdp: SessionDescription) {
-        val gen = sdpSendGen.incrementAndGet()
-        val scheduledAt = System.currentTimeMillis()
-        gatheredCandidates.clear()
-        inlineIceSent = false
-        AppLog.i(TAG, "${sdp.type}: отправка через ${INLINE_ICE_WAIT_MS}мс — кандидаты уйдут ВНУТРИ SDP (#CALLS-INLINE-ICE)")
-        signalingHandler?.postDelayed({
-            if (gen != sdpSendGen.get()) return@postDelayed // отменено: рестарт/новый SDP
-            if (peerConnection == null) return@postDelayed  // звонок завершён за время ожидания
-            val (finalSdp, inlined, skipped) = buildSdpWithCandidates(sdp.description, gatheredCandidates)
-            gatheredCandidates.clear()
-            inlineIceSent = true
-            AppLog.i(TAG, "${sdp.type} → отправка (inline кандидатов: $inlined, отфильтровано loopback/tcp: $skipped; сбор ${System.currentTimeMillis() - scheduledAt}мс)")
-            val toSend = SessionDescription(sdp.type, finalSdp)
-            lastLocalSdp = toSend
-            onLocalSdpReady(toSend)
-        }, INLINE_ICE_WAIT_MS)
-    }
-
-    /**
-     * #CALLS-INLINE-ICE: зашить ICE-кандидатов в текст SDP по своим m-секциям.
-     * Секцию определяем по sdpMLineIndex (если индекс больше числа секций — в последнюю:
-     * BUNDLE делает все секции одним транспортом, позиция не критична).
-     * Loopback (127.0.0.1/::1) и tcp-кандидатов НЕ зашиваем: они бесполезны на провода
-     * и раздували бы frame до порога доставки сервера (~4КБ: в логе 13:06 offer 4.1КБ
-     * был принят сервером, но НЕ доставлен; answer 3.4КБ — доставлен). После strip
-     * H265 answer ~3.1КБ + ~5 полезных кандидатов ~0.6КБ ≈ 3.7КБ — с запасом.
-     *
-     * @return (SDP с кандидатами, сколько зашито, сколько отфильтровано)
-     */
-    private fun buildSdpWithCandidates(sdp: String, candidates: List<IceCandidate>): Triple<String, Int, Int> {
-        if (candidates.isEmpty()) return Triple(sdp, 0, 0)
-        val sep = if (sdp.contains("\r\n")) "\r\n" else "\n"
-        val lines = sdp.split(sep).toMutableList()
-        val mIdx = mutableListOf<Int>()
-        lines.forEachIndexed { i, l -> if (l.startsWith("m=")) mIdx.add(i) }
-        if (mIdx.isEmpty()) return Triple(sdp, 0, 0)
-
-        val useful = candidates.filterNot { c ->
-            val isTcp = c.sdp.split(" ").getOrNull(2) == "tcp"
-            val isLoopback = c.sdp.contains(" 127.0.0.1 ") || c.sdp.contains(" ::1 ")
-            isTcp || isLoopback
-        }
-        val skipped = candidates.size - useful.size
-        if (useful.isEmpty()) return Triple(sdp, 0, skipped)
-
-        // Группируем по m-секции; вставляем С КОНЦА, чтобы индексы не поехали.
-        val bySection = useful.groupBy { c ->
-            if (c.sdpMLineIndex in mIdx.indices) c.sdpMLineIndex else mIdx.size - 1
-        }
-        var inserted = 0
-        for (sec in mIdx.indices.reversed()) {
-            val list = bySection[sec] ?: continue
-            val insertAtRaw = if (sec + 1 < mIdx.size) mIdx[sec + 1] else lines.size
-            // Если SDP заканчивается разделителем, split даёт пустой хвост — вставляем перед ним.
-            val insertAt = if (insertAtRaw > 0 && lines[insertAtRaw - 1].isEmpty()) insertAtRaw - 1 else insertAtRaw
-            val candLines = list.map { "a=" + it.sdp }
-            lines.addAll(insertAt, candLines)
-            inserted += candLines.size
-        }
-        return Triple(lines.joinToString(sep), inserted, skipped)
+        AppLog.i(TAG, "${sdp.type} → отправка сразу (#CALLS-NON-TRICKLE-2)")
+        lastLocalSdp = sdp
+        onLocalSdpReady(sdp)
     }
 
     /**
