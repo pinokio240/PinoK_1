@@ -39,7 +39,7 @@ import kotlin.random.Random
  *  - readTimeout httpClient должен быть ≥ 45с (wait=25 + запас).
  */
 // Task 20: реализует CallsLongPoll (фасад :feature:calls, член без вызовов экранов).
-class LongPollClient(
+class LongPollClient : CallsLongPoll(
     private val httpClient: OkHttpClient,
     private val apiClient: VKApiClient,
     private val networkObserver: NetworkObserver? = null,

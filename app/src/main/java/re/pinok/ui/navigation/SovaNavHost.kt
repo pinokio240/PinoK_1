@@ -1863,6 +1863,7 @@ composable(Screen.CallsHistory.route) {
                         title = title,
                         photo = photo,
                         incoming = incoming,
+                        deps = app,
                         onNavigateBack = { nav.popBackStack() },
                         incomingPayload = payload,
                     )

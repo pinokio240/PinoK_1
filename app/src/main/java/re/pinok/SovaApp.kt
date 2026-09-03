@@ -68,7 +68,7 @@ import java.util.concurrent.TimeUnit
 // :feature:calls); CompositionLocal ставится в MainActivity.setContent.
 class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
 
-    lateinit var prefs: SovaPrefs
+    override lateinit var prefs: SovaPrefs
         private set
 
     /**
@@ -91,7 +91,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
         private set
 
     /** Exchange-token auth flow orchestrator (phone+password+2FA, refresh, LongPoll). */
-    lateinit var exchangeAuthRepository: ExchangeAuthRepository
+    override lateinit var exchangeAuthRepository: ExchangeAuthRepository
         private set
 
     /**
@@ -102,12 +102,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
     fun isExchangeAuthRepositoryInitialized(): Boolean =
         ::exchangeAuthRepository.isInitialized
 
-    lateinit var httpClient: OkHttpClient
+    override lateinit var httpClient: OkHttpClient
         private set
 
-    lateinit var apiClient: VKApiClient
+    override lateinit var apiClient: VKApiClient
     /** #CALLS: сигналинг звонков через queuev4.vk.ru. */
-    lateinit var queuev4Client: Queuev4Client
+    override lateinit var queuev4Client: Queuev4Client
         private set
     /**
      * #CALLS: вторая queuev4-подписка на events_queue<uid> — сюда приходят полные
@@ -210,7 +210,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
      * Запускается из [re.pinok.ui.MainActivity] при `tokenStorage.hasValidToken()`,
      * останавливается при logout. UI подписывается на [LongPollClient.events].
      */
-    lateinit var longPollClient: LongPollClient
+    override lateinit var longPollClient: LongPollClient
         private set
 
     /**
@@ -1515,7 +1515,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
      *
      * @return session_key (не пустой) или null.
      */
-    override suspend fun ensureCallsSessionKey(force: Boolean = false): String? {
+    override suspend fun ensureCallsSessionKey(force: Boolean): String? {
         return try {
             // 1) Уже есть в prefs — используем (если не force).
             val snap = prefs.data.first()
