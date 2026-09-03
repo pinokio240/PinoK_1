@@ -11679,3 +11679,22 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 ### Остатки/риски
 - :app:compileDebugKotlin на этом коде ещё НИ РАЗУ не выполнялся — возможны НОВЫЕ ошибки Kotlin при следующей сборке; при появлении — лог в работу.
 - Далее: assembleDebug → тест звонков по матрице §2.1, в логе штамп calls-2026.09.02-6.
+
+---
+
+## 2026-09-02 — Фикс конфигурации :feature:calls: Compose-плагин без runtime (Task 18)
+
+### Коммит: fix(calls) 3dd616c1 (ветка PinoK, push origin OK)
+
+### Факт до кода
+- Второй лог сборки пользователя: :feature:calls:compileDebugKotlin — IrGenerationExtensionException «The Compose Compiler requires the Compose Runtime to be on the class path» (fir2ir-фаза). Прежних 4 null-ошибок НЕТ — фикс c6f80bc6 прошёл фронтенд-анализ. Ошибка КОНФИГУРАЦИИ, не код и не null-операторы.
+- Факты: :feature:calls — 0 compose-кода (grep androidx.compose|@Composable = 0); этап 1.3 подключил kotlin.compose + compose = true «на вырост» без зависимостей — предположение «безвредно» неверно: плагин Compose требует androidx.compose.runtime на classpath даже без @Composable. В песочнице без SDK конфиг не проверялся. photos/audio корректны (плагин + compose-deps), contracts/core — без плагина.
+
+### Что сделано
+- :feature:calls: снят alias(libs.plugins.kotlin.compose) и compose = true; комментарий-обоснование + план возврата одним коммитом при реальном переносе CallScreen (прецедент photos/audio). BuildStamp не бамплен: звонковая логика не менялась, штамп -6 ещё ни разу не собирался.
+
+### Верификация
+- Сканер баланса скобок OK; git diff только build.gradle.kts (чужой .gitignore не коммитился).
+
+### Остатки/риски
+- Цепочка по логам: резолв зависимостей → null-ошибки кода → конфиг compose. :feature:photos/:feature:audio/:app:compileDebugKotlin ещё ни разу не выполнялись — при новых ошибках Kotlin лог в работу. Цель: assembleDebug → тест звонков (штамп calls-2026.09.02-6).

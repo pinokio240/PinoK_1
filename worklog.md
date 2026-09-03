@@ -6314,3 +6314,17 @@ Work Log:
 
 Stage Summary:
 - :feature:calls:compileDebugKotlin должен пройти; :app:compileDebugKotlin на этом коде ещё НЕ выполнялся ни разу — при новых ошибках Kotlin присылать лог. Далее: assembleDebug + тест звонков по матрице §2.1 (в логе штамп calls-2026.09.02-6).
+
+---
+Task ID: 18 (фикс конфигурации :feature:calls по второму логу сборки пользователя)
+Agent: Z.ai Code (Sergey)
+Task: IrGenerationExtensionException «Compose Compiler requires the Compose Runtime» на :feature:calls:compileDebugKotlin
+
+Work Log:
+- Лог пользователя: единственная проблема — fir2ir-фаза :feature:calls падает «The Compose Compiler requires the Compose Runtime to be on the class path». Прежних 4 null-ошибок (510-534) НЕТ — фикс c6f80bc6 прошёл фронтенд-анализ. Ошибка конфигурации Gradle, не Kotlin-код и не null-операторы.
+- Факты: (1) в :feature:calls 0 compose-кода (grep androidx.compose|@Composable по src = 0); (2) этап 1.3 подключил плагин «на вырост» без зависимостей, комментарий в build.gradle.kts это документирует — предположение «безвредно» неверно: плагин Compose требует runtime на classpath даже без @Composable; (3) photos/audio корректны (плагин + compose-bom/ui/material3), contracts/core плагина не имеют.
+- Фикс: снят alias(libs.plugins.kotlin.compose) и compose = true из :feature:calls, комментарий-обоснование + план возврата одним коммитом при переносе CallScreen. Сканер скобок OK. BuildStamp НЕ бамплен (конфиг, не звонковая логика; -6 ещё ни разу не собирался).
+- Коммит 3dd616c1 запушен (133bf6cd..3dd616c1).
+
+Stage Summary:
+- Цепочка сборки по логам: резолв (TOML, a5a26926) → null-ошибки кода (c6f80bc6) → конфиг compose (3dd616c1). Далее :feature:photos/:feature:audio/:app:compileDebugKotlin ещё ни разу не выполнялись — возможны НОВЫЕ ошибки Kotlin, лог присылать. Цель: assembleDebug → тест звонков, штамп calls-2026.09.02-6.
