@@ -6328,3 +6328,17 @@ Work Log:
 
 Stage Summary:
 - Цепочка сборки по логам: резолв (TOML, a5a26926) → null-ошибки кода (c6f80bc6) → конфиг compose (3dd616c1). Далее :feature:photos/:feature:audio/:app:compileDebugKotlin ещё ни разу не выполнялись — возможны НОВЫЕ ошибки Kotlin, лог присылать. Цель: assembleDebug → тест звонков, штамп calls-2026.09.02-6.
+
+---
+Task ID: 19 (фикс компиляции :app по третьему логу сборки пользователя)
+Agent: Z.ai Code (Sergey)
+Task: SovaApp.kt:654 «Return type mismatch: expected 'Boolean', actual 'Unit'» — хост-хук CallStarter
+
+Work Log:
+- Прогресс по логу: все :core/:feature модули скомпилировались, упал последний — :app. Ошибка ровно ОДНА на весь модуль.
+- Факты: контракт CallStarter.startCall: Boolean (KDoc: true — принят в работу, false — невозможен); CallsStarterImpl оборачивает хук в try/catch → false при краше; requestOutgoingCall возвращала Unit, лямбда startCallHook требовала Boolean. Потребители (SovaNavHost:336/1563) Boolean не читают.
+- Фикс на стороне хоста (контракт не трогали): requestOutgoingCall → Boolean, всегда true (pending-механизм отказать не может — валидность решается при consumeOutgoingCall в SovaNavHost). Сканер скобок OK. Инцидент инструментария: MultiEdit не атомарен — первая правка легла, вторая упала; состояние обоих файлов сверено до коммита.
+- BuildStamp -6 → -7. Коммит 80b6db01 запушен (f1d9694f..80b6db01).
+
+Stage Summary:
+- Счётчик ошибок по логам: 9 (резолв-каскад) → 4 (nullable) → 1 (конфиг compose) → 1 (тип-контракт). :app:compileDebugKotlin — последний модуль в цепочке; после фикса вероятны либо BUILD SUCCESSFUL, либо полный список оставшихся ошибок модуля одним логом. Дальше dex/упаковка — механические. Штамп для теста звонков: calls-2026.09.02-7.

@@ -11698,3 +11698,23 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ### Остатки/риски
 - Цепочка по логам: резолв зависимостей → null-ошибки кода → конфиг compose. :feature:photos/:feature:audio/:app:compileDebugKotlin ещё ни разу не выполнялись — при новых ошибках Kotlin лог в работу. Цель: assembleDebug → тест звонков (штамп calls-2026.09.02-6).
+
+---
+
+## 2026-09-02 — Фикс компиляции :app: хост-хук CallStarter к контракту (Task 19)
+
+### Коммит: fix(calls) 80b6db01 (ветка PinoK, push origin OK)
+
+### Факт до кода
+- Третий лог сборки: все :core/:feature скомпилировались, :app:compileDebugKotlin — ровно ОДНА ошибка на весь модуль: SovaApp.kt:654 «Return type mismatch: expected 'Boolean', actual 'Unit'».
+- Контракт CallStarter.startCall: Boolean (true — принят в работу; false — краш хука, ловится CallsStarterImpl try/catch). Хост-хук requestOutgoingCall возвращал Unit.
+
+### Что сделано
+- requestOutgoingCall → Boolean, всегда true: pending-механизм отказать не может, валидность peerId/навигатор решаются при consumeOutgoingCall в SovaNavHost. Контракт и CallsContainer не тронуты; потребители (SovaNavHost:336/1563) результат не читают — поведение не менялось.
+- BuildStamp calls-2026.09.02-6 → -7 (штамп отличит сборку в логе звонка).
+
+### Верификация
+- Сканер скобок OK (SovaApp, BuildStamp). Инцидент: MultiEdit не атомарен (первая правка легла, вторая упала) — состояние сверено по sed/grep до коммита.
+
+### Счётчик ошибок по логам
+- 9 (резолв-каскад TOML) → 4 (nullable-ресивер, код) → 1 (конфиг compose) → 1 (тип-контракт, код). :app — последний модуль; далее dex/упаковка механические. Цель: assembleDebug → тест звонков (штамп calls-2026.09.02-7).
