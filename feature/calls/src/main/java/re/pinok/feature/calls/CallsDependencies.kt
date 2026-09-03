@@ -73,20 +73,17 @@ interface CallsApi {
         sessionKey: String,
         isVideo: Boolean,
     ): JsonObject?
-
     suspend fun vchatHangupConversation(
         conversationId: String,
         sessionKey: String,
         reason: String,
     ): Boolean
-
     suspend fun vchatStartConversation(
         conversationId: String,
         sessionKey: String?,
         peerUid: Long,
         callerAppId: Long,
     ): JsonObject?
-
     suspend fun messagesStartCall(peerId: Long, video: Boolean): String?
     suspend fun messagesGetCurrentCalls(): List<JsonObject>
     suspend fun messagesGetInboundCalls(count: Int): List<JsonObject>
@@ -94,6 +91,17 @@ interface CallsApi {
     suspend fun messagesGetCallRecordings(count: Int): List<JsonObject>
     suspend fun messagesGetCallTranscriptions(count: Int): List<JsonObject>
     suspend fun friendsGetOnline(userId: Long?): List<UserProfile>
+    suspend fun likesAdd(type: String, ownerId: Long, itemId: Long): Int
+    suspend fun likesDelete(type: String, ownerId: Long, itemId: Long): Int
+    suspend fun likesIsLiked(type: String, ownerId: Long, itemId: Long): Boolean?
+    suspend fun wallRepost(object_: String): Pair<Long, Int>
+    suspend fun faveAdd(type: String, ownerId: Long, itemId: Long): Boolean
+    suspend fun faveRemove(type: String, ownerId: Long, itemId: Long): Boolean
+    suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String?): Boolean
+    suspend fun videoGet(ownerId: Long?, count: Int, offset: Int, albumId: Long?): List<re.pinok.data.model.Video>
+    suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int): List<re.pinok.data.model.Comment>
+    suspend fun videoCreateComment(ownerId: Long, videoId: Long, message: String, replyToComment: Long?): Long
+    suspend fun videoGetById(videoId: Long, ownerId: Long): re.pinok.data.model.Video?
 }
 
 /** Фасад Queuev4Client: setCredential/start/events — вызовы экранов (census). */
