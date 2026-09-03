@@ -10,10 +10,14 @@ plugins {
     // kotlin-android НЕ нужен — AGP 9.0+ имеет встроенную поддержку Kotlin
     // https://kotl.in/gradle/agp-built-in-kotlin
     alias(libs.plugins.android.library)
-    // Compose-компилятор подключён с первого дня (модуль целится в приём
-    // CallScreen/секций на Этапе 1.4); compose-зависимости добавятся по факту
-    // переноса экранов — текущему коду модуля compose не нужен.
-    alias(libs.plugins.kotlin.compose)
+    // kotlin.compose НЕ подключён (раньше был «на вырост» — ошибка): плагин
+    // Compose-компилятора требует androidx.compose.runtime на classpath ДАЖЕ
+    // в модуле без @Composable — с плагином и без compose-зависимостей
+    // :feature:calls:compileDebugKotlin падал «The Compose Compiler requires
+    // the Compose Runtime to be on the class path» (лог сборки 2026-09-02,
+    // Task 18). В модуле 0 compose-кода (grep androidx.compose|@Composable = 0).
+    // Вернуть плагин + compose = true + compose-bom/ui/material3 ОДНИМ коммитом
+    // при реальном переносе CallScreen — прецедент :feature:photos/:feature:audio.
 }
 
 android {
@@ -30,9 +34,8 @@ android {
     }
 
     buildFeatures {
-        // compose-кода в модуле пока нет (контейнер — без UI); флаг включён
-        // заранее, чтобы Этап 1.4 не трогал gradle-файл.
-        compose = true
+        // compose = true НЕ включён: флаг без плагина/зависимостей мёртвый,
+        // вернуть ВМЕСТЕ с kotlin.compose при переносе CallScreen (см. plugins).
         // BuildConfig библиотечному модулю НЕ нужен: перенесённый код не читает
         // re.pinok.BuildConfig (прецедент 1.2-а/1.2-в: AppLog.setAppBuildInfo,
         // AppLog.debugBuild — инжект из хоста).
