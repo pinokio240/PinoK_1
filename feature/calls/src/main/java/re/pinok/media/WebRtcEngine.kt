@@ -1031,27 +1031,7 @@ class WebRtcEngine(
      * (включая relay) — это последний шанс поднять медиа до того, как собеседник
      * сдастся (в тесте 20:49 он сбросил через 11с после topology-changed).
      *
-     * @return true — restart запущен, свежий offer уйдёт через onLocalSdpReady.
-     */
-    fun restartIce(): Boolean {
-        val pc = peerConnection ?: run {
-            AppLog.w(TAG, "restartIce: PeerConnection нет — некому рестартовать")
-            return false
-        }
-        return try {
-            AppLog.i(TAG, "ICE RESTART: новый ufrag/pwd + свежая сборка кандидатов")
-            pc.restartIce()
-            // createOffer при pending negotiation-needed даст offer с новыми
-            // ice-credentials; setLocal + sendLocalSdpNow отправят его собеседнику.
-            createOffer()
-            true
-        } catch (e: Exception) {
-            AppLog.e(TAG, "restartIce error: ${e.message}")
-            false
-        }
-    }
-
-    /** #CALLS-VK-TOPOLOGY (2026-09-03, VK web pattern): topology-changed{SERVER}.
+     /** #CALLS-VK-TOPOLOGY (2026-09-03, VK web pattern): topology-changed{SERVER}.
      * 5s wait → restartIce() → 20s timeout → если не помогло — вызывает onBounce.
      * @param onBounce колбэк для сигналинг-bounce (WS переподключение), если restart не помог. */
     fun handleTopologyServer(onBounce: () -> Unit) {
