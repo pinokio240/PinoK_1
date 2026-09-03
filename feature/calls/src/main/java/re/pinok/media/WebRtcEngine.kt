@@ -43,10 +43,14 @@ class WebRtcEngine(
     /** #CALLS-VIDEO-RX: удалённый VideoTrack появился (или null — звонок завершён). */
     private val onRemoteVideoTrack: ((VideoTrack?) -> Unit)? = null,
 ) {
-    companion object {
+companion object {
         private const val TAG = "WebRtcEngine"
         private val STUN_URL = "stun:videostun.okcdn.ru:19302"
         private val TURN_URL = "turn:calls.okcdn.ru:3478?transport=udp"
+        /** #CALLS-INLINE-ICE: официальный VK-клиент зашивает кандидаты ВНУТРЬ SDP.
+         *  Без inline-кандидатов входящий звонок не работает (пар=0, reqS=0).
+         *  Ждём сбора кандидатов до 1.5с, затем отправляем SDP с зашитыми a=candidate. */
+        private const val INLINE_ICE_WAIT_MS = 1500L
     }
 
     private var factory: PeerConnectionFactory? = null
@@ -54,13 +58,15 @@ class WebRtcEngine(
     private var localAudioTrack: AudioTrack? = null
     private var audioSource: AudioSource? = null
     private val pendingRemoteIce = ConcurrentHashMap<String, MutableList<IceCandidate>>()
-    // #CALLS-FIX (2026-08-24): последний отправленный локальный SDP (offer/answer).
-    // При topology-changed сервер просит отправить offer заново — берём его отсюда
-    // (в CallScreen кэш pendingLocalSdp очищается после первой отправки).
-    // Чистый SDP без inline-кандидатов (trickle-модель, как в VK web).
     @Volatile
     private var lastLocalSdp: SessionDescription? = null
     fun lastLocalSdp(): SessionDescription? = lastLocalSdp
+
+    // #CALLS-INLINE-ICE: кандидаты, собранные с момента планирования отправки SDP.
+    private val gatheredCandidates = ArrayList<IceCandidate>(16)
+    @Volatile
+    private var inlineIceSent = false
+    private val sdpSendGen = java.util.concurrent.atomic.AtomicLong(0)
 
     // #CALLS-ANSWER-FIRST (2026-08-30, тест 4 16:03–16:05): ПОРЯДОК отправки решает всё.
     // Прежний #CALLS-NON-TRICKLE (ждать gathering ≤3с, зашивать кандидатов в текст SDP)
@@ -554,6 +560,10 @@ class WebRtcEngine(
         lastPairStats = null
         // #CALLS-PC-RESTART: оффер прошлого звонка не должен утечь в новый
         lastRemoteOffer = null
+        // #CALLS-INLINE-ICE: новый PC — буфер кандидатов и режим отправки заново
+        gatheredCandidates.clear()
+        inlineIceSent = false
+        sdpSendGen.incrementAndGet()
         val iceServers = this.iceServers.ifEmpty {
             listOf(
                 PeerConnection.IceServer.builder(STUN_URL).createIceServer(),
@@ -593,10 +603,17 @@ class WebRtcEngine(
                     AppLog.d(TAG, "локальный кандидат ОТФИЛЬТРОВАН (tcp/loopback/any): $typ/$proto ${candidate.sdp.take(40)}")
                     return
                 }
-                // #CALLS-NON-TRICKLE-2: кандидаты уходят trickle'ом СРАЗУ через
-                // onIceCandidateReady (SDP первым, кандидаты следом — как в VK).
-                AppLog.d(TAG, "локальный кандидат (trickle): $typ/$proto ${candidate.sdp.take(48)}")
-                onIceCandidateReady(candidate)
+                // #CALLS-INLINE-ICE: официальный VK-клиент зашивает кандидаты ВНУТРЬ SDP.
+                // Доказательство: лог 20:25 исходящий — answer от оф.клиента содержал
+                // a=candidate:468136283... прямо в SDP. Trickle-кандидаты не добавляются.
+                // До отправки SDP кандидаты копятся в буфере; после — trickle.
+                if (inlineIceSent) {
+                    AppLog.d(TAG, "локальный кандидат (trickle): $typ/$proto ${candidate.sdp.take(48)}")
+                    onIceCandidateReady(candidate)
+                } else {
+                    gatheredCandidates.add(candidate)
+                    AppLog.d(TAG, "локальный кандидат (буфер→inline): $typ/$proto ${candidate.sdp.take(48)}")
+                }
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
             override fun onSignalingChange(state: PeerConnection.SignalingState) {}
@@ -1070,15 +1087,60 @@ class WebRtcEngine(
     }
 
     /**
-     * #CALLS-NON-TRICKLE-2 (2026-09-03): SDP отправляется СРАЗУ после setLocal —
-     * без ожидания сбора кандидатов и зашивания их в SDP (схема #CALLS-INLINE-ICE
-     * снята веткой «answer первым, кандидаты trickle'ом следом», как в VK).
-     * Вызов на signaling thread (setLocal onSetSuccess уже там).
+     * #CALLS-INLINE-ICE: SDP отправляется с задержкой [INLINE_ICE_WAIT_MS] для сбора
+     * кандидатов. Кандидаты зашиваются ВНУТРЬ SDP (a=candidate), как делает официальный
+     * VK-клиент. Доказательство: лог 20:25 — answer оф.клиента содержал inline-кандидаты.
+     * Trickle-кандидаты после отправки SDP — только для свежесобранных.
      */
     private fun sendLocalSdpNow(sdp: SessionDescription) {
-        AppLog.i(TAG, "${sdp.type} → отправка сразу (#CALLS-NON-TRICKLE-2)")
-        lastLocalSdp = sdp
-        onLocalSdpReady(sdp)
+        val gen = sdpSendGen.incrementAndGet()
+        val scheduledAt = System.currentTimeMillis()
+        gatheredCandidates.clear()
+        inlineIceSent = false
+        AppLog.i(TAG, "${sdp.type}: отправка через ${INLINE_ICE_WAIT_MS}мс — кандидаты уйдут ВНУТРИ SDP (#CALLS-INLINE-ICE)")
+        signalingHandler?.postDelayed({
+            if (gen != sdpSendGen.get()) return@postDelayed
+            if (peerConnection == null) return@postDelayed
+            val (finalSdp, inlined, skipped) = buildSdpWithCandidates(sdp.description, gatheredCandidates)
+            gatheredCandidates.clear()
+            inlineIceSent = true
+            AppLog.i(TAG, "${sdp.type} → отправка (inline кандидатов: $inlined, отфильтровано loopback/tcp: $skipped; сбор ${System.currentTimeMillis() - scheduledAt}мс)")
+            val toSend = SessionDescription(sdp.type, finalSdp)
+            lastLocalSdp = toSend
+            onLocalSdpReady(toSend)
+        }, INLINE_ICE_WAIT_MS)
+    }
+
+    /**
+     * #CALLS-INLINE-ICE: зашить ICE-кандидатов в текст SDP по своим m-секциям.
+     */
+    private fun buildSdpWithCandidates(sdp: String, candidates: List<IceCandidate>): Triple<String, Int, Int> {
+        if (candidates.isEmpty()) return Triple(sdp, 0, 0)
+        val sep = if (sdp.contains("\r\n")) "\r\n" else "\n"
+        val lines = sdp.split(sep).toMutableList()
+        val mIdx = mutableListOf<Int>()
+        lines.forEachIndexed { i, l -> if (l.startsWith("m=")) mIdx.add(i) }
+        if (mIdx.isEmpty()) return Triple(sdp, 0, 0)
+        val useful = candidates.filterNot { c ->
+            val isTcp = c.sdp.split(" ").getOrNull(2) == "tcp"
+            val isLoopback = c.sdp.contains(" 127.0.0.1 ") || c.sdp.contains(" ::1 ")
+            isTcp || isLoopback
+        }
+        val skipped = candidates.size - useful.size
+        if (useful.isEmpty()) return Triple(sdp, 0, skipped)
+        val bySection = useful.groupBy { c ->
+            if (c.sdpMLineIndex in mIdx.indices) c.sdpMLineIndex else mIdx.size - 1
+        }
+        var inserted = 0
+        for (sec in mIdx.indices.reversed()) {
+            val list = bySection[sec] ?: continue
+            val insertAtRaw = if (sec + 1 < mIdx.size) mIdx[sec + 1] else lines.size
+            val insertAt = if (insertAtRaw > 0 && lines[insertAtRaw - 1].isEmpty()) insertAtRaw - 1 else insertAtRaw
+            val candLines = list.map { "a=" + it.sdp }
+            lines.addAll(insertAt, candLines)
+            inserted += candLines.size
+        }
+        return Triple(lines.joinToString(sep), inserted, skipped)
     }
 
     /**
