@@ -11764,3 +11764,23 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ### Урок
 - Анализ переносимости файла — по всем same-package ссылкам, не только по import. Слепая зона: классы одного пакета не импортируются.
+
+## Task 22 (2026-09-03) — 55 ошибок лога 14:16: UserProfile -> :core:data, try/catch composables, довески фасадов
+
+### Контекст
+- Лог 2026-09-03 14:16: 55 ошибок компиляции, все в :feature:calls. После Task 20/21 (330 -> 55).
+- Группы: (A) Unresolved UserProfile x19; (B) try-catch вокруг composable x14 (7 файлов); (C) каскад инференса CallScreen x14 (от A); (D) force без значения x2; (E) Unresolved 'app' x2; (F) Unresolved 'auth'/RemixsidCapturer x3.
+
+### Что сделано
+- (A+C) UserProfile перенесён из :app (Models.kt:13-98) в :core:data (core/data/src/main/java/re/pinok/data/model/UserProfile.kt), пакет re.pinok.data.model сохранён; в :core:data добавлен gson. Класс самодостаточен (только @SerializedName + вложенные классы). Потребители :app видят без правок (same-package через classpath; прецедент — PermissionManager -> AppLog из упавшего билда Task 21).
+- (B) Локальный паттерн-баг 7 файлов: LocalCallsDeps.current (@Composable-чтение) внутри try внутри LaunchedEffect/DisposableEffect. Чтение вынесено на compose-уровень перед effect-блоком. Отсутствие провайдера теперь fail-fast при композиции (замысел staticCompositionLocalOf), а не глотается catch'ем.
+- (D) deps.ensureCallsSessionKey() x2 -> force = false (прежний дефолт SovaApp:1518; до миграции вызывалось app.ensureCallsSessionKey()).
+- (E) CallsHistoryScreen 75-76: унаследованные app.apiClient -> deps.apiClient; messagesGetInboundCalls добавлен в CallsApi (17-й член; пропуск census Task 20: вызов стоял под app., grep по deps. его не видел) + override в VKApiClient:11499.
+- (F) buildVkCookieHeader() добавлен в фасад CallsAuth; ExchangeAuthRepository делегирует в RemixsidCapturer (same-package, перенос невозможен — кластер auth.exchange, урок Task 21); CallsWebViewScreen вызывает через deps.exchangeAuthRepository. Рантайм тот же.
+- Доведён незавершённый Task 21: ExchangeAuthRepository объявлен ': CallsAuth' (override-маркеры лежали в дереве без супертипа — 'overrides nothing' при следующей сборке); :core:network снята implementation(:core:data).
+- BuildStamp calls-2026.09.03-10.
+
+### Верификация
+- Скобочный сканер восстановлен (.zscripts/bracket_scanner.py, статус-машина с корректной обработкой ${-шаблонов) — 14/14 OK, включая VKApiClient 14304 строки.
+- Ре-аудит: все re.pinok.* import'ы :feature:calls резолвятся; census deps.*/apiClient.* = 100% фасадам; NULL-EXPLICIT: 0 новых !!/?. в диффе.
+- Состав членов CallsDependencies НЕ сужен; расширены только фасады CallsApi 16->17 и CallsAuth 2->3 (по реальным вызовам экранов).
