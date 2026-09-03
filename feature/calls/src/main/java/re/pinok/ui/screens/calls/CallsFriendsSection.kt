@@ -60,7 +60,7 @@ fun CallsFriendsSection(onNavigateToCall: (Long) -> Unit) {
     LaunchedEffect(Unit) {
         try {
             val deps = LocalCallsDeps.current
-            val result = deps.apiClient.friendsGetOnline()
+            val result = deps.apiClient.friendsGetOnline(userId = null)
             items = result
             AppLog.i("CallsFriendsSection", "loaded ${items.size} online friends")
         } catch (e: Exception) {

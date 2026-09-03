@@ -1,7 +1,6 @@
 package re.pinok.data.local
 
 import android.content.Context
-import re.pinok.BuildConfig
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -68,7 +67,10 @@ private val Context.sovaDataStore by preferencesDataStore(name = "sova_settings"
  *
  * Plus a few SOVA_2.0-only extras (selected accent color index).
  */
-class SovaPrefs(context: Context) {
+// #ARCH-DATA (Task 20): дефолт showLogFab раньше читался из BuildConfig.DEBUG
+// (:app) — библиотечному модулю :core:data BuildConfig не нужен, значение
+// подаёт хост (SovaApp: SovaPrefs(this, BuildConfig.DEBUG)).
+class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     private val ds = context.applicationContext.sovaDataStore
 
@@ -104,7 +106,7 @@ class SovaPrefs(context: Context) {
             // Default = BuildConfig.DEBUG — в debug-сборке виден разработчику,
             // в release-сборке скрыт по умолчанию. Пользователь может включить
             // в настройках (SettingsScreen → Логирование → «Показывать значок»). 
-            showLogFab         = p[Keys.SHOW_LOG_FAB]           ?: BuildConfig.DEBUG,
+            showLogFab         = p[Keys.SHOW_LOG_FAB]           ?: debugDefault,
             // #LOG-CATEGORIES: множество имён отключенных категорий логов.
             // #LOG-CATEGORIES-DEFAULT-CRITICAL (2026-08-05): default =
             // NON_CRITICAL_CATEGORY_NAMES — включены только AUTH+SYSTEM+NETWORK,

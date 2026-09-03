@@ -19,6 +19,13 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -8 (03.09) = #ARCH-DATA Task 20: DI-контракт CallsDependencies (6742de6c)
+    // сделан собираемым: SovaPrefs -> :core:data (новый модуль), ExchangeAuthRepository
+    // -> :core:network, PermissionManager -> :feature:calls (пакеты сохранены);
+    // VKApiClient/Queuev4Client/LongPollClient — фасады CallsApi/CallsQueue/CallsLongPoll
+    // (перенос VKApiClient невозможен: 14k строк, импорт re.pinok.SovaApp); SovaApp
+    // реализует CallsDependencies, провайдер в MainActivity.setContent. Состав членов
+    // 6742de6c НЕ сужен; поведение звонков не менялось (те же объекты в рантайме).
     // -7 (02.09) = хост-хук CallStarter приведён к контракту: requestOutgoingCall
     // возвращает Boolean (pending-механизм всегда принимает — true; краш хука
     // ловит CallsStarterImpl — false). Ошибка «Return type mismatch: expected
@@ -53,5 +60,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.02-7"
+    const val STAMP: String = "calls-2026.09.03-8"
 }

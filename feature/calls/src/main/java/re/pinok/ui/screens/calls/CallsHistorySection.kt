@@ -77,7 +77,7 @@ fun CallsHistorySection(onNavigateToCall: (Long) -> Unit) {
 LaunchedEffect(Unit) {
         try {
             val deps = LocalCallsDeps.current
-            val raw = deps.apiClient.callsGetHistory(30)
+            val raw = deps.apiClient.callsGetHistory(30, offset = 0)
             var parsed = raw.mapNotNull { it.parseCallItem() }
             val uniquePeers = parsed.map { it.peerId }.distinct()
             if (uniquePeers.isNotEmpty()) {

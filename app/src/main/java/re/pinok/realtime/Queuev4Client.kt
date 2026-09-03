@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import re.pinok.api.VKApiClient
+import re.pinok.feature.calls.CallsQueue
 import re.pinok.data.model.QueueCredential
 import re.pinok.data.model.QueueEvent
 import re.pinok.util.AppLog
@@ -40,10 +41,11 @@ import kotlin.random.Random
  *
  * Используется для приёма входящих звонков (LP 115).
  */
+// Task 20: реализует CallsQueue (фасад :feature:calls) — события/креденшелы queue.
 class Queuev4Client(
     private val httpClient: OkHttpClient,
     private val apiClient: VKApiClient,
-) {
+) : CallsQueue {
     companion object {
         private const val TAG = "Queuev4Client"
         private const val MIN_BACKOFF_MS = 2_000L
@@ -64,14 +66,14 @@ class Queuev4Client(
     private var credential: QueueCredential? = null
 
     private val _events = MutableSharedFlow<QueueEvent>(replay = 0, extraBufferCapacity = 64)
-    val events: SharedFlow<QueueEvent> = _events.asSharedFlow()
+    override val events: SharedFlow<QueueEvent> = _events.asSharedFlow()
 
-    fun setCredential(cred: QueueCredential) { credential = cred }
+    override fun setCredential(cred: QueueCredential) { credential = cred }
 
     /** True если long-poll цикл активен. */
     fun isRunning(): Boolean = pollJob?.isActive == true
 
-    fun start() {
+    override fun start() {
         if (pollJob?.isActive == true) return
         // #NULL-EXPLICIT: credential — var-свойство класса, smart-cast невозможен —
         // захватываем в локальный val (снимок на момент start()). Инвариант: владелец

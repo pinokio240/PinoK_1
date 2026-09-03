@@ -19,6 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import re.pinok.api.VKApiClient
+import re.pinok.feature.calls.CallsLongPoll
 import re.pinok.data.local.SovaPrefs
 import re.pinok.util.AppLog
 import re.pinok.util.NetworkObserver
@@ -37,6 +38,7 @@ import kotlin.random.Random
  *    очищает застоявшиеся TCP-соединения на мёртвом интерфейсе (WiFi → 4G).
  *  - readTimeout httpClient должен быть ≥ 45с (wait=25 + запас).
  */
+// Task 20: реализует CallsLongPoll (фасад :feature:calls, член без вызовов экранов).
 class LongPollClient(
     private val httpClient: OkHttpClient,
     private val apiClient: VKApiClient,

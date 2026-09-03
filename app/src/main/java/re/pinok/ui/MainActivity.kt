@@ -9,6 +9,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.CompositionLocalProvider
+import re.pinok.feature.calls.LocalCallsDeps
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -726,6 +728,9 @@ class MainActivity : ComponentActivity() {
                             // На Android 13+ без POST_NOTIFICATIONS не работают уведомления
                             // foreground-сервисов (загрузка музыки/видео, плеер).
                             RequestAllPermissionsEffect()
+                            // Task 20: CompositionLocal DI-контракта экранов звонков —
+                            // провайдер SovaApp (реализует CallsDependencies).
+                            CompositionLocalProvider(LocalCallsDeps provides app) {
                             SovaNavHost(
                                 initialRoute = snap.lastRoute,
                                 pendingOpenChatPeerId = pendingOpenChatPeerId,
@@ -863,6 +868,7 @@ class MainActivity : ComponentActivity() {
                                     finishAffinity()
                                 },
                             )
+                            } // CompositionLocalProvider(LocalCallsDeps)
                         }
 
                         // #34: Guest-режим — пользователь нажал «Офлайн-режим» на

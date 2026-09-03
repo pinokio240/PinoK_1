@@ -21,6 +21,7 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import re.pinok.SovaApp
+import re.pinok.feature.calls.CallsApi
 import re.pinok.auth.exchange.ExchangeAuthRepository
 import re.pinok.data.local.SovaPrefs
 import re.pinok.data.local.TokenStorage
@@ -90,6 +91,8 @@ private fun isNetworkRecentlySwitched(windowMs: Long): Boolean {
     }
 }
 
+// Task 20: реализует CallsApi (фасад :feature:calls) — рантайм тот же объект,
+// сигнатуры без правок (дефолты аргументов легальны поверх интерфейса без дефолтов).
 class VKApiClient(
     private val context: Context,
     private val httpClient: OkHttpClient,
@@ -97,7 +100,7 @@ class VKApiClient(
     private val prefs: SovaPrefs,
     private val exchangeAuthRepository: ExchangeAuthRepository? = null,
     networkObserver: NetworkObserver? = null,
-) {
+) : CallsApi {
 
     private val networkObserver = networkObserver ?: NetworkObserver(context)
     private val networkMods = NetworkMods()
@@ -108,7 +111,7 @@ class VKApiClient(
     // НЕ VK user_id (171093180). Нужен для userId в WS URL сигналинга.
     @Volatile
     private var lastAnonymUid: Long = 0L
-    fun lastAnonymUid(): Long = lastAnonymUid
+    override fun lastAnonymUid(): Long = lastAnonymUid
 
     private val randomIdCounter = java.util.concurrent.atomic.AtomicLong(0)
 
@@ -6680,7 +6683,7 @@ class VKApiClient(
      *
      * Возвращает Map<userId, UserProfile>.
      */
-    suspend fun usersGetByIds(userIds: List<Long>): Map<Long, UserProfile> {
+    override suspend fun usersGetByIds(userIds: List<Long>): Map<Long, UserProfile> {
         if (isOffline() || userIds.isEmpty()) return emptyMap()
         val args = mutableMapOf(
             "user_ids" to userIds.joinToString(",") { it.toString() },
@@ -9728,11 +9731,11 @@ class VKApiClient(
     }
 
     @Volatile
-    var lastApiError: String? = null
+    override var lastApiError: String? = null
         private set
 
     @Volatile
-    var lastApiErrorCode: Int = 0
+    override var lastApiErrorCode: Int = 0
         private set
 
     // ── #38: Auto-offline после N последовательных сетевых неудач ──────────
@@ -10813,7 +10816,7 @@ class VKApiClient(
      * @param queueIdSuffix имя очереди (по умолчанию accountcounters_<uid>).
      * @return QueueCredential или null при ошибке.
      */
-    suspend fun queueSubscribe(userId: Long = 0L, queueIdSuffix: String? = null): QueueCredential? {
+    override suspend fun queueSubscribe(userId: Long = 0L, queueIdSuffix: String? = null): QueueCredential? {
         if (isOffline()) return null
         val uid = if (userId > 0L) userId else (exchangeAuthRepository?.userId() ?: 0L)
         val suffix = queueIdSuffix ?: "accountcounters_$uid"
@@ -11143,7 +11146,7 @@ class VKApiClient(
      *
      * @return JsonObject response или null.
      */
-    suspend fun vchatSystemGetInfo(sessionKey: String): JsonObject? {
+    override suspend fun vchatSystemGetInfo(sessionKey: String): JsonObject? {
         if (isOffline()) return null
         if (sessionKey.isBlank()) return null
         return try {
@@ -11187,7 +11190,7 @@ class VKApiClient(
      *
      * @return join_link (base64url токен) или null.
      */
-    suspend fun vchatCreateJoinLink(conversationId: String, sessionKey: String): String? {
+    override suspend fun vchatCreateJoinLink(conversationId: String, sessionKey: String): String? {
         if (isOffline()) return null
         return try {
             val form = FormBody.Builder()
@@ -11239,7 +11242,7 @@ class VKApiClient(
      * @param isVideo флаг видео
      * @return JsonObject response или null
      */
-    suspend fun vchatJoinConversation(
+    override suspend fun vchatJoinConversation(
         conversationId: String,
         sessionKey: String,
         isVideo: Boolean = false,
@@ -11312,7 +11315,7 @@ class VKApiClient(
      *   session_key=<session_key>
      *   reason=hungup
      */
-    suspend fun vchatHangupConversation(
+    override suspend fun vchatHangupConversation(
         conversationId: String,
         sessionKey: String,
         reason: String = "hungup",
@@ -11382,7 +11385,7 @@ class VKApiClient(
      * @param callerAppId app_id звонка (эталон desktop = 6287487)
      * @return JsonObject response или null.
      */
-    suspend fun vchatStartConversation(
+    override suspend fun vchatStartConversation(
         conversationId: String,
         sessionKey: String?,
         peerUid: Long,
@@ -11459,7 +11462,7 @@ class VKApiClient(
      *
      * @return call_id (string) или null.
      */
-    suspend fun messagesStartCall(peerId: Long, video: Boolean = false): String? {
+    override suspend fun messagesStartCall(peerId: Long, video: Boolean = false): String? {
         if (isOffline()) return null
         val args = mutableMapOf("peer_id" to peerId.toString())
         if (!video) args["voice"] = "1"
@@ -11477,7 +11480,7 @@ class VKApiClient(
      * #CALLS: messages.getCurrentCalls — текущие активные звонки.
      * VK API: messages.getCurrentCalls → response.items[] = [...]
      */
-    suspend fun messagesGetCurrentCalls(): List<JsonObject> {
+    override suspend fun messagesGetCurrentCalls(): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("messages.getCurrentCalls", emptyMap()) ?: return emptyList()
         return try {
@@ -11509,7 +11512,7 @@ class VKApiClient(
      * #CALLS (2026-08-27): calls.getHistory — история звонков (как Chrome desktop).
      * Формат ответа: { response: { items: [{ peer_id, name, photo, direction, date, duration, ... }] } }
      */
-    suspend fun callsGetHistory(count: Int = 30, offset: Int = 0): List<JsonObject> {
+    override suspend fun callsGetHistory(count: Int = 30, offset: Int = 0): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("calls.getHistory", mapOf("count" to count.toString(), "offset" to offset.toString())) ?: return emptyList()
         return try {
@@ -11599,7 +11602,7 @@ class VKApiClient(
      * #CALLS: messages.getCallRecordings — записи звонков.
      * VK API: messages.getCallRecordings { count=30 } → response.items[] = [...]
      */
-    suspend fun messagesGetCallRecordings(count: Int = 30): List<JsonObject> {
+    override suspend fun messagesGetCallRecordings(count: Int = 30): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("messages.getCallRecordings", mapOf("count" to count.toString())) ?: return emptyList()
         return try {
@@ -11615,7 +11618,7 @@ class VKApiClient(
      * #CALLS: messages.getCallTranscriptions — расшифровки звонков.
      * VK API: messages.getCallTranscriptions { count=30 } → response.items[] = [...]
      */
-    suspend fun messagesGetCallTranscriptions(count: Int = 30): List<JsonObject> {
+    override suspend fun messagesGetCallTranscriptions(count: Int = 30): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("messages.getCallTranscriptions", mapOf("count" to count.toString())) ?: return emptyList()
         return try {
@@ -12156,7 +12159,7 @@ class VKApiClient(
      * @param userId ID пользователя (если null — текущий пользователь).
      * @return Список UserProfile (только id, firstName, lastName, photo100, online).
      */
-    suspend fun friendsGetOnline(userId: Long? = null): List<UserProfile> {
+    override suspend fun friendsGetOnline(userId: Long? = null): List<UserProfile> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf(
             "fields" to "photo_100,photo_200,online,last_seen",

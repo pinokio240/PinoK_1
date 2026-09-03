@@ -42,6 +42,12 @@ include(":core:network")
 // Плеер/download-менеджеры/сервисы остались в :app (data.model/UI/Service —
 // см. контейнеры.план.md, Этап 1.2).
 include(":core:media")
+// #ARCH-DATA (2026-09-03, Task 20): data-слой — SovaPrefs (+Snapshot). Первая
+// выемка из запланированного выделения data-слоя (контейнеры.план.md, Часть 3):
+// предпосылка — перенос экранов звонков в :feature:calls (6742de6c), экранам
+// нужен тип SovaPrefs в CallsDependencies. Пакеты НЕ переименовываются
+// (re.pinok.data.local) — :app видит класс как раньше.
+include(":core:data")
 // #ARCH-CONTAINERS (Этап 1.3): контейнер-пионер звонков — WebRtcEngine,
 // VideoTextureRenderer (re.pinok.media), CallModels (re.pinok.data.model),
 // CallsContainer (capability-реестр звонков). UI-экраны звонков пока в :app

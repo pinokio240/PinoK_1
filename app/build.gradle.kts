@@ -217,6 +217,9 @@ dependencies {
     // пока в :app (см. контейнеры.план.md, Этап 1.5).
     implementation(project(":core:media"))
 
+    // #ARCH-DATA (Task 20): data-слой (SovaPrefs/Snapshot) переехал в :core:data.
+    implementation(project(":core:data"))
+
     // #ARCH-CONTAINERS (Этап 1.3): контейнер-пионер звонков (WebRtcEngine,
     // VideoTextureRenderer, CallModels, CallsContainer). Пакеты прежние —
     // потребители в :app (CallScreen и пр.) резолвятся без правок кода.

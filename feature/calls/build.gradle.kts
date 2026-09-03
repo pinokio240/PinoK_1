@@ -67,4 +67,19 @@ dependencies {
 
     // Navigation (для compose-маршрутов экранов)
     implementation(libs.androidx.navigation.compose)
+
+    // #ARCH-DATA (Task 20): CallsDependencies.prefs — тип SovaPrefs из :core:data.
+    implementation(project(":core:data"))
+
+    // CallSignalingClient(deps.httpClient) — конструктор сигналинга принимает
+    // okhttp3.OkHttpClient (тип нужен на classpath: лог сборки 2026-09-03).
+    implementation(libs.okhttp)
+    // CallScreen парсит vchat-ответы (JsonObject/JsonArray) и CallsApi-сигнатуры
+    // возвращают gson-типы.
+    implementation(libs.gson)
+    // SharedFlow/StateFlow в CallsQueue/фасадах (явно, не транзитивно).
+    implementation(libs.kotlinx.coroutines.android)
+    // PermissionManager (перенесён в :feature:calls, пакет re.pinok.util) —
+    // ContextCompat/Manifest проверки разрешений звонка.
+    implementation(libs.androidx.core.ktx)
 }

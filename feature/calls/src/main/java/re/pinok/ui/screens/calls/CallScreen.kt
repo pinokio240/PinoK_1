@@ -709,7 +709,7 @@ fun CallScreen(
         } else {
             AppLog.i("CallScreen", "Starting call to peerId=$peerId")
             try {
-                val callId = deps.apiClient.messagesStartCall(peerId)
+                val callId = deps.apiClient.messagesStartCall(peerId, video = false)
                 AppLog.i("CallScreen", "messagesStartCall returned: $callId")
                 if (callId == null) {
                     val err = deps.apiClient.lastApiError
@@ -726,7 +726,7 @@ fun CallScreen(
                     activeCallId.value = callId
                     // #CALLS: получаем queue-credential через queue.subscribe (SAT-токен)
                     // и запускаем long-poll — ловим LP 115 (собеседник принял/звонит).
-                    val cred = deps.apiClient.queueSubscribe()
+                    val cred = deps.apiClient.queueSubscribe(userId = 0L, queueIdSuffix = null)
                     if (cred != null) {
                         deps.queuev4Client.setCredential(cred)
                         deps.queuev4Client.start()
@@ -780,7 +780,7 @@ fun CallScreen(
                             AppLog.i("CallScreen", "vchat.system.getInfo: ${if (sysResp != null) "OK (${sysResp.keySet().size} полей)" else "null"}")
                             AppLog.i("CallScreen", "startConversation: conversationId=$outgoingConvId (свой UUID, не call_id=$callId)")
                             val scResp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                deps.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId)
+                                deps.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId, callerAppId = 6287487L)
                             }
                             if (scResp != null) {
                                 AppLog.i("CallScreen", "vchat.startConversation OK (${scResp.keySet().size} полей)")

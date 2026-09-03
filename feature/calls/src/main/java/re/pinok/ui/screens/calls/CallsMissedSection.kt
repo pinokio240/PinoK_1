@@ -38,7 +38,7 @@ fun CallsMissedSection(onNavigateToCall: (Long) -> Unit) {
     LaunchedEffect(Unit) {
         try {
             val deps = LocalCallsDeps.current
-            val raw = deps.apiClient.callsGetHistory(30)
+            val raw = deps.apiClient.callsGetHistory(30, offset = 0)
             var parsed = raw.mapNotNull { it.parseCallItem() }.filter { it.direction.name.startsWith("MISSED") }
             val uniqueIds = parsed.map { it.peerId }.distinct()
             if (uniqueIds.isNotEmpty()) {

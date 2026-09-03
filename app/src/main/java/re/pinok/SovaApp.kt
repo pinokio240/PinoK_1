@@ -25,6 +25,7 @@ import re.pinok.auth.exchange.RemixsidCapturer
 import re.pinok.auth.exchange.ExchangeTokenStorage
 import re.pinok.auth.exchange.ExternalBrowserAuth
 import re.pinok.data.local.SovaPrefs
+import re.pinok.feature.calls.CallsDependencies
 import re.pinok.data.local.TokenStorage
 import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
@@ -63,7 +64,9 @@ import java.util.concurrent.TimeUnit
  *  - configure Coil with the same OkHttp client (single connection pool)
  *  - install as [SingletonImageLoader.Factory] for Coil 3
  */
-class SovaApp : Application(), SingletonImageLoader.Factory {
+// Task 20: SovaApp — провайдер CallsDependencies (DI-контракт экранов звонков
+// :feature:calls); CompositionLocal ставится в MainActivity.setContent.
+class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
 
     lateinit var prefs: SovaPrefs
         private set
@@ -165,6 +168,19 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         pendingOutgoingCallPeerId = peerId
         return true
     }
+
+    // Task 20: реализация CallsDependencies (фасад экранов звонков :feature:calls).
+    // callsSessionKey/Uid — снапшот из кэша prefsSnapshot (сами члены экранами
+    // не читаются — census Task 20; честный синхронный кэш SovaApp).
+    override val callsSessionKey: String
+        get() = prefsSnapshot?.callsSessionKey ?: ""
+    override val callsSessionUid: Long
+        get() = prefsSnapshot?.callsSessionUid ?: 0L
+    // #NULL-ЯВНО: prefsSnapshot обновляется из setContent SideEffect (Fix #154),
+    // к моменту звонка заполнен; до этого — честные нули (0/""), не крэш.
+    override fun getOkUid(): Long = apiClient.lastAnonymUid()
+    override fun getVkUid(): Long = exchangeAuthRepository.userId()
+    override fun getAnonymUid(): Long = apiClient.lastAnonymUid()
 
     /** Забрать pending-событие исходящего звонка (после навигации). */
     fun consumeOutgoingCall() {
@@ -856,7 +872,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
         }
 
         tokenStorage = TokenStorage(exchangeStorage)
-        prefs = SovaPrefs(this)
+        prefs = SovaPrefs(this, BuildConfig.DEBUG)
 
         // #LOG-CATEGORIES (2026-08-04): загрузка отключенных категорий логов
         // из DataStore в AppLog. Делаем ОДИН синхронный read в runBlocking на
@@ -1499,7 +1515,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
      *
      * @return session_key (не пустой) или null.
      */
-    suspend fun ensureCallsSessionKey(force: Boolean = false): String? {
+    override suspend fun ensureCallsSessionKey(force: Boolean = false): String? {
         return try {
             // 1) Уже есть в prefs — используем (если не force).
             val snap = prefs.data.first()
@@ -1612,7 +1628,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
      * @param conversationId call_id из messages.getCurrentCalls
      * @return (sessionKey, vchatResponse)
      */
-    suspend fun getCallConversationParams(
+    override suspend fun getCallConversationParams(
         conversationId: String,
     ): Pair<String?, com.google.gson.JsonObject?> {
         return withContext(Dispatchers.IO) {
