@@ -154,10 +154,16 @@ class SovaApp : Application(), SingletonImageLoader.Factory {
     var pendingOutgoingCallVideo: Boolean = false
         private set
 
-    /** Запросить исходящий звонок через контейнер (CallStarter.startCall). */
-    fun requestOutgoingCall(peerId: Long, video: Boolean) {
+    /** Запросить исходящий звонок через контейнер (CallStarter.startCall).
+     * #NULL-EXPLICIT/Тип-контракт: CallStarter.startCall возвращает Boolean
+     * (true — принят в работу; false — краш хука, ловится в CallsStarterImpl).
+     * Pending-механизм отказать не может — валидность peerId и наличие
+     * навигатора решаются в SovaNavHost при заборе события
+     * (consumeOutgoingCall), поэтому всегда true. */
+    fun requestOutgoingCall(peerId: Long, video: Boolean): Boolean {
         pendingOutgoingCallVideo = video
         pendingOutgoingCallPeerId = peerId
+        return true
     }
 
     /** Забрать pending-событие исходящего звонка (после навигации). */
