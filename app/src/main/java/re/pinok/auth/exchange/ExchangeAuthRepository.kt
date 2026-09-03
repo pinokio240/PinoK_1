@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import re.pinok.data.local.SovaPrefs
+import re.pinok.feature.calls.CallsAuth
 import re.pinok.util.AppLog
 import re.pinok.util.ExponentialBackoff
 import re.pinok.util.NetworkObserver
@@ -52,12 +53,17 @@ import kotlin.coroutines.resumeWithException
  *   6. (external) POST oauth.vk.com/access_token  grant_type=vk_external_auth
  *        → AuthResult
  */
+// Task 21: реализует CallsAuth (фасад :feature:calls) — userId()/remixsid() для
+// CallsWebViewScreen/CallScreen. Файл возвращён в :app: пакет re.pinok.auth.exchange —
+// кластер из 14 файлов (AuthState/AuthModels/AuthResponseParser/ExchangeTokenStorage/
+// CookieRefreshWorker/ExternalBrowserAuth...), same-package ссылки импорта не требуют
+// (330 ошибок лога 2026-09-03 — только этот файл). Рантайм-объект тот же.
 class ExchangeAuthRepository(
     private val api: ExchangeAuthApi,
     private val storage: ExchangeTokenStorage,
     private val httpClient: OkHttpClient? = null,
     private val prefs: SovaPrefs? = null,
-) {
+) : CallsAuth {
 
     private val refreshMutex = Mutex()
 
@@ -1521,7 +1527,7 @@ class ExchangeAuthRepository(
 
     fun longPoll(): LongPollCredentials? = storage.longPoll()
     fun accessToken(): String? = storage.accessToken()
-    fun userId(): Long = storage.userId()
+    override fun userId(): Long = storage.userId()
 
     /**
      * #AUTH-LOOP-FIX (2026-08-07): сохраняет userId в storage.
@@ -1560,7 +1566,14 @@ class ExchangeAuthRepository(
      * запускать AuthActivity в silent mode (есть remixsid → авто re-login)
      * или в обычном режиме (нет remixsid → полный ручной вход).
      */
-    fun remixsid(): String? = storage.remixsid()
+    override fun remixsid(): String? = storage.remixsid()
+
+    /**
+     * Task 22 (2026-09-03): override CallsAuth (:feature:calls). Делегирует в
+     * RemixsidCapturer (same-package, :app) — CallsWebViewScreen синхронизирует
+     * куки через фасад deps.exchangeAuthRepository, рантайм не менялся.
+     */
+    override fun buildVkCookieHeader(): String = RemixsidCapturer.buildVkCookieHeader()
 
     /**
      * #NO-SILENT-MEANS (2026-08-02): public accessor для VKApiClient.

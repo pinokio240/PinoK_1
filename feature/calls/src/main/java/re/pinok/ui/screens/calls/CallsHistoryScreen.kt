@@ -72,8 +72,10 @@ fun CallsHistoryScreen(
 
     LaunchedEffect(Unit) {
         try {
-            val cur = app.apiClient.messagesGetCurrentCalls()
-            val inb = app.apiClient.messagesGetInboundCalls(30)
+            // Task 22: было `app.apiClient` — унаследованное обращение к singleton
+            // :app после переноса; deps прочитан выше на compose-уровне.
+            val cur = deps.apiClient.messagesGetCurrentCalls()
+            val inb = deps.apiClient.messagesGetInboundCalls(30)
             currentCalls = cur
             inboundCalls = inb
             AppLog.i("CallsHistory", "current=${cur.size} inbound=${inb.size}")

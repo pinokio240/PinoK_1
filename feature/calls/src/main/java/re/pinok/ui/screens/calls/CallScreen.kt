@@ -1876,7 +1876,9 @@ fun CallScreen(
                                             signaling.declineCall()
                                         } else {
                                             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                                val sk = deps.ensureCallsSessionKey()
+                                                // Task 22: force=false — прежний дефолт SovaApp
+                                                // (аргумент без дефолта в интерфейсе CallsDependencies).
+                                                val sk = deps.ensureCallsSessionKey(force = false)
                                                 val cid = activeCallId.value
                                                 if (sk != null && !cid.isNullOrBlank()) {
                                                     withContext(Dispatchers.IO) {
@@ -1951,7 +1953,9 @@ fun CallScreen(
                                                 return@launch
                                             }
                                             AppLog.i("CallScreen", "Принять: params готовы, ws готов — accept")
-                                            val sk = deps.ensureCallsSessionKey()
+                                            // Task 22: force=false — прежний дефолт SovaApp
+                                            // (аргумент без дефолта в интерфейсе CallsDependencies).
+                                            val sk = deps.ensureCallsSessionKey(force = false)
                                             if (sk != null) {
                                                 withContext(Dispatchers.IO) {
                                                     deps.apiClient.vchatJoinConversation(

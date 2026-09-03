@@ -39,4 +39,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     // Flow/first/map.
     implementation(libs.kotlinx.coroutines.android)
+    // Task 22 (2026-09-03): UserProfile (re.pinok.data.model) использует
+    // @SerializedName — фасады CallsApi (:feature:calls) ссылаются на его тип.
+    implementation(libs.gson)
 }

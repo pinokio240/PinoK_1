@@ -27,7 +27,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import re.pinok.feature.calls.LocalCallsDeps
-import re.pinok.auth.exchange.RemixsidCapturer
 import re.pinok.util.AppLog
 
 private const val TAG = "CallsWebView"
@@ -43,9 +42,15 @@ fun CallsWebViewScreen(
     var isLoading by remember { mutableStateOf(true) }
     var webView by remember { mutableStateOf<WebView?>(null) }
 
+    // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; внутри
+    // DisposableEffect (не compose-контекст) и внутри try он запрещён (K2:
+    // "@Composable invocations can only happen from the context of a
+    // @Composable function"). Читаем на compose-уровне: отсутствие провайдера
+    // = fail-fast при композиции (замысел staticCompositionLocalOf).
+    val deps = LocalCallsDeps.current
+
     DisposableEffect(Unit) {
         try {
-            val deps = LocalCallsDeps.current
             val cm = CookieManager.getInstance()
             cm.setAcceptCookie(true)
             if (webView != null) { try { cm.setAcceptThirdPartyCookies(webView, true) } catch (_: Exception) {} }
@@ -53,8 +58,10 @@ fun CallsWebViewScreen(
                 ".m.vk.ru", "m.vk.ru", ".login.vk.com", "login.vk.com",
                 ".id.vk.com", "id.vk.com", ".vk.com", "vk.com")
             val cookies = mutableMapOf<String, String>()
-            // 1) session cookies через RemixsidCapturer (из CookieManager)
-            val header = RemixsidCapturer.buildVkCookieHeader()
+            // 1) session cookies через фасад CallsAuth (рантайм — RemixsidCapturer
+            //    :app; сам класс в пакете-кластере re.pinok.auth.exchange —
+            //    перенос невозможен, Task 21/22)
+            val header = deps.exchangeAuthRepository.buildVkCookieHeader()
             if (header.isNotBlank()) {
                 for (pair in header.split(";")) {
                     val parts = pair.trim().split("=", limit = 2)

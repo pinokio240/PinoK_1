@@ -51,11 +51,14 @@ interface CallsDependencies {
 }
 
 /**
- * Фасад VKApiClient для экранов звонков: 16 членов — census вызовов экранов
- * (Task 20). Возвращаемые типы — gson/примитивы/CallModels этого модуля.
+ * Фасад VKApiClient для экранов звонков: 17 членов — census вызовов экранов
+ * (Task 20 + Task 22: messagesGetInboundCalls — CallsHistoryScreen:76, был
+ * пропущен в census Task 20: в перенесённом файле стояло унаследованное
+ * `app.apiClient` вместо `deps.apiClient`, поэтому вызов не попал в grep).
+ * Возвращаемые типы — gson/примитивы/UserProfile (:core:data)/CallModels.
  * Дефолтных аргументов в интерфейсе НЕТ (override не может переобъявлять
  * дефолты): VKApiClient реализует своими сигнатурами как есть, вызовы из
- * экранов — с явными аргументами (правка Task 20, значения те же дефолты).
+ * экранов — с явными аргументами (правка Task 20/22, значения те же дефолты).
  */
 interface CallsApi {
     val lastApiError: String?
@@ -86,6 +89,7 @@ interface CallsApi {
 
     suspend fun messagesStartCall(peerId: Long, video: Boolean): String?
     suspend fun messagesGetCurrentCalls(): List<JsonObject>
+    suspend fun messagesGetInboundCalls(count: Int): List<JsonObject>
     suspend fun callsGetHistory(count: Int, offset: Int): List<JsonObject>
     suspend fun messagesGetCallRecordings(count: Int): List<JsonObject>
     suspend fun messagesGetCallTranscriptions(count: Int): List<JsonObject>
@@ -99,10 +103,18 @@ interface CallsQueue {
     val events: SharedFlow<QueueEvent>
 }
 
-/** Фасад ExchangeAuthRepository: userId()/remixsid() — вызовы экранов (census Task 20/21). */
+/**
+ * Фасад ExchangeAuthRepository: userId()/remixsid()/buildVkCookieHeader() —
+ * вызовы экранов (census Task 20/21/22). buildVkCookieHeader добавлен в Task 22:
+ * CallsWebViewScreen синхронизирует куки через RemixsidCapturer (:app, пакет
+ * re.pinok.auth.exchange — кластер из 14 файлов, перенос невозможен — тот же
+ * корень, что у Task 21); делегируем через уже инжектируемый объект
+ * ExchangeAuthRepository, рантайм — тот же RemixsidCapturer.buildVkCookieHeader().
+ */
 interface CallsAuth {
     fun userId(): Long
     fun remixsid(): String?
+    fun buildVkCookieHeader(): String
 }
 
 /** Фасад LongPollClient: член без вызовов экранов (состав 6742de6c). */

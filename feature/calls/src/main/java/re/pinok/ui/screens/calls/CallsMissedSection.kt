@@ -35,9 +35,15 @@ fun CallsMissedSection(onNavigateToCall: (Long) -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf(false) }
 
+    // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; он
+    // запрещён внутри try (K2: "Try catch is not supported around composable
+    // function invocations") и внутри LaunchedEffect (не compose-контекст).
+    // Читаем на compose-уровне: отсутствие провайдера = fail-fast при
+    // композиции (замысел staticCompositionLocalOf), а не глотается catch.
+    val deps = LocalCallsDeps.current
+
     LaunchedEffect(Unit) {
         try {
-            val deps = LocalCallsDeps.current
             val raw = deps.apiClient.callsGetHistory(30, offset = 0)
             var parsed = raw.mapNotNull { it.parseCallItem() }.filter { it.direction.name.startsWith("MISSED") }
             val uniqueIds = parsed.map { it.peerId }.distinct()

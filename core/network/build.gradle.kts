@@ -33,8 +33,6 @@ android {
 dependencies {
     // AppLog (re.pinok.util) — общий логгер из 1.2-а.
     implementation(project(":core:common"))
-    // #ARCH-DATA (Task 20): ExchangeAuthRepository (re.pinok.auth.exchange) читает SovaPrefs.
-    implementation(project(":core:data"))
     // CallSignalingClient: okhttp3 (OkHttpClient/Request/WebSocket/WebSocketListener);
     // okio.ByteString — транзитивная зависимость okhttp (на compile-classpath модуля).
     implementation(libs.okhttp)

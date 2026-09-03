@@ -19,6 +19,26 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -10 (03.09) = Task 22: устранены 55 ошибок лога 2026-09-03 (все в
+    // :feature:calls): (1) UserProfile git mv из :app Models.kt -> :core:data
+    // (пакет re.pinok.data.model сохранён; gson в :core:data) — фасады
+    // CallsApi/пользователи UserFull.user видят класс без цикла :feature->:app,
+    // каскад 14 ошибок CallScreen (destructure/firstName/photo100) уходит;
+    // (2) чтение LocalCallsDeps.current — @Composable-вызов — вынесено из try/
+    // LaunchedEffect/DisposableEffect на compose-уровень в 7 файлах секций
+    // (K2: "Try catch is not supported around composable function invocations");
+    // отсутствие провайдера теперь fail-fast при композиции (замысел
+    // staticCompositionLocalOf), а не глотается catch'ем;
+    // (3) CallsHistoryScreen: унаследованные app.apiClient -> deps.apiClient;
+    // messagesGetInboundCalls добавлен в фасад CallsApi (пропуск census Task 20)
+    // + override в VKApiClient; (4) ensureCallsSessionKey() x2 -> force = false
+    // (прежний дефолт SovaApp; в интерфейсе аргумент без дефолта); (5)
+    // CallsWebViewScreen: RemixsidCapturer (:app, пакет-кластер auth.exchange —
+    // перенос невозможен, урок Task 21) недостижим из :feature — в фасад CallsAuth
+    // добавлен buildVkCookieHeader(), ExchangeAuthRepository делегирует
+    // (рантайм тот же), класс доведён до ": CallsAuth" (override-маркеры Task 21
+    // остались в рабочем дереве без супертипа — завершены здесь). Поведение
+    // звонков не менялось; состав членов CallsDependencies НЕ сужен.
     // -9 (03.09) = Task 21: ExchangeAuthRepository возвращён в :app (пакет
     // auth.exchange — кластер 14 файлов, same-package ссылки не требуют импорта;
     // перенос одного файла = 330 unresolved), в CallsDependencies член заменён
@@ -64,5 +84,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.03-9"
+    const val STAMP: String = "calls-2026.09.03-10"
 }

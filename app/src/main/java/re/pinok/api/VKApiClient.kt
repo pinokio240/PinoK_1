@@ -11496,7 +11496,9 @@ class VKApiClient(
      * #CALLS: messages.getInboundCalls — история входящих звонков.
      * VK API: messages.getInboundCalls { count=30 } → response.items[] = [...]
      */
-    suspend fun messagesGetInboundCalls(count: Int = 30): List<JsonObject> {
+    // Task 22: override CallsApi (:feature:calls). Дефолт count=30 легален
+    // поверх интерфейса без дефолта (переопределение не переобъявляет дефолт).
+    override suspend fun messagesGetInboundCalls(count: Int = 30): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("messages.getInboundCalls", mapOf("count" to count.toString())) ?: return emptyList()
         return try {

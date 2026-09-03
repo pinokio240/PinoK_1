@@ -57,9 +57,15 @@ fun CallsFriendsSection(onNavigateToCall: (Long) -> Unit) {
         error = false
     }
 
+    // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; он
+    // запрещён внутри try (K2: "Try catch is not supported around composable
+    // function invocations") и внутри LaunchedEffect (не compose-контекст).
+    // Читаем на compose-уровне: отсутствие провайдера = fail-fast при
+    // композиции (замысел staticCompositionLocalOf), а не глотается catch.
+    val deps = LocalCallsDeps.current
+
     LaunchedEffect(Unit) {
         try {
-            val deps = LocalCallsDeps.current
             val result = deps.apiClient.friendsGetOnline(userId = null)
             items = result
             AppLog.i("CallsFriendsSection", "loaded ${items.size} online friends")
