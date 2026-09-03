@@ -1031,7 +1031,7 @@ class WebRtcEngine(
      * (включая relay) — это последний шанс поднять медиа до того, как собеседник
      * сдастся (в тесте 20:49 он сбросил через 11с после topology-changed).
      *
-     /** #CALLS-VK-TOPOLOGY (2026-09-03, VK web pattern): topology-changed{SERVER}.
+     * #CALLS-VK-TOPOLOGY (2026-09-03, VK web pattern): topology-changed{SERVER}.
      * 5s wait → restartIce() → 20s timeout → если не помогло — вызывает onBounce.
      * @param onBounce колбэк для сигналинг-bounce (WS переподключение), если restart не помог. */
     fun handleTopologyServer(onBounce: () -> Unit) {
