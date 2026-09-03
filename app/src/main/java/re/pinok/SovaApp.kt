@@ -7,6 +7,10 @@ import android.app.PendingIntent
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -122,18 +126,16 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
      * Устанавливается в startCallNotifier при входящем звонке; MainActivity
      * читает и открывает CallScreen(incoming=true, payload). После навигации
      * сбрасывается (consumeIncomingCall).
+     * #COMPOSE-OBSERVABLE: mutableStateOf/mutableLongStateOf чтоб LaunchedEffect
+     * в SovaNavHost срабатывал сразу, а не при случайной рекомпозиции.
      */
-    @Volatile
-    var pendingIncomingCallPayload: String? = null
+    var pendingIncomingCallPayload: String? by mutableStateOf(null)
         private set
-    @Volatile
-    var pendingIncomingCallPeerId: Long = 0L
+    var pendingIncomingCallPeerId: Long by mutableLongStateOf(0L)
         private set
-    @Volatile
-    var pendingIncomingCallTitle: String = ""
+    var pendingIncomingCallTitle: String by mutableStateOf("")
         private set
-    @Volatile
-    var pendingIncomingCallPhoto: String? = null
+    var pendingIncomingCallPhoto: String? by mutableStateOf(null)
         private set
 
     fun consumeIncomingCall() {
@@ -150,11 +152,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
     // (тот же паттерн, что pendingIncomingCallPayload выше). С Этапа 1.4 кнопки
     // звонка (лента/друзья/чат/история) идут через find<CallStarter>() → этот
     // механизм; title/photo хост доносит через OutgoingCallMeta в SovaNavHost.
-    @Volatile
-    var pendingOutgoingCallPeerId: Long = 0L
+    // #COMPOSE-OBSERVABLE: mutableLongStateOf для корректного LaunchedEffect.
+    var pendingOutgoingCallPeerId: Long by mutableLongStateOf(0L)
         private set
-    @Volatile
-    var pendingOutgoingCallVideo: Boolean = false
+    var pendingOutgoingCallVideo: Boolean by mutableStateOf(false)
         private set
 
     /** Запросить исходящий звонок через контейнер (CallStarter.startCall).
