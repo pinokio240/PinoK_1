@@ -6516,3 +6516,21 @@ Stage Summary:
 - Ожидание от юзера: git pull → assembleDebug → открыть офлайн-менеджер (ожидается спиннер 1-3s затем список; в logcat нет Davey>1s); затем тап по треку (ожидается «playTrackList: ... I/O on Default» — маркер 0aa6908f).
 - Для §3.7 п.2 (аудио): экран офлайн-менеджера — ещё один потребитель PlayerConnection/TrackDownloadManager; при контейнеризации объекты скана (AudioOfflineItem и пр.) останутся UI-слоем, но getLocalFile-вызовы уйдут за AudioDependencies — риска смарт-кастов добавить smartcast_hunt.py на Этапе Д п.2.
 - Follow-up (не в этом коммите): гонка rateLimitWait (CopyOnWriteArrayList.removeAll из двух корутин) — отдельный мелкий фикс, крэш пойман, но шумит в лог.
+
+---
+Task ID: CALLS-SNAP-PLAN
+Agent: Z.ai Code (main)
+Task: Изучить снапшоты раздела «Звонки» (upload/2308.zip, upload/2608.zip) и составить план переноса полного функционала без заглушек.
+
+Work Log:
+- Распакованы снапшоты: 2608 = 6 сохранённых страниц веб-раздела «Звонки» (Главная/История, чат звонка, История, Пропущенные, Записи, Расшифровки); 2308 = бандлы входящего виджета (webCallsBridge/webCallsWidget/core_spa) + дамп localStorage.
+- Из DOM снапшотов (cp1251) извлечён полный инвентарь контролов: шапка (Создать звонок/Запланировать/Присоединиться), 8 пунктов сайдбара, кластеры строк истории/пропущенных (статусы Завершённый/Пропущенный/Отменённый/Групповой, redial аудио/видео, Действия), карточки записей (0:55, просмотры), расшифровки, чат звонка (сервисные сообщения, Приглашение в звонок).
+- Из бандлов извлечена карта API с параметрами: calls.getHistory{filter,pagination_marker}, deleteHistoryRecords, clearHistory(+Group), getGroupHistory, getAsr/Edit/DeleteAsrTranscriptions, getSettings(toggles)/get/setUserSettings, getCall/UpdateCallSettings, getParticipants/getReactions/editParticipantName, getConversationByCall{call_id,hall_id}, subscribeToQueue, unmask; messages.editCall (создание запланированного), getScheduledCalls, deleteScheduledCall, forceCallFinish, search, getConversations, getContactCallToken; vchat.getAnonymTokenByLink, joinConversationByLink, removeJoinLink; voiceRoomsGetParticipants; photos.getCallBackgroundsPhotoUploadServer.
+- i18n-ключи calls_* (весь webCallsBridge) дали полную in-call матрицу: футер (chat/collapse/fullscreen/layout/leave/raise_hand/reactions/settings), участники (kick/mute/pin/rename/assign admin/add), запись start/stop, ASR start/stop, зал ожидания, залы (rooms), watch together, трансляция, vmoji, виртуальный фон, субтитры, шумодав (auto/simple/neural), качество видео (optimal/high).
+- Исследован код PinoK (Explore-агент): :feature:calls 6121 строк/18 файлов; CallScreen 2116 строк (микрофон/динамик/ссылка/завершить работают); CallsMainScreen 3 таба (Позвонить друзьям/История/Пропущенные); 5 секций мёртвые (Active/Scheduled/Recordings/Transcripts/Home); фасад CallsApi 17 членов; VKApiClient имеет getMissedCalls/getScheduledCalls/getCallRecordings/Transcriptions вне фасада; сигналинг/WebRTC/LP115/queuev4 работают; BuildStamp calls-2026.09.03-11.
+- Составлен и записан план: звонки.перенос.план.md (§0 источники, §1 контрольная матрица UI контрол-к-кнопке, §2 карта API с покрытием, §3 архитектура (CallsSectionRepository, расширение фасада волнами, 8-член CallsDependencies не трогается), §4 этапы А-И (фасад/история-пропущенные/записи-расшифровки/создание-планирование-join/чат звонка/входящий экран+виджет/in-call матрица Ж1-Ж11/настройки/верификация no-stub), §5 риски, §6 согласование с каноном §3.7.
+
+Stage Summary:
+- Полный разрыв функции: из 6 подразделов раздела живы 2 (История/Пропущенные базово); записи/расшифровки/запланированные/активные — мёртвый код; «Запланировать» и «Присоединиться» — заглушки; видеозвонок не стартует (video-флаг теряется); чат звонка/входящий-экран/виджет отсутствуют.
+- План гарантирует no-stub: каждый контрол матрицы §1 обязан получить реальный обработчик; Этап Ж-0 (реверс wire-формата команд записи/ASR/реакций/залов) обязателен перед кодированием Ж-этапов.
+- Артефакт: /home/z/my-project/звонки.перенос.план.md. Гипотеза юзера про «свой сервис для офлайна» не относится к этой задаче; ANR-фиксы проверяет юзер параллельно.
