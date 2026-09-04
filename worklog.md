@@ -6405,3 +6405,25 @@ Work Log:
 
 Stage Summary:
 - Канон присоединения контейнера к ядру зафиксирован в контейнеры.план.md (ЧАСТЬ 3): контейнер декларирует зависимости сам (интерфейс в контейнере), ядро реализует override-маркерами, единственная точка сборки — CompositionLocalProvider в MainActivity; контейнер максимально независим от ядра (И1–И7 проверяемы). Директива «состав не сужается» записана в канон. Следующий шаг — зелёная сборка пользователя (штамп calls-2026.09.03-11), затем очередь §3.7.
+
+---
+Task ID: 25
+Agent: Z.ai Code (Sergey)
+Task: Очередь §3.7 п.1 — контейнер фото (PhotosScreen → :feature:photos) по канону §3.2; вопрос пользователя про «универсальные статичные блоки в ядре»
+
+Work Log:
+- Синхронизация: origin ушёл вперёд (f0e44ec0/6923ea6b — коллега убрал дефолты из CallsApi и откатил override 8 методов; в сообщении «сборка пройдена» — ПЕРВАЯ зелёная полная сборка :app). git pull --ff-only.
+- Census PhotosScreen (491 строк, 9 вызовов): photosGetAlbums×2, photosGet×3, lastApiError×2, likesAdd×1, likesDelete×1; типы Album/PhotoItem/PhotoViewer/ErrorView/SovaApp.get(); prefs НЕ используются (запланированный планом член «prefs-снапшоты» не понадобился — состав по фактическим вызовам).
+- Замыкание PhotoItem взорвалось в весь кластер Models.kt (Attachment.Photo.Size, Post.Likes/Comments/Reposts → Attachment/Post/Video/...): решение — пакет re.pinok.data.model ЦЕЛИКОМ вниз. ПРОВЕРКА ПЕРЕД ПЕРЕНОСОМ: Models.kt чист (только gson+kotlin.math.abs), :core:media/common/network/contracts ссылок на data.model НЕ имеют (цикла нет).
+- git mv x7 (пакеты сохранены, история 100%): Models/PhotoSizes/VideoQuality/VkAccountModels → :core:data; PhotoViewer (фото-домен) → :feature:photos; ErrorView → :core:ui (НОВЫЙ модуль — по вопросу пользователя «универсальные статичные блоки»: дом compose-компонентов без доменной специфики, виден ядру и всем контейнерам; владение универсалом контейнером = запах, фичи между собой не зависят); PhotosScreen → :feature:photos. Пустые директории удалены.
+- Этап Б: PhotosDependencies.kt — PhotosApi (5 членов: photosGetAlbums/photosGet/likesAdd/likesDelete/lastApiError), дефолты аргументов = прежним дефолтам VKApiClient и объявлены ТОЛЬКО в интерфейсе (урок 197819a6/6923ea6b доведён до конца: call-site'ы ядра через конкретный тип НАСЛЕДУЮТ дефолты интерфейса — ни один из ~20 вызовов likesAdd/Delete в :app не редактировался); LocalPhotosDeps = staticCompositionLocalOf { error(...) }.
+- Этап В: VKApiClient : CallsApi, PhotosApi — 4 метода получили override БЕЗ дефолтов (lastApiError уже override var, один на оба фасада); SovaApp : PhotosDependencies + override val photosApi get() = apiClient (поле сужено до VKApiClient — делегирование без каста, И4 рантайм-честность); MainActivity — CompositionLocalProvider(LocalCallsDeps provides app, LocalPhotosDeps provides app) — единственная точка сборки.
+- Экран: SovaApp.get() → LocalPhotosDeps.current ×3 (все на compose-уровне — урок Task 22), app.apiClient.* → deps.photosApi.* ×9; импорт SovaApp удалён.
+- Этап Г: хост-хуки уже от 1.5-а (PhotosContainer в SovaApp:700, runCatching, NavEntry "photos") — без изменений.
+- Gradle: :feature:photos += :core:data/:core:ui/icons-extended/animation/ui-graphics/coroutines; :app += :core:ui; settings += :core:ui; :core:ui (новый) — compose-набор ПОЛНЫЙ (урок Task 18) + :core:common.
+- Инструмент: .zscripts/kt_scan.py v2 (v1 терялась между сессиями и имела 2 бага): (1) вложенные строки внутри ${...}-шаблонов ("groupsArr=${... ?: "null"}" — контекстный стек code/str/tstr с флагом template); (2) вложенные блочные комментарии (стек). 13/13 OK, включая VKApiClient (14k+ строк).
+- Верификация: И1 импорт-аудит :feature:photos — только contracts/core:*/self; И2 — ноль project(":app"); census 9/9 = 5 членов PhotosApi; NULL-EXPLICIT — 0 новых !!, 0 новых ?.; сканер 7/7 финальных путей.
+- Docs: план §3.0 (дельта: CallsApi 17 после отката, data.model целиком, экран фото), §3.3 (+2 строки решателя: универсальный/доменный compose-компонент), §3.7 п.1 ВЫПОЛНЕН, «С чего начать» обновлён.
+
+Stage Summary:
+- Очередь §3.7 п.1 закрыт архитектурно: контейнер фото НЕ зависит от ядра (8-членный CallsDependencies не тронут, PhotosApi — новый независимый фасад того же рантайм-объекта). Ответ на вопрос пользователя: статичные универсальные блоки уже в ядре — host-маппинги + ContainerRegistry; для универсальных compose-компонентов создан :core:ui (ErrorView — первый жилец); доменные (PhotoViewer) — в контейнерах; правило записано в решатель §3.3. Ожидание от пользователя: assembleDebug (порядок: :core:data/:core:ui → :feature:photos → :app) — 2 новых модуля впервые компилируются; лог присылать целиком. Следующий этап — §3.7 п.2 (аудио).

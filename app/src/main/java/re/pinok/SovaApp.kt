@@ -30,6 +30,8 @@ import re.pinok.auth.exchange.ExchangeTokenStorage
 import re.pinok.auth.exchange.ExternalBrowserAuth
 import re.pinok.data.local.SovaPrefs
 import re.pinok.feature.calls.CallsDependencies
+import re.pinok.feature.photos.PhotosApi
+import re.pinok.feature.photos.PhotosDependencies
 import re.pinok.data.local.TokenStorage
 import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
@@ -70,7 +72,7 @@ import java.util.concurrent.TimeUnit
  */
 // Task 20: SovaApp — провайдер CallsDependencies (DI-контракт экранов звонков
 // :feature:calls); CompositionLocal ставится в MainActivity.setContent.
-class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
+class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, PhotosDependencies {
 
     override lateinit var prefs: SovaPrefs
         private set
@@ -110,6 +112,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies {
         private set
 
     override lateinit var apiClient: VKApiClient
+
+    /**
+     * #ARCH-CONTAINERS Этап 3.7-1 (2026-09-03): PhotosDependencies.photosApi.
+     * Рантайм-объект ТОТ ЖЕ VKApiClient (инвариант И4 канона §3.5 — фасад
+     * «очки», не обёртка): поле сужено до конкретного класса, поэтому
+     * делегирование без каста.
+     */
+    override val photosApi: PhotosApi
+        get() = apiClient
     /** #CALLS: сигналинг звонков через queuev4.vk.ru. */
     override lateinit var queuev4Client: Queuev4Client
         private set

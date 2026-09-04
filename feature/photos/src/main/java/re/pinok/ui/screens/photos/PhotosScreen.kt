@@ -56,9 +56,9 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import re.pinok.SovaApp
 import re.pinok.data.model.Album
 import re.pinok.data.model.PhotoItem
+import re.pinok.feature.photos.LocalPhotosDeps
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.util.AppLog
@@ -66,7 +66,10 @@ import re.pinok.util.AppLog
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhotosScreen() {
-    val app = SovaApp.get()
+    // #ARCH-CONTAINERS 3.7-1: SovaApp.get() заменён на CompositionLocal
+    // (контейнер не знает ядро, канон §3.2). Чтение deps — ТОЛЬКО на
+    // compose-уровне, не внутри try/effect (урок Task 22).
+    val deps = LocalPhotosDeps.current
     val scope = rememberCoroutineScope()
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
     var loadingAlbums by remember { mutableStateOf(true) }
@@ -81,14 +84,14 @@ fun PhotosScreen() {
             loadingAlbums = true
             errorText = null
             try {
-                val list = app.apiClient.photosGetAlbums()
+                val list = deps.photosApi.photosGetAlbums()
                 // Fix #53: защитная дедупликация — LazyColumn keys должны быть уникальны.
                 albums = list
                     .filter { it.id > 0 && it.ownerId != 0L }
                     .distinctBy { "${it.ownerId}_${it.id}" }
                 AppLog.i("PhotosScreen", "Loaded ${list.size} albums")
                 if (list.isEmpty()) {
-                    errorText = app.apiClient.lastApiError ?: "Нет альбомов"
+                    errorText = deps.photosApi.lastApiError ?: "Нет альбомов"
                 }
             } catch (e: Exception) {
                 AppLog.e("PhotosScreen", "Failed to load albums", e)
@@ -104,7 +107,7 @@ fun PhotosScreen() {
         scope.launch {
             isRefreshingAlbums = true
             try {
-                val list = app.apiClient.photosGetAlbums()
+                val list = deps.photosApi.photosGetAlbums()
                 albums = list
                     .filter { it.id > 0 && it.ownerId != 0L }
                     .distinctBy { "${it.ownerId}_${it.id}" }
@@ -216,7 +219,7 @@ private fun AlbumRow(album: Album, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
-    val app = SovaApp.get()
+    val deps = LocalPhotosDeps.current
     val scope = rememberCoroutineScope()
     var photos by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -236,7 +239,7 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
             endReached = false
             errorText = null
             try {
-                val list = app.apiClient.photosGet(
+                val list = deps.photosApi.photosGet(
                     ownerId = album.ownerId,
                     albumId = album.id.toString(),
                     count = pageSize,
@@ -248,7 +251,7 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
                 if (list.size < pageSize) endReached = true
                 AppLog.i("PhotosScreen", "Loaded ${list.size} photos from album ${album.id}")
                 if (list.isEmpty()) {
-                    errorText = app.apiClient.lastApiError ?: "В альбоме нет фото"
+                    errorText = deps.photosApi.lastApiError ?: "В альбоме нет фото"
                 }
             } catch (e: Exception) {
                 AppLog.e("PhotosScreen", "Failed to load photos", e)
@@ -264,7 +267,7 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
         scope.launch {
             isRefreshing = true
             try {
-                val list = app.apiClient.photosGet(
+                val list = deps.photosApi.photosGet(
                     ownerId = album.ownerId,
                     albumId = album.id.toString(),
                     count = pageSize,
@@ -289,7 +292,7 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
             loadingMore = true
             try {
                 val offset = photos.size
-                val page = app.apiClient.photosGet(
+                val page = deps.photosApi.photosGet(
                     ownerId = album.ownerId,
                     albumId = album.id.toString(),
                     count = pageSize,
@@ -423,7 +426,8 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
 private fun PhotoThumb(photo: PhotoItem, onClick: () -> Unit = {}) {
     val url = photo.mediumUrl ?: photo.largestUrl
     // Sprint 2, P1-2 (#89): локальное состояние лайка фото.
-    val app = SovaApp.get()
+    // deps — compose-уровень (Task 22): лямбда clickable ниже захватывает его.
+    val deps = LocalPhotosDeps.current
     val scope = rememberCoroutineScope()
     var isLiked by remember(photo.id) { mutableStateOf(photo.likes?.userLikes == 1) }
     var likeCount by remember(photo.id) { mutableStateOf(photo.likes?.count ?: 0) }
@@ -456,9 +460,9 @@ private fun PhotoThumb(photo: PhotoItem, onClick: () -> Unit = {}) {
                     likeCount = (likeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
                     scope.launch {
                         val newCount = if (newLiked) {
-                            app.apiClient.likesAdd("photo", photo.ownerId, photo.id)
+                            deps.photosApi.likesAdd("photo", photo.ownerId, photo.id)
                         } else {
-                            app.apiClient.likesDelete("photo", photo.ownerId, photo.id)
+                            deps.photosApi.likesDelete("photo", photo.ownerId, photo.id)
                         }
                         if (newCount >= 0) {
                             likeCount = newCount

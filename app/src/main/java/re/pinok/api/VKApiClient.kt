@@ -22,6 +22,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import re.pinok.SovaApp
 import re.pinok.feature.calls.CallsApi
+import re.pinok.feature.photos.PhotosApi
 import re.pinok.auth.exchange.ExchangeAuthRepository
 import re.pinok.data.local.SovaPrefs
 import re.pinok.data.local.TokenStorage
@@ -93,6 +94,10 @@ private fun isNetworkRecentlySwitched(windowMs: Long): Boolean {
 
 // Task 20: реализует CallsApi (фасад :feature:calls) — рантайм тот же объект,
 // сигнатуры без правок (дефолты аргументов легальны поверх интерфейса без дефолтов).
+// #ARCH-CONTAINERS Этап 3.7-1 (2026-09-03): + PhotosApi (фасад :feature:photos).
+// ВАЖНО (урок 197819a6/6923ea6b): override НЕ повторяет дефолты аргументов —
+// они теперь объявлены в PhotosApi; call-site'ы через конкретный тип наследуют
+// те же дефолты из интерфейса, поведение вызовов не менялось.
 class VKApiClient(
     private val context: Context,
     private val httpClient: OkHttpClient,
@@ -100,7 +105,7 @@ class VKApiClient(
     private val prefs: SovaPrefs,
     private val exchangeAuthRepository: ExchangeAuthRepository? = null,
     networkObserver: NetworkObserver? = null,
-) : CallsApi {
+) : CallsApi, PhotosApi {
 
     private val networkObserver = networkObserver ?: NetworkObserver(context)
     private val networkMods = NetworkMods()
@@ -4792,13 +4797,16 @@ class VKApiClient(
      *
      * @param accessKey ключ доступа (для приватных видео/клипов), nullable.
      */
-    suspend fun likesAdd(
+    // PhotosApi: дефолты reactionId/accessKey/trackCode — в интерфейсе
+    // (FeedScreen/PostDetailScreen/ClipsRepository и др. вызовы через конкретный
+    // тип наследуют те же дефолты — поведение не менялось).
+    override suspend fun likesAdd(
         type: String,
         ownerId: Long,
         itemId: Long,
-        reactionId: Int? = null,
-        accessKey: String? = null,
-        trackCode: String? = null,
+        reactionId: Int?,
+        accessKey: String?,
+        trackCode: String?,
     ): Int {
         val args = mutableMapOf(
             "type" to type,
@@ -4830,12 +4838,12 @@ class VKApiClient(
      *
      * §37.12 #326: access_key как отдельный параметр (см. [likesAdd]).
      */
-    suspend fun likesDelete(
+    override suspend fun likesDelete(
         type: String,
         ownerId: Long,
         itemId: Long,
-        accessKey: String? = null,
-        trackCode: String? = null,
+        accessKey: String?,
+        trackCode: String?,
     ): Int {
         val args = mutableMapOf(
             "type" to type,
@@ -7744,7 +7752,9 @@ class VKApiClient(
 
     /** photos.getAlbums — список фотоальбомов пользователя.
      *  @param ownerId ID владельца (отрицательный для групп, null = текущий) */
-    suspend fun photosGetAlbums(ownerId: Long? = null): List<Album> {
+    // PhotosApi: дефолты ownerId=null объявлены в интерфейсе (:feature:photos);
+    // override их не повторяет (Kotlin), call-site'ы наследуют те же значения.
+    override suspend fun photosGetAlbums(ownerId: Long?): List<Album> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf("need_covers" to "1", "need_system" to "1")
         if (ownerId != null) args["owner_id"] = ownerId.toString()
@@ -7775,11 +7785,12 @@ class VKApiClient(
     /** photos.get — фотографии из альбома.
      *  @param ownerId  ID владельца альбома
      *  @param albumId  ID альбома (или "wall", "profile", "saved") */
-    suspend fun photosGet(
+    // PhotosApi: дефолты albumId/count/offset — в интерфейсе (урок 197819a6/6923ea6b).
+    override suspend fun photosGet(
         ownerId: Long,
-        albumId: String = "profile",
-        count: Int = 50,
-        offset: Int = 0,
+        albumId: String,
+        count: Int,
+        offset: Int,
     ): List<PhotoItem> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf(

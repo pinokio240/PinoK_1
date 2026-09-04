@@ -218,7 +218,13 @@ dependencies {
     implementation(project(":core:media"))
 
     // #ARCH-DATA (Task 20): data-слой (SovaPrefs/Snapshot) переехал в :core:data.
+    // Этап 3.7-1: весь пакет re.pinok.data.model (Models/PhotoSizes/VideoQuality/
+    // VkAccountModels) тоже в :core:data (пакет сохранён — потребители без правок).
     implementation(project(":core:data"))
+
+    // Этап 3.7-1 (решение пользователя): универсальные compose-компоненты
+    // (ErrorView) — дом для ядра и всех контейнеров.
+    implementation(project(":core:ui"))
 
     // #ARCH-CONTAINERS (Этап 1.3): контейнер-пионер звонков (WebRtcEngine,
     // VideoTextureRenderer, CallModels, CallsContainer). Пакеты прежние —

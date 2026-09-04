@@ -48,6 +48,11 @@ include(":core:media")
 // нужен тип SovaPrefs в CallsDependencies. Пакеты НЕ переименовываются
 // (re.pinok.data.local) — :app видит класс как раньше.
 include(":core:data")
+// #ARCH-CONTAINERS Этап 3.7-1 (2026-09-03, решение пользователя): дом
+// УНИВЕРСАЛЬНЫХ compose-компонентов (без доменной специфики) — виден и ядру,
+// и всем контейнерам. Первый жилец — ErrorView (пакет re.pinok.ui.components
+// сохранён; дальше — по потребности контейнеров, §3.3 решатель).
+include(":core:ui")
 // #ARCH-CONTAINERS (Этап 1.3): контейнер-пионер звонков — WebRtcEngine,
 // VideoTextureRenderer (re.pinok.media), CallModels (re.pinok.data.model),
 // CallsContainer (capability-реестр звонков). UI-экраны звонков пока в :app
@@ -55,8 +60,9 @@ include(":core:data")
 include(":feature:calls")
 // #ARCH-CONTAINERS (Этап 1.5-а): контейнер фото — NavEntry «Фото» (route "photos")
 // + AttachmentRenderer ("photos_inline": инлайн-рендер фото-вложений чата,
-// перенесён из ChatDetailScreen). Экран раздела PhotosScreen пока в :app
-// (блокер SovaApp/data-слой — см. контейнеры.план.md, Этап 1.5).
+// перенесён из ChatDetailScreen). Этап 3.7-1: сюда же переехал экран раздела
+// PhotosScreen (git mv, пакет re.pinok.ui.screens.photos сохранён) и PhotoViewer
+// (фото-домен); ErrorView — в :core:ui (универсальный).
 include(":feature:photos")
 // #ARCH-CONTAINERS (Этап 1.5-б): контейнер аудио — NavEntry «Эквалайзер»
 // (route "equalizer" — бывший ядерный пункт drawer) + SettingsSection

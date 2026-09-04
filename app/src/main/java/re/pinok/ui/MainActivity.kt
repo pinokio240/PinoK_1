@@ -11,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.photos.LocalPhotosDeps
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -730,7 +731,12 @@ class MainActivity : ComponentActivity() {
                             RequestAllPermissionsEffect()
                             // Task 20: CompositionLocal DI-контракта экранов звонков —
                             // провайдер SovaApp (реализует CallsDependencies).
-                            CompositionLocalProvider(LocalCallsDeps provides app) {
+                            // Этап 3.7-1: рядом провайдер контейнера фото — ЕДИНАЯ
+                            // точка сборки (канон §3.2 Этап В).
+                            CompositionLocalProvider(
+                                LocalCallsDeps provides app,
+                                LocalPhotosDeps provides app,
+                            ) {
                             SovaNavHost(
                                 initialRoute = snap.lastRoute,
                                 pendingOpenChatPeerId = pendingOpenChatPeerId,
@@ -868,7 +874,7 @@ class MainActivity : ComponentActivity() {
                                     finishAffinity()
                                 },
                             )
-                            } // CompositionLocalProvider(LocalCallsDeps)
+                            } // CompositionLocalProvider(LocalCallsDeps, LocalPhotosDeps)
                         }
 
                         // #34: Guest-режим — пользователь нажал «Офлайн-режим» на
