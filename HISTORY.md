@@ -11784,3 +11784,28 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - Скобочный сканер восстановлен (.zscripts/bracket_scanner.py, статус-машина с корректной обработкой ${-шаблонов) — 14/14 OK, включая VKApiClient 14304 строки.
 - Ре-аудит: все re.pinok.* import'ы :feature:calls резолвятся; census deps.*/apiClient.* = 100% фасадам; NULL-EXPLICIT: 0 новых !!/?. в диффе.
 - Состав членов CallsDependencies НЕ сужен; расширены только фасады CallsApi 16->17 и CallsAuth 2->3 (по реальным вызовам экранов).
+
+## 2026-09-04 — День Этапа 3.7-1: контейнер фото + две волны смарт-кастов + ANR-хотфикс
+
+### Коммиты (ветка PinoK, push origin OK)
+- `59c50ea3` arch(containers) — Этап 3.7-1: PhotosScreen → :feature:photos, PhotosApi (дефолты в интерфейсе), data.model целиком → :core:data, ErrorView → НОВЫЙ :core:ui.
+- `b4726c7f` fix(containers) — волна 1: межмодульные смарт-касты, 17 точек в 8 файлах → захват в локальный val.
+- `a1c0d8ae` fix(containers) — волна 2: 43 ошибки :app (формы вне зон сканера + second-order инференс), 30 точек в 12 файлах.
+- `0aa6908f` fix(media) — ANR при старте плейлиста: I/O очереди уведён с main на Dispatchers.Default (#ANR-MAIN-IO).
+
+### Факт
+- Этап 3.7-1 СБОРКОЙ ПОДТВЕРЖДЁН: лог 2026-09-04 20:02 (ciber.txt) — приложение собрано, запущено, оффлайн-воспроизведение работает (:core:data/:core:ui/:feature:photos прошли компиляцию; волна 2 исчерпала класс ошибок).
+- Тот же лог поймал СТАРЫЙ баг (не от контейнеризации): очередь 2516 скачанных треков → getLocalFile + toMediaItem (file-open ради лога) ≈ 5000 файловых операций на main → UI заморожен на 4.8s+, процесс убит.
+
+### Что сделано в 0aa6908f
+- playTrackList: предфильтр на main (O(1) isDownloaded) → prepareQueue() на Dispatchers.Default (localCache + playable + MediaItems) → применение к контроллеру на main.
+- shuffleAll: та же схема. seq-токен queueSetSeq — last-tap-wins при быстрых повторных тапах (двойная проверка: после withContext и внутри withController).
+- toMediaItem: file-open для magic-bytes лога убран у .mp3/.m4a; у .ts siren-проверка и magic-лог слиты в один readFully(4).
+
+### Уроки (в канон — контейнеры.план.md §3.6 ловушка 7)
+- Межмодульный смарт-каст невозможен после переноса типов в другой модуль; фикс — захват в локальный val. Second-order инференс: val из if/when-ветки выводит T? и падает ниже. Инструмент .zscripts/smartcast_hunt.py — обязателен на Этапе Д переносов типов.
+- Для §3.7 п.2 (аудио): при переносе PlayerConnection в :feature:audio касты всплывут в ОБРАТНУЮ сторону (ядро — потребитель фичевого типа).
+
+### Стартовая точка
+- Пользователю: `git pull` → assembleDebug (проверка 0aa6908f) → тест плеера на большой библиотеке (UI не замирает, logcat «I/O on Default») + тест звонков (inline-ICE, матрица §2.1).
+- Следующий этап: §3.7 п.2 — плеер/эквалайзер → :feature:audio по канону §3.2 (А–Д); разведка сделана (кластер media/ + экраны Audio*/Music*/MiniPlayer; PlayerService остаётся в ядре).
