@@ -1799,11 +1799,14 @@ private fun MusicHomeTab(
                         // Горизонтальная карусель треков
                         if (block.tracks.isNotEmpty()) {
                             item {
-                                if (block.title != null) {
+                                // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast
+                                // свойства чужого модуля невозможен; захват в локальный val.
+                                val blockTitle = block.title
+                                if (blockTitle != null) {
                                     SectionHeader(
-                                        block.title.uppercase(), textColor, secondaryColor,
+                                        blockTitle.uppercase(), textColor, secondaryColor,
                                         onShowAll = block.showAllId?.let { sid ->
-                                            { onShowAll(sid, block.title) }
+                                            { onShowAll(sid, blockTitle) }
                                         },
                                     )
                                 }
@@ -1829,11 +1832,14 @@ private fun MusicHomeTab(
                     re.pinok.data.model.CatalogViewType.RECOMMS_SLIDER -> {
                         if (block.playlists.isNotEmpty()) {
                             item {
-                                if (block.title != null) {
+                                // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast
+                                // свойства чужого модуля невозможен; захват в локальный val.
+                                val blockTitle = block.title
+                                if (blockTitle != null) {
                                     SectionHeader(
-                                        block.title.uppercase(), textColor, secondaryColor,
+                                        blockTitle.uppercase(), textColor, secondaryColor,
                                         onShowAll = block.showAllId?.let { sid ->
-                                            { onShowAll(sid, block.title) }
+                                            { onShowAll(sid, blockTitle) }
                                         },
                                     )
                                 }
@@ -1853,11 +1859,14 @@ private fun MusicHomeTab(
                         // Горизонтальная карусель плейлистов
                         if (block.playlists.isNotEmpty()) {
                             item {
-                                if (block.title != null) {
+                                // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast
+                                // свойства чужого модуля невозможен; захват в локальный val.
+                                val blockTitle = block.title
+                                if (blockTitle != null) {
                                     SectionHeader(
-                                        block.title.uppercase(), textColor, secondaryColor,
+                                        blockTitle.uppercase(), textColor, secondaryColor,
                                         onShowAll = block.showAllId?.let { sid ->
-                                            { onShowAll(sid, block.title) }
+                                            { onShowAll(sid, blockTitle) }
                                         },
                                     )
                                 }
@@ -2031,11 +2040,14 @@ private fun DiscoverTab(
                     re.pinok.data.model.CatalogViewType.TRIPLE_STACKED_SLIDER -> {
                         if (block.tracks.isNotEmpty()) {
                             item {
-                                if (block.title != null) {
+                                // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast
+                                // свойства чужого модуля невозможен; захват в локальный val.
+                                val blockTitle = block.title
+                                if (blockTitle != null) {
                                     SectionHeader(
-                                        block.title.uppercase(), textColor, secondaryColor,
+                                        blockTitle.uppercase(), textColor, secondaryColor,
                                         onShowAll = block.showAllId?.let { sid ->
-                                            { onShowAll(sid, block.title) }
+                                            { onShowAll(sid, blockTitle) }
                                         },
                                     )
                                 }
@@ -2061,11 +2073,14 @@ private fun DiscoverTab(
                     re.pinok.data.model.CatalogViewType.RECOMMS_SLIDER -> {
                         if (block.playlists.isNotEmpty()) {
                             item {
-                                if (block.title != null) {
+                                // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast
+                                // свойства чужого модуля невозможен; захват в локальный val.
+                                val blockTitle = block.title
+                                if (blockTitle != null) {
                                     SectionHeader(
-                                        block.title.uppercase(), textColor, secondaryColor,
+                                        blockTitle.uppercase(), textColor, secondaryColor,
                                         onShowAll = block.showAllId?.let { sid ->
-                                            { onShowAll(sid, block.title) }
+                                            { onShowAll(sid, blockTitle) }
                                         },
                                     )
                                 }
@@ -2084,11 +2099,14 @@ private fun DiscoverTab(
                     re.pinok.data.model.CatalogViewType.LARGE_SLIDER -> {
                         if (block.playlists.isNotEmpty()) {
                             item {
-                                if (block.title != null) {
+                                // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast
+                                // свойства чужого модуля невозможен; захват в локальный val.
+                                val blockTitle = block.title
+                                if (blockTitle != null) {
                                     SectionHeader(
-                                        block.title.uppercase(), textColor, secondaryColor,
+                                        blockTitle.uppercase(), textColor, secondaryColor,
                                         onShowAll = block.showAllId?.let { sid ->
-                                            { onShowAll(sid, block.title) }
+                                            { onShowAll(sid, blockTitle) }
                                         },
                                     )
                                 }
@@ -2854,8 +2872,11 @@ private fun SearchPlaylistCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast чужого модуля
+        // невозможен; без захвата subtitle выводился бы String? и isNotBlank() падал.
+        val playlistDescription = playlist.description
         val subtitle = when {
-            !playlist.description.isNullOrBlank() -> playlist.description
+            !playlistDescription.isNullOrBlank() -> playlistDescription
             playlist.count > 0 -> "${playlist.count} треков"
             else -> ""
         }

@@ -1852,9 +1852,12 @@ private fun PostCard(
                 )
             }
             // SOVA_2_lenta: индикатор копирайта-источника.
-            if (post.copyright?.name != null) {
+            // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast чужого модуля
+            // невозможен; захват в локальный val.
+            val copyrightName = post.copyright?.name
+            if (copyrightName != null) {
                 Text(
-                    text = post.copyright.name,
+                    text = copyrightName,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,
@@ -2410,18 +2413,21 @@ private fun LinkCard(link: Attachment.Link, onClick: () -> Unit = {}) {
                 )
             }
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (link.title != null) {
+                // #ARCH-CONTAINERS 3.7-1: захват в локальный val (модели в :core:data)
+                val linkTitle = link.title
+                if (linkTitle != null) {
                     Text(
-                        text = link.title,
+                        text = linkTitle,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Medium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (link.description != null) {
+                val linkDescription = link.description
+                if (linkDescription != null) {
                     Text(
-                        text = link.description,
+                        text = linkDescription,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,

@@ -2004,9 +2004,12 @@ private fun CommentLinkCard(link: Attachment.Link) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!link.description.isNullOrBlank()) {
+            // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast чужого модуля
+            // невозможен; захват в локальный val.
+            val linkDescription = link.description
+            if (!linkDescription.isNullOrBlank()) {
                 Text(
-                    text = link.description,
+                    text = linkDescription,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,

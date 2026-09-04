@@ -2605,7 +2605,10 @@ class VKApiClient(
         if (isOffline()) return null
         val audioId = "${track.ownerId}_${track.id}"
         val args = mutableMapOf("audios" to audioId)
-        if (track.accessKey != null) args["access_key"] = track.accessKey
+        // #ARCH-CONTAINERS 3.7-1: Track в :core:data — smart cast чужого модуля
+        // невозможен; MutableMap<String,String>.set требует non-null — захват в val.
+        val trackAccessKey = track.accessKey
+        if (trackAccessKey != null) args["access_key"] = trackAccessKey
         // Fix #147: quality=hq для максимального качества. audio.getById
         // используется как refresh path когда track.url==null (устарел URL) —
         // без quality=hq получим 128kbps вместо 320kbps.

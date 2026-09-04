@@ -203,9 +203,12 @@ private fun AlbumRow(album: Album, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (!album.description.isNullOrBlank()) {
+            // Smart cast через границу модуля (модели в :core:data) невозможен —
+            // захватываем в локальный val: контракт isNullOrBlank() смарт-кастит его.
+            val albumDescription = album.description
+            if (!albumDescription.isNullOrBlank()) {
                 Text(
-                    text = album.description,
+                    text = albumDescription,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

@@ -62,8 +62,11 @@ class AlAudioFallback(
             .add("act", "reload_audio")
             .add("al", "1")
             .add("ids", audioId)
-        if (track.accessKey != null && track.accessKey.isNotBlank()) {
-            formBuilder.add("access_keys", track.accessKey)
+        // #ARCH-CONTAINERS 3.7-1: Track в :core:data — smart cast чужого модуля
+        // невозможен (было: accessKey != null && accessKey.isNotBlank()); захват в val.
+        val fallbackAccessKey = track.accessKey
+        if (!fallbackAccessKey.isNullOrBlank()) {
+            formBuilder.add("access_keys", fallbackAccessKey)
         }
 
         val req = Request.Builder()

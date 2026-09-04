@@ -3441,11 +3441,13 @@ private fun NotificationsTab(
                 if (sections != null) {
                     val apiMap = mutableMapOf<String, Boolean>()
                     sections.flatMap { it.params }.forEach { p ->
-                        if (p.isChecked != null &&
+                        // #ARCH-CONTAINERS 3.7-1: isChecked в :core:data — захват в локальный val
+                        val checked = p.isChecked
+                        if (checked != null &&
                             p.key.isNotBlank() &&
                             NOTIFY_DEFAULTS.containsKey(p.key)
                         ) {
-                            apiMap[p.key] = p.isChecked
+                            apiMap[p.key] = checked
                         }
                     }
                     // Merge с учётом in-flight тогглов:

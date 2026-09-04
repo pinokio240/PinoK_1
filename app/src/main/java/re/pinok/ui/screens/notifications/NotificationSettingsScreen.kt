@@ -233,15 +233,19 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
 
                     // 2. BFF sections from settingsGeneral.getNotifySettings
                     sections.forEach { section ->
-                        if (!section.title.isNullOrBlank()) {
+                        // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast чужого
+                        // модуля невозможен; захват в локальный val (работает и через item{}).
+                        val sectionTitle = section.title
+                        if (!sectionTitle.isNullOrBlank()) {
                             item(key = "header_${section.id}") {
-                                SectionHeader(title = section.title)
+                                SectionHeader(title = sectionTitle)
                             }
                         }
-                        if (!section.description.isNullOrBlank()) {
+                        val sectionDescription = section.description
+                        if (!sectionDescription.isNullOrBlank()) {
                             item(key = "desc_${section.id}") {
                                 Text(
-                                    section.description,
+                                    sectionDescription,
                                     modifier = Modifier.padding(
                                         start = 16.dp, end = 16.dp, bottom = 4.dp,
                                     ),
