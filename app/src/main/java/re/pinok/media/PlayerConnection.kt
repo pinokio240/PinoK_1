@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import re.pinok.data.model.EqualizerPreset
 import re.pinok.data.model.PlayerState
 import re.pinok.data.model.Track
@@ -206,6 +207,13 @@ object PlayerConnection {
      */
     private var precacheAfterCurrentJob: Job? = null
 
+    // #ANR-MAIN-IO (2026-09-04): seq-токен применения очереди. playTrackList/shuffleAll
+    // готовят MediaItem'ы на Dispatchers.Default (I/O: getLocalFile + siren-проверка).
+    // При быстром повторном тапе две фоновые подготовки могут завершиться в любом
+    // порядке — применяется только та, чей seq равен актуальному (last-tap-wins).
+    @Volatile
+    private var queueSetSeq: Long = 0L
+
     /**
      * Lazy-инициализация. Безопасно вызывать много раз — реальная работа
      * выполняется один раз. Должна вызываться из SovaApp.onCreate.
@@ -364,41 +372,49 @@ object PlayerConnection {
 
     // ─── Публичный API ─────────────────────────────────────────────
 
+    /** #ANR-MAIN-IO: результат фоновой подготовки очереди (см. [prepareQueue]). */
+    private data class PreparedQueue(
+        val playable: List<Track>,
+        val safeIndex: Int,
+        val mediaItems: List<MediaItem>,
+    )
+
     /**
-     * Задать плейлист и начать воспроизведение с заданного индекса.
+     * #ANR-MAIN-IO (2026-09-04): подготовка очереди ВНЕ main thread.
      *
-     * Fix #59: треки без источника (нет локального файла И нет URL) фильтруются —
-     * иначе они попадали в плейлист с URI "about:blank", и ExoPlayer падал с
-     * ERROR_CODE_INPUT_INVALID при попытке их воспроизведения. StartIndex
-     * ремапится на отфильтрованный плейлист по ID выбранного трека.
+     * Fix #164 (оригинал): localCache чтобы избежать повторных File.exists() в
+     * toMediaItem. НО ВЕСЬ блок всё ещё выполнялся на main: для плейлиста, где
+     * скачаны ВСЕ треки (лог 2026-09-04 20:02:00–20:02:04, ciber.txt: очередь
+     * 2516/2516 LOCAL), это 2516 × getLocalFile (до 3×stat + открытие файла для
+     * валидации magic bytes) + 2516 × toMediaItem (stat + file-open для
+     * диагностического лога) ≈ 5000 файловых операций на main thread →
+     * UI заморожен на 4.8s+, процесс убит посреди цикла (PROCESS ENDED).
+     *
+     * Теперь: вызывается из playTrackList/shuffleAll внутри
+     * withContext(Dispatchers.Default). startTrackId берётся из ИСХОДНОГО tracks
+     * (пользовательский индекс в полном списке), затем ремапится в
+     * отфильтрованный playable по ID — как в оригинале.
      */
-    fun playTrackList(tracks: List<Track>, startIndex: Int = 0) {
-        if (tracks.isEmpty()) {
-            AppLog.w(TAG, "playTrackList: пустой плейлист")
-            return
-        }
-        // Fix #164: убраны File.exists() вызовы с main thread.
-        // Раньше: tracks.map { getLocalFile(t.id) } = N вызовов File.exists() +
-        // isValidAudioFile (читает 4 байта) на main thread. Для 824 треков =
-        // 824 stat-сисвызова → ANR → ForegroundServiceDidNotStartInTimeException.
-        // Теперь: используем in-memory isDownloaded() (StateFlow lookup, O(1))
-        // для фильтрации, и getLocalFile() ТОЛЬКО для скачанных треков
-        // (обычно 57 из 824). Ускорение в ~14 раз.
+    private fun prepareQueue(
+        tracks: List<Track>,
+        prePlayable: List<Track>,
+        startIndex: Int,
+    ): PreparedQueue? {
         val localCache: Map<Long, java.io.File?> = buildMap {
-            tracks.forEach { t ->
+            prePlayable.forEach { t ->
                 if (TrackDownloadManager.isDownloaded(t.id)) {
                     put(t.id, TrackDownloadManager.getLocalFile(t.id))
                 }
             }
         }
         val localCount = localCache.count { it.value != null }
-        val onlineCount = tracks.count { !it.url.isNullOrBlank() && !localCache.containsKey(it.id) }
+        val onlineCount = prePlayable.count { !it.url.isNullOrBlank() && !localCache.containsKey(it.id) }
         // Fix #165: логируем онлайн-режим — определяет ONLINE vs OFFLINE playback.
         val isOnline = re.pinok.SovaApp.getOrNull()?.networkObserver?.isOnline() ?: false
-        AppLog.i(TAG, "playTrackList: total=${tracks.size} local=$localCount online=$onlineCount startIdx=$startIndex isOnline=$isOnline (Fix #165: hybrid mode)")
-        // Логирование каждого трека вынесено на Dispatchers.Default (не блокирует UI).
-        if (tracks.size <= 50) {
-            tracks.forEachIndexed { i, t ->
+        AppLog.i(TAG, "playTrackList: total=${tracks.size} preFiltered=${prePlayable.size} local=$localCount online=$onlineCount startIdx=$startIndex isOnline=$isOnline (hybrid mode, I/O on Default)")
+        // Логирование каждого трека — уже на Dispatchers.Default (не блокирует UI).
+        if (prePlayable.size <= 50) {
+            prePlayable.forEachIndexed { i, t ->
                 val local = localCache[t.id]
                 if (local != null) {
                     AppLog.d(TAG, "  [$i] track=#${t.id} LOCAL ext=${local.extension} size=${local.length()}B — ${t.artist} - ${t.title}")
@@ -409,20 +425,19 @@ object PlayerConnection {
                 }
             }
         } else {
-            AppLog.i(TAG, "  (skipped per-track log, ${tracks.size} items > 50)")
+            AppLog.i(TAG, "  (skipped per-track log, ${prePlayable.size} items > 50)")
         }
-        val startTrackId = tracks.getOrNull(startIndex.coerceIn(0, tracks.lastIndex))?.id
-        val playable = tracks.filter { t ->
+        val playable = prePlayable.filter { t ->
             !t.url.isNullOrBlank() || localCache[t.id] != null
         }
         if (playable.isEmpty()) {
-            AppLog.w(TAG, "playTrackList: нет воспроизводимых треков (все без URL)")
+            AppLog.w(TAG, "playTrackList: нет воспроизводимых треков (все без URL, кэш невалиден)")
             _playerState.value = _playerState.value.copy(
                 error = "Нет воспроизводимых треков — у всех отсутствует URL",
             )
-            return
+            return null
         }
-        playlist = playable
+        val startTrackId = tracks.getOrNull(startIndex.coerceIn(0, tracks.lastIndex))?.id
         val safeIndex = if (startTrackId != null) {
             playable.indexOfFirst { it.id == startTrackId }.coerceAtLeast(0)
         } else {
@@ -431,76 +446,100 @@ object PlayerConnection {
         // Fix #164: передаём кэшированный localFile в toMediaItem чтобы избежать
         // повторных File.exists() вызовов (по одному на трек).
         val mediaItems = playable.map { it.toMediaItem(localCache[it.id]) }
-        withController { ctrl ->
-            ctrl.setMediaItems(mediaItems, safeIndex, 0L)
-            // Fix #51-C: убран restore сохранённой позиции в playTrackList.
-            // Раньше здесь был seekTo(safeIndex, savedPos) если savedPos > 3000ms.
-            // Это вызывало баг: трек A играет 30сек → пользователь нажимает next →
-            // onMediaItemTransition сохраняет позицию A (30сек) в PlaybackPositionStore →
-            // пользователь кликает на A в списке → playTrackList([A,...], 0) →
-            // restored 30сек → трек A начинается с середины вместо начала.
-            // playTrackList = ВСЕГДА явный выбор пользователя (клик в списке,
-            // аудио-вложение, плейлист) → должен стартовать с начала.
-            // Все 13 UI-вызовов playTrackList (AudioAttachmentList, MusicScreen,
-            // OfflineManager, OfflineAudioPlayer, PostDetail, PlaylistAttachmentCard)
-            // = явный выбор. Resume после паузы идёт через togglePlayPause/play(),
-            // не через playTrackList. Cold-start resume не реализован через playTrackList.
-            val startTrack = playable[safeIndex]
-            ctrl.prepare()
-            ctrl.playWhenReady = true
-            currentTrack = startTrack
-            publishStateImmediate()
-            AppLog.i(TAG, "playTrackList: ${playable.size}/${tracks.size} треков, start=$safeIndex")
+        return PreparedQueue(playable, safeIndex, mediaItems)
+    }
 
+    /**
+     * Задать плейлист и начать воспроизведение с заданного индекса.
+     *
+     * Fix #59: треки без источника (нет локального файла И нет URL) фильтруются —
+     * иначе они попадали в плейлист с URI "about:blank", и ExoPlayer падал с
+     * ERROR_CODE_INPUT_INVALID при попытке их воспроизведения. StartIndex
+     * ремапится на отфильтрованный плейлист по ID выбранного трека.
+     *
+     * #ANR-MAIN-IO (2026-09-04): механика из трёх шагов.
+     *  1. main: дешёвый in-memory предфильтр (isDownloaded = O(1) StateFlow
+     *     lookup, getLocalFile НЕ вызывается) + ранний выход если играть нечем.
+     *  2. Dispatchers.Default ([prepareQueue]): localCache (реальный I/O),
+     *     точный playable-фильтр, конвертация Track → MediaItem.
+     *  3. main: применяем очередь к контроллеру (Media3 требует main), если seq
+     *     всё ещё актуален (last-tap-wins при быстрых повторных тапах).
+     */
+    fun playTrackList(tracks: List<Track>, startIndex: Int = 0) {
+        if (tracks.isEmpty()) {
+            AppLog.w(TAG, "playTrackList: пустой плейлист")
+            return
+        }
+        // #ANR-MAIN-IO: дешёвый предфильтр на main. #ARCH-CONTAINERS 3.7-1:
+        // Track.url в :core:data — захват ДО проверки (смарт-каст чужого модуля).
+        val prePlayable = tracks.filter { t ->
+            !t.url.isNullOrBlank() || TrackDownloadManager.isDownloaded(t.id)
+        }
+        if (prePlayable.isEmpty()) {
+            AppLog.w(TAG, "playTrackList: нет воспроизводимых треков (все без URL и кэша)")
+            _playerState.value = _playerState.value.copy(
+                error = "Нет воспроизводимых треков — у всех отсутствует URL",
+            )
+            return
+        }
+        val seq = ++queueSetSeq
+        scope.launch {
+            // Шаг 2: Dispatchers.Default — localCache + MediaItem'ы (реальный I/O).
+            val prepared = withContext(Dispatchers.Default) {
+                prepareQueue(tracks, prePlayable, startIndex)
+            } ?: return@launch // playable пуст после валидации кэша — error уже опубликован
+            // Шаг 3: main — применяем очередь, если не устарела.
+            if (seq != queueSetSeq) {
+                AppLog.i(TAG, "playTrackList: подготовка #$seq устарела (актуальна #$queueSetSeq) — skip")
+                return@launch
+            }
+            playlist = prepared.playable
             // Fix #177: кэшируем ТЕКУЩИЙ трек (startTrack), а НЕ firstTrack.
-            //
-            // КОНТЕКСТ БАГА: Раньше здесь кэшировался firstTrack (index 0) когда
-            // safeIndex > 0. Идея была «onPlaybackStateChanged(READY) кэширует только
-            // воспроизводимый трек, поэтому firstTrack никогда не попадёт в кеш».
-            // Но Fix #170 (SEQUENTIAL mode) + Fix #174 (schedulePrecacheAfterCurrent)
-            // сделали это логику ВРЕДНОЙ:
-            //   1. playTrackList → enqueueDownload(firstTrack) — sequential mode занят
-            //   2. onPlaybackStateChanged(READY) для startTrack → auto-cache[READY]
-            //      SKIP: "another download active (sequential mode)"
-            //   3. startTrack (ТЕКУЩИЙ играющий) НИКОГДА не кэшируется
-            //   4. schedulePrecacheAfterCurrent ждёт COMPLETED для startTrack, но
-            //      startTrack не качается → precacheNext никогда не запустится
-            // Пользователь видел в кеше firstTrack (следующий по порядку), а текущий
-            // трек — нет. Это ровно баг «в кеш загружается следующий трек, а не тот
-            // что играет».
-            //
-            // РЕШЕНИЕ: кэшируем startTrack (currentTrack) сразу при playTrackList,
-            // не дожидаясь STATE_READY. Тогда:
-            //   - startTrack качается первым (правильный приоритет)
-            //   - auto-cache[READY] SKIP'нет startTrack (inProgress=true) — ОК
-            //   - schedulePrecacheAfterCurrent ждёт COMPLETED → precacheNext
-            //   - firstTrack (index 0) кэшируется через precacheNext когда очередь
-            //     дойдёт до него (repeat mode ALL) — или не кэшируется вообще
-            //     (repeat mode OFF) — это нормально, пользователь выбрал safeIndex.
-            //
-            // Fix #110: gate через autoCacheAudio pref (default false, #AUTOCACHE-AUDIO-OFF).
-            // Fix #140: diagnostic logging для всех веток решения (START/SKIP + reason).
-            if (autoCacheAudio) {
-                val cur = startTrack
-                // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — смарт-каст свойства
-                // чужого модуля невозможен; захват url ДО проверки (контракт кастит val).
-                val url = cur.url
-                if (!url.isNullOrBlank()) {
-                    val isHls = url.contains("m3u8", ignoreCase = true) || url.contains("vkuseraudio.net")
-                    val isCached = TrackDownloadManager.isDownloaded(cur.id)
-                    val inProgress = TrackDownloadManager.getDownloadState(cur.id)?.isInProgress == true
-                    // Fix #280: hasActiveDownload() gate убран — TrackDownloadManager
-                    // теперь имеет настоящую FIFO-очередь (Fix #265): enqueueDownload
-                    // НЕ запускает параллельный download, а кладёт трек в очередь.
-                    // Раньше этот gate SKIPал текущий (играющий) трек, если качался
-                    // другой → текущий НИКОГДА не кэшировался (см. баг-контекст выше).
-                    when {
-                        isCached -> AppLog.d(TAG, "auto-cache[playList] SKIP current #${cur.id}: already cached")
-                        inProgress -> AppLog.d(TAG, "auto-cache[playList] SKIP current #${cur.id}: download in progress")
-                        !isHls -> AppLog.w(TAG, "auto-cache[playList] SKIP current #${cur.id}: not HLS (${url.take(60)})")
-                        else -> {
-                            AppLog.i(TAG, "auto-cache[playList] START current #${cur.id} (HLS, silent)")
-                            TrackDownloadManager.enqueueDownload(cur, silent = true)
+            val startTrack = prepared.playable[prepared.safeIndex]
+            withController { ctrl ->
+                // Повторная проверка: с момента подготовки мог прийти более новый
+                // тап (в т.ч. через retry-путь withController с delay).
+                if (seq != queueSetSeq) {
+                    AppLog.i(TAG, "playTrackList: очередь #$seq устарела перед setMediaItems — skip")
+                    return@withController
+                }
+                ctrl.setMediaItems(prepared.mediaItems, prepared.safeIndex, 0L)
+                // Fix #51-C: убран restore сохранённой позиции в playTrackList —
+                // это ВСЕГДА явный выбор пользователя (клик в списке, аудио-вложение,
+                // плейлист) → старт с начала. Resume после паузы идёт через
+                // togglePlayPause/play(), не через playTrackList.
+                ctrl.prepare()
+                ctrl.playWhenReady = true
+                currentTrack = startTrack
+                publishStateImmediate()
+                AppLog.i(TAG, "playTrackList: ${prepared.playable.size}/${tracks.size} треков, start=${prepared.safeIndex}")
+
+                // Fix #177 (детали в git-истории): кэшируем ТЕКУЩИЙ трек (startTrack),
+                // а НЕ firstTrack — иначе при safeIndex > 0 текущий играющий трек
+                // никогда не кэшируется (sequential mode занят firstTrack'ом,
+                // schedulePrecacheAfterCurrent вечно ждёт COMPLETED для него).
+                //
+                // Fix #110: gate через autoCacheAudio pref (default false, #AUTOCACHE-AUDIO-OFF).
+                if (autoCacheAudio) {
+                    val cur = startTrack
+                    // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — смарт-каст свойства
+                    // чужого модуля невозможен; захват url ДО проверки (контракт кастит val).
+                    val url = cur.url
+                    if (!url.isNullOrBlank()) {
+                        val isHls = url.contains("m3u8", ignoreCase = true) || url.contains("vkuseraudio.net")
+                        val isCached = TrackDownloadManager.isDownloaded(cur.id)
+                        val inProgress = TrackDownloadManager.getDownloadState(cur.id)?.isInProgress == true
+                        // Fix #280: hasActiveDownload() gate убран — TrackDownloadManager
+                        // теперь имеет настоящую FIFO-очередь (Fix #265): enqueueDownload
+                        // НЕ запускает параллельный download, а кладёт трек в очередь.
+                        when {
+                            isCached -> AppLog.d(TAG, "auto-cache[playList] SKIP current #${cur.id}: already cached")
+                            inProgress -> AppLog.d(TAG, "auto-cache[playList] SKIP current #${cur.id}: download in progress")
+                            !isHls -> AppLog.w(TAG, "auto-cache[playList] SKIP current #${cur.id}: not HLS (${url.take(60)})")
+                            else -> {
+                                AppLog.i(TAG, "auto-cache[playList] START current #${cur.id} (HLS, silent)")
+                                TrackDownloadManager.enqueueDownload(cur, silent = true)
+                            }
                         }
                     }
                 }
@@ -640,27 +679,41 @@ object PlayerConnection {
     /** Fix #62: перемешать текущий плейлист и начать воспроизведение с первого трека. */
     fun shuffleAll(tracks: List<Track>) {
         if (tracks.isEmpty()) return
-        val shuffled = tracks.shuffled()
-        // Перемешиваем плейлист и обновляем внутреннее состояние.
-        playlist = shuffled
-        // Fix #164: передаём кэшированный localFile в toMediaItem (in-memory filter).
-        val localCache: Map<Long, java.io.File?> = buildMap {
-            shuffled.forEach { t ->
-                if (TrackDownloadManager.isDownloaded(t.id)) {
-                    put(t.id, TrackDownloadManager.getLocalFile(t.id))
+        val seq = ++queueSetSeq
+        scope.launch {
+            // #ANR-MAIN-IO: перемешивание + localCache (I/O) + конвертация MediaItem —
+            // на Dispatchers.Default. Для полностью скачанной библиотеки (2516 треков
+            // в логе 2026-09-04) старый синхронный путь блокировал main на секунды.
+            val prepared = withContext(Dispatchers.Default) {
+                val shuffled = tracks.shuffled()
+                // Fix #164: передаём кэшированный localFile в toMediaItem (in-memory filter).
+                val localCache: Map<Long, java.io.File?> = buildMap {
+                    shuffled.forEach { t ->
+                        if (TrackDownloadManager.isDownloaded(t.id)) {
+                            put(t.id, TrackDownloadManager.getLocalFile(t.id))
+                        }
+                    }
                 }
+                val mediaItems = shuffled.map { it.toMediaItem(localCache[it.id]) }
+                shuffled to mediaItems
             }
-        }
-        val mediaItems = shuffled.map { it.toMediaItem(localCache[it.id]) }
-        withController { ctrl ->
-            ctrl.setMediaItems(mediaItems, 0, 0L)
-            ctrl.shuffleModeEnabled = true
-            ctrl.prepare()
-            ctrl.playWhenReady = true
-            currentTrack = shuffled.firstOrNull()
-            _playerState.value = _playerState.value.copy(shuffleModeEnabled = true)
-            publishStateImmediate()
-            AppLog.i(TAG, "shuffleAll: ${shuffled.size} треков перемешано")
+            if (seq != queueSetSeq) {
+                AppLog.i(TAG, "shuffleAll: подготовка #$seq устарела (актуальна #$queueSetSeq) — skip")
+                return@launch
+            }
+            // Перемешиваем плейлист и обновляем внутреннее состояние.
+            playlist = prepared.first
+            withController { ctrl ->
+                if (seq != queueSetSeq) return@withController
+                ctrl.setMediaItems(prepared.second, 0, 0L)
+                ctrl.shuffleModeEnabled = true
+                ctrl.prepare()
+                ctrl.playWhenReady = true
+                currentTrack = prepared.first.firstOrNull()
+                _playerState.value = _playerState.value.copy(shuffleModeEnabled = true)
+                publishStateImmediate()
+                AppLog.i(TAG, "shuffleAll: ${prepared.first.size} треков перемешано (I/O on Default)")
+            }
         }
     }
 
@@ -1050,16 +1103,30 @@ object PlayerConnection {
         // Лог 2026-08-01 19:49:04: track #456249594, magic 25 78 11 5b, падал.
         // Если локальный .ts — siren, НЕ используем его: при наличии URL стримим
         // онлайн HLS (там HLS-стек умеет siren), без URL — about:blank (skip).
-        // Чтение 1 байта — дёшево; делаем только если реально рассматриваем local.
+        // #ANR-MAIN-IO: чтение magic bytes (4 байта) — только для .ts и только
+        // если реально рассматриваем local; выполняется на Dispatchers.Default
+        // (готовка очереди) либо main для одиночных треков — это дёшево.
         // Note: localFile != null включён напрямую в useLocal (не через отдельный
         // val) — иначе Kotlin не смарт-кастит localFile в Uri.fromFile ниже.
         val considerLocal = !isOnline || !hasUrl
         var localIsSiren = false
         if (localFile != null && considerLocal && localFile.extension.lowercase() == "ts") {
             try {
-                val firstByte = localFile.inputStream().use { it.read() }
-                localIsSiren = firstByte != 0x47
+                // #ANR-MAIN-IO (2026-09-04): раньше здесь читался 1 байт, а ниже
+                // отдельный блок открывал файл ЕЩЁ раз для magic-bytes лога — для
+                // ВСЕХ локальных треков, включая .mp3 (в логе 2026-09-04: 2516
+                // file-open на main thread → ANR). Теперь: один readFully(4)
+                // ТОЛЬКО для .ts (siren актуален только для MPEG-TS); .mp3/.m4a
+                // не открываются вовсе — их валидность проверяет getLocalFile.
+                val header = ByteArray(4)
+                java.io.DataInputStream(localFile.inputStream()).use { it.readFully(header) }
+                AppLog.d(TAG, "OFFLINE magic bytes(.ts): ${header.joinToString(" ") { "%02x".format(it) }}")
+                localIsSiren = (header[0].toInt() and 0xFF) != 0x47
             } catch (e: Exception) {
+                // Отличие от старой версии: короткий (<4B) .ts больше не помечается
+                // siren (старый read() давал -1 → siren), а пойдёт в локальный
+                // playback и будет отброшен error-логикой ExoPlayer'а — файл <4B
+                // невалиден в обоих случаях.
                 AppLog.w(TAG, "toMediaItem: siren-check read failed for #${this.id}: ${e.message}")
             }
         }
@@ -1099,14 +1166,9 @@ object PlayerConnection {
         //   - OFFLINE (cache) — нет сети ИЛИ нет URL, но есть валидный кэш
         //   - SKIP — нет ни URL, ни валидного кэша (трек пропустится)
         if (isLocal) {
+            // #ANR-MAIN-IO: file-open для magic-bytes лога УБРАН (был на каждый
+            // локальный трек). Siren-диагностика осталась только для .ts (см. выше).
             AppLog.i(TAG, "OFFLINE toMediaItem: track=#$id ext=${localFile.extension} size=${localFile.length()}B path=${localFile.absolutePath} (reason=${if (!isOnline) "no-net" else "no-url"})")
-            val header = ByteArray(4)
-            try {
-                java.io.DataInputStream(localFile.inputStream()).use { it.readFully(header) }
-                AppLog.d(TAG, "OFFLINE magic bytes: ${header.joinToString(" ") { "%02x".format(it) }}")
-            } catch (e: Exception) {
-                AppLog.w(TAG, "OFFLINE header read failed: ${e.message}")
-            }
         } else if (hasUrl && isOnline) {
             AppLog.i(TAG, "ONLINE toMediaItem: track=#$id url=${uri.toString().take(80)} (HLS stream, cache=${if (localFile != null) "ignored-online" else "absent"})")
         } else if (hasUrl && !isOnline) {

@@ -6427,3 +6427,60 @@ Work Log:
 
 Stage Summary:
 - Очередь §3.7 п.1 закрыт архитектурно: контейнер фото НЕ зависит от ядра (8-членный CallsDependencies не тронут, PhotosApi — новый независимый фасад того же рантайм-объекта). Ответ на вопрос пользователя: статичные универсальные блоки уже в ядре — host-маппинги + ContainerRegistry; для универсальных compose-компонентов создан :core:ui (ErrorView — первый жилец); доменные (PhotoViewer) — в контейнерах; правило записано в решатель §3.3. Ожидание от пользователя: assembleDebug (порядок: :core:data/:core:ui → :feature:photos → :app) — 2 новых модуля впервые компилируются; лог присылать целиком. Следующий этап — §3.7 п.2 (аудио).
+
+---
+Task ID: 3.7-1-fix
+Agent: Z.ai Code (основной)
+Task: Верификация сборки Этапа 3.7-1 — ошибка «Smart cast to 'String' is impossible, because 'description' is a public API property declared in different module» (PhotosScreen.kt:208) + превентивный поиск аналогов.
+
+Work Log:
+- Диагноз: после переноса data.model в :core:data public API property другого модуля не смарт-кастится (K1/K2) — до переноса модели и потребители жили в одном модуле :app, смарт-касты были легальны.
+- Эталонный фикс: захват в локальный val + явная null-проверка (контракт isNullOrBlank()/!= null смарт-кастит локальный val; ограничение «чужой модуль» на локальные val не действует). 0 новых !!, 0 новых ?.
+- Написан .zscripts/smartcast_hunt.py: 39 nullable backing-val свойств моделей (computed get() исключены — они и раньше не костились) × паттерны check→use (окно 25 строк, SAME-LINE — урок AlAudioFallback «x.p != null && x.p.isNotBlank()», when-else).
+- 66 кандидатов → триаж → 17 реальных в 8 файлах: PhotosScreen 1 (album.description); MusicScreen 7 (6× block.title + onShowAll-лямбда; 1× subtitle — when-ветка без каста выводила String?, isNotBlank() падал на nullable receiver); FeedScreen 3 (copyright.name через ?. цепочку, link.title, link.description); PostDetailScreen 1 (link.description — выловлен контрольным grep остатков после первичного триажа); NotificationSettingsScreen 2 (section.title/description — захват легален и в item{}-лямбду, т.к. val иммутабелен); SettingsScreen 1 (isChecked → MutableMap<String,Boolean>.set); VKApiClient.audioGetById 1 (MutableMap<String,String>.set); AlAudioFallback 1 (SAME-LINE &&).
+- Ложные срабатывания отсечены по сигнатурам: coil model: Any?, stdlib StringBuilder.append(String?), peer.copy() с параметрами String?, platform-типы okhttp/putExtra, строковые шаблоны (toString на Any?), mapNotNull, !!, StateFlow.value.
+- kt_scan v2: 8/8 правленых файлов OK; контрольный grep остатков старых паттернов — чисто.
+
+Stage Summary:
+- Регрессия межмодульного смарт-каста закрыта полностью (17 точек, 8 файлов) — следующий assembleDebug не должен капнуть на этот класс ошибок в :feature:photos и :app. Остаточный риск: when-формы/?.let с повторным чтением — сканер не ловит, компилятор добьёт.
+- Инструмент smartcast_hunt.py оставлен untracked в .zscripts рядом с kt_scan.py.
+- Ожидание: повторный assembleDebug от пользователя; после зелёного — §3.7 п.2 (аудио).
+
+---
+Task ID: 3.7-1-fix2
+Agent: Z.ai Code (основной)
+Task: Волна 2 верификации Этапа 3.7-1 — 43 ошибки :app:compileDebugKotlin (лог пользователя ciber.txt).
+
+Work Log:
+- Класс ошибок — расширение волны 1, две формы: (а) смарт-каст чужого модуля в формах вне зон smartcast_hunt: «проверка свойства → захват свойства» (контракт isNullOrBlank кастит СВОЙСТВО, а не локальную копию: if (!x.url.isNullOrBlank()) { val url = x.url; url.contains() }), elvis-на-свойстве без захвата (bm.post?.ownerId ?: return не кастит bm.post для следующей строки), receiver внутри аргументов x?.copy(...) не кастится; (б) second-order инференс: локальные val из if/when-веток выводились String?/Message? (ветка потеряла смарт-каст) и падали ниже — isNotBlank/contains/take/Builder(String) на nullable receiver.
+- 30 точек в 12 файлах: PlayerConnection 6 (autoCache playList/READY/ERROR, precacheNext, toMediaItem: захват trackUrl + замена else-if(hasUrl) на явную !trackUrl.isNullOrBlank() для контракта), MessageMods (originalText -> copy(text: String)), BookmarksScreen 5 веток when (захват объекта целиком вместо elvis-на-свойстве), ClipsFeedScreen 2 (desc, musicInfo), ClipsViewModel (freshLikes — захват + if вместо fresh.likes?.copy с обращением к receiver в аргументах), FeedScreen 3 (donut.placeholder, copyHistory.first(), link.photo.largestUrl), GroupsScreen (status), ChatDetailScreen 3 (reply, doc внутри лямбды filter, reactions), MessagesScreen (attachments в when), AudioPlayerScreen (lyricsId — захвата достаточно, lyricsId!=null гарантирует track!=null), MusicScreen (genres), SearchScreen (activity).
+- NULL-EXPLICIT: 0 новых !!; новые ?. только где захват до проверки неизбежен (track?.url, track?.lyricsId, post.donut?.placeholder) — с обоснованием в комментариях.
+- kt_scan v2 12/12 OK; grep остатков старых форм чист.
+
+Stage Summary:
+- Важный факт из лога: :core:data/:core:ui/:feature:photos/:feature:calls прошли компиляцию — ошибки только в :app (модуль-потребитель моделей). Kotlin репортит ВСЕ ошибки модуля сразу — волна 2 исчерпывает класс; третья волна возможна только если фиксы что-то сломали (сканер+grep против).
+- Урок для п.2 (аудио): PlayerConnection уже правлен в ядре, при переносе в :feature:audio межмодульные касты всплывут в ОБРАТНУЮ сторону (ядро-потребитель фичевого типа) — smartcast_hunt расширить формами волны 2.
+---
+Task ID: 3.7-1-hotfix-anr
+Agent: Z.ai (main)
+Task: Разобрать лог ciber.txt («приложение зависло») — диагноз и фикс.
+
+Work Log:
+- Лог /home/z/my-project/upload/ciber.txt (5030 строк, 20:02:00.065-20:02:04.895): 5026 строк = PlayerConnection.toMediaItem на MAIN thread, 2516 треков (id 456249755..456240021, все url=LOCAL, /Music/PinoK/*.mp3), затем PROCESS ENDED посреди цикла. Ни одного ANR/FATAL — UI просто заморожен, процесс убит (юзером/системой).
+- ХОРОШАЯ НОВОСТЬ: приложение СОБРАЛОСЬ И ЗАПУСТИЛОСЬ — волна-2 ошибок компиляции была последней; Этап 3.7-1 компилируется (осталось формально закрыть этап).
+- Диагноз ANR (двойной I/O-шторм на main, все треки скачаны — worst case):
+  1) playTrackList: localCache build = 2516 x getLocalFile (до 3x stat + открытие файла для валидации magic bytes + readFilenameFromMeta) на main;
+  2) toMediaItem x 2516: stat + file-open ДЛЯ ЛОГА (magic bytes 4 байта читались на каждый локальный трек, вкл. .mp3) + 4-5 AppLog строк.
+  Итого ~5000 файловых операций на main за 4.8s+ -> заморозка. Это НЕ регрессия контейнеризации — старый код (Fix #164/#170 боролись с этим же, но рассчитывали на «57 из 824 скачаны»).
+- Фикс (#ANR-MAIN-IO, PlayerConnection.kt, 1558 строк, баланс скобок OK):
+  * playTrackList: 3 шага — (1) main: дешёвый предфильтр prePlayable (isDownloaded = O(1) StateFlow lookup) + ранний выход; (2) withContext(Dispatchers.Default): НОВЫЙ prepareQueue() = localCache + точный playable + mediaItems (весь I/O); (3) main: withController + setMediaItems.
+  * shuffleAll: та же схема (withContext(Default) + seq-guard).
+  * seq-токен queueSetSeq (@Volatile Long): last-tap-wins — при быстром повторном тапе устаревшая фоновая подготовка НЕ применяется (проверка дважды: после withContext и внутри withController — покрывает retry-путь с delay).
+  * toMediaItem: file-open для magic-bytes лога УБРАН для .mp3/.m4a; для .ts siren-проверка и magic-лог слиты в ОДИН readFully(4) (было 2 открытия файла). Поведение siren для реальных .ts не изменилось (первый байт != 0x47); короткий <4B .ts теперь не siren, а отбрасывается error-логикой ExoPlayer (невалиден в обоих случаях).
+  * Стартовый трек: startTrackId берётся из ИСХОДНОГО tracks (пользовательский индекс), ремап в playable по ID — семантика сохранена; per-track лог <=50 перенесён на Default.
+- NULL-EXPLICIT: 0 новых !!; захватов не потребовалось (isNullOrBlank на nullable receiver, без смарт-кастов). BuildStamp НЕ трогал (не звонковое).
+
+Stage Summary:
+- Коммит fix(media) «ANR при старте плейлиста: I/O очереди уведён с main» — пуш в origin/PinoK, ожидание сборки юзером.
+- Ожидаемый эффект: UI не замирает при тапе по треку даже на 2516-трековой скачанной библиотеке; подготовка очереди ~1-3s на Default (те же I/O, но без блокировки main), лог «playTrackList: ... I/O on Default».
+- Для Этапа Д п.2 (аудио): в prepareQueue/toMediaItem больше I/O-деталей, при переносе в :feature:audio смарт-касты всплывут с обеих сторон — smartcast_hunt.py обязателен.
