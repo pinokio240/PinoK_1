@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -167,27 +168,123 @@ fun OfflineManagerScreen(
     val videoCount = completedVideo.size
     val storyCount = completedStories.size
     val clipCount = completedClips.size
-    val audioBytes = TrackDownloadManager.getTotalDownloadedBytes()
-    // #39 C5: считаем и видео-байты для футера (раньше только аудио).
-    val videoBytes = remember(completedVideo) {
-        completedVideo.sumOf { ds ->
-            VideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId)?.length() ?: 0L
+
+    // #ANR-MAIN-IO (2026-09-04): все файловые операции экрана — getLocalFile
+    // (stat + magic-byte валидация с ОТКРЫТИЕМ файла), lastModified/length,
+    // чтение .meta sidecar — выполняются на Dispatchers.IO, а не в композиции.
+    // Раньше: getTotalDownloadedBytes() вызывался без remember (на каждой
+    // рекомпозиции!), + remember-блоки байтов и allItems-сканы вкладок — суммарно
+    // ~2500+ файловых операций на main при открытии экрана с полной библиотекой
+    // → Davey 10349ms + ANR-tombstone (лог 2026-09-04 20:56:19–29).
+    //
+    // Состояние сканов: null = сканирование идёт (вкладка показывает спиннер,
+    // футер показывает «…»); List = готово. При пересканировании старый список
+    // остаётся видимым до атомарной замены — мигания списков нет.
+    var audioItems by remember { mutableStateOf<List<AudioOfflineItem>?>(null) }
+    var videoItems by remember { mutableStateOf<List<VideoOfflineItem>?>(null) }
+    var storyItems by remember { mutableStateOf<List<StoryOfflineItem>?>(null) }
+    var clipItems by remember { mutableStateOf<List<ClipOfflineItem>?>(null) }
+
+    // Ключи пересканирования: FNV-1a по набору загрузок (см. audioScanKeyOf/
+    // mediaScanKeyOf ниже). Прогресс-тики активных скачиваний НЕ меняют набор
+    // COMPLETED → ключ стабилен → пересканирования нет; завершение скачивания /
+    // удаление меняют набор → ключ меняется → пересканирование.
+    val audioScanKey = remember(completedAudio) { audioScanKeyOf(completedAudio) }
+    val videoScanKey = remember(completedVideo) { mediaScanKeyOf(completedVideo) }
+    val storyScanKey = remember(completedStories) { mediaScanKeyOf(completedStories) }
+    val clipScanKey = remember(completedClips) { mediaScanKeyOf(completedClips) }
+
+    LaunchedEffect(audioScanKey) {
+        val snapshot = completedAudio
+        audioItems = withContext(Dispatchers.IO) {
+            snapshot.map { ds ->
+                val f = TrackDownloadManager.getLocalFile(ds.trackId)
+                var lm = 0L
+                var sz = 0L
+                if (f != null) {
+                    lm = f.lastModified()
+                    sz = f.length()
+                }
+                AudioOfflineItem(state = ds, file = f, lastModified = lm, sizeBytes = sz)
+            }
         }
     }
-    // Fix #100: story video bytes для футера.
-    val storyBytes = remember(completedStories) {
-        completedStories.sumOf { ds ->
-            // trackId хранит storyId (Int→Long). Парсим ключ для getLocalFile.
-            StoryVideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId.toInt())?.length() ?: 0L
+    LaunchedEffect(videoScanKey) {
+        val snapshot = completedVideo
+        videoItems = withContext(Dispatchers.IO) {
+            snapshot.map { ds ->
+                val f = VideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId)
+                var lm = 0L
+                var sz = 0L
+                if (f != null) {
+                    lm = f.lastModified()
+                    sz = f.length()
+                }
+                VideoOfflineItem(state = ds, file = f, lastModified = lm, sizeBytes = sz)
+            }
         }
     }
-    // §37.12 #330: clip bytes для футера. Для clips trackId хранит Long videoId.
-    val clipBytes = remember(completedClips) {
-        completedClips.sumOf { ds ->
-            ClipVideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId)?.length() ?: 0L
+    LaunchedEffect(storyScanKey) {
+        val snapshot = completedStories
+        storyItems = withContext(Dispatchers.IO) {
+            snapshot.map { ds ->
+                val key = StoryVideoDownloadManager.storyKey(ds.ownerId, ds.trackId.toInt())
+                val meta = StoryVideoDownloadManager.getStoryMeta(key)
+                val f = StoryVideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId.toInt())
+                var lm = 0L
+                var sz = 0L
+                if (f != null) {
+                    lm = f.lastModified()
+                    sz = f.length()
+                }
+                var dateKey = lm
+                if (meta != null && meta.downloadedAt > 0L) {
+                    dateKey = meta.downloadedAt
+                }
+                StoryOfflineItem(
+                    state = ds, meta = meta, file = f,
+                    lastModified = lm, sizeBytes = sz, dateKey = dateKey,
+                )
+            }
         }
     }
+    LaunchedEffect(clipScanKey) {
+        val snapshot = completedClips
+        clipItems = withContext(Dispatchers.IO) {
+            snapshot.map { ds ->
+                val meta = ClipVideoDownloadManager.getClipMeta(ds.ownerId, ds.trackId)
+                val f = ClipVideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId)
+                var lm = 0L
+                var sz = 0L
+                if (f != null) {
+                    lm = f.lastModified()
+                    sz = f.length()
+                }
+                var dateKey = lm
+                if (meta != null && meta.downloadedAt > 0L) {
+                    dateKey = meta.downloadedAt
+                }
+                ClipOfflineItem(
+                    state = ds, meta = meta, file = f,
+                    lastModified = lm, sizeBytes = sz, dateKey = dateKey,
+                )
+            }
+        }
+    }
+
+    // Футер: байты считаются из уже просканированных списков (чисто in-memory).
+    // #NULL-EXPLICIT: захваты nullable-делегатов в локальные val.
+    val loadedAudio = audioItems
+    val loadedVideo = videoItems
+    val loadedStory = storyItems
+    val loadedClip = clipItems
+    val audioBytes = if (loadedAudio != null) loadedAudio.sumOf { it.sizeBytes } else 0L
+    val videoBytes = if (loadedVideo != null) loadedVideo.sumOf { it.sizeBytes } else 0L
+    val storyBytes = if (loadedStory != null) loadedStory.sumOf { it.sizeBytes } else 0L
+    val clipBytes = if (loadedClip != null) loadedClip.sumOf { it.sizeBytes } else 0L
     val totalBytes = audioBytes + videoBytes + storyBytes + clipBytes
+    val bytesScanPending = loadedAudio == null || loadedVideo == null ||
+        loadedStory == null || loadedClip == null
 
     var selectedTab by remember { mutableIntStateOf(0) }
     // #39 C5: state поиска/сортировки — отдельные для каждой вкладки.
@@ -216,8 +313,13 @@ fun OfflineManagerScreen(
     androidx.compose.runtime.LaunchedEffect(Unit) {
         try {
             val snap = re.pinok.SovaApp.get().prefs.data.first()
-            if (snap.musicDownloadPath.isNotBlank()) {
-                TrackDownloadManager.checkPathMismatch(snap.musicDownloadPath)
+            val savedPath = snap.musicDownloadPath
+            if (savedPath.isNotBlank()) {
+                // #ANR-MAIN-IO: checkPathMismatch делает дисковый I/O
+                // (exists/canWrite/probeWritable — запись probe-файла) — не на main.
+                withContext(Dispatchers.IO) {
+                    TrackDownloadManager.checkPathMismatch(savedPath)
+                }
             }
         } catch (e: Exception) {
             // prefs может быть не готов — не критично, при следующем open сработает.
@@ -438,7 +540,7 @@ fun OfflineManagerScreen(
         ) {
             when (selectedTab) {
                 0 -> AudioOfflineTab(
-                    tracks = completedAudio,
+                    items = audioItems,
                     query = audioQuery,
                     onQueryChange = { audioQuery = it },
                     sort = audioSort,
@@ -446,7 +548,7 @@ fun OfflineManagerScreen(
                     onOpenPlayer = onOpenPlayer,
                 )
                 1 -> VideoOfflineTab(
-                    videos = completedVideo,
+                    items = videoItems,
                     query = videoQuery,
                     onQueryChange = { videoQuery = it },
                     sort = videoSort,
@@ -455,7 +557,7 @@ fun OfflineManagerScreen(
                 )
                 // Fix #100: таб «Истории» — story video кэш.
                 2 -> StoryOfflineTab(
-                    stories = completedStories,
+                    items = storyItems,
                     query = storyQuery,
                     onQueryChange = { storyQuery = it },
                     sort = storySort,
@@ -464,7 +566,7 @@ fun OfflineManagerScreen(
                 )
                 // §37.12 #330: таб «Клипы» — clip video кэш (ClipVideoDownloadManager).
                 3 -> ClipOfflineTab(
-                    clips = completedClips,
+                    items = clipItems,
                     query = clipQuery,
                     onQueryChange = { clipQuery = it },
                     sort = clipSort,
@@ -495,7 +597,7 @@ fun OfflineManagerScreen(
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
-                    text = formatBytes(totalBytes),
+                    text = if (bytesScanPending) "…" else formatBytes(totalBytes),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -583,21 +685,78 @@ private fun SearchSortBar(
     }
 }
 
-/** Элемент офлайн-аудио с файлом для сортировки по date/size. */
+/**
+ * Элемент офлайн-аудио с файлом для сортировки по date/size.
+ * #ANR-MAIN-IO: lastModified/sizeBytes предвычислены при сканировании на
+ * Dispatchers.IO (см. OfflineManagerScreen) — сортировка и отрисовка НЕ делают
+ * файловых операций (раньше sortedByDescending { file.lastModified() } давал
+ * O(n·log n) stat-системных вызовов на main).
+ */
 private data class AudioOfflineItem(
     val state: re.pinok.data.model.DownloadState,
     val file: File?,
+    val lastModified: Long,
+    val sizeBytes: Long,
 )
 
-/** Элемент офлайн-видео с файлом для сортировки по date/size. */
+/**
+ * Элемент офлайн-видео с файлом для сортировки по date/size.
+ * #ANR-MAIN-IO: lastModified/sizeBytes предвычислены при сканировании (см. AudioOfflineItem).
+ */
 private data class VideoOfflineItem(
     val state: re.pinok.data.model.DownloadState,
     val file: File?,
+    val lastModified: Long,
+    val sizeBytes: Long,
 )
+
+/** #ANR-MAIN-IO: ключ пересканирования аудио — FNV-1a по trackId набора.
+ *  Стабилен для неизменного набора COMPLETED (прогресс-тики не пересканируют),
+ *  меняется при завершении скачивания / удалении загрузки. */
+private fun audioScanKeyOf(states: List<re.pinok.data.model.DownloadState>): Long {
+    var h = -3750763034362895579L // FNV-1a 64-bit offset basis
+    for (s in states) {
+        h = (h xor s.trackId) * 1099511628211L // FNV prime
+    }
+    return h
+}
+
+/** #ANR-MAIN-IO: ключ пересканирования видео/историй/клипов — FNV-1a по (ownerId, trackId). */
+private fun mediaScanKeyOf(states: List<re.pinok.data.model.DownloadState>): Long {
+    var h = -3750763034362895579L // FNV-1a 64-bit offset basis
+    for (s in states) {
+        h = (h xor s.ownerId) * 1099511628211L
+        h = (h xor s.trackId) * 1099511628211L
+    }
+    return h
+}
+
+/** #ANR-MAIN-IO: общая заглушка «Сканирование кэша…» для вкладок офлайн-менеджера. */
+@Composable
+private fun OfflineScanInProgress(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Сканирование кэша…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 @Composable
 private fun AudioOfflineTab(
-    tracks: List<re.pinok.data.model.DownloadState>,
+    /** #ANR-MAIN-IO: просканированные элементы (null = сканирование кэша идёт). */
+    items: List<AudioOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
     sort: OfflineSortOption,
@@ -605,31 +764,31 @@ private fun AudioOfflineTab(
     /** Fix #50: открывает [OfflineAudioPlayerScreen] при тапе. */
     onOpenPlayer: () -> Unit = {},
 ) {
-    // Построить список items с файлами (для sort by date/size).
-    val allItems = remember(tracks) {
-        tracks.map { ds ->
-            AudioOfflineItem(
-                state = ds,
-                file = TrackDownloadManager.getLocalFile(ds.trackId),
-            )
-        }
-    }
+    // #NULL-EXPLICIT: захват nullable-параметра в локальный val для смарт-каста.
+    val loaded = items
+    val allItems = if (loaded != null) loaded else emptyList()
 
-    // #39 C5: filter + sort
-    val visibleItems = remember(allItems, query, sort) {
-        val q = query.trim().lowercase()
-        val filtered = if (q.isEmpty()) allItems else {
-            allItems.filter { item ->
-                item.state.title.lowercase().contains(q) ||
-                    item.state.artist.lowercase().contains(q) ||
-                    item.state.displayText.lowercase().contains(q)
+    // #39 C5: filter + sort — ЧИСТО in-memory: lastModified/sizeBytes
+    // предвычислены при сканировании на Dispatchers.IO (#ANR-MAIN-IO),
+    // файловых операций на каждое нажатие клавиши больше нет.
+    val visibleItems = remember(loaded, query, sort) {
+        if (loaded == null) {
+            emptyList()
+        } else {
+            val q = query.trim().lowercase()
+            val filtered = if (q.isEmpty()) loaded else {
+                loaded.filter { item ->
+                    item.state.title.lowercase().contains(q) ||
+                        item.state.artist.lowercase().contains(q) ||
+                        item.state.displayText.lowercase().contains(q)
+                }
             }
-        }
-        when (sort) {
-            OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.file?.lastModified() ?: 0L }
-            OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.file?.length() ?: 0L }
-            OfflineSortOption.TITLE_AZ -> filtered.sortedBy { it.state.title.lowercase() }
-            OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { it.state.artist.lowercase() }
+            when (sort) {
+                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.lastModified }
+                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> filtered.sortedBy { it.state.title.lowercase() }
+                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { it.state.artist.lowercase() }
+            }
         }
     }
 
@@ -681,7 +840,10 @@ private fun AudioOfflineTab(
             totalCount = allItems.size,
         )
 
-        if (visibleItems.isEmpty()) {
+        if (loaded == null) {
+            // #ANR-MAIN-IO: сканирование кэша идёт на Dispatchers.IO — честный loading.
+            OfflineScanInProgress(modifier = Modifier.weight(1f))
+        } else if (visibleItems.isEmpty()) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
@@ -708,7 +870,8 @@ private fun AudioOfflineTab(
                     val downloadState = item.state
                     AudioOfflineRow(
                         state = downloadState,
-                        fileSize = item.file?.length() ?: 0L,
+                        // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
+                        fileSize = item.sizeBytes,
                         onClick = {
                             val index = playableTracks.indexOfFirst { it.id == downloadState.trackId }
                             if (index >= 0) {
@@ -729,34 +892,34 @@ private fun AudioOfflineTab(
 
 @Composable
 private fun VideoOfflineTab(
-    videos: List<re.pinok.data.model.DownloadState>,
+    /** #ANR-MAIN-IO: просканированные элементы (null = сканирование кэша идёт). */
+    items: List<VideoOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
     sort: OfflineSortOption,
     onSortChange: (OfflineSortOption) -> Unit,
     onPlayVideo: ((ownerId: Long, videoId: Long, title: String) -> Unit)?,
 ) {
-    val allItems = remember(videos) {
-        videos.map { ds ->
-            VideoOfflineItem(
-                state = ds,
-                file = VideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId),
-            )
-        }
-    }
+    // #NULL-EXPLICIT: захват nullable-параметра в локальный val для смарт-каста.
+    val loaded = items
+    val allItems = if (loaded != null) loaded else emptyList()
 
-    // #39 C5: filter + sort (видео — без ARTIST_AZ, эта опция скрыта).
-    val visibleItems = remember(allItems, query, sort) {
-        val q = query.trim().lowercase()
-        val filtered = if (q.isEmpty()) allItems else {
-            allItems.filter { it.state.title.lowercase().contains(q) }
-        }
-        when (sort) {
-            OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.file?.lastModified() ?: 0L }
-            OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.file?.length() ?: 0L }
-            OfflineSortOption.TITLE_AZ -> filtered.sortedBy { it.state.title.lowercase() }
-            // Для видео ARTIST_AZ не имеет смысла — fallback на TITLE_AZ.
-            OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { it.state.title.lowercase() }
+    // #39 C5: filter + sort (видео — без ARTIST_AZ) — чисто in-memory (#ANR-MAIN-IO).
+    val visibleItems = remember(loaded, query, sort) {
+        if (loaded == null) {
+            emptyList()
+        } else {
+            val q = query.trim().lowercase()
+            val filtered = if (q.isEmpty()) loaded else {
+                loaded.filter { it.state.title.lowercase().contains(q) }
+            }
+            when (sort) {
+                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.lastModified }
+                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> filtered.sortedBy { it.state.title.lowercase() }
+                // Для видео ARTIST_AZ не имеет смысла — fallback на TITLE_AZ.
+                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { it.state.title.lowercase() }
+            }
         }
     }
 
@@ -772,7 +935,10 @@ private fun VideoOfflineTab(
             totalCount = allItems.size,
         )
 
-        if (visibleItems.isEmpty()) {
+        if (loaded == null) {
+            // #ANR-MAIN-IO: сканирование кэша идёт на Dispatchers.IO — честный loading.
+            OfflineScanInProgress(modifier = Modifier.weight(1f))
+        } else if (visibleItems.isEmpty()) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
@@ -799,7 +965,8 @@ private fun VideoOfflineTab(
                     val downloadState = item.state
                     VideoOfflineRow(
                         state = downloadState,
-                        fileSize = item.file?.length() ?: 0L,
+                        // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
+                        fileSize = item.sizeBytes,
                         canPlay = onPlayVideo != null,
                         onClick = {
                             if (onPlayVideo != null) {
@@ -959,7 +1126,8 @@ private fun formatBytes(bytes: Long): String {
 
 @Composable
 private fun StoryOfflineTab(
-    stories: List<re.pinok.data.model.DownloadState>,
+    /** #ANR-MAIN-IO: просканированные элементы с .meta sidecar (null = сканирование идёт). */
+    items: List<StoryOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
     sort: OfflineSortOption,
@@ -970,29 +1138,26 @@ private fun StoryOfflineTab(
      */
     onPlayStory: ((ownerId: Long, storyId: Int) -> Unit)? = null,
 ) {
-    // Загружаем .meta sidecar для каждого story — там ownerName, thumbUrl, expiresAt.
-    val allItems = remember(stories) {
-        stories.map { ds ->
-            val key = StoryVideoDownloadManager.storyKey(ds.ownerId, ds.trackId.toInt())
-            val meta = StoryVideoDownloadManager.getStoryMeta(key)
-            StoryOfflineItem(
-                state = ds,
-                meta = meta,
-                file = StoryVideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId.toInt()),
-            )
-        }
-    }
+    // #NULL-EXPLICIT: захват nullable-параметра в локальный val для смарт-каста.
+    val loaded = items
+    val allItems = if (loaded != null) loaded else emptyList()
 
-    val visibleItems = remember(allItems, query, sort) {
-        val q = query.trim().lowercase()
-        val filtered = if (q.isEmpty()) allItems else {
-            allItems.filter { (it.meta?.ownerName ?: it.state.title).lowercase().contains(q) }
-        }
-        when (sort) {
-            OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.meta?.downloadedAt ?: it.file?.lastModified() ?: 0L }
-            OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.file?.length() ?: 0L }
-            OfflineSortOption.TITLE_AZ -> filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
-            OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
+    // #ANR-MAIN-IO: сортировка по предвычисленным dateKey/sizeBytes (чисто in-memory);
+    // файловые операции (lastModified/length) и чтение .meta — только при скане на IO.
+    val visibleItems = remember(loaded, query, sort) {
+        if (loaded == null) {
+            emptyList()
+        } else {
+            val q = query.trim().lowercase()
+            val filtered = if (q.isEmpty()) loaded else {
+                loaded.filter { (it.meta?.ownerName ?: it.state.title).lowercase().contains(q) }
+            }
+            when (sort) {
+                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.dateKey }
+                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
+                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
+            }
         }
     }
 
@@ -1006,7 +1171,10 @@ private fun StoryOfflineTab(
             totalCount = allItems.size,
         )
 
-        if (visibleItems.isEmpty()) {
+        if (loaded == null) {
+            // #ANR-MAIN-IO: сканирование кэша идёт на Dispatchers.IO — честный loading.
+            OfflineScanInProgress(modifier = Modifier.weight(1f))
+        } else if (visibleItems.isEmpty()) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
@@ -1038,13 +1206,18 @@ private fun StoryOfflineTab(
         } else {
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(visibleItems, key = { "s_${it.state.ownerId}_${it.state.trackId}" }) { item ->
+                    // #NULL-EXPLICIT: захват для смарт-каста + отсутствие live-exists() на recompose.
+                    val rowMeta = item.meta
+                    val rowFile = item.file
                     StoryOfflineRow(
                         state = item.state,
-                        meta = item.meta,
-                        fileSize = item.file?.length() ?: 0L,
-                        // Fix #111: canPlay только если файл существует И onPlayStory задан.
-                        // Если файл удалён/истёк — тап игнорируется (нельзя играть).
-                        canPlay = item.file != null && item.file.exists() && onPlayStory != null,
+                        meta = rowMeta,
+                        // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
+                        fileSize = item.sizeBytes,
+                        // Fix #111: canPlay — файл, подтверждённый сканом (getLocalFile
+                        // возвращает файл только если он существует и валиден).
+                        // Живая exists()-проверка на каждый recompose убрана (#ANR-MAIN-IO).
+                        canPlay = rowFile != null && onPlayStory != null,
                         onPlay = {
                             onPlayStory?.invoke(item.state.ownerId, item.state.trackId.toInt())
                         },
@@ -1059,10 +1232,19 @@ private fun StoryOfflineTab(
     }
 }
 
+/**
+ * Fix #100: элемент офлайн-истории — DownloadState + .meta sidecar + файл.
+ * #ANR-MAIN-IO: lastModified/sizeBytes/dateKey предвычислены при скане на IO;
+ * dateKey = meta.downloadedAt (если >0), иначе file.lastModified — сортировка
+ * DATE_NEW без файловых операций.
+ */
 private data class StoryOfflineItem(
     val state: re.pinok.data.model.DownloadState,
     val meta: StoryVideoDownloadManager.StoryVideoMeta?,
     val file: java.io.File?,
+    val lastModified: Long,
+    val sizeBytes: Long,
+    val dateKey: Long,
 )
 
 @Composable
@@ -1183,11 +1365,17 @@ private fun StoryOfflineRow(
  * Для clips trackId в DownloadState хранит Long videoId (вместо Int storyId
  * у stories). OwnerId берётся из DownloadState.ownerId — он может быть
  * отрицательным для групповых клипов (например -229917482 → группа 229917482).
+ *
+ * #ANR-MAIN-IO: lastModified/sizeBytes/dateKey предвычислены при скане на IO;
+ * dateKey = meta.downloadedAt (если >0), иначе file.lastModified.
  */
 private data class ClipOfflineItem(
     val state: re.pinok.data.model.DownloadState,
     val meta: ClipVideoDownloadManager.ClipVideoMeta?,
     val file: java.io.File?,
+    val lastModified: Long,
+    val sizeBytes: Long,
+    val dateKey: Long,
 )
 
 /**
@@ -1205,7 +1393,7 @@ private data class ClipOfflineItem(
  */
 @Composable
 private fun ClipOfflineTab(
-    clips: List<re.pinok.data.model.DownloadState>,
+    items: List<ClipOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
     sort: OfflineSortOption,
@@ -1218,40 +1406,38 @@ private fun ClipOfflineTab(
     /** Колбэк удаления clip (обычно вызывает ClipVideoDownloadManager.removeDownload). */
     onRemoveClip: (ownerId: Long, videoId: Long) -> Unit,
 ) {
-    // Загружаем .meta sidecar + локальный файл для каждого clip.
-    // В .meta хранятся: title, description, thumbUrl, duration, authorName,
-    // authorAvatar, downloadedAt (для сортировки и отображения).
-    val allItems = remember(clips) {
-        clips.map { ds ->
-            val meta = ClipVideoDownloadManager.getClipMeta(ds.ownerId, ds.trackId)
-            val file = ClipVideoDownloadManager.getLocalFile(ds.ownerId, ds.trackId)
-            ClipOfflineItem(state = ds, meta = meta, file = file)
-        }
-    }
+    // #NULL-EXPLICIT: захват nullable-параметра в локальный val для смарт-каста.
+    // #ANR-MAIN-IO: .meta sidecar + файл сканируются на Dispatchers.IO
+    // (см. OfflineManagerScreen), вкладка получает готовые элементы.
+    val loaded = items
+    val allItems = if (loaded != null) loaded else emptyList()
 
     // #39 C5: filter + sort (clips — без ARTIST_AZ, эта опция скрыта — mirror video).
-    val visibleItems = remember(allItems, query, sort) {
-        val q = query.trim().lowercase()
-        val filtered = if (q.isEmpty()) allItems else {
-            allItems.filter { item ->
-                val title = item.meta?.title?.lowercase().orEmpty()
-                val author = item.meta?.authorName?.lowercase().orEmpty()
-                val desc = item.meta?.description?.lowercase().orEmpty()
-                title.contains(q) || author.contains(q) || desc.contains(q) ||
-                    item.state.title.lowercase().contains(q)
+    // #ANR-MAIN-IO: сортировка по предвычисленным dateKey/sizeBytes (in-memory).
+    val visibleItems = remember(loaded, query, sort) {
+        if (loaded == null) {
+            emptyList()
+        } else {
+            val q = query.trim().lowercase()
+            val filtered = if (q.isEmpty()) loaded else {
+                loaded.filter { item ->
+                    val title = item.meta?.title?.lowercase().orEmpty()
+                    val author = item.meta?.authorName?.lowercase().orEmpty()
+                    val desc = item.meta?.description?.lowercase().orEmpty()
+                    title.contains(q) || author.contains(q) || desc.contains(q) ||
+                        item.state.title.lowercase().contains(q)
+                }
             }
-        }
-        when (sort) {
-            OfflineSortOption.DATE_NEW -> filtered.sortedByDescending {
-                it.meta?.downloadedAt?.takeIf { t -> t > 0 } ?: it.file?.lastModified() ?: 0L
-            }
-            OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.file?.length() ?: 0L }
-            OfflineSortOption.TITLE_AZ -> filtered.sortedBy {
-                (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
-            }
-            // Для clips ARTIST_AZ не имеет смысла — fallback на TITLE_AZ (mirror video).
-            OfflineSortOption.ARTIST_AZ -> filtered.sortedBy {
-                (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
+            when (sort) {
+                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.dateKey }
+                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> filtered.sortedBy {
+                    (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
+                }
+                // Для clips ARTIST_AZ не имеет смысла — fallback на TITLE_AZ (mirror video).
+                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy {
+                    (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
+                }
             }
         }
     }
@@ -1267,7 +1453,10 @@ private fun ClipOfflineTab(
             totalCount = allItems.size,
         )
 
-        if (visibleItems.isEmpty()) {
+        if (loaded == null) {
+            // #ANR-MAIN-IO: сканирование кэша идёт на Dispatchers.IO — честный loading.
+            OfflineScanInProgress(modifier = Modifier.weight(1f))
+        } else if (visibleItems.isEmpty()) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
@@ -1299,13 +1488,16 @@ private fun ClipOfflineTab(
         } else {
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(visibleItems, key = { "c_${it.state.ownerId}_${it.state.trackId}" }) { item ->
+                    // #NULL-EXPLICIT: захват для смарт-каста + отсутствие live-exists() на recompose.
+                    val rowFile = item.file
                     ClipOfflineRow(
                         state = item.state,
                         meta = item.meta,
-                        fileSize = item.file?.length() ?: 0L,
-                        // §37.12 #330: canPlay только если файл существует И onPlayClip задан.
-                        // Если файл удалён пользователем/истёк TTL — тап игнорируется.
-                        canPlay = item.file != null && item.file.exists() && onPlayClip != null,
+                        // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
+                        fileSize = item.sizeBytes,
+                        // §37.12 #330: canPlay — файл, подтверждённый сканом (getLocalFile
+                        // возвращает файл только если он существует и валиден).
+                        canPlay = rowFile != null && onPlayClip != null,
                         onPlay = {
                             onPlayClip?.invoke(item.state.ownerId, item.state.trackId)
                         },

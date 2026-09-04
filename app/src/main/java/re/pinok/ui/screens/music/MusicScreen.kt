@@ -1542,7 +1542,18 @@ private fun MyMusicMenuList(
         val downloadedTracks = downloadedStates.values
             .filter { it.isCompleted }
             .sortedByDescending { it.trackId }
-        val totalBytes = TrackDownloadManager.getTotalDownloadedBytes()
+        // #ANR-MAIN-IO (2026-09-04): getTotalDownloadedBytes делает getLocalFile
+        // (stat + magic-byte валидация с открытием файла) на каждый трек — для
+        // большой скачанной библиотеки это тысячи файловых операций на КАЖДУЮ
+        // рекомпозицию диалога. Считаем на Dispatchers.IO по ключу размера
+        // набора завершённых.
+        var totalBytesState by remember { mutableStateOf(0L) }
+        LaunchedEffect(downloadedTracks.size) {
+            totalBytesState = withContext(Dispatchers.IO) {
+                TrackDownloadManager.getTotalDownloadedBytes()
+            }
+        }
+        val totalBytes = totalBytesState
         val sizeStr = when {
             totalBytes < 1024 -> "$totalBytes Б"
             totalBytes < 1024 * 1024 -> "${"%.1f".format(totalBytes / 1024.0)} КБ"

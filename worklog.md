@@ -6496,3 +6496,23 @@ Work Log:
 
 Stage Summary:
 - Документация дня полная: worklog (было) + HISTORY.md (добавлен) + канон плана (ловушка 7, статусы, стартовая точка). Коммит docs(plan) — пуш origin/PinoK.
+
+---
+Task ID: 3.7-1-hotfix-anr2-offline
+Agent: Z.ai (main)
+Task: Диагноз по новому рантайм-логу пользователя (ciber.txt, 8487 строк, 20:53–20:57): «при открытии офлайн менеджера ANR». Ответ на вопрос «может для офлайн нужен свой сервис или длинный плейлист?» + фикс.
+
+Work Log:
+- Диагноз по логу: крэш ArrayIndexOutOfBoundsException (CopyOnWriteArrayList.remove в VKApiClient.rateLimitWait:14312, гонка removeAll) — на worker-потоке, пойман, НЕ причина ANR. Ключевое: Davey duration=10349ms (один кадр 10.3s) + SignalCatcher «Wrote stack traces to tombstoned» (ANR-трасса 20:56:28) — ДО тапа «Play offline track» (20:56:58, OfflineManagerScreen.kt:715, main). Т.е. фриз — при ОТКРЫТИИ офлайн-менеджера. В логе НЕТ маркеров фикса 0aa6908f («I/O on Default») — юзер вероятно не пересобрал, но открытый ANR им и не лечится.
+- Второй, независимый источник ANR (этап 3.7-1 его не затрагивал): OfflineManagerScreen делает файловый I/O прямо в композиции на main: (1) getTotalDownloadedBytes() БЕЗ remember — 2516 × getLocalFile (stat + открытие файла ради magic-bytes) на КАЖДУЮ рекомпозицию; (2) allItems-сканы вкладок — getLocalFile × N; (3) сортировка sortedByDescending { file.lastModified() } — O(n·log n) stat-системных вызовов; (4) per-row file.length()/exists() на recompose; (5) checkPathMismatch (exists/canWrite/probeWritable — запись probe-файла) из LaunchedEffect на main.
+- Фикс (OfflineManagerScreen.kt, 1698 строк, баланс скобок OK): все 4 скана (аудио/видео/истории/клипы) вынесены в LaunchedEffect + withContext(Dispatchers.IO) в родителе; вкладки получили готовые items: List<X>? (null = сканирование → спиннер «Сканирование кэша…»); data-классы AudioOfflineItem/VideoOfflineItem/StoryOfflineItem/ClipOfflineItem расширены предвычисленными lastModified/sizeBytes (+dateKey для story/clip = meta.downloadedAt>0 ? ... без ?: — явный if) — сортировка и отрисовка чисто in-memory; футер: байты = sumOf по просканированным спискам, «…» пока скан не завершён; checkPathMismatch обёрнут в Dispatchers.IO.
+- Анти-рескан: FNV-1a ключи пересканирования (audioScanKeyOf по trackId; mediaScanKeyOf по ownerId+trackId) — прогресс-тики активных скачиваний НЕ меняют набор COMPLETED → пересканирования нет; завершение/удаление меняют набор → ключ меняется → перескан. При перескане старый список остаётся видимым до атомарной замены (без мигания в спиннер).
+- Тот же класс бага закрыт в двух смежных местах: MusicScreen (диалог «Скачанная музыка» — getTotalDownloadedBytes без remember на каждой рекомпозиции диалога) и SettingsScreen.OfflineTab (remember(completedCount), но всё равно main) → оба переведены на LaunchedEffect + withContext(Dispatchers.IO), ключ = размер набора завершённых. SettingsScreen: добавлены импорты Dispatchers/withContext.
+- NULL-EXPLICIT: 0 новых !!; в новом коде nullable-цепочки заменены явными if-проверками и захватами в val (loaded/loadedAudio/rowFile/rowMeta); legacy ?. в перенесённых фильтрах не трогал (Этапы Б/В). BuildStamp не тронут (не звонковое).
+
+Stage Summary:
+- Ответ юзеру: НИ свой сервис, НИ «длинный плейлист» не нужны — PlayerService уже есть (Media3), очередь уже асинхронна после 0aa6908f; зависание давал сам экран офлайн-менеджера (I/O в композиции). ANR при ОТКРЫТИИ и ANR при тапе — два разных источника; теперь оба закрыты.
+- Коммит fix(media) «ANR при открытии офлайн-менеджера — файловый I/O экрана уведён на Dispatchers.IO» + push origin/PinoK.
+- Ожидание от юзера: git pull → assembleDebug → открыть офлайн-менеджер (ожидается спиннер 1-3s затем список; в logcat нет Davey>1s); затем тап по треку (ожидается «playTrackList: ... I/O on Default» — маркер 0aa6908f).
+- Для §3.7 п.2 (аудио): экран офлайн-менеджера — ещё один потребитель PlayerConnection/TrackDownloadManager; при контейнеризации объекты скана (AudioOfflineItem и пр.) останутся UI-слоем, но getLocalFile-вызовы уйдут за AudioDependencies — риска смарт-кастов добавить smartcast_hunt.py на Этапе Д п.2.
+- Follow-up (не в этом коммите): гонка rateLimitWait (CopyOnWriteArrayList.removeAll из двух корутин) — отдельный мелкий фикс, крэш пойман, но шумит в лог.

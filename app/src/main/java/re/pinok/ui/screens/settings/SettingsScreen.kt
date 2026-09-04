@@ -81,7 +81,9 @@ import re.pinok.data.model.Track
 import re.pinok.ui.theme.SovaColors
 import re.pinok.util.AppLog
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -920,8 +922,14 @@ private fun OfflineTab(
     // totalBytes делает File I/O (getLocalFile per track) — пересчитываем ТОЛЬКО
     // при смене completedCount (трек доскачался / удалён), а не на каждый progress-tick
     // сегмента (иначе O(N) File.exists на каждом из 50 сегментов трека = jank).
-    val totalBytes = remember(completedCount) {
-        re.pinok.media.TrackDownloadManager.getTotalDownloadedBytes()
+    // #ANR-MAIN-IO (2026-09-04): плюс — сам расчёт перенесён на Dispatchers.IO:
+    // для большой библиотеки (2516 треков) remember-блок на main давал секунды
+    // блокировки при каждом изменении completedCount (каждое завершение загрузки).
+    var totalBytes by remember { mutableStateOf(0L) }
+    LaunchedEffect(completedCount) {
+        totalBytes = withContext(Dispatchers.IO) {
+            re.pinok.media.TrackDownloadManager.getTotalDownloadedBytes()
+        }
     }
     // queueSize — ConcurrentLinkedQueue.size() O(n), n мало (<100); пересчитываем
     // при изменении activeCount (enqueue / worker-take / complete меняют карту).
