@@ -482,8 +482,10 @@ object PlayerConnection {
             // Fix #140: diagnostic logging для всех веток решения (START/SKIP + reason).
             if (autoCacheAudio) {
                 val cur = startTrack
-                if (!cur.url.isNullOrBlank()) {
-                    val url = cur.url
+                // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — смарт-каст свойства
+                // чужого модуля невозможен; захват url ДО проверки (контракт кастит val).
+                val url = cur.url
+                if (!url.isNullOrBlank()) {
                     val isHls = url.contains("m3u8", ignoreCase = true) || url.contains("vkuseraudio.net")
                     val isCached = TrackDownloadManager.isDownloaded(cur.id)
                     val inProgress = TrackDownloadManager.getDownloadState(cur.id)?.isInProgress == true
@@ -844,15 +846,17 @@ object PlayerConnection {
             AppLog.d(TAG, "precacheNext: SKIP (track #$nextTrackId not in playlist)")
             return false
         }
-        if (nextTrack.url.isNullOrBlank()) {
+        // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — захват ДО проверки.
+        val nextUrl = nextTrack.url
+        if (nextUrl.isNullOrBlank()) {
             AppLog.d(TAG, "precacheNext: SKIP track #${nextTrack.id}: URL is null/blank")
             return false
         }
         // Не кешируем прямые (не-HLS) URL — они и так играются быстро.
-        val isHls = nextTrack.url.contains("m3u8", ignoreCase = true) ||
-            nextTrack.url.contains("vkuseraudio.net")
+        val isHls = nextUrl.contains("m3u8", ignoreCase = true) ||
+            nextUrl.contains("vkuseraudio.net")
         if (!isHls) {
-            AppLog.w(TAG, "precacheNext: SKIP track #${nextTrack.id}: not HLS (${nextTrack.url.take(60)})")
+            AppLog.w(TAG, "precacheNext: SKIP track #${nextTrack.id}: not HLS (${nextUrl.take(60)})")
             return false
         }
         // Fix #170: isDownloaded() вместо getLocalFile() — O(1) без I/O.
@@ -1037,7 +1041,9 @@ object PlayerConnection {
         // При офлайне — играем из кэша (если валиден). Если кэш повреждён —
         // URI = about:blank, трек пропустится (см. playTrackList filter).
         val isOnline = re.pinok.SovaApp.getOrNull()?.networkObserver?.isOnline() ?: false
-        val hasUrl = !this.url.isNullOrBlank()
+        // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — захват ДО проверки.
+        val trackUrl = this.url
+        val hasUrl = !trackUrl.isNullOrBlank()
         // #SIREN-FIX (2026-08-01): .ts-кэш с VK Siren codec (non-encrypted HLS,
         // первый байт != 0x47) НЕ проигрывается ExoPlayer'ом офлайн — TsExtractor
         // не умеет siren → UnrecognizedInputFormatException → цикл ошибок.
@@ -1065,14 +1071,14 @@ object PlayerConnection {
         val isLocal = useLocal
         val uri = if (isLocal) {
             android.net.Uri.fromFile(localFile)
-        } else if (hasUrl) {
+        } else if (!trackUrl.isNullOrBlank()) {
             // Fix #62: VK audio.get/audio.getCatalog иногда отдают HTTP-ссылки
             // (http://cs1-50v4.vkuseraudio.net/...). network_security_config
             // запрещает cleartextTraffic → ExoPlayer падает с "Cleartext HTTP
             // traffic not permitted". VK audio CDN поддерживает HTTPS, поэтому
             // безопасно переписать схему. Также обрезаем лишние пробелы/CR-LF,
             // которые иногда просачиваются из VK-ответа.
-            val cleaned = this.url.trim()
+            val cleaned = trackUrl.trim()
             val https = if (cleaned.startsWith("http://")) {
                 "https://" + cleaned.substring("http://".length)
             } else cleaned
@@ -1320,8 +1326,9 @@ object PlayerConnection {
                 // Fix #110: gate через autoCacheAudio pref (default false, #AUTOCACHE-AUDIO-OFF).
                 // Fix #140: diagnostic logging для всех веток решения (START/SKIP + reason).
                 val track = currentTrack
-                if (track != null && !track.url.isNullOrBlank() && autoCacheAudio) {
-                    val url = track.url
+                // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — захват ДО проверки.
+                val url = track?.url
+                if (track != null && !url.isNullOrBlank() && autoCacheAudio) {
                     val isHls = url.contains("m3u8", ignoreCase = true) ||
                         url.contains("vkuseraudio.net")
                     // Fix #170: isDownloaded() вместо getLocalFile() — O(1) без I/O.
@@ -1445,11 +1452,11 @@ object PlayerConnection {
                 // Fix #280: !hasActiveDownload() убран из условия — FIFO-очередь
                 // (Fix #265) разруливает sequencing. Трек при ошибке встаёт в
                 // очередь и качается после текущего.
-                if (track != null && !track.url.isNullOrBlank() && autoCacheAudio &&
+                if (track != null && !trackUrl.isNullOrBlank() && autoCacheAudio &&
                     !TrackDownloadManager.isDownloaded(track.id) &&
                     TrackDownloadManager.getDownloadState(track.id)?.isInProgress != true
                 ) {
-                    AppLog.i(TAG, "auto-cache[ERROR] START track #${track.id} (url=${track.url.take(60)}, silent)")
+                    AppLog.i(TAG, "auto-cache[ERROR] START track #${track.id} (url=${trackUrl.take(60)}, silent)")
                     TrackDownloadManager.enqueueDownload(track, silent = true)
                 }
                 consecutivePlayerErrors++

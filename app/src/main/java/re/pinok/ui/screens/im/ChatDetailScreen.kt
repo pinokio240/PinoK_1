@@ -3934,8 +3934,9 @@ private fun MessageBubble(
                 // #60: Reply — ответ на сообщение (reply_message)
                 // Fix #206: плашка кликабельна → скролл к исходному сообщению
                 // (+подсветка), либо preview-диалог если цель вне загруженной истории.
-                if (message.hasReply && message.replyMessage != null) {
-                    val reply = message.replyMessage
+                // #ARCH-CONTAINERS 3.7-1: replyMessage в :core:data — захват ДО проверки.
+                val reply = message.replyMessage
+                if (message.hasReply && reply != null) {
                     // Имя автора ответа (если есть в загруженных профилях).
                     val replyAuthor = profiles[reply.fromId]
                     val replyAuthorName = replyAuthor?.let {
@@ -4264,7 +4265,11 @@ private fun MessageBubble(
                 }
                 // Обычные документы (не голосовые).
                 val docAttachments = message.attachments
-                    ?.filter { it.type == "doc" && it.doc != null && it.doc.isVoiceMessage.not() }
+                    // #ARCH-CONTAINERS 3.7-1: doc в :core:data — захват внутри лямбды.
+                    ?.filter { att ->
+                        val doc = att.doc
+                        att.type == "doc" && doc != null && doc.isVoiceMessage.not()
+                    }
                 if (!docAttachments.isNullOrEmpty()) {
                     for (da in docAttachments) {
                         da.doc?.let { doc ->
@@ -4438,10 +4443,12 @@ private fun MessageBubble(
                             tint = textColor.copy(alpha = 0.7f),
                         )
                     }
-                    if (message.reactions != null && message.reactions.count > 0) {
+                    // #ARCH-CONTAINERS 3.7-1: reactions в :core:data — захват ДО проверки.
+                    val reactions = message.reactions
+                    if (reactions != null && reactions.count > 0) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = reactionEmoji(message.reactions.userReaction ?: 0),
+                            text = reactionEmoji(reactions.userReaction ?: 0),
                             fontSize = 12.sp,
                         )
                     }

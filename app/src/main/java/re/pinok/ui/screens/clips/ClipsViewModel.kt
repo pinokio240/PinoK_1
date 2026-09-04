@@ -162,10 +162,15 @@ class ClipsViewModel(
                 isSubscribed = clip.isSubscribed ?: fresh.isSubscribed,
                 isFavorite = clip.isFavorite ?: fresh.isFavorite,
                 likes = clip.likes?.let { cur ->
-                    fresh.likes?.copy(
-                        count = cur.count.coerceAtLeast(fresh.likes.count),
-                        userLikes = cur.userLikes,
-                    ) ?: cur
+                    // #ARCH-CONTAINERS 3.7-1: likes в :core:data — захват + явная проверка
+                    // (внутри аргументов copy безопасный вызов receiver не смарт-кастит).
+                    val freshLikes = fresh.likes
+                    if (freshLikes != null) {
+                        freshLikes.copy(
+                            count = cur.count.coerceAtLeast(freshLikes.count),
+                            userLikes = cur.userLikes,
+                        )
+                    } else cur
                 } ?: fresh.likes,
             )
             _state.update { st ->

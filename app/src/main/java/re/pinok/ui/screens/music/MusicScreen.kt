@@ -2807,9 +2807,11 @@ private fun SearchArtistCard(
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-        if (!artist.genres.isNullOrEmpty()) {
+        // #ARCH-CONTAINERS 3.7-1: genres в :core:data — захват ДО проверки.
+        val artistGenres = artist.genres
+        if (!artistGenres.isNullOrEmpty()) {
             Text(
-                text = artist.genres.first(),
+                text = artistGenres.first(),
                 color = secondaryColor,
                 fontSize = 10.sp,
                 maxLines = 1,

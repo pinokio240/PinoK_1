@@ -318,9 +318,11 @@ private fun GroupRow(group: Group, onGroupClick: (Long) -> Unit = {}) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!group.status.isNullOrBlank()) {
+            // #ARCH-CONTAINERS 3.7-1: статус в :core:data — захват ДО проверки.
+            val groupStatus = group.status
+            if (!groupStatus.isNullOrBlank()) {
                 Text(
-                    text = group.status,
+                    text = groupStatus,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

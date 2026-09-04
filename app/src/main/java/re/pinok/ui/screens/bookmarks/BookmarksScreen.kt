@@ -192,25 +192,32 @@ fun BookmarksScreen(
                 val ownerId: Long
                 val itemId: Long
                 when (type) {
+                    // #ARCH-CONTAINERS 3.7-1: elvis на свойстве чужого модуля не смарт-кастит
+                    // его для следующих строк — захватываем объект целиком.
                     "post" -> {
-                        ownerId = bm.post?.ownerId ?: return@launch
-                        itemId = bm.post.id
+                        val post = bm.post ?: return@launch
+                        ownerId = post.ownerId
+                        itemId = post.id
                     }
                     "user", "profile" -> {
-                        ownerId = bm.user?.id ?: return@launch
-                        itemId = bm.user.id
+                        val user = bm.user ?: return@launch
+                        ownerId = user.id
+                        itemId = user.id
                     }
                     "group" -> {
-                        ownerId = -(bm.group?.id ?: return@launch)
-                        itemId = bm.group.id
+                        val group = bm.group ?: return@launch
+                        ownerId = -(group.id)
+                        itemId = group.id
                     }
                     "photo" -> {
-                        ownerId = bm.photo?.ownerId ?: return@launch
-                        itemId = bm.photo.id
+                        val photo = bm.photo ?: return@launch
+                        ownerId = photo.ownerId
+                        itemId = photo.id
                     }
                     "video" -> {
-                        ownerId = bm.video?.ownerId ?: return@launch
-                        itemId = bm.video.id
+                        val video = bm.video ?: return@launch
+                        ownerId = video.ownerId
+                        itemId = video.id
                     }
                     "link" -> {
                         // Для ссылок используем ownerId=0 и id=0 — VK API для ссылок требует

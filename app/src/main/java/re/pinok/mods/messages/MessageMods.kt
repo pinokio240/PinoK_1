@@ -37,9 +37,11 @@ class MessageMods {
 
         if (snapshot.msgUnedit) {
             result = result.map { m ->
-                if (m.isEdited && !m.originalText.isNullOrBlank()) {
+                // #ARCH-CONTAINERS 3.7-1: originalText в :core:data — захват ДО проверки.
+                val originalText = m.originalText
+                if (m.isEdited && !originalText.isNullOrBlank()) {
                     uneditCount++
-                    m.copy(text = m.originalText, edited = 0)
+                    m.copy(text = originalText, edited = 0)
                 } else m
             }
             AppLog.d(tag, "unedit applied: restored $uneditCount messages")

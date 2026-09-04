@@ -683,8 +683,9 @@ private fun ClipPlayerItem(
             Spacer(Modifier.height(8.dp))
 
             // Описание клипа (с кликабельными хештегами §37.10).
-            if (!clip.description.isNullOrBlank()) {
-                val desc = clip.description
+            // #ARCH-CONTAINERS 3.7-1: захват ДО проверки (модели в :core:data).
+            val desc = clip.description
+            if (!desc.isNullOrBlank()) {
                 val hashtagRegex = Regex("#[\\wА-Яа-яЁё\\-_]+")
                 val annotated = remember(desc) {
                     androidx.compose.ui.text.AnnotatedString.Builder(desc).apply {
@@ -727,7 +728,9 @@ private fun ClipPlayerItem(
             }
 
             // Музыка.
-            if (clip.musicInfo != null) {
+            // #ARCH-CONTAINERS 3.7-1: захват ДО проверки (модели в :core:data).
+            val musicInfo = clip.musicInfo
+            if (musicInfo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Filled.MusicNote,
@@ -737,7 +740,7 @@ private fun ClipPlayerItem(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "${clip.musicInfo.artist} — ${clip.musicInfo.title}".trimStart('—', ' '),
+                        text = "${musicInfo.artist} — ${musicInfo.title}".trimStart('—', ' '),
                         color = Color.White.copy(alpha = 0.85f),
                         fontSize = 12.sp,
                         maxLines = 1,

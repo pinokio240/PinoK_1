@@ -1866,8 +1866,10 @@ private fun PostCard(
                 )
             }
             // SOVA_2_lenta: индикатор Donut-заглушки.
-            if (post.isDonut && post.donut?.placeholder != null) {
-                Text(text = post.donut.placeholder,
+            // #ARCH-CONTAINERS 3.7-1: donut/placeholder в :core:data — захват ДО проверки.
+            val donutPlaceholder = post.donut?.placeholder
+            if (post.isDonut && donutPlaceholder != null) {
+                Text(text = donutPlaceholder,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2063,8 +2065,10 @@ private fun PostCard(
                 }
             }
             // Репост — copy_history.
-            if (!post.copyHistory.isNullOrEmpty()) {
-                val original = post.copyHistory.first()
+            // #ARCH-CONTAINERS 3.7-1: copyHistory в :core:data — захват ДО проверки.
+            val copyHistory = post.copyHistory
+            if (!copyHistory.isNullOrEmpty()) {
+                val original = copyHistory.first()
                 // VKUI: repost header — 24dp avatar, repost_outline_16 icon, 8px gap
                 // padding: 4px 8px 0px
                 Card(
@@ -2404,9 +2408,11 @@ private fun LinkCard(link: Attachment.Link, onClick: () -> Unit = {}) {
         elevation = CardDefaults.cardElevation(0.dp),
     ) {
         Column {
-            if (link.photo?.largestUrl != null) {
+            // #ARCH-CONTAINERS 3.7-1: photo/largestUrl в :core:data — захват ДО проверки.
+            val linkPhotoUrl = link.photo?.largestUrl
+            if (linkPhotoUrl != null) {
                 AsyncImage(
-                    model = link.photo.largestUrl,
+                    model = linkPhotoUrl,
                     contentDescription = link.title,
                     modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
                     contentScale = ContentScale.Crop,

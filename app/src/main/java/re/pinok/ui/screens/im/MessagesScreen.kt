@@ -1068,10 +1068,12 @@ private fun ChatCard(
         lastMessage.actionText ?: "…"
     } else {
         val prefix = if (lastMessage.isOut) "Вы: " else ""
+        // #ARCH-CONTAINERS 3.7-1: attachments в :core:data — захват ДО проверки.
+        val lastAttachments = lastMessage.attachments
         val body = when {
             lastMessage.text.isNotBlank() -> lastMessage.text
-            !lastMessage.attachments.isNullOrEmpty() ->
-                lastMessage.attachments.firstOrNull()?.let { attachmentPreviewLabel(it) } ?: "…"
+            !lastAttachments.isNullOrEmpty() ->
+                lastAttachments.firstOrNull()?.let { attachmentPreviewLabel(it) } ?: "…"
             else -> "…"
         }
         prefix + body

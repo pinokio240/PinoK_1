@@ -535,9 +535,11 @@ private fun GroupRow(group: Group, onGroupClick: (Long) -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (!group.activity.isNullOrBlank()) {
+            // #ARCH-CONTAINERS 3.7-1: activity в :core:data — захват ДО проверки.
+            val groupActivity = group.activity
+            if (!groupActivity.isNullOrBlank()) {
                 Text(
-                    text = group.activity,
+                    text = groupActivity,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

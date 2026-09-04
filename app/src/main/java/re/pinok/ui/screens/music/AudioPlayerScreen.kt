@@ -709,10 +709,12 @@ fun AudioPlayerScreen(
 
         // Fetch lyrics when sheet opens
         LaunchedEffect(showLyrics) {
-            val currentTrack = track
-            if (showLyrics && currentTrack != null && currentTrack.lyricsId != null) {
+            // #ARCH-CONTAINERS 3.7-1: lyricsId в :core:data — захват ДО проверки
+            // (lyricsId != null одновременно гарантирует track != null).
+            val lyricsId = track?.lyricsId
+            if (showLyrics && lyricsId != null) {
                 lyricsLoading = true
-                lyricsText = app.apiClient.audioGetLyrics(currentTrack.lyricsId)
+                lyricsText = app.apiClient.audioGetLyrics(lyricsId)
                 lyricsLoading = false
             }
         }
