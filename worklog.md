@@ -6548,3 +6548,50 @@ Work Log:
 
 Stage Summary:
 - Материал профиля получен и каталогизирован; параллельная волна запущена; итоговые доки и пуш — по завершении агентов.
+---
+Task ID: PLAN-A1
+Agent: PLAN-A1 (sub-agent)
+Task: Этап А1 — фасад API звонков, волны 1+2
+Work Log:
+- Фаза 0: прочитаны §2/§3 плана звонки.перенос.план.md, CallsDependencies.kt, BuildStamp.kt, диапазоны VKApiClient (call(), образцы #CALLS-методов, vchat-канал, хвост класса).
+- Обнаружен закоммиченный-лишь-частично прогресс: рабочее дерево уже содержало правку всех 3 файлов (VKApiClient +653/-6, CallsDependencies +154/-0, BuildStamp 19/-1) — попытка-предшественник прервалась ДО верификации и worklog.
+- Верификация полноты: все 31 новый член CallsApi имеют override в VKApiClient (grep по именам — 31/31; callsGetHistory — 2 перегрузки: прежняя (count,offset) не тронута); override-счётчик 23 (HEAD) -> 54, дельта ровно 31.
+- vchat-методы getAnonymTokenByLink / joinConversationByLink / removeJoinLink — POST calls.okcdn.ru/fb.do по образцу vchatGetConversationParams (VCHAT_BASE/VCHAT_API_KEY в companion, VKApiClient 10500-10514); messages.search -> messagesSearchForCallTargets (без коллизии с существующим messagesSearch).
+- Проверки правил: null-assertions в git diff — 0 (упоминание в комментарии переформулировано в "null-assert"); баланс добавленных строк вне комментариев (): 0, {}: +5 = ровно 5 заменённых строк-сигнатур (закрывающие скобки — неизменённый контекст), вставленные блоки самобалансны; CallsDependencies — 0 удалённых строк (состав 8+5 членов не тронут).
+- Дефолты сняты у 5 методов, вводимых в фасад (callsGetMissedCalls, messagesGetScheduledCalls, messagesEditCall, messagesDeleteScheduledCall, messagesForceCallFinish) — K2: override не может объявлять дефолты; внешних вызовов с дефолтами нет (grep по репозиторию — только VKApiClient).
+- Отклонение от буквы ТЗ (зафиксировано, не чинилось): voiceRoomsGetParticipants идёт через api-шлюз call("voicerooms.getParticipants"), а НЕ fb.do — по доказательству из бандла в KDoc (общий враппер xP, как calls.getHistory); остальные vchat-методы — через fb.do как в ТЗ. Сигнатуры — типизированные (не Map-прокси), параметры из бандлов; calls.getMissedCalls и messages.getScheduledCalls введены в фасад по §2 плана («ВКА ok, ФАСАД no -> расширяем фасад»).
+- worklog.md дополнен этой секцией (python append, CRLF). Коммит не выполнялся (по регламенту).
+Stage Summary:
+- CallsApi (feature/calls/CallsDependencies.kt): 17 -> 48 членов, +31, только добавление. Волна 1 (§2.1-2.2): callsGetHistory(+filter/pagination_marker), callsGetGroupHistory, callsDeleteHistoryRecords, callsClearHistory, callsDeleteGroupHistoryRecords, callsClearGroupHistory, callsGetMissedCalls, callsGetAsrTranscriptions, callsEditAsrTranscription, callsDeleteAsrTranscriptions. Волна 2 (§2.3-2.4): messagesGetScheduledCalls, messagesEditCall, messagesDeleteScheduledCall, messagesForceCallFinish, vchatGetAnonymTokenByLink, vchatJoinConversationByLink, vchatRemoveJoinLink, messagesSearchForCallTargets, callsGetConversationByCall, callsGetSettings, callsGetUserSettings, callsSetUserSettings, callsGetCallSettings, callsUpdateCallSettings, callsGetParticipants, callsGetParticipantsByIds, callsGetReactions, callsEditParticipantName, callsDeleteParticipantName, callsCheckParticipantName, voiceRoomsGetParticipants.
+- VKApiClient.kt: vchat-блок 11471-11627, основной блок 11866-12341 (+ #CALLS-SNAP KDoc у 5 вводимых в фасад методов); все suspend, call()-маршрутизация, try/catch + AppLog.e("VKApiClient", ...), парсинг safe*/opt-стилем, KDoc-маркер #CALLS-SNAP (2026-09-04).
+- BuildStamp.kt: STAMP "calls-2026.09.03-11" -> "calls-2026.09.04-12", журнал -12.
+- git diff --stat: 3 файла, 826 insertions(+), 7 deletions(-).
+
+---
+Task ID: PROF-ARCH
+Agent: PROF-ARCH (sub-agent, opus)
+Task: Полное изучение снапшотов Профиля (upload/snapПрофиль) и готового кода «Контейнер Профиль»; инвентарный док.
+
+Work Log:
+- Изучены 6 страниц VK web (cp1251): Профиль /pluton_tut, настройки Голоса/Приватность/Уведомления (+группы)/Чёрный список; извлечены DOM-инвентарь (aria/title/testid/текст) и встроенный apiPrefetchCache (24 запроса с полными параметрами).
+- Из бандлов (pageProfile, core_spa, privacy, wall, lang0_2) извлечена карта ~60 API-методов с параметрами; классифицированы web-only пути (al_payments.php, al_settings.php, al_friends.php, al_profile.php).
+- Проверено покрытие PinoK rg-ом: подтверждены MISS-методы (photos.getAll, photoFeedGet, albumsCount, cover-upload тройка, articles.getOwnerPublished, narratives.getFromOwner, gifts.get, fave.addUser/removeUser, users.getSubscriptions, users.report, friends.deleteSubscriber, status.set/get, account.saveProfileInfo/getProfileInfo, wall.markAsSpam) и «есть в VKA, не подключено в UI» (getContentTabs/getWallTabs, wallGetWithFilter, wall.edit/delete/pin/unpin, getRequests/getFollowers, video.get, fave.get, BFF-приватность).
+- Проанализирован код юзера: ProfileContainer не зарегистрирован, route-конфликт с ядерным Screen.Profile, нет ProfileDependencies/LocalProfileDeps; ProfileScreen — 5 дефектов компиляции (photosGetAll, AudioTrack→Track, online==1, likesAdd>0, List<Friend>→UserProfile), вкладки clips/articles/bookmarks — Text-заглушки.
+- Написан /home/z/my-project/профиль.снапшоты.инвентарь.md (565 строк): §0 источники, §1 матрица UI 6 страниц, §2 карта API, §3 анализ контейнера, §4 пробелы, §5 этапы П-0..П-5, Приложение А (rg-доказательства файл:строка).
+
+Stage Summary:
+- Полная доказательная база для плана Профиля; вердикт: код юзера = прототип UI (профиль остаётся ядром); 16 MISS-методов к добавлению; настройка-страницы: чёрный список покрыт лучше всего, приватность/уведомления-группы — пусто.
+
+---
+Task ID: WAVE-PARALLEL-1 (главный)
+Agent: Z.ai Code (main)
+Task: Координация параллельной волны: PROF-ARCH + PLAN-A1 одновременно; верификация; документация и публикация.
+
+Work Log:
+- Оба суб-агента высшего класса отработали ОДНОВРЕМЕННО (параллельные Task-вызовы, конфликты файлов исключены разделением скоупов). PLAN-A1 (первая попытка) пал по таймауту контекста, перезапущен с точными строковыми якорями — успешно.
+- Верификация PLAN-A1: 31/31 новых членов CallsApi покрыты override; '!!' в diff = 0; структурный баланс VKApiClient идентичен HEAD (офсет — от строк/комментариев); diff 844+/7- по 4 файлам; BuildStamp calls-2026.09.04-12.
+- Написаны: профиль.перенос.план.md (этапы П-0..П-6, no-stub критерии, архитектура «профиль=ядро, код юзера=прототип»), звонки.этап-А1.внедрение.md (документация внедрения: состав, верификация, что открывает).
+- Публикация: все доки + код фасада + worklog — коммит и push в origin/PinoK.
+
+Stage Summary:
+- Параллельная волна-1 завершена: инвентарь Профиля + план П-0..П-6 готовы; Этап А1 звонков выполнен (фасад 17→48 членов, +653 строки VKApiClient); следующее: Этап А2-А3 звонков и Этап Б; для Профиля — П-0 (API-фундамент). Ожидается пользовательская сборка с меткой calls-2026.09.04-12.

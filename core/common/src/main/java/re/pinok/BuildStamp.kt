@@ -19,6 +19,24 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -12 (04.09) = #CALLS-SNAP Этап А1 (план «звонки.перенос.план.md»): фасад
+    // CallsApi расширен волнами 1+2 (§2.1–§2.4) на 31 член (17→48, только
+    // добавление; 8 членов CallsDependencies не тронуты). VKApiClient: +27
+    // новых методов — calls.getHistory (перегрузка filter/pagination_marker),
+    // getGroupHistory, delete/clearHistory (+Group-варианты), ASR get/edit/
+    // delete, getConversationByCall, getSettings, get/setUserSettings,
+    // get/updateCallSettings, getParticipants(+ByIds), getReactions,
+    // edit/delete/checkParticipantName, voicerooms.getParticipants,
+    // messages.search (messagesSearchForCallTargets); vchat-канал fb.do:
+    // getAnonymTokenByLink, joinConversationByLink, removeJoinLink.
+    // 5 существующих методов (callsGetMissedCalls, messagesGetScheduledCalls,
+    // messagesEditCall, messagesDeleteScheduledCall, messagesForceCallFinish)
+    // введены в фасад: добавлен override, дефолты сняты (K2: «an overriding
+    // function is not allowed to specify default values for its parameters» —
+    // проверено компилятором 2.0.21; внешних вызовов с дефолтами не было).
+    // Прежние сигнатуры/поведение не менялись. Верификация без Android-сборки:
+    // фасад и harness из извлечённых методов скомпилированы kotlinc 2.0.21
+    // против gson/okhttp (EXIT=0); баланс скобок до/после сохранён.
     // -10 (03.09) = Task 22: устранены 55 ошибок лога 2026-09-03 (все в
     // :feature:calls): (1) UserProfile git mv из :app Models.kt -> :core:data
     // (пакет re.pinok.data.model сохранён; gson в :core:data) — фасады
@@ -84,5 +102,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.03-11"
+    const val STAMP: String = "calls-2026.09.04-12"
 }

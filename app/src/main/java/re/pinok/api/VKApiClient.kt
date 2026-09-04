@@ -11469,6 +11469,164 @@ class VKApiClient(
     }
 
     /**
+     * #CALLS-SNAP (2026-09-04): vchat.getAnonymTokenByLink — анонимный токен по
+     * ссылке-приглашению vk.ru/call/join/<join_link> (план §2.3, волна 2;
+     * флоу «Присоединиться» §1.1/Г4). vchat-канал: POST calls.okcdn.ru/fb.do.
+     *
+     * Эталон webCallsBridge (16131.37d89c39.js):
+     *   getAnonymTokenByLink(joinLink, anonymName?) →
+     *   _call("vchat.getAnonymTokenByLink", {joinLink, anonymName?}) →
+     *   response {token, uid}; web кладёт uid в _userId (okcdn-uid).
+     *
+     * @param joinLink токен из ссылки vk.ru/call/join/<join_link> (base64url,
+     *                 как возвращает vchat.createJoinLink)
+     * @param anonymName имя анонимного участника (опционально, web передаёт
+     *                   при запросе имени)
+     * @return token или null; okcdn-uid из ответа сохраняется в lastAnonymUid
+     *         (нужен дальше в WS URL сигналинга анонимной сессии).
+     */
+    override suspend fun vchatGetAnonymTokenByLink(joinLink: String, anonymName: String?): String? {
+        if (isOffline()) return null
+        if (joinLink.isBlank()) return null
+        return try {
+            val form = FormBody.Builder()
+                .add("method", "vchat.getAnonymTokenByLink")
+                .add("format", "JSON")
+                .add("joinLink", joinLink)
+                .add("application_key", VCHAT_API_KEY)
+            if (!anonymName.isNullOrBlank()) form.add("anonymName", anonymName)
+            val req = Request.Builder()
+                .url("$VCHAT_BASE/fb.do")
+                .post(form.build())
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: return@use null
+                if (!resp.isSuccessful) {
+                    AppLog.w("VKApiClient", "vchat.getAnonymTokenByLink HTTP ${resp.code}: ${body.take(120)}")
+                    return@use null
+                }
+                val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject ?: return@use null
+                if (json.has("error") || json.has("error_code")) {
+                    AppLog.w("VKApiClient", "vchat.getAnonymTokenByLink error: $json")
+                    return@use null
+                }
+                val respObj = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject ?: json
+                val okUid = safeString(respObj.get("uid"))?.toLongOrNull()
+                if (okUid != null && okUid > 0L) lastAnonymUid = okUid
+                safeString(respObj.get("token"))
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "vchatGetAnonymTokenByLink error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): vchat.joinConversationByLink — присоединиться к
+     * звонку по ссылке (план §2.3, волна 2; Г4 → существующая цепочка
+     * params→signaling→engine). vchat-канал: POST calls.okcdn.ru/fb.do.
+     *
+     * Эталон webCallsBridge: _call("vchat.joinConversationByLink",
+     * {joinLink, isVideo, protocolVersion, capabilities, observedIds?,
+     * anonymToken?, payload?}). Для authed-пользователя отправляем session_key
+     * (как vchat.joinConversation), для анонима — anonymToken из
+     * vchatGetAnonymTokenByLink. capabilities/observedIds/payload web-специфика
+     * SDK — не отправляются (прецедент: vchat.joinConversation работает без них);
+     * protocolVersion=5 — из эталона vchat.startConversation (2026-08-24).
+     *
+     * @return JsonObject response (параметры conversation для сигналинга) или null.
+     */
+    override suspend fun vchatJoinConversationByLink(
+        joinLink: String,
+        isVideo: Boolean,
+        sessionKey: String?,
+        anonymToken: String?,
+    ): JsonObject? {
+        if (isOffline()) return null
+        if (joinLink.isBlank()) return null
+        if (sessionKey.isNullOrBlank() && anonymToken.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "vchatJoinConversationByLink: нет session_key и anonymToken — неоткуда авторизоваться")
+            return null
+        }
+        return try {
+            val form = FormBody.Builder()
+                .add("method", "vchat.joinConversationByLink")
+                .add("format", "JSON")
+                .add("joinLink", joinLink)
+                .add("isVideo", isVideo.toString())
+                .add("protocolVersion", "5")
+                .add("application_key", VCHAT_API_KEY)
+            if (!sessionKey.isNullOrBlank()) {
+                form.add("session_key", sessionKey)
+            } else {
+                form.add("anonymToken", anonymToken ?: "")
+            }
+            val req = Request.Builder()
+                .url("$VCHAT_BASE/fb.do")
+                .post(form.build())
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: return@use null
+                if (!resp.isSuccessful) {
+                    AppLog.w("VKApiClient", "vchat.joinConversationByLink HTTP ${resp.code}: ${body.take(120)}")
+                    return@use null
+                }
+                val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject ?: return@use null
+                if (json.has("error") || json.has("error_code")) {
+                    AppLog.w("VKApiClient", "vchat.joinConversationByLink error: $json")
+                    return@use null
+                }
+                json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject ?: json
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "vchatJoinConversationByLink error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): vchat.removeJoinLink — инвалидировать
+     * ссылку-приглашение звонка (план §2.3, волна 2). vchat-канал:
+     * POST calls.okcdn.ru/fb.do, method=vchat.removeJoinLink{conversationId}
+     * (эталон webCallsBridge: removeJoinLink(conversationId)).
+     *
+     * @return true при успехе (без error/error_code в ответе).
+     */
+    override suspend fun vchatRemoveJoinLink(conversationId: String, sessionKey: String): Boolean {
+        if (isOffline()) return false
+        if (conversationId.isBlank() || sessionKey.isBlank()) return false
+        return try {
+            val form = FormBody.Builder()
+                .add("method", "vchat.removeJoinLink")
+                .add("format", "JSON")
+                .add("conversationId", conversationId)
+                .add("application_key", VCHAT_API_KEY)
+                .add("session_key", sessionKey)
+                .build()
+            val req = Request.Builder()
+                .url("$VCHAT_BASE/fb.do")
+                .post(form)
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: return@use false
+                if (!resp.isSuccessful) {
+                    AppLog.w("VKApiClient", "vchat.removeJoinLink HTTP ${resp.code}: ${body.take(120)}")
+                    return@use false
+                }
+                val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject ?: return@use false
+                if (json.has("error") || json.has("error_code")) {
+                    AppLog.w("VKApiClient", "vchat.removeJoinLink error: $json")
+                    return@use false
+                }
+                true
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "vchatRemoveJoinLink error", e)
+            false
+        }
+    }
+
+    /**
      * #CALLS: messages.startCall — инициировать звонок собеседнику.
      *
      * VK API: messages.startCall { peer_id, voice? } → response { call_id }.
@@ -11542,8 +11700,12 @@ class VKApiClient(
 
     /**
      * #CALLS (2026-08-27): calls.getMissedCalls — пропущенные звонки.
+     * #CALLS-SNAP (2026-09-04): введён в фасад CallsApi (план §2.1, волна 1).
+     * Дефолт снят: K2 — «an overriding function is not allowed to specify
+     * default values for its parameters» (проверено компилятором 2.0.21);
+     * внешних вызовов с дефолтом не было (rg). Вызовы — с явным count.
      */
-    suspend fun callsGetMissedCalls(count: Int = 30): List<JsonObject> {
+    override suspend fun callsGetMissedCalls(count: Int): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("calls.getMissedCalls", mapOf("count" to count.toString())) ?: return emptyList()
         return try {
@@ -11557,8 +11719,10 @@ class VKApiClient(
 
     /**
      * #CALLS: messages.getScheduledCalls — запланированные звонки.
+     * #CALLS-SNAP (2026-09-04): введён в фасад CallsApi (план §2.3, волна 2 —
+     * «Запланированные»). Дефолт снят по той же K2-причине.
      */
-    suspend fun messagesGetScheduledCalls(count: Int = 30): List<JsonObject> {
+    override suspend fun messagesGetScheduledCalls(count: Int): List<JsonObject> {
         if (isOffline()) return emptyList()
         val json = call("messages.getScheduledCalls", mapOf("count" to count.toString())) ?: return emptyList()
         return try {
@@ -11647,10 +11811,14 @@ class VKApiClient(
     }
 
     /**
-     * #CALLS: messages.editCall — редактировать звонок.
+     * #CALLS: messages.editCall — создать/править запланированный звонок.
      * @return true при успехе.
+     *
+     * #CALLS-SNAP (2026-09-04): введён в фасад CallsApi (план §2.3, волна 2 —
+     * модалка «Запланировать»). Дефолты name/scheduledDate сняты (K2: override
+     * не может объявлять дефолты); вызовы — с явными аргументами.
      */
-    suspend fun messagesEditCall(callId: String, name: String? = null, scheduledDate: Long? = null): Boolean {
+    override suspend fun messagesEditCall(callId: String, name: String?, scheduledDate: Long?): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf("call_id" to callId)
         name?.let { args["name"] = it }
@@ -11661,8 +11829,9 @@ class VKApiClient(
 
     /**
      * #CALLS: messages.deleteScheduledCall — удалить запланированный звонок.
+     * #CALLS-SNAP (2026-09-04): введён в фасад CallsApi (план §2.3, волна 2).
      */
-    suspend fun messagesDeleteScheduledCall(callId: String): Boolean {
+    override suspend fun messagesDeleteScheduledCall(callId: String): Boolean {
         if (isOffline()) return false
         val json = call("messages.deleteScheduledCall", mapOf("call_id" to callId)) ?: return false
         return json.get("response")?.takeIf { it.isJsonObject } != null
@@ -11670,8 +11839,10 @@ class VKApiClient(
 
     /**
      * #CALLS: messages.forceCallFinish — принудительно завершить звонок.
+     * #CALLS-SNAP (2026-09-04): введён в фасад CallsApi (план §2.3, волна 2 —
+     * «Начать сейчас» на карточке запланированного).
      */
-    suspend fun messagesForceCallFinish(callId: String): Boolean {
+    override suspend fun messagesForceCallFinish(callId: String): Boolean {
         if (isOffline()) return false
         val json = call("messages.forceCallFinish", mapOf("call_id" to callId)) ?: return false
         return json.get("response")?.takeIf { it.isJsonObject } != null
@@ -11689,6 +11860,482 @@ class VKApiClient(
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesVkRoomsJoinCall parse error", e)
             null
+        }
+    }
+
+    // ═══ #CALLS-SNAP (2026-09-04): Этап А1 плана «звонки.перенос.план.md» —
+    // волны 1+2 (§2.1–§2.4): история/ASR (§2.1–§2.2), планирование/join (§2.3),
+    // участники/реакции/настройки/чат звонка/залы (§2.4). Параметры выверены по
+    // бандлам webCallsBridge (2308); парсинг — в существующем стиле файла
+    // (safe*/getObj хелперы, mapNotNull, без null-assert); I/O вне main обеспечивают
+    // вызывающие корутины (#ANR-MAIN-IO). Возвраты — JsonObject/List<JsonObject>,
+    // как у соседних звонковых методов.
+
+    /** #CALLS-SNAP: поля профиля для history/participants-методов (web шлёт
+     *  более широкий список s.d+",last_name_gen"; минимум достаточен для строк
+     *  истории/участников). */
+    private val CALLS_USER_FIELDS = "id,first_name,last_name,photo_100,photo_200"
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getHistory — перегрузка с фильтром и
+     * пагинацией маркером (план §2.1, волна 1; история §1.2 + пропущенные §1.3).
+     *
+     * VK API: calls.getHistory { count, offset, fields, filter:"all"|"missed",
+     * pagination_marker } — параметры из бандла webCallsBridge
+     * ({count:25, fields:<userFields>+",last_name_gen", filter:"all"},
+     * pagination_marker добавляется при подгрузке следующей страницы).
+     *
+     * Прежняя сигнатура callsGetHistory(count, offset) НЕ тронута и продолжает
+     * работать (без filter/marker).
+     */
+    override suspend fun callsGetHistory(
+        count: Int,
+        offset: Int,
+        filter: String,
+        paginationMarker: String?,
+    ): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "fields" to CALLS_USER_FIELDS + ",last_name_gen",
+            "filter" to filter,
+        )
+        if (!paginationMarker.isNullOrBlank()) args["pagination_marker"] = paginationMarker
+        val json = call("calls.getHistory", args) ?: return emptyList()
+        return try {
+            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetHistory(filter/marker) parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getGroupHistory — история групповых
+     * звонков (план §2.1, волна 1).
+     *
+     * VK API: calls.getGroupHistory { group_id, count, fields, filter,
+     * pagination_marker } — из бандла webCallsBridge.
+     */
+    override suspend fun callsGetGroupHistory(
+        groupId: Long,
+        count: Int,
+        filter: String,
+        paginationMarker: String?,
+    ): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "fields" to CALLS_USER_FIELDS + ",last_name_gen",
+            "filter" to filter,
+        )
+        if (!paginationMarker.isNullOrBlank()) args["pagination_marker"] = paginationMarker
+        val json = call("calls.getGroupHistory", args) ?: return emptyList()
+        return try {
+            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetGroupHistory parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.deleteHistoryRecords — убрать записи из
+     * списка истории («Действия» строки / «Убрать чат из списка», план §2.1/§1.3).
+     *
+     * VK API: calls.deleteHistoryRecords { record_ids:"1,2" } — из бандла.
+     * Успех = есть ключ response (VK может вернуть response:1 — примитив,
+     * поэтому проверка has(), а не isJsonObject).
+     */
+    override suspend fun callsDeleteHistoryRecords(recordIds: List<Long>): Boolean {
+        if (isOffline()) return false
+        if (recordIds.isEmpty()) return false
+        val json = call("calls.deleteHistoryRecords", mapOf("record_ids" to recordIds.joinToString(","))) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.clearHistory — очистить личную историю
+     * звонков («Очистить историю», план §2.1/§1.3). VK API: calls.clearHistory {}.
+     */
+    override suspend fun callsClearHistory(): Boolean {
+        if (isOffline()) return false
+        val json = call("calls.clearHistory", emptyMap()) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.deleteGroupHistoryRecords — убрать записи
+     * групповых звонков (план §2.1, волна 1). VK API:
+     * calls.deleteGroupHistoryRecords { record_ids:"1,2", group_id } — из бандла.
+     */
+    override suspend fun callsDeleteGroupHistoryRecords(recordIds: List<Long>, groupId: Long): Boolean {
+        if (isOffline()) return false
+        if (recordIds.isEmpty()) return false
+        val json = call(
+            "calls.deleteGroupHistoryRecords",
+            mapOf(
+                "record_ids" to recordIds.joinToString(","),
+                "group_id" to groupId.toString(),
+            ),
+        ) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.clearGroupHistory — очистить историю
+     * групповых звонков (план §2.1, волна 1). VK API:
+     * calls.clearGroupHistory { group_id } — из бандла.
+     */
+    override suspend fun callsClearGroupHistory(groupId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("calls.clearGroupHistory", mapOf("group_id" to groupId.toString())) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getAsrTranscriptions — список расшифровок
+     * звонков (план §2.2, волна 1; раздел «Расшифровки» §1.5/В2).
+     *
+     * VK API: calls.getAsrTranscriptions { count } (в бандле обёртка без
+     * литеральных параметров; count — стандартное ограничение списка, как у
+     * соседних звонковых списков).
+     */
+    override suspend fun callsGetAsrTranscriptions(count: Int): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val json = call("calls.getAsrTranscriptions", mapOf("count" to count.toString())) ?: return emptyList()
+        return try {
+            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetAsrTranscriptions parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.editAsrTranscription — правка текста
+     * расшифровки (план §2.2, волна 1; §1.5 «Правка текста»).
+     *
+     * VK API: calls.editAsrTranscription { transcription_id, text } (имена
+     * полей восстановить из снапшотов нельзя — приняты по аналогии с
+     * record_ids-методами; уточняются на Этапе В2 при живом прогоне).
+     */
+    override suspend fun callsEditAsrTranscription(transcriptionId: String, text: String): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "calls.editAsrTranscription",
+            mapOf(
+                "transcription_id" to transcriptionId,
+                "text" to text,
+            ),
+        ) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.deleteAsrTranscriptions — удаление
+     * расшифровок (план §2.2, волна 1; §1.5). VK API:
+     * calls.deleteAsrTranscriptions { transcription_ids:"1,2" } (форма как у
+     * calls.deleteHistoryRecords; уточняется на Этапе В2).
+     */
+    override suspend fun callsDeleteAsrTranscriptions(transcriptionIds: List<Long>): Boolean {
+        if (isOffline()) return false
+        if (transcriptionIds.isEmpty()) return false
+        val json = call("calls.deleteAsrTranscriptions", mapOf("transcription_ids" to transcriptionIds.joinToString(","))) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getConversationByCall — чат, связанный со
+     * звонком (план §2.4, волна 2; открытие чата звонка из строки истории §1.3/Д1).
+     *
+     * VK API: calls.getConversationByCall { call_id, hall_id? } — из бандла
+     * webCallsBridge (Ke: {call_id, hall_id при наличии}).
+     */
+    override suspend fun callsGetConversationByCall(callId: String, hallId: Long?): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf("call_id" to callId)
+        hallId?.let { args["hall_id"] = it.toString() }
+        val json = call("calls.getConversationByCall", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetConversationByCall parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getSettings — глобальные настройки/тумблеры
+     * звонков (план §2.4, волна 2; экран настроек З1).
+     *
+     * VK API: calls.getSettings {} →
+     * { settings:{public_key, is_dev, calls_ip, ip_setting_enabled, ...},
+     *   toggles:[{name, enabled}] } — форма подтверждена бандлом
+     * (Ue/He: settings.public_key, settings.calls_ip, toggles[].name/enabled).
+     */
+    override suspend fun callsGetSettings(): JsonObject? {
+        if (isOffline()) return null
+        val json = call("calls.getSettings", emptyMap()) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetSettings parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getUserSettings — персональные настройки
+     * звонков, чтение (план §2.4, волна 2; З1).
+     */
+    override suspend fun callsGetUserSettings(): JsonObject? {
+        if (isOffline()) return null
+        val json = call("calls.getUserSettings", emptyMap()) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetUserSettings parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.setUserSettings — персональные настройки
+     * звонков, запись (план §2.4, волна 2; З1).
+     *
+     * VK API: calls.setUserSettings { settings:<JSON> } (в бандле обёртка
+     * принимает объект настроек; wire-форма передаётся JSON-строкой —
+     * уточняется на Этапе З1 при живом прогоне).
+     */
+    override suspend fun callsSetUserSettings(settingsJson: String): Boolean {
+        if (isOffline()) return false
+        if (settingsJson.isBlank()) return false
+        val json = call("calls.setUserSettings", mapOf("settings" to settingsJson)) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getCallSettings — настройки конкретного
+     * звонка, чтение (план §2.4, волна 2; Ж4). VK API:
+     * calls.getCallSettings { call_id }.
+     */
+    override suspend fun callsGetCallSettings(callId: String): JsonObject? {
+        if (isOffline()) return null
+        val json = call("calls.getCallSettings", mapOf("call_id" to callId)) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetCallSettings parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.updateCallSettings — настройки конкретного
+     * звонка, запись (план §2.4, волна 2; Ж4). VK API:
+     * calls.updateCallSettings { call_id, show_chat_history:0|1 } — ПАРАМЕТРЫ
+     * ТОЧНО из бандла (M=(e,t)=>({show_chat_history:e?1:0, call_id:t})).
+     */
+    override suspend fun callsUpdateCallSettings(callId: String, showChatHistory: Boolean): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "calls.updateCallSettings",
+            mapOf(
+                "call_id" to callId,
+                "show_chat_history" to if (showChatHistory) "1" else "0",
+            ),
+        ) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getParticipants — участники звонка
+     * постранично (план §2.4, волна 2; Ж1).
+     *
+     * VK API: calls.getParticipants { call_id, offset, count, fields } —
+     * в бандле обёртка добавляет fields к параметрам вызывающего;
+     * response = {count, secret, profiles, anonyms, groups} (форма как у
+     * calls.getParticipantsByIds). Возвращаем сырой response: у списка есть
+     * count/secret — типизированный List потерял бы их.
+     */
+    override suspend fun callsGetParticipants(callId: String, offset: Int, count: Int, fields: String?): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "call_id" to callId,
+            "offset" to offset.toString(),
+            "count" to count.toString(),
+        )
+        args["fields"] = fields ?: CALLS_USER_FIELDS
+        val json = call("calls.getParticipants", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetParticipants parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getParticipantsByIds — участники звонка
+     * по id (план §2.4, волна 2). VK API: calls.getParticipantsByIds
+     * { call_id, participant_ids:"1,2", fields } — ПАРАМЕТРЫ ТОЧНО из бандла
+     * ({call_id:e, participant_ids:n.join(","), fields:m}).
+     */
+    override suspend fun callsGetParticipantsByIds(callId: String, participantIds: List<Long>, fields: String?): JsonObject? {
+        if (isOffline()) return null
+        if (participantIds.isEmpty()) return null
+        val args = mutableMapOf(
+            "call_id" to callId,
+            "participant_ids" to participantIds.joinToString(","),
+        )
+        args["fields"] = fields ?: CALLS_USER_FIELDS
+        val json = call("calls.getParticipantsByIds", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetParticipantsByIds parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.getReactions — реакции в звонке
+     * (план §2.4, волна 2; Ж2). VK API: calls.getReactions { call_id }
+     * (в бандле обёртка без литеральных параметров; call_id — минимальный
+     * ключ выбора звонка, уточняется на Ж-0 при живом прогоне).
+     */
+    override suspend fun callsGetReactions(callId: String): JsonObject? {
+        if (isOffline()) return null
+        val json = call("calls.getReactions", mapOf("call_id" to callId)) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsGetReactions parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.editParticipantName — переименование
+     * участника (custom name, план §2.4, волна 2; Ж1). VK API:
+     * calls.editParticipantName { call_id, user_id, name } (имена полей по
+     * аналогии с getParticipantsByIds; уточняются на Ж1).
+     */
+    override suspend fun callsEditParticipantName(callId: String, userId: Long, name: String): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "calls.editParticipantName",
+            mapOf(
+                "call_id" to callId,
+                "user_id" to userId.toString(),
+                "name" to name,
+            ),
+        ) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.deleteParticipantName — сброс имени
+     * участника (план §2.4, волна 2; Ж1). VK API:
+     * calls.deleteParticipantName { call_id, user_id }.
+     */
+    override suspend fun callsDeleteParticipantName(callId: String, userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "calls.deleteParticipantName",
+            mapOf(
+                "call_id" to callId,
+                "user_id" to userId.toString(),
+            ),
+        ) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): calls.checkParticipantName — проверка
+     * допустимости имени участника (план §2.4, волна 2; Ж1). VK API:
+     * calls.checkParticipantName { call_id, name }; ответ возвращаем сырым —
+     * поле доступности в снапшотах не восстановлено (уточняется на Ж1).
+     */
+    override suspend fun callsCheckParticipantName(callId: String, name: String): JsonObject? {
+        if (isOffline()) return null
+        val json = call(
+            "calls.checkParticipantName",
+            mapOf(
+                "call_id" to callId,
+                "name" to name,
+            ),
+        ) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsCheckParticipantName parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): voicerooms.getParticipants — слушатели/залы
+     * (брейкаут, план §2.4, волна 2; Ж9).
+     *
+     * КАНАЛ: api-шлюз (НЕ fb.do): в бандле метод создаётся общим враппером
+     * xP (как calls.getHistory/messages.search) — экспорт webCallsBridge
+     * называется voiceRoomsGetParticipants, wire-имя "voicerooms.getParticipants".
+     *
+     * VK API: voicerooms.getParticipants { call_id, filter:"listeners",
+     * offset, count, fields } (+ в anon-режиме web добавляет device_id/secret/
+     * user_id — не нужно авторизованной сессии); response =
+     * {profiles, anonyms, groups, count, secret} — возвращаем сырым.
+     */
+    override suspend fun voiceRoomsGetParticipants(callId: String, offset: Int, count: Int, filter: String?): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "call_id" to callId,
+            "offset" to offset.toString(),
+            "count" to count.toString(),
+            "fields" to CALLS_USER_FIELDS,
+        )
+        if (!filter.isNullOrBlank()) args["filter"] = filter
+        val json = call("voicerooms.getParticipants", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "voiceRoomsGetParticipants parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP (2026-09-04): messages.search — поиск адресата для
+     * «Создать звонок» (план §2.3, волна 2; §1.1/Г1).
+     *
+     * VK API: messages.search { q, count:20, extended:1, fields } — из бандла
+     * (pe: {count:20, extended:1, ...}); возвращает сырые items[] (смесь
+     * диалогов/контактов — селектор адресата рисует их сам). Не путать с
+     * существующим messagesSearch(query, peerId, count) — тот ищет СООБЩЕНИЯ
+     * в конкретном диалоге и возвращает MessageSearchResult.
+     */
+    override suspend fun messagesSearchForCallTargets(query: String, count: Int): List<JsonObject> {
+        if (isOffline() || query.isBlank()) return emptyList()
+        val args = mutableMapOf(
+            "q" to query.trim(),
+            "count" to count.toString(),
+            "extended" to "1",
+            "fields" to CALLS_USER_FIELDS,
+        )
+        val json = call("messages.search", args) ?: return emptyList()
+        return try {
+            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesSearchForCallTargets parse error", e)
+            emptyList()
         }
     }
 
