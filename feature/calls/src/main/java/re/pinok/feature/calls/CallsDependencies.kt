@@ -94,18 +94,6 @@ interface CallsApi {
     suspend fun messagesGetCallRecordings(count: Int): List<JsonObject>
     suspend fun messagesGetCallTranscriptions(count: Int): List<JsonObject>
     suspend fun friendsGetOnline(userId: Long?): List<UserProfile>
-
-    // #KOTLIN-OVERRIDE: дефолты НЕ объявляем в интерфейсе — Kotlin запрещает
-    // override с дефолтами, если они есть в интерфейсе. Дефолты живут в
-    // VKApiClient (единственная реализация, статический тип :app = VKApiClient).
-    suspend fun likesAdd(type: String, ownerId: Long, itemId: Long, reactionId: Int?, accessKey: String?, trackCode: String?): Int
-    suspend fun likesDelete(type: String, ownerId: Long, itemId: Long, accessKey: String?, trackCode: String?): Int
-    suspend fun likesIsLiked(type: String, ownerId: Long, itemId: Long): Boolean?
-    suspend fun wallRepost(object_: String, message: String): Pair<Long, Int>
-    suspend fun faveAdd(type: String, ownerId: Long, itemId: Long): Boolean
-    suspend fun faveRemove(type: String, ownerId: Long, itemId: Long): Boolean
-    suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String?): Boolean
-    suspend fun videoCreateComment(ownerId: Long, videoId: Long, message: String, replyToComment: Long?): Long
 }
 
 /** Фасад Queuev4Client: setCredential/start/events — вызовы экранов (census). */
