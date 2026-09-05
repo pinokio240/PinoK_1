@@ -19,6 +19,33 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -14 (05.09) = #CALLS-SNAP Этапы Б+В+З (план «звонки.перенос.план.md»), волна-3.
+    // Б: пагинация истории/пропущенных scroll-to-end (offset по 25, append
+    // без дублей по callId; VKApiClient отбрасывает pagination_marker —
+    // ограничение зафиксировано, фасад 4-арг), кластеры «Имя (N)»/
+    // «Групповой звонок dd.MM.yyyy» (clusterHistoryEntries, групповые не
+    // сливаются), redial «Аудиозвонок X»/«Видеозвонок X»
+    // (startCall(peerId,video)), меню «Действия»: deleteHistoryRecords/
+    // clearHistory (+Group-варианты) с подтверждением и авто-refresh,
+    // бейдж пропущенных в сайдбаре (missedCount, 99+). В: записи — media3
+    // ExoPlayer в :feature:calls (CallsRecordingPlayer, fullscreen-Dialog,
+    // audio-focus/becoming-noisy), DownloadManager в Downloads/Clipboard/
+    // открытие (CallsRecordingFileOps), мультивыбор+пакетное удаление;
+    // расшифровки — просмотр (SelectionContainer)/правка
+    // editAsrTranscription/удаление deleteAsrTranscriptions/скачать-открыть
+    // (CallsTranscriptViewer); формат элемента по реверсу бандла
+    // {name,doc_id,doc_url,doc_size,date,chat.title}. З: SettingsScreen
+    // settings_calls +3 секции — серверные тумблеры getSettings (реальный
+    // список toggles + privacy calls_ip read-only), персональные
+    // getUserSettings/setUserSettings (оптимистично, откат при ошибке),
+    // дефолты устройств/шумодав SovaPrefs (calls_mic_default/
+    // calls_route_default/calls_camera_default/calls_noise_cancel_default;
+    // потребитель Ж4). Фасад CallsApi 48+8, VKApiClient, CallScreen,
+    // SovaApp/MainActivity/SovaNavHost не тронуты. Верификация: NULL-
+    // EXPLICIT=0 по коду, скобочный баланс 10 изменённых = HEAD + 3 новых
+    // самобалансны; известно: video-флаг теряется в SovaNavHost/CallScreen
+    // (фикс — этап Г), deleteAsrTranscriptions шлёт transcription_ids, веб
+    // шлёт doc_ids (проверка на живом сервере — этап И).
     // -13 (05.09) = #CALLS-SNAP Этап А2+А3+А4 (план «звонки.перенос.план.md»).
     // А2: capability CallsSectionRepository (интерфейс в :feature:calls,
     // реализация CallsSectionRepositoryImpl в :app, CompositionLocal в
@@ -123,5 +150,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.05-13"
+    const val STAMP: String = "calls-2026.09.05-14"
 }

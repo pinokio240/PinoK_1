@@ -31,6 +31,18 @@ import java.util.concurrent.ConcurrentHashMap
  * (#ANR-MAIN-IO: план §3.2 — «I/O — только на Dispatchers.Default»).
  * Кэш-семантика: refresh(force=false) не перезапрашивает CONTENT; in-flight
  * dedupe по ключу (спам по «Повторить» не порождает параллельных фечей).
+ *
+ * #CALLS-SNAP (2026-09-05, Этап Б1): пагинация HISTORY/MISSED —
+ * callsGetHistory 4-арг (count, offset, filter, paginationMarker) постранично:
+ * первая страница offset=0, далее offset=размер уже загруженных сырых записей
+ * (карта pagination по ключу). Маркер пагинации веб-формы через фасад
+ * недоступен (VKApiClient возвращает только items, response.pagination_marker
+ * отбрасывается — фасад/клиент вне скоупа этапа), поэтому используется
+ * offset-параметр ТЕГО ЖЕ вызова; дедупликация append по callId снимает
+ * возможные сдвиги offset-пагинации. Страница меньше HISTORY_PAGE_SIZE = конец.
+ * Этап Б3: removeFromHistory/clearCallHistory — реальные delete/clear API,
+ * после успеха HISTORY+MISSED перечитываются форсом.
+ *
  * #NULL-EXPLICIT: без non-null assertion; safe-call и elvis операторы
  * не используются — явные if-проверки с захватом в локальный val.
  */
@@ -44,6 +56,10 @@ class CallsSectionRepositoryImpl(
 
     private val _missed = MutableStateFlow(CallsSectionState<CallHistoryEntry>())
     override val missed: StateFlow<CallsSectionState<CallHistoryEntry>> = _missed.asStateFlow()
+
+    /** Бейдж пропущенных (Этап Б4): пишется на каждом CONTENT-обновлении MISSED. */
+    private val _missedCount = MutableStateFlow(0)
+    override val missedCount: StateFlow<Int> = _missedCount.asStateFlow()
 
     private val _recordings = MutableStateFlow(CallsSectionState<JsonObject>())
     override val recordings: StateFlow<CallsSectionState<JsonObject>> = _recordings.asStateFlow()
@@ -59,6 +75,21 @@ class CallsSectionRepositoryImpl(
 
     /** Ключи, чей fetch прямо сейчас выполняется (dedupe параллельных фечей). */
     private val inFlight: MutableSet<CallsSectionKey> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Ключи, чей loadMore прямо сейчас выполняется (dedupe дозагрузки —
+     * отдельно от inFlight refresh, чтобы скролл и «Повторить» не блокировали
+     * друг друга).
+     */
+    private val loadMoreInFlight: MutableSet<CallsSectionKey> = ConcurrentHashMap.newKeySet()
+
+    /** Состояние пагинации HISTORY/MISSED: смещение следующей страницы + конец списка. */
+    private class HistoryPagination {
+        var nextOffset: Int = 0
+        var endReached: Boolean = false
+    }
+
+    private val pagination = ConcurrentHashMap<CallsSectionKey, HistoryPagination>()
 
     override fun refresh(key: CallsSectionKey, force: Boolean) {
         if (!force) {
@@ -95,8 +126,27 @@ class CallsSectionRepositoryImpl(
 
     private suspend fun fetch(key: CallsSectionKey) {
         when (key) {
-            CallsSectionKey.HISTORY -> _history.value = loadHistory(FILTER_ALL, missedContext = false)
-            CallsSectionKey.MISSED -> _missed.value = loadHistory(FILTER_MISSED, missedContext = true)
+            CallsSectionKey.HISTORY -> {
+                val page = loadHistoryPage(FILTER_ALL, missedContext = false)
+                val pg = HistoryPagination()
+                pg.nextOffset = page.rawCount
+                pg.endReached = page.rawCount < HISTORY_PAGE_SIZE
+                pagination[key] = pg
+                _history.value = page.state
+            }
+            CallsSectionKey.MISSED -> {
+                val page = loadHistoryPage(FILTER_MISSED, missedContext = true)
+                val pg = HistoryPagination()
+                pg.nextOffset = page.rawCount
+                pg.endReached = page.rawCount < HISTORY_PAGE_SIZE
+                pagination[key] = pg
+                _missed.value = page.state
+                if (page.state.status == CallsSectionStatus.CONTENT) {
+                    _missedCount.value = page.state.items.size
+                } else {
+                    _missedCount.value = 0
+                }
+            }
             CallsSectionKey.RECORDINGS ->
                 _recordings.value = loadRaw { deps.apiClient.messagesGetCallRecordings(PAGE_SIZE) }
             CallsSectionKey.TRANSCRIPTS ->
@@ -119,21 +169,37 @@ class CallsSectionRepositoryImpl(
      * История/пропущенные: calls.getHistory{filter} + обогащение профилями
      * (usersGetByIds одним запросом). isOffline() фасадного клиента вернёт
      * пустой список — честный EMPTY; «Повторить» подтянет, когда сеть вернётся.
+     * Возвращает также размер сырой страницы — offset-пагинация Этапа Б1.
      */
-    private suspend fun loadHistory(filter: String, missedContext: Boolean): CallsSectionState<CallHistoryEntry> {
-        val raw = deps.apiClient.callsGetHistory(PAGE_SIZE, 0, filter, null)
-        if (raw.isEmpty()) return CallsSectionState(status = CallsSectionStatus.EMPTY)
+    private class HistoryPage(
+        val state: CallsSectionState<CallHistoryEntry>,
+        val rawCount: Int,
+    )
+
+    private suspend fun loadHistoryPage(filter: String, missedContext: Boolean): HistoryPage {
+        val raw = deps.apiClient.callsGetHistory(HISTORY_PAGE_SIZE, 0, filter, null)
+        if (raw.isEmpty()) return HistoryPage(CallsSectionState(status = CallsSectionStatus.EMPTY), 0)
         val entries = parseHistoryPage(raw, missedContext)
         if (entries.isEmpty()) {
             // Сырые данные есть, но формат не распознан — НЕ врём про «нет звонков»,
             // а честная ошибка с «Повторить» (данные не потеряны, формат донастроится).
             AppLog.w(TAG, "history(filter=$filter): raw=" + raw.size + ", parsed=0 — формат не распознан")
-            return CallsSectionState(
-                status = CallsSectionStatus.ERROR,
-                errorMessage = "Формат истории не распознан",
+            return HistoryPage(
+                CallsSectionState(
+                    status = CallsSectionStatus.ERROR,
+                    errorMessage = "Формат истории не распознан",
+                ),
+                raw.size,
             )
         }
-        return CallsSectionState(status = CallsSectionStatus.CONTENT, items = entries)
+        return HistoryPage(
+            CallsSectionState(
+                status = CallsSectionStatus.CONTENT,
+                items = entries,
+                hasMore = raw.size >= HISTORY_PAGE_SIZE,
+            ),
+            raw.size,
+        )
     }
 
     // ─── парсинг истории/пропущенных (новый код — #NULL-EXPLICIT: без
@@ -205,6 +271,27 @@ class CallsSectionRepositoryImpl(
                     CallOutcome.CANCELED
                 }
 
+                // Этап Б3: адресация действий строки. record_id (если сервер
+                // даёт отдельное поле) либо числовой call_id; синтетические
+                // desktop-id («p<peer>_<ts>») чисел не дают — recordId=0,
+                // удаление такой записи UI отключает (честно, без фейка).
+                val rawRecordId = longField(o, "record_id")
+                val numericCallId = callId.toLongOrNull()
+                var recordId = 0L
+                if (rawRecordId != null && rawRecordId > 0L) {
+                    recordId = rawRecordId
+                } else if (numericCallId != null && numericCallId > 0L) {
+                    recordId = numericCallId
+                }
+                // group_id: явное поле, иначе peer группового чата (2e9+).
+                val rawGroupId = longField(o, "group_id")
+                var groupId = 0L
+                if (rawGroupId != null && rawGroupId > 0L) {
+                    groupId = rawGroupId
+                } else if (isGroup && peerId >= GROUP_PEER_MIN) {
+                    groupId = peerId
+                }
+
                 CallHistoryEntry(
                     callId = callId,
                     peerId = peerId,
@@ -216,6 +303,8 @@ class CallsSectionRepositoryImpl(
                     outcome = outcome,
                     timestampSec = extractTimestamp(o),
                     durationSec = durationSec,
+                    recordId = recordId,
+                    groupId = groupId,
                 )
             }
         } catch (e: Exception) {
@@ -312,6 +401,144 @@ class CallsSectionRepositoryImpl(
         return null
     }
 
+    // ─── пагинация истории/пропущенных (Этап Б1) ───
+
+    override fun loadMore(key: CallsSectionKey) {
+        if (key != CallsSectionKey.HISTORY && key != CallsSectionKey.MISSED) {
+            AppLog.w(TAG, "loadMore($key): пагинация поддерживается только для HISTORY/MISSED")
+            return
+        }
+        if (!loadMoreInFlight.add(key)) return // уже дозагружается — no-op (dedupe)
+        scope.launch {
+            try {
+                withContext(Dispatchers.Default) {
+                    loadMoreHistory(key)
+                }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "loadMore($key) failed", e)
+                // Список остаётся видимым; снимаем индикацию — следующий
+                // scroll-to-end повторит попытку.
+                setHistoryLoadingMore(key, false)
+            } finally {
+                loadMoreInFlight.remove(key)
+            }
+        }
+    }
+
+    private suspend fun loadMoreHistory(key: CallsSectionKey) {
+        val pg = pagination[key]
+        if (pg == null) {
+            // Нет контекста пагинации (кэш собран до Этапа Б) — полная перезагрузка.
+            AppLog.i(TAG, "loadMore($key): нет pagination-контекста — полный refresh")
+            refresh(key, force = true)
+            return
+        }
+        if (pg.endReached) return
+        val current = currentHistoryState(key)
+        if (current.status != CallsSectionStatus.CONTENT) return
+        setHistoryLoadingMore(key, true)
+
+        val filter = if (key == CallsSectionKey.HISTORY) FILTER_ALL else FILTER_MISSED
+        val raw = deps.apiClient.callsGetHistory(HISTORY_PAGE_SIZE, pg.nextOffset, filter, null)
+        if (raw.isEmpty()) {
+            pg.endReached = true
+            publishHistoryState(key, current.copy(loadingMore = false, hasMore = false))
+            return
+        }
+        pg.nextOffset += raw.size
+        if (raw.size < HISTORY_PAGE_SIZE) pg.endReached = true
+
+        val missedContext = key == CallsSectionKey.MISSED
+        val parsed = parseHistoryPage(raw, missedContext)
+        // Дедупликация append по callId: offset-пагинация при параллельных
+        // удалениях может давать сдвиги/повторы — дубль не попадает в список.
+        val seen = HashSet<String>()
+        val latest = currentHistoryState(key)
+        for (e in latest.items) seen.add(e.callId)
+        val fresh = ArrayList<CallHistoryEntry>(parsed.size)
+        for (e in parsed) {
+            if (!seen.contains(e.callId)) fresh.add(e)
+        }
+        val merged = latest.items + fresh
+        publishHistoryState(
+            key,
+            CallsSectionState(
+                status = CallsSectionStatus.CONTENT,
+                items = merged,
+                hasMore = !pg.endReached,
+                loadingMore = false,
+            ),
+        )
+        if (key == CallsSectionKey.MISSED) _missedCount.value = merged.size
+        AppLog.i(
+            TAG,
+            "loadMore($key): raw=" + raw.size + ", new=" + fresh.size +
+                ", total=" + merged.size + ", endReached=" + pg.endReached,
+        )
+    }
+
+    private fun currentHistoryState(key: CallsSectionKey): CallsSectionState<CallHistoryEntry> {
+        if (key == CallsSectionKey.HISTORY) return _history.value
+        return _missed.value
+    }
+
+    private fun publishHistoryState(key: CallsSectionKey, state: CallsSectionState<CallHistoryEntry>) {
+        if (key == CallsSectionKey.HISTORY) {
+            _history.value = state
+        } else {
+            _missed.value = state
+        }
+    }
+
+    private fun setHistoryLoadingMore(key: CallsSectionKey, loading: Boolean) {
+        val current = currentHistoryState(key)
+        if (current.status != CallsSectionStatus.CONTENT) return
+        publishHistoryState(key, current.copy(loadingMore = loading))
+    }
+
+    // ─── действия строки/секции (Этап Б3) ───
+
+    override suspend fun removeFromHistory(recordIds: List<Long>, groupId: Long): Boolean {
+        val ids = ArrayList<Long>()
+        for (id in recordIds) {
+            if (id > 0L) ids.add(id)
+        }
+        if (ids.isEmpty()) {
+            AppLog.w(TAG, "removeFromHistory: нет валидных record_id — вызов не отправлен")
+            return false
+        }
+        val ok = withContext(Dispatchers.Default) {
+            if (groupId > 0L) {
+                deps.apiClient.callsDeleteGroupHistoryRecords(ids, groupId)
+            } else {
+                deps.apiClient.callsDeleteHistoryRecords(ids)
+            }
+        }
+        AppLog.i(TAG, "removeFromHistory(ids=" + ids.size + ", groupId=$groupId) -> $ok")
+        if (ok) invalidateAfterMutation()
+        return ok
+    }
+
+    override suspend fun clearCallHistory(groupId: Long): Boolean {
+        val ok = withContext(Dispatchers.Default) {
+            if (groupId > 0L) {
+                deps.apiClient.callsClearGroupHistory(groupId)
+            } else {
+                deps.apiClient.callsClearHistory()
+            }
+        }
+        AppLog.i(TAG, "clearCallHistory(groupId=$groupId) -> $ok")
+        if (ok) invalidateAfterMutation()
+        return ok
+    }
+
+    /** После успешной мутации оба списка перечитываются форсом (инвалидация). */
+    private fun invalidateAfterMutation() {
+        AppLog.i(TAG, "invalidateAfterMutation: refreshing history+missed")
+        refresh(CallsSectionKey.HISTORY, force = true)
+        refresh(CallsSectionKey.MISSED, force = true)
+    }
+
     // ─── доступ к состояниям по ключу ───
 
     private fun stateFor(key: CallsSectionKey): CallsSectionState<*> {
@@ -343,8 +570,13 @@ class CallsSectionRepositoryImpl(
 
     companion object {
         private const val TAG = "CallsSectionRepo"
-        /** Страница списков — как у прежних фечей секций (30). */
+        /** Страница сырых списков (recordings/transcripts/scheduled) — как у прежних фечей секций (30). */
         private const val PAGE_SIZE = 30
+        /**
+         * Страница истории/пропущенных — count:25 веб-формы calls.getHistory
+         * (бандл webCallsBridge, план §2.1); тот же размер для loadMore.
+         */
+        private const val HISTORY_PAGE_SIZE = 25
         private const val FILTER_ALL = "all"
         private const val FILTER_MISSED = "missed"
         /** Граничное значение «unix-миллисекунды» (~3366 год в секундах). */

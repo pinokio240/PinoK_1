@@ -82,4 +82,12 @@ dependencies {
     // PermissionManager (перенесён в :feature:calls, пакет re.pinok.util) —
     // ContextCompat/Manifest проверки разрешений звонка.
     implementation(libs.androidx.core.ktx)
+
+    // #CALLS-SNAP (2026-09-05): Этап В1 — плеер записи звонка (нативный
+    // эквивалент vkvideo-плеера, план §4-В/§1.4): Media3 ExoPlayer +
+    // PlayerView. Алиасы уже в корневом каталоге версий (media3 1.8.0).
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+    // MediaItem/Player/AudioAttributes — публичный API ExoPlayer-блока.
+    implementation(libs.androidx.media3.common)
 }

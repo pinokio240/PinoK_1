@@ -58,6 +58,47 @@ interface CallsSectionRepository {
     fun refresh(key: CallsSectionKey, force: Boolean)
 
     /**
+     * #CALLS-SNAP (2026-09-05, Этап Б1): дозагрузка следующей страницы
+     * истории/пропущенных (scroll-to-end LazyColumn). Поддерживается только
+     * для HISTORY/MISSED (остальные ключи — no-op с логом). Подгруженная
+     * страница ДОБАВЛЯЕТСЯ к текущему списку (append без дублей по callId);
+     * индикация/наличие следующей страницы — поля [CallsSectionState.loadingMore]
+     * и [CallsSectionState.hasMore] того же StateFlow. Повторный вызов для
+     * уже дозагружающегося ключа — no-op (dedupe in-flight, отдельный от refresh).
+     */
+    fun loadMore(key: CallsSectionKey)
+
+    /**
+     * #CALLS-SNAP (2026-09-05, Этап Б3): «Убрать из списка» —
+     * calls.deleteHistoryRecords{record_ids}; при groupId>0 — групповой
+     * аналог calls.deleteGroupHistoryRecords{record_ids, group_id}.
+     * После УСПЕХА оба списка (HISTORY/MISSED) перечитываются форсом
+     * (список реально обновляется). I/O — Dispatchers.Default.
+     *
+     * @return true — API подтвердил удаление (или уже запущен refresh).
+     */
+    suspend fun removeFromHistory(recordIds: List<Long>, groupId: Long): Boolean
+
+    /**
+     * #CALLS-SNAP (2026-09-05, Этап Б3): «Очистить историю» —
+     * calls.clearHistory{}; при groupId>0 — групповой аналог
+     * calls.clearGroupHistory{group_id}. Необратимо — вызывающий обязан
+     * показать подтверждающий диалог ДО вызова. После УСПЕХА HISTORY/MISSED
+     * перечитываются форсом. I/O — Dispatchers.Default.
+     *
+     * @return true — API подтвердил очистку.
+     */
+    suspend fun clearCallHistory(groupId: Long): Boolean
+
+    /**
+     * #CALLS-SNAP (2026-09-05, Этап Б4): количество пропущенных звонков
+     * (бейдж на табе «Пропущенные» сайдбара). Равен числу записей в
+     * загруженной части списка MISSED (растёт при loadMore; total по серверу
+     * через фасад недоступен — calls.getHistory отдаёт только items).
+     */
+    val missedCount: StateFlow<Int>
+
+    /**
      * #CALLS-SNAP: событийная инвалидация по завершении звонка — точка
      * расширения. Сейчас вызывается из CallsActiveSection после hangup и из
      * хоста (LP/queue-событие о завершении, когда будет подключено); позже
@@ -78,11 +119,18 @@ enum class CallsSectionStatus { LOADING, CONTENT, EMPTY, ERROR }
  * Состояние одного списка. status=LOADING — первый фетч (спиннер);
  * ERROR — показать ошибку + «Повторить»; EMPTY — честный empty-state
  * (API ответил пустым списком); CONTENT — данные для рендера.
+ *
+ * #CALLS-SNAP (2026-09-05, Этап Б1): поля пагинации истории/пропущенных.
+ * loadingMore — идёт дозагрузка следующей страницы (футер-спиннер);
+ * hasMore — есть следующая страница (scroll-to-end триггерит loadMore).
+ * Для списков без пагинации оба поля остаются false (дефолты).
  */
 data class CallsSectionState<T>(
     val status: CallsSectionStatus = CallsSectionStatus.LOADING,
     val items: List<T> = emptyList(),
     val errorMessage: String? = null,
+    val loadingMore: Boolean = false,
+    val hasMore: Boolean = false,
 )
 
 /** Исход звонка — статус-строка общего вида строки-кластера (Этап А4). */
@@ -94,6 +142,15 @@ enum class CallOutcome { FINISHED, MISSED, CANCELED }
  * started_at, finished_at} и desktop {peer_id, name, photo, direction,
  * date, duration}). name/photo обогащаются профилем (usersGetByIds) в
  * реализации репозитория.
+ *
+ * #CALLS-SNAP (2026-09-05, Этап Б3): recordId/groupId — адресация действий
+ * строки («Убрать из списка»/«Очистить историю» групповых):
+ * calls.deleteHistoryRecords{record_ids} / calls.deleteGroupHistoryRecords
+ * {record_ids, group_id} / calls.clearGroupHistory{group_id}.
+ * recordId=0 — числовой id не распознан (desktop-формат с синтетическим
+ * callId) — удаление такой записи недоступно (UI честно отключает пункт);
+ * groupId>0 — у групповой записи известен group_id (поле group_id либо
+ * peer группового чата 2e9+).
  */
 data class CallHistoryEntry(
     val callId: String,
@@ -108,6 +165,10 @@ data class CallHistoryEntry(
     val timestampSec: Long,
     /** Длительность в секундах (0 — не состоялся/пропущен). */
     val durationSec: Int,
+    /** Числовой id записи для deleteHistoryRecords (0 — не распознан). */
+    val recordId: Long = 0L,
+    /** group_id группового звонка (0 — не групповой/неизвестен). */
+    val groupId: Long = 0L,
 )
 
 /**

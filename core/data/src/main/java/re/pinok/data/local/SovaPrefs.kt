@@ -541,6 +541,64 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     /** #CALLS-SNAP: сохранить конфигурацию сайдбара «Звонков». */
     suspend fun setCallsSidebarCfg(v: String)            = put(Keys.CALLS_SIDEBAR_CFG, v)
+
+    // ─── #CALLS-Z (2026-09-05): Этап З плана «звонки.перенос.план.md» — З2 ───
+    // Устройства по умолчанию и шумодав по умолчанию для звонков.
+    // Потребитель — Этап Ж4 (media-панель активного звонка: выбор устройства
+    // Android / AudioDeviceManager / BT-маршрутизация / конфиг WebRTC APM).
+    // Отдельные ключи ВНЕ Snapshot-класса (урок themeMonetHybrid, паттерн
+    // calls_sidebar_cfg выше: большой data-класс не расширяем, читается
+    // отдельным флоу, пишется сеттером).
+
+    /**
+     * #CALLS-Z: микрофон по умолчанию. Значение — «type:address» из
+     * AudioDeviceInfo (AudioManager.GET_DEVICES_INPUTS; type — числовой тип,
+     * address — стабильный идентификатор: «bottom» у встр. микрофонов, MAC у BT).
+     * Пустая строка = авто (выбор системой). Выбор и перечисление —
+     * Настройки → Звонки (SettingsScreen.CallsDefaultDevicesCards).
+     */
+    val callsMicDefault: Flow<String> = ds.data.map { p ->
+        // NULL-ЯВНО: отсутствие ключа — тривиальный фолбэк на дефолт
+        val raw = p[Keys.CALLS_MIC_DEFAULT]
+        if (raw == null) "" else raw
+    }
+
+    /** #CALLS-Z: сохранить микрофон по умолчанию («type:address», "" = авто). */
+    suspend fun setCallsMicDefault(v: String)            = put(Keys.CALLS_MIC_DEFAULT, v)
+
+    /**
+     * #CALLS-Z: маршрут звука по умолчанию — «auto» | «speaker» | «earpiece» | «bt».
+     * (Speakerphone/Earpiece/BT — из AudioManager; потребитель — Ж4.)
+     */
+    val callsRouteDefault: Flow<String> = ds.data.map { p ->
+        val raw = p[Keys.CALLS_ROUTE_DEFAULT]
+        if (raw == null) "auto" else raw
+    }
+
+    /** #CALLS-Z: сохранить маршрут звука по умолчанию. */
+    suspend fun setCallsRouteDefault(v: String)          = put(Keys.CALLS_ROUTE_DEFAULT, v)
+
+    /** #CALLS-Z: камера по умолчанию — «front» | «back» (CameraManager, LENS_FACING). */
+    val callsCameraDefault: Flow<String> = ds.data.map { p ->
+        val raw = p[Keys.CALLS_CAMERA_DEFAULT]
+        if (raw == null) "front" else raw
+    }
+
+    /** #CALLS-Z: сохранить камеру по умолчанию. */
+    suspend fun setCallsCameraDefault(v: String)         = put(Keys.CALLS_CAMERA_DEFAULT, v)
+
+    /**
+     * #CALLS-Z: шумодав по умолчанию — «AUTO» | «SIMPLE» | «NEURAL» (значения
+     * web-бридга; в localStorage-дампе calls_video_options
+     * noise_cancellation_mode = «NEURAL» — ui-срезы §9.4). Default «NEURAL».
+     */
+    val callsNoiseCancelDefault: Flow<String> = ds.data.map { p ->
+        val raw = p[Keys.CALLS_NOISE_CANCEL_DEFAULT]
+        if (raw == null) "NEURAL" else raw
+    }
+
+    /** #CALLS-Z: сохранить шумодав по умолчанию. */
+    suspend fun setCallsNoiseCancelDefault(v: String)    = put(Keys.CALLS_NOISE_CANCEL_DEFAULT, v)
     /** P3.7: bubble-less дизайн — flat layout сообщений. */
     suspend fun setMsgBubbleless(v: Boolean)              = put(Keys.MSG_BUBBLELESS, v)
     /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий. */
@@ -1128,6 +1186,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val PINNED_CONVS_DATA     = stringPreferencesKey("pinned_convs_data")
         // #CALLS-SNAP (2026-09-05): конфигурация сайдбара «Звонков» (Этап А3)
         val CALLS_SIDEBAR_CFG     = stringPreferencesKey("calls_sidebar_cfg")
+        // #CALLS-Z (2026-09-05): Этап З2 — дефолты устройств/шумодава звонков
+        // (потребитель — Этап Ж4). Форматы значений — см. Flow-свойства выше.
+        val CALLS_MIC_DEFAULT     = stringPreferencesKey("calls_mic_default")
+        val CALLS_ROUTE_DEFAULT   = stringPreferencesKey("calls_route_default")
+        val CALLS_CAMERA_DEFAULT  = stringPreferencesKey("calls_camera_default")
+        val CALLS_NOISE_CANCEL_DEFAULT = stringPreferencesKey("calls_noise_cancel_default")
         val MSG_BUBBLELESS        = booleanPreferencesKey("msg_bubbleless")
         // P4.2: LongPoll backfill — persistence ts/pts между сессиями
         val MSG_LP_BACKFILL        = booleanPreferencesKey("msg_lp_backfill")

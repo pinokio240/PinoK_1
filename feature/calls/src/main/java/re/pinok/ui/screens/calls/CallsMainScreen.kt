@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +41,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,7 +55,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import re.pinok.feature.calls.CallsSectionKey
 import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.util.AppLog
 
 /**
@@ -123,6 +128,14 @@ fun CallsMainScreen(
     onNavigateToCall: (Long) -> Unit,
 ) {
     val deps = LocalCallsDeps.current
+    // Этап Б4: бейдж пропущенных на табе «Пропущенные» (число из репозитория).
+    val callsRepo = LocalCallsSectionRepository.current
+    val missedBadge by callsRepo.missedCount.collectAsState()
+    LaunchedEffect(Unit) {
+        // Кэш-семантика: CONTENT не перезапрашивается; инвалидация по событиям
+        // (hangup/мутации) обновит счётчик через StateFlow.
+        callsRepo.refresh(CallsSectionKey.MISSED, force = false)
+    }
     val scope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf(CallsTab.HISTORY) }
     var sidebarExpanded by remember { mutableStateOf(true) }
@@ -215,6 +228,7 @@ fun CallsMainScreen(
                     CallsRightSidebar(
                         tabs = visibleTabs,
                         selectedTab = effectiveTab,
+                        missedBadgeCount = missedBadge,
                         onTabSelected = { selectedTab = it },
                         onOpenMenuSettings = { showMenuSettings = true },
                         modifier = Modifier.width(180.dp).fillMaxHeight(),
@@ -467,11 +481,15 @@ private fun ContentArea(
 /**
  * Сайдбар: видимые пункты (конфиг А3) + разделители по прежним позициям
  * (после 1-го/3-го/5-го) + внизу ⚙ «Настройка пунктов меню».
+ * Этап Б4: missedBadgeCount — бейдж количества пропущенных на пункте
+ * «Пропущенные» (материал-3 BadgedBox/Badge — как unread-badge Сообщений
+ * в SovaNavHost).
  */
 @Composable
 fun CallsRightSidebar(
     tabs: List<CallsTab>,
     selectedTab: CallsTab,
+    missedBadgeCount: Int,
     onTabSelected: (CallsTab) -> Unit,
     onOpenMenuSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -487,6 +505,7 @@ fun CallsRightSidebar(
                     SidebarTabItem(
                         tab = tab,
                         isSelected = tab == selectedTab,
+                        badgeCount = if (tab == CallsTab.MISSED) missedBadgeCount else 0,
                         onClick = { onTabSelected(tab) },
                     )
                 }
@@ -532,12 +551,26 @@ fun CallsRightSidebar(
 private fun SidebarTabItem(
     tab: CallsTab,
     isSelected: Boolean,
+    badgeCount: Int,
     onClick: () -> Unit,
 ) {
     val bgColor = if (isSelected) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
     } else {
         Color.Transparent
+    }
+
+    // Метка пункта: с бейджем (BadgedBox, стиль unread-badge SovaNavHost)
+    // или без — одинаковая типографика в обеих ветках.
+    val label: @Composable () -> Unit = {
+        Text(
+            text = tab.label,
+            modifier = Modifier.padding(start = 8.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurface,
+        )
     }
 
     Row(
@@ -549,13 +582,16 @@ private fun SidebarTabItem(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = tab.label,
-            modifier = Modifier.padding(start = 8.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurface,
-        )
+        if (badgeCount > 0) {
+            BadgedBox(
+                badge = {
+                    Badge { Text(if (badgeCount > 99) "99+" else badgeCount.toString()) }
+                },
+            ) {
+                label()
+            }
+        } else {
+            label()
+        }
     }
 }

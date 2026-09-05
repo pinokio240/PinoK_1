@@ -121,6 +121,14 @@ import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import java.text.DecimalFormat
+// #CALLS-Z (2026-09-05, Этап З): серверные тумблеры/персональные настройки + дефолты устройств.
+import com.google.gson.JsonObject
+import kotlinx.coroutines.flow.first
+import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 
 // ══════════════════════════════════════════════════════════════════════
 //  #245 (settings tabs): разбиение длинного списка настроек на вкладки.
@@ -572,6 +580,788 @@ private fun CallsTab(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Остановить") }
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        //  #CALLS-Z (2026-09-05): Этап З плана «звонки.перенос.план.md».
+        //  З1 — серверные тумблеры (calls.getSettings) + privacy «Определение
+        //  IP» + персональные настройки (getUserSettings/setUserSettings);
+        //  З2 — устройства/шумодав по умолчанию (SovaPrefs, потребитель — Ж4).
+        // ════════════════════════════════════════════════════════════════
+        item { SectionHeader("Серверные настройки звонков") }
+        item { CallsServerSettingsCard(app, scope) }
+
+        item { SectionHeader("Персональные настройки") }
+        item { CallsUserSettingsCard(app, scope, context) }
+
+        item { SectionHeader("Устройства и шумодав по умолчанию") }
+        item { CallsDefaultDevicesCards(app, scope, context) }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Tab: Звонки — Этап З (#CALLS-Z, 2026-09-05)
+//
+//  З1: calls.getSettings (серверные тумблеры toggles[{name,enabled}] +
+//      privacy settings{calls_ip, ip_setting_enabled}) и персональные
+//      calls.getUserSettings / calls.setUserSettings{settings:<JSON>}.
+//  З2: устройства по умолчанию (микрофон/маршрут/камера) и шумодав
+//      (AUTO/SIMPLE/NEURAL) — SovaPrefs, ключи ВНЕ Snapshot (паттерн
+//      calls_sidebar_cfg), потребитель — Этап Ж4.
+//
+//  Политика no-stub (план §5.р5): каждый переключатель читает и пишет
+//  реальное состояние. Серверные тумблеры getSettings — read-only (write-API
+//  в протоколе/фасаде нет — показываем честное состояние сервера);
+//  персональные — честная запись тем же набором полей, что прочитали
+//  (точная wire-форма settings JSON не восстановлена из снапшота — KDoc
+//  фасада callsSetUserSettings; подтверждается живым сервером на Этапе И).
+//  I/O — вне main (#ANR-MAIN-IO): fetch+parse в withContext(Dispatchers.Default),
+//  HTTP внутри VKApiClient уже на Dispatchers.IO.
+// ══════════════════════════════════════════════════════════════════════
+
+/** Состояние загрузки серверных секций звонков (З1). */
+private enum class CallsSettingsLoadState { LOADING, READY, ERROR, EMPTY }
+
+/** Серверный тумблер из calls.getSettings: toggles[{name, enabled}] (план §2.4). */
+private data class CallsServerToggle(val name: String, val enabled: Boolean)
+
+/** Разобранный ответ calls.getSettings: тумблеры + privacy-поля settings. */
+private data class CallsServerSettingsData(
+    val toggles: List<CallsServerToggle>,
+    val callsIp: String?,
+    val ipSettingEnabled: Boolean?,
+)
+
+/**
+ * Словарь человекочитаемых подписей серверных тумблеров (З1). Имена — из
+ * init-контекста web-виджета (звонки.реверс.ui-срезы.md §9.3: toggles
+ * {enableSimplePiPVk, videoSlotsCount, noiseReductionMode, enableVmoji, …}).
+ * Неизвестное имя — fallback на сырое name (без выдумок).
+ */
+private val CALLS_SERVER_TOGGLE_LABELS: Map<String, String> = mapOf(
+    "enableSimplePiPVk" to "Простой PiP (VK)",
+    "enableSimplePiPSafariVk" to "Простой PiP (Safari/VK)",
+    "videoSlotsCount" to "Количество видео-слотов",
+    "browserWarnings" to "Предупреждения о браузере",
+    "disabledBanners" to "Отключённые баннеры",
+    "customScreenShareCongestionControlThreshold" to "Порог congestion control демонстрации экрана",
+    "customExternalDomain" to "Внешний домен звонков",
+    "noiseReductionMode" to "Шумоподавление",
+    "enableVmoji" to "Vmoji (анимация вместо себя)",
+    "temporaryVirtualBackgrounds" to "Временные виртуальные фоны",
+    "deviceId" to "ID устройства",
+)
+
+/** Подпись тумблера: словарь → fallback на сырое name. */
+private fun callsServerToggleLabel(name: String): String {
+    val known = CALLS_SERVER_TOGGLE_LABELS[name]
+    if (known != null) return known
+    return name
+}
+
+/**
+ * Разбор ответа calls.getSettings (форма по KDoc фасада/плану §2.4:
+ * {settings:{public_key, is_dev, calls_ip, ip_setting_enabled, …},
+ * toggles:[{name, enabled}]}). NULL-ЯВНО: явные if-проверки с захватом в val.
+ * null = запрос не удался (офлайн/ошибка/парсинг) — caller различает ошибку.
+ */
+private fun parseCallsServerSettings(resp: JsonObject?): CallsServerSettingsData? {
+    if (resp == null) return null
+    val toggles = ArrayList<CallsServerToggle>()
+    val tEl = resp.get("toggles")
+    if (tEl != null && tEl.isJsonArray) {
+        for (item in tEl.asJsonArray) {
+            if (item.isJsonObject) {
+                val t = item.asJsonObject
+                val nEl = t.get("name")
+                val eEl = t.get("enabled")
+                if (nEl != null && nEl.isJsonPrimitive && eEl != null && eEl.isJsonPrimitive) {
+                    toggles.add(
+                        CallsServerToggle(nEl.asJsonPrimitive.asString, eEl.asJsonPrimitive.asBoolean),
+                    )
+                }
+            }
+        }
+    }
+    var callsIp: String? = null
+    var ipEnabled: Boolean? = null
+    val sEl = resp.get("settings")
+    if (sEl != null && sEl.isJsonObject) {
+        val st = sEl.asJsonObject
+        val ipEl = st.get("calls_ip")
+        if (ipEl != null && ipEl.isJsonPrimitive) callsIp = ipEl.asJsonPrimitive.asString
+        val enEl = st.get("ip_setting_enabled")
+        if (enEl != null && enEl.isJsonPrimitive && enEl.asJsonPrimitive.isBoolean) {
+            ipEnabled = enEl.asJsonPrimitive.asBoolean
+        }
+    }
+    return CallsServerSettingsData(toggles, callsIp, ipEnabled)
+}
+
+/**
+ * З1: секция «Серверные настройки звонков» — calls.getSettings через фасад.
+ *
+ * Серверные тумблеры (toggles) — feature-флаги сервера: write-API для них в
+ * протоколе снапшота нет (в §9.2 ui-срезов у calls.* нет setSettings), поэтому
+ * рендерим РЕАЛЬНЫЙ список из ответа как состояние «только для чтения»
+ * (честно, без мнимых переключателей — план §5.р5). Privacy-блок «Определение
+ * IP» (calls_ip / ip_setting_enabled) — реальные значения из settings, также
+ * read-only. Загрузка/ошибка/пусто — в стиле NotificationsTab/CallsSectionScaffold
+ * (спиннер / текст ошибки + «Повторить»).
+ */
+@Composable
+private fun CallsServerSettingsCard(app: SovaApp, scope: CoroutineScope) {
+    var loadState by remember { mutableStateOf(CallsSettingsLoadState.LOADING) }
+    var errorText by remember { mutableStateOf("") }
+    var data by remember { mutableStateOf<CallsServerSettingsData?>(null) }
+
+    fun reload() {
+        loadState = CallsSettingsLoadState.LOADING
+        scope.launch {
+            val parsed = withContext(Dispatchers.Default) {
+                parseCallsServerSettings(app.apiClient.callsGetSettings())
+            }
+            if (parsed == null) {
+                // Реальное сообщение об ошибке из фасада (lastApiError ставит
+                // VKApiClient при error-ответе), иначе — сетевая формулировка.
+                val lastErr = app.apiClient.lastApiError
+                if (lastErr != null) {
+                    errorText = lastErr
+                } else {
+                    errorText = "офлайн или ошибка сети"
+                }
+                loadState = CallsSettingsLoadState.ERROR
+            } else if (parsed.toggles.isEmpty() && parsed.callsIp == null && parsed.ipSettingEnabled == null) {
+                data = parsed
+                loadState = CallsSettingsLoadState.EMPTY
+            } else {
+                data = parsed
+                loadState = CallsSettingsLoadState.READY
+            }
+        }
+    }
+    LaunchedEffect(Unit) { reload() }
+
+    val d = data
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            when {
+                loadState == CallsSettingsLoadState.LOADING -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Загрузка настроек сервера…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                loadState == CallsSettingsLoadState.ERROR -> {
+                    Text(
+                        "Ошибка загрузки: $errorText",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = { reload() }, modifier = Modifier.fillMaxWidth()) { Text("Повторить") }
+                }
+                loadState == CallsSettingsLoadState.EMPTY -> {
+                    Text(
+                        "Сервер не вернул ни тумблеров, ни privacy-полей.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = { reload() }, modifier = Modifier.fillMaxWidth()) { Text("Повторить") }
+                }
+                d != null -> {
+                    Text(
+                        "Тумблеры сервера (${d.toggles.size})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (d.toggles.isEmpty()) {
+                        Text(
+                            "Список тумблеров пуст",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    for (t in d.toggles) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text(callsServerToggleLabel(t.name), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "${t.name} · состояние сервера, только чтение",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            // Read-only: onCheckedChange = null — Switch без взаимодействия.
+                            Switch(checked = t.enabled, onCheckedChange = null)
+                        }
+                        HorizontalDivider()
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Приватность: определение IP",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    val ipVal = d.callsIp
+                    Text(
+                        if (ipVal != null) "calls_ip: $ipVal" else "calls_ip: нет данных",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val enVal = d.ipSettingEnabled
+                    val enText = when {
+                        enVal == null -> "нет данных"
+                        enVal -> "включено"
+                        else -> "выключено"
+                    }
+                    Text(
+                        "ip_setting_enabled: $enText",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                else -> {
+                    // Недостижимо при инварианте (READY ставится только с d != null) — не падаем.
+                    Text("Загрузка настроек сервера…", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
+
+/** Разобранные персональные настройки: booleans — переключаемые, scalars — только показ. */
+private data class CallsUserSettingsData(
+    val booleans: List<Pair<String, Boolean>>,
+    val scalars: List<Pair<String, String>>,
+)
+
+/**
+ * Словарь подписей персональных настроек (З1). Точный состав полей
+ * calls.getUserSettings в снапшотах не сохранился; включены известные ключи
+ * calls_video_options из localStorage-дампа (ui-срезы §9.4). Неизвестное
+ * имя — fallback на сырое name.
+ */
+private val CALLS_USER_SETTING_LABELS: Map<String, String> = mapOf(
+    "calls_is_video_mirrored" to "Зеркалить своё видео",
+    "noise_cancellation_mode" to "Шумоподавление",
+    "simple_pip_enabled_by_user" to "Простой PiP (картинка в картинке)",
+    "skip_join_call_prompt" to "Пропускать запрос перед присоединением",
+    "is_skip_join_call_prompt_refreshed" to "Подсказка о присоединении обновлена",
+    "video_suspend_banner_times" to "Счётчик баннера приостановки видео",
+)
+
+/** Подпись персональной настройки: словарь → fallback на сырое name. */
+private fun callsUserSettingLabel(key: String): String {
+    val known = CALLS_USER_SETTING_LABELS[key]
+    if (known != null) return known
+    return key
+}
+
+/**
+ * calls.getUserSettings → тело персональных настроек: response.settings
+ * (если сервер так оборачивает), иначе сам response. NULL-ЯВНО.
+ */
+private fun parseCallsUserSettings(resp: JsonObject?): JsonObject? {
+    if (resp == null) return null
+    val sEl = resp.get("settings")
+    if (sEl != null && sEl.isJsonObject) return sEl.asJsonObject
+    return resp
+}
+
+/** Разбор тела персональных настроек на переключаемые (boolean) и отображаемые (прочее). */
+private fun splitCallsUserSettings(obj: JsonObject): CallsUserSettingsData {
+    val booleans = ArrayList<Pair<String, Boolean>>()
+    val scalars = ArrayList<Pair<String, String>>()
+    for (entry in obj.entrySet()) {
+        val v = entry.value
+        if (v.isJsonPrimitive && v.asJsonPrimitive.isBoolean) {
+            booleans.add(entry.key to v.asJsonPrimitive.asBoolean)
+        } else if (v.isJsonPrimitive) {
+            scalars.add(entry.key to v.asJsonPrimitive.asString)
+        } else if (v.isJsonNull) {
+            scalars.add(entry.key to "null")
+        } else {
+            scalars.add(entry.key to "(объект/массив — только просмотр)")
+        }
+    }
+    return CallsUserSettingsData(booleans, scalars)
+}
+
+/**
+ * З1: секция «Персональные настройки» — calls.getUserSettings / setUserSettings.
+ *
+ * Чтение: РЕАЛЬНЫЙ ответ сервера; boolean-поля — переключатели, числа/строки —
+ * read-only строки (честное отображение состояния сервера).
+ * Запись (no-stub, план §5.р5): точная wire-форма settings JSON не восстановлена
+ * из снапшота (KDoc фасада callsSetUserSettings фиксирует то же) — пишем ТЕМ ЖЕ
+ * набором полей, что прочитали: глубокая копия разобранного тела + изменённое
+ * boolean-поле. Форма подтверждается живым сервером (Этап И, §4-И1).
+ * Переключение — оптимистично с откатом при ошибке + РЕАЛЬНОЕ сообщение
+ * (lastApiError фасада / текст исключения) — паттерн NotificationsTab.toggleNotify.
+ */
+@Composable
+private fun CallsUserSettingsCard(
+    app: SovaApp,
+    scope: CoroutineScope,
+    context: Context,
+) {
+    var loadState by remember { mutableStateOf(CallsSettingsLoadState.LOADING) }
+    var errorText by remember { mutableStateOf("") }
+    var rawBody by remember { mutableStateOf<JsonObject?>(null) }
+    var booleans by remember { mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) }
+    var scalars by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var loadingKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    fun reload() {
+        loadState = CallsSettingsLoadState.LOADING
+        scope.launch {
+            val body = withContext(Dispatchers.Default) {
+                parseCallsUserSettings(app.apiClient.callsGetUserSettings())
+            }
+            if (body == null) {
+                val lastErr = app.apiClient.lastApiError
+                if (lastErr != null) {
+                    errorText = lastErr
+                } else {
+                    errorText = "офлайн или ошибка сети"
+                }
+                loadState = CallsSettingsLoadState.ERROR
+            } else {
+                val split = withContext(Dispatchers.Default) { splitCallsUserSettings(body) }
+                rawBody = body
+                booleans = split.booleans
+                scalars = split.scalars
+                if (split.booleans.isEmpty() && split.scalars.isEmpty()) {
+                    loadState = CallsSettingsLoadState.EMPTY
+                } else {
+                    loadState = CallsSettingsLoadState.READY
+                }
+            }
+        }
+    }
+
+    /**
+     * Оптимистичный toggle персональной настройки: calls.setUserSettings
+     * отправляет тот же набор полей, что был прочитан (+ изменённое поле).
+     */
+    fun toggleUserSetting(key: String, newValue: Boolean) {
+        val body = rawBody
+        if (body == null) return
+        val current = booleans.firstOrNull { it.first == key }
+        if (current == null) return
+        if (current.second == newValue) return
+        // Оптимистичное обновление UI.
+        booleans = booleans.map { if (it.first == key) key to newValue else it }
+        loadingKeys = loadingKeys + key
+        // Снимок ТЕКУЩИХ optimistic-значений: если параллельно летит другой
+        // toggle, его значение тоже попадёт в payload (payload всегда строится
+        // из того же набора полей, что прочитали — план §5.р5).
+        val snapshot = booleans
+        scope.launch {
+            val updated = withContext(Dispatchers.Default) {
+                val copy = body.deepCopy()
+                for (b in snapshot) {
+                    copy.addProperty(b.first, b.second)
+                }
+                copy
+            }
+            var excText: String? = null
+            val ok = try {
+                app.apiClient.callsSetUserSettings(updated.toString())
+            } catch (e: Exception) {
+                AppLog.e("CallsSettings", "calls.setUserSettings($key=$newValue) failed", e)
+                excText = e.message
+                false
+            }
+            if (ok) {
+                rawBody = updated
+                AppLog.i("CallsSettings", "calls.setUserSettings ok: $key=$newValue")
+            } else {
+                // Откат оптимистичного значения + реальное сообщение об ошибке.
+                booleans = booleans.map { if (it.first == key) key to current.second else it }
+                val lastErr = app.apiClient.lastApiError
+                var msg = "ошибка сети"
+                if (lastErr != null) {
+                    msg = lastErr
+                } else {
+                    val exc = excText
+                    if (exc != null) msg = exc
+                }
+                android.widget.Toast.makeText(
+                    context,
+                    "Не удалось изменить «${callsUserSettingLabel(key)}»: $msg",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+            loadingKeys = loadingKeys - key
+        }
+    }
+
+    LaunchedEffect(Unit) { reload() }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            when {
+                loadState == CallsSettingsLoadState.LOADING -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Загрузка персональных настроек…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                loadState == CallsSettingsLoadState.ERROR -> {
+                    Text(
+                        "Ошибка загрузки: $errorText",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = { reload() }, modifier = Modifier.fillMaxWidth()) { Text("Повторить") }
+                }
+                loadState == CallsSettingsLoadState.EMPTY -> {
+                    Text(
+                        "Сервер вернул пустой объект персональных настроек.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = { reload() }, modifier = Modifier.fillMaxWidth()) { Text("Повторить") }
+                }
+                else -> {
+                    if (booleans.isEmpty()) {
+                        Text(
+                            "Переключаемых настроек нет",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    for (b in booleans) {
+                        ToggleRowWithLoading(
+                            title = callsUserSettingLabel(b.first),
+                            subtitle = b.first,
+                            checked = b.second,
+                            loading = b.first in loadingKeys,
+                            onToggle = { toggleUserSetting(b.first, it) },
+                        )
+                    }
+                    if (scalars.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Серверные значения (только чтение)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        for (sc in scalars) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(callsUserSettingLabel(sc.first), style = MaterialTheme.typography.bodyLarge)
+                                    Text(
+                                        "${sc.first} = ${sc.second}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Микрофон из AudioManager.getDevices(INPUTS): value = "type:address", label — productName + тип. */
+private data class CallsMicDevice(val value: String, val label: String)
+
+/** Подпись типа аудио-устройства (З2). */
+private fun callsAudioDeviceTypeLabel(type: Int): String = when (type) {
+    AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Встроенный микрофон"
+    AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth (SCO)"
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth (A2DP)"
+    AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Проводная гарнитура"
+    AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Проводные наушники"
+    AudioDeviceInfo.TYPE_USB_DEVICE -> "USB-устройство"
+    AudioDeviceInfo.TYPE_USB_HEADSET -> "USB-гарнитура"
+    AudioDeviceInfo.TYPE_TELEPHONY -> "Телефония"
+    else -> "Тип $type"
+}
+
+/**
+ * РЕАЛЬНОЕ перечисление устройств ввода (AudioManager.GET_DEVICES_INPUTS) и
+ * камер (CameraManager, LENS_FACING). Вызывается вне main (#ANR-MAIN-IO) —
+ * из withContext(Dispatchers.Default). Идентификатор микрофона —
+ * «type:address»: address стабилен между перезагрузками (bottom/top у
+ * встроенных, MAC у BT), в отличие от AudioDeviceInfo.getId() (per-boot).
+ */
+private fun enumerateCallMediaDevices(context: Context): Triple<List<CallsMicDevice>, Boolean, Boolean> {
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val seen = HashSet<String>()
+    val mics = ArrayList<CallsMicDevice>()
+    for (info in audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+        val value = info.type.toString() + ":" + info.address
+        if (seen.contains(value)) continue
+        seen.add(value)
+        val product = info.productName
+        val typeLabel = callsAudioDeviceTypeLabel(info.type)
+        val label: String = if (product != null && product.isNotEmpty()) "$product · $typeLabel" else typeLabel
+        mics.add(CallsMicDevice(value, label))
+    }
+    var hasFront = false
+    var hasBack = false
+    try {
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        for (id in cameraManager.cameraIdList) {
+            val characteristics = cameraManager.getCameraCharacteristics(id)
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            if (facing == null) continue
+            if (facing == CameraCharacteristics.LENS_FACING_FRONT) hasFront = true
+            if (facing == CameraCharacteristics.LENS_FACING_BACK) hasBack = true
+        }
+    } catch (e: Exception) {
+        AppLog.w("CallsSettings", "CameraManager enumerate failed: ${e.message}")
+    }
+    return Triple(mics, hasFront, hasBack)
+}
+
+/** Строка-опция с RadioButton (стиль QualityRow/AudioFormatRow). */
+@Composable
+private fun CallsRadioOptionRow(
+    label: String,
+    subtitle: String?,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onSelect() }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** Маршруты звука (З2): Speakerphone/Earpiece/BT — из AudioManager. */
+private val CALLS_ROUTE_OPTIONS = listOf(
+    "auto" to "Авто (как решит система)",
+    "speaker" to "Громкая связь (Speakerphone)",
+    "earpiece" to "Телефонный динамик (Earpiece)",
+    "bt" to "Bluetooth",
+)
+
+/** Режимы шумодава (З2): значения web-бридга (ui-срезы §9.4/§6, default NEURAL). */
+private val CALLS_NOISE_OPTIONS = listOf(
+    "AUTO" to "Авто",
+    "SIMPLE" to "Простой",
+    "NEURAL" to "Нейросетевой",
+)
+
+/**
+ * З2: устройства по умолчанию и шумодав — SovaPrefs (ключи #CALLS-Z:
+ * calls_mic_default / calls_route_default / calls_camera_default /
+ * calls_noise_cancel_default; ВНЕ Snapshot, паттерн calls_sidebar_cfg).
+ * Микрофон — реальный список AudioManager.getDevices(INPUTS), камера —
+ * CameraManager (front/back с отметкой доступности), маршрут — enum-набор,
+ * шумодав — AUTO/SIMPLE/NEURAL. Значения честно читаются при входе (flow.first)
+ * и пишутся сеттерами при выборе. Потребитель — Этап Ж4 (media-панель звонка).
+ */
+@Composable
+private fun CallsDefaultDevicesCards(
+    app: SovaApp,
+    scope: CoroutineScope,
+    context: Context,
+) {
+    var micValue by remember { mutableStateOf("") }
+    var routeValue by remember { mutableStateOf("auto") }
+    var cameraValue by remember { mutableStateOf("front") }
+    var noiseValue by remember { mutableStateOf("NEURAL") }
+    var mics by remember { mutableStateOf<List<CallsMicDevice>>(emptyList()) }
+    var hasFrontCamera by remember { mutableStateOf(false) }
+    var hasBackCamera by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        // Восстановление сохранённых дефолтов (SovaPrefs) + перечисление устройств.
+        val micSaved = app.prefs.callsMicDefault.first()
+        val routeSaved = app.prefs.callsRouteDefault.first()
+        val cameraSaved = app.prefs.callsCameraDefault.first()
+        val noiseSaved = app.prefs.callsNoiseCancelDefault.first()
+        micValue = micSaved
+        routeValue = routeSaved
+        cameraValue = cameraSaved
+        noiseValue = noiseSaved
+        val enumerated = withContext(Dispatchers.Default) { enumerateCallMediaDevices(context) }
+        mics = enumerated.first
+        hasFrontCamera = enumerated.second
+        hasBackCamera = enumerated.third
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Микрофон по умолчанию (З2).
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Микрофон по умолчанию",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "Применяется при старте звонка (Этап Ж4). Пусто = выбор системой",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                CallsRadioOptionRow(
+                    label = "Авто (выбор системы)",
+                    subtitle = null,
+                    selected = micValue == "",
+                    onSelect = {
+                        micValue = ""
+                        scope.launch { app.prefs.setCallsMicDefault("") }
+                    },
+                )
+                for (dev in mics) {
+                    CallsRadioOptionRow(
+                        label = dev.label,
+                        subtitle = dev.value,
+                        selected = micValue == dev.value,
+                        onSelect = {
+                            micValue = dev.value
+                            scope.launch { app.prefs.setCallsMicDefault(dev.value) }
+                        },
+                    )
+                }
+                if (mics.isEmpty()) {
+                    Text(
+                        "Поиск микрофонов…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        // Маршрут звука по умолчанию (З2).
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Маршрут звука по умолчанию",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "Speakerphone / Earpiece / Bluetooth — маршрутизация AudioManager",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                for (opt in CALLS_ROUTE_OPTIONS) {
+                    val optValue = opt.first
+                    CallsRadioOptionRow(
+                        label = opt.second,
+                        subtitle = null,
+                        selected = routeValue == optValue,
+                        onSelect = {
+                            routeValue = optValue
+                            scope.launch { app.prefs.setCallsRouteDefault(optValue) }
+                        },
+                    )
+                }
+            }
+        }
+
+        // Камера по умолчанию (З2): front/back по реальному CameraManager.
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Камера по умолчанию",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(4.dp))
+                CallsRadioOptionRow(
+                    label = "Фронтальная камера",
+                    subtitle = if (hasFrontCamera) "Доступна на устройстве" else "Не обнаружена (выбор сохранён)",
+                    selected = cameraValue == "front",
+                    onSelect = {
+                        cameraValue = "front"
+                        scope.launch { app.prefs.setCallsCameraDefault("front") }
+                    },
+                )
+                CallsRadioOptionRow(
+                    label = "Основная камера",
+                    subtitle = if (hasBackCamera) "Доступна на устройстве" else "Не обнаружена (выбор сохранён)",
+                    selected = cameraValue == "back",
+                    onSelect = {
+                        cameraValue = "back"
+                        scope.launch { app.prefs.setCallsCameraDefault("back") }
+                    },
+                )
+            }
+        }
+
+        // Шумодав по умолчанию (З2): AUTO/SIMPLE/NEURAL, default NEURAL.
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Шумоподавление по умолчанию",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "Значения web-клиента (noise_cancellation_mode); по умолчанию NEURAL",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                for (opt in CALLS_NOISE_OPTIONS) {
+                    val optValue = opt.first
+                    CallsRadioOptionRow(
+                        label = opt.second,
+                        subtitle = null,
+                        selected = noiseValue == optValue,
+                        onSelect = {
+                            noiseValue = optValue
+                            scope.launch { app.prefs.setCallsNoiseCancelDefault(optValue) }
+                        },
+                    )
                 }
             }
         }
