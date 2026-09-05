@@ -12694,8 +12694,15 @@ class VKApiClient(
      * Расширенная версия usersGet для ProfileScreen.
      * Audit #40: переименована из usersGetFull в usersGetFullExtended,
      * чтобы избежать конфликта перегрузок с базовой версией выше.
+     * #PROFILE-SNAP (2026-09-05): fields расширен до веб-набора снапшотов
+     * «Профиль» (кластеры mutual/owner_state/stories_archive_count/buttons/
+     * third_party_buttons/permissions/last_name-инфлекции — инвентарь §2.0/§4.1,
+     * план §4 П-0). Парсинг ниже НЕ менялся: новые поля приходят в ответе и
+     * ждут расширения UserProfile на П-1/П-2; счётчики clips приходят внутри
+     * counters (уже запрошен). extraFields — опциональное расширение списка
+     * вызывающим (дефолт null, существующие вызовы не ломает).
      */
-    suspend fun usersGetFullExtended(userId: Long? = null): UserProfile? {
+    suspend fun usersGetFullExtended(userId: Long? = null, extraFields: String? = null): UserProfile? {
         if (isOffline()) return null
         // #30i (profile fix): убрана filterUsersFields — могла ломать загрузку.
         val args = mutableMapOf(
@@ -12710,7 +12717,18 @@ class VKApiClient(
                 "cover,maiden_name,nickname,photo_200,photo_400,photo_avg_color,photo_id," +
                 "photo_max_size,profile_buttons,service_description,is_followers_mode_on," +
                 "followers_count,home_phone,mobile_phone,photo_50,photo_100,online,last_seen," +
-                "status,verified,counters",
+                "status,verified,counters," +
+                // #PROFILE-SNAP (2026-09-05): веб-набор (инвентарь §2.0/§4.1,
+                // план §4 П-0) — кластеры mutual/clips/buttons/permissions,
+                // добавлены без разрушения парсинга (модели расширяются на П-1/П-2).
+                "mutual,owner_state,stories_archive_count,buttons,third_party_buttons," +
+                "can_invite_to_chats,can_see_wishes,can_ban,can_see_gifts,can_call," +
+                "can_send_friend_request,can_see_all_posts,can_subscribe_stories," +
+                "is_subscribed_stories,blacklisted,blacklisted_by_me,deactivated," +
+                "no_index,lists,image_status,is_sber_verified,is_tinkoff_verified," +
+                "is_esia_verified,last_name_acc,last_name_dat,last_name_gen," +
+                "last_name_ins,can_post,can_write_private_message" +
+                (if (extraFields.isNullOrBlank()) "" else ",$extraFields"),
         )
         if (userId != null) args["user_ids"] = userId.toString()
         val json = call("users.get", args) ?: return null
@@ -14949,6 +14967,541 @@ class VKApiClient(
         val key = "clips_dislike_${ownerId}_$videoId"
         val code = "var r = API.storage.set({key:\"$key\", value:\"0\"}); return r;"
         val json = call("execute", mapOf("code" to code)) ?: return false
+        return json.has("response")
+    }
+
+    // ═══ #PROFILE-SNAP (2026-09-05): Этап П-0 плана «профиль.перенос.план.md» —
+    // API-фундамент Профиля (§2 MISS-методы, БЕЗ UI). Параметры выверены по
+    // доказательной базе профиль.снапшоты.инвентарь.md (§2 + Приложение А):
+    // бандлы pageProfile.a8b48616.js / core_spa.533b21ec.js / common.83dfafe6.js
+    // и apiPrefetchCache страницы профиля. Журнал блока (19 методов):
+    // photosGetAll, photosGetAlbumsCount, photosPhotoFeedGet,
+    // photosGetOwnerCoverPhotoUploadServer, photosSaveOwnerCoverPhoto,
+    // photosRemoveOwnerCoverPhoto, articlesGetOwnerPublished,
+    // narrativesGetFromOwner, giftsGet, faveAddUser, faveRemoveUser,
+    // usersGetSubscriptions, usersReport, friendsDeleteSubscriber, statusSet,
+    // statusGet, accountGetProfileInfo, accountSaveProfileInfo, wallMarkAsSpam.
+    // Стиль парсинга — блока #CALLS-SNAP (getObj/getArr/safeInt/safeLong/safeString,
+    // safe-списки, try/catch + AppLog.e), но по #NULL-EXPLICIT в новом коде без
+    // null-safe-операторов, элвиса и null-assert — явные if-проверки с захватом
+    // локального val.
+    // I/O вне main обеспечивают вызывающие корутины (#ANR-MAIN-IO). Возвраты —
+    // JsonObject/List<JsonObject>/Boolean/Int/String, резолвятся в :app.
+    // BuildStamp НЕ затрагивается (профиль его не трогает по плану).
+
+    /** #PROFILE-SNAP: безопасный список JsonObject из JsonArray (элементы
+     *  не-объекты отбрасываются, как в takeIf-варианте #CALLS-SNAP, но с
+     *  явным if по #NULL-EXPLICIT). */
+    private fun profileSnapObjList(arr: JsonArray): List<JsonObject> {
+        val out = ArrayList<JsonObject>()
+        for (el in arr) {
+            if (el.isJsonObject) out.add(el.asJsonObject)
+        }
+        return out
+    }
+
+    /** #PROFILE-SNAP: ответ VK, когда response — список (users.get-форма) или
+     *  объект с items[]: возвращает унифицированный список JsonObject либо null. */
+    private fun profileSnapResponseItems(json: JsonObject): List<JsonObject>? {
+        val respEl = json.get("response")
+        if (respEl == null || respEl.isJsonNull) return null
+        if (respEl.isJsonArray) return profileSnapObjList(respEl.asJsonArray)
+        if (!respEl.isJsonObject) return null
+        val resp = respEl.asJsonObject
+        val items = getArr(resp, "items")
+        if (items == null) return null
+        return profileSnapObjList(items)
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): photos.getAll — все фото владельца (вкладка
+     * «Фото», инвентарь §2.0/§2.2, MISS подтверждён Приложением А).
+     *
+     * VK API: photos.getAll { owner_id, count, offset, photo_sizes, extended,
+     * skip_hidden }. Бандл шлёт {owner_id, photo_sizes:1, extended:1,
+     * skip_hidden:1} (обёртка j() в pageProfile, count не передаёт — серверный
+     * дефолт); инвентарь §2.2 фиксирует {owner_id, count, offset} для
+     * постраничной прокрутки вкладки. Объединено: count=0 означает «не
+     * отправлять» (web-форма), флаги включены по бандлу.
+     */
+    suspend fun photosGetAll(
+        ownerId: Long,
+        count: Int = 0,
+        offset: Int = 0,
+        photoSizes: Boolean = true,
+        extended: Boolean = true,
+        skipHidden: Boolean = true,
+    ): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "offset" to offset.toString(),
+            "photo_sizes" to if (photoSizes) "1" else "0",
+            "extended" to if (extended) "1" else "0",
+            "skip_hidden" to if (skipHidden) "1" else "0",
+        )
+        if (count > 0) args["count"] = count.toString()
+        val json = call("photos.getAll", args)
+        if (json == null) return emptyList()
+        return try {
+            val items = profileSnapResponseItems(json)
+            if (items == null) emptyList() else items
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosGetAll parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): photos.getAlbumsCount — счётчик альбомов
+     * (модуль «Альбомы», инвентарь §2.0/§2.2). VK API:
+     * photos.getAlbumsCount { user_id, need_system:1 } — ПАРАМЕТРЫ ТОЧНО из
+     * apiPrefetchCache страницы профиля. response — примитив-число.
+     */
+    suspend fun photosGetAlbumsCount(userId: Long, needSystem: Boolean = true): Int {
+        if (isOffline()) return 0
+        val args = mutableMapOf(
+            "user_id" to userId.toString(),
+            "need_system" to if (needSystem) "1" else "0",
+        )
+        val json = call("photos.getAlbumsCount", args)
+        if (json == null) return 0
+        return try {
+            val resp = json.get("response")
+            if (resp == null || !resp.isJsonPrimitive) 0 else safeInt(resp)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosGetAlbumsCount parse error", e)
+            0
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): photos.photoFeedGet — фото-лента владельца
+     * (вкладка «Фото», инвентарь §2.0/§2.2). VK API:
+     * photos.photoFeedGet { owner_id, extended:1, photo_sizes:1, count:6 } —
+     * ПАРАМЕТРЫ ТОЧНО из бандла pageProfile (обёртка d(), case "photos").
+     * response при extended=1 содержит count/items/profiles — возвращаем
+     * сырым: экран рисует и фото, и авторов (как решено для звонковых
+     * response-объектов с count/secret).
+     */
+    suspend fun photosPhotoFeedGet(ownerId: Long, count: Int = 6): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "extended" to "1",
+            "photo_sizes" to "1",
+            "count" to count.toString(),
+        )
+        val json = call("photos.photoFeedGet", args)
+        if (json == null) return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosPhotoFeedGet parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): photos.getOwnerCoverPhotoUploadServer — шаг 1
+     * upload-цепочки обложки профиля (инвентарь §2.2; открывает Этапы П-1/П-3).
+     *
+     * VK API: photos.getOwnerCoverPhotoUploadServer { group_id?, crop_x,
+     * crop_y, crop_width, crop_height, upload_v2 }. Бандл для СВОЕЙ обложки
+     * шлёт {crop_y, crop_x, crop_width, crop_height, upload_v2:1}
+     * (uploadCoverToServer в pageProfile); owner-контекст берётся из токена,
+     * group_id — вариант для сообщества.
+     *
+     * @return upload_url из response.upload_url или null.
+     */
+    suspend fun photosGetOwnerCoverPhotoUploadServer(
+        groupId: Long? = null,
+        cropX: Int? = null,
+        cropY: Int? = null,
+        cropWidth: Int? = null,
+        cropHeight: Int? = null,
+        uploadV2: Boolean = true,
+    ): String? {
+        if (isOffline()) return null
+        val args = mutableMapOf<String, String>()
+        if (groupId != null) args["group_id"] = groupId.toString()
+        if (cropX != null) args["crop_x"] = cropX.toString()
+        if (cropY != null) args["crop_y"] = cropY.toString()
+        if (cropWidth != null) args["crop_width"] = cropWidth.toString()
+        if (cropHeight != null) args["crop_height"] = cropHeight.toString()
+        if (uploadV2) args["upload_v2"] = "1"
+        val json = call("photos.getOwnerCoverPhotoUploadServer", args)
+        if (json == null) return null
+        return try {
+            val resp = getObj(json, "response")
+            if (resp == null) null else safeString(resp.get("upload_url"))
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosGetOwnerCoverPhotoUploadServer parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): photos.saveOwnerCoverPhoto — шаг 2
+     * upload-цепочки обложки (инвентарь §2.2).
+     *
+     * VK API: photos.saveOwnerCoverPhoto { owner_id?/group_id?, photo, hash }
+     * — классическая форма; бандл (saveCover/uploadCoverToServer в
+     * pageProfile) использует v2-форму {crop_*, upload_v2:1, response_json},
+     * где response_json = JSON-строка результата multipart-загрузки файла на
+     * upload_url (fieldName "file"). Обе формы поддержаны: передаётся либо
+     * пара photo+hash, либо responseJson. Успех = есть response (детали
+     * crop VK возвращает не всегда; UI перечитает users.get fields=cover).
+     */
+    suspend fun photosSaveOwnerCoverPhoto(
+        photo: String? = null,
+        hash: String? = null,
+        responseJson: String? = null,
+        groupId: Long? = null,
+        cropX: Int? = null,
+        cropY: Int? = null,
+        cropWidth: Int? = null,
+        cropHeight: Int? = null,
+        uploadV2: Boolean = false,
+    ): Boolean {
+        if (isOffline()) return false
+        if (responseJson == null && (photo == null || hash == null)) return false
+        val args = mutableMapOf<String, String>()
+        if (groupId != null) args["group_id"] = groupId.toString()
+        if (photo != null) args["photo"] = photo
+        if (hash != null) args["hash"] = hash
+        if (responseJson != null) args["response_json"] = responseJson
+        if (cropX != null) args["crop_x"] = cropX.toString()
+        if (cropY != null) args["crop_y"] = cropY.toString()
+        if (cropWidth != null) args["crop_width"] = cropWidth.toString()
+        if (cropHeight != null) args["crop_height"] = cropHeight.toString()
+        if (uploadV2) args["upload_v2"] = "1"
+        val json = call("photos.saveOwnerCoverPhoto", args)
+        if (json == null) return false
+        return json.has("response")
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): photos.removeOwnerCoverPhoto — удалить
+     * обложку профиля (инвентарь §2.2, pageProfile 1+1+1). VK API:
+     * photos.removeOwnerCoverPhoto { group_id? } — бандл шлёт ПУСТОЙ объект
+     * для своей обложки (обёртка y(): (0,s.FH)("photos.removeOwnerCoverPhoto",{})),
+     * group_id — вариант для сообщества.
+     */
+    suspend fun photosRemoveOwnerCoverPhoto(groupId: Long? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf<String, String>()
+        if (groupId != null) args["group_id"] = groupId.toString()
+        val json = call("photos.removeOwnerCoverPhoto", args)
+        if (json == null) return false
+        return json.has("response")
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): articles.getOwnerPublished — опубликованные
+     * статьи владельца (вкладка «Статьи», инвентарь §2.0/§2.5). VK API:
+     * articles.getOwnerPublished { owner_id, count:3 } — ПАРАМЕТРЫ ТОЧНО из
+     * бандла pageProfile (обёртка d(), case "articles").
+     */
+    suspend fun articlesGetOwnerPublished(ownerId: Long, count: Int = 3): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "count" to count.toString(),
+        )
+        val json = call("articles.getOwnerPublished", args)
+        if (json == null) return emptyList()
+        return try {
+            val items = profileSnapResponseItems(json)
+            if (items == null) emptyList() else items
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "articlesGetOwnerPublished parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): narratives.getFromOwner — рассказы владельца
+     * (вкладка «Рассказы», инвентарь §2.0/§2.5). VK API:
+     * narratives.getFromOwner { owner_id, limit:9 } — ПАРАМЕТРЫ ТОЧНО из
+     * бандла pageProfile (обёртка d(), case "narratives": limit, НЕ count).
+     */
+    suspend fun narrativesGetFromOwner(ownerId: Long, limit: Int = 9): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "limit" to limit.toString(),
+        )
+        val json = call("narratives.getFromOwner", args)
+        if (json == null) return emptyList()
+        return try {
+            val items = profileSnapResponseItems(json)
+            if (items == null) emptyList() else items
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "narrativesGetFromOwner parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): gifts.get — подарки профиля (модуль
+     * «Подарки», инвентарь §2.0/§2.5). VK API: gifts.get { user_id, count:6 }
+     * — из бандла pageProfile (eB(): (0,ec.FH)("gifts.get",{user_id:e.id,
+     * count:6}); при флаге vas_gifts_service_lists web зовёт gifts.getAlias —
+     * оставляем базовый gifts.get). Не путать с существующим giftsGetCatalog —
+     * тот отдаёт каталог для отправки.
+     */
+    suspend fun giftsGet(userId: Long, count: Int = 6): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "user_id" to userId.toString(),
+            "count" to count.toString(),
+        )
+        val json = call("gifts.get", args)
+        if (json == null) return emptyList()
+        return try {
+            val items = profileSnapResponseItems(json)
+            if (items == null) emptyList() else items
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "giftsGet parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): fave.addUser — добавить пользователя в
+     * закладки («В избранное» на чужом профиле, инвентарь §2.5, план П-2).
+     * VK API: fave.addUser { user_id } — ПАРАМЕТР ТОЧНО из бандла pageProfile
+     * (onIsFavoriteChange: o = e ? "fave.addUser" : "fave.removeUser",
+     * (0,ec.FH)(o,{user_id:s})).
+     */
+    suspend fun faveAddUser(userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("fave.addUser", mapOf("user_id" to userId.toString()))
+        if (json == null) return false
+        return json.has("response")
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): fave.removeUser — убрать пользователя из
+     * закладок (снятие «В избранном», инвентарь §2.5, план П-2).
+     * VK API: fave.removeUser { user_id } — пара к faveAddUser (тот же
+     * onIsFavoriteChange в бандле pageProfile).
+     */
+    suspend fun faveRemoveUser(userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("fave.removeUser", mapOf("user_id" to userId.toString()))
+        if (json == null) return false
+        return json.has("response")
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): users.getSubscriptions — подписки
+     * пользователя (модуль «Подписки», инвентарь §2.0/§2.1/§2.6). VK API:
+     * users.getSubscriptions { user_id, fields, count:5, extended:1 } —
+     * ПАРАМЕТРЫ ТОЧНО из apiPrefetchCache страницы профиля
+     * (fields:"photo_200,photo_100,description,status,is_nft").
+     * response при extended=1 = {groups:{count,items}, users:{count,items}} —
+     * возвращаем сырым: разделение группы/юзеры решает экран (П-2).
+     */
+    suspend fun usersGetSubscriptions(
+        userId: Long,
+        count: Int = 5,
+        offset: Int = 0,
+        fields: String = "photo_200,photo_100,description,status,is_nft",
+    ): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "user_id" to userId.toString(),
+            "fields" to fields,
+            "count" to count.toString(),
+            "extended" to "1",
+        )
+        if (offset > 0) args["offset"] = offset.toString()
+        val json = call("users.getSubscriptions", args)
+        if (json == null) return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "usersGetSubscriptions parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): users.report — пожаловаться на пользователя
+     * («Пожаловаться» на чужом профиле, план П-2). VK API:
+     * users.report { user_id, type, comment? }; type: porn|spam|fraud|insult|
+     * advertisement|drug|child_porn|migration_extremism|migration_fraud|
+     * migration_illegal|extremism|weapons|suicide|animal_cruelty.
+     * Литеральной обёртки в снапшотах нет (меню репорта web-al_страницы),
+     * параметры — по открытому VK API (соседи по стилю: usersSubscribe).
+     * response: 1 = жалоба принята.
+     */
+    suspend fun usersReport(userId: Long, type: String, comment: String? = null): Boolean {
+        if (isOffline()) return false
+        if (type.isBlank()) return false
+        val args = mutableMapOf(
+            "user_id" to userId.toString(),
+            "type" to type,
+        )
+        if (comment != null) args["comment"] = comment
+        val json = call("users.report", args)
+        if (json == null) return false
+        return safeInt(json.get("response")) == 1
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): friends.deleteSubscriber — убрать
+     * подписчика (меню подписчика на своём профиле, инвентарь §2.6, план П-2).
+     * VK API: friends.deleteSubscriber { subscriber_id } — ИМЯ ПАРАМЕТРА ТОЧНО
+     * из бандла pageProfile (обёртка m({id}): (0,s.FH)
+     * ("friends.deleteSubscriber",{subscriber_id:e}); НЕ user_id, как у
+     * friends.delete).
+     */
+    suspend fun friendsDeleteSubscriber(subscriberId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("friends.deleteSubscriber", mapOf("subscriber_id" to subscriberId.toString()))
+        if (json == null) return false
+        return json.has("response")
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): status.set — установить статус («нажмите
+     * сюда, чтобы добавить статус», инвентарь §1.1.1/§2.1, план П-1).
+     * VK API: status.set { text } — пустая строка снимает статус.
+     * response: 1 = успех.
+     */
+    suspend fun statusSet(text: String): Boolean {
+        if (isOffline()) return false
+        val json = call("status.set", mapOf("text" to text))
+        if (json == null) return false
+        return safeInt(json.get("response")) == 1
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): status.get — текущий статус (инвентарь
+     * §2.1/§2.7; отдельный метод нужен для П-1/П-2 — web берёт статус из
+     * users.get fields=status, литеральной обёртки status.get в снапшотах нет).
+     * VK API: status.get { user_id?, group_id? } → response = {text} (+ id
+     * при наличии прикреплённого объекта).
+     */
+    suspend fun statusGet(userId: Long? = null, groupId: Long? = null): String? {
+        if (isOffline()) return null
+        val args = mutableMapOf<String, String>()
+        if (userId != null) args["user_id"] = userId.toString()
+        if (groupId != null) args["group_id"] = groupId.toString()
+        val json = call("status.get", args)
+        if (json == null) return null
+        return try {
+            val resp = getObj(json, "response")
+            if (resp == null) null else safeString(resp.get("text"))
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statusGet parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): account.getProfileInfo — данные профиля для
+     * редактирования (инвентарь §2.7, кэш-метод бандла core_spa; план П-3).
+     * VK API: account.getProfileInfo {} → response = {first_name, last_name,
+     * screen_name, bdate, city, country, sex, status, occupation, activities,
+     * interests, music, movies, tv, books, games, relation, personal, ...}.
+     * Возвращаем сырым: экран редактирования (П-3) читает только нужное.
+     */
+    suspend fun accountGetProfileInfo(): JsonObject? {
+        if (isOffline()) return null
+        val json = call("account.getProfileInfo", emptyMap())
+        if (json == null) return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "accountGetProfileInfo parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): account.saveProfileInfo — сохранить поля
+     * профиля (инвентарь §2.7, план П-3; литеральной обёртки в снапшотах нет —
+     * web правит через al_settings.php, нативный путь — открытый VK API).
+     * VK API: account.saveProfileInfo { first_name?, last_name?, maiden_name?,
+     * screen_name?, bdate?, bdate_visibility?, home_town?, relation?, status?,
+     * city?, country?, sex?, occupation?, activities?, interests?, music?,
+     * movies?, tv?, books?, games? }. response = {changed:1} либо
+     * {captcha_needed:1, captcha_sid, ...} — возвращаем сырым, captcha-ретрай
+     * уже умеет callInternal.
+     */
+    suspend fun accountSaveProfileInfo(
+        firstName: String? = null,
+        lastName: String? = null,
+        maidenName: String? = null,
+        screenName: String? = null,
+        bdate: String? = null,
+        bdateVisibility: Int? = null,
+        homeTown: String? = null,
+        relation: Int? = null,
+        status: String? = null,
+        cityId: Int? = null,
+        countryId: Int? = null,
+        sex: Int? = null,
+        occupation: String? = null,
+        activities: String? = null,
+        interests: String? = null,
+        music: String? = null,
+        movies: String? = null,
+        tv: String? = null,
+        books: String? = null,
+        games: String? = null,
+    ): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf<String, String>()
+        if (firstName != null) args["first_name"] = firstName
+        if (lastName != null) args["last_name"] = lastName
+        if (maidenName != null) args["maiden_name"] = maidenName
+        if (screenName != null) args["screen_name"] = screenName
+        if (bdate != null) args["bdate"] = bdate
+        if (bdateVisibility != null) args["bdate_visibility"] = bdateVisibility.toString()
+        if (homeTown != null) args["home_town"] = homeTown
+        if (relation != null) args["relation"] = relation.toString()
+        if (status != null) args["status"] = status
+        if (cityId != null) args["city"] = cityId.toString()
+        if (countryId != null) args["country"] = countryId.toString()
+        if (sex != null) args["sex"] = sex.toString()
+        if (occupation != null) args["occupation"] = occupation
+        if (activities != null) args["activities"] = activities
+        if (interests != null) args["interests"] = interests
+        if (music != null) args["music"] = music
+        if (movies != null) args["movies"] = movies
+        if (tv != null) args["tv"] = tv
+        if (books != null) args["books"] = books
+        if (games != null) args["games"] = games
+        val json = call("account.saveProfileInfo", args)
+        if (json == null) return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "accountSaveProfileInfo parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (2026-09-05): wall.markAsSpam — отметить пост спамом
+     * («Действия» поста → «Пожаловаться/Спам», инвентарь §2.1, бандл
+     * wall.7aca715a.js; план П-1). VK API: wall.markAsSpam { owner_id, post_id }.
+     */
+    suspend fun wallMarkAsSpam(ownerId: Long, postId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "wall.markAsSpam",
+            mapOf(
+                "owner_id" to ownerId.toString(),
+                "post_id" to postId.toString(),
+            ),
+        )
+        if (json == null) return false
         return json.has("response")
     }
 
