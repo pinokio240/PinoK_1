@@ -523,6 +523,24 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setMsgFoldersData(v: String)             = put(Keys.MSG_FOLDERS_DATA, v)
     /** Fix #276: JSON-массив peer_id закреплённых диалогов (в порядке). */
     suspend fun setPinnedConvsData(v: String)            = put(Keys.PINNED_CONVS_DATA, v)
+
+    // ─── #CALLS-SNAP (2026-09-05): Этап А3 плана «звонки.перенос.план.md» ───
+    // Конфигурация сайдбара раздела «Звонки» («Настройка пунктов меню»):
+    // CSV "TAB:1,TAB:0" в порядке отображения (TAB — имя CallsTab из
+    // :feature:calls); пустая строка = конфигурация по умолчанию.
+    // Отдельный ключ ВНЕ Snapshot — чтобы не расширять большой data-класс
+    // (FeedScreen передаёт initial-копию целиком, урок themeMonetHybrid):
+    // читается отдельным флоу, пишется сеттером.
+
+    /** #CALLS-SNAP: конфигурация сайдбара «Звонков» (CSV, "" = дефолт). */
+    val callsSidebarCfg: Flow<String> = ds.data.map { p ->
+        // NULL-ЯВНО: отсутствие ключа — тривиальный фолбэк на дефолт
+        val raw = p[Keys.CALLS_SIDEBAR_CFG]
+        if (raw == null) "" else raw
+    }
+
+    /** #CALLS-SNAP: сохранить конфигурацию сайдбара «Звонков». */
+    suspend fun setCallsSidebarCfg(v: String)            = put(Keys.CALLS_SIDEBAR_CFG, v)
     /** P3.7: bubble-less дизайн — flat layout сообщений. */
     suspend fun setMsgBubbleless(v: Boolean)              = put(Keys.MSG_BUBBLELESS, v)
     /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий. */
@@ -1108,6 +1126,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val MSG_FOLDERS_DATA      = stringPreferencesKey("msg_folders_data")
         // Fix #276: локальное хранилище закреплённых диалогов (JSON array of peer_id).
         val PINNED_CONVS_DATA     = stringPreferencesKey("pinned_convs_data")
+        // #CALLS-SNAP (2026-09-05): конфигурация сайдбара «Звонков» (Этап А3)
+        val CALLS_SIDEBAR_CFG     = stringPreferencesKey("calls_sidebar_cfg")
         val MSG_BUBBLELESS        = booleanPreferencesKey("msg_bubbleless")
         // P4.2: LongPoll backfill — persistence ts/pts между сессиями
         val MSG_LP_BACKFILL        = booleanPreferencesKey("msg_lp_backfill")

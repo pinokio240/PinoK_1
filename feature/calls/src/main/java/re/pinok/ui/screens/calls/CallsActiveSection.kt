@@ -16,21 +16,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,10 +39,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import re.pinok.feature.calls.CallsSectionKey
 import re.pinok.feature.calls.LocalCallsDeps
-import re.pinok.feature.calls.CallsDependencies
+import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.util.AppLog
 
 private data class ActiveCallItem(
@@ -56,59 +58,58 @@ private data class ActiveCallItem(
     val photo: String?,
 )
 
+/**
+ * #CALLS-SNAP (2026-09-05): Этап А2/А3 — секция «Активные» оживлена: данные
+ * из репозитория раздела (CallsSectionRepository.active →
+ * messagesGetCurrentCalls), кнопки карточки РЕАЛЬНЫЕ:
+ *  - «Вернуться» — переход в звонок через существующий CallStarter-паттерн
+ *    хоста (SovaNavHost onNavigateToCall → starter.startCall(peerId, video));
+ *  - «Завершить» — vchat.hangupConversation{reason:"hungup"} тем же
+ *    fallback-путём, что «Отклонить» в CallScreen (ensureCallsSessionKey →
+ *    HTTP hangup, I/O на Dispatchers.Default), затем invalidateOnCallFinished()
+ *    (#CALLS-SNAP) — активные/история/пропущенные перечитываются.
+ */
 @Composable
 fun CallsActiveSection(onNavigateToCall: (Long) -> Unit) {
-    var items by remember { mutableStateOf<List<ActiveCallItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf(false) }
-
-    fun load() {
-        loading = true
-        error = false
-    }
-
-    // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; он
-    // запрещён внутри try (K2: "Try catch is not supported around composable
-    // function invocations") и внутри LaunchedEffect (не compose-контекст).
-    // Читаем на compose-уровне: отсутствие провайдера = fail-fast при
-    // композиции (замысел staticCompositionLocalOf), а не глотается catch.
     val deps = LocalCallsDeps.current
+    val repo = LocalCallsSectionRepository.current
+    val scope = rememberCoroutineScope()
+    val state by repo.active.collectAsState()
 
     LaunchedEffect(Unit) {
-        try {
-            val raw = deps.apiClient.messagesGetCurrentCalls()
-            items = raw.mapNotNull { it.parseActiveCallItem() }
-            AppLog.i("CallsActiveSection", "loaded ${items.size} items")
-        } catch (e: Exception) {
-            AppLog.e("CallsActiveSection", "load error", e)
-            error = true
-        } finally {
-            loading = false
+        AppLog.i("CallsActiveSection", "ensure loaded (кэш: CONTENT не перезапрашивается)")
+        repo.refresh(CallsSectionKey.ACTIVE, force = false)
+    }
+
+    fun finishCall(item: ActiveCallItem) {
+        scope.launch {
+            val sk = deps.ensureCallsSessionKey(force = false)
+            if (sk == null) {
+                AppLog.w("CallsActiveSection", "Завершить: нет sessionKey — hangup не отправлен (${item.callId})")
+            } else {
+                try {
+                    withContext(Dispatchers.Default) {
+                        deps.apiClient.vchatHangupConversation(item.callId, sk, "hungup")
+                    }
+                    AppLog.i("CallsActiveSection", "hangup отправлен: ${item.callId}")
+                } catch (e: Exception) {
+                    AppLog.e("CallsActiveSection", "hangup failed: ${item.callId}", e)
+                }
+            }
+            // #CALLS-SNAP: событийная инвалидация по завершении звонка
+            repo.invalidateOnCallFinished()
         }
     }
 
-    when {
-        loading -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        }
-        error -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "Ошибка загрузки",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { load() }) {
-                        Text("Повторить")
-                    }
-                }
-            }
-        }
-        items.isEmpty() -> {
+    CallsSectionScaffold(
+        state = state,
+        emptyText = "Нет активных звонков",
+        onRetry = { repo.refresh(CallsSectionKey.ACTIVE, force = true) },
+        modifier = Modifier.testTag("active_section"),
+    ) { raw ->
+        val items = remember(raw) { raw.mapNotNull { it.parseActiveCallItem() } }
+        if (items.isEmpty()) {
+            // Сырой список не пуст, но строки не распарсились — честный empty.
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     "Нет активных звонков",
@@ -116,13 +117,16 @@ fun CallsActiveSection(onNavigateToCall: (Long) -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        else -> {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize().padding(vertical = 4.dp),
+            ) {
                 items(items, key = { it.callId }) { item ->
                     ActiveCallItemCard(
                         item = item,
-                        onClick = { onNavigateToCall(item.peerId) },
+                        onReturn = { onNavigateToCall(item.peerId) },
+                        onFinish = { finishCall(item) },
                         modifier = Modifier.testTag("active_call_item"),
                     )
                 }
@@ -134,7 +138,8 @@ fun CallsActiveSection(onNavigateToCall: (Long) -> Unit) {
 @Composable
 private fun ActiveCallItemCard(
     item: ActiveCallItem,
-    onClick: () -> Unit,
+    onReturn: () -> Unit,
+    onFinish: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -189,7 +194,16 @@ private fun ActiveCallItemCard(
                     )
                 }
             }
-            IconButton(onClick = onClick) {
+            // «Вернуться» — CallStarter-путь хоста (переход в звонок)
+            IconButton(onClick = onReturn, modifier = Modifier.testTag("active_call_return")) {
+                Icon(
+                    Icons.Filled.Call,
+                    contentDescription = "Вернуться в звонок",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            // «Завершить» — vchat.hangupConversation(reason="hungup")
+            IconButton(onClick = onFinish, modifier = Modifier.testTag("active_call_finish")) {
                 Icon(
                     Icons.Filled.CallEnd,
                     contentDescription = "Завершить",

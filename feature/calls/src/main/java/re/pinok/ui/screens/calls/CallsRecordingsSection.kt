@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -24,20 +23,17 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,7 +43,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.JsonObject
-import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.calls.CallsSectionKey
+import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 import re.pinok.util.toRelativeTime
@@ -60,59 +57,33 @@ private data class RecordingItem(
     val timeAgo: String,
 )
 
+/**
+ * #CALLS-SNAP (2026-09-05): Этап А2/А3 — секция «Записи звонков» оживлена:
+ * реальный список messages.getCallRecordings через репозиторий раздела
+ * (CallsSectionRepository.recordings) вместо мёртвого remember{}-феча.
+ * Плеер записи/инкремент просмотров/действия (скачать/копировать/удалить) —
+ * Этап В по плану; кнопки карточки — прежние (лог), честно не имитируют
+ * воспроизведение.
+ */
 @Composable
 fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
-    var items by remember { mutableStateOf<List<RecordingItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf(false) }
-
-    fun load() {
-        loading = true
-        error = false
-    }
-
-    // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; он
-    // запрещён внутри try (K2: "Try catch is not supported around composable
-    // function invocations") и внутри LaunchedEffect (не compose-контекст).
-    // Читаем на compose-уровне: отсутствие провайдера = fail-fast при
-    // композиции (замысел staticCompositionLocalOf), а не глотается catch.
-    val deps = LocalCallsDeps.current
+    val repo = LocalCallsSectionRepository.current
+    val state by repo.recordings.collectAsState()
 
     LaunchedEffect(Unit) {
-        try {
-            val raw = deps.apiClient.messagesGetCallRecordings(30)
-            items = raw.mapNotNull { it.parseRecordingItem() }
-            AppLog.i("CallsRecordingsSection", "loaded ${items.size} items")
-        } catch (e: Exception) {
-            AppLog.e("CallsRecordingsSection", "load error", e)
-            error = true
-        } finally {
-            loading = false
-        }
+        AppLog.i("CallsRecordingsSection", "ensure loaded (кэш: CONTENT не перезапрашивается)")
+        repo.refresh(CallsSectionKey.RECORDINGS, force = false)
     }
 
-    when {
-        loading -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        }
-        error -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "Ошибка загрузки",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { load() }) {
-                        Text("Повторить")
-                    }
-                }
-            }
-        }
-        items.isEmpty() -> {
+    CallsSectionScaffold(
+        state = state,
+        emptyText = "Нет записей звонков",
+        onRetry = { repo.refresh(CallsSectionKey.RECORDINGS, force = true) },
+        modifier = Modifier.testTag("recordings_section"),
+    ) { raw ->
+        val items = remember(raw) { raw.mapNotNull { it.parseRecordingItem() } }
+        if (items.isEmpty()) {
+            // Сырой список не пуст, но строки не распарсились — честный empty.
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     "Нет записей звонков",
@@ -120,11 +91,10 @@ fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        else -> {
+        } else {
             Column(Modifier.fillMaxSize()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -143,7 +113,7 @@ fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
                     columns = GridCells.Fixed(2),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("recordings_grid"),
+                    modifier = Modifier.fillMaxSize().testTag("recordings_grid"),
                 ) {
                     items(items, key = { it.id }) { item ->
                         RecordingItemCard(

@@ -18,20 +18,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,7 +37,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.google.gson.JsonObject
-import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.calls.CallsSectionKey
+import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.util.AppLog
 import re.pinok.util.toRelativeTime
 
@@ -51,71 +49,43 @@ private data class TranscriptItem(
     val preview: String,
 )
 
+/**
+ * #CALLS-SNAP (2026-09-05): Этап А2/А3 — секция «Расшифровки звонков»
+ * оживлена: реальный список calls.getAsrTranscriptions (план §2.2, §1.2 —
+ * «Расшифровки звонков»; прежний феч был messages.getCallTranscriptions и
+ * секция была мёртвой) через репозиторий раздела. Просмотр/правка/удаление
+ * текста расшифровки — Этап В2 по плану; «Открыть» — прежний честный лог.
+ */
 @Composable
 fun CallsTranscriptsSection(onNavigateToCall: (Long) -> Unit) {
-    var items by remember { mutableStateOf<List<TranscriptItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf(false) }
-
-    fun load() {
-        loading = true
-        error = false
-    }
-
-    // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; он
-    // запрещён внутри try (K2: "Try catch is not supported around composable
-    // function invocations") и внутри LaunchedEffect (не compose-контекст).
-    // Читаем на compose-уровне: отсутствие провайдера = fail-fast при
-    // композиции (замысел staticCompositionLocalOf), а не глотается catch.
-    val deps = LocalCallsDeps.current
+    val repo = LocalCallsSectionRepository.current
+    val state by repo.transcripts.collectAsState()
 
     LaunchedEffect(Unit) {
-        try {
-            val raw = deps.apiClient.messagesGetCallTranscriptions(30)
-            items = raw.mapNotNull { it.parseTranscriptItem() }
-            AppLog.i("CallsTranscriptsSection", "loaded ${items.size} items")
-        } catch (e: Exception) {
-            AppLog.e("CallsTranscriptsSection", "load error", e)
-            error = true
-        } finally {
-            loading = false
-        }
+        AppLog.i("CallsTranscriptsSection", "ensure loaded (кэш: CONTENT не перезапрашивается)")
+        repo.refresh(CallsSectionKey.TRANSCRIPTS, force = false)
     }
 
-    when {
-        loading -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        }
-        error -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "Ошибка загрузки",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { load() }) {
-                        Text("Повторить")
-                    }
-                }
-            }
-        }
-        items.isEmpty() -> {
+    CallsSectionScaffold(
+        state = state,
+        emptyText = "У вас нет расшифровок",
+        onRetry = { repo.refresh(CallsSectionKey.TRANSCRIPTS, force = true) },
+        modifier = Modifier.testTag("transcripts_section"),
+    ) { raw ->
+        val items = remember(raw) { raw.mapNotNull { it.parseTranscriptItem() } }
+        if (items.isEmpty()) {
+            // Сырой список не пуст, но строки не распарсились — честный empty.
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "Нет расшифровок звонков",
+                    "У вас нет расшифровок",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        else -> {
+        } else {
             Column(Modifier.fillMaxSize()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -132,7 +102,7 @@ fun CallsTranscriptsSection(onNavigateToCall: (Long) -> Unit) {
                 }
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("transcripts_list"),
+                    modifier = Modifier.fillMaxSize().testTag("transcripts_list"),
                 ) {
                     items(items, key = { it.id }) { item ->
                         TranscriptItemCard(

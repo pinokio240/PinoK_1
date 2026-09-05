@@ -11,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import re.pinok.feature.calls.LocalCallsDeps
+import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.feature.photos.LocalPhotosDeps
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -735,6 +736,10 @@ class MainActivity : ComponentActivity() {
                             // точка сборки (канон §3.2 Этап В).
                             CompositionLocalProvider(
                                 LocalCallsDeps provides app,
+                                // #CALLS-SNAP (2026-09-05): репозиторий раздела «Звонки»
+                                // (Этап А2 плана «звонки.перенос.план.md») — та же
+                                // единая точка сборки (канон §3.2 Этап В).
+                                LocalCallsSectionRepository provides app.callsSectionRepository,
                                 LocalPhotosDeps provides app,
                             ) {
                             SovaNavHost(

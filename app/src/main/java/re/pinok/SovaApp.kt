@@ -194,6 +194,20 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     override fun getVkUid(): Long = exchangeAuthRepository.userId()
     override fun getAnonymUid(): Long = apiClient.lastAnonymUid()
 
+    /**
+     * #CALLS-SNAP (2026-09-05): репозиторий раздела «Звонки» (Этап А2 плана
+     * «звонки.перенос.план.md») — capability :feature:calls по канону §3.2:
+     * интерфейс CallsSectionRepository в контейнере, эта реализация — в хосте,
+     * публикация CompositionLocal (LocalCallsSectionRepository) — в
+     * MainActivity.setContent рядом с LocalCallsDeps. Лениво: к первому доступу
+     * из UI (композиция после onCreate) apiClient/exchangeAuthRepository
+     * уже инициализированы. scope = appScope (keepAliveScope) — фечи переживают
+     * смену экрана; весь сетевой I/O внутри реализации — Dispatchers.Default.
+     */
+    val callsSectionRepository: re.pinok.calls.CallsSectionRepositoryImpl by lazy {
+        re.pinok.calls.CallsSectionRepositoryImpl(deps = this, scope = appScope)
+    }
+
     /** Забрать pending-событие исходящего звонка (после навигации). */
     fun consumeOutgoingCall() {
         pendingOutgoingCallPeerId = 0L

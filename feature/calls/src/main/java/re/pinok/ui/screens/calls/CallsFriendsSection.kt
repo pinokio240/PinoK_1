@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -51,11 +52,11 @@ fun CallsFriendsSection(onNavigateToCall: (Long) -> Unit) {
     var items by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf(false) }
-
-    fun load() {
-        loading = true
-        error = false
-    }
+    // #CALLS-SNAP (2026-09-05) Этап А4: фикс известного бага «Повторить не
+    // перезагружает» — раньше load() менял только флаги (LaunchedEffect(Unit)
+    // не перезапускался). Теперь кнопка инкрементит retryKey — эффект с
+    // LaunchedEffect(retryKey) реально перезапускает fetch.
+    var retryKey by remember { mutableIntStateOf(0) }
 
     // Task 22 (2026-09-03): чтение LocalCallsDeps — @Composable-вызов; он
     // запрещён внутри try (K2: "Try catch is not supported around composable
@@ -64,7 +65,9 @@ fun CallsFriendsSection(onNavigateToCall: (Long) -> Unit) {
     // композиции (замысел staticCompositionLocalOf), а не глотается catch.
     val deps = LocalCallsDeps.current
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(retryKey) {
+        loading = true
+        error = false
         try {
             val result = deps.apiClient.friendsGetOnline(userId = null)
             items = result
@@ -92,7 +95,7 @@ fun CallsFriendsSection(onNavigateToCall: (Long) -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(16.dp))
-                    Button(onClick = { load() }) {
+                    Button(onClick = { retryKey++ }) {
                         Text("Повторить")
                     }
                 }

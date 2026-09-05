@@ -19,6 +19,27 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -13 (05.09) = #CALLS-SNAP Этап А2+А3+А4 (план «звонки.перенос.план.md»).
+    // А2: capability CallsSectionRepository (интерфейс в :feature:calls,
+    // реализация CallsSectionRepositoryImpl в :app, CompositionLocal в
+    // MainActivity) — StateFlow-состояния 6 списков (история/пропущенные/
+    // записи/расшифровки/запланированные/активные), кэш (CONTENT не
+    // перезапрашивается), in-flight dedupe, событийная инвалидация по
+    // завершении звонка (точка расширения #CALLS-SNAP), весь fetch/парсинг
+    // на Dispatchers.Default (#ANR-MAIN-IO). А3: сайдбар 8 пунктов
+    // (CallsTab 3→8) + «Настройка пунктов меню» (⚙, видимость/порядок,
+    // persist SovaPrefs calls_sidebar_cfg CSV, восстановление при старте);
+    // «Запланировать» шапки больше не «будет доступна позже» — открывает
+    // живой таб «Запланированные» (модалка editCall — Этап Г2). Оживлены
+    // мёртвые секции Home/Active/Scheduled/Recordings/Transcripts — каждая
+    // тянет реальный фасадный метод; «Повторить» реально перезапускает
+    // fetch (баг «retry менял только флаги» устранён через репозиторий/
+    // retryKey). А4: общий вид строки-кластера CallsClusterRow (статусы
+    // Завершённый/Пропущенный/Отменённый/Групповой · длительность ·
+    // сегодня/вчера/дата) и общий паттерн CallsSectionScaffold
+    // (loading/error/empty+Повторить). «Завершить» на активном звонке —
+    // vchat.hangupConversation(reason="hungup") + invalidateOnCallFinished.
+    // VKApiClient/CallScreen/WebRtcEngine НЕ тронуты; фасад CallsApi не менялся.
     // -12 (04.09) = #CALLS-SNAP Этап А1 (план «звонки.перенос.план.md»): фасад
     // CallsApi расширен волнами 1+2 (§2.1–§2.4) на 31 член (17→48, только
     // добавление; 8 членов CallsDependencies не тронуты). VKApiClient: +27
@@ -102,5 +123,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.04-12"
+    const val STAMP: String = "calls-2026.09.05-13"
 }
