@@ -60,8 +60,13 @@ import re.pinok.util.toDurationString
  * recordIds — числовые id записей кластера для calls.deleteHistoryRecords /
  * calls.deleteGroupHistoryRecords; canRemove=false — хотя бы одна запись без
  * распознанного числового id (пункт «Убрать из списка» честно отключается).
+ *
+ * Public (без internal): тип в публичной сигнатуре CallsClusterRow
+ * (cluster/onRemove/onClear) — internal-экспозиция = ошибка компиляции
+ * (сборка юзера, «'public' function exposes its 'internal' parameter type
+ * 'CallCluster'»).
  */
-internal data class CallCluster(
+data class CallCluster(
     val key: String,
     val peerId: Long,
     val name: String,

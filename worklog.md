@@ -6904,3 +6904,15 @@ Work Log:
 
 Stage Summary:
 - Поручение «документация + документация внедрения» закрыто полностью: план + 2 реверса + 6 этапных доков (утерянный фрагмент) + сводный итог (этот коммит). Остаток — ЖИВАЯ приёмка юзером по чек-листу (штамп calls-2026.09.06-3) и Этапы Б/В null-политики звонковых легаси-файлов после успешного теста.
+---
+Task ID: CALLS-FIX-COMPILE-4 (сборка юзера после волн 1–6 — компиляционные ошибки :feature:calls)
+Agent: Z.ai Code (Sergey)
+Task: разбор лога «e: ...compileDebugKotlin» (12 ошибок) и фикс; сквозная приёмка дополнена проверками семантики (импорты/типы/видимость), не только скобками
+
+Work Log:
+- 5 корней: (1) isBoolean — свойство JsonPrimitive, НЕ JsonElement — CallParticipantsPanel ×5 → asJsonPrimitive.isBoolean под guard isJsonPrimitive; (2) CallScreen:713 — nullable joinSession без смарт-каста через decoded → явная if (s != null) (#NULL-EXPLICIT, без !! и ?.); (3) internal CallCluster в публичной сигнатуре CallsClusterRow (cluster/onRemove/onClear) → тип сделан public (KDoc-пояснение; наружу тип больше нигде не торчит); (4) CallsJoinByLinkDialog:278 — отсутствовал import android.widget.Toast (в CallScreen Toast полностью квалифицированный — не пострадал); (5) IncomingCallScreen:384 — отсутствовал import kotlinx.coroutines.flow.first (prefs.data.first()).
+- Проактивный скан того же класса рисков по ВСЕМ звонковым файлам (компилятор юзера остановился на :feature:calls, :app не проверен): isBoolean/isNumber/isString на JsonElement — других нет (CallChatScreen:866 — jsonPrim() возвращает JsonPrimitive, корректно); Toast без import — других нет; .first() без flow-import — других нет; collectAsState без import — чисто; internal-экспозиция — CallChatScreen/FastChatTileData/CallsFastChatsPanel internal, но :app их не потребляет; CallsSectionRepository/LocalCallsSectionRepository/LocalCallsDeps/CallJoinByLinkHolder/IncomingCallScreen/Banner/CallScreen/CallsMainScreen — public, потребление :app легально.
+- Верификация: string-aware сканер скобок по 6 правленым файлам OK; новые строки без NULL-операторов; BuildStamp → calls-2026.09.06-4 (bump в звонковом коммите).
+
+Stage Summary:
+- fix(calls) закоммичен и запушен (calls-2026.09.06-4): 12 ошибок компиляции закрыты 5 точечными правками, поведение не менялось (сужение типов/импорты/видимость/nullable-guard). Ждём пересборку юзера: если :app выдаст новые ошибки — лог прислать.

@@ -410,16 +410,18 @@ private fun parseCallParticipantsPage(resp: JsonObject): Pair<List<CallParticipa
             if (msEl != null && msEl.isJsonObject) {
                 val ms = msEl.asJsonObject
                 val aEl = ms.get("isAudioEnabled")
-                if (aEl != null && aEl.isJsonPrimitive && aEl.isBoolean) muted = !aEl.asBoolean
+                // isBoolean живёт на JsonPrimitive, НЕ на JsonElement (ошибка компиляции
+                // сборки юзера) — сужаем через asJsonPrimitive под guard isJsonPrimitive.
+                if (aEl != null && aEl.isJsonPrimitive && aEl.asJsonPrimitive.isBoolean) muted = !aEl.asBoolean
                 val vEl = ms.get("isVideoEnabled")
-                if (vEl != null && vEl.isJsonPrimitive && vEl.isBoolean) camOff = !vEl.asBoolean
+                if (vEl != null && vEl.isJsonPrimitive && vEl.asJsonPrimitive.isBoolean) camOff = !vEl.asBoolean
             }
             val mutedEl = p.get("is_muted")
-            if (muted == null && mutedEl != null && mutedEl.isJsonPrimitive && mutedEl.isBoolean) muted = mutedEl.asBoolean
+            if (muted == null && mutedEl != null && mutedEl.isJsonPrimitive && mutedEl.asJsonPrimitive.isBoolean) muted = mutedEl.asBoolean
             val muted2El = p.get("muted")
-            if (muted == null && muted2El != null && muted2El.isJsonPrimitive && muted2El.isBoolean) muted = muted2El.asBoolean
+            if (muted == null && muted2El != null && muted2El.isJsonPrimitive && muted2El.asJsonPrimitive.isBoolean) muted = muted2El.asBoolean
             val videoEl = p.get("is_video")
-            if (camOff == null && videoEl != null && videoEl.isJsonPrimitive && videoEl.isBoolean) camOff = !videoEl.asBoolean
+            if (camOff == null && videoEl != null && videoEl.isJsonPrimitive && videoEl.asJsonPrimitive.isBoolean) camOff = !videoEl.asBoolean
             // Статус/роль — сырые серверные значения (ParticipantStatus/UserRole —
             // Ж0 §2.6; без самодельного словаря, честно как пришло).
             val stEl = p.get("state")

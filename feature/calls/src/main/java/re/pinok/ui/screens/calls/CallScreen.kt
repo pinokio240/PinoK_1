@@ -710,7 +710,9 @@ fun CallScreen(
                 phase = CallPhase.FAILED
             } else {
                 val s = joinSession
-                val idEl = s.paramsJson.get("id")
+                // s==null здесь невозможен (decoded получен из s.paramsJson выше), но
+                // компилятор не смарт-кастит через decoded — явная проверка (#NULL-EXPLICIT).
+                val idEl = if (s != null) s.paramsJson.get("id") else null
                 val convId: String = if (idEl != null && idEl.isJsonPrimitive) idEl.asString else ""
                 if (convId.isBlank()) {
                     AppLog.w("CallScreen", "JOIN_BY_LINK: в ответе нет id conversation — signaling может не зарегистрироваться (живой прогон: Этап И)")
