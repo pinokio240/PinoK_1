@@ -19,6 +19,18 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -1 (06.09) = #CALLS-SNAP Этапы Г+Д (план «звонки.перенос.план.md»), волна-4.
+    // Г: модалки шапки — «Запланировать» CallsScheduleDialog (messagesEditCall,
+    // создание call_id="0"), «Присоединиться по ссылке» CallsJoinByLinkDialog
+    // (getAnonymTokenByLink → joinConversationByLink → CallJoinByLinkHolder →
+    // CallScreen joinByLink), «Создать звонок» CallsCreateCallDialog (поиск
+    // messagesSearchForCallTargets, аудио/видео), действия Scheduled (Начать
+    // сейчас/Редактировать/Удалить); #CALLS-VIDEO-ROUTE: pendingOutgoingCallVideo
+    // читается SovaNavHost → ARG_VIDEO маршрута → CallScreen messagesStartCall
+    // (обрыв video-флага из находки Этапа Б2 устранён). Д: CallChatScreen
+    // (getConversationByCall, Dialog-прецедент записей) + FCPanel на «Главной»
+    // (плитки звонковых чатов, крестик «Убрать чат из списка» = deleteHistoryRecords).
+    // Заглушки шапки (лог-only join, «позже») устранены — no-stub.
     // -14 (05.09) = #CALLS-SNAP Этапы Б+В+З (план «звонки.перенос.план.md»), волна-3.
     // Б: пагинация истории/пропущенных scroll-to-end (offset по 25, append
     // без дублей по callId; VKApiClient отбрасывает pagination_marker —
@@ -150,5 +162,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.05-14"
+    const val STAMP: String = "calls-2026.09.06-1"
 }

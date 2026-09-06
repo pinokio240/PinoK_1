@@ -38,15 +38,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.launch
+import android.widget.Toast
 import re.pinok.data.model.UserProfile
 import re.pinok.feature.calls.CallsSectionKey
 import re.pinok.feature.calls.CallsSectionStatus
@@ -61,6 +65,16 @@ import re.pinok.util.AppLog
  * Кнопки «Создать звонок»/«Присоединиться» открывают существующие диалоги
  * шапки (callback'и CallsMainScreen); «Показать всех» → таб «Позвонить
  * друзьям». Промо-баннеры «залы»/«vmoji» — прежние (§1.2).
+ *
+ * #CALLS-SNAP (2026-09-05): Этап Д — FCPanel (панель быстрых звонковых
+ * чатов, REV-UI §1.5) над «Последними звонками»: плитки последних звонковых
+ * чатов из HISTORY-состояния репозитория (CallChatPanel.kt); тап по плитке —
+ * CallChatScreen (полноэкранный Dialog, callsGetConversationByCall, маршруты
+ * не добавляются — прецедент CallsRecordingPlayer/CallsTranscriptViewer);
+ * крестик плитки «Убрать чат из списка» — repo.removeFromHistory
+ * (callsDeleteHistoryRecords / callsDeleteGroupHistoryRecords при groupId>0
+ * + форс-обновление списков репозиторием) + честный Toast результата.
+ * Прежние элементы секции не тронуты — панель ДОБАВЛЕНА, не заменяет.
  */
 private const val HOME_PREVIEW_COUNT = 5
 
@@ -73,6 +87,8 @@ fun CallsHomeSection(
 ) {
     val deps = LocalCallsDeps.current
     val repo = LocalCallsSectionRepository.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val historyState by repo.history.collectAsState()
 
     LaunchedEffect(Unit) {
@@ -99,6 +115,11 @@ fun CallsHomeSection(
             friendsLoading = false
         }
     }
+
+    // Этап Д: открытый чат плитки FCPanel (callId записи + данные шапки плитки).
+    var openChatCallId by remember { mutableStateOf<String?>(null) }
+    var openChatTitle by remember { mutableStateOf<String?>(null) }
+    var openChatPhoto by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -135,6 +156,32 @@ fun CallsHomeSection(
             }
         }
 
+        // ─── FCPanel: панель быстрых звонковых чатов (REV-UI §1.5, Этап Д) ───
+        val hs = historyState
+        CallsFastChatsPanel(
+            tiles = remember(hs.items) { buildFastChatTiles(hs.items) },
+            onOpenChat = { tile ->
+                openChatCallId = tile.callId
+                openChatTitle = tile.name
+                openChatPhoto = tile.photo
+            },
+            onRemoveChat = { tile ->
+                scope.launch {
+                    // repo.removeFromHistory: callsDeleteHistoryRecords(ids) либо
+                    // callsDeleteGroupHistoryRecords(ids, groupId) при groupId>0,
+                    // после успеха — форс-обновление HISTORY+MISSED (impl репозитория).
+                    val ids = ArrayList<Long>()
+                    if (tile.recordId > 0L) ids.add(tile.recordId)
+                    val ok = repo.removeFromHistory(ids, tile.groupId)
+                    if (ok) {
+                        Toast.makeText(context, "Чат убран из списка", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Не удалось убрать чат из списка", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+        )
+
         // ─── Последние звонки (репозиторий А2, общий вид строки А4) ───
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -147,7 +194,6 @@ fun CallsHomeSection(
                 modifier = Modifier.weight(1f),
             )
         }
-        val hs = historyState
         when (hs.status) {
             CallsSectionStatus.LOADING -> Box(
                 Modifier.fillMaxWidth().height(56.dp),
@@ -270,6 +316,23 @@ fun CallsHomeSection(
                 )
             }
         }
+    }
+
+    // Этап Д: чат звонка — полноэкранный Dialog внутри секции (маршруты
+    // не добавляются; hall_id в записях истории отсутствует — вызов без зала).
+    val openCallId = openChatCallId
+    if (openCallId != null) {
+        CallChatScreen(
+            callId = openCallId,
+            hallId = null,
+            title = openChatTitle,
+            photoUrl = openChatPhoto,
+            onDismiss = {
+                openChatCallId = null
+                openChatTitle = null
+                openChatPhoto = null
+            },
+        )
     }
 }
 

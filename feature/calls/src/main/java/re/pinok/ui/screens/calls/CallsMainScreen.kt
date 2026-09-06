@@ -36,7 +36,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -145,6 +144,7 @@ fun CallsMainScreen(
     )
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
+    var showScheduleDialog by remember { mutableStateOf(false) }
     var showMenuSettings by remember { mutableStateOf(false) }
     var sidebarConfig by remember { mutableStateOf(defaultSidebarConfig()) }
 
@@ -183,13 +183,13 @@ fun CallsMainScreen(
             CallsHeader(
                 onCreateCall = { showCreateDialog = true },
                 onSchedule = {
-                    // #CALLS-SNAP (2026-09-05): «Запланировать» — прежний диалог
-                    // «будет доступна позже» (запрещённая заглушка) заменён
-                    // переходом в ЖИВОЙ таб «Запланированные» (реальный список
-                    // messages.getScheduledCalls, Этап А2/А3). Модалка создания
-                    // messages.editCall — Этап Г2 плана, заменит этот обработчик.
-                    AppLog.i("CallsHeader", "Запланировать → таб Запланированные (модалка editCall — Этап Г2)")
-                    selectedTab = CallsTab.SCHEDULED
+                    // #CALLS-SNAP (2026-09-06, Этап Г2): «Запланировать» — настоящая
+                    // модалка планирования (REV-UI §6.3, messages.editCall, создание
+                    // call_id="0"). Прежний переход в таб Scheduled (А3) и прежний
+                    // диалог «будет доступна позже» заменены; живой список — таб
+                    // «Запланированные» с действиями (Г3, CallsScheduledSection).
+                    AppLog.i("CallsHeader", "Запланировать → модалка messages.editCall (создание)")
+                    showScheduleDialog = true
                 },
                 onJoin = { showJoinDialog = true },
             )
@@ -239,21 +239,29 @@ fun CallsMainScreen(
     }
     // Диалоги для кнопок шапки
     if (showCreateDialog) {
-        CreateCallDialog(
+        // #CALLS-SNAP (Этап Г1): поиск адресата (messagesSearchForCallTargets) +
+        // аудио/видео через CallStarter — вместо прежнего ввода сырого peerId.
+        CallsCreateCallDialog(
             onDismiss = { showCreateDialog = false },
-            onCall = { peerId ->
-                showCreateDialog = false
-                onNavigateToCall(peerId)
-            }
         )
     }
     if (showJoinDialog) {
-        JoinCallDialog(
+        // #CALLS-SNAP (Этап Г4): реальный join-флоу по ссылке
+        // (getAnonymTokenByLink → joinConversationByLink → CallScreen) —
+        // вместо прежней лог-only заглушки. Навигация в звонок — через
+        // CallJoinByLinkHolder (SovaNavHost).
+        CallsJoinByLinkDialog(
             onDismiss = { showJoinDialog = false },
-            onJoin = { link ->
-                showJoinDialog = false
-                AppLog.i("CallsMain", "join by link: $link")
-            }
+        )
+    }
+    if (showScheduleDialog) {
+        // #CALLS-SNAP (Этап Г2): модалка планирования (messages.editCall,
+        // call_id="0" — создание). После успеха — refresh(SCHEDULED)+Toast в модалке.
+        CallsScheduleCallDialog(
+            editCallId = null,
+            initialName = "",
+            initialDateSec = 0L,
+            onDismiss = { showScheduleDialog = false },
         )
     }
     // ⚙ «Настройка пунктов меню» (Этап А3): видимость/порядок + persist.
@@ -352,69 +360,6 @@ private fun CallsMenuSettingsDialog(
 }
 
 @Composable
-private fun CreateCallDialog(onDismiss: () -> Unit, onCall: (Long) -> Unit) {
-    var peerIdText by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Создать звонок") },
-        text = {
-            Column {
-                Text("Введите ID пользователя:", style = MaterialTheme.typography.bodyMedium)
-                TextField(
-                    value = peerIdText,
-                    onValueChange = { peerIdText = it },
-                    placeholder = { Text("152094335") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("create_call_input"),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val id = peerIdText.toLongOrNull()
-                    if (id != null) onCall(id)
-                },
-                enabled = peerIdText.toLongOrNull() != null,
-            ) { Text("Позвонить") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
-        }
-    )
-}
-
-@Composable
-private fun JoinCallDialog(onDismiss: () -> Unit, onJoin: (String) -> Unit) {
-    var linkText by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Подключиться к звонку") },
-        text = {
-            Column {
-                Text("Введите ссылку-приглашение:", style = MaterialTheme.typography.bodyMedium)
-                TextField(
-                    value = linkText,
-                    onValueChange = { linkText = it },
-                    placeholder = { Text("https://vk.ru/call/join/...") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("join_call_input"),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onJoin(linkText) },
-                enabled = linkText.isNotBlank(),
-            ) { Text("Подключиться") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
-        }
-    )
-}
-
-@Composable
 private fun CallsHeader(
     onCreateCall: () -> Unit = {},
     onSchedule: () -> Unit = {},
@@ -429,7 +374,9 @@ private fun CallsHeader(
     ) {
         HeaderButton(label = "Создать звонок", onClick = onCreateCall)
         HeaderButton(label = "Запланировать", onClick = onSchedule)
-        HeaderButton(label = "Подключиться", onClick = onJoin)
+        // REV-UI §1.1: подпись веб-кнопки — именно «Присоединиться»
+        // (calls_main_page_button_join_call); прежняя «Подключиться» — S11-расхождение.
+        HeaderButton(label = "Присоединиться", onClick = onJoin)
     }
 }
 

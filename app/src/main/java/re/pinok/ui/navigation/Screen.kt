@@ -318,21 +318,37 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * Принимает peerId как path-параметр, title/photo — query-параметры.
      * Открывается из ChatDetailScreen (кнопка звонка) или из уведомления
      * о входящем звонке (CallForegroundService).
+     *
+     * #CALLS-VIDEO-ROUTE (2026-09-06, Этап Г плана «звонки.перенос.план.md»):
+     * добавлен query-параметр video (BoolType) — видеозвонок. Прежде флаг
+     * обрывался: CallStarter.startCall(peerId, video) доносил его только до
+     * SovaApp.pendingOutgoingCallVideo, который никто не читал, и CallScreen
+     * жёстко слал messagesStartCall(video=false) — «Видеозвонок» из redial
+     * звонил аудио. video=false по умолчанию: существующие вызовы buildRoute
+     * (входящий из LP-уведомления и прежние call-sites) не меняются.
      */
-    object Call : Screen("call/{peerId}?title={title}&photo={photo}&incoming={incoming}&payload={payload}", "Звонок", null) {
+    object Call : Screen("call/{peerId}?title={title}&photo={photo}&incoming={incoming}&payload={payload}&video={video}", "Звонок", null) {
         const val ARG_PEER_ID = "peerId"
         const val ARG_TITLE = "title"
         const val ARG_PHOTO = "photo"
         const val ARG_INCOMING = "incoming"
         const val ARG_PAYLOAD = "payload"
-        fun buildRoute(peerId: Long, title: String, photo: String?, incoming: Boolean, payload: String? = null): String {
+        const val ARG_VIDEO = "video"
+        fun buildRoute(
+            peerId: Long,
+            title: String,
+            photo: String?,
+            incoming: Boolean,
+            payload: String? = null,
+            video: Boolean = false,
+        ): String {
             // #CALLS-NAME-FIX (2026-08-29): URLEncoder (FORM) превращал пробел в «+»:
             // «Входящий звонок» приходил на экран как «Входящий+звонок» (Navigation
             // декодирует %XX, но не «+»). Uri.encode → %20 → корректный пробел.
             val t = android.net.Uri.encode(title.ifBlank { "Звонок" })
             val p = photo?.let { android.net.Uri.encode(it) } ?: ""
             val pl = payload?.let { android.net.Uri.encode(it) } ?: ""
-            return "call/$peerId?title=$t&photo=$p&incoming=$incoming&payload=$pl"
+            return "call/$peerId?title=$t&photo=$p&incoming=$incoming&payload=$pl&video=$video"
         }
     }
 

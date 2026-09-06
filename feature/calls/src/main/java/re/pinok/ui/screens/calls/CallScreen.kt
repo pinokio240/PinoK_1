@@ -84,6 +84,18 @@ import re.pinok.feature.calls.CallsDependencies
  *  - CONNECTING: спиннер + «Соединение…»
  *  - ACTIVE: разговор — кнопки mute/speaker/end
  *  - ENDED/FAILED: результат + кнопка «Закрыть»
+ *
+ * #CALLS-VIDEO-ROUTE (2026-09-06, Этап Г): параметр [video] — видеозвонок,
+ * доносится из маршрута Screen.Call (SovaNavHost читает
+ * SovaApp.pendingOutgoingCallVideo). Влияет ТОЛЬКО на точку старта исходящего
+ * (messagesStartCall(peerId, video)); входящий accept/ack не менялся
+ * («Принять с видео» — Этап Е плана, отдельная задача).
+ *
+ * #CALLS-JOIN-BY-LINK (Этап Г/Г4): параметр [joinByLink] — вход через
+ * присоединение по ссылке vk.ru/call/join/<token>. API-часть (анонимный
+ * токен + joinConversationByLink) выполняет модалка CallsJoinByLinkDialog и
+ * кладёт conversation params в CallJoinByLinkHolder; экран забирает их
+ * (consume) и поднимает существующую цепочку params→signaling→engine.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,10 +107,18 @@ fun CallScreen(
     deps: CallsDependencies,
     onNavigateBack: () -> Unit,
     incomingPayload: String? = null,
+    video: Boolean = false,
+    joinByLink: Boolean = false,
 ) {
     val context = LocalContext.current
-    val direction = if (incoming) CallDirection.INCOMING else CallDirection.OUTGOING
-    var phase by remember { mutableStateOf(if (incoming) CallPhase.RINGING else CallPhase.CONNECTING) }
+    // #CALLS-JOIN-BY-LINK: сессия join-по-ссылке — consume ОДИН раз на
+    // композицию (remember); при joinByLink=false всегда null (обычные звонки).
+    val joinSession = remember { if (joinByLink) CallJoinByLinkHolder.consume() else null }
+    // По wire-семантике join-по-ссылке — мы ОТВЕТЧИК (offer присылает инициатор),
+    // поэтому направление/фаза как у входящего (RINGING: пользователь подтверждает
+    // вход кнопкой «Принять» — эквивалент web-превью calls_preview_*, REV-UI §6.4).
+    val direction = if (incoming || joinByLink) CallDirection.INCOMING else CallDirection.OUTGOING
+    var phase by remember { mutableStateOf(if (incoming || joinByLink) CallPhase.RINGING else CallPhase.CONNECTING) }
     var isMuted by remember { mutableStateOf(false) }
     var isSpeakerOn by remember { mutableStateOf(false) }
     var callDuration by remember { mutableStateOf(0L) }
@@ -575,7 +595,7 @@ fun CallScreen(
         // не успевают — пользователь присылает лог вместо скриншота).
         AppLog.i(
             "CallScreen",
-            "════════ CALL START [${re.pinok.BuildStamp.STAMP}]: ${if (incoming) "входящий" else "исходящий"} peer=$peerId name=$peerName payload=${incomingPayload?.length ?: 0} ════════"
+            "════════ CALL START [${re.pinok.BuildStamp.STAMP}]: ${if (joinByLink) "join-по-ссылке" else if (incoming) "входящий" else "исходящий"} peer=$peerId name=$peerName video=$video payload=${incomingPayload?.length ?: 0} ════════"
         )
         // #CALLS-VIDEO-PREFS-RACE: настройки видео ДО initialize/startCall/acceptCall
         // (rx/tx — на направления транссиверов и создание заглушки в startCall/acceptCall).
@@ -592,7 +612,62 @@ fun CallScreen(
         engine.initialize()
         // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
         if (!micGranted) micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-        if (incoming) {
+        if (joinByLink) {
+            // #CALLS-JOIN-BY-LINK (Этап Г/Г4): API-часть уже выполнена модалкой
+            // (getAnonymTokenByLink при анониме/пароле → joinConversationByLink),
+            // ответ — conversation params (форма как у vchat.getConversationParams:
+            // {id, endpoint/wssBase, token, stun{urls}, turn{urls,username,credential}}).
+            // Здесь БЕЗ нового startCall/join-API — мы уже участник: параметры
+            // из сессии, signaling, RINGING; «Принять» шлёт accept-call существующим
+            // кодом входящего-accept (incomingParamsDeferred завершён ниже).
+            val decoded = if (joinSession != null) {
+                re.pinok.media.ConversationParamsDecoder.decodeParamsJson(joinSession.paramsJson)
+            } else {
+                null
+            }
+            if (decoded == null) {
+                AppLog.w("CallScreen", "JOIN_BY_LINK: params conversation не распознаны (сессия потеряна/сервер вернул не то) — join невозможен")
+                failText = "Не удалось получить параметры звонка по ссылке"
+                phase = CallPhase.FAILED
+            } else {
+                val s = joinSession
+                val idEl = s.paramsJson.get("id")
+                val convId: String = if (idEl != null && idEl.isJsonPrimitive) idEl.asString else ""
+                if (convId.isBlank()) {
+                    AppLog.w("CallScreen", "JOIN_BY_LINK: в ответе нет id conversation — signaling может не зарегистрироваться (живой прогон: Этап И)")
+                }
+                // #CALLS-FIX (как у входящего): userId в WS URL — okcdn uid, НЕ VK user_id.
+                val snap = deps.prefs.data.first()
+                val okUid = snap.callsSessionUid
+                val uid = if (okUid > 0L) okUid else deps.exchangeAuthRepository.userId()
+                AppLog.i("CallScreen", "JOIN_BY_LINK: conv=$convId uid=$uid endpoint=${decoded.endpoint.take(40)}…")
+                activeCallId.value = convId
+                engine.setIceServers(decoded)
+                sigUid = uid
+                sigConvId = convId
+                signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId)
+                // #CALLS-SERVER-REJOIN: параметры старта для ре-join'а (как у входящего).
+                sigRestart = { reAccept ->
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        signaling.stop()
+                        signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId)
+                        var waited = 0
+                        while (!signaling.isWsReady() && waited < 10_000) {
+                            kotlinx.coroutines.delay(250)
+                            waited += 250
+                        }
+                        if (reAccept && signaling.isWsReady()) {
+                            val ok = signaling.acceptCall(isVideo = isVideoCall)
+                            AppLog.i("CallScreen", "JOIN_BY_LINK nudge: WS перерегистрирован, повторный accept-call ok=$ok")
+                        }
+                    }
+                }
+                sigStarted = true
+                // params готовы — «Принять» (incomingParamsDeferred.await) их получит.
+                incomingParamsDeferred.complete(decoded)
+                AppLog.i("CallScreen", "JOIN_BY_LINK: signaling поднят — ждём «Принять» и offer инициатора")
+            }
+        } else if (incoming) {
             // #CALLS: входящий звонок. Если есть payload — декодируем conversation
             // params и подключаемся к WebSocket-сигналингу (accept/decline).
             AppLog.i("CallScreen", "Incoming call, payload.len=${incomingPayload?.length ?: 0}")
@@ -697,8 +772,8 @@ fun CallScreen(
         } else {
             AppLog.i("CallScreen", "Starting call to peerId=$peerId")
             try {
-                val callId = deps.apiClient.messagesStartCall(peerId, video = false)
-                AppLog.i("CallScreen", "messagesStartCall returned: $callId")
+                val callId = deps.apiClient.messagesStartCall(peerId, video = video)
+                AppLog.i("CallScreen", "messagesStartCall returned: $callId (video=$video)")
                 if (callId == null) {
                     val err = deps.apiClient.lastApiError
                     val errCode = deps.apiClient.lastApiErrorCode
@@ -1905,8 +1980,12 @@ fun CallScreen(
                                             AppLog.i("CallScreen", "Принять: params готовы, ws готов — accept")
                                             // Task 22: force=false — прежний дефолт SovaApp
                                             // (аргумент без дефолта в интерфейсе CallsDependencies).
+                                            // #CALLS-JOIN-BY-LINK: при join-по-ссылке API-ack уже
+                                            // сделан модалкой (joinConversationByLink) — повторный
+                                            // vchat.joinConversation пропускаем (иначе при анонимном
+                                            // входе повторная регистрация шла бы от authed-сессии).
                                             val sk = deps.ensureCallsSessionKey(force = false)
-                                            if (sk != null) {
+                                            if (sk != null && !joinByLink) {
                                                 withContext(Dispatchers.IO) {
                                                     deps.apiClient.vchatJoinConversation(
                                                         activeCallId.value ?: "", sk, isVideo = false

@@ -380,15 +380,40 @@ fun SovaNavHost(
     // incoming выше). title/photo берём из OutgoingCallMeta — их заложил
     // host-сайт кнопки (контракт CallStarter их не передаёт); пусто →
     // CallScreen подтянет профиль сам (usersGetByIds).
+    // #CALLS-VIDEO-ROUTE (Этап Г): pendingOutgoingCallVideo теперь ЧИТАЕТСЯ
+    // здесь и доносится до CallScreen через query-параметр video маршрута
+    // (раньше флаг обрывался: никто не читал — «Видеозвонок» звонил аудио).
+    // Сброс — consumeOutgoingCall() (сбрасывает оба pending-поля, паттерн
+    // соседних pending-полей SovaApp).
     LaunchedEffect(app.pendingOutgoingCallPeerId) {
         val peerId = app.pendingOutgoingCallPeerId
         if (peerId > 0L) {
             val (metaTitle, metaPhoto) = OutgoingCallMeta.consume()
-            AppLog.i("SovaNavHost", "OUTGOING_CALL: navigating to CallScreen peerId=$peerId (CallStarter)")
-            nav.navigate(Screen.Call.buildRoute(peerId, metaTitle, metaPhoto, incoming = false)) {
+            val video = app.pendingOutgoingCallVideo
+            AppLog.i("SovaNavHost", "OUTGOING_CALL: navigating to CallScreen peerId=$peerId video=$video (CallStarter)")
+            nav.navigate(Screen.Call.buildRoute(peerId, metaTitle, metaPhoto, incoming = false, video = video)) {
                 launchSingleTop = true
             }
             app.consumeOutgoingCall()
+        }
+    }
+
+    // #CALLS-JOIN-BY-LINK (Этап Г, Г4): присоединение к звонку по ссылке.
+    // Модалка «Присоединиться» (CallsJoinByLinkDialog) сама выполняет цепочку
+    // vchat.getAnonymTokenByLink (аноним) → vchat.joinConversationByLink и
+    // кладёт результат (conversation params) в CallJoinByLinkHolder —
+    // Compose-observable, поэтому LaunchedEffect перезапускается ГАРАНТИРОВАННО
+    // (в отличие от pendingOutgoingCallPeerId, который после consumeOutgoingCall
+    // всегда 0 — навигация по «0→0» не сработала бы). Пустой peerId честен:
+    // у звонка по ссылке собеседник неизвестен, CallScreen подтягивает
+    // conversation params из holder'а (screen сам consume'ит сессию).
+    LaunchedEffect(re.pinok.ui.screens.calls.CallJoinByLinkHolder.session) {
+        val joinSession = re.pinok.ui.screens.calls.CallJoinByLinkHolder.session
+        if (joinSession != null) {
+            AppLog.i("SovaNavHost", "JOIN_BY_LINK: navigating to CallScreen (join-сессия, convId из params)")
+            nav.navigate(Screen.Call.buildRoute(0L, "Звонок по ссылке", null, incoming = true)) {
+                launchSingleTop = true
+            }
         }
     }
 
@@ -1851,6 +1876,8 @@ composable(Screen.CallsHistory.route) {
                         navArgument(Screen.Call.ARG_PHOTO) { type = NavType.StringType; defaultValue = "" },
                         navArgument(Screen.Call.ARG_INCOMING) { type = NavType.BoolType; defaultValue = false },
                         navArgument(Screen.Call.ARG_PAYLOAD) { type = NavType.StringType; defaultValue = "" },
+                        // #CALLS-VIDEO-ROUTE (Этап Г): видеозвонок (query-параметр маршрута).
+                        navArgument(Screen.Call.ARG_VIDEO) { type = NavType.BoolType; defaultValue = false },
                     ),
                 ) { entry ->
                     val peerId = entry.arguments?.getLong(Screen.Call.ARG_PEER_ID) ?: 0L
@@ -1858,6 +1885,9 @@ composable(Screen.CallsHistory.route) {
                     val photo = entry.arguments?.getString(Screen.Call.ARG_PHOTO)?.takeIf { it.isNotBlank() }
                     val incoming = entry.arguments?.getBoolean(Screen.Call.ARG_INCOMING) ?: false
                     val payload = entry.arguments?.getString(Screen.Call.ARG_PAYLOAD)?.takeIf { it.isNotBlank() }
+                    // #NULL-EXPLICIT: args захватом в val (без ?./?: в новом коде).
+                    val videoArgs = entry.arguments
+                    val video = if (videoArgs != null) videoArgs.getBoolean(Screen.Call.ARG_VIDEO) else false
                     re.pinok.ui.screens.calls.CallScreen(
                         peerId = peerId,
                         title = title,
@@ -1866,6 +1896,10 @@ composable(Screen.CallsHistory.route) {
                         deps = app,
                         onNavigateBack = { nav.popBackStack() },
                         incomingPayload = payload,
+                        // #CALLS-JOIN-BY-LINK (Этап Г): сессия join-по-ссылке из holder'а
+                        // (кладёт CallsJoinByLinkDialog после реального joinConversationByLink).
+                        // CallScreen consume'ит её при композиции (см. экран).
+                        joinByLink = re.pinok.ui.screens.calls.CallJoinByLinkHolder.session != null,
                     )
 }
                 composable(Screen.CallsWebView.route) {
