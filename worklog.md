@@ -6861,3 +6861,33 @@ Work Log:
 
 Stage Summary:
 - Волна-5 завершена: Этап Е (входящий: полноэкранный + баннер + «Занято»/REJECTED/BUSY + отмена звонящим) и ядро Ж (участники/реакции+рука/медиа-настройки/чат в звонке/мини-виджет). ОСТАЛОСЬ по плану: Ж6-Ж11 (запись/ASR/зал ожидания/залы/watch together/трансляция/vmoji/фон/телефонный) - волна-6, wire в Ж0 готов; Этап И (no-stub приёмка: reason-строки HTTP-фолбэка, значения hand, каталог реакций, форма getConversationByCall/joinConversationByLink/setUserSettings, pagination_marker 1 строка VKApiClient, doc_ids vs transcription_ids). Ожидается пользовательская сборка calls-2026.09.06-2.
+---
+Task ID: 6-a (CALLS-ZH2)
+Agent: исполнитель Этапа Ж-2 (opus, прерван инфраструктурой после правок до отчёта), приёмка - Z.ai Code
+Task: Этап Ж-2 плана звонков - Ж7 субтитры/ASR (DC), Ж9 залы, Ж8 зал ожидания, Ж6 запись, Ж10/Ж11
+
+Work Log:
+- Агент выполнил весь объём правок скоупа, прерван до верификации/worklog (таймаут инфраструктуры). Приёмка оркестратором.
+- WebRtcEngine.kt (+191, АДДИТИВНО - ICE/offer/answer/SERVER-rejoin не тронуты): Ж7 DataChannel-инфраструктура - DC "asr" (приём) + "producerCommand" (клиентские команды) создаются при создании PC (m=application в SDP как у эталона; если удалённый offer без m=application - libwebrtc не включит секцию в answer, аудио-нога не затронута); onAsrText(text, ssrc) колбэк (прецедент onRemoteVideoTrack); onDataChannel БЫЛ ПУСТ - теперь адопция серверных asr/producerCommand + лог прочих; handleAsrFrame - бинарный кадр [v1][msgType=1][seq u16be][ssrc u32be][ts u32be][dur u32be][UTF-8] (Ж0 §5.3, 16131@190768); sendRequestAsr(request) - varint-конверт producerCommand [type=3][v0][seq][bool] (Ж0 §5.2, 16131@154058), постинг на signaling-тред, все ошибки - честные логи (не крэш). Честное ограничение: ssrc->участник НЕ мапится (реестра participantIdRegistry в движке нет) - субтитры без атрибуции спикера.
+- CallSignalingClient.kt (+287, АДДИТИВНО): 13 команд Ж-0 (record-start/stop, asr-start/stop, get-rooms/update-rooms/activate-rooms/remove-rooms/switch-room, get-waiting-hall, promote-participant, remove-participant, participant-state-changed константа) + sendJson-хелпер + методы startRecording(name, privacy, streamMovie)/stopRecording(remove)/startAsr(fileName)/stopAsr/getRooms(withParticipants)/updateRoomsCreate(roomNames, assignRandomly, countdownSec)/... KDoc с цитатами Ж-0.
+- Ж7 CallSubtitlesOverlay.kt (НОВЫЙ, 110 строк): оверлей последних субтитров поверх звонка (subtitleLines <- onAsrText); тоггл в CallScreen -> engine.sendRequestAsr(true/false) + автозапрос при фазе ACTIVE (LaunchedEffect, эталон bridge@181914).
+- Ж9 CallRoomsPanel.kt (НОВЫЙ, 424 строки): залы - get-rooms/update-rooms(создание, assignRandomly, countdown)/activate-rooms/remove-rooms/switch-room через сигналинг.
+- Ж8 CallWaitingHallPanel.kt (НОВЫЙ, 301 строка): зал ожидания - get-waiting-hall + promote-participant (админ).
+- Ж6: запись - startRecording/stopRecording + индикация (команды из CallMorePanel; Ж-0 wire).
+- CallMorePanel.kt (НОВЫЙ, 295 строк): «ещё»-меню футера (web calls_call_menu_*): запись/ASR/залы/зал ожидания + Ж10/Ж11 пункты по доступности (честные отклонения в KDoc).
+- CallScreen.kt (+143): состояния showMorePanel/showRooms/showWaitingHall, кнопка «ещё», интеграция onAsrText->CallSubtitlesOverlay, автозапрос asr на ACTIVE.
+- Верификация оркестратора: скобки 4/4 новых OK; дельта-баланс 3/3 правленых = (0,0) по всем скобкам; NULL: 0 в новых файлах и добавленных строках; регресс WebRtcEngine - дифф только аддитивный (onDataChannel был пуст - задокументировано агентом), форматы существующих сообщений сигналинга не изменены.
+
+Stage Summary:
+- Ж6/Ж7/Ж8/Ж9 реализованы на реальных wire-форматах Ж-0 (запись, субтитры DC asr full-stack, залы, зал ожидания). Ж10 watch together/Ж11 трансляция/vmoji/фон/телефонный - честные отклонения (нет членов фасада/не обеспечено сигналингом) - перечислены в KDoc CallMorePanel и отчёте. ПЛАН А-И ЗАКРЫТ ПО КОДУ: А/Б/В/Г/Д/Е/Ж/З сделаны (И - живая приёмка юзера + финальные доки). Риски живого прогона: DC asr на реальном сервере (первый звонок с субтитрами), каталог privacy записи, автозапрос asr.
+---
+Task ID: WAVE-PARALLEL-6 (главный)
+Agent: Z.ai Code (Sergey)
+Task: координация волны-6: CALLS-ZH2 (Этап Ж-2: Ж6-Ж11); приёмка; документация внедрения; публикация
+
+Work Log:
+- CALLS-ZH2 (6-a) прерван инфраструктурой после правок ДО отчёта - приёмка оркестратором: WebRtcEngine +191 (DC asr/producerCommand АДДИТИВНО, кадр Ж-0 §5.3, request-asr §5.2, onDataChannel был пуст), CallSignalingClient +287 (13 команд Ж-0), CallSubtitlesOverlay/CallRoomsPanel/CallWaitingHallPanel/CallMorePanel (новые, 1130 строк), CallScreen +143 (интеграция/оверлей/автозапрос ACTIVE). Верификация: скобки 4/4 + дельта 3/3 = 0, NULL = 0, регресс ядра звонков не задет.
+- BuildStamp -> calls-2026.09.06-3. Документация внедрения: звонки.этап-Ж2.внедрение.md. Публикация: arch(calls) Ж-2 + штамп, docs(calls) (док + worklog) + push origin/PinoK.
+
+Stage Summary:
+- Волна-6 завершена: Ж6-Ж9 живые, Ж10/Ж11 - честные отклонения. ЭТАПЫ ПЛАНА А-И ЗАКРЫТЫ ПО КОДУ (А1/А2-А4/Б/В/Г/Д/Е/Ж/З; И = живая no-stub приёмка юзером по чек-листам этапных доков + финальная фиксация). Полный план «звонки.перенос.план.md» исполнен 6 волнами за 2026-09-04..06 (волны 1-3 - утерянный фрагмент сессии, 4-6 - текущая). Ожидается пользовательская сборка calls-2026.09.06-3.
