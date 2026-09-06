@@ -7066,3 +7066,26 @@ Work Log:
 
 Stage Summary:
 - Волна-7 завершена: «внедрение снапшотов» поднято с «закрыто по коду волной-1» до полного wire-соответствия реверсу по трём фронтам — расписание (calls.start вместо опровергнутого editCall"0", 18 контролов, пагинация/дни/действия), чат звонка (реальная история+отправка+сервисные вместо read-only), записи (переименование). Отклонения итог-дока §4.5/§4.7 закрыты, §4.6 закрыт наполовину (rename да, views-инкремент серверный). Честно НЕ внедрено (факты добыты, требует движка/сигналинга-интеграции): фон (локальные video-effects), vmoji (DC animoji), трансляция-UI, watch together, PSTN. Живые проверки юзера по чек-листу штампа calls-2026.09.06-5: calls.start, editCallScheduled+marker_time, backward-пагинация чата offset=-1, video.edit, формы ответов getHistory/send.
+
+---
+Task ID: 17 (Fix #281: музыка/поиск — ANR + crash + документация + публикация)
+Agent: Z.ai Code (Sergey)
+Task: пользователь: «Есть проблемы в разделе музыка, при поиске может закрыться приложение или выдает ANR. Приготовь документацию, исправь и опубликуй всё на гит»
+
+Work Log:
+- Аудит зоны поиска: MusicScreen (поиск S5-1, Fix #266/#269), VKApiClient audio.search*/catalog.getAudioSearch, PlayerConnection.playTrackList, rate-limiter, AppLog. Найдены 3 независимых корня:
+  (1) CRASH: fallback audioSearchArtists парсит catalog links[] → ВСЕ артисты с id=0 → два item с key="artist_0" в LazyRow → IllegalArgumentException «Key was already used» → процесс падал (соответствует «приложение может закрыться»);
+  (2) ANR: AppLog.appendToFile — write+flush+file.length()+callerLocation(Throwable stack) на потоке вызывающего под persistLock; при поиске всплеск AppLog.api/W/I + фон поллеров → main сам делал дисковый I/O и ждал лок;
+  (3) ANR-контрибьютор: audioSearchWithSections — до 5 HTTP-вызовов, 3× re-download 200-500KB catalog JSON под rate-limit 3 rps (~2с задержек на запрос); UI: LaunchedEffect(searchQuery)+collect глотал CancellationException в catch(Exception) → затирание результатов при наборе.
+- VKApiClient.kt: audioSearchWithSections переписан — catalogGetAudioSearchRaw (ОДИН вызов), добор артистов из links[]/плейлистов из albums[]+playlists[] ТОГО ЖЕ ответа; finalizeAudioSearchResult — дедуп (артисты id>0 → id, иначе имя; треки/плейлисты → ownerId_id; треки take(count)); audioSearch + параметр allowCatalogFallback=true (из withSections false); тела audioSearchArtists/audioSearchAlbums вынесены в parseArtistsFromCatalogSearchLinks/parsePlaylistsFromCatalogSearch (сигнатуры публичных функций не менялись — MusicLibraryScreens не тронуты); audio.searchPlaylists вызывается если playlists пусты (другой эндпоинт — direct-auth).
+- MusicScreen.kt: itemsIndexed-ключи ×3 (артисты/плейлисты/треки — «${idx}_» в ключе — crash-proof к любым дубликатам); поиск: LaunchedEffect(Unit)+snapshotFlow+debounce(500)+collectLatest (отмена in-flight, OkHttp-cancel уже в call()); rethrow CancellationException ×2 (поиск + loadMoreTracksSuspend); импорты itemsIndexed/collectLatest.
+- AppLog.kt (:core:common): persistExecutor «PinoK-LogWriter» (daemon, single-thread) + pendingPersistWrites; appendToFile — только постановка задачи (форматирование/запись/flush/rotation на writer-потоке), batch-flush при исчерпании очереди; flushSync(2000ms) + вызов в clear() перед закрытием writer; буфер/снапшоты/экспорт не изменены.
+- Проверки: сканер баланса скобок (template-aware, delta HEAD↔now = (0,0,0) по всем 3 .kt — баланс не изменён); scripts/check-nested-comments.py — ALL CLEAN; diff-ревью; grep new-code ?. / ?: — новые операторы не добавлены (перенесённые тела — 1:1).
+- Документация: MUSIC_SEARCH_ANR_FIX.md (симптомы, механика 3 корней, было/стало, матрица проверки 7 пунктов, техдетали, компромиссы); HISTORY.md — append запись 2026-09-03; worklog — этот блок.
+- Git: коммит только задачных файлов (VKApiClient.kt, MusicScreen.kt, AppLog.kt, MUSIC_SEARCH_ANR_FIX.md, HISTORY.md, worklog.md; чужой M .gitignore и Next.js-скаффолд не тронуты) + push origin PinoK.
+
+Stage Summary:
+- Fix #281 закрывает оба симптома: crash «Key was already used» (дедуп данных + индексные ключи) и ANR (дисковый I/O логов вынесен с main; поисковый запрос — 1 catalog-вызов вместо 3-5, отмена in-flight при наборе).
+- BuildStamp НЕ бампнут: звонковая цепочка не затронута (calls-2026.09.06-5 в силе).
+- Для пользователя: собрать, прогнать матрицу §4 из MUSIC_SEARCH_ANR_FIX.md (быстрый набор, секции, логи «audioSearchWithSections(catalog)» по одной строке на запрос).
+- Компромиссы задокументированы: возможная потеря последних не-flush строк persistent.log при крэше процесса (буфер в памяти полный); clear() ждёт flushSync до 2с.

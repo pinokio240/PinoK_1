@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,6 +83,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
@@ -204,14 +206,24 @@ fun MusicScreen(
     // фокус автоматически → клавиатура не открывается.
     val searchFocusRequester = remember { FocusRequester() }
 
-    // Дебаунс 500мс для поискового запроса
-    LaunchedEffect(searchQuery) {
+    // Дебаунс 500мс для поискового запроса.
+    // Fix #281 (ANR/crash музыки-поиска):
+    //  1) БЫЛО LaunchedEffect(searchQuery) — эффект перезапускался на КАЖДОМ
+    //     нажатии клавиши; collect внутри ловил CancellationException в
+    //     catch(Exception) и затирал searchResult пустым AudioSearchResult()
+    //     → вспышка «Ничего не найдено» при наборе + потеря результатов.
+    //  2) СЕЙЧАС: эффект стартует ОДИН раз (LaunchedEffect(Unit)),
+    //     snapshotFlow отдаёт изменения запроса, collectLatest ОТМЕНЯЕТ
+    //     предыдущий запрос при новом вводе (in-flight OkHttp-cancel через
+    //     suspendCancellableCoroutine в call()), а CancellationException
+    //     пробрасывается явно — структурная конкурентность не нарушается.
+    LaunchedEffect(Unit) {
         snapshotFlow { searchQuery }
             .debounce(500)
-            .collect { query ->
+            .collectLatest { query ->
                 if (query.isBlank()) {
                     searchResult = null
-                    return@collect
+                    return@collectLatest
                 }
                 searchLoading = true
                 try {
@@ -221,6 +233,10 @@ fun MusicScreen(
                         app.apiClient.audioSearchWithSections(query, count = 50)
                     }
                     searchResult = result
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Fix #281: отмена (новое нажатие / уход с экрана) — НЕ ошибка.
+                    // Раньше сюда попадало в catch(Exception) и затирало результат.
+                    throw e
                 } catch (e: Exception) {
                     AppLog.e("MusicScreen", "Search error", e)
                     searchResult = AudioSearchResult()
@@ -321,6 +337,10 @@ fun MusicScreen(
                 MusicTracksCache.update(tracks, totalCount)
                 AppLog.d("MusicScreen", "Loaded page at offset=$currentSize: ${fresh.size} new, total=${tracks.size}/$total, hasMore=$hasMore")
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Fix #281: отмена (уход с экрана) — НЕ ошибка загрузки, пробрасываем.
+            // Раньше catch(Exception) глотал отмену и логировал её как failure.
+            throw e
         } catch (e: Exception) {
             AppLog.e("MusicScreen", "loadMoreTracks failed", e)
         } finally {
@@ -561,7 +581,14 @@ fun MusicScreen(
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
-                                items(resultArtists, key = { "artist_${it.id}" }) { artist ->
+                                // Fix #281 (crash): ключ с индексом — гарантированно
+                                // уникальный. Артисты из links[] приходят с id=0 у всех,
+                                // прежний key="artist_${it.id}" давал дубли →
+                                // IllegalArgumentException «Key was already used» → падение.
+                                itemsIndexed(
+                                    resultArtists,
+                                    key = { idx, artist -> "artist_${idx}_${artist.id}" },
+                                ) { _, artist ->
                                     SearchArtistCard(
                                         artist = artist,
                                         cardColor = vkCard,
@@ -595,7 +622,13 @@ fun MusicScreen(
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
-                                items(resultPlaylists, key = { "pl_${it.ownerId}_${it.id}" }) { pl ->
+                                // Fix #281 (crash): ключ с индексом — дубли плейлистов
+                                // (VK может вернуть один плейлист в albums[] и playlists[])
+                                // больше не крашат LazyColumn.
+                                itemsIndexed(
+                                    resultPlaylists,
+                                    key = { idx, pl -> "pl_${idx}_${pl.ownerId}_${pl.id}" },
+                                ) { _, pl ->
                                     SearchPlaylistCard(
                                         playlist = pl,
                                         cardColor = vkCard,
@@ -625,7 +658,13 @@ fun MusicScreen(
                             )
                         }
                     }
-                    items(resultTracks, key = { "track_${it.ownerId}_${it.id}" }) { track ->
+                    // Fix #281 (crash): ключ с индексом — belt-and-braces к дедупу
+                    // finalizeAudioSearchResult: даже если данные придут с дублями,
+                    // LazyColumn не упадёт с «Key was already used».
+                    itemsIndexed(
+                        resultTracks,
+                        key = { idx, track -> "track_${idx}_${track.ownerId}_${track.id}" },
+                    ) { _, track ->
                         val current = playerState.currentTrack
                         val isCurrent = current != null &&
                             track.id == current.id &&

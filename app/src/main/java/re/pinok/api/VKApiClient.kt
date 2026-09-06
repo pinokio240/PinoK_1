@@ -2384,11 +2384,17 @@ class VKApiClient(
      *
      * Возвращаем Pair<count, tracks>. Фильтруем треки без url (нельзя играть).
      * Дедуплицируем по (ownerId, id) — catalog может вернуть дубли.
+     *
+     * Fix #281 (ANR музыки-поиска): параметр allowCatalogFallback — вызыватель
+     * [audioSearchWithSections] уже сделал catalog.getAudioSearch; повторный
+     * catalog-запрос внутри fallback только тратил rate-limit (3 rps) и
+     * трафик (re-download 200-500KB JSON).
      */
     suspend fun audioSearch(
         query: String,
         count: Int = 30,
         offset: Int = 0,
+        allowCatalogFallback: Boolean = true,
     ): Pair<Int, List<Track>> {
         if (isOffline() || query.isBlank()) return 0 to emptyList()
         // Fix #147: quality=hq для максимального качества (320kbps MP3 / HQ AAC).
@@ -2422,6 +2428,13 @@ class VKApiClient(
         }
         // Fallback: catalog.getAudioSearch — работает с веб-токенами.
         // Возвращает секцию с блоками; извлекаем все треки из всех блоков.
+        // Fix #281: из withSections вызываем с allowCatalogFallback=false —
+        // catalog уже был запрошен там, второй раз не идём.
+        if (!allowCatalogFallback) {
+            AppLog.d("VKApiClient",
+                "audio.search не дал результатов; catalog-fallback пропущен (уже сделан вызывателем)")
+            return 0 to emptyList()
+        }
         return audioSearchCatalogFallback(query, count, offset)
     }
 
@@ -2475,11 +2488,23 @@ class VKApiClient(
 
     /**
      * Fix #266: Расширенный поиск музыки — возвращает треки + артистов + плейлисты.
-     * Сначала пробует audio.search / audio.searchArtists / audio.searchPlaylists
-     * (более точные результаты), при ошибке падает на catalog.getAudioSearch,
-     * который возвращает все типы одним запросом (веб-токены).
+     * Сначала пробует catalog.getAudioSearch (один запрос на все типы), при
+     * ошибке падает на классические audio.search* методы.
      *
      * Используется в MusicScreen для отображения секций в результатах поиска.
+     *
+     * Fix #281 (ANR/crash музыки-поиска):
+     *  1) БЫЛО: fallback-ветка делала до 3 повторных HTTP-вызовов того же
+     *     catalog.getAudioSearch (внутри audioSearch→audioSearchCatalogFallback,
+     *     audioSearchArtists, audioSearchPlaylists) — каждый полный re-download
+     *     и re-parse 200-500KB JSON, всё под rate-limit 3 rps → до ~2с лишних
+     *     задержек и CPU на каждое нажатие клавиши в поиске.
+     *  2) БЫЛО: артисты из links[] приходят с id=0 у ВСЕХ — без дедупа
+     *     LazyRow в MusicScreen падал IllegalArgumentException
+     *     «Key artist_0 was already used» → приложение закрывалось при поиске.
+     *  СЕЙЧАС: catalog.getAudioSearch — ОДИН запрос; артисты/плейлисты
+     *  добираются из ТОГО ЖЕ ответа (links[]/albums[]/playlists[]);
+     *  финальная дедупликация всех секций в [finalizeAudioSearchResult].
      */
     suspend fun audioSearchWithSections(
         query: String,
@@ -2492,11 +2517,17 @@ class VKApiClient(
         val artists = mutableListOf<re.pinok.data.model.AudioArtist>()
         val playlists = mutableListOf<AudioPlaylist>()
 
-        // 1) Пробуем catalog.getAudioSearch — работает с любым токеном и
-        //    возвращает все типы одним запросом. Это даёт «богатый» UI
-        //    (артисты сверху, плейлисты, треки) как в нативном VK Music.
-        try {
-            val section = catalogGetAudioSearchExtended(query, startFrom = null)
+        // 1) catalog.getAudioSearch — работает с любым токеном и возвращает все
+        //    типы одним запросом. ОДИН вызов, сырой ответ переиспользуется ниже.
+        val catalogRaw = try {
+            catalogGetAudioSearchRaw(query)
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "audioSearchWithSections: catalog.getAudioSearch failed: ${e.message}")
+            null
+        }
+
+        if (catalogRaw != null) {
+            val section = parseCatalogSectionExtended(catalogRaw, "search")
             if (section != null) {
                 val seenTrackKeys = HashSet<Pair<Long, Long>>()
                 val seenArtistIds = HashSet<Long>()
@@ -2528,37 +2559,100 @@ class VKApiClient(
                     }
                     if (tracks.size >= count) break
                 }
-                AppLog.i("VKApiClient",
-                    "audioSearchWithSections(catalog): query='$query' → " +
-                        "${tracks.size} tracks, ${artists.size} artists, ${playlists.size} playlists")
-                // Если catalog дал хотя бы треки — возвращаем его.
-                // Если ничего не дал — пробуем классический audio.search ниже.
-                if (tracks.isNotEmpty() || artists.isNotEmpty() || playlists.isNotEmpty()) {
-                    return re.pinok.data.model.AudioSearchResult(tracks, artists, playlists)
+            }
+            // 1-б) Блоки пусты (или мало данных) — добираем артисты/плейлисты из
+            // ТОГО ЖЕ ответа: links[] (content_type=artist) и albums[]/playlists[].
+            // Fix #281: раньше это были ОТДЕЛЬНЫЕ HTTP-вызова catalog.getAudioSearch.
+            val resp = catalogRaw.getAsJsonObject("response")
+            if (resp != null) {
+                if (artists.isEmpty()) {
+                    artists.addAll(parseArtistsFromCatalogSearchLinks(resp, 10))
+                }
+                if (playlists.isEmpty()) {
+                    playlists.addAll(parsePlaylistsFromCatalogSearch(resp, 10))
                 }
             }
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "audioSearchWithSections: catalog.getAudioSearch failed: ${e.message}")
+            AppLog.i("VKApiClient",
+                "audioSearchWithSections(catalog): query='$query' → " +
+                    "${tracks.size} tracks, ${artists.size} artists, ${playlists.size} playlists")
+            // Если catalog дал хотя бы что-то — возвращаем.
+            // Если ничего не дал — пробуем классический audio.search ниже.
+            if (tracks.isNotEmpty() || artists.isNotEmpty() || playlists.isNotEmpty()) {
+                return finalizeAudioSearchResult(tracks, artists, playlists, count)
+            }
         }
 
-        // 2) Fallback на классические методы (для direct-auth токенов).
+        // 2) Fallback на классические методы (для direct-auth токенов, когда
+        //    catalog.getAudioSearch недоступен — error 3/15).
         try {
-            val (_, t) = audioSearch(query, count, 0)
+            // Fix #281: allowCatalogFallback=false — catalog уже запрошен выше,
+            // второй вызов только жёг rate-limit (3 rps) и трафик.
+            val (_, t) = audioSearch(query, count, 0, allowCatalogFallback = false)
             tracks.addAll(t)
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "audioSearchWithSections: audio.search failed: ${e.message}")
         }
-        try {
-            artists.addAll(audioSearchArtists(query, count = 10))
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "audioSearchWithSections: audio.searchArtists failed: ${e.message}")
+        if (catalogRaw == null) {
+            // catalog не отвечал вообще (direct-auth токен) — артистов из
+            // links[] взять неоткуда, пробуем классический поиск артистов.
+            try {
+                artists.addAll(audioSearchArtists(query, count = 10))
+            } catch (e: Exception) {
+                AppLog.w("VKApiClient", "audioSearchWithSections: audio.searchArtists failed: ${e.message}")
+            }
         }
-        try {
-            playlists.addAll(audioSearchPlaylists(query, count = 10))
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "audioSearchWithSections: audio.searchPlaylists failed: ${e.message}")
+        if (playlists.isEmpty()) {
+            // audio.searchPlaylists — ДРУГОЙ эндпоинт (не catalog): для
+            // direct-auth токенов работает даже когда catalog пуст.
+            try {
+                playlists.addAll(audioSearchPlaylists(query, count = 10))
+            } catch (e: Exception) {
+                AppLog.w("VKApiClient", "audioSearchWithSections: audio.searchPlaylists failed: ${e.message}")
+            }
         }
-        return re.pinok.data.model.AudioSearchResult(tracks, artists, playlists)
+        return finalizeAudioSearchResult(tracks, artists, playlists, count)
+    }
+
+    /**
+     * Fix #281 (crash): финальная дедупликация результатов поиска.
+     *
+     * Артисты, спарсенные из links[] catalog.getAudioSearch, приходят с id=0 у
+     * ВСЕХ (VK не отдаёт числовой id в links). Без дедупа два таких артиста в
+     * результате давали два item с key="artist_0" в LazyRow →
+     * IllegalArgumentException «Key was already used» → процесс падал (пользователь
+     * видел «приложение закрылось при поиске»).
+     *
+     * Идентичность артиста: id>0 → по числовому id; id=0 → по имени (lowercase).
+     * Плейлисты/треки — по (ownerId, id). Треки обрезаются до maxTracks.
+     */
+    private fun finalizeAudioSearchResult(
+        tracks: MutableList<Track>,
+        artists: MutableList<re.pinok.data.model.AudioArtist>,
+        playlists: MutableList<AudioPlaylist>,
+        maxTracks: Int,
+    ): re.pinok.data.model.AudioSearchResult {
+        val uniqueTracks = tracks.distinctBy { "${it.ownerId}_${it.id}" }.take(maxTracks)
+        val uniqueArtists = artists.distinctBy { a ->
+            if (a.id > 0L) "id_${a.id}" else "name_${a.name.lowercase()}"
+        }
+        val uniquePlaylists = playlists.distinctBy { "${it.ownerId}_${it.id}" }
+        return re.pinok.data.model.AudioSearchResult(uniqueTracks, uniqueArtists, uniquePlaylists)
+    }
+
+    /** Сырой ответ catalog.getAudioSearch (Fix #281: переиспользование одним запросом). */
+    private suspend fun catalogGetAudioSearchRaw(
+        query: String,
+        startFrom: String? = null,
+    ): JsonObject? {
+        if (isOffline() || query.isBlank()) return null
+        // #MUSIC-PORT-FIX: параметр называется `query` (не `q`), и нужен
+        // need_blocks=1 — иначе VK вернёт только названия секций без блоков.
+        val args = mutableMapOf(
+            "query" to query,
+            "need_blocks" to "1",
+        )
+        if (!startFrom.isNullOrBlank()) args["start_from"] = startFrom
+        return call("catalog.getAudioSearch", args)
     }
 
     /** #68: audio.searchPlaylists — поиск плейлистов. */
@@ -4243,6 +4337,24 @@ class VKApiClient(
             "need_blocks" to "1",
         )) ?: return emptyList()
         val resp = json.getAsJsonObject("response") ?: return emptyList()
+        // Fix #281: тело перенесено в parseArtistsFromCatalogSearchLinks —
+        // тот же парсер используется в audioSearchWithSections для уже
+        // скачанного ответа (без повторного HTTP).
+        return parseArtistsFromCatalogSearchLinks(resp, count)
+    }
+
+    /**
+     * Fix #281: парсер артистов из response.links[] catalog.getAudioSearch
+     * (content_type=artist). Тело 1:1 из прежнего audioSearchArtists.
+     *
+     * ВАЖНО для UI: VK в links[] НЕ отдаёт числовой id — все артисты приходят
+     * с id=0. Дедуп по имени обязателен у потребителя (finalizeAudioSearchResult),
+     * иначе дубли ключей LazyRow (crash «Key artist_0 was already used»).
+     */
+    private fun parseArtistsFromCatalogSearchLinks(
+        resp: JsonObject,
+        count: Int,
+    ): List<re.pinok.data.model.AudioArtist> {
         val result = mutableListOf<re.pinok.data.model.AudioArtist>()
         resp.getAsJsonArray("links")?.forEach { el ->
             if (!el.isJsonObject) return@forEach
@@ -4278,6 +4390,17 @@ class VKApiClient(
             "need_blocks" to "1",
         )) ?: return emptyList()
         val resp = json.getAsJsonObject("response") ?: return emptyList()
+        // Fix #281: тело перенесено в parsePlaylistsFromCatalogSearch —
+        // тот же парсер используется в audioSearchWithSections для уже
+        // скачанного ответа (без повторного HTTP).
+        return parsePlaylistsFromCatalogSearch(resp, count)
+    }
+
+    /** Fix #281: парсер альбомов/плейлистов из response.albums[]/playlists[] catalog.getAudioSearch. */
+    private fun parsePlaylistsFromCatalogSearch(
+        resp: JsonObject,
+        count: Int,
+    ): List<re.pinok.data.model.AudioPlaylist> {
         val result = mutableListOf<re.pinok.data.model.AudioPlaylist>()
         val seen = HashSet<Pair<Long, Long>>()
         for (key in listOf("albums", "playlists")) {
@@ -4567,14 +4690,7 @@ class VKApiClient(
         startFrom: String? = null,
     ): re.pinok.data.model.AudioCatalogSection? {
         if (isOffline() || query.isBlank()) return null
-        // #MUSIC-PORT-FIX: параметр называется `query` (не `q`), и нужен
-        // need_blocks=1 — иначе VK вернёт только названия секций без блоков.
-        val args = mutableMapOf(
-            "query" to query,
-            "need_blocks" to "1",
-        )
-        if (!startFrom.isNullOrBlank()) args["start_from"] = startFrom
-        val json = call("catalog.getAudioSearch", args) ?: return null
+        val json = catalogGetAudioSearchRaw(query, startFrom) ?: return null
         return parseCatalogSectionExtended(json, "search")
     }
 

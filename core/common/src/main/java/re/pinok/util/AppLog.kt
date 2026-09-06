@@ -78,6 +78,29 @@ object AppLog {
 
     private val persistLock = Any()
 
+    // ─── Fix #281 (ANR музыки-поиска): асинхронная запись файла ─────────
+    //
+    // Раньше appendToFile выполнял write + flush + file.length() (stat-сисвызов)
+    // НА ПОТОКЕ ВЫЗЫВАЮЩЕГО — включая main. Во время поиска музыки всплеск
+    // логов (AppLog.api на каждый запрос, W-логи fallback-веток, per-track
+    // логи playTrackList) + постоянный фоновый спам поллеров (LongPoll,
+    // NotificationsPoller) означали: main-поток регулярно упирался в
+    // synchronized(persistLock) за фоновым писателем и делал дисковый I/O
+    // сам — это давало jank и вкладывалось в ANR «приложение не отвечает».
+    //
+    // Теперь: логирующий поток только кладёт задачу в однопоточный executor
+    // "PinoK-LogWriter"; форматирование строки, запись, batch-flush (когда
+    // очередь исчерпана) и rotation выполняются на writer-потоке.
+    // In-memory buffer (для LogViewer/snapshot) остаётся синхронным — он
+    // дешёвый (addFirst + removeLast под коротким локом).
+    private val persistExecutor: java.util.concurrent.ExecutorService =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "PinoK-LogWriter").apply { isDaemon = true }
+        }
+
+    /** Счётчик задач в очереди writer-потока (для batch-flush при исчерпании). */
+    private val pendingPersistWrites = java.util.concurrent.atomic.AtomicInteger(0)
+
     /**
      * #LOGCAT-NOISE-FIX (2026-08-03): gate verbose logcat output.
      *
@@ -714,40 +737,92 @@ object AppLog {
         return null
     }
 
+    /**
+     * Fix #281 (ANR музыки-поиска): файловая запись — ТОЛЬКО на writer-потоке.
+     *
+     * Вызывающий поток (включая main) платит только за постановку задачи в
+     * очередь executor'а. Форматирование строки (SimpleDateFormat, stack trace
+     * Throwable), write, batch-flush и rotation — на "PinoK-LogWriter".
+     *
+     * Batch-flush: flush выполняется когда очередь задач исчерпана
+     * (pendingPersistWrites == 0) — при burst'е логов (поиск музыки, старт
+     * приложения) это N записей на один flush вместо N flush'ей.
+     */
     private fun appendToFile(entry: LogEntry, levelStr: String) {
-        val writer = persistWriter ?: return
-        synchronized(persistLock) {
-            try {
-                val dateStr = isoFormat.get()?.format(Date(entry.timestamp)) ?: return
-                val threadStr = "  [${entry.threadName}]"
-                val callerStr = entry.callerLocation?.let { "  @ $it" } ?: ""
-                val ctxStr = entry.context?.takeIf { it.isNotEmpty() }?.let {
-                    "  " + it.entries.joinToString(",", "{", "}") { (k, v) -> "$k=$v" }
-                } ?: ""
-                val traceStr = entry.throwable?.let {
-                    "\n" + formatThrowable(it).prependIndent("    ")
-                } ?: ""
-                val line = "$dateStr $levelStr/$PREFIX/${entry.tag}: " +
-                    "${entry.message}$threadStr$callerStr$ctxStr$traceStr\n"
-                writer.write(line)
-                writer.flush()
-                // Rotation check
-                val file = persistFile
-                if (file != null && file.length() > PERSIST_MAX_BYTES) {
-                    writer.close()
-                    val old = File(file.parentFile, "$PERSIST_FILE.old")
-                    old.delete()
-                    file.renameTo(old)
-                    val newFile = File(file.parentFile, PERSIST_FILE)
-                    persistFile = newFile
-                    persistWriter = OutputStreamWriter(
-                        java.io.FileOutputStream(newFile, true),
-                        Charsets.UTF_8,
-                    )
+        if (persistWriter == null) return  // init не вызывался — только буфер
+        pendingPersistWrites.incrementAndGet()
+        persistExecutor.execute {
+            synchronized(persistLock) {
+                val w = persistWriter
+                if (w == null) {
+                    pendingPersistWrites.decrementAndGet()
+                    return@execute
                 }
-            } catch (_: Exception) {
-                // Не падаем если файл недоступен — in-memory буфер всё ещё работает
+                try {
+                    val dateStr = isoFormat.get()?.format(Date(entry.timestamp)) ?: return@execute
+                    val threadStr = "  [${entry.threadName}]"
+                    val callerStr = entry.callerLocation?.let { "  @ $it" } ?: ""
+                    val ctxStr = entry.context?.takeIf { it.isNotEmpty() }?.let {
+                        "  " + it.entries.joinToString(",", "{", "}") { (k, v) -> "$k=$v" }
+                    } ?: ""
+                    val traceStr = entry.throwable?.let {
+                        "\n" + formatThrowable(it).prependIndent("    ")
+                    } ?: ""
+                    val line = "$dateStr $levelStr/$PREFIX/${entry.tag}: " +
+                        "${entry.message}$threadStr$callerStr$ctxStr$traceStr\n"
+                    w.write(line)
+                } catch (_: Exception) {
+                    // Не падаем если файл недоступен — in-memory буфер всё ещё работает
+                } finally {
+                    // Batch-flush: доливаем на диск когда очередь опустела.
+                    if (pendingPersistWrites.decrementAndGet() <= 0) {
+                        try { w.flush() } catch (_: Exception) {}
+                    }
+                }
+                // Rotation check (только на writer-потоке — конкуренции с
+                // вызывающими потоками больше нет).
+                try {
+                    val file = persistFile
+                    if (file != null && file.length() > PERSIST_MAX_BYTES) {
+                        w.close()
+                        val old = File(file.parentFile, "$PERSIST_FILE.old")
+                        old.delete()
+                        file.renameTo(old)
+                        val newFile = File(file.parentFile, PERSIST_FILE)
+                        persistFile = newFile
+                        persistWriter = OutputStreamWriter(
+                            java.io.FileOutputStream(newFile, true),
+                            Charsets.UTF_8,
+                        )
+                    }
+                } catch (_: Exception) {
+                    // rotation не удался — пишем дальше в текущий writer
+                }
             }
+        }
+    }
+
+    /**
+     * Fix #281: синхронный flush персистентного файла с таймаутом.
+     * Для путей, где важна полнота файла на диске СЕЙЧАС: [clear] (перед
+     * закрытием writer) и будущие экспортные ветки, читающие persistent.log.
+     *
+     * Не бросает исключений: при таймауте/недоступности executor'а просто
+     * возвращается (batch-flush на writer-потоке долоёт файл позже).
+     */
+    fun flushSync(timeoutMs: Long = 2000L) {
+        try {
+            val f = persistExecutor.submit {
+                synchronized(persistLock) {
+                    val w = persistWriter
+                    if (w != null) {
+                        try { w.flush() } catch (_: Exception) {}
+                    }
+                }
+            }
+            f.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            // таймаут / executor недоступен — не критично
         }
     }
 
@@ -890,6 +965,10 @@ object AppLog {
 
     fun clear() {
         synchronized(bufferLock) { buffer.clear() }
+        // Fix #281: writer асинхронный — дренируем очередь задач ДО закрытия,
+        // иначе pending-задачи попытаются писать в закрытый writer
+        // (исключение глотается, но записи теряются).
+        flushSync()
         synchronized(persistLock) {
             try {
                 persistWriter?.close()
