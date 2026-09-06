@@ -12340,6 +12340,241 @@ class VKApiClient(
     }
 
     /**
+     * #CALLS-SNAP (2026-09-06) РЕВИЗИЯ-2: calls.start — создать запланированный
+     * звонок (фасад CallsApi.callsStartScheduledCall, REV-DEEP-2).
+     *
+     * Реверс: web-сабмит ModalScheduleCall `(0,y.callsStart)(PO(e))`
+     * (bridge@777039) БЕЗ call-аргумента; wire-объект wO (bridge@725601).
+     * Прежняя гипотеза «messages.editCall{call_id:"0"}» опровергнута —
+     * editCall в web правит ТОЛЬКО существующие.
+     *
+     * Все поля — скаляры (bool → "1"/"0"); nullable — omit (условные поля
+     * wO). Ответ: {call_id, join_link, short_credentials{...}} — сырой.
+     */
+    override suspend fun callsStartScheduledCall(
+        name: String,
+        timeSec: Long,
+        durationSec: Long,
+        muteAudio: String,
+        muteVideo: String,
+        onlyAuthUsers: Boolean,
+        recurrenceRule: String,
+        waitingHall: Boolean,
+        feedback: Boolean,
+        onlyAdminCanShareMovie: Boolean,
+        onlyAdminCanRecord: Boolean,
+        muteScreenSharing: String,
+        groupId: Long?,
+        skipNotification: Boolean?,
+        showChatHistory: Boolean?,
+        recurrenceUntilSec: Long?,
+    ): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "name" to name,
+            "time" to timeSec.toString(),
+            "duration" to durationSec.toString(),
+            "mute_audio" to muteAudio,
+            "mute_video" to muteVideo,
+            "only_auth_users" to if (onlyAuthUsers) "1" else "0",
+            "recurrence_rule" to recurrenceRule,
+            "waiting_hall" to if (waitingHall) "1" else "0",
+            "feedback" to if (feedback) "1" else "0",
+            "only_admin_can_share_movie" to if (onlyAdminCanShareMovie) "1" else "0",
+            "only_admin_can_record" to if (onlyAdminCanRecord) "1" else "0",
+            "mute_screen_sharing" to muteScreenSharing,
+        )
+        if (groupId != null) args["group_id"] = groupId.toString()
+        if (skipNotification != null) args["skip_notification"] = if (skipNotification) "1" else "0"
+        if (showChatHistory != null) args["show_chat_history"] = if (showChatHistory) "1" else "0"
+        if (recurrenceUntilSec != null) args["recurrence_until_time"] = recurrenceUntilSec.toString()
+        val json = call("calls.start", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "callsStartScheduledCall parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: messages.editCall — ПОЛНЫЙ wire (правка/перенос
+     * существующего запланированного; фасад CallsApi.messagesEditCallScheduled,
+     * REV-DEEP-2 PO@726449/Uk@899680). payload = wO + call_id + marker_time
+     * (из schedule айтема); nullable — omit.
+     */
+    override suspend fun messagesEditCallScheduled(
+        callId: String,
+        name: String,
+        timeSec: Long,
+        durationSec: Long,
+        muteAudio: String,
+        muteVideo: String,
+        onlyAuthUsers: Boolean,
+        recurrenceRule: String,
+        waitingHall: Boolean,
+        feedback: Boolean,
+        onlyAdminCanShareMovie: Boolean,
+        onlyAdminCanRecord: Boolean,
+        muteScreenSharing: String,
+        markerTime: Long?,
+        groupId: Long?,
+        skipNotification: Boolean?,
+        showChatHistory: Boolean?,
+        recurrenceUntilSec: Long?,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "call_id" to callId,
+            "name" to name,
+            "time" to timeSec.toString(),
+            "duration" to durationSec.toString(),
+            "mute_audio" to muteAudio,
+            "mute_video" to muteVideo,
+            "only_auth_users" to if (onlyAuthUsers) "1" else "0",
+            "recurrence_rule" to recurrenceRule,
+            "waiting_hall" to if (waitingHall) "1" else "0",
+            "feedback" to if (feedback) "1" else "0",
+            "only_admin_can_share_movie" to if (onlyAdminCanShareMovie) "1" else "0",
+            "only_admin_can_record" to if (onlyAdminCanRecord) "1" else "0",
+            "mute_screen_sharing" to muteScreenSharing,
+        )
+        if (markerTime != null) args["marker_time"] = markerTime.toString()
+        if (groupId != null) args["group_id"] = groupId.toString()
+        if (skipNotification != null) args["skip_notification"] = if (skipNotification) "1" else "0"
+        if (showChatHistory != null) args["show_chat_history"] = if (showChatHistory) "1" else "0"
+        if (recurrenceUntilSec != null) args["recurrence_until_time"] = recurrenceUntilSec.toString()
+        val json = call("messages.editCall", args) ?: return false
+        return json.get("response")?.takeIf { it.isJsonObject } != null
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: messages.getScheduledCalls — ПОЛНАЯ форма
+     * {grouped, count, [caller_id], [start_from]} (REV-DEEP-2, 97907@90169);
+     * ответ {items, next_from, groups, profiles} — СЫРОЙ (next_from нужен
+     * пагинации секции).
+     */
+    override suspend fun messagesGetScheduledCallsPage(grouped: Boolean, count: Int, callerId: Long?, startFrom: String?): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "grouped" to if (grouped) "1" else "0",
+            "count" to count.toString(),
+        )
+        if (callerId != null) args["caller_id"] = callerId.toString()
+        if (!startFrom.isNullOrBlank()) args["start_from"] = startFrom
+        val json = call("messages.getScheduledCalls", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetScheduledCallsPage parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: messages.getHistory — сырье для чата звонка
+     * (фасад CallsApi.messagesGetHistory, REV-DEEP-1 IM-SPA@1769954): {peer_id,
+     * [start_cmid], count, offset, extended:1, fwd_extended:1}; направления
+     * web: назад offset=-1, вперёд offset=1-p, вокруг -floor(0.8·p).
+     * Возвращает items[] БЕЗ трансформации (сервисные action.type звонка
+     * нужны UI как есть). Отличается от существующего messagesGetHistory
+     * (List<Message>, rev=0, без start_cmid) — JVM-сигнатуры не конфликтуют
+     * (4 параметра).
+     */
+    override suspend fun messagesGetHistory(peerId: Long, count: Int, offset: Int, startCmid: Long?): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "peer_id" to peerId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "extended" to "1",
+            "fwd_extended" to "1",
+        )
+        if (startCmid != null) args["start_cmid"] = startCmid.toString()
+        val json = call("messages.getHistory", args) ?: return emptyList()
+        return try {
+            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetHistory(raw) parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: messages.send — текст в чат звонка (фасад
+     * CallsApi.messagesSendToPeer, REV-DEEP-1: passthrough-обёртка бридга
+     * bridge@968528; builder IM-SPA 83836@1541400 — {peer_id, random_id,
+     * message}; random_id UI берёт round(2e9·random), живой пример
+     * 252761de@13996). Вложения/forward — вне этого члена (нет загрузчиков).
+     */
+    override suspend fun messagesSendToPeer(peerId: Long, message: String, randomId: Long): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "peer_id" to peerId.toString(),
+            "random_id" to randomId.toString(),
+            "message" to message,
+        )
+        val json = call("messages.send", args) ?: return false
+        return try {
+            val resp = json.get("response")
+            resp != null && !resp.isJsonNull
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesSendToPeer parse error", e)
+            false
+        }
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: messages.getConversationsById — реестр чатов по
+     * peer_id (фасад CallsApi.messagesGetConversationsById, REV-DEEP-1
+     * bridge@960662: fields="name,photo_100,photo_200,can_upload_video,
+     * custom_names_for_calls", extended:1). Ответ сырой.
+     */
+    override suspend fun messagesGetConversationsById(peerIds: List<Long>, fields: String?): JsonObject? {
+        if (isOffline() || peerIds.isEmpty()) return null
+        val args = mutableMapOf(
+            "peer_ids" to peerIds.joinToString(",") { it.toString() },
+            "extended" to "1",
+        )
+        args["fields"] = if (fields.isNullOrBlank()) {
+            "name,photo_100,photo_200,can_upload_video,custom_names_for_calls"
+        } else {
+            fields
+        }
+        val json = call("messages.getConversationsById", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetConversationsById parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: video.edit — переименование записи звонка
+     * (фасад CallsApi.videoEditTitle, REV-DEEP-3). Запись — ОБЫЧНЫЙ VK-видео
+     * (messages.getCallRecordings НЕ существует), переименование = правка
+     * заголовка видео; wire-гипотеза (обёртка video.edit есть bridge@964211),
+     * подтверждается живым сервером (Этап И). Делегирует существующему
+     * videoEdit(videoId, ownerId, name) — тот же wire-вызов.
+     */
+    override suspend fun videoEditTitle(ownerId: Long, videoId: Long, name: String): Boolean {
+        return videoEdit(videoId = videoId, ownerId = ownerId, name = name)
+    }
+
+    /**
+     * #CALLS-SNAP РЕВИЗИЯ-2: messages.getGroupsForCall — группы для «От имени»
+     * запланированного звонка (фасад CallsApi.messagesGetGroupsForCallForSchedule,
+     * REV-DEEP-2 bridge@776476). Делегирует существующему messagesGetGroupsForCall
+     * (тот же wire-вызов; имя члена фасада расширено суффиксом ForSchedule,
+     * чтобы не пересекаться с :app-методом по вызовам старого кода).
+     */
+    override suspend fun messagesGetGroupsForCallForSchedule(): List<JsonObject> {
+        return messagesGetGroupsForCall()
+    }
+
+    /**
      * Fix #267 (Plan §36.12 P1-CHAT-5): account.getToggles — feature flags.
      *
      * VK API method `account.getToggles` возвращает список фича-флагов

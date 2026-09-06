@@ -248,6 +248,207 @@ interface CallsApi {
      *  (§2.4; в бандле экспортируется как voiceRoomsGetParticipants, wire-метод —
      *  voicerooms.getParticipants через api-шлюз, НЕ fb.do); response = {profiles, anonyms, groups, count, secret}. */
     suspend fun voiceRoomsGetParticipants(callId: String, offset: Int, count: Int, filter: String?): JsonObject?
+
+    // ─── #CALLS-SNAP (2026-09-06): РЕВИЗИЯ-2 (REV-DEEP-1/2/3, волна-7) —
+    // запланированные (calls.start + editCall full-wire), чат звонка
+    // (getHistory/send/getConversationsById), записи (video.edit). Только
+    // добавление: прежние 48 членов не тронуты, состав 8 членов
+    // CallsDependencies не сужен. Дефолтов в фасаде нет (урок K2).
+
+    /**
+     * Создать запланированный звонок — VK API calls.start.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-2, bridge@777039/725601): web создаёт запланированный
+     * звонок РОВНО этим методом (обёртка callsStart, сабмит jM→handleOnSubmit
+     * `(0,y.callsStart)(PO(e))` без call-аргумента). ПРЕЖНЯЯ гипотеза
+     * «messages.editCall с call_id="0"» ОПРОВЕРГНУТА реверсом: в коде web
+     * call_id:"0" нигде не встречается, messages.editCall используется ТОЛЬКО
+     * для правки/переноса существующего (PO с t=call).
+     *
+     * Wire-объект wO (bridge@725601, точные имена): {mute_audio, mute_video,
+     * name, only_auth_users, duration (СЕКУНДЫ, Math.round(ms/1e3)),
+     * time (unix СЕКУНДЫ, пересчитанные в выбранную TZ), recurrence_rule,
+     * waiting_hall, feedback, only_admin_can_share_movie,
+     * only_admin_can_record, mute_screen_sharing} + условные [group_id],
+     * [skip_notification], [show_chat_history], [recurrence_until_time].
+     * Calendar/displayName — КЛИЕНТСКИЕ поля web, в API не уходят.
+     *
+     * MuteState (bridge@720715): "unmute"|"mute"|"mute_permanent";
+     * mute_screen_sharing при создании — только "unmute"|"mute_permanent".
+     * recurrence_rule (модуль 912069): never|daily|weekly|weekdays|weekend|
+     * monthly|yearly (same_week_day UI → weekdays/weekend wire, RO@725500).
+     *
+     * Ответ (FM@773057): {call_id, join_link,
+     * short_credentials:{link_with_password, link_without_password, password}}.
+     *
+     * @param name               название (web шлёт всегда; пустое — клиентский
+     *                           дефолт calls_default_meeting_name, решает UI)
+     * @param timeSec            начало, unix СЕКУНДЫ (в TZ пользователя)
+     * @param durationSec        длительность в СЕКУНДАХ
+     * @param muteAudio          wire-строка MuteState для микрофонов
+     * @param muteVideo          wire-строка MuteState для камер
+     * @param onlyAuthUsers      анонимная ссылка: false = anonymous ON (wire 0)
+     * @param recurrenceRule     повтор (7 wire-значений выше)
+     * @param waitingHall        зал ожидания (wire 0/1)
+     * @param feedback           реакции (wire 0/1; web-дефолт ON → 1)
+     * @param onlyAdminCanShareMovie совместный просмотр: false = ALL (wire 0)
+     * @param onlyAdminCanRecord запись: только админ (web шлёт 1/0 всегда)
+     * @param muteScreenSharing  wire-строка MuteState демонстрации
+     * @param groupId            «от имени группы» (wire group_id; null — omit)
+     * @param skipNotification   напоминание ВЫКЛ (null — omit; wire 0/1)
+     * @param showChatHistory    история чата (null — omit; wire 0/1)
+     * @param recurrenceUntilSec конец повтора (null — omit; wire СЕКУНДЫ)
+     * @return response-объект или null (ошибка — lastApiError).
+     */
+    suspend fun callsStartScheduledCall(
+        name: String,
+        timeSec: Long,
+        durationSec: Long,
+        muteAudio: String,
+        muteVideo: String,
+        onlyAuthUsers: Boolean,
+        recurrenceRule: String,
+        waitingHall: Boolean,
+        feedback: Boolean,
+        onlyAdminCanShareMovie: Boolean,
+        onlyAdminCanRecord: Boolean,
+        muteScreenSharing: String,
+        groupId: Long?,
+        skipNotification: Boolean?,
+        showChatHistory: Boolean?,
+        recurrenceUntilSec: Long?,
+    ): JsonObject?
+
+    /**
+     * Править/перенести существующий запланированный звонок —
+     * VK API messages.editCall (ПОЛНЫЙ wire-объект).
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-2, bridge@726449 PO с t=call / @899680 Uk-перенос):
+     * payload = wO(e) + call_id + marker_time (из item.schedule.marker_time);
+     * web использует editCall ТОЛЬКО для существующих (правка BM / перенос Uk).
+     * Прежний узкий член messagesEditCall(callId, name, scheduledDate)
+     * СОХРАНЁН (правило «фасад расширяется добавлением»); новый член — полный
+     * wire, старый остаётся для совместимости сигнатур волны-1.
+     *
+     * @param markerTime marker_time из schedule айтема (null — omit; web
+     *                   шлёт при правке/переносе всегда из айтема)
+     * @return true при успехе (response-объект получен).
+     */
+    suspend fun messagesEditCallScheduled(
+        callId: String,
+        name: String,
+        timeSec: Long,
+        durationSec: Long,
+        muteAudio: String,
+        muteVideo: String,
+        onlyAuthUsers: Boolean,
+        recurrenceRule: String,
+        waitingHall: Boolean,
+        feedback: Boolean,
+        onlyAdminCanShareMovie: Boolean,
+        onlyAdminCanRecord: Boolean,
+        muteScreenSharing: String,
+        markerTime: Long?,
+        groupId: Long?,
+        skipNotification: Boolean?,
+        showChatHistory: Boolean?,
+        recurrenceUntilSec: Long?,
+    ): Boolean
+
+    /**
+     * Список запланированных звонков (ПОЛНАЯ форма с пагинацией) —
+     * VK API messages.getScheduledCalls.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-2, 97907@90169): web шлёт {grouped:1, count:50,
+     * [caller_id], [start_from]}; ответ {items, next_from, groups, profiles}.
+     * Прежний узкий член messagesGetScheduledCalls(count) СОХРАНЁН.
+     *
+     * @param grouped   группировка web (1)
+     * @param count     страница (web 50)
+     * @param callerId  фильтр владельца (full-вкладка, null — omit)
+     * @param startFrom пагинация (next_from прошлого ответа, null — первая)
+     * @return СЫРОЙ response {items, next_from, groups, profiles} или null.
+     */
+    suspend fun messagesGetScheduledCallsPage(grouped: Boolean, count: Int, callerId: Long?, startFrom: String?): JsonObject?
+
+    /**
+     * История сообщений чата — VK API messages.getHistory.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-1, IM-SPA 83836@1769954): {peer_id, [start_cmid],
+     * count, offset, extended:1, fwd_extended:1} (+retries:5 — клиентский
+     * ретрай web, у нас общий call()). Направления web: назад offset=-1;
+     * вперёд offset=1-p; вокруг offset=-floor(0.8·p). peer_id чата звонка —
+     * ГОТОВЫЙ из ответа calls.getConversationByCall → conversation.peer.id
+     * (bridge@196400 setRoomChatId; арифметики +2e9 НЕ требуется — приходит
+     * готовым; арифметика 2e9 существует только в IM-чанках для chat_id).
+     *
+     * @param peerId    peer_id чата (conversation.peer.id)
+     * @param count     размер страницы
+     * @param offset    направление пагинации (см. выше)
+     * @param startCmid стартовый conversation_message_id (null — omit)
+     * @return items[] (каждый содержит conversation_message_id/date/text/
+     *         from_id/action? — сервисные сообщения звонка).
+     */
+    suspend fun messagesGetHistory(peerId: Long, count: Int, offset: Int, startCmid: Long?): List<JsonObject>
+
+    /**
+     * Отправить сообщение в чат — VK API messages.send.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-1): обёртка звонкового бридга — passthrough
+     * (bridge@968528 `ue=(e={})=>xP("messages.send")(e)`); builder IM-SPA
+     * (83836@1541400) для текста шлёт {peer_id, random_id, message}; живой
+     * пример random_id — `Math.round(2e9*Math.random())` (252761de@13996).
+     * Вложения/forward/sticker — НЕ в этом члене (загрузчиков в фасаде нет,
+     * честное отклонение остаётся).
+     *
+     * @param peerId   peer_id чата звонка
+     * @param message  текст сообщения
+     * @param randomId идемпотент отправки (UI генерит round(2e9·random))
+     * @return true при успехе (response получен).
+     */
+    suspend fun messagesSendToPeer(peerId: Long, message: String, randomId: Long): Boolean
+
+    /**
+     * Реестр чатов по peer_id — VK API messages.getConversationsById.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-1, bridge@960662): {peer_ids:"1,2", extended:1,
+     * fields:"name,photo_100,photo_200,can_upload_video,
+     * custom_names_for_calls"} — заголовок/фото чата звонка.
+     *
+     * @return СЫРОЙ response ({conversations|count, profiles...}) или null.
+     */
+    suspend fun messagesGetConversationsById(peerIds: List<Long>, fields: String?): JsonObject?
+
+    /**
+     * Переименовать запись звонка (заголовок VK-видео) — VK API video.edit.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-3): «метода messages.getCallRecordings не
+     * существует; запись — ОБЫЧНЫЙ VK-видео» (DOM страницы записей:
+     * video_card_layout + video_card_edit_button-карандаш); calls.*-мутатора
+     * переименования в бандлах НЕТ; wire-ГИПОТЕЗА video.edit {owner_id,
+     * video_id, name} (обёртка есть: bridge@964211/972213) — подтверждается
+     * живым сервером (Этап И), помечено в KDoc реализации.
+     *
+     * @param ownerId owner_id видео (recordExternalOwnerId / ссылка vkvideo)
+     * @param videoId video_id видео (recordExternalMovieId)
+     * @param name    новый заголовок
+     * @return true при успехе.
+     */
+    suspend fun videoEditTitle(ownerId: Long, videoId: Long, name: String): Boolean
+
+    /**
+     * Группы, от имени которых можно запланировать/создать звонок —
+     * VK API messages.getGroupsForCall.
+     *
+     * РЕВИЗИЯ-2 (REV-DEEP-2, bridge@776476): опции селекта «От имени»
+     * (calls_schedule_call_modal_user_select) = я + getGroupsForCall
+     * (value = -id); item.wO group_id уходит ТОЛЬКО при создании/правке
+     * «от имени группы». Реализация существовала в VKApiClient (метод :app
+     * без члена фасада) — введён в фасад для модалки расписания.
+     *
+     * @return items[] сырых групп ({id, name, photo_50, ...}).
+     */
+    suspend fun messagesGetGroupsForCallForSchedule(): List<JsonObject>
 }
 
 /** Фасад Queuev4Client: setCredential/start/events — вызовы экранов (census). */

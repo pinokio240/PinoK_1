@@ -183,5 +183,12 @@ object BuildStamp {
     // nullable joinSession → явная проверка (CallScreen JOIN_BY_LINK), internal
     // CallCluster в public-сигнатуре → public (CallsClusterRow), import Toast
     // (CallsJoinByLinkDialog), import flow.first (IncomingCallScreen).
-    const val STAMP: String = "calls-2026.09.06-4"
+    // -5 (2026-09-06): волна-7 «ревизия-2 снапшотов» (REV-DEEP-1/2/3). Расписание:
+    // создание = calls.start (гипотеза editCall call_id:"0" ОПРОВЕРГНУТА реверсом),
+    // модалка 18 контролов full-wire (wO), список getScheduledCalls{grouped} с
+    // next_from-пагинацией + группировка по дням + действия join/edit/delete/copy;
+    // чат звонка: история messages.getHistory + отправка messages.send (random_id
+    // round(2e9·rand)) + сервисные action-типы; записи: переименование video.edit
+    // (wire-гипотеза); фасад CallsApi 48→56 членов.
+    const val STAMP: String = "calls-2026.09.06-5"
 }

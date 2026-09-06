@@ -291,7 +291,7 @@ fun CallsJoinByLinkDialog(onDismiss: () -> Unit) {
 }
 
 /** Итог join-цепочки: сессия при успехе / РЕАЛЬНОЕ сообщение об ошибке. */
-private data class CallJoinResult(val success: Boolean, val session: CallJoinByLinkSession?, val errorMessage: String)
+internal data class CallJoinResult(val success: Boolean, val session: CallJoinByLinkSession?, val errorMessage: String)
 
 /**
  * Цепочка Г4 (по реверсу §6.4 + фасаду CallsApi):
@@ -300,8 +300,14 @@ private data class CallJoinResult(val success: Boolean, val session: CallJoinByL
  *     authed через session_key / аноним через anonymToken;
  *  3. пароль (если есть) — appended к joinLink как «?p=<pass>» (нормализация §6.4).
  * Тяжёлые вызовы — withContext(Dispatchers.Default) (#ANR-MAIN-IO).
+ *
+ * internal (волна-7, Task 7-b): переиспользование секцией запланированных
+ * (CallsScheduledSection) для join по vk_join_link айтема (REV-DEEP-2: web
+ * входит по ссылке — showJoinPopup); аноним-ветку секция НЕ использует
+ * (anonymName пустой), isVideo=false — фикс секции. CallJoinResult тоже
+ * internal — internal-функция не может выставлять private-in-file тип.
  */
-private suspend fun performJoinByLink(
+internal suspend fun performJoinByLink(
     deps: CallsDependencies,
     parts: CallJoinLinkParts,
     password: String,

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Lock
@@ -38,6 +39,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -88,6 +90,10 @@ internal data class RecordingItem(
     val url: String?,
     /** Собранная ссылка vkvideo-страницы (формат thumb среза §4), если id известны. */
     val pageUrl: String?,
+    /** owner_id/video_id VK-видео записи (ревизия-2 REV-DEEP-3: запись — обычный
+     *  VK-видео; адресат переименования video.edit). 0 — не распознаны. */
+    val ownerId: Long,
+    val videoId: Long,
     val isPrivate: Boolean,
 )
 
@@ -110,9 +116,12 @@ internal data class RecordingItem(
  *                               подтверждением;
  *      more_horizontal_24     → меню: Открыть в VK Видео / Скопировать
  *                               ссылку / Скачать / Удалить;
- *      pen_outline_16         → НЕ рендерится: API переименования записи в
- *                               фасаде CallsApi нет (чужой файл не
- *                               расширяется), имитация запрещена no-stub;
+ *      pen_outline_16         → «Переименовать» (ревизия-2 волна-7, REV-DEEP-3:
+ *                               запись — ОБЫЧНЫЙ VK-видео, переименование =
+ *                               video.edit {owner_id, video_id, name}; в бандлах
+ *                               calls.*-мутатора НЕТ — wire-гипотеза, подтверждается
+ *                               живым сервером Этапа И); пункт виден ТОЛЬКО при
+ *                               известных owner_id/video_id (честно);
  *      lock_16                → индикатор приватности (is_private).
  *  - «N просмотров · время назад» — фактический формат среза §4.2
  *    (русская плюрализация «просмотр/просмотра/просмотров»); инкремент
@@ -142,6 +151,8 @@ fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
     var selectionMode by remember { mutableStateOf(false) }
     val selected = remember { mutableStateListOf<Long>() }
     var deleting by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var renameItem by remember { mutableStateOf<RecordingItem?>(null) }
 
     fun performDelete(ids: List<Long>) {
         if (deleting) return
@@ -309,6 +320,8 @@ fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
                                 }
                             },
                             onDelete = { confirmDeleteIds = listOf(item.id) },
+                            onRename = { renameItem = item },
+                            canRename = item.ownerId != 0L && item.videoId != 0L,
                             modifier = Modifier.testTag("recordings_item"),
                         )
                     }
@@ -354,6 +367,68 @@ fun CallsRecordingsSection(onNavigateToCall: (Long) -> Unit) {
             },
         )
     }
+
+    // «Переименовать» (pen_outline_16, ревизия-2 REV-DEEP-3): video.edit
+    // {owner_id, video_id, name} — wire-гипотеза (живая проверка Этапа И);
+    // лимит названия 100 — calls_validation_length модалки расписания.
+    val renamingTarget = renameItem
+    if (renamingTarget != null) {
+        var renameText by remember(renamingTarget.id) { mutableStateOf(renamingTarget.title) }
+        AlertDialog(
+            onDismissRequest = { if (!renaming) renameItem = null },
+            title = { Text("Переименовать запись") },
+            text = {
+                TextField(
+                    value = renameText,
+                    onValueChange = { if (it.length <= 100) renameText = it },
+                    singleLine = true,
+                    enabled = !renaming,
+                    label = { Text("Название") },
+                    supportingText = { Text(renameText.length.toString() + "/100") },
+                    modifier = Modifier.fillMaxWidth().testTag("video_card_edit_input"),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !renaming && renameText.trim().isNotBlank(),
+                    onClick = {
+                        val target = renamingTarget
+                        val ownerId = target.ownerId
+                        val videoId = target.videoId
+                        val newName = renameText.trim()
+                        renaming = true
+                        scope.launch {
+                            val ok = try {
+                                deps.apiClient.videoEditTitle(ownerId, videoId, newName)
+                            } catch (e: Exception) {
+                                AppLog.e(TAG, "videoEditTitle error (owner=$ownerId video=$videoId)", e)
+                                false
+                            }
+                            renaming = false
+                            if (ok) {
+                                AppLog.i(TAG, "videoEditTitle OK: video=$videoId")
+                                renameItem = null
+                                repo.refresh(CallsSectionKey.RECORDINGS, force = true)
+                                Toast.makeText(context, "Запись переименована", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val apiErr = deps.apiClient.lastApiError
+                                val msg = if (apiErr.isNullOrBlank()) {
+                                    "Не удалось переименовать (сервер не подтвердил video.edit)"
+                                } else {
+                                    "Ошибка: $apiErr"
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("video_card_edit_confirm"),
+                ) { Text("Сохранить") }
+            },
+            dismissButton = {
+                TextButton(enabled = !renaming, onClick = { renameItem = null }) { Text("Отмена") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -368,6 +443,10 @@ private fun RecordingItemCard(
     onOpen: () -> Unit,
     onCopyLink: () -> Unit,
     onDelete: () -> Unit,
+    /** Ревизия-2: pen_outline_16 — переименование video.edit (см. KDoc секции). */
+    onRename: () -> Unit,
+    /** Честно: без owner_id/video_id пункт не рендерится. */
+    canRename: Boolean,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -475,6 +554,17 @@ private fun RecordingItemCard(
                                     onDownload()
                                 },
                             )
+                            if (canRename) {
+                                DropdownMenuItem(
+                                    text = { Text("Переименовать") },
+                                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        onRename()
+                                    },
+                                    modifier = Modifier.testTag("video_card_edit_button"),
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Удалить") },
                                 leadingIcon = {
@@ -607,15 +697,27 @@ internal fun parseRecordingItem(o: JsonObject): RecordingItem? {
     val mediaUrl = o.firstStrOrNull(RECORDING_URL_FIELDS)
     // Страница vkvideo — формат thumb среза §4: vk.ru/video<owner>_<video>.
     var pageUrl: String? = null
+    var ownerId = 0L
+    var videoId = 0L
     val owner = o.longFieldOrNull("owner_id")
     val video = o.longFieldOrNull("video_id")
     if (owner != null && video != null && owner != 0L && video != 0L) {
+        ownerId = owner
+        videoId = video
         pageUrl = "https://vkvideo.ru/video" + owner + "_" + video
     }
     if (pageUrl == null) {
         val vidStr = o.strFieldOrNull("video_id")
         if (vidStr != null && vidStr.contains("_")) {
             pageUrl = "https://vkvideo.ru/video" + vidStr
+            // Разбор "<owner>_<video>" для адресата переименования (ревизия-2).
+            val parts = vidStr.split("_", limit = 2)
+            if (parts.size == 2) {
+                val parsedOwner = parts[0].toLongOrNull()
+                val parsedVideo = parts[1].toLongOrNull()
+                if (parsedOwner != null) ownerId = parsedOwner
+                if (parsedVideo != null) videoId = parsedVideo
+            }
         }
     }
     var url: String? = mediaUrl
@@ -630,6 +732,8 @@ internal fun parseRecordingItem(o: JsonObject): RecordingItem? {
         timestampSec = ts,
         url = url,
         pageUrl = pageUrl,
+        ownerId = ownerId,
+        videoId = videoId,
         isPrivate = isPrivate,
     )
 }

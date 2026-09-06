@@ -255,12 +255,13 @@ fun CallsMainScreen(
         )
     }
     if (showScheduleDialog) {
-        // #CALLS-SNAP (Этап Г2): модалка планирования (messages.editCall,
-        // call_id="0" — создание). После успеха — refresh(SCHEDULED)+Toast в модалке.
+        // #CALLS-SNAP (Этап Г2, ревизия-2 REV-DEEP-2): модалка планирования —
+        // СОЗДАНИЕ = calls.start (messages.editCall НЕ создаёт, прежний
+        // call_id="0" опровергнут реверсом). editItem=null — режим создания;
+        // правка/перенос — из CallsScheduledSection с сырым айтемом. После
+        // успеха — refresh(SCHEDULED) + пост-модалка ссылки в модалке.
         CallsScheduleCallDialog(
-            editCallId = null,
-            initialName = "",
-            initialDateSec = 0L,
+            editItem = null,
             onDismiss = { showScheduleDialog = false },
         )
     }

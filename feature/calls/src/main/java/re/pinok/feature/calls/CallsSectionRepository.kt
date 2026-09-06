@@ -26,7 +26,8 @@ import kotlinx.coroutines.flow.StateFlow
  *  - MISSED     → callsGetHistory(count, offset, filter:"missed", marker=null)
  *  - RECORDINGS → messagesGetCallRecordings(count)
  *  - TRANSCRIPTS→ callsGetAsrTranscriptions(count)
- *  - SCHEDULED  → messagesGetScheduledCalls(count)
+ *  - SCHEDULED  → messagesGetScheduledCallsPage(grouped=true, count=50,
+ *                callerId=null, startFrom=null; next_from-пагинация loadMore)
  *  - ACTIVE     → messagesGetCurrentCalls()
  */
 interface CallsSectionRepository {
@@ -43,7 +44,11 @@ interface CallsSectionRepository {
     /** Расшифровки ASR (сырые items calls.getAsrTranscriptions — правка, Этап В). */
     val transcripts: StateFlow<CallsSectionState<JsonObject>>
 
-    /** Запланированные звонки (сырые items messages.getScheduledCalls — действия, Этап Г). */
+    /**
+     * Запланированные звонки (сырые items messages.getScheduledCalls —
+     * действия, Этап Г; ревизия-2 волна-7: paged-форма
+     * messagesGetScheduledCallsPage с next_from-пагинацией).
+     */
     val scheduled: StateFlow<CallsSectionState<JsonObject>>
 
     /** Активные звонки (сырые items messages.getCurrentCalls). */
@@ -59,12 +64,16 @@ interface CallsSectionRepository {
 
     /**
      * #CALLS-SNAP (2026-09-05, Этап Б1): дозагрузка следующей страницы
-     * истории/пропущенных (scroll-to-end LazyColumn). Поддерживается только
-     * для HISTORY/MISSED (остальные ключи — no-op с логом). Подгруженная
-     * страница ДОБАВЛЯЕТСЯ к текущему списку (append без дублей по callId);
-     * индикация/наличие следующей страницы — поля [CallsSectionState.loadingMore]
-     * и [CallsSectionState.hasMore] того же StateFlow. Повторный вызов для
-     * уже дозагружающегося ключа — no-op (dedupe in-flight, отдельный от refresh).
+     * истории/пропущенных (scroll-to-end LazyColumn). Поддерживается для
+     * HISTORY/MISSED/SCHEDULED (остальные ключи — no-op с логом):
+     * HISTORY/MISSED — offset-пагинация calls.getHistory; SCHEDULED (ревизия-2,
+     * REV-DEEP-2 97907@90169) — start_from-пагинация messages.getScheduledCalls
+     * (курсор next_from прошлого ответа, хранится в реализации). Подгруженная
+     * страница ДОБАВЛЯЕТСЯ к текущему списку (append без дублей — по callId /
+     * call_id); индикация/наличие следующей страницы — поля
+     * [CallsSectionState.loadingMore] и [CallsSectionState.hasMore] того же
+     * StateFlow. Повторный вызов для уже дозагружающегося ключа — no-op
+     * (dedupe in-flight, отдельный от refresh).
      */
     fun loadMore(key: CallsSectionKey)
 

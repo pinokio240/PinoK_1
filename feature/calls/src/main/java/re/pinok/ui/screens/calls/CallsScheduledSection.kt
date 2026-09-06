@@ -10,15 +10,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -34,16 +38,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
 import com.google.gson.JsonObject
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 import re.pinok.feature.calls.CallsSectionKey
 import re.pinok.feature.calls.LocalCallsDeps
@@ -51,32 +62,72 @@ import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
 
+/** Айтем списка запланированных (wire REV-DEEP-2, см. parseScheduledCall). */
 private data class ScheduledCallItem(
     val callId: String,
     val name: String,
-    val dateLabel: String,
+    /** schedule.time — unix СЕКУНДЫ (прежних кандидатов scheduled_date/date/start_date в wire НЕТ). */
     val ts: Long,
+    /** schedule.duration — СЕКУНДЫ. */
+    val durationSec: Long,
+    /** schedule.recurrence_rule (never|daily|weekly|weekdays|weekend|monthly|yearly). */
+    val recurrenceRule: String,
+    /** Ссылка-приглашение (join-флоу + «Копировать ссылку-приглашение»). */
+    val vkJoinLink: String,
+    /** group.name — для desc-строки айтема (calls_scheduled_calls_item_desc). */
+    val groupName: String,
+    /** schedule.marker_time — маркер messages.editCall при правке/переносе. */
+    val markerTime: Long,
+    /** Сырой JsonObject — editItem модалки CallsScheduleCallDialog (полный prefill). */
+    val raw: JsonObject,
 )
 
+/** Блок группировки по дням: «Сегодня»/«Завтра»/дата (локальная TZ). */
+private class ScheduledDayBlock(val title: String, val isToday: Boolean, val items: List<ScheduledCallItem>)
+
 /**
- * #CALLS-SNAP (2026-09-06): Этап А2/А3 + Этап Г/Г3 плана «звонки.перенос.план.md»
- * — секция «Запланированные»: реальный список messages.getScheduledCalls через
- * репозиторий раздела (CallsSectionRepository.scheduled) + ДЕЙСТВИЯ карточки
- * (REV-UI §1.2 «перенести/удалить/начать сейчас»):
- *  - «Начать сейчас» → messagesForceCallFinish(callId) (механизм запуска по плану Г3);
- *  - «Редактировать» → модалка планирования (CallsScheduleCallDialog в режиме
- *    editCall с существующим call_id, Г2);
- *  - «Удалить» → messagesDeleteScheduledCall(callId) с AlertDialog-подтверждением.
- * После успеха — repo.refresh(SCHEDULED, force=true) + Toast; при провале —
- * Toast с РЕАЛЬНЫМ сообщением (lastApiError фасада). Парсинг полей — tolerant
- * кандидаты, согласованные с CallsSectionRepositoryImpl (SCHEDULED — сырые
- * JsonObject из messages.getScheduledCalls).
+ * #CALLS-SNAP (2026-09-06, РЕВИЗИЯ-2 по REV-DEEP-2): секция «Запланированные»
+ * — messages.getScheduledCalls через репозиторий раздела (paged-форма
+ * {grouped:1, count:50, start_from}; next_from-пагинация — loadMore(SCHEDULED)),
+ * ГРУППИРОВКА ПО ДНЯМ (подзаголовки блоков «Сегодня»/«Завтра»/дата по локальной
+ * TZ — testid calls_main_page_scheduled_calls_block_title), wire-парсинг
+ * schedule{time,duration,recurrence_rule,marker_time} + vk_join_link + group.
+ *
+ * Действия айтема (web-меню ds@97907 — подмножество, обеспеченное фасадом):
+ *  - «Присоединиться» → join по vk_join_link (web: showJoinPopup, отдельного
+ *    API «начать сейчас» НЕ существует; messagesForceCallFinish web'ом НЕ
+ *    используется — прежний пункт УДАЛЁН из карточки): authed-вход
+ *    performJoinByLink(deps, parseCallJoinLink(vkJoinLink), пароль из ссылки,
+ *    anonymName="", isVideo=false) → при успехе CallJoinByLinkHolder.stash —
+ *    SovaNavHost сам открывает CallScreen (join-режим). isVideo=false — фикс:
+ *    тоггл не делаем (mute_video айтема мог бы подсказать, web-поведение
+ *    превью не эмулируем); анонимную ветку секция НЕ использует (имя пустое).
+ *  - «Редактировать/перенести» → CallsScheduleCallDialog(editItem=raw):
+ *    web правит (BM) и переносит (Uk) одним messages.editCall — один пункт.
+ *  - «Копировать ссылку-приглашение» → vk_join_link в буфер обмена.
+ *  - «Удалить» → messages.deleteScheduledCall с confirm-диалогом.
+ * У сегодняшних айтемов — прямая кнопка «Присоединиться» на карточке
+ * (calls_scheduled_calls_item_join).
+ *
+ * НЕ РЕНДЕРЯТСЯ (честные отклонения, обеспеченность фасада/UI):
+ *  - goto_chat (переход в chat.peer_id) — навигация в :app-мессенджер из
+ *    :feature:calls недоступна (модульные границы);
+ *  - share_qr_code — QR-генератора в проекте нет;
+ *  - copy_short_link/copy_broadcast_link — short_credentials показываются в
+ *    пост-модалке создания; основная ссылка айтема — vk_join_link;
+ *  - «Присоединиться» не рендерится, если vk_join_link пуст (честно).
+ *
+ * Пагинация (паттерн Этапа Б1, CallsHistorySection): scroll-to-end LazyColumn
+ * → repo.loadMore(CallsSectionKey.SCHEDULED); hasMore/loadingMore — поля
+ * CallsSectionState, футер-спиннер при дозагрузке. После мутаций —
+ * repo.refresh(SCHEDULED, force=true) + честный Toast (lastApiError).
  */
 @Composable
 fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
     val repo = LocalCallsSectionRepository.current
     val deps = LocalCallsDeps.current
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val state by repo.scheduled.collectAsState()
 
@@ -88,6 +139,7 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
     var editItem by remember { mutableStateOf<ScheduledCallItem?>(null) }
     var deleteItem by remember { mutableStateOf<ScheduledCallItem?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var joining by remember { mutableStateOf(false) }
 
     // Общий исполнитель действий карточки: API → refresh+Toast / Toast с реальной ошибкой.
     val runAction: (ScheduledCallItem, String, suspend (String) -> Boolean) -> Unit =
@@ -100,12 +152,12 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
                     val ok = try {
                         apiCall(item.callId)
                     } catch (e: Exception) {
-                        AppLog.e("CallsScheduledSection", "action error (callId=${item.callId})", e)
+                        AppLog.e("CallsScheduledSection", "action error (callId=" + item.callId + ")", e)
                         false
                     }
                     busy = false
                     if (ok) {
-                        AppLog.i("CallsScheduledSection", "action OK (callId=${item.callId})")
+                        AppLog.i("CallsScheduledSection", "action OK (callId=" + item.callId + ")")
                         repo.refresh(CallsSectionKey.SCHEDULED, force = true)
                         Toast.makeText(context, successText, Toast.LENGTH_SHORT).show()
                     } else {
@@ -121,14 +173,56 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
             }
         }
 
+    // Join-флоу (REV-DEEP-2: web входит по vk_join_link — showJoinPopup):
+    // authed-путь performJoinByLink, пароль — из самой ссылки (?p=), анонимная
+    // ветка секцией не используется, isVideo=false (см. KDoc).
+    val runJoin: (ScheduledCallItem) -> Unit = { item ->
+        if (joining) {
+            AppLog.w("CallsScheduledSection", "join пропущен: предыдущее присоединение ещё выполняется")
+        } else {
+            val parts = parseCallJoinLink(item.vkJoinLink)
+            if (parts == null) {
+                Toast.makeText(context, "Не удалось распознать ссылку-приглашение", Toast.LENGTH_LONG).show()
+            } else {
+                joining = true
+                scope.launch {
+                    val result = performJoinByLink(
+                        deps = deps,
+                        parts = parts,
+                        password = parts.password,
+                        anonymName = "",
+                        isVideo = false,
+                    )
+                    joining = false
+                    if (result.success) {
+                        val session = result.session
+                        if (session != null) {
+                            AppLog.i("CallsScheduledSection", "join OK (callId=" + item.callId + ") — сессия в CallJoinByLinkHolder")
+                            CallJoinByLinkHolder.stash(session)
+                        } else {
+                            Toast.makeText(context, "Сервер не вернул параметры звонка", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Toast.makeText(context, result.errorMessage, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    val copyInvite: (String) -> Unit = { link ->
+        clipboard.setText(AnnotatedString(link))
+        Toast.makeText(context, "Ссылка-приглашение скопирована", Toast.LENGTH_SHORT).show()
+    }
+
     CallsSectionScaffold(
         state = state,
         emptyText = "Нет запланированных звонков",
         onRetry = { repo.refresh(CallsSectionKey.SCHEDULED, force = true) },
         modifier = Modifier.testTag("scheduled_section"),
     ) { raw ->
-        val items = remember(raw) { raw.mapNotNull { it.parseScheduledCall() } }
-        if (items.isEmpty()) {
+        val parsed = remember(raw) { raw.mapNotNull { it.parseScheduledCall() } }
+        if (parsed.isEmpty()) {
             // Сырой список не пуст, но строки не распарсились — честный empty.
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
@@ -138,44 +232,92 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
                 )
             }
         } else {
+            val blocks = remember(parsed) { groupScheduledByDays(parsed) }
+            val listState = rememberLazyListState()
+            val flatCount = blocks.size + parsed.size
+
+            // Пагинация: scroll-to-end → loadMore(SCHEDULED) (паттерн Этапа Б1).
+            LaunchedEffect(flatCount, state.hasMore, state.loadingMore) {
+                snapshotFlow {
+                    val info = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+                    if (info != null) info.index else -1
+                }.collect { lastVisible ->
+                    if (lastVisible >= 0 &&
+                        parsed.isNotEmpty() &&
+                        lastVisible >= flatCount - LOAD_MORE_AHEAD &&
+                        state.hasMore &&
+                        !state.loadingMore
+                    ) {
+                        AppLog.i("CallsScheduledSection", "scroll-to-end → loadMore(SCHEDULED)")
+                        repo.loadMore(CallsSectionKey.SCHEDULED)
+                    }
+                }
+            }
+
             Column(Modifier.fillMaxSize()) {
                 Text(
-                    "Запланированные · " + items.size,
+                    "Запланированные · " + parsed.size,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
                 )
                 LazyColumn(
+                    state = listState,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize().testTag("scheduled_list"),
                 ) {
-                    items(items, key = { it.callId }) { item ->
-                        ScheduledCallCard(
-                            item = item,
-                            busy = busy,
-                            onStartNow = {
-                                // Г3: «Начать сейчас» — forceCallFinish (план §1.2/Г3).
-                                runAction(item, "Звонок запущен (подтверждено сервером)") { callId ->
-                                    deps.apiClient.messagesForceCallFinish(callId)
-                                }
-                            },
-                            onEdit = { editItem = item },
-                            onDelete = { deleteItem = item },
-                            modifier = Modifier.testTag("scheduled_item"),
-                        )
+                    // Индекс в ключе заголовка: при «рваном» порядке айтемов два
+                    // блока могут получить одинаковый заголовок — ключи LazyColumn
+                    // обязаны быть уникальны.
+                    blocks.forEachIndexed { blockIdx, block ->
+                        item(key = "scheduled_day_" + blockIdx + "_" + block.title) {
+                            Text(
+                                block.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    .testTag("calls_main_page_scheduled_calls_block_title"),
+                            )
+                        }
+                        items(block.items, key = { it.callId }) { item ->
+                            ScheduledCallCard(
+                                item = item,
+                                isToday = block.isToday,
+                                busy = busy || joining,
+                                onJoin = { runJoin(item) },
+                                onEdit = { editItem = item },
+                                onCopyInvite = { copyInvite(item.vkJoinLink) },
+                                onDelete = { deleteItem = item },
+                                modifier = Modifier.testTag("scheduled_item"),
+                            )
+                        }
+                    }
+                    if (state.loadingMore) {
+                        item(key = "scheduled_load_more_footer") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp)
+                                    .testTag("calls_scheduled_load_more"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    // «Редактировать» → модалка планирования в режиме правки (Г2, существующий call_id).
+    // «Редактировать/перенести» → модалка планирования с полным prefill
+    // из сырого айтема (правка/перенос — один messages.editCall, REV-DEEP-2).
     val editing = editItem
     if (editing != null) {
         CallsScheduleCallDialog(
-            editCallId = editing.callId,
-            initialName = editing.name,
-            initialDateSec = editing.ts,
+            editItem = editing.raw,
             onDismiss = { editItem = null },
         )
     }
@@ -185,7 +327,7 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
     if (deleting != null) {
         AlertDialog(
             onDismissRequest = { deleteItem = null },
-            title = { Text("Удалить запланированный звонок?") },
+            title = { Text("Удалить запланированный звонок") },
             text = { Text("«" + deleting.name + "» будет удалён. Действие необратимо.") },
             confirmButton = {
                 TextButton(
@@ -210,13 +352,17 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
 @Composable
 private fun ScheduledCallCard(
     item: ScheduledCallItem,
+    isToday: Boolean,
     busy: Boolean,
-    onStartNow: () -> Unit,
+    onJoin: () -> Unit,
     onEdit: () -> Unit,
+    onCopyInvite: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    // Пункт «Присоединиться» честно не рендерится без vk_join_link.
+    val hasJoinLink = item.vkJoinLink.isNotBlank()
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -247,16 +393,29 @@ private fun ScheduledCallCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (item.dateLabel.isNotBlank()) {
+                val desc = scheduledDescOf(item)
+                if (desc.isNotBlank()) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        item.dateLabel,
+                        desc,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                // Прямая кнопка «Присоединиться» — у сегодняшних айтемов
+                // (web: calls_scheduled_calls_item_join).
+                if (isToday && hasJoinLink) {
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = onJoin,
+                        enabled = !busy,
+                        modifier = Modifier.testTag("calls_scheduled_calls_item_join"),
+                    ) {
+                        Text("Присоединиться")
+                    }
+                }
             }
-            // Меню действий карточки (REV-UI §1.2): Начать сейчас / Редактировать / Удалить.
+            // Меню действий карточки (подмножество web-меню ds@97907).
             Box {
                 IconButton(
                     enabled = !busy,
@@ -269,29 +428,41 @@ private fun ScheduledCallCard(
                     expanded = menuOpen,
                     onDismissRequest = { menuOpen = false },
                 ) {
+                    if (hasJoinLink) {
+                        DropdownMenuItem(
+                            text = { Text("Присоединиться") },
+                            onClick = {
+                                menuOpen = false
+                                onJoin()
+                            },
+                            modifier = Modifier.testTag("calls_scheduled_calls_item_menu_join"),
+                        )
+                    }
                     DropdownMenuItem(
-                        text = { Text("Начать сейчас") },
-                        onClick = {
-                            menuOpen = false
-                            onStartNow()
-                        },
-                        modifier = Modifier.testTag("scheduled_item_start_now"),
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Редактировать") },
+                        text = { Text("Редактировать/перенести") },
                         onClick = {
                             menuOpen = false
                             onEdit()
                         },
-                        modifier = Modifier.testTag("scheduled_item_edit"),
+                        modifier = Modifier.testTag("calls_scheduled_calls_item_menu_edit"),
                     )
+                    if (hasJoinLink) {
+                        DropdownMenuItem(
+                            text = { Text("Копировать ссылку-приглашение") },
+                            onClick = {
+                                menuOpen = false
+                                onCopyInvite()
+                            },
+                            modifier = Modifier.testTag("calls_scheduled_calls_item_menu_copy_invite"),
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Удалить") },
                         onClick = {
                             menuOpen = false
                             onDelete()
                         },
-                        modifier = Modifier.testTag("scheduled_item_delete"),
+                        modifier = Modifier.testTag("calls_scheduled_calls_item_menu_delete"),
                     )
                 }
             }
@@ -299,7 +470,88 @@ private fun ScheduledCallCard(
     }
 }
 
-/** Парсинг items[] messages.getScheduledCalls (новый код — #NULL-EXPLICIT). */
+/** Desc-строка айтема (calls_scheduled_calls_item_desc): время + повтор + группа. */
+private fun scheduledDescOf(item: ScheduledCallItem): String {
+    var desc = ""
+    if (item.ts > 0L) desc = item.ts.toAbsoluteTime()
+    if (item.recurrenceRule.isNotBlank() && item.recurrenceRule != "never") {
+        desc = desc + " · " + repeatLabelOf(item.recurrenceRule)
+    }
+    if (item.groupName.isNotBlank()) {
+        desc = desc + " · " + item.groupName
+    }
+    return desc
+}
+
+/** Рус. подпись повтора (wire-енум модуля 912069; ланг-ключи не вырезаны). */
+private fun repeatLabelOf(wire: String): String {
+    when (wire) {
+        "daily" -> return "Каждый день"
+        "weekly" -> return "Каждую неделю"
+        "weekdays" -> return "По будням"
+        "weekend" -> return "По выходным"
+        "monthly" -> return "Каждый месяц"
+        "yearly" -> return "Каждый год"
+    }
+    return wire
+}
+
+/** Ключ дня (локальная TZ): год*1000 + dayOfYear — стабильный ключ группировки. */
+private fun dayKeyOf(sec: Long): Int {
+    val cal = Calendar.getInstance()
+    cal.timeInMillis = sec * 1000L
+    return cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR)
+}
+
+/** Заголовок блока дня: Сегодня/Завтра/«d MMMM»/«d MMMM yyyy»; без даты — «Без даты». */
+private fun dayTitleOf(sec: Long, key: Int, todayKey: Int, tomorrowKey: Int): String {
+    if (sec <= 0L) return "Без даты"
+    if (key == todayKey) return "Сегодня"
+    if (key == tomorrowKey) return "Завтра"
+    val cal = Calendar.getInstance()
+    cal.timeInMillis = sec * 1000L
+    val pattern = if (cal.get(Calendar.YEAR) == Calendar.getInstance().get(Calendar.YEAR)) {
+        "d MMMM"
+    } else {
+        "d MMMM yyyy"
+    }
+    val sdf = SimpleDateFormat(pattern, Locale.forLanguageTag("ru"))
+    return sdf.format(Date(sec * 1000L))
+}
+
+/**
+ * Группировка по дням в порядке списка (порядок wire не меняем): соседние
+ * айтемы одного дня попадают в один блок с подзаголовком Сегодня/Завтра/дата.
+ */
+private fun groupScheduledByDays(items: List<ScheduledCallItem>): List<ScheduledDayBlock> {
+    val nowSec = System.currentTimeMillis() / 1000L
+    val todayKey = dayKeyOf(nowSec)
+    val tomorrowKey = dayKeyOf(nowSec + 86_400L)
+    val blocks = ArrayList<ScheduledDayBlock>()
+    var currentKey = Int.MIN_VALUE
+    var currentTitle = ""
+    var currentToday = false
+    var currentList = ArrayList<ScheduledCallItem>()
+    for (item in items) {
+        val key = dayKeyOf(item.ts)
+        if (key != currentKey) {
+            if (currentList.isNotEmpty()) {
+                blocks.add(ScheduledDayBlock(currentTitle, currentToday, currentList))
+            }
+            currentKey = key
+            currentTitle = dayTitleOf(item.ts, key, todayKey, tomorrowKey)
+            currentToday = key == todayKey
+            currentList = ArrayList()
+        }
+        currentList.add(item)
+    }
+    if (currentList.isNotEmpty()) {
+        blocks.add(ScheduledDayBlock(currentTitle, currentToday, currentList))
+    }
+    return blocks
+}
+
+/** Парсинг items[] messages.getScheduledCalls по wire (новый код — #NULL-EXPLICIT). */
 private fun JsonObject.parseScheduledCall(): ScheduledCallItem? {
     return try {
         val idEl = get("call_id")
@@ -311,29 +563,51 @@ private fun JsonObject.parseScheduledCall(): ScheduledCallItem? {
         if (nameEl != null && nameEl.isJsonPrimitive) {
             val n = nameEl.asString
             if (n.isNotBlank()) name = n
-        } else {
-            val titleEl = get("title")
-            if (titleEl != null && titleEl.isJsonPrimitive) {
-                val t = titleEl.asString
-                if (t.isNotBlank()) name = t
-            }
         }
 
+        // Wire (REV-DEEP-2): schedule{time, duration, recurrence_rule,
+        // recurrence_until_time, marker_time} — СЕКУНДЫ. Прежние кандидаты
+        // scheduled_date/date/start_date в wire НЕ существуют — удалены.
         var ts = 0L
-        val scheduledEl = get("scheduled_date")
-        if (scheduledEl != null && scheduledEl.isJsonPrimitive) ts = scheduledEl.asLong
-        if (ts == 0L) {
-            val dateEl = get("date")
-            if (dateEl != null && dateEl.isJsonPrimitive) ts = dateEl.asLong
-        }
-        if (ts == 0L) {
-            val startEl = get("start_date")
-            if (startEl != null && startEl.isJsonPrimitive) ts = startEl.asLong
+        var durationSec = 0L
+        var recurrenceRule = ""
+        var markerTime = 0L
+        val schedEl = get("schedule")
+        if (schedEl != null && schedEl.isJsonObject) {
+            val sched = schedEl.asJsonObject
+            val timeEl = sched.get("time")
+            if (timeEl != null && timeEl.isJsonPrimitive) ts = timeEl.asLong
+            val durEl = sched.get("duration")
+            if (durEl != null && durEl.isJsonPrimitive) durationSec = durEl.asLong
+            val rrEl = sched.get("recurrence_rule")
+            if (rrEl != null && rrEl.isJsonPrimitive) recurrenceRule = rrEl.asString
+            val markerEl = sched.get("marker_time")
+            if (markerEl != null && markerEl.isJsonPrimitive) markerTime = markerEl.asLong
         }
         if (ts > 100_000_000_000L) ts = ts / 1000L // защита от миллисекунд
-        val dateLabel = if (ts == 0L) "" else ts.toAbsoluteTime()
 
-        ScheduledCallItem(callId, name, dateLabel, ts)
+        var joinLink = ""
+        val linkEl = get("vk_join_link")
+        if (linkEl != null && linkEl.isJsonPrimitive) joinLink = linkEl.asString
+
+        var groupName = ""
+        val groupEl = get("group")
+        if (groupEl != null && groupEl.isJsonObject) {
+            val gnameEl = groupEl.asJsonObject.get("name")
+            if (gnameEl != null && gnameEl.isJsonPrimitive) groupName = gnameEl.asString
+        }
+
+        ScheduledCallItem(
+            callId = callId,
+            name = name,
+            ts = ts,
+            durationSec = durationSec,
+            recurrenceRule = recurrenceRule,
+            vkJoinLink = joinLink,
+            groupName = groupName,
+            markerTime = markerTime,
+            raw = this,
+        )
     } catch (e: Exception) {
         AppLog.e("CallsScheduledSection", "parseScheduledCall: запись пропущена", e)
         null

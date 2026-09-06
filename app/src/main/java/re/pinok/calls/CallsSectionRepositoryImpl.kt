@@ -18,6 +18,7 @@ import re.pinok.feature.calls.CallsSectionState
 import re.pinok.feature.calls.CallsSectionStatus
 import re.pinok.util.AppLog
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * #CALLS-SNAP (2026-09-05): Этап А2 плана «звонки.перенос.план.md» —
@@ -45,6 +46,13 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * #NULL-EXPLICIT: без non-null assertion; safe-call и elvis операторы
  * не используются — явные if-проверки с захватом в локальный val.
+ *
+ * #CALLS-SNAP (2026-09-06, РЕВИЗИЯ-2 по REV-DEEP-2, волна-7 Task 7-b):
+ * SCHEDULED переведён на paged-форму messages.getScheduledCalls
+ * (facade messagesGetScheduledCallsPage: {grouped:1, count:50,
+ * [start_from]}; сырой response {items, next_from, groups, profiles});
+ * loadMore(SCHEDULED) — append следующей страницы по next_from с дедупом
+ * по call_id (паттерн Этапа Б1 для HISTORY/MISSED).
  */
 class CallsSectionRepositoryImpl(
     private val deps: CallsDependencies,
@@ -152,7 +160,7 @@ class CallsSectionRepositoryImpl(
             CallsSectionKey.TRANSCRIPTS ->
                 _transcripts.value = loadRaw { deps.apiClient.callsGetAsrTranscriptions(PAGE_SIZE) }
             CallsSectionKey.SCHEDULED ->
-                _scheduled.value = loadRaw { deps.apiClient.messagesGetScheduledCalls(PAGE_SIZE) }
+                _scheduled.value = loadScheduledFirstPage()
             CallsSectionKey.ACTIVE ->
                 _active.value = loadRaw { deps.apiClient.messagesGetCurrentCalls() }
         }
@@ -404,21 +412,34 @@ class CallsSectionRepositoryImpl(
     // ─── пагинация истории/пропущенных (Этап Б1) ───
 
     override fun loadMore(key: CallsSectionKey) {
-        if (key != CallsSectionKey.HISTORY && key != CallsSectionKey.MISSED) {
-            AppLog.w(TAG, "loadMore($key): пагинация поддерживается только для HISTORY/MISSED")
+        if (key != CallsSectionKey.HISTORY && key != CallsSectionKey.MISSED && key != CallsSectionKey.SCHEDULED) {
+            AppLog.w(TAG, "loadMore($key): пагинация поддерживается только для HISTORY/MISSED/SCHEDULED")
             return
         }
         if (!loadMoreInFlight.add(key)) return // уже дозагружается — no-op (dedupe)
         scope.launch {
             try {
-                withContext(Dispatchers.Default) {
-                    loadMoreHistory(key)
+                if (key == CallsSectionKey.SCHEDULED) {
+                    withContext(Dispatchers.Default) {
+                        loadMoreScheduled()
+                    }
+                } else {
+                    withContext(Dispatchers.Default) {
+                        loadMoreHistory(key)
+                    }
                 }
             } catch (e: Exception) {
                 AppLog.e(TAG, "loadMore($key) failed", e)
                 // Список остаётся видимым; снимаем индикацию — следующий
                 // scroll-to-end повторит попытку.
-                setHistoryLoadingMore(key, false)
+                if (key == CallsSectionKey.SCHEDULED) {
+                    val current = _scheduled.value
+                    if (current.status == CallsSectionStatus.CONTENT) {
+                        _scheduled.value = current.copy(loadingMore = false)
+                    }
+                } else {
+                    setHistoryLoadingMore(key, false)
+                }
             } finally {
                 loadMoreInFlight.remove(key)
             }
@@ -496,6 +517,99 @@ class CallsSectionRepositoryImpl(
         publishHistoryState(key, current.copy(loadingMore = loading))
     }
 
+    // ─── пагинация запланированных (ревизия-2, REV-DEEP-2: 97907@90169) ───
+
+    /**
+     * next_from пагинации messages.getScheduledCalls (сырой response:
+     * {items, next_from, groups, profiles}); null — страница последняя
+     * либо офлайн/сбой (следующий scroll-to-end делает полный refresh).
+     */
+    private val scheduledNextFrom = AtomicReference<String?>(null)
+
+    /** Первая страница запланированных: {grouped:1, count:50, caller_id=null, start_from=null}. */
+    private suspend fun loadScheduledFirstPage(): CallsSectionState<JsonObject> {
+        val resp = deps.apiClient.messagesGetScheduledCallsPage(true, SCHEDULED_PAGE_SIZE, null, null)
+        val items = scheduledItemsOf(resp)
+        val nextFrom = scheduledNextOf(resp)
+        scheduledNextFrom.set(nextFrom)
+        if (items.isEmpty()) return CallsSectionState(status = CallsSectionStatus.EMPTY)
+        return CallsSectionState(
+            status = CallsSectionStatus.CONTENT,
+            items = items,
+            hasMore = nextFrom != null,
+        )
+    }
+
+    /** Дозагрузка SCHEDULED: start_from=next_from, append с дедупом по call_id. */
+    private suspend fun loadMoreScheduled() {
+        val nextFrom = scheduledNextFrom.get()
+        if (nextFrom == null) {
+            // Нет контекста пагинации (кэш собран до ревизии-2) — полная перезагрузка.
+            AppLog.i(TAG, "loadMore(SCHEDULED): нет next_from — полный refresh")
+            refresh(CallsSectionKey.SCHEDULED, force = true)
+            return
+        }
+        val current = _scheduled.value
+        if (current.status != CallsSectionStatus.CONTENT) return
+        _scheduled.value = current.copy(loadingMore = true)
+
+        val resp = deps.apiClient.messagesGetScheduledCallsPage(true, SCHEDULED_PAGE_SIZE, null, nextFrom)
+        val items = scheduledItemsOf(resp)
+        val freshNext = scheduledNextOf(resp)
+        scheduledNextFrom.set(freshNext)
+
+        // Дедупликация append по call_id (см. loadMoreHistory): сдвиги курсора
+        // при параллельных мутациях не должны плодить повторы айтемов.
+        val seen = HashSet<String>()
+        val latest = _scheduled.value
+        for (o in latest.items) seen.add(scheduledDedupKey(o))
+        val fresh = ArrayList<JsonObject>(items.size)
+        for (o in items) {
+            if (!seen.contains(scheduledDedupKey(o))) fresh.add(o)
+        }
+        val merged = latest.items + fresh
+        _scheduled.value = CallsSectionState(
+            status = CallsSectionStatus.CONTENT,
+            items = merged,
+            hasMore = freshNext != null,
+            loadingMore = false,
+        )
+        AppLog.i(
+            TAG,
+            "loadMore(SCHEDULED): raw=" + items.size + ", new=" + fresh.size +
+                ", total=" + merged.size + ", hasMore=" + (freshNext != null),
+        )
+    }
+
+    /** items[] сырого response (пустой — офлайн/пустая страница). */
+    private fun scheduledItemsOf(resp: JsonObject?): List<JsonObject> {
+        if (resp == null) return emptyList()
+        val arrEl = resp.get("items")
+        if (arrEl == null || !arrEl.isJsonArray) return emptyList()
+        val arr = arrEl.asJsonArray
+        val out = ArrayList<JsonObject>(arr.size())
+        for (el in arr) {
+            if (el.isJsonObject) out.add(el.asJsonObject)
+        }
+        return out
+    }
+
+    private fun scheduledNextOf(resp: JsonObject?): String? {
+        if (resp == null) return null
+        val el = resp.get("next_from")
+        if (el == null || !el.isJsonPrimitive) return null
+        val raw = el.asString
+        if (raw.isBlank()) return null
+        return raw
+    }
+
+    /** Ключ дедупликации айтема: call_id (есть по wire) либо сериализация объекта. */
+    private fun scheduledDedupKey(o: JsonObject): String {
+        val el = o.get("call_id")
+        if (el != null && el.isJsonPrimitive) return el.asString
+        return o.toString()
+    }
+
     // ─── действия строки/секции (Этап Б3) ───
 
     override suspend fun removeFromHistory(recordIds: List<Long>, groupId: Long): Boolean {
@@ -570,8 +684,10 @@ class CallsSectionRepositoryImpl(
 
     companion object {
         private const val TAG = "CallsSectionRepo"
-        /** Страница сырых списков (recordings/transcripts/scheduled) — как у прежних фечей секций (30). */
+        /** Страница сырых списков (recordings/transcripts/active) — как у прежних фечей секций (30). */
         private const val PAGE_SIZE = 30
+        /** Страница запланированных — count:50 web-формы messages.getScheduledCalls (97907@90169). */
+        private const val SCHEDULED_PAGE_SIZE = 50
         /**
          * Страница истории/пропущенных — count:25 веб-формы calls.getHistory
          * (бандл webCallsBridge, план §2.1); тот же размер для loadMore.
