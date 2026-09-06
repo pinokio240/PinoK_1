@@ -59,6 +59,16 @@ class CallSignalingClient(
         const val CMD_ADD_PARTICIPANT = "add-participant"
         const val CMD_GET_PARTICIPANTS = "get-participants"
 
+        // ─── #CALLS-ZH (Этап Ж, Task 5-b): имена команд in-call ядра (wire — Ж0-протокол) ───
+        // Только КОНСТАНТЫ имён + ДОБАВЛЯЮЩИЕ send-методы ниже; форматы существующих
+        // сообщений (accept-call/hangup/transmit-data) не изменены (РЕГРЕСС недопустим).
+        /** Рука/статусы участника (Ж0 §1.1#10, 16131@306127): {participantState:{state:{…≤5симв}}} */
+        const val CMD_CHANGE_PARTICIPANT_STATE = "change-participant-state"
+        /** Шумодав (Ж0 §1.1#31, 16131@308860): {mediaModifiers:{denoise,denoiseAnn}} */
+        const val CMD_UPDATE_MEDIA_MODIFIERS = "update-media-modifiers"
+        /** Реакция (Ж0 §1.1#48, §3.1, 16131@309999): {key} — key из каталога calls.getReactions */
+        const val CMD_FEEDBACK = "feedback"
+
         /** Входящие команды/события. */
         const val CMD_OFFER = "offer"
         const val CMD_ANSWER = "answer"
@@ -284,6 +294,80 @@ class CallSignalingClient(
         }
         val data = JsonObject().apply { add("candidate", c) }
         return send(CMD_TRANSMIT_DATA, mapOf("participantId" to composeParticipantId(participantId), "data" to data))
+    }
+
+    // ─── #CALLS-ZH (Этап Ж, Task 5-b): send-методы in-call ядра (ДОБАВЛЕНИЕ) ───
+    // Конверт тот же {command, sequence, …} через существующий send(); ответы/уведомления
+    // сервера (feedback, participant-state-changed, media-settings-changed) уходят в
+    // messages-flow СУЩЕСТВУЮЩИМ обработчиком (else-ветка эмитит имя notification) —
+    // CallScreen читает их без правок транспорта.
+
+    /**
+     * #CALLS-ZH Ж4: change-media-settings (Ж0 §1.1#9, 16131@306103; §9.1).
+     * mediaSettings — ПОЛНЫЙ объект из 6 bool (НЕ диф), ретрай у эталона 10.
+     * Mute/камера у эталона сопровождаются этой командой (media-settings-changed).
+     * @return true — команда реально ушла в WS (false — WS закрыт, у эталона ретрай).
+     */
+    fun changeMediaSettings(
+        isAudioEnabled: Boolean,
+        isVideoEnabled: Boolean,
+        isScreenSharingEnabled: Boolean = false,
+        isFastScreenSharingEnabled: Boolean = false,
+        isAudioSharingEnabled: Boolean = false,
+        isAnimojiEnabled: Boolean = false,
+    ): Boolean {
+        val media = JsonObject().apply {
+            addProperty("isAudioEnabled", isAudioEnabled)
+            addProperty("isVideoEnabled", isVideoEnabled)
+            addProperty("isScreenSharingEnabled", isScreenSharingEnabled)
+            addProperty("isFastScreenSharingEnabled", isFastScreenSharingEnabled)
+            addProperty("isAudioSharingEnabled", isAudioSharingEnabled)
+            addProperty("isAnimojiEnabled", isAnimojiEnabled)
+        }
+        return send(CMD_CHANGE_MEDIA_SETTINGS, mapOf("mediaSettings" to media))
+    }
+
+    /**
+     * #CALLS-ZH Ж4: update-media-modifiers — шумодав (Ж0 §1.1#31, 16131@308860;
+     * маппинг режимов 9644@18175). Значения UI web: NEURAL/AUTO={denoise:true,
+     * denoiseAnn:true}, SIMPLE={true,false}, NONE/CLIENT={false,false} — конвертация
+     * у вызывающего (CallScreen/CallMediaSettingsPanel), здесь чистый wire.
+     * @return true — команда реально ушла в WS.
+     */
+    fun updateMediaModifiers(denoise: Boolean, denoiseAnn: Boolean): Boolean {
+        val m = JsonObject().apply {
+            addProperty("denoise", denoise)
+            addProperty("denoiseAnn", denoiseAnn)
+        }
+        return send(CMD_UPDATE_MEDIA_MODIFIERS, mapOf("mediaModifiers" to m))
+    }
+
+    /**
+     * #CALLS-ZH Ж2: feedback — реакция (эмодзи-плашка) (Ж0 §3.1, 16131@309999).
+     * wire: {"command":"feedback","sequence":N,"key":"<key>"}. У эталона _sendRaw —
+     * БЕЗ декомпозиции participantId (не нужен). key — СЕРВЕРНОЕ имя из каталога
+     * calls.getReactions (Ж0 §13.5: в снапшотах ключей нет — только каталог).
+     * @return true — команда реально ушла в WS.
+     */
+    fun sendFeedback(key: String): Boolean = send(CMD_FEEDBACK, mapOf("key" to key))
+
+    /**
+     * #CALLS-ZH Ж2: change-participant-state — поднятая рука (Ж0 §3.2, 16131@306127).
+     * wire: {"command":"change-participant-state","sequence":N,
+     *        "participantState":{"state":{"hand":"1"|"0"}}}. КЛЮЧ/ЗНАЧЕНИЕ ≤5 символов
+     * (валидация эталона 16131@402205); значения "1"/"0" — SDK-enum
+     * ParticipantStateDataValue (16131@480035; живая проверка — Этап И, Ж0 §13.1).
+     * Чужую руку (participantId) эталон позволяет только админу — здесь НЕ шлём.
+     * @return true — команда реально ушла в WS.
+     */
+    fun changeParticipantState(key: String, value: String): Boolean {
+        if (key.length > 5 || value.length > 5) {
+            AppLog.w(TAG, "changeParticipantState: key/value >5 символов — сервер отбросит ($key=$value)")
+            return false
+        }
+        val state = JsonObject().apply { addProperty(key, value) }
+        val ps = JsonObject().apply { add("state", state) }
+        return send(CMD_CHANGE_PARTICIPANT_STATE, mapOf("participantState" to ps))
     }
 
     // ─── Внутреннее ─────────────────────────────────────────────

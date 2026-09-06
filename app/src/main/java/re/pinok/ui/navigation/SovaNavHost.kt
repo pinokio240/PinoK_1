@@ -361,9 +361,14 @@ fun SovaNavHost(
     // #CALLS: навигация на CallScreen при входящем звонке (тап по уведомлению).
     // SovaApp.startCallNotifier сохраняет pendingIncomingCallPayload; здесь
     // подхватываем и открываем CallScreen(incoming=true, payload).
-    LaunchedEffect(app.pendingIncomingCallPayload) {
+    // #CALLS-INCOMING-UI (Этап Е): payload больше НЕ навигирует сам по себе —
+    // пока входящий не принят, он показывается оверлеем (IncomingCallScreen /
+    // свёрнутый баннер — см. конец этой composable). Навигация происходит
+    // только после «Принять» (app.acceptIncomingCall → incomingCallAccepted),
+    // после неё consumeIncomingCall() сбрасывает весь pending-стейт.
+    LaunchedEffect(app.pendingIncomingCallPayload, app.incomingCallAccepted) {
         val payload = app.pendingIncomingCallPayload
-        if (!payload.isNullOrBlank()) {
+        if (!payload.isNullOrBlank() && app.incomingCallAccepted) {
             val peerId = app.pendingIncomingCallPeerId
             val title = app.pendingIncomingCallTitle.ifBlank { "Входящий звонок" }
             val photo = app.pendingIncomingCallPhoto
@@ -2327,6 +2332,56 @@ composable(Screen.CallsHistory.route) {
             initial = initial,
             onDismiss = { PhotoHolder.close() },
         )
+    }
+    // ═══ #CALLS-INCOMING-UI (Этап Е, план §4-Е, реверс §8.1–8.2): входящий звонок ═══
+    // Оверлей поверх всего app (последний ребёнок Box — верхний z-порядок, выше
+    // overlayVideo/overlayPhoto: входящий звонок приоритетнее медиа). Пока
+    // pendingIncomingCallPayload не пуст:
+    //  - полноэкранный IncomingCallScreen (§8.1) — до «Принять»/«Отклонить»/«Свернуть»;
+    //  - свёрнутый баннер (§8.2, calls_collapse) — поверх контента, системные бары
+    //    НЕ перекрываются (statusBarsPadding внутри баннера); в звонковом разделе
+    //    (route "call"/"calls_*"/"settings_calls") баннер скрыт — входящий остаётся
+    //    pending и вернётся при выходе из раздела (реверс-правило задания Этапа Е).
+    // «Принять» (оба UI) → app.acceptIncomingCall() → существующая навигация
+    // LaunchedEffect выше (CallScreen incoming=true, payload — как до Этапа Е).
+    // «Отклонить» → WS hangup REJECTED/BUSY (HTTP-фолбэк) внутри экрана, успех →
+    // app.consumeIncomingCall().
+    val incomingPayloadE = app.pendingIncomingCallPayload
+    if (!incomingPayloadE.isNullOrBlank()) {
+        val incomingPeerIdE = app.pendingIncomingCallPeerId
+        val incomingTitleE = app.pendingIncomingCallTitle
+        val incomingPhotoE = app.pendingIncomingCallPhoto
+        val incomingCollapsedE = app.incomingCallCollapsed
+        // Звонковый раздел: экран активного звонка + раздел «Звонки» (контейнер
+        // calls_history), webview звонков и вкладка настроек «Звонки».
+        val incomingInCallsSectionE = currentRoute == Screen.Call.route ||
+            currentRoute.startsWith("calls_") || currentRoute == "settings_calls"
+        if (incomingCollapsedE) {
+            if (!incomingInCallsSectionE) {
+                re.pinok.ui.screens.calls.IncomingCallBanner(
+                    peerId = incomingPeerIdE,
+                    title = incomingTitleE,
+                    photo = incomingPhotoE,
+                    payload = incomingPayloadE,
+                    deps = app,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    onAccept = { app.acceptIncomingCall() },
+                    onDone = { app.consumeIncomingCall() },
+                    onExpand = { app.expandIncomingCall() },
+                )
+            }
+        } else {
+            re.pinok.ui.screens.calls.IncomingCallScreen(
+                peerId = incomingPeerIdE,
+                title = incomingTitleE,
+                photo = incomingPhotoE,
+                payload = incomingPayloadE,
+                deps = app,
+                onAccept = { app.acceptIncomingCall() },
+                onDone = { app.consumeIncomingCall() },
+                onCollapse = { app.collapseIncomingCall() },
+            )
+        }
     }
     } // Box
 }

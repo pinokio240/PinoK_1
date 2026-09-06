@@ -19,6 +19,15 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -2 (06.09) = #CALLS-SNAP Этапы Е+Ж-ядро (план «звонки.перенос.план.md»), волна-5.
+    // Е: входящий — полноэкранный IncomingCallScreen (REJECTED/BUSY по Ж-0,
+    // HTTP-фолбэк, отмена звонящим опросом getCurrentCalls) + свёрнутый баннер.
+    // Ж-ядро: участники (getParticipants offset-пагинация), реакции/рука
+    // (feedback/change-participant-state + синк participant-state-changed),
+    // медиа-настройки (change-media-settings 6 bool / update-media-modifiers,
+    // дефолты З2), чат в звонке (CallChatScreen), мини-виджет (локальный
+    // UI-стейт, Ж0 §10 — wire нет). CallSignalingClient +4 send-метода —
+    // АДДИТИВНО, существующие форматы не изменены.
     // -1 (06.09) = #CALLS-SNAP Этапы Г+Д (план «звонки.перенос.план.md»), волна-4.
     // Г: модалки шапки — «Запланировать» CallsScheduleDialog (messagesEditCall,
     // создание call_id="0"), «Присоединиться по ссылке» CallsJoinByLinkDialog
@@ -162,5 +171,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.06-1"
+    const val STAMP: String = "calls-2026.09.06-2"
 }

@@ -149,11 +149,44 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     var pendingIncomingCallPhoto: String? by mutableStateOf(null)
         private set
 
+    // ═══ #CALLS-INCOMING-UI (Этап Е): UI-состояния входящего звонка ═══
+    // pendingIncomingCallPayload сам по себе больше НЕ означает «сразу навигировать
+    // на CallScreen»: оверлей входящего (IncomingCallScreen / свёрнутый баннер,
+    // SovaNavHost) рендерится, пока payload не пуст, а навигация происходит
+    // только по «Принять» (incomingCallAccepted). Паттерн тот же, что у соседних
+    // pending-полей: mutableStateOf → LaunchedEffect срабатывает гарантированно.
+    /** false = полноэкранный IncomingCallScreen (реверс §8.1), true = свёрнутый
+     *  баннер (реверс §8.2, calls_collapse). Сбрасывается в consumeIncomingCall. */
+    var incomingCallCollapsed: Boolean by mutableStateOf(false)
+        private set
+    /** One-shot «Принять»: ставится экраном входящего, потребляется навигацией
+     *  на CallScreen в SovaNavHost (вместе с consumeIncomingCall). */
+    var incomingCallAccepted: Boolean by mutableStateOf(false)
+        private set
+
+    /** «Свернуть» с полноэкранного входящего в баннер (реверс §8.1 collapse). */
+    fun collapseIncomingCall() {
+        incomingCallCollapsed = true
+    }
+
+    /** Тап по баннеру / разворот в полный экран (реверс §8.2 restore). */
+    fun expandIncomingCall() {
+        incomingCallCollapsed = false
+    }
+
+    /** «Принять» на экране входящего/баннера: навигация на CallScreen —
+     *  существующий путь SovaNavHost (incoming=true, payload — как сейчас). */
+    fun acceptIncomingCall() {
+        incomingCallAccepted = true
+    }
+
     fun consumeIncomingCall() {
         pendingIncomingCallPayload = null
         pendingIncomingCallPeerId = 0L
         pendingIncomingCallTitle = ""
         pendingIncomingCallPhoto = null
+        incomingCallCollapsed = false
+        incomingCallAccepted = false
     }
 
     // ═══ #ARCH-CONTAINERS (Этап 1.3, потреблено на Этапе 1.4): pending ИСХОДЯЩЕГО звонка ═══

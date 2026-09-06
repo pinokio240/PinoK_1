@@ -1,6 +1,8 @@
 package re.pinok.ui.screens.calls
 
 import androidx.compose.foundation.background
+// #CALLS-ZH (Этап Ж, 5-b): горизонтальная прокрутка расширенного футера.
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,10 +25,17 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
+// #CALLS-ZH (Этап Ж, 5-b): иконки новых кнопок футера/виджета (Chat/Group/EmojiEmotions/PanTool — extended).
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,6 +45,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -57,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -283,6 +294,21 @@ fun CallScreen(
     // (type:"error" на наши transmit-data). Сервер отвергает данные, когда разговор
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
     var srvErrCount by remember { mutableStateOf(0) }
+
+    // ══ #CALLS-ZH (2026-09-06, Этап Ж, Task 5-b): состояния in-call ядра ══
+    // Ж1 участники / Ж2 реакции+рука / Ж3 чат / Ж4 настройки медиа — панели;
+    // Ж5 мини-виджет — ЛОКАЛЬНЫЙ UI-стейт (Ж0 §10: wire нет).
+    var showParticipants by remember { mutableStateOf(false) }
+    var showReactions by remember { mutableStateOf(false) }
+    var showMediaSettings by remember { mutableStateOf(false) }
+    var showCallChat by remember { mutableStateOf(false) }
+    var isCollapsed by remember { mutableStateOf(false) }
+    // Ж2: своя рука — состояние общее для панели и серверного синка
+    // (participant-state-changed по myParticipantId).
+    var isHandRaised by remember { mutableStateOf(false) }
+    // Свой participantId — из connection.participants (см. isMe-парсинг ниже):
+    // participant-state-changed приходит с числовым participantId, синк — только свой.
+    var myParticipantId by remember { mutableStateOf<String?>(null) }
 
     // #CALLS-SDP-DUP-GUARD-REVERT (2026-09-01, тест после 106d0281): дедуп SDP
     // («максимум 2 отправки одного SDP») УДАЛЁН, цепочка отправки возвращена к
@@ -1201,6 +1227,11 @@ fun CallScreen(
                                 val state = p.get("state")?.takeIf { it.isJsonPrimitive }?.asString
                                 // Собеседник: другой VK id / не наш okcdn uid.
                                 val isMe = extVkId == myVkUid || (myOkUid > 0L && pId == myOkUid)
+                                // #CALLS-ZH Ж2: запоминаем СВОЙ participantId — нужен для
+                                // синка руки из participant-state-changed (см. when-ветку).
+                                if (isMe && pId != null && pId > 0L && myParticipantId == null) {
+                                    myParticipantId = pId.toString()
+                                }
                                 if (!isMe && pId != null && pId > 0L) {
                                     remoteParticipantId.value = pId.toString()
                                     AppLog.i("CallScreen", "participantId собеседника из connection.participants: $pId (extId=$extVkId state=$state)")
@@ -1291,6 +1322,29 @@ fun CallScreen(
                     engine.endCall()
                     signaling.stop()
                     phase = CallPhase.ENDED
+                }
+                re.pinok.realtime.CallSignalingClient.CMD_PARTICIPANT_STATE_CHANGED -> {
+                    // #CALLS-ZH Ж2: participant-state-changed (Ж0 §1.2/§3.2) — синк СВОЕЙ
+                    // поднятой руки. Значения hand "1"/"0" — ParticipantStateDataValue
+                    // (16131@480035; живая проверка — Этап И, Ж0 §13.1). Форма события:
+                    // {participantId, participantState{state{…}, stateUpdateTs{…}}}.
+                    // NULL-ЯВНО: захваты в val — умный каст делегированных свойств невозможен.
+                    val pidEl = msg.json.get("participantId")
+                    val pidStr = if (pidEl != null && pidEl.isJsonPrimitive) pidEl.asString else msg.participantId
+                    val stEl = msg.json.get("participantState")
+                    val stObj = if (stEl != null && stEl.isJsonObject) stEl.asJsonObject else null
+                    val stateEl = if (stObj != null) stObj.get("state") else null
+                    val stateObj = if (stateEl != null && stateEl.isJsonObject) stateEl.asJsonObject else null
+                    val handEl = if (stateObj != null) stateObj.get("hand") else null
+                    val handVal = if (handEl != null && handEl.isJsonPrimitive) handEl.asString else null
+                    val mineId = myParticipantId
+                    if (handVal != null && pidStr != null && mineId != null && pidStr == mineId) {
+                        val raised = handVal == "1"
+                        if (raised != isHandRaised) {
+                            isHandRaised = raised
+                            AppLog.i("CallScreen", "#CALLS-ZH: своя рука синхронизирована сервером (hand=" + handVal + ")")
+                        }
+                    }
                 }
                 else -> { /* прочие события игнорируем */ }
             }
@@ -1404,6 +1458,53 @@ fun CallScreen(
                 callDuration = (System.currentTimeMillis() - startTime) / 1000
                 kotlinx.coroutines.delay(1000)
             }
+        }
+    }
+
+    // ══ #CALLS-ZH (Этап Ж, Task 5-b) — дефолты З2 (SovaPrefs) и виджет ══
+
+    // Ж4: дефолт маршрута звука (calls_route_default) применяется при старте.
+    // speaker → громкая связь; earpiece → телефонный динамик; auto — решает система;
+    // bt — ЧЕСТНОЕ ОТКЛОНЕНИЕ: SCO/BT-форсирования в WebRtcEngine нет
+    // (setSpeakerOn покрывает только speaker/earpiece) — контрол BT не рендерится
+    // (CallMediaSettingsPanel), дефолт игнорируется с логом (no-stub).
+    LaunchedEffect(Unit) {
+        val route = runCatching { deps.prefs.callsRouteDefault.first() }.getOrDefault("auto")
+        when (route) {
+            "speaker" -> {
+                isSpeakerOn = true
+                engine.setSpeakerOn(true)
+                AppLog.i("CallScreen", "#CALLS-ZH: маршрут по умолчанию speaker применён")
+            }
+            "earpiece" -> {
+                isSpeakerOn = false
+                engine.setSpeakerOn(false)
+                AppLog.i("CallScreen", "#CALLS-ZH: маршрут по умолчанию earpiece применён")
+            }
+            "bt" -> AppLog.w("CallScreen", "#CALLS-ZH: calls_route_default=bt — применения нет (нет SCO-пути), работает системный маршрут")
+            else -> AppLog.i("CallScreen", "#CALLS-ZH: маршрут по умолчанию auto — решает система")
+        }
+    }
+
+    // Ж4: шумодав по умолчанию (calls_noise_cancel_default, З2) → update-media-modifiers
+    // ОДНОКРАТНО при входе в ACTIVE при готовом WS. Маппинг Ж0 §9.2 (9644@18175):
+    // NEURAL/AUTO={denoise:true,denoiseAnn:true}, SIMPLE={denoise:true,denoiseAnn:false},
+    // прочее (NONE)={denoise:false,denoiseAnn:false}.
+    LaunchedEffect(phase == CallPhase.ACTIVE) {
+        if (phase != CallPhase.ACTIVE) return@LaunchedEffect
+        if (!signaling.isWsReady()) return@LaunchedEffect
+        val mode = runCatching { deps.prefs.callsNoiseCancelDefault.first() }.getOrDefault("NEURAL")
+        val denoiseAnn = mode == "AUTO" || mode == "NEURAL"
+        val denoise = denoiseAnn || mode == "SIMPLE"
+        val ok = signaling.updateMediaModifiers(denoise = denoise, denoiseAnn = denoiseAnn)
+        AppLog.i("CallScreen", "#CALLS-ZH: update-media-modifiers mode=" + mode + " denoise=" + denoise + " denoiseAnn=" + denoiseAnn + " ok=" + ok)
+    }
+
+    // Ж5: в финальных фазах мини-виджет разворачивается сам — пользователь
+    // должен видеть финальный статус и кнопку закрытия.
+    LaunchedEffect(phase) {
+        if (isCollapsed && (phase == CallPhase.ENDED || phase == CallPhase.FAILED)) {
+            isCollapsed = false
         }
     }
 
@@ -1707,6 +1808,15 @@ fun CallScreen(
         topBar = {
             TopAppBar(
                 title = { Text(peerName, color = Color.White) },
+                // #CALLS-ZH Ж5: «Свернуть» (web calls_call_footer_button_collapse /
+                // calls_collapse) — локальный UI-стейт, wire нет (Ж0 §10).
+                actions = {
+                    if (phase == CallPhase.ACTIVE || phase == CallPhase.CONNECTING) {
+                        IconButton(onClick = { isCollapsed = true }) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Свернуть", tint = Color.White)
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = if (videoRenderActive) Color.Transparent else Color(0xFF1A1A2E),
                     titleContentColor = Color.White,
@@ -1788,7 +1898,41 @@ fun CallScreen(
                 }
             }
 
-            Column(
+            // ══ #CALLS-ZH Ж5 (Task 5-b): мини-виджет свёрнутого звонка ══
+            // Ж0 §10: collapse — ЛОКАЛЬНЫЙ UI-стейт, wire нет. Полный коллапс с
+            // переживанием навигации НЕ имитируется: signaling/engine живут в
+            // композиции CallScreen (честное ограничение — отчёт 5-b).
+            if (isCollapsed) {
+                CallCollapsedWidget(
+                    name = peerName,
+                    phaseLabel = when (phase) {
+                        CallPhase.RINGING -> "Звоним…"
+                        CallPhase.CONNECTING -> "Соединение…"
+                        CallPhase.ACTIVE -> formatDuration(callDuration)
+                        CallPhase.ENDED -> "Завершён"
+                        else -> "Ошибка"
+                    },
+                    isMuted = isMuted,
+                    onMute = {
+                        isMuted = !isMuted
+                        engine.setMuted(isMuted)
+                        signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = false)
+                    },
+                    onEnd = {
+                        signaling.hangup(if (phase == CallPhase.ACTIVE) "hungup" else "cancel")
+                        engine.endCall()
+                        signaling.stop()
+                        phase = CallPhase.ENDED
+                        onNavigateBack()
+                    },
+                    onExpand = { isCollapsed = false },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp),
+                )
+            }
+
+            // #CALLS-ZH Ж5: при свёрнутом виджете основная колонка скрыта
+            // (виджет поверх видео/фона); состояние звонка не трогается.
+            if (!isCollapsed) Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier
@@ -2021,7 +2165,11 @@ fun CallScreen(
                     }
                     CallPhase.ACTIVE, CallPhase.CONNECTING -> {
                         // Footer как в VK (mvk_calls_call_footer_*): микрофон, динамик, ссылка, завершить
+                        // #CALLS-ZH (Этап Ж): + чат/участники/реакции/настройки (web-группы
+                        // футера — REV-UI §11.1); Row прокручивается горизонтально:
+                        // 8 кнопок не влезают на узких экранах (web-футер тоже скроллится [S7]).
                         Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(20.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -2029,7 +2177,15 @@ fun CallScreen(
                                 icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
                                 label = if (isMuted) "Вкл. микрофон" else "Микрофон",
                                 color = if (isMuted) Color(0xFF616161) else Color(0xFF37474F),
-                                onClick = { isMuted = !isMuted; engine.setMuted(isMuted) },
+                                onClick = {
+                                    isMuted = !isMuted
+                                    engine.setMuted(isMuted)
+                                    // #CALLS-ZH Ж4: mute сопровождаем change-media-settings —
+                                    // ПОЛНЫЙ mediaSettings из 6 bool (Ж0 §9.1, 16131@306103;
+                                    // не диф — его не понимает сервер). isVideoEnabled=false:
+                                    // локальной камеры нет (видеозаглушка #CALLS-SYMMETRIC).
+                                    signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = false)
+                                },
                             )
                             CallControlButton(
                                 icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
@@ -2069,6 +2225,43 @@ fun CallScreen(
                                         }
                                     }
                                 },
+                            )
+                            // ══ #CALLS-ZH (Этап Ж, Task 5-b): новые кнопки футера ══
+                            // Ж3: чат звонка (calls_call_footer_button_chat) — готовый
+                            // CallChatScreen (Этап Д) с активным callId.
+                            CallControlButton(
+                                icon = Icons.Default.Chat,
+                                label = "Чат",
+                                color = if (showCallChat) Color(0xFF43A047) else Color(0xFF37474F),
+                                onClick = {
+                                    val cid = activeCallId.value
+                                    if (cid.isNullOrBlank()) {
+                                        android.widget.Toast.makeText(context, "Звонок ещё не создан", android.widget.Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        showCallChat = true
+                                    }
+                                },
+                            )
+                            // Ж1: участники (calls_call_footer_button_participants).
+                            CallControlButton(
+                                icon = Icons.Default.Group,
+                                label = "Участники",
+                                color = if (showParticipants) Color(0xFF43A047) else Color(0xFF37474F),
+                                onClick = { showParticipants = true },
+                            )
+                            // Ж2: реакции + поднятая рука (зона calls_call_footer_button_raise_hand).
+                            CallControlButton(
+                                icon = Icons.Default.EmojiEmotions,
+                                label = "Реакции",
+                                color = if (showReactions) Color(0xFF43A047) else Color(0xFF37474F),
+                                onClick = { showReactions = true },
+                            )
+                            // Ж4: настройки медиа (rc calls_call_settings_root).
+                            CallControlButton(
+                                icon = Icons.Default.Settings,
+                                label = "Настройки",
+                                color = if (showMediaSettings) Color(0xFF43A047) else Color(0xFF37474F),
+                                onClick = { showMediaSettings = true },
                             )
                             CallControlButton(
                                 icon = Icons.Default.CallEnd,
@@ -2156,6 +2349,55 @@ fun CallScreen(
             }
         }
     }
+
+    // ══ #CALLS-ZH (Этап Ж, Task 5-b): панели in-call ядра — рендерятся поверх Scaffold ══
+    // Ж1/Ж2/Ж4 — Dialog-панели (новые файлы того же пакета); Ж3 — готовый
+    // CallChatScreen (Этап Д) с активным callId; hall_id здесь всегда null
+    // (основной зал — Ж0 §1.3; залы — Ж9, следующая волна).
+    val panelCallId = activeCallId.value
+    if (showParticipants) {
+        CallParticipantsPanel(
+            callId = panelCallId,
+            onDismiss = { showParticipants = false },
+        )
+    }
+    if (showReactions) {
+        CallReactionsPanel(
+            callId = panelCallId,
+            signaling = signaling,
+            isHandRaised = isHandRaised,
+            onHandChanged = { isHandRaised = it },
+            onDismiss = { showReactions = false },
+        )
+    }
+    if (showMediaSettings) {
+        CallMediaSettingsPanel(
+            signaling = signaling,
+            isMuted = isMuted,
+            isSpeakerOn = isSpeakerOn,
+            onMuteChange = { muted ->
+                isMuted = muted
+                engine.setMuted(muted)
+                // Тот же wire, что у футерной mute-кнопки (Ж0 §9.1: 6 bool целиком).
+                signaling.changeMediaSettings(isAudioEnabled = !muted, isVideoEnabled = false)
+            },
+            onSpeakerChange = { on ->
+                isSpeakerOn = on
+                engine.setSpeakerOn(on)
+            },
+            onDismiss = { showMediaSettings = false },
+        )
+    }
+    // NULL-ЯВНО: panelCallId — локальный val, smart-cast в условии легален.
+    if (showCallChat && panelCallId != null) {
+        CallChatScreen(
+            callId = panelCallId,
+            hallId = null,
+            title = peerName,
+            photoUrl = peerPhoto,
+            onDismiss = { showCallChat = false },
+        )
+    }
 }
 
 @Composable
@@ -2194,3 +2436,96 @@ private fun formatDuration(seconds: Long): String {
  */
 private fun sdpOLine(sdp: String): String? =
     sdp.lineSequence().firstOrNull { it.startsWith("o=") }?.trim()?.take(100)
+
+/**
+ * #CALLS-ZH Ж5 (Task 5-b, Этап Ж): мини-виджет свёрнутого звонка — ТОЛЬКО внутри
+ * экрана звонка. Web-эталон (CollapsedCall, REV-UI §8.2) — отдельное перетаскиваемое
+ * окно поверх ВСЕГО приложения с сохранением позиции в sessionStorage; здесь это
+ * НЕ имитируется: signaling/WebRtcEngine живут в композиции CallScreen, «переживать»
+ * навигацию в другие разделы без переноса архитектуры звонка — нельзя честно
+ * (зафиксировано в отчёте 5-b; кандидат на отдельный этап — звонковый Service/
+ * foreground-нота). Кнопки — ключевые по заданию: mute / завершить / развернуть
+ * (web-слоты mic-toggle / leave / restore, REV-UI §8.2; wire-действий нет —
+ * только локальные вызовы тех же обработчиков, что и у футера).
+ */
+@Composable
+private fun CallCollapsedWidget(
+    name: String,
+    phaseLabel: String,
+    isMuted: Boolean,
+    onMute: () -> Unit,
+    onEnd: () -> Unit,
+    onExpand: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.width(196.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xEE20203A),
+        shadowElevation = 8.dp,
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = name,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = phaseLabel,
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = onMute,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(if (isMuted) Color(0xFF616161) else Color(0xFF37474F)),
+                ) {
+                    Icon(
+                        if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                        contentDescription = if (isMuted) "Вкл. микрофон" else "Микрофон",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onExpand,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF37474F)),
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Развернуть",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onEnd,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE53935)),
+                ) {
+                    Icon(
+                        Icons.Default.CallEnd,
+                        contentDescription = "Завершить",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+    }
+}
