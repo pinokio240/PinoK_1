@@ -35,6 +35,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+// #CALLS-ZH2 (Task 6-a): «Ещё» (меню Ж6/Ж7/Ж8/Ж9) — extended-иконка.
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
@@ -54,6 +56,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+// #CALLS-ZH2 (Task 6-a): список строк субтитров (Ж7).
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -310,6 +314,20 @@ fun CallScreen(
     // participant-state-changed приходит с числовым participantId, синк — только свой.
     var myParticipantId by remember { mutableStateOf<String?>(null) }
 
+    // ══ #CALLS-ZH2 (2026-09-06, Этап Ж-2, Task 6-a): Ж6 запись / Ж7 субтитры / Ж8 зал ожидания / Ж9 залы ══
+    // Панели — новые файлы (CallMorePanel/CallRoomsPanel/CallWaitingHallPanel);
+    // статусы записи/расшифровки — ТОЛЬКО серверные уведомления (record-started/stopped,
+    // asr-started/stopped — when-ветки ниже), кнопок без wire не рендерим (no-stub).
+    var showMorePanel by remember { mutableStateOf(false) }
+    var showRooms by remember { mutableStateOf(false) }
+    var showWaitingHall by remember { mutableStateOf(false) }
+    var isRecording by remember { mutableStateOf(false) }
+    var isAsrRunning by remember { mutableStateOf(false) }
+    // Ж7 субтитры: включены ли ДЛЯ СЕБЯ (request-asr по DC) + последние строки транскрипции
+    // (DC "asr" → WebRtcEngine.onAsrText). Оверлей — CallSubtitlesOverlay.
+    var subtitlesEnabled by remember { mutableStateOf(false) }
+    val subtitleLines = remember { mutableStateListOf<String>() }
+
     // #CALLS-SDP-DUP-GUARD-REVERT (2026-09-01, тест после 106d0281): дедуп SDP
     // («максимум 2 отправки одного SDP») УДАЛЁН, цепочка отправки возвращена к
     // проверенной (первый успешный звонок 17:55 и 4/4 исходящих — там отправка
@@ -399,7 +417,42 @@ fun CallScreen(
             // #CALLS-VIDEO-RX (§11.2.3): удалённый VideoTrack появился (или null при
             // endCall/release) — UI сам подключит/отпустит рендерер.
             onRemoteVideoTrack = { track -> remoteVideoTrack = track },
+            // #CALLS-ZH2 (Task 6-a) Ж7: живые субтитры по DC "asr" (Ж0 §5.3) — вызов с
+            // signaling-треда, Compose-снапшоты потокобезопасны (прецедент onRemoteVideoTrack).
+            onAsrText = { text, ssrc ->
+                subtitleLines.add(text)
+                while (subtitleLines.size > 12) {
+                    subtitleLines.removeAt(0)
+                }
+                AppLog.i("CallScreen", "#CALLS-ZH2: ASR (ssrc=" + ssrc + "): " + text.take(120))
+            },
         )
+    }
+
+    // ══ #CALLS-ZH2 (Task 6-a): Ж6/Ж7 имена по умолчанию + тоггл субтитров ══
+    // Ж0 §4: имя записи по умолчанию «<имя звонившего> <дата>» (лимит 128 — guard в Client);
+    // Ж0 §5.1: заголовок расшифровки «Расшифровка <дата>». Формируются один раз на звонок.
+    val callDateStamp = remember {
+        java.text.SimpleDateFormat("d.MM", java.util.Locale.getDefault()).format(java.util.Date())
+    }
+    val recordName = remember(peerName) { peerName + " " + callDateStamp }
+    val asrName = remember { "Расшифровка " + callDateStamp }
+
+    // Ж7: тоггл субтитров — request-asr по DC producerCommand (JSON-фолбэка НЕТ — Ж0 §5.2).
+    // Провал (DC нет/не OPEN) — честный откат тоггла + тост, оверлей не включается.
+    val toggleSubtitles: (Boolean) -> Unit = { on ->
+        val sent = engine.sendRequestAsr(on)
+        if (on && !sent) {
+            subtitlesEnabled = false
+            android.widget.Toast.makeText(context, "Субтитры недоступны: DataChannel не открыт", android.widget.Toast.LENGTH_SHORT).show()
+            AppLog.w("CallScreen", "#CALLS-ZH2: request-asr(true) не отправлен — тоггл откачен")
+        } else {
+            subtitlesEnabled = on
+            if (on) {
+                subtitleLines.clear()
+            }
+            AppLog.i("CallScreen", "#CALLS-ZH2: субтитры " + (if (on) "включены" else "выключены") + " (sent=" + sent + ")")
+        }
     }
 
     // #CALLS-VIDEO-RX: kill-switch видео. #CALLS-VIDEO-PREFS-RACE (2026-09-01):
@@ -1346,8 +1399,38 @@ fun CallScreen(
                         }
                     }
                 }
+                // ══ #CALLS-ZH2 (Task 6-a): Ж6 запись / Ж7 расшифровка — индикация по серверу ══
+                // Локального стейта НЕ ставим из кнопок: авторитет — уведомления сервера
+                // (Ж0 §1.2; кнопки CallMorePanel шлют record-start/stop, asr-start/stop,
+                // статус приходит ЭТИМИ ветками — и чужие старты тоже видим).
+                "record-started" -> {
+                    isRecording = true
+                    AppLog.i("CallScreen", "#CALLS-ZH2: запись включена (record-started)")
+                }
+                "record-stopped" -> {
+                    isRecording = false
+                    AppLog.i("CallScreen", "#CALLS-ZH2: запись остановлена (record-stopped)")
+                }
+                "asr-started" -> {
+                    isAsrRunning = true
+                    AppLog.i("CallScreen", "#CALLS-ZH2: расшифровка запущена (asr-started)")
+                }
+                "asr-stopped" -> {
+                    isAsrRunning = false
+                    AppLog.i("CallScreen", "#CALLS-ZH2: расшифровка остановлена (asr-stopped)")
+                }
                 else -> { /* прочие события игнорируем */ }
             }
+        }
+    }
+
+    // #CALLS-ZH2 (Task 6-a) Ж7: автоповтор подписки на субтитры после переподключения —
+    // эталон bridge@181914 (CONNECTED && enabled → requestAsr(true)); фаза ACTIVE
+    // перезаходит после PC-RESTART/SERVER-rejoin — LaunchedEffect перезапустится.
+    LaunchedEffect(phase, subtitlesEnabled) {
+        if (phase == CallPhase.ACTIVE && subtitlesEnabled) {
+            val sent = engine.sendRequestAsr(true)
+            AppLog.i("CallScreen", "#CALLS-ZH2: автоповтор request-asr(true) при ACTIVE: sent=" + sent)
         }
     }
 
@@ -1930,6 +2013,24 @@ fun CallScreen(
                 )
             }
 
+            // ══ #CALLS-ZH2 (Task 6-a) Ж6/Ж7: оверлеи записи и субтитров ══
+            // Низ экрана: зона Top-55% может быть перекрыта SurfaceViewRenderer видео
+            // (#CALLS-SURFACE-ZTOP — hardware-слой ПОВЕРХ окна). Показываем в активном звонке;
+            // пустые контролы не рендерятся (no-stub: бейдж скрывается без записи,
+            // оверлей — без включённых субтитров).
+            if (!isCollapsed && (phase == CallPhase.ACTIVE || phase == CallPhase.CONNECTING)) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 176.dp),
+                ) {
+                    CallRecordingBadge(visible = isRecording)
+                    if (subtitlesEnabled) {
+                        CallSubtitlesOverlay(lines = subtitleLines)
+                    }
+                }
+            }
+
             // #CALLS-ZH Ж5: при свёрнутом виджете основная колонка скрыта
             // (виджет поверх видео/фона); состояние звонка не трогается.
             if (!isCollapsed) Column(
@@ -2263,6 +2364,14 @@ fun CallScreen(
                                 color = if (showMediaSettings) Color(0xFF43A047) else Color(0xFF37474F),
                                 onClick = { showMediaSettings = true },
                             )
+                            // ══ #CALLS-ZH2 (Task 6-a): «Ещё» — Ж6 запись / Ж7 расшифровка+субтитры / Ж8 зал ожидания / Ж9 залы ══
+                            // (web-меню calls_call_menu_*; панели — CallMorePanel и вложенные).
+                            CallControlButton(
+                                icon = Icons.Default.MoreHoriz,
+                                label = "Ещё",
+                                color = if (showMorePanel) Color(0xFF43A047) else Color(0xFF37474F),
+                                onClick = { showMorePanel = true },
+                            )
                             CallControlButton(
                                 icon = Icons.Default.CallEnd,
                                 label = "Завершить",
@@ -2396,6 +2505,40 @@ fun CallScreen(
             title = peerName,
             photoUrl = peerPhoto,
             onDismiss = { showCallChat = false },
+        )
+    }
+
+    // ══ #CALLS-ZH2 (Task 6-a): панели Ж-2 — «Ещё» (Ж6/Ж7) / залы (Ж9) / зал ожидания (Ж8) ══
+    if (showMorePanel) {
+        CallMorePanel(
+            signaling = signaling,
+            isRecording = isRecording,
+            isAsrRunning = isAsrRunning,
+            subtitlesEnabled = subtitlesEnabled,
+            defaultRecordName = recordName,
+            defaultAsrName = asrName,
+            onToggleSubtitles = { on -> toggleSubtitles(on) },
+            onOpenRooms = {
+                showMorePanel = false
+                showRooms = true
+            },
+            onOpenWaitingHall = {
+                showMorePanel = false
+                showWaitingHall = true
+            },
+            onDismiss = { showMorePanel = false },
+        )
+    }
+    if (showRooms) {
+        CallRoomsPanel(
+            signaling = signaling,
+            onDismiss = { showRooms = false },
+        )
+    }
+    if (showWaitingHall) {
+        CallWaitingHallPanel(
+            signaling = signaling,
+            onDismiss = { showWaitingHall = false },
         )
     }
 }

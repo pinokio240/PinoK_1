@@ -42,6 +42,13 @@ class WebRtcEngine(
     private val onIceStateChanged: ((String) -> Unit)? = null,
     /** #CALLS-VIDEO-RX: удалённый VideoTrack появился (или null — звонок завершён). */
     private val onRemoteVideoTrack: ((VideoTrack?) -> Unit)? = null,
+    /**
+     * #CALLS-ZH2 (Task 6-a) Ж7: текст живой транскрипции по DC "asr" (Ж0 §5.3).
+     * Аргументы: (текст UTF-8, ssrc отправителя). Вызывается на signaling-треде
+     * (Compose-снапшоты потокобезопасны — прецедент onRemoteVideoTrack/#CALLS-VIDEO-RX).
+     * ssrc→участник НЕ мапится: реестра participantIdRegistry в движке нет (Ж0 §5.3) —
+     * честное ограничение: субтитры показываются без атрибуции спикера. */
+    private val onAsrText: ((String, Long) -> Unit)? = null,
 ) {
 companion object {
         private const val TAG = "WebRtcEngine"
@@ -51,6 +58,12 @@ companion object {
          *  Без inline-кандидатов входящий звонок не работает (пар=0, reqS=0).
          *  Ждём сбора кандидатов до 1.5с, затем отправляем SDP с зашитыми a=candidate. */
         private const val INLINE_ICE_WAIT_MS = 1500L
+
+        // #CALLS-ZH2 (Task 6-a) Ж7: имена DataChannel'ов (Ж0 §2.4, 16131@~163300).
+        // "asr" — приём живых транскрипций (сервер→клиент); "producerCommand" — клиентские
+        // DC-команды (в т.ч. request-asr #3, Ж0 §2.4/§5.2, сериализатор 16131@154058).
+        private const val DC_ASR = "asr"
+        private const val DC_PRODUCER_COMMAND = "producerCommand"
     }
 
     private var factory: PeerConnectionFactory? = null
@@ -172,6 +185,20 @@ companion object {
     // официального; после strip первым выжившим становится H264).
     @Volatile
     private var videoRxEnabled: Boolean = false
+
+    // ══ #CALLS-ZH2 (Task 6-a) Ж7: DataChannel-инфраструктура ASR (АДДИТИВНО) ══
+    // Каналы создаются в createPeerConnection ДО первичных переговоров (m=application в
+    // offer/answer — как у эталона, чей SDP содержит DC-секции). Если удалённый offer без
+    // m=application — libwebrtc просто НЕ включит секцию в answer (аудио-нога не затрагивается).
+    // Доступ: создание/переиспользование — ТОЛЬКО signaling thread; чтение ссылки из UI —
+    // @Volatile. Ссылки ПЕРЕЗАПИСЫВАЮТСЯ при создании нового PC (PC-RESTART тоже);
+    // при close() PC старые каналы закрываются нативно вместе с ним.
+    @Volatile
+    private var asrChannel: DataChannel? = null
+    @Volatile
+    private var producerCommandChannel: DataChannel? = null
+    /** #CALLS-ZH2: sequence DC-конверта request-asr ([3][0][seq][bool], Ж0 §2.4). */
+    private val dcSequence = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun setVideoRxEnabled(enabled: Boolean) { videoRxEnabled = enabled }
 
@@ -675,7 +702,25 @@ companion object {
             }
             override fun onAddStream(stream: MediaStream) {}
             override fun onRemoveStream(stream: MediaStream) {}
-            override fun onDataChannel(channel: DataChannel) {}
+            override fun onDataChannel(channel: DataChannel) {
+                // #CALLS-ZH2 (Task 6-a) Ж7: тело БЫЛО пустым — добавлен ТОЛЬКО приём
+                // серверных DC "asr"/"producerCommand" (адопция + observer). Прочие каналы
+                // логируются и игнорируются; существующие PC-логики (ICE/offer/answer) не затронуты.
+                val label = channel.label()
+                AppLog.i(TAG, "onDataChannel: label=$label state=${channel.state()}")
+                if (label == DC_ASR) {
+                    // Сервер открыл СВОЙ asr-канал — адоптируем (приём и на наш созданный,
+                    // и на серверный; созданный остаётся запасным).
+                    attachAsrObserver(channel, label)
+                    asrChannel = channel
+                } else if (label == DC_PRODUCER_COMMAND) {
+                    attachAsrObserver(channel, label)
+                    val mine = producerCommandChannel
+                    if (mine == null || runCatching { mine.state() }.getOrNull() != DataChannel.State.OPEN) {
+                        producerCommandChannel = channel
+                    }
+                }
+            }
             override fun onRenegotiationNeeded() {}
             override fun onAddTrack(receiver: org.webrtc.RtpReceiver, streams: Array<out MediaStream>) {
                 val track = receiver.track()
@@ -697,6 +742,150 @@ companion object {
         @Suppress("DEPRECATION")
         peerConnection = factory?.createPeerConnection(rtcConfig, pcConstraints, observer)
         pcCreated = peerConnection != null
+        // #CALLS-ZH2 (Task 6-a) Ж7: DataChannel "asr"/"producerCommand" — АДДИТИВНО
+        // (после создания PC; существующие строки выше не изменены — ICE/offer/answer
+        // логики не тронуты, см. KDoc initAsrDataChannels).
+        initAsrDataChannels()
+    }
+
+    /**
+     * #CALLS-ZH2 (Task 6-a) Ж7: создание DataChannel'ов ASR при создании PC.
+     * АДДИТИВНЫЙ метод — вызывается единственный раз из createPeerConnection; при null-PC
+     * и любых ошибках — честный лог, НЕ исключение (регресс звонков недопустим).
+     */
+    private fun initAsrDataChannels() {
+        val pc = peerConnection
+        if (pc == null) {
+            AppLog.w(TAG, "initAsrDataChannels: PC нет — DC ASR пропущены (субтитры будут недоступны)")
+            return
+        }
+        val existingAsr = asrChannel
+        if (existingAsr == null) {
+            asrChannel = createLabeledChannel(pc, DC_ASR)
+        }
+        val existingCmd = producerCommandChannel
+        if (existingCmd == null) {
+            producerCommandChannel = createLabeledChannel(pc, DC_PRODUCER_COMMAND)
+        }
+    }
+
+    /** #CALLS-ZH2: createDataChannel с observer'ом; любые ошибки — null + лог (не крэш). */
+    private fun createLabeledChannel(pc: PeerConnection, label: String): DataChannel? {
+        return runCatching {
+            val init = DataChannel.Init()
+            init.ordered = true
+            val ch = pc.createDataChannel(label, init)
+            attachAsrObserver(ch, label)
+            AppLog.i(TAG, "DataChannel '" + label + "' создан (ordered)")
+            ch
+        }.onFailure { AppLog.w(TAG, "createDataChannel('$label'): ${it.message}") }.getOrNull()
+    }
+
+    /**
+     * #CALLS-ZH2: observer DC. Для "asr" — парсинг транскрипций (Ж0 §5.3, 16131@190768);
+     * для producerCommand — входящие сообщения только логируются (серверных DC-ответов
+     * на request-asr протоколом не предусмотрено — Ж0 §2.4).
+     */
+    private fun attachAsrObserver(ch: DataChannel, label: String) {
+        runCatching {
+            ch.registerObserver(object : DataChannel.Observer {
+                override fun onBufferedAmountChange(previous: Long) {}
+                override fun onStateChange() {
+                    AppLog.i(TAG, "DC '$label' state=${ch.state()}")
+                }
+                override fun onMessage(buf: DataChannel.Buffer) {
+                    if (label != DC_ASR) return
+                    if (!buf.binary) return
+                    val bb = buf.data
+                    if (bb != null && bb.remaining() >= 16) {
+                        val bytes = ByteArray(bb.remaining())
+                        bb.get(bytes)
+                        handleAsrFrame(bytes)
+                    }
+                }
+            })
+        }.onFailure { AppLog.w(TAG, "registerObserver('$label'): ${it.message}") }
+    }
+
+    /**
+     * #CALLS-ZH2 Ж7: бинарный кадр транскрипции DC "asr" (Ж0 §5.3, 16131@190768):
+     * [u8 version==1][u8 msgType==1][u16be sequence][u32be ssrc][u32be timestamp]
+     * [u32be duration][UTF-8 текст с оффсета 16]. Склейка строк (интервал <5с) —
+     * забота UI (CallScreen добавляет строки в оверлей).
+     */
+    private fun handleAsrFrame(bytes: ByteArray) {
+        val version = bytes[0].toInt() and 0xFF
+        if (version != 1) {
+            AppLog.w(TAG, "ASR-кадр: неизвестная версия $version — пропущен (${bytes.size}Б)")
+            return
+        }
+        val msgType = bytes[1].toInt() and 0xFF
+        if (msgType != 1) {
+            AppLog.d(TAG, "ASR-кадр: msgType=$msgType (не текст) — пропущен")
+            return
+        }
+        val ssrc = ((bytes[4].toLong() and 0xFF) shl 24) or
+            ((bytes[5].toLong() and 0xFF) shl 16) or
+            ((bytes[6].toLong() and 0xFF) shl 8) or
+            (bytes[7].toLong() and 0xFF)
+        val textLen = bytes.size - 16
+        val text = String(bytes, 16, textLen, Charsets.UTF_8)
+        if (text.isNotBlank()) {
+            val cb = onAsrText
+            if (cb != null) {
+                cb(text, ssrc)
+            }
+        }
+    }
+
+    /**
+     * #CALLS-ZH2 Ж7: request-asr — включить/выключить ПРИЁМ живых субтитров ДЛЯ СЕБЯ
+     * (Ж0 §5.2/§15; JSON-фолбэка НЕТ — только DC, 16131@154058 serializeRequestAsr):
+     * varint-конверт по producerCommand [type=3][version=0][sequence][bool request].
+     * Вызывается с UI-потока: реальная отправка постится на signaling thread (все DC/PC
+     * операции — там, KDoc класса); [return] — «команда принята к отправке» (канал есть и OPEN).
+     * Автоповтор при переподключении — обязанность UI (Эталон: CONNECTED && enabled →
+     * requestAsr(true), bridge@181914; CallScreen — LaunchedEffect по фазе ACTIVE).
+     * @return true — канал есть и OPEN, отправка запланирована (не гарантия доставки).
+     */
+    fun sendRequestAsr(request: Boolean): Boolean {
+        val handler = signalingHandler
+        val ch = producerCommandChannel
+        if (handler == null || ch == null) {
+            AppLog.w(TAG, "sendRequestAsr: signaling-тред/DC producerCommand нет — подписка на субтитры не отправлена")
+            return false
+        }
+        val state = runCatching { ch.state() }.getOrNull()
+        if (state == null || state != DataChannel.State.OPEN) {
+            AppLog.w(TAG, "sendRequestAsr: DC producerCommand в состоянии $state — не отправлено")
+            return false
+        }
+        handler.post {
+            runCatching {
+                val out = java.io.ByteArrayOutputStream()
+                dcVarint(3, out)
+                dcVarint(0, out)
+                dcVarint(dcSequence.incrementAndGet(), out)
+                out.write(if (request) 1 else 0)
+                val sent = ch.send(DataChannel.Buffer(java.nio.ByteBuffer.wrap(out.toByteArray()), true))
+                AppLog.i(TAG, "sendRequestAsr(request=$request): отправлено=$sent")
+            }.onFailure { AppLog.w(TAG, "sendRequestAsr: ошибка отправки: ${it.message}") }
+        }
+        return true
+    }
+
+    /** #CALLS-ZH2: varint-кодирование (аналог Ne.enc эталона, Ж0 §2.4). */
+    private fun dcVarint(value: Int, out: java.io.ByteArrayOutputStream) {
+        var v = value
+        while (true) {
+            val b = v and 0x7F
+            v = v ushr 7
+            if (v == 0) {
+                out.write(b)
+                return
+            }
+            out.write(b or 0x80)
+        }
     }
 
     private fun createLocalAudioTrack() {

@@ -1,7 +1,12 @@
 package re.pinok.realtime
 
+// #CALLS-ZH2 (Task 6-a): JsonArray/JsonPrimitive/JsonNull — команды Ж6-Ж9 с массивами
+// и ЯВНЫМИ JSON null (record-start/update-rooms/activate-rooms/switch-room; Ж0 §4/§5/§8).
+import com.google.gson.JsonArray
+import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.JsonPrimitive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,6 +73,49 @@ class CallSignalingClient(
         const val CMD_UPDATE_MEDIA_MODIFIERS = "update-media-modifiers"
         /** Реакция (Ж0 §1.1#48, §3.1, 16131@309999): {key} — key из каталога calls.getReactions */
         const val CMD_FEEDBACK = "feedback"
+
+        // ─── #CALLS-ZH2 (Task 6-a): команды Ж6 запись / Ж7 ASR / Ж8 зал ожидания / Ж9 залы ───
+        // Все имена — wire-литералы Ж0-протокола (§1.1, смещения эталона в KDoc методов).
+        /** Ж6 запись (Ж0 §1.1#16, 16131@422393 startStream): {movieId:null,name,privacy,groupId:null,roomId:null,streamMovie:false} */
+        const val CMD_RECORD_START = "record-start"
+        /** Ж6 запись (Ж0 §1.1#17, 16131@422494 stopStream): {roomId:null, remove?} */
+        const val CMD_RECORD_STOP = "record-stop"
+        /** Ж7 расшифровка (Ж0 §1.1#49, 16131@310522 startAsr): {fileName≤128, roomId?} */
+        const val CMD_ASR_START = "asr-start"
+        /** Ж7 расшифровка (Ж0 §1.1#50, 16131@310539 stopAsr): {} (roomId только если есть) */
+        const val CMD_ASR_STOP = "asr-stop"
+        /** Ж9 залы (Ж0 §1.1#43, 16131@307641): {withParticipants:bool} → response {rooms:{roomId, rooms:[Room]}} */
+        const val CMD_GET_ROOMS = "get-rooms"
+        /** Ж9 залы (Ж0 §8, bridge@819377/830706): создание {rooms:[{name,participantCount}],assignRandomly} / перемещение {rooms:[{id,removeParticipantIds},{id,addParticipantIds}]} */
+        const val CMD_UPDATE_ROOMS = "update-rooms"
+        /** Ж9 залы (Ж0 §8, bridge@830343/394008): {roomIds:[…], deactivate:bool} */
+        const val CMD_ACTIVATE_ROOMS = "activate-rooms"
+        /** Ж9 залы (Ж0 §8, bridge@830722): {roomIds:[…]} */
+        const val CMD_REMOVE_ROOMS = "remove-rooms"
+        /** Ж9 залы (Ж0 §1.1#47, 16131@307553): {toRoomId?(null=основной), participantId?} */
+        const val CMD_SWITCH_ROOM = "switch-room"
+        /** Ж8 зал ожидания (Ж0 §1.1#33, 16131@309933 getWaitingHall): {fromId?,count?,backward?} → {totalCount,participants} */
+        const val CMD_GET_WAITING_HALL = "get-waiting-hall"
+        /** Ж8 зал ожидания (Ж0 §1.1#36, 16131@309678): {participantId, demote?:bool} — впустить/вернуть в зал */
+        const val CMD_PROMOTE_PARTICIPANT = "promote-participant"
+        /** Ж8 отказ в зале ожидания (Ж0 §6.3/§7): remove-participant {participantId, ban:false}.
+         *  Сам send-метод в Ж1 (wave-5) НЕ вошёл — добавлен в Ж8-пакете для «Отклонить» (refuse). */
+        const val CMD_REMOVE_PARTICIPANT = "remove-participant"
+
+        /**
+         * #CALLS-ZH2 ФИКС волны-5 (Task 6-a): имя УВЕДОМЛЕНИЯ participant-state-changed
+         * (Ж0 §1.2, enum 16131@163588). CallScreen в ветке Ж2 (Task 5-b) уже сравнивает
+         * msg.command с ЭТОЙ константой (CallScreen.kt, when-ветка синка руки), но сама
+         * константа в companion объявлена НЕ БЫЛА — репозиторий после волны-5 не собирался.
+         * Уведомление эмитится в messages-flow СУЩЕСТВУЮЩИМ обработчиком (effective2 =
+         * имя notification) — здесь только объявление литерала. */
+        const val CMD_PARTICIPANT_STATE_CHANGED = "participant-state-changed"
+
+        /**
+         * #CALLS-ZH2 Ж7: запрещённые символы fileName расшифровки (Ж0 §5.1,
+         * валидация эталона bridge@849931): [#%&{}\/<>*?$!`"':@+|=].
+         */
+        private val ASR_NAME_FORBIDDEN = Regex("[#%&{}\\\\/<>*?\$!`\"':@+|=]")
 
         /** Входящие команды/события. */
         const val CMD_OFFER = "offer"
@@ -368,6 +416,245 @@ class CallSignalingClient(
         val state = JsonObject().apply { addProperty(key, value) }
         val ps = JsonObject().apply { add("state", state) }
         return send(CMD_CHANGE_PARTICIPANT_STATE, mapOf("participantState" to ps))
+    }
+
+    // ─── #CALLS-ZH2 (Task 6-a): send-методы Ж6 запись / Ж7 ASR / Ж8 зал ожидания / Ж9 залы ───
+    // АДДИТИВНО: существующие константы/методы/форматы (accept-call/hangup/transmit-data/
+    // change-media-settings/update-media-modifiers/feedback/change-participant-state) НЕ тронуты.
+    // Уведомления ответных событий (record-started/stopped, asr-started/stopped, promote-participant,
+    // room-updated/rooms-updated/room-participants-updated) уходят в messages-flow СУЩЕСТВУЮЩИМ
+    // обработчиком (else-ветка эмитит имя notification) — CallScreen/панели читают без правок транспорта.
+
+    /**
+     * #CALLS-ZH2: конверт для команд с JSON-массивами и ЯВНЫМИ null
+     * (record-start/stop, asr-start/stop, get-rooms/update-rooms/activate-rooms/
+     * remove-rooms/switch-room, get-waiting-hall/promote-participant/remove-participant).
+     * Существующий send(Map<String,Any>) НЕ РАСШИРЯЛСЯ (нулевая правка форм сообщений
+     * волн 1-5): JSON null в Map невыразим, а null-поля wire-схемы обязательны
+     * (Ж0 §4: movieId/groupId/roomId=null в record-start). Конверт тот же
+     * {command, sequence, …body} (Ж0 §2.2 _serializeJson, 16131@320580).
+     * @return true — команда реально ушла в WS.
+     */
+    private fun sendJson(command: String, body: JsonObject): Boolean {
+        val ws = webSocket
+        if (ws == null || !wsOpen) {
+            AppLog.w(TAG, "sendJson: WS не открыт, команда '$command' отброшена")
+            return false
+        }
+        return try {
+            val seq = sequence.incrementAndGet()
+            val payload = JsonObject()
+            payload.addProperty("command", command)
+            payload.addProperty("sequence", seq)
+            for (e in body.entrySet()) {
+                payload.add(e.key, e.value)
+            }
+            val text = payload.toString()
+            val ok = ws.send(text)
+            AppLog.i(TAG, "send: command=$command seq=$seq ok=$ok size=${text.toByteArray(Charsets.UTF_8).size}Б")
+            AppLog.d(TAG, "send payload: $payload")
+            ok
+        } catch (e: Exception) {
+            AppLog.w(TAG, "send error: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * #CALLS-ZH2 Ж6: record-start — запись звонка (Ж0 §4, 16131@422393 startStream).
+     * wire: {"command":"record-start","sequence":N,"movieId":null,"name":"<название>",
+     *        "privacy":"DIRECT_LINK","groupId":null,"roomId":null,"streamMovie":false}
+     * (roomId=null — основной зал; movieId/groupId — ЯВНЫЕ JSON null). streamMovie=true —
+     * только для трансляции (Ж11: video.startStreaming — фасадом не обеспечен, НЕ шлём).
+     * Имя по умолчанию UI-эталона "<имя звонившего> <дата>", лимит 128 (bridge@850013) —
+     * формирует вызывающий (CallMorePanel/CallScreen). Индикация: record-started/stopped.
+     * @return true — команда реально ушла в WS.
+     */
+    fun startRecording(name: String, privacy: String = "DIRECT_LINK", streamMovie: Boolean = false): Boolean {
+        val body = JsonObject()
+        body.add("movieId", JsonNull.INSTANCE)
+        body.addProperty("name", name)
+        body.addProperty("privacy", privacy)
+        body.add("groupId", JsonNull.INSTANCE)
+        body.add("roomId", JsonNull.INSTANCE)
+        body.addProperty("streamMovie", streamMovie)
+        return sendJson(CMD_RECORD_START, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж6: record-stop — стоп записи (Ж0 §4, 16131@422494 stopStream(e={roomId:null})).
+     * [remove]=true — удалить созданный video-стрим (только трансляция, Ж0 §4; здесь false —
+     * поле опускается). Индикация: record-stopped.
+     * @return true — команда реально ушла в WS.
+     */
+    fun stopRecording(remove: Boolean = false): Boolean {
+        val body = JsonObject()
+        body.add("roomId", JsonNull.INSTANCE)
+        if (remove) body.addProperty("remove", true)
+        return sendJson(CMD_RECORD_STOP, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж7: asr-start — старт расшифровки (Ж0 §5.1, 16131@310522 startAsr;
+     * валидация эталона bridge@849931): fileName ≤128 и БЕЗ символов
+     * [#%&{}\\/<>*?$!`"':@+|=]. Заголовок расшифровки = fileName; результат — «Расшифровки
+     * звонков» (calls.getAsrTranscriptions, фасад есть). Индикация: asr-started {asrInfo}.
+     * @return true — команда реально ушла в WS (false — невалидное имя/WS закрыт).
+     */
+    fun startAsr(fileName: String): Boolean {
+        if (fileName.length > 128) {
+            AppLog.w(TAG, "startAsr: fileName >128 символов — сервер отклонит (${fileName.length})")
+            return false
+        }
+        if (ASR_NAME_FORBIDDEN.containsMatchIn(fileName)) {
+            AppLog.w(TAG, "startAsr: fileName содержит запрещённые символы (Ж0 §5.1) — сервер отклонит")
+            return false
+        }
+        val body = JsonObject()
+        body.addProperty("fileName", fileName)
+        return sendJson(CMD_ASR_START, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж7: asr-stop — стоп расшифровки (Ж0 §5.1, 16131@310539 stopAsr:
+     * payload {} — roomId добавляется только если есть; у нас roomId всегда основной зал = null).
+     * Индикация: asr-stopped {roomId}.
+     * @return true — команда реально ушла в WS.
+     */
+    fun stopAsr(): Boolean = sendJson(CMD_ASR_STOP, JsonObject())
+
+    /**
+     * #CALLS-ZH2 Ж9: get-rooms — список залов (Ж0 §8, 16131@307641). withParticipants=true —
+     * только админ (Ж0 §8). Ответ: type:"response" c {rooms:{roomId, rooms:[Room]}}
+     * (Room-схема Ж0 §8); парсинг — CallRoomsPanel (tolerant).
+     * @return true — команда реально ушла в WS.
+     */
+    fun getRooms(withParticipants: Boolean): Boolean {
+        val body = JsonObject()
+        body.addProperty("withParticipants", withParticipants)
+        return sendJson(CMD_GET_ROOMS, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж9: update-rooms — СОЗДАНИЕ залов (Ж0 §8, bridge@819377):
+     * {rooms:[{name:"Зал N", participantCount:0, countdownSec?}], assignRandomly:false}.
+     * Имя по умолчанию эталона calls_room_control_create_default_room_name («Зал 1») —
+     * генерирует вызывающий. [countdownSec] — таймер залов (опция, не шлём при null).
+     * @return true — команда реально ушла в WS.
+     */
+    fun updateRoomsCreate(roomNames: List<String>, assignRandomly: Boolean = false, countdownSec: Long? = null): Boolean {
+        if (roomNames.isEmpty()) {
+            AppLog.w(TAG, "updateRoomsCreate: пустой список имён — команда не отправляется")
+            return false
+        }
+        val arr = JsonArray()
+        for (name in roomNames) {
+            val room = JsonObject()
+            room.addProperty("name", name)
+            room.addProperty("participantCount", 0)
+            val cd = countdownSec
+            if (cd != null) room.addProperty("countdownSec", cd)
+            arr.add(room)
+        }
+        val body = JsonObject()
+        body.add("rooms", arr)
+        body.addProperty("assignRandomly", assignRandomly)
+        return sendJson(CMD_UPDATE_ROOMS, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж9: activate-rooms — открыть/закрыть залы (Ж0 §8, bridge@830343/394008):
+     * {roomIds:[…], deactivate:bool}. Закрытие у эталона = activate-rooms{deactivate:true}
+     * + затем remove-rooms (двухшагово — вызывающий).
+     * @return true — команда реально ушла в WS.
+     */
+    fun activateRooms(roomIds: List<Long>, deactivate: Boolean): Boolean {
+        if (roomIds.isEmpty()) {
+            AppLog.w(TAG, "activateRooms: пустой список id — команда не отправляется")
+            return false
+        }
+        val arr = JsonArray()
+        for (id in roomIds) arr.add(JsonPrimitive(id))
+        val body = JsonObject()
+        body.add("roomIds", arr)
+        body.addProperty("deactivate", deactivate)
+        return sendJson(CMD_ACTIVATE_ROOMS, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж9: remove-rooms — удалить залы (Ж0 §8, bridge@830722): {roomIds:[…]}.
+     * @return true — команда реально ушла в WS.
+     */
+    fun removeRooms(roomIds: List<Long>): Boolean {
+        if (roomIds.isEmpty()) {
+            AppLog.w(TAG, "removeRooms: пустой список id — команда не отправляется")
+            return false
+        }
+        val arr = JsonArray()
+        for (id in roomIds) arr.add(JsonPrimitive(id))
+        val body = JsonObject()
+        body.add("roomIds", arr)
+        return sendJson(CMD_REMOVE_ROOMS, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж9: switch-room — переход в зал (Ж0 §1.1#47, 16131@307553):
+     * {toRoomId?(null=ОСНОВНОЙ зал — ЯВНЫЙ JSON null), participantId?}. participantId —
+     * перемещение ДРУГОГО участника (админ; §13.7 — семантика не доказана, не используем).
+     * Форма participantId — СТРОКА (проверенный в этом клиенте формат transmit-data;
+     * живая сверка — Этап И). Событие: room-participants-updated.
+     * @return true — команда реально ушла в WS.
+     */
+    fun switchRoom(toRoomId: Long?, participantId: String? = null): Boolean {
+        val body = JsonObject()
+        val rid = toRoomId
+        if (rid != null) body.add("toRoomId", JsonPrimitive(rid)) else body.add("toRoomId", JsonNull.INSTANCE)
+        val pid = participantId
+        if (pid != null) body.addProperty("participantId", pid)
+        return sendJson(CMD_SWITCH_ROOM, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж8: get-waiting-hall — список ожидающих в зале ожидания (Ж0 §7,
+     * 16131@309933 getWaitingHall): {fromId?, count?, backward?} → response
+     * {totalCount, participants:[…]}. Пагинация: fromId — курсор (эталон догружает
+     * пачками; наш UI — одна пачка [count] + повтор по кнопке «Обновить»).
+     * @return true — команда реально ушла в WS.
+     */
+    fun getWaitingHall(count: Int, fromId: Long? = null, backward: Boolean = false): Boolean {
+        val body = JsonObject()
+        body.addProperty("count", count)
+        body.addProperty("backward", backward)
+        val f = fromId
+        if (f != null) body.addProperty("fromId", f)
+        return sendJson(CMD_GET_WAITING_HALL, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж8: promote-participant — ВПУСТИТЬ из зала ожидания (Ж0 §7, 16131@309678):
+     * {participantId} (demote=true — вернуть в зал/выгнать из звонка, 16131@408802 —
+     * админ-функция). Форма participantId — СТРОКА (проверенный формат; Этап И — живая сверка).
+     * Отказ (forbid) — отдельная команда remove-participant {ban:false} ([removeParticipant]).
+     * @return true — команда реально ушла в WS.
+     */
+    fun promoteParticipant(participantId: String, demote: Boolean = false): Boolean {
+        val body = JsonObject()
+        body.addProperty("participantId", participantId)
+        if (demote) body.addProperty("demote", true)
+        return sendJson(CMD_PROMOTE_PARTICIPANT, body)
+    }
+
+    /**
+     * #CALLS-ZH2 Ж8: remove-participant — отказ ожидающему (Ж0 §6.3/§7):
+     * {participantId, ban:false} — kickType WAITING_HALL у эталона (чисто UI-различие;
+     * ban=true — обычный kick из Ж1, здесь НЕ используем).
+     * @return true — команда реально ушла в WS.
+     */
+    fun removeParticipant(participantId: String, ban: Boolean = false): Boolean {
+        val body = JsonObject()
+        body.addProperty("participantId", participantId)
+        body.addProperty("ban", ban)
+        return sendJson(CMD_REMOVE_PARTICIPANT, body)
     }
 
     // ─── Внутреннее ─────────────────────────────────────────────

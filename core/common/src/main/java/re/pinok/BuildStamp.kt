@@ -19,6 +19,13 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -3 (06.09) = #CALLS-SNAP Этап Ж-2 (план «звонки.перенос.план.md»), волна-6.
+    // Ж6 запись (record-start/stop), Ж7 субтитры (DC "asr"/"producerCommand"
+    // в WebRtcEngine — АДДИТИВНО, кадр Ж-0 §5.3, request-asr §5.2, оверлей,
+    // автозапрос на ACTIVE), Ж8 зал ожидания (get-waiting-hall/promote),
+    // Ж9 залы (get-rooms/update-rooms/activate-rooms/switch-room), «ещё»-меню
+    // CallMorePanel. Ж10/Ж11 — честные отклонения (нет членов фасада).
+    // CallSignalingClient +13 команд/методов — АДДИТИВНО.
     // -2 (06.09) = #CALLS-SNAP Этапы Е+Ж-ядро (план «звонки.перенос.план.md»), волна-5.
     // Е: входящий — полноэкранный IncomingCallScreen (REJECTED/BUSY по Ж-0,
     // HTTP-фолбэк, отмена звонящим опросом getCurrentCalls) + свёрнутый баннер.
@@ -171,5 +178,5 @@ object BuildStamp {
     // по o=-строке SDP вместо булева флага — ответ на НОВЫЙ offer больше не теряется
     // (рассинхрон ufrag/pwd звонка №2), дубли того же цикла по-прежнему отсекаются;
     // (4) ZOMBIE не срабатывает в окне ре-join'а (12с), watchdog 7с→10с.
-    const val STAMP: String = "calls-2026.09.06-2"
+    const val STAMP: String = "calls-2026.09.06-3"
 }
