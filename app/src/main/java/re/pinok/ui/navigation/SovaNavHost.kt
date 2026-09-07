@@ -2091,6 +2091,10 @@ composable(Screen.CallsHistory.route) {
                             PostHolder.last = post
                             nav.navigate(Screen.PostDetail.buildRoute(post.ownerId, post.id))
                         },
+                        // Этап П-2 (PROFILE-P2-3b): «Позвонить» в чужом профиле —
+                        // через CallStarter (тот же callClick-паттерн, что
+                        // FriendsScreen/FeedScreen; null → кнопка не рендерится).
+                        onCallClick = callClick,
                     )
                 }
                 // Fix #71: экран детального просмотра поста.
