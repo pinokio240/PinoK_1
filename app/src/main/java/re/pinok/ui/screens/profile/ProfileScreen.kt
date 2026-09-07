@@ -5,8 +5,14 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+// П-8-REACT: ExperimentalFoundationApi — combinedClickable (long-press лайка
+// → пикер реакций; страховочная аннотация, см. ActionIcon).
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+// П-8-REACT: long-press по лайку записи стены (named-аргументы — как в
+// FeedScreen.ActionIcon :2391).
+import androidx.compose.foundation.combinedClickable
 // П-6b (#PROFILE-GAP-6b): 7 вкладок контента не помещаются на узких экранах —
 // чип-ряд скроллится горизонтально.
 import androidx.compose.foundation.horizontalScroll
@@ -23,6 +29,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+// П-8-REACT: пикер реакций всплывает НАД кнопкой лайка (паттерн FeedScreen :2198).
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -83,6 +91,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+// П-8-REACT: пикер реакций рисуется поверх соседей внутри карточки (zIndex).
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
@@ -101,6 +111,10 @@ import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
+// П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
+// (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
+import re.pinok.ui.screens.feed.ReactionEntry
+import re.pinok.ui.screens.feed.ReactionPicker
 import re.pinok.util.AppLog
 import re.pinok.util.openUrlExternal
 import re.pinok.util.toCountString
@@ -188,6 +202,12 @@ fun ProfileScreen(
     // → (isLiked, count). Пустая карта = показываем серверные post.likes
     // (стартовое состояние — user_likes из wall.get, поле есть в модели Post).
     val likeStates = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
+    // ══ П-8-REACT: «моя реакция» на запись стены (long-press по лайку → пикер,
+    // паттерн FeedScreen :2186-2210). key "ownerId_id" → reaction_id моей текущей
+    // реакции; 0 = реакции нет/неизвестна. При ОТСУТСТВИИ ключа — серверная
+    // post.reactions.user_reacted (модель Post.Reactions, парсер VKApiClient
+    // :9868; сама модель — core/data, 0 diff по правилам задачи).
+    val reactionStates = remember { mutableStateMapOf<String, Int>() }
     // Ключи записей с лайком «в полёте» (повторный клик игнорируется — disabled).
     val likeInFlight = remember { mutableStateMapOf<String, Boolean>() }
     // Ключи записей с действием «в полёте» (pin/unpin/delete/edit) — меню disabled.
@@ -533,6 +553,12 @@ fun ProfileScreen(
             if (newCount >= 0) {
                 // VK подтвердил — фиксируем точное значение счётчика.
                 likeStates[key] = newLiked to newCount
+                // П-8-REACT: обычный клик (likes.add БЕЗ reaction_id) или снятие
+                // лайка — «моя реакция» обнуляется: после снятия её нет; после
+                // простого лайка reaction_id неизвестен → будущий long-press
+                // пойдёт по цепочке likes.delete + likes.add (см.
+                // applyWallPostReaction, случай C — идемпотентно корректен).
+                reactionStates[key] = 0
             } else {
                 likeStates[key] = current
                 Toast.makeText(
@@ -540,6 +566,147 @@ fun ProfileScreen(
                     app.apiClient.lastApiError ?: "Не удалось оценить запись",
                     Toast.LENGTH_SHORT,
                 ).show()
+            }
+        }
+    }
+
+    // ══ П-8-REACT: выбор реакции long-press'ом по лайку записи стены ══
+    // (пикер — re/pinok/ui/screens/feed/ReactionPicker.kt, переиспользован как
+    // есть + аддитивный параметр selectedReactionId; образец — FeedScreen.
+    // onReaction :1437-1453, НО умнее: FeedScreen не различает «уже лайкнуто»
+    // и всегда зовёт likes.add(+1 optimistic) — здесь 3 случая).
+    //
+    // ЧЕСТНО О «МОЕЙ РЕАКЦИИ»: модель Post несёт reactions.user_reacted
+    // (Post.Reactions, парсер VKApiClient :9868) — reaction_id моей текущей
+    // реакции или 0/absent. Отсюда:
+    //  - reaction_id ИЗВЕСТЕН → «та же реакция» выключает лайк (likes.delete,
+    //    случай B), «другая» — последовательно likes.delete + likes.add(новая)
+    //    (VK не умеет смену реакции одним likes.add; FeedScreen так не делает —
+    //    у него ветки «уже лайкнуто» нет вообще), случай C;
+    //  - reaction_id НЕИЗВЕСТЕН (поле reactions не пришло — старые версии API /
+    //    стены без reactions) → любая реакция на уже лайкнутую запись идёт по
+    //    цепочке delete+add (она идемпотентно корректна и для «той же» реакции:
+    //    снять-поставить ту же = то же состояние); пикер — без предвыделения.
+    //    Модель править запрещено (core/data, 0 diff) — честное ограничение.
+    //
+    // ИЗВЕСТНОЕ КОСМЕТИЧЕСКОЕ РАСХОЖДЕНИЕ (преждесуществующее, унаследовано от
+    // FeedScreen): маппинг emoji→reaction_id в ReactionPicker.VK_REACTIONS не
+    // совпадает с семантикой KDoc VKApiClient.messagesReact :5327 (1=👍, 2=❤️,
+    // 3=😂, 4=😭, 5=😡, 6=🎉, 7=🔥, 8=😮): пикер отдаёт 3=🔥, 5=😮, 6=😭, 7=😡,
+    // 8=🙏. В API уходит только Int (истина — id); править ReactionPicker
+    // запрещено (приоритет 0 правок задачи).
+    fun applyWallPostReaction(clicked: Post, reaction: ReactionEntry) {
+        val key = "${clicked.ownerId}_${clicked.id}"
+        if (likeInFlight.containsKey(key)) return
+        val current = likeStates[key]
+            ?: ((clicked.likes?.userLikes == 1) to (clicked.likes?.count ?: 0))
+        val prevReaction = reactionStates[key]
+            ?: clicked.reactions?.userReacted?.takeIf { it > 0 }
+            ?: 0
+        if (!current.first) {
+            // (A) НЕ лайкнуто: optimistic (true, count+1) → likes.add(reactionId).
+            likeStates[key] = true to (current.second + 1)
+            reactionStates[key] = reaction.reactionId
+            likeInFlight[key] = true
+            scope.launch {
+                val newCount = try {
+                    app.apiClient.likesAdd("post", clicked.ownerId, clicked.id, reactionId = reaction.reactionId)
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "likes.add(reaction) failed", e)
+                    -1
+                }
+                likeInFlight.remove(key)
+                if (newCount >= 0) {
+                    likeStates[key] = true to newCount
+                } else {
+                    likeStates[key] = current
+                    reactionStates[key] = prevReaction
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось поставить реакцию",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        } else if (prevReaction == reaction.reactionId) {
+            // (B) УЖЕ лайкнуто ТЕМ ЖЕ reaction_id: выключить — optimistic
+            // (false, count-1) → likes.delete.
+            likeStates[key] = false to (current.second - 1).coerceAtLeast(0)
+            reactionStates[key] = 0
+            likeInFlight[key] = true
+            scope.launch {
+                val newCount = try {
+                    app.apiClient.likesDelete("post", clicked.ownerId, clicked.id)
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "likes.delete(reaction) failed", e)
+                    -1
+                }
+                likeInFlight.remove(key)
+                if (newCount >= 0) {
+                    likeStates[key] = false to newCount
+                } else {
+                    likeStates[key] = current
+                    reactionStates[key] = prevReaction
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось снять реакцию",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        } else {
+            // (C) УЖЕ лайкнуто ДРУГОЙ (или НЕИЗВЕСТНОЙ — prevReaction==0, честное
+            // ограничение выше) реакцией: VK не умеет смену одним likes.add →
+            // ПОСЛЕДОВАТЕЛЬНО likes.delete + likes.add(новая). Счётчик оптимистично
+            // НЕ трогаем (delete+add = ±0). Откат всей цепочки при ошибке любого
+            // шага; при сбое add после успешного delete — компенсация: вернуть
+            // прежнюю реакцию likes.add(prevReaction) (best-effort, только если
+            // она была известна; иначе сервер остаётся «не лайкнуто», UI откатится
+            // к прежнему виду — честная деградация, состояние восстановится при
+            // следующей перезагрузке стены).
+            reactionStates[key] = reaction.reactionId
+            likeInFlight[key] = true
+            scope.launch {
+                val delCount = try {
+                    app.apiClient.likesDelete("post", clicked.ownerId, clicked.id)
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "likes.delete(switch) failed", e)
+                    -1
+                }
+                if (delCount < 0) {
+                    likeInFlight.remove(key)
+                    reactionStates[key] = prevReaction
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось сменить реакцию",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return@launch
+                }
+                val addCount = try {
+                    app.apiClient.likesAdd("post", clicked.ownerId, clicked.id, reactionId = reaction.reactionId)
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "likes.add(switch) failed", e)
+                    -1
+                }
+                likeInFlight.remove(key)
+                if (addCount >= 0) {
+                    likeStates[key] = true to addCount
+                } else {
+                    // Текст ошибки читаем ДО компенсации (иначе lastApiError
+                    // перетрётся ответом/ошибкой restore-вызова).
+                    val errMsg = app.apiClient.lastApiError ?: "Не удалось сменить реакцию"
+                    if (prevReaction > 0) {
+                        try {
+                            app.apiClient.likesAdd("post", clicked.ownerId, clicked.id, reactionId = prevReaction)
+                        } catch (e: Exception) {
+                            AppLog.e("ProfileScreen", "likes.add(restore) failed", e)
+                        }
+                    }
+                    likeStates[key] = current
+                    reactionStates[key] = prevReaction
+                    Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -911,6 +1078,9 @@ fun ProfileScreen(
                     // П-6a (#PROFILE-GAP-6a): лайк записи + «Действия» поста стены
                     // (pin/unpin/delete/edit). Свой профиль → владелец стены = p.id.
                     likesState = likeStates,
+                    // П-8-REACT: реакции long-press'ом (пикер + optimistic-карта).
+                    reactionsState = reactionStates,
+                    onReaction = { clicked, reaction -> applyWallPostReaction(clicked, reaction) },
                     likePending = likeInFlight.containsKey(postKey),
                     onLikeToggle = { toggleWallPostLike(it) },
                     showActions = true,
@@ -1473,6 +1643,18 @@ fun CountersRow(
  *  меню откроется с ОДНИМ пунктом «Пожаловаться» (manage-пункты гейтерятся
  *  showActions — поведение П-6а на своём профиле не изменилось).
  *  Подтверждение (AlertDialog) и сам вызов — на уровне экрана.
+ *
+ *  П-8-REACT: РЕАКЦИИ ([reactionsState]/[onReaction]) — long-press по лайку →
+ *  ReactionPicker (переиспользован из FeedScreen; + аддитивный параметр
+ *  selectedReactionId с дефолтом — вызов FeedScreen.kt:2201 не задет).
+ *  Пикер показывается ТОЛЬКО при переданном [onReaction] — UserProfileScreen
+ *  лайки не прокидывает (П-6а), dead-пикер там недопустим. Клик — прежний
+ *  простой лайк ([onLikeToggle]). Семантика выбора (добавить / снять «ту же» /
+ *  сменить «другую» через likes.delete + likes.add, откат цепочки) — см. KDoc
+ *  applyWallPostReaction в ProfileScreen. «Моя реакция» — [reactionsState]
+ *  поверх серверной post.reactions.user_reacted (модель Post.Reactions, поле
+ *  может отсутствовать → пикер без предвыделения и смена реакции идёт по
+ *  цепочке delete+add — честное ограничение, модель core/data не правим).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1491,6 +1673,13 @@ fun WallPostCard(
     // П-6a (#PROFILE-GAP-6a): optimistic-состояния лайков экрана
     // (key "ownerId_id" → (isLiked, count)); пустая карта — серверные post.likes.
     likesState: Map<String, Pair<Boolean, Int>> = emptyMap(),
+    // П-8-REACT: «моя реакция» на запись (key "ownerId_id" → reaction_id,
+    // 0 = нет/неизвестна; фоллбэк внутри карточки — post.reactions.user_reacted).
+    reactionsState: Map<String, Int> = emptyMap(),
+    // П-8-REACT: long-press по лайку → пикер реакций. Nullable с дефолтом null:
+    // прежние вызовы без параметра (UserProfileScreen:731, лайки не прокинуты)
+    // long-press НЕ получают — dead-пикер недопустим.
+    onReaction: ((Post, ReactionEntry) -> Unit)? = null,
     likePending: Boolean = false,
     onLikeToggle: (Post) -> Unit = {},
     // П-6a: «Действия» поста (pin/unpin/delete/edit) — см. KDoc выше.
@@ -1517,6 +1706,15 @@ fun WallPostCard(
     val likeOverride = likesState["${post.ownerId}_${post.id}"]
     val isLiked = likeOverride?.first ?: (post.likes?.userLikes == 1)
     val likeCount = likeOverride?.second ?: (post.likes?.count ?: 0)
+    // П-8-REACT: «моя реакция» — optimistic-переопределение экрана поверх
+    // серверной post.reactions.user_reacted (reaction_id или 0/absent; поле
+    // отсутствует у старых API/стен без reactions → 0 = «неизвестно», пикер
+    // без предвыделения — честное ограничение, модель core/data не правим).
+    // Предвыделение в пикере осмысленно только при активном лайке.
+    val myReactionId = reactionsState["${post.ownerId}_${post.id}"]
+        ?: post.reactions?.userReacted?.takeIf { it > 0 }
+        ?: 0
+    val pickerSelection = if (isLiked) myReactionId else 0
     val commentCount = post.comments?.count ?: 0
     val repostCount = post.reposts?.count ?: 0
     val viewCount = post.views?.count ?: 0
@@ -1691,15 +1889,42 @@ fun WallPostCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ActionIcon(
-                    icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                    count = likeCount,
-                    tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
-                    // П-6a (#PROFILE-GAP-6a): кликабельный лайк записи стены
-                    // (likes.add / likes.delete через onLikeToggle); во время полёта — disabled.
-                    onClick = { onLikeToggle(post) },
-                    enabled = !likePending,
-                )
+                // П-8-REACT: long-press по лайку → пикер реакций (паттерн
+                // FeedScreen :2186-2210). Пикер показывается только когда
+                // вызывающий экран прокинул onReaction (иначе dead-UX).
+                var showReactions by remember { mutableStateOf(false) }
+                Box {
+                    ActionIcon(
+                        icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
+                        count = likeCount,
+                        tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        // П-6a (#PROFILE-GAP-6a): кликабельный лайк записи стены
+                        // (likes.add / likes.delete через onLikeToggle); во время полёта — disabled.
+                        onClick = { onLikeToggle(post) },
+                        // П-8-REACT: long-press → пикер реакций (только если экран
+                        // прокинул onReaction; иначе null — поведение как раньше).
+                        onLongClick = if (onReaction != null) {
+                            { showReactions = true }
+                        } else {
+                            null
+                        },
+                        enabled = !likePending,
+                    )
+                    if (showReactions) {
+                        Box(
+                            modifier = Modifier
+                                .offset(y = (-48).dp)
+                                .zIndex(10f),
+                        ) {
+                            ReactionPicker(
+                                onDismiss = { showReactions = false },
+                                // П-8-REACT: предвыделение «моей» реакции (0 = нет).
+                                selectedReactionId = pickerSelection,
+                                onSelect = { reaction -> onReaction?.invoke(post, reaction) },
+                            )
+                        }
+                    }
+                }
                 Spacer(Modifier.width(8.dp))
                 ActionIcon(
                     icon = Icons.Outlined.ChatBubbleOutline,
@@ -1906,19 +2131,34 @@ fun RepostBlock(
     }
 }
 
+// П-8-REACT: ExperimentalFoundationApi — combinedClickable для long-press
+// (в foundation 1.8 / BOM 2025.06 stable-перегрузка с named onClick/onLongClick
+// opt-in не требует — аннотация страховочная, как @OptIn в FeedScreen:2231).
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ActionIcon(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     count: Int,
     tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     onClick: (() -> Unit)? = null,
+    // П-8-REACT: long-press (пикер реакций на лайке); null — прежнее поведение.
+    // Прочие вызовы (комментарий/репост) параметр не передают. Named-аргументы
+    // combinedClickable идентичны FeedScreen.ActionIcon (:2391);
+    // onLongClick == null деградирует до простого клика.
+    onLongClick: (() -> Unit)? = null,
     // П-6a: disabled-состояние — во время API-полёта clickable не вешается.
     enabled: Boolean = true,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .then(if (onClick != null && enabled) Modifier.clickable { onClick() } else Modifier)
+            .then(
+                if (onClick != null && enabled) {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                } else {
+                    Modifier
+                }
+            )
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)

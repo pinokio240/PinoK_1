@@ -11929,3 +11929,21 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - Отклонения (KDoc): countryId=1 (Россия) при отсутствии страны в профиле, выбора страны нет; «очистить город» не реализовано (city=0 в VK не документирован — no-stub); homeTown («Родной город») не задет — отдельное поле.
 
 **Приёмка оркестратора:** скобки string-aware 7 файлов — 6 OK; VKApiClient {1135,1133} stack_left=2 = ТОЧНО базлайн HEAD (преждесуществующий артефакт сканера, дельта волны 0); nested-comments ALL CLEAN (165); дубли деклараций = 0 (FollowList/CitySuggestion/databaseGetCities/FollowersSubscriptionsScreen/SubscriptionsEntryRow/CountersRow/EditCitySearchDialog/EditCityRow — по 1); Screen.kt/SovaNavHost.kt 0 удалений; вызовы databaseGetCities (:1049) и wallMarkAsSpam (:670/:319) сверены с декларациями; VKApiClient — 1 аддитивный hunk; модели core/data не тронуты; работа одного агента не пересекается с файлами другого (git-union = ровно 7 код-файлов).
+
+---
+
+## 2026-09-07 — feat(profile): П-8-REACT — реакции постов стены профиля (long-press → пикер)
+
+**Контекст:** последний выполнимый остаток профиль.этап-П5.решение.md §3 (реакции были вне объёма П-6а); остальное §3 — legacy без wire-путей (16 тумблеров групп al_settings.php, голоса/платежи web-only).
+
+**Механика (Pattern FeedScreen :2186-2210 переиспользован):**
+- Like-ряд WallPostCard → combinedClickable: клик = прежний простой лайк П-6a (не изменён), long-press → ReactionPicker (переиспользован из feed) в попапе Box(offset -48dp, zIndex).
+- Хендлер applyWallPostReaction — 3 ветки: (A) не лайкнуто → optimistic(count+1) → likesAdd(reactionId) → фиксация/откат+тост; (B) та же реакция → likesDelete, optimistic(count−1); (C) другая реакция → последовательно likesDelete + likesAdd (VK не умеет смену одним add — FeedScreen такой ветки не имеет вообще, там слепой +1; отличие задокументировано), ошибка add после delete → компенсация likesAdd(прежней) best-effort + откат UI.
+- «Моя реакция» — ЧЕСТНО из сервера: Post.Reactions(count, user_reacted) (core/data Models.kt:82, парсер VKA :9868), optimistic-карта reactionsState поверх; предвыделение в пикере. Plain-лайк сбрасывает reactionsState в 0 (id неизвестен → будущий long-press идёт по корректной цепочке C).
+- likeInFlight-гейт П-6a сохранён; «⋯»-меню (Закрепить/Редактировать/Удалить/Пожаловаться) не тронуто.
+
+**ReactionPicker.kt (единственная правка вне зоны, аддитивная +17/0):** параметр selectedReactionId: Int = 0 (подсветка текущей реакции). Совместимость доказана: единственный внешний вызов FeedScreen:2201 (onDismiss/onSelect) — дефолт 0 не совпадает с id 1..8; ChatDetailScreen — свой приватный пикер, не задет.
+
+**Отклонения (KDoc):** UserProfileScreen — 0 правок (лайки там не прокинуты решением П-6а, nullable onReaction исключает dead-пикер); при отсутствии post.reactions от сервера — пикер без предвыделения, смена идёт по идемпотентной цепочке C; преждесуществующее расхождение emoji-маппинга пикера с KDoc VKA (в API уходит только Int) — унаследовано от FeedScreen, не чинилось (зона).
+
+**Приёмка оркестратора:** diff-union ровно ReactionPicker.kt (+17/0) + ProfileScreen.kt (+250/−10); VKApiClient/FeedScreen/core-data — 0 diff; скобки OK оба файла; nested-comments ALL CLEAN (165); selectedReactionId/reactionStates/applyWallPostReaction — по 1 декларации; вызовы likesAdd/likesDelete (named reactionId) сверены с декларациями :5092/:5130; combinedClickable+ExperimentalFoundationApi импортированы (7 упоминаний); Post.Reactions.userReacted подтверждён в core-модели.

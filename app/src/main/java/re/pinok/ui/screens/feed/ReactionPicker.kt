@@ -50,6 +50,14 @@ val VK_REACTIONS = listOf(
 /**
  * ReactionPicker — всплывающая панель эмодзи-реакций.
  * [onSelect] — колбэк с выбранной реакцией.
+ *
+ * П-8-REACT (переиспользование в ProfileScreen.WallPostCard): аддитивный
+ * параметр [selectedReactionId] — подсветка «моей» текущей реакции
+ * (reaction_id из post.reactions.user_reacted / optimistic-карты экрана).
+ * 0 (дефолт) = без предвыделения — сигнатура и поведение существующих
+ * вызовов НЕ меняются (единственный внешний вызов — FeedScreen.kt:2201:
+ * ReactionPicker(onDismiss, onSelect) — совместим, параметр стоит после
+ * modifier и имеет дефолт).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -57,6 +65,9 @@ fun ReactionPicker(
     onDismiss: () -> Unit,
     onSelect: (ReactionEntry) -> Unit,
     modifier: Modifier = Modifier,
+    // П-8-REACT: reaction_id «моей» текущей реакции; 0 = нет предвыделения
+    // (дефолт — поведение FeedScreen не меняется).
+    selectedReactionId: Int = 0,
 ) {
     Column(
         modifier = modifier
@@ -72,10 +83,16 @@ fun ReactionPicker(
             maxItemsInEachRow = 4,
         ) {
             VK_REACTIONS.forEach { reaction ->
+                // П-8-REACT: подсветка «моей» текущей реакции (см. KDoc выше).
+                val isSelected = reaction.reactionId == selectedReactionId
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                            else Color.Transparent,
+                        )
                         .clickable {
                             onSelect(reaction)
                             onDismiss()
