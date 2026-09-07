@@ -88,6 +88,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DevicesOther
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CloudOff
@@ -340,6 +341,11 @@ private fun hostSettingsContentFor(route: String): (@Composable (SovaPrefs.Snaps
 fun SettingsScreen(
     onOpenNotificationSettings: () -> Unit = {},
     onOpenDevices: () -> Unit = {},
+    // §PROFILE-P4: VK-приватность на BFF (PrivacySettingsScreen) и
+    // самостоятельный чёрный список (BlacklistScreen) — тот же
+    // callback-паттерн навигации, что и onOpenNotificationSettings.
+    onOpenPrivacySettings: () -> Unit = {},
+    onOpenBlacklist: () -> Unit = {},
 ) {
     val app = SovaApp.get()
     val snap by app.prefs.data.collectAsState(initial = null)
@@ -399,9 +405,9 @@ fun SettingsScreen(
                     SettingsTab.OFFLINE -> OfflineTab(s, app, scope, context)
                     SettingsTab.VIDEO -> VideoTab(s, app, scope, context)
                     SettingsTab.NETWORK -> NetworkTab(s, app, scope)
-                    SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings)
+                    SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings, onOpenBlacklist)
                     SettingsTab.PANELS -> PanelEditorTab(s, app, scope)
-                    SettingsTab.PRIVACY -> PrivacyTab(s, app, scope)
+                    SettingsTab.PRIVACY -> PrivacyTab(s, app, scope, onOpenPrivacySettings)
                     SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices)
                     SettingsTab.LOGGING -> LoggingTab(s, app, scope)
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
@@ -2850,12 +2856,51 @@ private fun PrivacyTab(
     s: SovaPrefs.Snapshot,
     app: SovaApp,
     scope: CoroutineScope,
+    onOpenPrivacySettings: () -> Unit = {},
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { SectionHeader("Приватность") }
+        // §PROFILE-P4 (этап П-4, инвентарь §4.1 п.10): серверная VK-приватность
+        // на BFF settingsGeneral.get/setPrivacySettings — ПЕРЕД локальными
+        // модами (маскировка/анти-телеметрия/last seen), как в ТЗ этапа.
+        item {
+            Card(modifier = Modifier.fillMaxWidth().clickable { onOpenPrivacySettings() }) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .heightIn(min = 44.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.size(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Настройки приватности VK",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            "Кто видит страницу, посты, фото; связь со мной",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         // #38: toggle «Офлайн-режим» убран из настроек — теперь офлайн
         // включается автоматически после N сетевых неудач либо вручную
         // из drawer (кнопка «Офлайн» → OfflineManagerScreen).
@@ -4144,13 +4189,17 @@ private fun LazyListScope.notifyToggleSection(
  * экрану [NotificationSettingsScreen], где находятся:
  *  - «Не беспокоить» с таймерами 15мин/1ч/8ч/навсегда
  *  - BFF-секции (account.setInfo / settingsGeneral.setNotifySettings)
- *  - Заблокированные пользователи (account.getBanned)
+ *  - Уведомления сообществ (groups.get + groups.edit, этап П-4)
  *  - Фильтр нецензурной лексики (account.setObsceneFilter)
  *  - Per-community / per-app push (messages.allowMessagesFromGroup / apps.allowNotifications)
+ *
+ * §PROFILE-P4: чёрный список перенесён в самостоятельный экран
+ * [BlacklistScreen] (инвентарь §1.6) — строка-вход осталась здесь.
  *
  * Карта API и UI структуры построена в NOTIF-RESEARCH-1 (см. WORKLOG.md).
  *
  * @param onOpenNotificationSettings переход к Screen.NotificationSettings
+ * @param onOpenBlacklist переход к Screen.Blacklist (§PROFILE-P4)
  */
 @Composable
 private fun NotificationsTab(
@@ -4158,6 +4207,7 @@ private fun NotificationsTab(
     app: SovaApp,
     scope: CoroutineScope,
     onOpenNotificationSettings: () -> Unit,
+    onOpenBlacklist: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // Локальный кэш «Не беспокоить» — загружаем при первом показе.
@@ -5105,11 +5155,49 @@ private fun NotificationsTab(
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                         )
                         Text(
-                            "Звуки, сообщества, приложения, заблокированные, фильтр мата",
+                            "Звуки, сообщества, приложения, фильтр мата",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+        }
+        // §PROFILE-P4 (инвентарь §1.6): чёрный список — самостоятельный экран
+        // BlacklistScreen (перенесён из NotificationSettingsScreen).
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth()
+                    .androidx_clickable { onOpenBlacklist() },
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Чёрный список",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        )
+                        Text(
+                            "Заблокированные; добавление по ссылке или короткому имени",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

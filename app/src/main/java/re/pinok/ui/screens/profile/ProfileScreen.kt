@@ -1,11 +1,16 @@
 package re.pinok.ui.screens.profile
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+// П-6b (#PROFILE-GAP-6b): 7 вкладок контента не помещаются на узких экранах —
+// чип-ряд скроллится горизонтально.
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,12 +35,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
@@ -43,7 +52,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -52,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,7 +74,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +85,8 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Attachment
+import re.pinok.data.model.Bookmark
+import re.pinok.data.model.Friend
 import re.pinok.data.model.Post
 import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.Track
@@ -82,6 +99,7 @@ import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
 import re.pinok.util.AppLog
+import re.pinok.util.openUrlExternal
 import re.pinok.util.toCountString
 import re.pinok.util.toRelativeTime
 
@@ -93,11 +111,21 @@ private const val PROFILE_TAB_MUSIC = "music"
 private const val PROFILE_TAB_VIDEO = "video"
 private const val PROFILE_TAB_PHOTO = "photo"
 
+// П-6b (#PROFILE-GAP-6b): остаток вкладок §3.2 снапшота — Клипы/Статьи/Закладки.
+private const val PROFILE_TAB_CLIPS = "clips"
+private const val PROFILE_TAB_ARTICLES = "articles"
+private const val PROFILE_TAB_BOOKMARKS = "bookmarks"
+
 private val PROFILE_CONTENT_TABS: List<Pair<String, String>> = listOf(
     PROFILE_TAB_WALL to "Стена",
     PROFILE_TAB_MUSIC to "Музыка",
     PROFILE_TAB_VIDEO to "Видео",
     PROFILE_TAB_PHOTO to "Фото",
+    // П-6b (#PROFILE-GAP-6b): закрытие остатка плана (инвентарь §5 п.2 —
+    // «секции правой колонки (…клипы/статьи)» и §3.2 Клипы/Статьи/Закладки).
+    PROFILE_TAB_CLIPS to "Клипы",
+    PROFILE_TAB_ARTICLES to "Статьи",
+    PROFILE_TAB_BOOKMARKS to "Закладки",
 )
 
 // П-1: подвкладки стены — значения wall.get(filter) по канонике users.getWallTabs
@@ -113,6 +141,18 @@ fun ProfileScreen(
     onVideoClick: (Video) -> Unit = {},
     // Шаг 5 (#32e): тап по комментарию поста → PostDetailScreen.
     onCommentClick: (Post) -> Unit = {},
+    // П-3 (#PROFILE-SNAP): кнопка «Редактировать профиль» → EditProfileScreen
+    // (маршрут profile_edit: account.saveProfileInfo + аватар/обложка).
+    // Параметр с дефолтом — существующие вызовы (SovaNavHost) обновлены,
+    // прочие вызовы не обязательны.
+    onEditProfileClick: () -> Unit = {},
+    // П-6b (#PROFILE-GAP-6b): тап по карточке «Возможно, вы знакомы» / юзер-закладке
+    // → чужой профиль (Screen.UserProfile, паттерн FriendsScreen.onUserClick).
+    onUserClick: (Long) -> Unit = {},
+    // П-6b: тап по пост-закладке → PostDetailScreen (паттерн BookmarksScreen.
+    // onPostClick: PostHolder.last + navigate). Отдельный колбэк — onCommentClick
+    // занят постами стены (см. вызов WallPostCard).
+    onPostClick: (Post) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -132,6 +172,22 @@ fun ProfileScreen(
     ) { uri -> selectedPhotoUri = uri }
     // Флаг: нужно перезагрузить стену после создания нового поста.
     var reloadWallTrigger by remember { mutableStateOf(0) }
+
+    // ══ П-6a (#PROFILE-GAP-6a): «Действия» поста стены + лайк (остаток скоупа П-1, §5 п.2) ══
+    // Optimistic-состояния лайков (паттерн FeedScreen.likesState): key "ownerId_id"
+    // → (isLiked, count). Пустая карта = показываем серверные post.likes
+    // (стартовое состояние — user_likes из wall.get, поле есть в модели Post).
+    val likeStates = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
+    // Ключи записей с лайком «в полёте» (повторный клик игнорируется — disabled).
+    val likeInFlight = remember { mutableStateMapOf<String, Boolean>() }
+    // Ключи записей с действием «в полёте» (pin/unpin/delete/edit) — меню disabled.
+    val postActionInFlight = remember { mutableStateMapOf<String, Boolean>() }
+    // Запись, ожидающая подтверждения удаления (AlertDialog ниже).
+    val deletingPost = remember { mutableStateOf<Post?>(null) }
+    // Запись, ожидающая правки текста (AlertDialog ниже).
+    val editingPost = remember { mutableStateOf<Post?>(null) }
+    var editSaving by remember { mutableStateOf(false) }
+    var editError by remember { mutableStateOf<String?>(null) }
 
     // ── П-1 (#PROFILE-SNAP): свой профиль — статус, подвкладки стены, вкладки контента ──
     // Активная подвкладка стены (wall.get filter).
@@ -161,6 +217,30 @@ fun ProfileScreen(
     var photoLoading by remember { mutableStateOf(false) }
     var photoError by remember { mutableStateOf<String?>(null) }
     var photos by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    // ══ П-6b (#PROFILE-GAP-6b): остаток плана — вкладки Клипы/Статьи/Закладки ══
+    // Клипы (shortVideo.getOwnerVideos) — Video с вертикальным постером.
+    var clipsLoaded by remember { mutableStateOf(false) }
+    var clipsLoading by remember { mutableStateOf(false) }
+    var clipsError by remember { mutableStateOf<String?>(null) }
+    var clips by remember { mutableStateOf<List<Video>>(emptyList()) }
+    // Статьи (articles.getOwnerPublished) — сырые JsonObject (парсинг в секции).
+    var articlesLoaded by remember { mutableStateOf(false) }
+    var articlesLoading by remember { mutableStateOf(false) }
+    var articlesError by remember { mutableStateOf<String?>(null) }
+    var articles by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    // Закладки (fave.get) — свои закладки, с подгрузкой «Загрузить ещё».
+    var bookmarksLoaded by remember { mutableStateOf(false) }
+    var bookmarksLoading by remember { mutableStateOf(false) }
+    var bookmarksError by remember { mutableStateOf<String?>(null) }
+    var bookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
+    var bookmarksHasMore by remember { mutableStateOf(false) }
+    var bookmarksLoadingMore by remember { mutableStateOf(false) }
+    // «Возможно, вы знакомы» (friends.getRecommendations): null = ещё грузится /
+    // ошибка → секция не рисуется (паттерн подарков П-1).
+    var friendSuggestions by remember { mutableStateOf<List<Friend>?>(null) }
+    // friend_status из friends.add (1 = добавлен, 2 = заявка отправлена).
+    val suggestionSent = remember { mutableStateMapOf<Long, Int>() }
+    val suggestionInFlight = remember { mutableStateMapOf<Long, Boolean>() }
     // Диалог правки статуса (status.set).
     var showStatusDialog by remember { mutableStateOf(false) }
     var statusSaving by remember { mutableStateOf(false) }
@@ -189,6 +269,15 @@ fun ProfileScreen(
                             gifts = app.apiClient.giftsGet(prof.id, count = 10)
                         } catch (e: Exception) {
                             AppLog.e("ProfileScreen", "Gifts load failed", e)
+                        }
+                    }
+                    // П-6b (#PROFILE-GAP-6b): «Возможно, вы знакомы» — параллельный
+                    // добор (паттерн подарков П-1). Пусто/ошибка → секция не рисуется.
+                    scope.launch {
+                        try {
+                            friendSuggestions = app.apiClient.friendsGetRecommendations(count = 10)
+                        } catch (e: Exception) {
+                            AppLog.e("ProfileScreen", "Friend suggestions load failed", e)
                         }
                     }
                     val wall = app.apiClient.wallGet(ownerId = prof.id, count = 20)
@@ -302,6 +391,56 @@ fun ProfileScreen(
                     photoLoading = false
                 }
             }
+            // П-6b (#PROFILE-GAP-6b): вкладка «Клипы» — shortVideo.getOwnerVideos.
+            PROFILE_TAB_CLIPS -> if (!clipsLoaded && !clipsLoading) {
+                clipsLoading = true
+                clipsError = null
+                try {
+                    clips = app.apiClient.shortVideoGetOwnerVideos(ownerId = ownerId, count = 30)
+                        .filter { it.id > 0L }
+                    clipsLoaded = true
+                    AppLog.i("ProfileScreen", "Clips tab loaded: ${clips.size} clips")
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "Clips tab load failed", e)
+                    clipsError = "Ошибка: ${e.message}"
+                } finally {
+                    clipsLoading = false
+                }
+            }
+            // П-6b: вкладка «Статьи» — articles.getOwnerPublished (сырые JsonObject;
+            // count=20 — вкладка-список, веб-сайдбар запрашивает 3 — см. KDoc секции).
+            PROFILE_TAB_ARTICLES -> if (!articlesLoaded && !articlesLoading) {
+                articlesLoading = true
+                articlesError = null
+                try {
+                    articles = app.apiClient.articlesGetOwnerPublished(ownerId = ownerId, count = 20)
+                    articlesLoaded = true
+                    AppLog.i("ProfileScreen", "Articles tab loaded: ${articles.size} items")
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "Articles tab load failed", e)
+                    articlesError = "Ошибка: ${e.message}"
+                } finally {
+                    articlesLoading = false
+                }
+            }
+            // П-6b: вкладка «Закладки» — fave.get (свои закладки; первая страница,
+            // подгрузка — loadMoreBookmarksPage).
+            PROFILE_TAB_BOOKMARKS -> if (!bookmarksLoaded && !bookmarksLoading) {
+                bookmarksLoading = true
+                bookmarksError = null
+                try {
+                    val page = app.apiClient.faveGet(count = BOOKMARKS_PAGE_SIZE)
+                    bookmarks = page
+                    bookmarksHasMore = page.size >= BOOKMARKS_PAGE_SIZE
+                    bookmarksLoaded = true
+                    AppLog.i("ProfileScreen", "Bookmarks tab loaded: ${page.size} items")
+                } catch (e: Exception) {
+                    AppLog.e("ProfileScreen", "Bookmarks tab load failed", e)
+                    bookmarksError = "Ошибка: ${e.message}"
+                } finally {
+                    bookmarksLoading = false
+                }
+            }
         }
     }
 
@@ -333,6 +472,239 @@ fun ProfileScreen(
         return
     }
 
+    // ══ П-6a (#PROFILE-GAP-6a): обработчики «Действий» поста стены и лайка ══
+    val context = LocalContext.current
+
+    // Лайк/анлайк записи стены: optimistic (isLiked + счётчик ±1) → likes.add /
+    // likes.delete (паттерн FeedScreen.onLikeToggle; обе функции возвращают Int —
+    // обновлённое количество лайков, -1 при ошибке). При ошибке — откат +
+    // Toast lastApiError. Повторный клик во время полёта игнорируется.
+    fun toggleWallPostLike(clicked: Post) {
+        val key = "${clicked.ownerId}_${clicked.id}"
+        if (likeInFlight.containsKey(key)) return
+        val current = likeStates[key]
+            ?: ((clicked.likes?.userLikes == 1) to (clicked.likes?.count ?: 0))
+        val newLiked = !current.first
+        likeStates[key] = newLiked to (current.second + (if (newLiked) 1 else -1)).coerceAtLeast(0)
+        likeInFlight[key] = true
+        scope.launch {
+            val newCount = try {
+                if (newLiked) {
+                    app.apiClient.likesAdd("post", clicked.ownerId, clicked.id)
+                } else {
+                    app.apiClient.likesDelete("post", clicked.ownerId, clicked.id)
+                }
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "likes.add/delete failed", e)
+                -1
+            }
+            likeInFlight.remove(key)
+            if (newCount >= 0) {
+                // VK подтвердил — фиксируем точное значение счётчика.
+                likeStates[key] = newLiked to newCount
+            } else {
+                likeStates[key] = current
+                Toast.makeText(
+                    context,
+                    app.apiClient.lastApiError ?: "Не удалось оценить запись",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    // Закрепить/открепить (wall.pin / wall.unpin): optimistic — флаг is_pinned
+    // и подъём закреплённой записи вверх списка (как в VK); при ошибке — откат
+    // всего списка + Toast lastApiError.
+    fun toggleWallPostPin(clicked: Post) {
+        val key = "${clicked.ownerId}_${clicked.id}"
+        if (postActionInFlight.containsKey(key)) return
+        val previous = posts
+        val newPinned = !clicked.isPinnedBool
+        posts = previous
+            .map {
+                if (it.ownerId == clicked.ownerId && it.id == clicked.id) {
+                    it.copy(isPinned = if (newPinned) 1 else 0)
+                } else {
+                    it
+                }
+            }
+            .sortedByDescending { it.isPinned }
+        postActionInFlight[key] = true
+        scope.launch {
+            val ok = try {
+                if (newPinned) {
+                    app.apiClient.wallPin(clicked.ownerId, clicked.id)
+                } else {
+                    app.apiClient.wallUnpin(clicked.ownerId, clicked.id)
+                }
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "wall.pin/unpin failed", e)
+                false
+            }
+            postActionInFlight.remove(key)
+            if (ok) {
+                Toast.makeText(
+                    context,
+                    if (newPinned) "Запись закреплена" else "Запись откреплена",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                posts = previous
+                Toast.makeText(
+                    context,
+                    app.apiClient.lastApiError
+                        ?: if (newPinned) "Не удалось закрепить запись" else "Не удалось открепить запись",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    // Удаление записи (wall.delete) после подтверждения в AlertDialog: optimistic —
+    // запись исчезает из списка сразу, при ошибке — возврат + Toast lastApiError.
+    fun deleteWallPostConfirmed(target: Post) {
+        val key = "${target.ownerId}_${target.id}"
+        if (postActionInFlight.containsKey(key)) return
+        deletingPost.value = null
+        val previous = posts
+        posts = previous.filter { it.ownerId != target.ownerId || it.id != target.id }
+        postActionInFlight[key] = true
+        scope.launch {
+            val ok = try {
+                app.apiClient.wallDelete(target.ownerId, target.id)
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "wallDelete failed", e)
+                false
+            }
+            postActionInFlight.remove(key)
+            if (ok) {
+                Toast.makeText(context, "Запись удалена", Toast.LENGTH_SHORT).show()
+            } else {
+                posts = previous
+                Toast.makeText(
+                    context,
+                    app.apiClient.lastApiError ?: "Не удалось удалить запись",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    // Редактирование текста записи (wall.edit) — только для текстовых постов
+    // (покрытие сигнатуры достаточное: message + friends_only; см. KDoc
+    // WallPostCard.editCovered). Текст применяется ПОСЛЕ ответа сервера
+    // (wall.edit → response.post_id); при ошибке диалог остаётся открыт
+    // с текстом lastApiError.
+    fun editWallPostConfirmed(target: Post, newText: String) {
+        val key = "${target.ownerId}_${target.id}"
+        if (postActionInFlight.containsKey(key)) return
+        postActionInFlight[key] = true
+        editSaving = true
+        scope.launch {
+            val ok = try {
+                app.apiClient.wallEdit(
+                    ownerId = target.ownerId,
+                    postId = target.id,
+                    message = newText,
+                    // wall.edit сбрасывает непереданные поля — friends_only передаём как есть.
+                    friendsOnly = target.friendsOnly == true,
+                )
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "wallEdit failed", e)
+                false
+            }
+            postActionInFlight.remove(key)
+            editSaving = false
+            if (ok) {
+                posts = posts.map {
+                    if (it.ownerId == target.ownerId && it.id == target.id) it.copy(text = newText) else it
+                }
+                editingPost.value = null
+                Toast.makeText(context, "Запись изменена", Toast.LENGTH_SHORT).show()
+            } else {
+                editError = app.apiClient.lastApiError ?: "Не удалось изменить запись"
+            }
+        }
+    }
+
+    // ══ П-6b (#PROFILE-GAP-6b): «Возможно, вы знакомы» — добавление в друзья ══
+    // friends.add(user_id): Int → friend_status (1 = стали друзьями, 2 = заявка
+    // отправлена, -1/ошибка). Кнопка после успеха становится disabled:
+    // «Заявка отправлена» (или «Добавлен» при мгновенном одобрении).
+    // Повторный клик в полёте/после успеха игнорируется.
+    fun addSuggestion(friend: Friend) {
+        if (suggestionInFlight.containsKey(friend.id)) return
+        if (suggestionSent.containsKey(friend.id)) return
+        suggestionInFlight[friend.id] = true
+        scope.launch {
+            val status = try {
+                app.apiClient.friendsAdd(friend.id)
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "friendsAdd failed", e)
+                -1
+            }
+            suggestionInFlight.remove(friend.id)
+            if (status > 0) {
+                suggestionSent[friend.id] = status
+                Toast.makeText(
+                    context,
+                    if (status == 1) "Добавлен в друзья" else "Заявка отправлена",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    app.apiClient.lastApiError ?: "Не удалось отправить заявку",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    // П-6b: открытие закладки — dispatch по типу Bookmark (только типы с живой
+    // навигацией; список «что открывается» — KDoc BookmarksTabSection).
+    fun openBookmark(bookmark: Bookmark) {
+        when (bookmark.type) {
+            "post" -> bookmark.post?.let { onPostClick(it) }
+            "video" -> bookmark.video?.let { onVideoClick(it) }
+            "photo" -> {
+                val url = bookmark.photo?.largestUrl
+                if (url != null) photoViewerState.value = listOf(url) to 0
+            }
+            "link" -> bookmark.link?.url?.takeIf { it.isNotBlank() }?.let { openUrlExternal(context, it) }
+            "user" -> bookmark.user?.let { onUserClick(it.id) }
+        }
+    }
+
+    // П-6b: подгрузка закладок (fave.get offset) — «Загрузить ещё».
+    fun loadMoreBookmarksPage() {
+        if (bookmarksLoadingMore || bookmarksLoading || !bookmarksHasMore) return
+        scope.launch {
+            bookmarksLoadingMore = true
+            try {
+                val next = app.apiClient.faveGet(count = BOOKMARKS_PAGE_SIZE, offset = bookmarks.size)
+                bookmarks = (bookmarks + next).distinctBy { b ->
+                    Triple(
+                        b.type,
+                        b.post?.id ?: b.video?.id ?: b.photo?.id ?: b.user?.id ?: b.group?.id ?: 0L,
+                        b.addedDate,
+                    )
+                }
+                bookmarksHasMore = next.size >= BOOKMARKS_PAGE_SIZE
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "Bookmarks load-more failed", e)
+                Toast.makeText(
+                    context,
+                    app.apiClient.lastApiError ?: "Не удалось загрузить закладки",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } finally {
+                bookmarksLoadingMore = false
+            }
+        }
+    }
+
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
     // ProfileScreen в hasOwnTopBar списке SovaNavHost, но своего Scaffold нет
     // (глобальный TopAppBar не рисуется) → insets применяем сами.
@@ -346,6 +718,34 @@ fun ProfileScreen(
                     showStatusDialog = true
                 },
             )
+        }
+        // П-3 (#PROFILE-SNAP): вход в редактор профиля (EditProfileScreen —
+        // account.saveProfileInfo + смена аватара/обложки). Паттерн кнопки-строки —
+        // как соседняя «Создать пост» (Icons.Filled.Edit уже в файле).
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                elevation = CardDefaults.cardElevation(0.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { onEditProfileClick() }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Редактировать профиль",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
         item { CountersRow(profile = p) }
         // П-1 (#PROFILE-SNAP): вкладки контента «Стена / Музыка / Видео / Фото» —
@@ -395,6 +795,20 @@ fun ProfileScreen(
                     onSelect = { wallFilter = it },
                 )
             }
+            // П-6b (#PROFILE-GAP-6b): «Возможно, вы знакомы» (friends.getRecommendations)
+            // — на вкладке Стена сверху, как в VK web. Пусто/ошибка — не рисуем.
+            val suggestions = friendSuggestions
+            if (!suggestions.isNullOrEmpty()) {
+                item {
+                    FriendSuggestionsSection(
+                        suggestions = suggestions,
+                        sentStatuses = suggestionSent,
+                        inFlight = suggestionInFlight,
+                        onAdd = { addSuggestion(it) },
+                        onOpen = onUserClick,
+                    )
+                }
+            }
             if (wallLoading) {
                 item { TabProgressRow() }
             }
@@ -410,6 +824,8 @@ fun ProfileScreen(
                 }
             }
             items(posts, key = { "${it.ownerId}_${it.id}" }) { post ->
+                // П-6a: ключ поста для optimistic-карт лайка/действий.
+                val postKey = "${post.ownerId}_${post.id}"
                 WallPostCard(
                     post = post,
                     authorName = p.fullName,
@@ -419,6 +835,20 @@ fun ProfileScreen(
                     onRepostClick = { repostPost.value = it },
                     // Шаг 5 (#32e): тап по комментарию → onCommentClick → PostDetailScreen.
                     onCommentClick = onCommentClick,
+                    // П-6a (#PROFILE-GAP-6a): лайк записи + «Действия» поста стены
+                    // (pin/unpin/delete/edit). Свой профиль → владелец стены = p.id.
+                    likesState = likeStates,
+                    likePending = likeInFlight.containsKey(postKey),
+                    onLikeToggle = { toggleWallPostLike(it) },
+                    showActions = true,
+                    wallOwnerId = p.id,
+                    actionPending = postActionInFlight.containsKey(postKey),
+                    onPinToggle = { toggleWallPostPin(it) },
+                    onDeleteRequest = { deletingPost.value = it },
+                    onEditRequest = {
+                        editError = null
+                        editingPost.value = it
+                    },
                 )
                 Box(
                     modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp)
@@ -477,6 +907,42 @@ fun ProfileScreen(
                     error = photoError,
                     onRetry = { contentRetryTick++ },
                     onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+                )
+            }
+        } else if (selectedContentTab == PROFILE_TAB_CLIPS) {
+            // П-6b (#PROFILE-GAP-6b): вкладка «Клипы».
+            item {
+                ClipsTabSection(
+                    clips = clips,
+                    loading = clipsLoading,
+                    error = clipsError,
+                    onRetry = { contentRetryTick++ },
+                    onClipClick = onVideoClick,
+                )
+            }
+        } else if (selectedContentTab == PROFILE_TAB_ARTICLES) {
+            // П-6b: вкладка «Статьи» — тап открывает статью в системном браузере.
+            item {
+                ArticlesTabSection(
+                    articles = articles,
+                    loading = articlesLoading,
+                    error = articlesError,
+                    onRetry = { contentRetryTick++ },
+                    onOpenArticle = { url -> openUrlExternal(context, url) },
+                )
+            }
+        } else if (selectedContentTab == PROFILE_TAB_BOOKMARKS) {
+            // П-6b: вкладка «Закладки» (fave.get) — тап по доступным типам.
+            item {
+                BookmarksTabSection(
+                    bookmarks = bookmarks,
+                    loading = bookmarksLoading,
+                    error = bookmarksError,
+                    onRetry = { contentRetryTick++ },
+                    hasMore = bookmarksHasMore,
+                    loadingMore = bookmarksLoadingMore,
+                    onLoadMore = { loadMoreBookmarksPage() },
+                    onOpen = { openBookmark(it) },
                 )
             }
         }
@@ -612,6 +1078,72 @@ fun ProfileScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showStatusDialog = false }, enabled = !statusSaving) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
+    // ══ П-6a (#PROFILE-GAP-6a): подтверждение удаления записи (wall.delete) ══
+    val deleteTarget = deletingPost.value
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deletingPost.value = null },
+            title = { Text("Удаление записи") },
+            text = { Text("Запись будет удалена со стены. Действие нельзя отменить.") },
+            confirmButton = {
+                TextButton(onClick = { deleteWallPostConfirmed(deleteTarget) }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingPost.value = null }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
+    // ══ П-6a (#PROFILE-GAP-6a): правка текста записи (wall.edit) ══
+    val editTarget = editingPost.value
+    if (editTarget != null) {
+        var editDraft by remember(editTarget) { mutableStateOf(editTarget.text) }
+        AlertDialog(
+            onDismissRequest = { if (!editSaving) editingPost.value = null },
+            title = { Text("Редактирование записи") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = editDraft,
+                        onValueChange = { editDraft = it },
+                        placeholder = { Text("Текст записи") },
+                        maxLines = 10,
+                        enabled = !editSaving,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    val eErr = editError
+                    if (eErr != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = eErr,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { editWallPostConfirmed(editTarget, editDraft.trim()) },
+                    // wall.edit с пустым message у текстовой записи — серверная
+                    // ошибка; пустой текст не отправляем (как в вебе VK).
+                    enabled = !editSaving && editDraft.trim().isNotEmpty(),
+                ) {
+                    Text(if (editSaving) "Сохранение…" else "Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingPost.value = null }, enabled = !editSaving) {
                     Text("Отмена")
                 }
             },
@@ -783,6 +1315,31 @@ fun CountersRow(profile: UserProfile) {
     }
 }
 
+/**
+ * Карточка записи на стене профиля.
+ *
+ * П-6a (#PROFILE-GAP-6a, остаток скоупа П-1 — инвентарь §5 п.2):
+ *  - ЛАЙК: ряд лайка кликабелен — optimistic (isLiked + счётчик ±1) →
+ *    likes.add / likes.delete; optimistic-состояние живёт в вызывающем экране
+ *    ([likesState], паттерн FeedScreen.likesState), откат и Toast lastApiError —
+ *    тоже там. Стартовое состояние — user_likes из wall.get (поле есть в модели
+ *    Post, парсится в parsePostMini).
+ *  - «ДЕЙСТВИЯ» ([showActions]): «⋯»-меню с Закрепить/Открепить (wall.pin /
+ *    wall.unpin, label по post.is_pinned), Редактировать (wall.edit — только
+ *    для ТЕКСТОВЫХ записей, см. editCovered ниже) и Удалить (wall.delete —
+ *    с AlertDialog-подтверждением на уровне экрана). Меню показывается для
+ *    постов владельца стены ([wallOwnerId]) ИЛИ постов с серверными
+ *    can_edit/can_delete (поля есть в модели Post) — правило §5 п.2; решение
+ *    «показывать ли меню вовсе» — за вызывающим экраном (ProfileScreen — свой
+ *    профиль; UserProfileScreen не передаёт showActions → меню скрыто).
+ *  ЧЕСТНОЕ ОГРАНИЧЕНИЕ РЕДАКТИРОВАНИЯ (editCovered): wall.edit сбрасывает
+ *  непереданные поля, а сигнатура VKApiClient.wallEdit принимает только
+ *  message/attachments/friends_only. Вложения link/poll/audio_playlist/
+ *  sticker и copy_history из модели Post невосстановимы в attachments-строку
+ *  → для постов с ними пункт «Редактировать» НЕ показывается (иначе молчаливая
+ *  потеря данных). Для текстовых записей покрытие достаточное: message +
+ *  friends_only, остальное у такого поста отсутствует.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WallPostCard(
@@ -797,6 +1354,18 @@ fun WallPostCard(
     onRepostClick: (Post) -> Unit = {},
     // Шаг 5 (#32e): тап по иконке комментария → PostDetailScreen.
     onCommentClick: (Post) -> Unit = {},
+    // П-6a (#PROFILE-GAP-6a): optimistic-состояния лайков экрана
+    // (key "ownerId_id" → (isLiked, count)); пустая карта — серверные post.likes.
+    likesState: Map<String, Pair<Boolean, Int>> = emptyMap(),
+    likePending: Boolean = false,
+    onLikeToggle: (Post) -> Unit = {},
+    // П-6a: «Действия» поста (pin/unpin/delete/edit) — см. KDoc выше.
+    showActions: Boolean = false,
+    wallOwnerId: Long = 0L,
+    actionPending: Boolean = false,
+    onPinToggle: (Post) -> Unit = {},
+    onDeleteRequest: (Post) -> Unit = {},
+    onEditRequest: (Post) -> Unit = {},
 ) {
     val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
     // Fix #70: ранее video-вложения вообще не отображались на стене профиля.
@@ -804,11 +1373,29 @@ fun WallPostCard(
     // #30 (audio attachments): рендер audio-вложений на стене профиля.
     val audioAttachments = post.attachments?.filter { it.type == "audio" && it.audio != null }.orEmpty()
     val timeStr = post.date.toRelativeTime()
-    val likeCount = post.likes?.count ?: 0
-    val isLiked = post.likes?.userLikes == 1
+    // П-6a: optimistic-состояние лайка поверх серверных post.likes
+    // (переопределение появляется после первого клика; до того — user_likes из wall.get).
+    val likeOverride = likesState["${post.ownerId}_${post.id}"]
+    val isLiked = likeOverride?.first ?: (post.likes?.userLikes == 1)
+    val likeCount = likeOverride?.second ?: (post.likes?.count ?: 0)
     val commentCount = post.comments?.count ?: 0
     val repostCount = post.reposts?.count ?: 0
     val viewCount = post.views?.count ?: 0
+    // П-6a: «⋯»-меню «Действий» — правило §5 п.2: посты владельца стены ИЛИ
+    // серверные can_edit/can_delete (поля есть в модели Post/parsePostMini;
+    // на своём профиле wallOwnerId == id текущего пользователя — покрывает и
+    // фоллбэк «owner == userId текущего пользователя»).
+    val canManage = post.ownerId == wallOwnerId || post.canEditBool || post.canDeleteBool
+    val menuVisible = showActions && canManage
+    // П-6a: «Редактировать» — только текстовые записи (честное ограничение
+    // wall.edit, см. KDoc выше): вложения/репост/копирайт/подпись — не редактируем.
+    val editCovered = post.attachments.isNullOrEmpty() &&
+        post.copyHistory == null &&
+        post.copyright == null &&
+        post.signerId == null &&
+        (post.postType == null || post.postType == "post")
+    // П-6a: состояние «⋯»-меню (паттерн FeedScreen.PostCard).
+    var showMenu by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -855,6 +1442,59 @@ fun WallPostCard(
                         color = MaterialTheme.colorScheme.outline,
                     )
                 }
+                // П-6a (#PROFILE-GAP-6a): «⋯»-меню «Действий» поста (как в VK web).
+                if (menuVisible) {
+                    Spacer(Modifier.weight(1f))
+                    Box {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.MoreHoriz,
+                                contentDescription = "Действия",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                        ) {
+                            // Закрепить/Открепить (wall.pin / wall.unpin) — label по post.is_pinned.
+                            if (post.canPinBool || post.ownerId == wallOwnerId) {
+                                DropdownMenuItem(
+                                    text = { Text(if (post.isPinnedBool) "Открепить" else "Закрепить") },
+                                    leadingIcon = { Icon(Icons.Outlined.PushPin, contentDescription = null) },
+                                    onClick = { showMenu = false; onPinToggle(post) },
+                                    enabled = !actionPending,
+                                )
+                            }
+                            // Редактировать (wall.edit) — только текстовые записи (editCovered).
+                            if (editCovered && (post.canEditBool || post.ownerId == wallOwnerId)) {
+                                DropdownMenuItem(
+                                    text = { Text("Редактировать") },
+                                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                    onClick = { showMenu = false; onEditRequest(post) },
+                                    enabled = !actionPending,
+                                )
+                            }
+                            // Удалить (wall.delete) — подтверждение на уровне экрана.
+                            DropdownMenuItem(
+                                text = { Text("Удалить", color = Color(0xFFE53935)) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = null,
+                                        tint = Color(0xFFE53935),
+                                    )
+                                },
+                                onClick = { showMenu = false; onDeleteRequest(post) },
+                                enabled = !actionPending,
+                            )
+                        }
+                    }
+                }
             }
             if (post.text.isNotBlank()) {
                 Text(
@@ -893,6 +1533,10 @@ fun WallPostCard(
                     icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
                     count = likeCount,
                     tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    // П-6a (#PROFILE-GAP-6a): кликабельный лайк записи стены
+                    // (likes.add / likes.delete через onLikeToggle); во время полёта — disabled.
+                    onClick = { onLikeToggle(post) },
+                    enabled = !likePending,
                 )
                 Spacer(Modifier.width(8.dp))
                 ActionIcon(
@@ -1106,11 +1750,13 @@ private fun ActionIcon(
     count: Int,
     tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     onClick: (() -> Unit)? = null,
+    // П-6a: disabled-состояние — во время API-полёта clickable не вешается.
+    enabled: Boolean = true,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+            .then(if (onClick != null && enabled) Modifier.clickable { onClick() } else Modifier)
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)
@@ -1132,8 +1778,12 @@ private fun ProfileChipsRow(
     selected: String,
     onSelect: (String) -> Unit,
 ) {
+    // П-6b (#PROFILE-GAP-6b): 7 вкладок контента не помещаются на узких экранах —
+    // ряд скроллится горизонтально (для 3 подвкладок стены поведение то же —
+    // они помещаются, скролл просто не активен).
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         options.forEach { (value, label) ->
@@ -1534,4 +2184,475 @@ private fun extractGiftThumbUrl(giftItem: JsonObject): String? {
         null
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// П-6b (#PROFILE-GAP-6b): остаток плана профиля — вкладки Клипы/Статьи/Закладки
+// (инвентарь §5 п.2 «секции правой колонки (…клипы/статьи)», §3.2) и блок
+// «Возможно, вы знакомы» (§5 п.3, переиспользован friendsGetRecommendations).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Размер страницы закладок (fave.get) и порог «Загрузить ещё». */
+private const val BOOKMARKS_PAGE_SIZE = 30
+
+/**
+ * Секция «Возможно, вы знакомы» (§5 п.3 — friends.getRecommendations).
+ * LazyRow карточек: аватар + имя + кнопка «+» (friends.add). Тап по карточке —
+ * чужой профиль ([onOpen]; паттерн FriendsScreen.onUserClick → Screen.UserProfile).
+ * После успешного friends.add кнопка становится disabled: «Заявка отправлена»
+ * (friend_status=2) / «Добавлен» (friend_status=1 — мгновенное одобрение).
+ * Секция рисуется только при непустом списке (вызывающий экран: пусто/ошибка
+ * API → секция не рисуется — паттерн подарков П-1).
+ */
+@Composable
+private fun FriendSuggestionsSection(
+    suggestions: List<Friend>,
+    sentStatuses: Map<Long, Int>,
+    inFlight: Map<Long, Boolean>,
+    onAdd: (Friend) -> Unit,
+    onOpen: (Long) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Text(
+            text = "Возможно, вы знакомы",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            itemsIndexed(
+                suggestions,
+                // Ключ с индексом — crash-proof к дублям (прецедент Fix #281).
+                key = { idx, friend -> "suggest_${idx}_${friend.id}" },
+            ) { _, friend ->
+                ProfileSuggestionCard(
+                    friend = friend,
+                    sentStatus = sentStatuses[friend.id],
+                    inFlight = inFlight[friend.id] == true,
+                    onAdd = { onAdd(friend) },
+                    onClick = { onOpen(friend.id) },
+                )
+            }
+        }
+    }
+}
+
+/** Карточка «Возможно, вы знакомы»: аватар + имя + кнопка «+». */
+@Composable
+private fun ProfileSuggestionCard(
+    friend: Friend,
+    sentStatus: Int?,
+    inFlight: Boolean,
+    onAdd: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.width(120.dp).clip(RoundedCornerShape(12.dp)).clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ),
+        elevation = CardDefaults.cardElevation(0.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            val avatarUrl = friend.photo200 ?: friend.photo100
+            if (avatarUrl != null) {
+                AsyncImage(
+                    model = avatarUrl,
+                    contentDescription = friend.fullName,
+                    modifier = Modifier.size(72.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(72.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = friend.firstName.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = friend.fullName,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (sentStatus != null) {
+                // friends.add уже прошёл — кнопка замещается disabled-меткой.
+                Text(
+                    text = if (sentStatus == 1) "Добавлен" else "Заявка отправлена",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                Button(
+                    onClick = onAdd,
+                    enabled = !inFlight,
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Добавить", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Вкладка «Клипы» (§5 п.2): shortVideo.getOwnerVideos → LazyRow вертикальных
+ * карточек-превью (паттерн VideoTabSection П-1).
+ *
+ * ОТКРЫТИЕ КЛИПА (честная механика): выделенного маршрута «конкретный клип» в
+ * приложении нет (Screen.Clips — параметless-фид ClipsFeedScreen), поэтому клип
+ * открывается СУЩЕСТВУЮЩИМ механизмом [onClipClick] → VideoHolder.open →
+ * VideoPlayerScreen — тот же живой путь, что у вкладки «Видео». Плеер сам
+ * дорезолвит воспроизведение: videoGetById(ownerId, id, accessKey) → files/hls
+ * (accessKey сохраняется в модели Video при парсинге) — просмотр живой,
+ * не превью-заглушка.
+ */
+@Composable
+private fun ClipsTabSection(
+    clips: List<Video>,
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    onClipClick: (Video) -> Unit,
+) {
+    when {
+        loading -> TabProgressRow()
+        error != null -> TabErrorRow(message = error, onRetry = onRetry)
+        clips.isEmpty() -> TabEmptyRow("У вас пока нет клипов")
+        else -> {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                itemsIndexed(
+                    clips,
+                    key = { idx, clip -> "clip_${idx}_${clip.ownerId}_${clip.id}" },
+                ) { _, clip ->
+                    ProfileClipCard(clip = clip, onClick = { onClipClick(clip) })
+                }
+            }
+        }
+    }
+}
+
+/** Вертикальная карточка клипа: постер (first_frames → covers) + длительность. */
+@Composable
+private fun ProfileClipCard(clip: Video, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.width(110.dp).clip(RoundedCornerShape(12.dp)).clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ),
+        elevation = CardDefaults.cardElevation(0.dp),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxWidth().aspectRatio(9f / 16f)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            val posterUrl = clip.clipPosterUrl
+            if (posterUrl != null) {
+                AsyncImage(
+                    model = posterUrl,
+                    contentDescription = clip.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            Box(
+                modifier = Modifier.size(32.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+            if (clip.duration > 0) {
+                Box(
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        "${clip.duration / 60}:${"%02d".format(clip.duration % 60)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Вкладка «Статьи» (§5 п.2): articles.getOwnerPublished → список карточек.
+ * Модели статьи в core-моделях для этого ответа нет (метод возвращает сырые
+ * JsonObject), поэтому title/url/обложка парсятся терпеливо здесь
+ * ([extractArticleInfo], isJsonNull-гварды — как extractPhotoAllUrl П-1).
+ *
+ * Тап по статье → системный браузер ([onOpenArticle] → Linkify.openUrlExternal,
+ * ACTION_VIEW): статья — веб-контент vk.com/@…, честное поведение.
+ * Статья без URL рисуется некликабельной.
+ *
+ * ОТКЛОНЕНИЕ от веб-снапшота: бандл pageProfile запрашивает count:3 (виджет
+ * сайдбара); здесь вкладка — полноценный список, запрашивается страница из 20.
+ */
+@Composable
+private fun ArticlesTabSection(
+    articles: List<JsonObject>,
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    onOpenArticle: (String) -> Unit,
+) {
+    val items = remember(articles) { articles.mapNotNull { extractArticleInfo(it) } }
+    when {
+        loading -> TabProgressRow()
+        error != null -> TabErrorRow(message = error, onRetry = onRetry)
+        items.isEmpty() -> TabEmptyRow("У вас пока нет статей")
+        else -> Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            itemsIndexed(items, key = { idx, item -> "article_${idx}_${item.title}" }) { _, item ->
+                ProfileArticleRow(item = item, onOpen = onOpenArticle)
+            }
+        }
+    }
+}
+
+/** Карточка статьи: обложка (если есть) + заголовок + дата/просмотры. */
+@Composable
+private fun ProfileArticleRow(item: ProfileArticleInfo, onOpen: (String) -> Unit) {
+    val url = item.url
+    Card(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .then(if (url != null) Modifier.clickable { onOpen(url) } else Modifier),
+        elevation = CardDefaults.cardElevation(0.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val imageUrl = item.imageUrl
+            if (imageUrl != null) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = item.title,
+                    modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentScale = ContentScale.Crop,
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title.ifBlank { "Статья" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = buildList {
+                    if (item.publishedDate > 0) add(item.publishedDate.toRelativeTime())
+                    if (item.views > 0) add("${item.views.toCountString()} просмотров")
+                }
+                if (meta.isNotEmpty()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = meta.joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Вкладка «Закладки» (§5 п.2): fave.get (СВОИ закладки, extended=1) → список
+ * строк (миниатюра/название/тип). Тап — только по типам с живой навигацией
+ * ([bookmarkIsOpenable]):
+ *  - post → PostDetailScreen (onPostClick: PostHolder.last + navigate, паттерн
+ *    BookmarksScreen.onPostClick);
+ *  - video → VideoHolder.open → VideoPlayerScreen;
+ *  - photo → существующий PhotoViewer (самый большой sizes);
+ *  - link → системный браузер (openUrlExternal — веб-контент);
+ *  - user → чужой профиль (Screen.UserProfile через onUserClick).
+ * Остальные типы (group, article, product, …) рисуются БЕЗ тапа: VKApiClient
+ * не парсит для них сущность (модель Bookmark статью/товар не несёт), а
+ * расширение VKApiClient/моделей вне скоупа задачи — честное отклонение
+ * (см. worklog П-6b). Подгрузка — «Загрузить ещё» (hasMore = последняя
+ * страница полная).
+ */
+@Composable
+private fun BookmarksTabSection(
+    bookmarks: List<Bookmark>,
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    onOpen: (Bookmark) -> Unit,
+) {
+    when {
+        loading -> TabProgressRow()
+        error != null -> TabErrorRow(message = error, onRetry = onRetry)
+        bookmarks.isEmpty() -> TabEmptyRow("У вас пока нет закладок")
+        else -> Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            bookmarks.forEach { bookmark ->
+                ProfileBookmarkRow(
+                    bookmark = bookmark,
+                    onClick = { onOpen(bookmark) },
+                )
+            }
+            if (hasMore) {
+                TextButton(
+                    onClick = onLoadMore,
+                    enabled = !loadingMore,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                ) {
+                    Text(if (loadingMore) "Загрузка…" else "Загрузить ещё")
+                }
+            }
+        }
+    }
+}
+
+/** Строка закладки: миниатюра (если есть) + название + метка типа. */
+@Composable
+private fun ProfileBookmarkRow(bookmark: Bookmark, onClick: () -> Unit) {
+    val openable = bookmarkIsOpenable(bookmark)
+    Card(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .then(if (openable) Modifier.clickable { onClick() } else Modifier),
+        elevation = CardDefaults.cardElevation(0.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val thumb = bookmark.thumbUrl
+            if (thumb != null) {
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = bookmark.title,
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentScale = ContentScale.Crop,
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = bookmark.title.ifBlank { "Без названия" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = bookmarkTypeLabel(bookmark.type),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** Тип закладки → человекочитаемая метка. */
+private fun bookmarkTypeLabel(type: String): String = when (type) {
+    "user" -> "Пользователь"
+    "group" -> "Сообщество"
+    "post" -> "Запись"
+    "photo" -> "Фотография"
+    "video" -> "Видео"
+    "link" -> "Ссылка"
+    "article" -> "Статья"
+    "product" -> "Товар"
+    else -> type
+}
+
+/**
+ * Есть ли у закладки живая навигация (см. KDoc BookmarksTabSection): только
+ * типы с распарсенной VKA сущностью и доступным просмотром.
+ */
+private fun bookmarkIsOpenable(bookmark: Bookmark): Boolean = when (bookmark.type) {
+    "post" -> bookmark.post != null
+    "video" -> bookmark.video != null
+    "photo" -> bookmark.photo?.largestUrl != null
+    "link" -> !bookmark.link?.url.isNullOrBlank()
+    "user" -> bookmark.user != null
+    else -> false
+}
+
+/**
+ * Поля статьи из «сырого» item articles.getOwnerPublished (patient-parsing):
+ * url → ("url", "view_url"), обложка → ("preview_img", "cover_photo",
+ * "photo_200", "photo"), дата → "published_date", просмотры → "views".
+ * Возвращает null, если в item нет ни заголовка, ни URL (рисовать нечего).
+ */
+private fun extractArticleInfo(article: JsonObject): ProfileArticleInfo? {
+    return try {
+        val title = jsonPrimitiveStr(article, "title", "subtitle").orEmpty()
+        val url = jsonPrimitiveStr(article, "url", "view_url")
+        if (title.isBlank() && url == null) return null
+        ProfileArticleInfo(
+            title = title,
+            url = url,
+            imageUrl = jsonPrimitiveStr(article, "preview_img", "cover_photo", "photo_200", "photo"),
+            publishedDate = article.get("published_date")
+                ?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+            views = article.get("views")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+        )
+    } catch (e: Exception) {
+        AppLog.e("ProfileScreen", "extractArticleInfo parse error", e)
+        null
+    }
+}
+
+/** Первое непустое строковое поле из кандидатов-ключей (гварды null/primitive). */
+private fun jsonPrimitiveStr(o: JsonObject, vararg keys: String): String? {
+    for (key in keys) {
+        val el = o.get(key) ?: continue
+        if (el.isJsonPrimitive && el.asString.isNotBlank()) return el.asString
+    }
+    return null
+}
+
+/** Распарсенные поля статьи вкладки «Статьи» (см. [extractArticleInfo]). */
+private data class ProfileArticleInfo(
+    val title: String,
+    val url: String?,
+    val imageUrl: String?,
+    val publishedDate: Long,
+    val views: Int,
+)
 

@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DevicesOther
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Group
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -41,6 +43,15 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     object Music         : Screen("music",         "Музыка",       Icons.Default.LibraryMusic)
     object Video         : Screen("video",         "Видео",        Icons.Default.PlayCircle)
     object Profile       : Screen("profile",       "Профиль",      Icons.Default.Person)
+
+    /**
+     * П-3 (#PROFILE-SNAP): полноэкранный редактор своего профиля —
+     * account.saveProfileInfo + смена аватара/обложки (upload-цепочки).
+     * Открывается кнопкой «Редактировать профиль» в ProfileScreen; иконка
+     * null — суб-экран без пункта в навбаре (как UserProfile/PostDetail).
+     * Маршрут в hasOwnTopBar (SovaNavHost): собственный Scaffold+TopAppBar.
+     */
+    object ProfileEdit   : Screen("profile_edit",  "Редактирование профиля", null)
 
     /**
      * Полноэкранный видеоплеер. Принимает ownerId/id как path-параметры:
@@ -278,6 +289,21 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     object Notifications : Screen("notifications", "Уведомления",  Icons.Default.AlternateEmail)
     object Settings      : Screen("settings",      "Настройки",    Icons.Default.Settings)
     object NotificationSettings : Screen("notification_settings", "Настройки уведомлений", Icons.Default.Notifications)
+
+    /**
+     * §PROFILE-P4 (этап П-4, инвентарь §4.1 п.10 / §5 п.5): VK-приватность на
+     * BFF settingsGeneral.get/setPrivacySettings (PrivacySettingsScreen).
+     * Доступ: Настройки → Приватность → «Настройки приватности VK».
+     */
+    object SettingsPrivacy : Screen("settings_privacy", "VK-приватность", Icons.Outlined.Shield)
+
+    /**
+     * §PROFILE-P4 (этап П-4, инвентарь §1.6 / §5 п.5): самостоятельный экран
+     * «Чёрный список» (account.getBanned/unban/ban по ссылке/короткому имени).
+     * Перенесён из NotificationSettingsScreen; доступ: Настройки → Уведомления →
+     * «Чёрный список».
+     */
+    object Blacklist : Screen("blacklist", "Чёрный список", Icons.Default.Block)
     /** #CALLS: история звонков (пропущенные/входящие/исходящие). */
     object CallsHistory  : Screen("calls_history", "Звонки",       Icons.Filled.Call)
     object About         : Screen("about",         "О приложении", null)

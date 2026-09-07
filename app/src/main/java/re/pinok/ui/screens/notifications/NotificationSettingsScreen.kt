@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,10 +23,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
 
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -64,8 +64,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
-import re.pinok.data.model.BannedUser
-import re.pinok.data.model.BannedUsersList
+import re.pinok.data.model.Group
 import re.pinok.data.model.SettingsParam
 import re.pinok.data.model.SettingsSection
 import re.pinok.data.model.SilentModeStatus
@@ -84,8 +83,14 @@ import java.util.Locale
  * Экран настроек уведомлений. Объединяет:
  *  - «Не беспокоить» (account.getSilentModeStatus / startSilentMode / stopSilentMode)
  *  - BFF-секции settingsGeneral.getNotifySettings → ParamRow (toggle/select/button/warning)
- *  - Заблокированные пользователи (account.getBanned / unban)
+ *  - Уведомления сообществ (этап П-4, §1.5): groups.get(filter=editor) +
+ *    groupsEditNotifications — тумблер УРОВНЯ группы (событийных тумблеров §1.5
+ *    в API нет — см. KDoc секции)
  *  - Фильтр нецензурной лексики (account.setObsceneFilter)
+ *
+ * §PROFILE-P4: секция «Заблокированные» (account.getBanned/unban) ПЕРЕНЕСЕНА в
+ * самостоятельный экран BlacklistScreen (ui/screens/settings) — строка-вход
+ * осталась на вкладке «Уведомления» SettingsScreen.
  *
  * Optimistic UI: переключатели двигаются мгновенно, откатываются при ошибке API + Toast.
  */
@@ -100,7 +105,13 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var silentMode by remember { mutableStateOf<SilentModeStatus?>(null) }
     var sections by remember { mutableStateOf<List<SettingsSection>>(emptyList()) }
-    var banned by remember { mutableStateOf<BannedUsersList?>(null) }
+    // §PROFILE-P4 (§1.5): сообщества, где я админ/редактор — тумблер уровня группы.
+    var groups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    // Локальное состояние тумблера по group.id. Начальное значение API НЕ отдаёт
+    // (геттера «уведомления сообщества» в VK API нет) — считаем включёнными
+    // (VK-дефолт «Отображать в ленте уведомлений» = вкл), честно указано в описании секции.
+    var groupNotifyState by remember { mutableStateOf<Map<Long, Boolean>>(emptyMap()) }
+    var groupBusy by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var obsceneFilter by remember { mutableStateOf(false) }
     var showOverflow by remember { mutableStateOf(false) }
 
@@ -110,11 +121,11 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
         try {
             val sm = app.apiClient.accountGetSilentModeStatus()
             val secs = app.apiClient.settingsGeneralGetNotifySettings()
-            val bn = app.apiClient.accountGetBanned()
+            val grps = app.apiClient.groupsGet(filter = "editor")
             silentMode = sm
             sections = secs ?: emptyList()
-            banned = bn
-            if (sm == null && secs == null && bn == null) {
+            groups = grps
+            if (sm == null && secs == null) {
                 error = "Не удалось загрузить настройки. Проверьте подключение к сети."
             }
         } catch (e: Exception) {
@@ -300,34 +311,71 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
                         }
                     }
 
-                    // 3. Banned users
-                    item(key = "header_banned") {
-                        SectionHeader(title = "Заблокированные", icon = Icons.Default.Block)
+                    // 3. Уведомления сообществ (§PROFILE-P4, §1.5)
+                    item(key = "header_groups") {
+                        SectionHeader(title = "Уведомления сообществ", icon = Icons.Default.Group)
                     }
-                    val bannedItems = banned?.items ?: emptyList()
-                    if (bannedItems.isEmpty()) {
-                        item(key = "banned_empty") {
+                    item(key = "groups_desc") {
+                        Text(
+                            "Сообщества, где вы администратор или редактор. " +
+                                "Тумблер — «Отображать в ленте уведомлений» для всего " +
+                                "сообщества. Отдельные события (комментарии, упоминания, " +
+                                "предложенные записи и др.) в VK API недоступны. " +
+                                "Положение тумблера до первого переключения не читается " +
+                                "из API — показан VK-дефолт «вкл».",
+                            modifier = Modifier.padding(
+                                start = 16.dp, end = 16.dp, bottom = 4.dp,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    if (groups.isEmpty()) {
+                        item(key = "groups_empty") {
                             Text(
-                                "Список заблокированных пуст",
+                                "Нет сообществ, где вы администратор или редактор",
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     } else {
-                        items(bannedItems, key = { "banned_${it.id}" }) { user ->
-                            BannedUserRow(
-                                user = user,
-                                onUnban = {
+                        items(groups, key = { "group_${it.id}" }) { group ->
+                            GroupNotifyRow(
+                                group = group,
+                                checked = groupNotifyState[group.id] ?: true,
+                                busy = group.id in groupBusy,
+                                onToggle = { g, newValue ->
+                                    val prevMap = groupNotifyState
+                                    groupNotifyState = groupNotifyState +
+                                        (g.id to newValue)
+                                    groupBusy = groupBusy + g.id
                                     scope.launch {
-                                        val ok = app.apiClient.accountUnban(user.id)
-                                        if (ok) {
-                                            banned = banned?.let { bl ->
-                                                bl.copy(items = bl.items.filter { it.id != user.id })
-                                            }
-                                        } else {
+                                        val ok = try {
+                                            // Сигнатура groupsEditNotifications(groupId, …)
+                                            // внутри инвертирует знак (wire group_id =
+                                            // -groupId), поэтому передаётся owner-style
+                                            // отрицательный id → на провод положительный
+                                            // group_id по спецификации VK API groups.edit.
+                                            app.apiClient.groupsEditNotifications(
+                                                -g.id,
+                                                newValue,
+                                            )
+                                        } catch (e: Exception) {
+                                            AppLog.e(
+                                                "NotificationSettings",
+                                                "groupsEditNotifications(${g.id}) failed",
+                                                e,
+                                            )
+                                            false
+                                        }
+                                        groupBusy = groupBusy - g.id
+                                        if (!ok) {
+                                            groupNotifyState = prevMap
                                             Toast.makeText(
                                                 context,
-                                                "Не удалось разблокировать",
+                                                "Не удалось изменить: " +
+                                                    (app.apiClient.lastApiError
+                                                        ?: "нет ответа сервера"),
                                                 Toast.LENGTH_SHORT,
                                             ).show()
                                         }
@@ -614,13 +662,35 @@ private fun ParamRow(
     }
 }
 
+/**
+ * §PROFILE-P4 (§1.5): строка сообщества с тумблером уровня группы.
+ *
+ * ЧЕСТНОЕ ОТКЛОНЕНИЕ от §1.5 (no-stub): 16 событийных тумблеров подстраницы
+ * (Комментарии, Предложенные записи, Упоминания, Реакции, Поделились,
+ * Новые подписчики, Истории, Непрочитанные сообщения, Статистика,
+ * Завершённые опросы, Советы по продвижению, Модерация товаров, Соавторство,
+ * Отзывы о сообществе, Отметки сообщества, Комментарии к товарам) и
+ * «Удалить источник» живут на legacy al_settings.php (group_notify_*) —
+ * wire-путей в снапшоте НЕТ, BFF-ключей в бандлах НЕ обнаружено.
+ * Единственный живой путь — groups.edit{group_id, notifications} — покрывает
+ * только вкл/выкл уровня группы (в вебе этот флаг называется «Отображать
+ * в ленте уведомлений»). Поэтому: один тумблер на группу, события не имитируются.
+ */
 @Composable
-private fun BannedUserRow(user: BannedUser, onUnban: () -> Unit) {
+private fun GroupNotifyRow(
+    group: Group,
+    checked: Boolean,
+    busy: Boolean,
+    onToggle: (Group, Boolean) -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .defaultMinSize(minHeight = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val photo = user.photo100 ?: user.photo200
+        val photo = group.photo100 ?: group.photo200
         if (photo != null) {
             AsyncImage(
                 model = photo,
@@ -634,7 +704,7 @@ private fun BannedUserRow(user: BannedUser, onUnban: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Default.Person,
+                    Icons.Default.Group,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -642,17 +712,23 @@ private fun BannedUserRow(user: BannedUser, onUnban: () -> Unit) {
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(user.fullName)
-            if (user.banDate > 0) {
-                val fmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+            Text(group.name)
+            if (group.screenName != null) {
                 Text(
-                    "Заблокирован ${fmt.format(Date(user.banDate * 1000))}",
+                    group.screenName ?: "",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                 )
             }
         }
-        TextButton(onClick = onUnban) { Text("Разблокировать") }
+        if (busy) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Switch(checked = checked, onCheckedChange = { onToggle(group, it) })
+        }
     }
 }
 

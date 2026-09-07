@@ -124,11 +124,14 @@ import re.pinok.ui.screens.offline.OfflineAudioPlayerScreen
 import re.pinok.ui.screens.offline.OfflineManagerScreen
 import re.pinok.ui.screens.offline.StoryOfflinePlayerScreen
 import re.pinok.ui.screens.photos.PhotosScreen
+import re.pinok.ui.screens.profile.EditProfileScreen
 import re.pinok.ui.screens.profile.ProfileScreen
 import re.pinok.ui.screens.profile.UserProfileScreen
 import re.pinok.ui.screens.search.SearchScreen
 import re.pinok.ui.screens.settings.AboutScreen
+import re.pinok.ui.screens.settings.BlacklistScreen
 import re.pinok.ui.screens.settings.LogScreen
+import re.pinok.ui.screens.settings.PrivacySettingsScreen
 import re.pinok.ui.screens.settings.SettingsScreen
 import re.pinok.ui.screens.superapp.ServicesScreen
 import re.pinok.ui.screens.video.VideoScreen
@@ -814,6 +817,10 @@ listOf(
         // поверх локального → две панели (скриншот Screenshot_20260804_212704).
         // Та же проблема что и у ChatInfo/FoldersSettings/InternalBrowser.
         Screen.NotificationSettings.route,
+        // §PROFILE-P4: у PrivacySettingsScreen/BlacklistScreen собственные
+        // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и NotificationSettings.
+        Screen.SettingsPrivacy.route,
+        Screen.Blacklist.route,
         // #MUSIC-PORT: у музыкальных экранов собственный LibraryTopBar
         // (← Название). Маршруты не были в списке → глобальный ScreenTopBar
         // (← PinoK) рисовался поверх локального → две панели.
@@ -823,6 +830,11 @@ listOf(
         Screen.MusicArtists.route,
         Screen.ArtistDetail.route,
         Screen.CatalogSection.route,
+        // П-3 (#PROFILE-SNAP): у EditProfileScreen собственный Scaffold+TopAppBar
+        // («← Редактирование профиля · Сохранить»). Без добавления в список
+        // глобальный ScreenTopBar рисовался бы поверх локального — та же проблема,
+        // что Fix #272 / #NOTIF-SETTINGS-DUAL-BAR.
+        Screen.ProfileEdit.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -1521,7 +1533,28 @@ listOf(
                             PostHolder.last = post
                             nav.navigate(Screen.PostDetail.buildRoute(post.ownerId, post.id))
                         },
+                        // П-3 (#PROFILE-SNAP): кнопка «Редактировать профиль» →
+                        // полноэкранный редактор (account.saveProfileInfo +
+                        // аватар/обложка). Возврат popBackStack → ProfileScreen
+                        // проходит свежую загрузку (usersGetFullExtended).
+                        onEditProfileClick = { nav.navigate(Screen.ProfileEdit.route) },
+                        // П-6b (#PROFILE-GAP-6b): карточка «Возможно, вы знакомы» /
+                        // юзер-закладка → чужой профиль (паттерн FriendsScreen.onUserClick).
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
+                        // П-6b: пост-закладка → PostDetailScreen
+                        // (паттерн BookmarksScreen.onPostClick: PostHolder.last + navigate).
+                        onPostClick = { post ->
+                            PostHolder.last = post
+                            nav.navigate(Screen.PostDetail.buildRoute(post.ownerId, post.id))
+                        },
                     )
+                }
+                // П-3 (#PROFILE-SNAP): редактор профиля — свой Scaffold+TopAppBar
+                // («← Редактирование профиля · Сохранить»), маршрут в hasOwnTopBar.
+                composable(Screen.ProfileEdit.route) {
+                    EditProfileScreen(onBack = { nav.popBackStack() })
                 }
                 composable(Screen.Friends.route)       {
                     FriendsScreen(
@@ -1861,10 +1894,27 @@ composable(Screen.CallsHistory.route) {
                         onOpenDevices = {
                             nav.navigate(Screen.Devices.route)
                         },
+                        // §PROFILE-P4: VK-приватность (BFF settingsGeneral.*) и
+                        // самостоятельный чёрный список — тот же callback-паттерн.
+                        onOpenPrivacySettings = {
+                            nav.navigate(Screen.SettingsPrivacy.route)
+                        },
+                        onOpenBlacklist = {
+                            nav.navigate(Screen.Blacklist.route)
+                        },
                     )
                 }
                 composable(Screen.NotificationSettings.route) {
                     NotificationSettingsScreen(onBack = { nav.popBackStack() })
+                }
+                // §PROFILE-P4: VK-приватность (BFF settingsGeneral.get/setPrivacySettings).
+                composable(Screen.SettingsPrivacy.route) {
+                    PrivacySettingsScreen(onBack = { nav.popBackStack() })
+                }
+                // §PROFILE-P4: самостоятельный чёрный список (перенесён из
+                // NotificationSettingsScreen, инвентарь §1.6).
+                composable(Screen.Blacklist.route) {
+                    BlacklistScreen(onBack = { nav.popBackStack() })
                 }
                 // §49.6 Sprint VK-ID-1.2: Управление сессиями/устройствами аккаунта.
                 composable(Screen.Devices.route) {
