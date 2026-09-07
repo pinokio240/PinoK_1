@@ -11828,3 +11828,15 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 **Верификация:** скобки диффа net=0 ×2 файла; MusicLibraryScreens не эволюционировал 93514bef→440aea47 (патч чисто); BuildStamp не бампан (звонковая волна-7 calls-2026.09.06-5 в силе). Чеклист теста — МУЗЫКА-ПОИСК-ФИКС.md §4.
 
+
+---
+
+## 2026-09-07 — fix(music): Fix #282 — треки поиска отсутствовали («ищутся только альбомы»)
+
+**Запрос:** «а почему в музыке только альбомы ищутся, а треки отсутствуют?» (поиск в разделе Музыка).
+
+**Корневая причина:** треки `catalog.getAudioSearch` лежат в `response.audios[]` (top-level) — задокументировано в HISTORY 2026-08-17 и подтверждено работающим на устройстве `audioGetAudiosByArtist` (38 треков «Баста» из этого поля). `audioSearchWithSections` парсил треки ТОЛЬКО из `blocks[]` (поиск их там не отдаёт — blocks живут в `response.catalog.sections[].blocks[]` и отдают suggestions) → `tracks = 0` всегда. Сверху Fix #281 добавил ранний return при «хоть что-то найдено» — возврат с нулевыми треками, до `audio.search` (даёт треки для direct-токенов) код не доходил. Тот же слепой патч — в `audioSearchCatalogFallback` (Fix #266). Секция «Треки» в UI была и всегда пустовала.
+
+**Исправления (VKApiClient.kt):** новый парсер `parseTracksFromCatalogSearchResponse` (response.audios[], дедуп (ownerId,id) через общий seen, URL-фильтр на стороне вызывателя); `audioSearchWithSections` — audios[] как первичный источник + blocks легаси-добор, ранний return ТОЛЬКО при ненулевых треках (иначе провал в audio.search); `audioSearchCatalogFallback` — audios[] первым источником (raw через catalogGetAudioSearchRaw). UI не тронут; бюджет HTTP не ухудшен (audios[] — из уже скачанного ответа; extra audio.search только в edge-case «каталог без треков»).
+
+**Док:** МУЗЫКА-ПОИСК-ТРЕКИ-ФИКС.md (диагноз, было/стало, матрица проверки 6 пунктов). BuildStamp не бампнут (calls-2026.09.06-5 в силе, музыкально-звонковая зона не пересекается).

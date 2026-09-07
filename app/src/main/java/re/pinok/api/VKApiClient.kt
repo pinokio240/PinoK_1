@@ -2459,21 +2459,33 @@ class VKApiClient(
                     "audioSearchCatalogFallback: offset=$offset — cursor-пагинация не поддерживается")
                 return 0 to emptyList()
             }
-            val section = catalogGetAudioSearchExtended(query, startFrom = null)
-                ?: return 0 to emptyList()
+            val raw = catalogGetAudioSearchRaw(query) ?: return 0 to emptyList()
             val seenKeys = HashSet<Pair<Long, Long>>()
             val result = mutableListOf<Track>()
-            for (block in section.blocks) {
-                for (item in block.items) {
-                    if (item is re.pinok.data.model.AudioCatalogItem.TrackItem) {
-                        val t = item.track
-                        if (t.id <= 0L || t.ownerId == 0L) continue
-                        if (!seenKeys.add(t.ownerId to t.id)) continue
-                        // Пропускаем треки без URL — не сможем играть.
-                        // (catalog может вернуть треки без URL для неподписчиков)
-                        if (t.url.isNullOrBlank()) continue
-                        result.add(t)
-                        if (result.size >= count) return result.size to result
+            // Fix #282: ГЛАВНОЕ место треков поискового ответа — response.audios[]
+            // (top-level). blocks[] треков поиска не содержат (см. KDoc
+            // [parseTracksFromCatalogSearchResponse]).
+            val resp = raw.getAsJsonObject("response")
+            if (resp != null) {
+                parseTracksFromCatalogSearchResponse(resp, count, seenKeys).forEach { t ->
+                    // Пропускаем треки без URL — не сможем играть.
+                    // (catalog может вернуть треки без URL для неподписчиков)
+                    if (!t.url.isNullOrBlank()) result.add(t)
+                }
+            }
+            // Легаси-путь Fix #266: добираем из блоков, если audios[] мало/пусто.
+            if (result.size < count) {
+                val section = parseCatalogSectionExtended(raw, "search")
+                for (block in section?.blocks ?: emptyList()) {
+                    for (item in block.items) {
+                        if (item is re.pinok.data.model.AudioCatalogItem.TrackItem) {
+                            val t = item.track
+                            if (t.id <= 0L || t.ownerId == 0L) continue
+                            if (!seenKeys.add(t.ownerId to t.id)) continue
+                            if (t.url.isNullOrBlank()) continue
+                            result.add(t)
+                            if (result.size >= count) return result.size to result
+                        }
                     }
                 }
             }
@@ -2505,6 +2517,17 @@ class VKApiClient(
      *  СЕЙЧАС: catalog.getAudioSearch — ОДИН запрос; артисты/плейлисты
      *  добираются из ТОГО ЖЕ ответа (links[]/albums[]/playlists[]);
      *  финальная дедупликация всех секций в [finalizeAudioSearchResult].
+     *
+     * Fix #282 (треки отсутствуют в поиске, «ищутся только альбомы»):
+     *  треки catalog.getAudioSearch лежат в response.audios[] (top-level),
+     *  а НЕ в blocks[] — blocks живут в response.catalog.sections[].blocks[]
+     *  и треков поиска не отдают (suggestions/заголовки). Раньше треки
+     *  парсились только из blocks → tracks всегда 0. Теперь audios[] —
+     *  первичный источник ([parseTracksFromCatalogSearchResponse]), blocks —
+     *  легаси-добор; ранний return только при ненулевых треках, иначе
+     *  провал в классический audio.search (даёт треки для direct-токенов).
+     *  Факт структуры: HISTORY.md 2026-08-17 + работающий на устройстве
+     *  audioGetAudiosByArtist (треки «Баста» приходят из response.audios[]).
      */
     suspend fun audioSearchWithSections(
         query: String,
@@ -2532,9 +2555,11 @@ class VKApiClient(
         }
 
         if (catalogRaw != null) {
+            // Fix #282: seen-набор вынесен наверх — общий дедуп треков из
+            // blocks[] и response.audios[] (пересечения возможны).
+            val seenTrackKeys = HashSet<Pair<Long, Long>>()
             val section = parseCatalogSectionExtended(catalogRaw, "search")
             if (section != null) {
-                val seenTrackKeys = HashSet<Pair<Long, Long>>()
                 val seenArtistIds = HashSet<Long>()
                 val seenPlaylistKeys = HashSet<Pair<Long, Long>>()
                 for (block in section.blocks) {
@@ -2570,6 +2595,17 @@ class VKApiClient(
             // Fix #281: раньше это были ОТДЕЛЬНЫЕ HTTP-вызова catalog.getAudioSearch.
             val resp = catalogRaw.getAsJsonObject("response")
             if (resp != null) {
+                // Fix #282: ГЛАВНОЕ место треков поискового ответа —
+                // response.audios[] (top-level), а НЕ blocks[]. blocks в
+                // catalog.getAudioSearch лежат в response.catalog.sections[].blocks[]
+                // и треков поиска не отдают (suggestions/заголовки). До этого
+                // фикса tracks парсились только из blocks → всегда 0 →
+                // пользователь видел только альбомы/плейлисты без треков.
+                if (tracks.size < count) {
+                    tracks.addAll(
+                        parseTracksFromCatalogSearchResponse(resp, count - tracks.size, seenTrackKeys)
+                    )
+                }
                 if (artists.isEmpty()) {
                     artists.addAll(parseArtistsFromCatalogSearchLinks(resp, 10))
                 }
@@ -2580,9 +2616,12 @@ class VKApiClient(
             AppLog.i("VKApiClient",
                 "audioSearchWithSections(catalog): query='$query' → " +
                     "${tracks.size} tracks, ${artists.size} artists, ${playlists.size} playlists")
-            // Если catalog дал хотя бы что-то — возвращаем.
-            // Если ничего не дал — пробуем классический audio.search ниже.
-            if (tracks.isNotEmpty() || artists.isNotEmpty() || playlists.isNotEmpty()) {
+            // Fix #282: ранний return — ТОЛЬКО если есть ТРЕКИ. Если catalog дал
+            // только артистов/плейлисты (треки не спарсились) — проваливаемся в
+            // классический audio.search ниже: для direct-токенов он работает и
+            // даст треки. Прежнее условие «хоть что-то» оставляло поиск без
+            // треков вовсе (симптом: «ищутся только альбомы»).
+            if (tracks.isNotEmpty()) {
                 return finalizeAudioSearchResult(tracks, artists, playlists, count)
             }
         }
@@ -4423,6 +4462,38 @@ class VKApiClient(
                     if (result.size >= count) return result
                 }
             }
+        }
+        return result
+    }
+
+    /**
+     * Fix #282: парсер треков из response.audios[] каталог-поиска
+     * (catalog.getAudioSearch). Это ГЛАВНОЕ место треков поискового ответа —
+     * blocks[] треков поиска не содержат (они лежат в
+     * response.catalog.sections[].blocks[] и отдают suggestions/заголовки).
+     *
+     * Источник факта: HISTORY.md 2026-08-17 — «response.audios[] — треки» +
+     * работающий на устройстве audioGetAudiosByArtist (треки «Баста» приходят
+     * именно из response.audios[] с main_artists[]).
+     *
+     * Дедуп по (ownerId, id) через общий seen (в audios[] и блоках возможны
+     * пересечения). Треки без URL здесь НЕ фильтруются — решение на стороне
+     * вызывателя (withSections показывает «доступно по подписке»,
+     * fallback-поиск пропускает непроигрываемые).
+     */
+    private fun parseTracksFromCatalogSearchResponse(
+        resp: JsonObject,
+        limit: Int,
+        seen: MutableSet<Pair<Long, Long>>,
+    ): List<Track> {
+        if (limit <= 0) return emptyList()
+        val result = mutableListOf<Track>()
+        resp.getAsJsonArray("audios")?.forEach { el ->
+            if (result.size >= limit) return result
+            if (!el.isJsonObject) return@forEach
+            val t = parseTrackFromJson(el.asJsonObject) ?: return@forEach
+            if (t.id <= 0L || t.ownerId == 0L || !seen.add(t.ownerId to t.id)) return@forEach
+            result.add(t)
         }
         return result
     }
