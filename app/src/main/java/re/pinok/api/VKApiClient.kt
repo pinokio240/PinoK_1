@@ -2521,6 +2521,11 @@ class VKApiClient(
         //    типы одним запросом. ОДИН вызов, сырой ответ переиспользуется ниже.
         val catalogRaw = try {
             catalogGetAudioSearchRaw(query)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // #MUSIC-ANR-4: отмена поиска (новый ввод / уход с экрана) — нормальный
+            // сценарий. Раньше (до этого фикса) catch(Exception) глотал отмену →
+            // корутина продолжала зомби-работу (fallback-запросы) после cancel.
+            throw e
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "audioSearchWithSections: catalog.getAudioSearch failed: ${e.message}")
             null
@@ -2589,6 +2594,8 @@ class VKApiClient(
             // второй вызов только жёг rate-limit (3 rps) и трафик.
             val (_, t) = audioSearch(query, count, 0, allowCatalogFallback = false)
             tracks.addAll(t)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "audioSearchWithSections: audio.search failed: ${e.message}")
         }
@@ -2597,6 +2604,8 @@ class VKApiClient(
             // links[] взять неоткуда, пробуем классический поиск артистов.
             try {
                 artists.addAll(audioSearchArtists(query, count = 10))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.w("VKApiClient", "audioSearchWithSections: audio.searchArtists failed: ${e.message}")
             }
@@ -2606,6 +2615,8 @@ class VKApiClient(
             // direct-auth токенов работает даже когда catalog пуст.
             try {
                 playlists.addAll(audioSearchPlaylists(query, count = 10))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.w("VKApiClient", "audioSearchWithSections: audio.searchPlaylists failed: ${e.message}")
             }

@@ -7089,3 +7089,24 @@ Stage Summary:
 - BuildStamp НЕ бампнут: звонковая цепочка не затронута (calls-2026.09.06-5 в силе).
 - Для пользователя: собрать, прогнать матрицу §4 из MUSIC_SEARCH_ANR_FIX.md (быстрый набор, секции, логи «audioSearchWithSections(catalog)» по одной строке на запрос).
 - Компромиссы задокументированы: возможная потеря последних не-flush строк persistent.log при крэше процесса (буфер в памяти полный); clear() ждёт flushSync до 2с.
+
+---
+Task ID: MUSIC-SEARCH-FIX-INTEGRATION
+Agent: Z.ai Code (Sergey)
+Task: интеграция собственного фикса поиска музыки с вышедшим параллельно Fix #281 (440aea47) — жалоба «при поиске может закрыться приложение или выдает ANR»
+
+Work Log:
+- Диагностика (собственная, по коду, до обнаружения Fix #281): краш = дубликаты Lazy-ключей (3 вектора: artists id=0 без дедупа в MusicScreen; MusicArtistsScreen key=domain?:id → все «0»; playlists без дедупа), ANR = глотание CancellationException + LaunchedEffect(searchQuery) перезапуск на символ + тяжёлые fallback-запросы.
+- git push отклонён: remote ушёл вперёд (волна-7 звонков 59a85e89 + Fix #281 440aea47 «ANR и падения при поиске музыки»). Fix #281 закрыл: главный ANR-корень (AppLog.appendToFile — дисковый I/O на MAIN под persistLock → async «PinoK-LogWriter»), 1 catalog-вызов вместо 3, дедуп finalizeAudioSearchResult + index-ключи MusicScreen, LaunchedEffect(Unit)+collectLatest+rethrow в UI.
+- Интеграция: попытка rebase → конфликты ×4 (обе стороны аппендили HISTORY/worklog + перекрытие кода); коммит пересобран поверх origin/PinoK (reset --hard + точечный перенос): собственные находки, закрытые Fix #281, НЕ вносились (дубль не создавался).
+- Оставшиеся пробелы поверх Fix #281 (этот коммит):
+  * MusicArtistsScreen: itemsIndexed-ключ "artist_i_domain|name" — ЕДИНСТВЕННЫЙ оставшийся краш-вектор (audioSearchArtists сырой: id=0, дубли slug; дедуп делает только finalizeAudioSearchResult, который экран не использует) — #MUSIC-CRASH-2.
+  * MusicAlbumsScreen: itemsIndexed-ключ "album_i_ownerId_id" — страховка — #MUSIC-CRASH-5.
+  * audioSearchWithSections: rethrow CancellationException ×4 catch (catalogRaw/audio.search/searchArtists/searchPlaylists) — зомби-fallback после cancel — #MUSIC-ANR-4.
+  * Dispatchers.Default для парсинга НЕ добавлен: все актуальные пути поиска идут под withContext(IO) из MusicScreen — не требуется.
+- Документация: МУЗЫКА-ПОИСК-ФИКС.md перезаписана под интеграционную реальность (§3 хронология Fix #281 → настоящий коммит; §4 чеклист теста); HISTORY.md — запись 2026-09-03.
+- Верификация: скобки диффа net=0 ×2; MusicLibraryScreens не эволюционировал 93514bef→440aea47 (патч чисто); BuildStamp не бампан (звонковая волна-7 calls-2026.09.06-5 в силе); .gitignore (M) и Next.js-скаффолд в коммит не включались.
+- Коммит fix(music) + push origin PinoK.
+
+Stage Summary:
+- Поиск музыки: закрыт последний краш-вектор (Артисты/Альбомы библиотеки) и восстановлена чистота отмены на API-уровне; вся остальная механика (AppLog async, 1-вызов, дедуп MusicScreen) уже в Fix #281. Итоговое покрытие жалобы: 5/5 краш-векторов, 4/4 ANR-вектора. Откат настоящего коммита — revert <sha> (Fix #281 не трогается).

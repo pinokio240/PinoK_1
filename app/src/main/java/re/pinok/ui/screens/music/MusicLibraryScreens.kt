@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -346,7 +347,10 @@ fun MusicAlbumsScreen(
                 Text("Ничего не найдено", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
             }
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(albums, key = { "${it.ownerId}_${it.id}" }) { al ->
+                // Fix #MUSIC-CRASH-5: ключ с индексом — дубли ключей в LazyColumn
+                // недопустимы (IllegalArgumentException → краш). Данные уже
+                // дедуплицированы в audioSearchAlbums, индекс — страховка.
+                itemsIndexed(albums, key = { i, al -> "album_${i}_${al.ownerId}_${al.id}" }) { _, al ->
                     PlaylistRow(
                         title = al.title,
                         coverUrl = al.coverUrl,
@@ -422,7 +426,10 @@ fun MusicArtistsScreen(
                 Text("Ничего не найдено", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
             }
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(artists, key = { it.domain ?: it.id.toString() }) { artist ->
+                // Fix #MUSIC-CRASH-2 (UI-сторона): ключ = domain ?: id → при ≥2
+                // артистах без domain все ключи «0» → IllegalArgumentException → краш
+                // («при поиске закрывается приложение»). Индекс гарантирует уникальность.
+                itemsIndexed(artists, key = { i, a -> "artist_${i}_${a.domain ?: a.name}" }) { _, artist ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
