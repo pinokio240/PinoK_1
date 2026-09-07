@@ -16127,6 +16127,71 @@ class VKApiClient(
         return json.has("response")
     }
 
+    /**
+     * #PROFILE-SNAP П-7-C (2026-09-07): database.getCities — поиск города по
+     * подстроке. Закрывает остаток §3 «профиль.этап-П5.решение.md»: «Город в
+     * редакторе — read-only (saveProfileInfo принимает city как ID; cities-
+     * поиска в VKA нет)» — cities-поиск появляется этим методом, UI-потребитель
+     * — EditProfileScreen (диалог поиска → выбор → cityId в dirty-diff
+     * account.saveProfileInfo, параметр cityId уже существует в сигнатуре).
+     *
+     * VK API: database.getCities { q, country_id, count, need_all } →
+     * response = { count: Int, items: [{ id: Int, title: String, ... }] }.
+     * need_all=0 — только крупные города (быстрый ответ, как дефолт веба);
+     * country_id — дефолт 1 (Россия, серверный дефолт VK), EditProfileScreen
+     * передаёт country.id из account.getProfileInfo, когда профиль его отдал.
+     *
+     * Возврат — ЛОКАЛЬНЫЙ CitySuggestion: модели re.pinok.data.model править
+     * правилами этапа запрещено (прецеденты локальных data class в этом файле —
+     * MessageSearchResult/UploadedPhoto/ContentTab и др.). Пустой список при
+     * offline/null/ошибке парсинга; гвард isOffline() и идиомы парсинга — как
+     * у соседей блока #PROFILE-SNAP (#NULL-EXPLICIT: без safe-call/элвиса).
+     */
+    data class CitySuggestion(val id: Int, val title: String)
+
+    suspend fun databaseGetCities(
+        q: String,
+        countryId: Int = 1,
+        count: Int = 30,
+    ): List<CitySuggestion> {
+        if (isOffline()) return emptyList()
+        if (q.isBlank()) return emptyList()
+        val args = mutableMapOf(
+            "q" to q,
+            "country_id" to countryId.toString(),
+            "count" to count.toString(),
+            "need_all" to "0",
+        )
+        val json = call("database.getCities", args)
+        if (json == null) return emptyList()
+        return try {
+            val resp = getObj(json, "response")
+            if (resp == null) {
+                emptyList()
+            } else {
+                val items = getArr(resp, "items")
+                if (items == null) {
+                    emptyList()
+                } else {
+                    val out = ArrayList<CitySuggestion>()
+                    for (el in items) {
+                        if (!el.isJsonObject) continue
+                        val obj = el.asJsonObject
+                        val id = safeIntNullable(obj.get("id"))
+                        if (id == null || id <= 0) continue
+                        val title = safeString(obj.get("title"))
+                        if (title == null) continue
+                        out.add(CitySuggestion(id = id, title = title))
+                    }
+                    out
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "databaseGetCities parse error", e)
+            emptyList()
+        }
+    }
+
     private suspend fun rateLimitWait() {
         while (true) {
             val now = System.currentTimeMillis()

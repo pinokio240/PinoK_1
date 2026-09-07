@@ -11908,3 +11908,24 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Верификация:** string-aware скобки ProfileScreen {582,582}/(1159,1159) (дельта −1/−1 = ровно убранный itemsIndexed-лямбда-блок с key-лямбдой), BlacklistScreen {151,151}/(280,280); check-nested-comments ALL CLEAN (164 файла); dangling-импортов нет.
 
 **Статус:** sandbox без Android SDK — юзеру пересобрать assembleDebug; при новых ошибках — фикс за фиксом (паттерн #102/#108).
+
+---
+
+## 2026-09-07 — feat(profile): П-7 — списки подписчиков/подписок + «Пожаловаться» + город-поиск
+
+**Запрос:** «продолжай» — закрытие честных остатков профиль.этап-П5.решение.md §3 (два параллельных субагента,opus; зоны непересекающиеся).
+
+**П-7-AB (подписчики/подписки + жалобы):**
+- Новый `FollowersSubscriptionsScreen.kt` (608 строк): список подписчиков (usersGetFollowers @9313, страницы по 50, строки аватар+имя → UserProfile) И подписок (usersGetSubscriptions @15929 — VKA отдаёт response в формате снапшота `{count, users:{items}, groups:{items}}`, парсинг терпит и `profiles[]/groups[]`-формат дефенсивно); пагинация «Загрузить ещё» (hasMore = страница полная — total API не отдаёт), фильтр по имени, PullToRefresh, честные empty/error (различение по lastApiError).
+- Маршрут `Screen.FollowList = follow_list/{userId}?mode={followers|subscriptions}` (+19 Screen.kt / +57 SovaNavHost.kt — чисто аддитивно, добавлен в hasOwnTopBar).
+- Входы: чип «Подписчики» в CountersRow теперь кликабелен (свой и чужой профиль), «Друзья» (свой) → существующий Screen.Friends; строка «Подписки (N)» под счётчиками (SubscriptionsEntryRow; счётчик — параллельный добор usersGetSubscriptions(count=1), паттерн подарков; поля subscriptions в модели Counters нет — модель не тронута, чип не добавлялся).
+- Группы в подписках → Screen.Community (маршрут Fix #67); строки помечены «Сообщество».
+- «Пожаловаться на запись»: wallMarkAsSpam @16117 в «⋯»-меню WallPostCard — ТОЛЬКО для чужих записей (showReport считает call-site: ProfileScreen post.ownerId≠p.id, UserProfileScreen !isSelf); AlertDialog-подтверждение → тост результата; Delete получил явный гейт showActions && canManage (поведение П-6a при showActions=true бит-в-бит сохранено) → на чужой стене меню открывается только с «Пожаловаться».
+- Отклонения (KDoc): чип «Друзья» на чужом профиле некликабелен (Screen.Friends глобальный, без userId — показал бы чужих друзей под видом своих); закрытый профиль — честные empty/error.
+
+**П-7-C (город-поиск):**
+- VKA +65/0: `data class CitySuggestion(id, title)` (локальная, прецеденты MessageSearchResult/UploadedPhoto) + `databaseGetCities(q, countryId=1, count=30): List<CitySuggestion>` — wire database.getCities{q, country_id, count, need_all:0}, isOffline-гвард, парсинг response.items[] идиомами файла, AppLog.e → emptyList(). Единственная правка VKA (базлайн-проверка сканера: дельта 0).
+- EditProfileScreen: «Город» read-only → кликабельная строка (стиль EditRelationRow) → AlertDialog-поиск: TextField + LaunchedEffect debounce 350мс (отмена прошлой корутины + staleness-гвард), пустой q не отправляется, честные состояния (Поиск…/ошибка/Начните вводить/Ничего не найдено), список ≤30 через Column.verticalScroll+forEach (Fix #284-паттерн). Выбор → selectedCityId/Title; dirty-diff: cityId уходит в saveProfileInfo ТОЛЬКО при реальной смене (сигнатура cityId/countryId уже была — save не расширялся). Prefill: city.id читается из account.getProfileInfo (editProfileNestedId), иначе база null — смена через поиск корректна.
+- Отклонения (KDoc): countryId=1 (Россия) при отсутствии страны в профиле, выбора страны нет; «очистить город» не реализовано (city=0 в VK не документирован — no-stub); homeTown («Родной город») не задет — отдельное поле.
+
+**Приёмка оркестратора:** скобки string-aware 7 файлов — 6 OK; VKApiClient {1135,1133} stack_left=2 = ТОЧНО базлайн HEAD (преждесуществующий артефакт сканера, дельта волны 0); nested-comments ALL CLEAN (165); дубли деклараций = 0 (FollowList/CitySuggestion/databaseGetCities/FollowersSubscriptionsScreen/SubscriptionsEntryRow/CountersRow/EditCitySearchDialog/EditCityRow — по 1); Screen.kt/SovaNavHost.kt 0 удалений; вызовы databaseGetCities (:1049) и wallMarkAsSpam (:670/:319) сверены с декларациями; VKApiClient — 1 аддитивный hunk; модели core/data не тронуты; работа одного агента не пересекается с файлами другого (git-union = ровно 7 код-файлов).

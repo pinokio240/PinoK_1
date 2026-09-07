@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -53,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -61,6 +64,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import re.pinok.SovaApp
+import re.pinok.api.VKApiClient
 import re.pinok.util.AppLog
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -86,15 +90,24 @@ import re.pinok.util.AppLog
 //     photos.saveOwnerCoverPhoto(response_json=..., upload_v2=1) — v2-форма
 //     saveCover/uploadCoverToServer. Удаление: photos.removeOwnerCoverPhoto.
 //
-// Честные отклонения (проверено rg 2026-09-07):
-//  - «Город» (city) показывается текстом и не редактируется:
-//    account.saveProfileInfo принимает city как ID, а searchCities/cities.get
-//    в VKApiClient отсутствуют — ввод города без поиска не реализуем честно.
-//    Подсказка в UI: «изменяется на веб-версии VK».
+// Честные отклонения (проверено rg 2026-09-07; «Город» обновлён П-7-C):
+//  - «Город» (city): П-7-C — редактируемый: тап открывает диалог поиска
+//    EditCitySearchDialog (debounce 350мс → VKA databaseGetCities =
+//    database.getCities), выбор даёт cityId+title → dirty-diff шлёт cityId
+//    в account.saveProfileInfo ТОЛЬКО при реальной смене города. Отклонения:
+//    (а) prefill-ID: account.getProfileInfo отдаёт city как {id,title} — ID
+//    читается editProfileNestedId; если сервер id не отдал (гвард) —
+//    dirty-база null, смена через поиск всё равно уходит корректным ID;
+//    (б) country_id поиска — country.id из префилла, иначе 1 (Россия,
+//    серверный дефолт VK); (в) «очистить город» не предлагается — поведение
+//    city=0/пустого city в account.saveProfileInfo VK не документировано
+//    (no-stub: не имитируем).
 //  - «О себе» (about) и «Сайт» (site) показываются read-only: сигнатура
 //    accountSaveProfileInfo этих параметров не содержит (расширение метода
 //    правилами этапа запрещено, overload нет). Подсказка: веб-версия VK.
 //  - crop-параметры обложки не задаются (опциональны) — VK кадрирует сам.
+//  - «Родной город» (home_town) — ОТДЕЛЬНОЕ строковое поле, не путать с
+//    city (ID справочника): механика homeTown П-3 не изменена П-7-C.
 //  - bdate — текстовый ввод без календаря (без внешних библиотек, как задано).
 //
 // Обновление профиля после сохранения: onBack() → popBackStack → ProfileScreen
@@ -121,6 +134,10 @@ private data class EditProfileSnapshot(
     val games: String,
     val sex: Int,
     val relation: Int,
+    // П-7-C: город как ID (city.id из account.getProfileInfo); null = не
+    // задан или сервер не отдал id. Сравнение с selectedCityId даёт
+    // dirty-diff по городу (cityId уходит в save только при реальной смене).
+    val cityId: Int?,
 )
 
 /** Значения relation (семейное положение) по account.saveProfileInfo. */
@@ -161,6 +178,13 @@ private fun editProfileNestedTitle(obj: JsonObject, key: String): String? {
     val el = obj.get(key) ?: return null
     if (!el.isJsonObject) return null
     return editProfileStr(el.asJsonObject, "title")
+}
+
+/** id вложенного объекта {id, title} (П-7-C: city/country из getProfileInfo). */
+private fun editProfileNestedId(obj: JsonObject, key: String): Int? {
+    val el = obj.get(key) ?: return null
+    if (!el.isJsonObject) return null
+    return editProfileInt(el.asJsonObject, "id")
 }
 
 /**
@@ -223,6 +247,13 @@ fun EditProfileScreen(onBack: () -> Unit) {
     var bdateVisibility by remember { mutableStateOf<Int?>(null) }
     var cityTitle by remember { mutableStateOf<String?>(null) }
     var countryTitle by remember { mutableStateOf<String?>(null) }
+    // П-7-C: город как ID (account.saveProfileInfo city=<id>). selected* —
+    // текущий выбор юзера (стартует с префилла), searchCountryId — страна
+    // для database.getCities (country.id префилла, иначе 1 = Россия —
+    // серверный дефолт VK; отклонение задокументировано в KDoc диалога).
+    var selectedCityId by remember { mutableStateOf<Int?>(null) }
+    var selectedCityTitle by remember { mutableStateOf<String?>(null) }
+    var searchCountryId by remember { mutableStateOf(1) }
     // Обложка уже установлена (users.get field=cover → usersGetFullExtended).
     var coverExists by remember { mutableStateOf(false) }
 
@@ -248,6 +279,7 @@ fun EditProfileScreen(onBack: () -> Unit) {
     var avatarBusy by remember { mutableStateOf(false) }
     var coverBusy by remember { mutableStateOf(false) }
     var showRelationDialog by remember { mutableStateOf(false) }
+    var showCityDialog by remember { mutableStateOf(false) }
 
     fun toastMsg(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -372,6 +404,9 @@ fun EditProfileScreen(onBack: () -> Unit) {
                     homeTown = homeTown.trim().takeIf { it != snap.homeTown },
                     relation = relation.takeIf { it != snap.relation },
                     status = status.trim().takeIf { it != snap.status },
+                    // П-7-C: city уходит ТОЛЬКО при реальной смене города
+                    // (выбор через databaseGetCities; см. EditCitySearchDialog).
+                    cityId = selectedCityId.takeIf { it != snap.cityId },
                     sex = sex.takeIf { it != snap.sex },
                     activities = activities.trim().takeIf { it != snap.activities },
                     interests = interests.trim().takeIf { it != snap.interests },
@@ -436,6 +471,10 @@ fun EditProfileScreen(onBack: () -> Unit) {
             relation = editProfileInt(info, "relation") ?: 0
             cityTitle = editProfileNestedTitle(info, "city")
             countryTitle = editProfileNestedTitle(info, "country")
+            // П-7-C: city/country как ID (база dirty-diff и страна поиска).
+            selectedCityId = editProfileNestedId(info, "city")
+            selectedCityTitle = null
+            searchCountryId = editProfileNestedId(info, "country") ?: 1
             snapshot = EditProfileSnapshot(
                 firstName = firstName.trim(),
                 lastName = lastName.trim(),
@@ -451,6 +490,7 @@ fun EditProfileScreen(onBack: () -> Unit) {
                 games = games.trim(),
                 sex = sex,
                 relation = relation,
+                cityId = selectedCityId,
             )
             AppLog.i(EDIT_TAG, "prefill loaded")
         } catch (e: Exception) {
@@ -493,11 +533,26 @@ fun EditProfileScreen(onBack: () -> Unit) {
             books.trim() != snapNow.books ||
             games.trim() != snapNow.games ||
             sex != snapNow.sex ||
-            relation != snapNow.relation
+            relation != snapNow.relation ||
+            selectedCityId != snapNow.cityId
         )
     val relationLabel = RELATION_OPTIONS
         .firstOrNull { it.first == relation }
         ?.second ?: "Не указано"
+    // П-7-C: текст строки «Город» — выбранный через поиск title при смене,
+    // иначе префилл (city.title + ", " + country.title), как было в П-3.
+    val cityChanged = snapNow != null && selectedCityId != snapNow.cityId
+    val cityRowText: String = if (cityChanged) {
+        selectedCityTitle ?: ""
+    } else {
+        buildString {
+            cityTitle?.let { append(it) }
+            countryTitle?.let {
+                if (isNotEmpty()) append(", ")
+                append(it)
+            }
+        }
+    }
     val currentSaveError = saveError
 
     Scaffold(
@@ -606,7 +661,13 @@ fun EditProfileScreen(onBack: () -> Unit) {
                         )
                     }
                     item {
-                        EditCityRow(cityTitle = cityTitle, countryTitle = countryTitle)
+                        // П-7-C: город редактируемый — тап открывает поиск
+                        // (database.getCities); выбор пишет selectedCityId/Title.
+                        EditCityRow(
+                            cityText = cityRowText,
+                            enabled = !saving,
+                            onOpen = { showCityDialog = true },
+                        )
                     }
                     item {
                         EditSectionHeader("Короткая информация")
@@ -772,6 +833,22 @@ fun EditProfileScreen(onBack: () -> Unit) {
             },
         )
     }
+
+    // Диалог поиска города (П-7-C): database.getCities через VKA; выбор →
+    // selectedCityId/selectedCityTitle (dirty-diff отправит cityId только
+    // при реальной смене). Страна поиска — searchCountryId (префилл country.id
+    // или дефолт 1, отклонение — KDoc EditCitySearchDialog).
+    if (showCityDialog) {
+        EditCitySearchDialog(
+            countryId = searchCountryId,
+            onDismiss = { showCityDialog = false },
+            onSelect = { id, title ->
+                selectedCityId = id
+                selectedCityTitle = title
+                showCityDialog = false
+            },
+        )
+    }
 }
 
 /** Заголовок секции формы. */
@@ -872,32 +949,38 @@ private fun EditRelationRow(label: String, enabled: Boolean, onOpen: () -> Unit)
     }
 }
 
-/** «Город» — read-only (честное отклонение: city в saveProfileInfo — ID). */
+/**
+ * Строка «Город» — П-7-C: редактируемая, тап открывает диалог поиска
+ * (EditCitySearchDialog → database.getCities → выбор = cityId+title).
+ * Стиль — как EditRelationRow (кликабельная строка с шевроном).
+ */
 @Composable
-private fun EditCityRow(cityTitle: String?, countryTitle: String?) {
-    val cityText = buildString {
-        cityTitle?.let { append(it) }
-        countryTitle?.let {
-            if (isNotEmpty()) append(", ")
-            append(it)
+private fun EditCityRow(cityText: String, enabled: Boolean, onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled) { onOpen() }
+            .padding(horizontal = 4.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Город",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = if (cityText.isBlank()) "Не указан" else cityText,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Нажмите, чтобы найти город в справочнике VK",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
         }
-    }
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Text(
-            text = "Город",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = if (cityText.isBlank()) "Не указан" else cityText,
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = "Изменение города недоступно в приложении — на веб-версии VK",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
-        )
+        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Выбрать город")
     }
 }
 
@@ -916,4 +999,141 @@ private fun EditReadOnlyRow(label: String, hint: String) {
             color = MaterialTheme.colorScheme.outline,
         )
     }
+}
+
+/**
+ * Диалог поиска города (П-7-C, остаток §3 «профиль.этап-П5.решение.md»):
+ * TextField «Поиск города» + debounce 350 мс → VKApiClient.databaseGetCities
+ * (database.getCities, q/country_id/count=30/need_all=0) → список подсказок
+ * → выбор = onSelect(id, title). Пустой запрос НЕ отправляется; loading /
+ * ошибка / пустой результат показываются честно (no-stub).
+ *
+ * Честные отклонения:
+ *  - countryId: передаётся из префилла (country.id account.getProfileInfo);
+ *    если профиль страну не отдал — вызывающая сторона даёт 1 (Россия,
+ *    серверный дефолт VK). Выбор страны в диалоге не делается (вне объёма).
+ *  - «Очистить город» нет: поведение пустого city=0 в account.saveProfileInfo
+ *    VK не документировано — не имитируем (см. шапку файла).
+ *
+ * Стиль — AlertDialog, как диалог relation выше (П-3). Список ≤30 (count=30)
+ * — фиксированный Column.verticalScroll, НЕ Lazy (паттерн Fix #284:
+ * items/itemsIndexed только в Lazy-скоупах; ленивость для 30 строк не нужна).
+ */
+@Composable
+private fun EditCitySearchDialog(
+    countryId: Int,
+    onDismiss: () -> Unit,
+    onSelect: (Int, String) -> Unit,
+) {
+    val app = SovaApp.get()
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<VKApiClient.CitySuggestion>>(emptyList()) }
+    var searching by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
+
+    // Debounce 350 мс: эффект перезапускается на каждый ввод (key = query),
+    // отменяя предыдущую корутину (запрос/дозапись не переживают отмену);
+    // сталeness-гвард перед применением результата — на случай гонки.
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            results = emptyList()
+            searching = false
+            searchError = null
+            return@LaunchedEffect
+        }
+        delay(350)
+        searching = true
+        searchError = null
+        try {
+            val found = app.apiClient.databaseGetCities(q, countryId = countryId, count = 30)
+            if (q == query.trim()) {
+                results = found
+                searching = false
+            }
+        } catch (e: Exception) {
+            AppLog.e(EDIT_TAG, "city search failed", e)
+            if (q == query.trim()) {
+                results = emptyList()
+                searchError = "Ошибка: ${e.message}"
+                searching = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Город") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it.take(100) },
+                    label = { Text("Поиск города") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                val err = searchError
+                when {
+                    searching -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Поиск…", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    err != null -> {
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    query.trim().isEmpty() -> {
+                        Text(
+                            text = "Начните вводить название города",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    results.isEmpty() -> {
+                        Text(
+                            text = "Ничего не найдено",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier
+                                .heightIn(max = 320.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            results.forEach { city ->
+                                TextButton(
+                                    onClick = { onSelect(city.id, city.title) },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                                ) {
+                                    Text(
+                                        text = city.title,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена")
+            }
+        },
+    )
 }

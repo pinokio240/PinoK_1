@@ -42,6 +42,9 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+// П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи; Groups — строка «Подписки».
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PushPin
@@ -153,6 +156,13 @@ fun ProfileScreen(
     // onPostClick: PostHolder.last + navigate). Отдельный колбэк — onCommentClick
     // занят постами стены (см. вызов WallPostCard).
     onPostClick: (Post) -> Unit = {},
+    // П-7-AB: тапы правой колонки веба (списки): чипы «Друзья»/«Подписчики»
+    // CountersRow и строка «Подписки» → FollowersSubscriptionsScreen /
+    // Screen.Friends. onFollowersClick/onSubscriptionsClick получают id
+    // владельца списка (p.id своего профиля).
+    onFriendsClick: () -> Unit = {},
+    onFollowersClick: (Long) -> Unit = {},
+    onSubscriptionsClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -241,6 +251,15 @@ fun ProfileScreen(
     // friend_status из friends.add (1 = добавлен, 2 = заявка отправлена).
     val suggestionSent = remember { mutableStateMapOf<Long, Int>() }
     val suggestionInFlight = remember { mutableStateMapOf<Long, Boolean>() }
+    // П-7-AB: счётчик «Подписок» (users.getSubscriptions → followSubscriptionsTotal,
+    // параллельный добор как подарки). Не распознан/ошибка → строка «Подписки»
+    // без числа (навигационная ссылка, счётчик не имитируется).
+    var subscriptionsCount by remember { mutableStateOf<Int?>(null) }
+    // П-7-AB: «Пожаловаться» на запись (wall.markAsSpam) — VK-семантика:
+    // доступна на ЧУЖИХ записях (ownerId != id текущего пользователя — здесь
+    // p.id своего профиля; решается в items() по посту: showReport).
+    val reportingPost = remember { mutableStateOf<Post?>(null) }
+    var reportInFlight by remember { mutableStateOf(false) }
     // Диалог правки статуса (status.set).
     var showStatusDialog by remember { mutableStateOf(false) }
     var statusSaving by remember { mutableStateOf(false) }
@@ -278,6 +297,18 @@ fun ProfileScreen(
                             friendSuggestions = app.apiClient.friendsGetRecommendations(count = 10)
                         } catch (e: Exception) {
                             AppLog.e("ProfileScreen", "Friend suggestions load failed", e)
+                        }
+                    }
+                    // П-7-AB: счётчик «Подписок» правой колонки (users.getSubscriptions
+                    // count=1 → total из response). Параллельный добор (паттерн
+                    // подарков); не распознан → строка «Подписки» без числа.
+                    scope.launch {
+                        try {
+                            subscriptionsCount = followSubscriptionsTotal(
+                                app.apiClient.usersGetSubscriptions(userId = prof.id, count = 1),
+                            )
+                        } catch (e: Exception) {
+                            AppLog.e("ProfileScreen", "Subscriptions count load failed", e)
                         }
                     }
                     val wall = app.apiClient.wallGet(ownerId = prof.id, count = 20)
@@ -628,6 +659,30 @@ fun ProfileScreen(
         }
     }
 
+    // П-7-AB: жалоба на запись (wall.markAsSpam) после подтверждения в
+    // AlertDialog. Успех → тост «Жалоба отправлена»; ошибка → тост lastApiError.
+    // Во время полёта кнопки диалога disabled, повторный вызов игнорируется.
+    fun reportWallPostConfirmed(target: Post) {
+        if (reportInFlight) return
+        reportInFlight = true
+        scope.launch {
+            val ok = try {
+                app.apiClient.wallMarkAsSpam(ownerId = target.ownerId, postId = target.id)
+            } catch (e: Exception) {
+                AppLog.e("ProfileScreen", "wallMarkAsSpam failed", e)
+                false
+            }
+            reportInFlight = false
+            reportingPost.value = null
+            Toast.makeText(
+                context,
+                if (ok) "Жалоба отправлена"
+                else (app.apiClient.lastApiError ?: "Не удалось отправить жалобу"),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
     // ══ П-6b (#PROFILE-GAP-6b): «Возможно, вы знакомы» — добавление в друзья ══
     // friends.add(user_id): Int → friend_status (1 = стали друзьями, 2 = заявка
     // отправлена, -1/ошибка). Кнопка после успеха становится disabled:
@@ -747,7 +802,25 @@ fun ProfileScreen(
                 }
             }
         }
-        item { CountersRow(profile = p) }
+        item {
+            CountersRow(
+                profile = p,
+                // П-7-AB: чипы кликабельны — «Друзья» → глобальный Screen.Friends
+                // (маршрут без userId; на своём профиле корректно), «Подписчики» →
+                // список подписчиков p.id (FollowersSubscriptionsScreen).
+                onFriendsClick = onFriendsClick,
+                onFollowersClick = { onFollowersClick(p.id) },
+            )
+        }
+        // П-7-AB: строка «Подписки» — доступ к экрану подписок БЕЗ чипа в
+        // CountersRow (поля subscriptions в модели Counters нет, модель править
+        // запрещено — см. KDoc SubscriptionsEntryRow).
+        item {
+            SubscriptionsEntryRow(
+                count = subscriptionsCount,
+                onClick = { onSubscriptionsClick(p.id) },
+            )
+        }
         // П-1 (#PROFILE-SNAP): вкладки контента «Стена / Музыка / Видео / Фото» —
         // шапка и счётчики сохраняются, меняется только контент ниже.
         item {
@@ -849,6 +922,11 @@ fun ProfileScreen(
                         editError = null
                         editingPost.value = it
                     },
+                    // П-7-AB: «Пожаловаться» — только на ЧУЖИХ записях (ownerId !=
+                    // мой id; на своей стене owner_id всегда p.id → пункт не
+                    // показывается, как в VK). Управление — через showReport.
+                    showReport = post.ownerId != p.id,
+                    onReportSpam = { reportingPost.value = it },
                 )
                 Box(
                     modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp)
@@ -1104,6 +1182,32 @@ fun ProfileScreen(
         )
     }
 
+    // ══ П-7-AB: подтверждение «Пожаловаться» (wall.markAsSpam) ══
+    val reportTarget = reportingPost.value
+    if (reportTarget != null) {
+        AlertDialog(
+            onDismissRequest = { if (!reportInFlight) reportingPost.value = null },
+            title = { Text("Пожаловаться на запись?") },
+            text = { Text("Запись будет отправлена на проверку администрации VK.") },
+            confirmButton = {
+                TextButton(
+                    onClick = { reportWallPostConfirmed(reportTarget) },
+                    enabled = !reportInFlight,
+                ) {
+                    Text(
+                        if (reportInFlight) "Отправка…" else "Пожаловаться",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { reportingPost.value = null }, enabled = !reportInFlight) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
     // ══ П-6a (#PROFILE-GAP-6a): правка текста записи (wall.edit) ══
     val editTarget = editingPost.value
     if (editTarget != null) {
@@ -1270,7 +1374,16 @@ fun ProfileHeader(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CountersRow(profile: UserProfile) {
+fun CountersRow(
+    profile: UserProfile,
+    // П-7-AB: тапы по чипам. Nullable с дефолтом null — существующие вызовы
+    // совместимы (UserProfileScreen зовёт без параметров); чип кликабелен
+    // ТОЛЬКО при переданном колбэке (нет мёртвой нажимаемости). На чужом
+    // профиле «Друзья» не передаётся: глобальный Screen.Friends показывает
+    // СВОИХ друзей — честное отклонение (см. KDoc UserProfileScreen).
+    onFriendsClick: (() -> Unit)? = null,
+    onFollowersClick: (() -> Unit)? = null,
+) {
     val counters = profile.counters
     val items = mutableListOf<Pair<String, Int>>()
     // Основные счётчики — из counters или верхнеуровневых полей.
@@ -1289,8 +1402,18 @@ fun CountersRow(profile: UserProfile) {
         maxItemsInEachRow = 3,
     ) {
         items.forEach { (label, count) ->
+            // П-7-AB: кликабельность чипа решается переданным колбэком. Чип
+            // «Подписки» в ряд НЕ добавляется — поля subscriptions в модели
+            // UserProfile.Counters нет (правки core-моделей запрещены); доступ
+            // к экрану подписок даёт отдельная строка (SubscriptionsEntryRow).
+            val chipClick: (() -> Unit)? = when (label) {
+                "Друзья" -> onFriendsClick
+                "Подписчики" -> onFollowersClick
+                else -> null
+            }
             Card(
-                modifier = Modifier.weight(1f).padding(2.dp),
+                modifier = Modifier.weight(1f).padding(2.dp)
+                    .clickable(enabled = chipClick != null) { chipClick?.invoke() },
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 elevation = CardDefaults.cardElevation(0.dp),
             ) {
@@ -1339,6 +1462,17 @@ fun CountersRow(profile: UserProfile) {
  *  → для постов с ними пункт «Редактировать» НЕ показывается (иначе молчаливая
  *  потеря данных). Для текстовых записей покрытие достаточное: message +
  *  friends_only, остальное у такого поста отсутствует.
+ *
+ *  П-7-AB: «ПОЖАЛОВАТЬСЯ» ([showReport]/[onReportSpam]) — wall.markAsSpam,
+ *  VK-семантика: доступен на ЧУЖИХ записях (ownerId != id текущего
+ *  пользователя). Решение о показе — за вызывающим экраном: «свой id» карточка
+ *  сама не вычисляет (WallPostCard переиспользуется на своём и чужом профиле) —
+ *  ProfileScreen передаёт showReport = post.ownerId != p.id, UserProfileScreen —
+ *  showReport = !isSelf (isSelf по exchangeAuthRepository.userId()). Если
+ *  manage-пунктов нет (showActions=false, чужая стена), но showReport=true —
+ *  меню откроется с ОДНИМ пунктом «Пожаловаться» (manage-пункты гейтерятся
+ *  showActions — поведение П-6а на своём профиле не изменилось).
+ *  Подтверждение (AlertDialog) и сам вызов — на уровне экрана.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1366,6 +1500,11 @@ fun WallPostCard(
     onPinToggle: (Post) -> Unit = {},
     onDeleteRequest: (Post) -> Unit = {},
     onEditRequest: (Post) -> Unit = {},
+    // П-7-AB: «Пожаловаться» (wall.markAsSpam) — показ решает вызывающий экран
+    // (VK-семантика: ЧУЖАЯ запись; см. KDoc выше). С дефолтом false: прежние
+    // вызовы (без параметра) меню не расширяют.
+    showReport: Boolean = false,
+    onReportSpam: (Post) -> Unit = {},
 ) {
     val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
     // Fix #70: ранее video-вложения вообще не отображались на стене профиля.
@@ -1385,8 +1524,10 @@ fun WallPostCard(
     // серверные can_edit/can_delete (поля есть в модели Post/parsePostMini;
     // на своём профиле wallOwnerId == id текущего пользователя — покрывает и
     // фоллбэк «owner == userId текущего пользователя»).
+    // П-7-AB: меню открывается и при showReport (чужая запись без manage-прав
+    // — пункты manage гейтерятся showActions ниже, останется один пункт).
     val canManage = post.ownerId == wallOwnerId || post.canEditBool || post.canDeleteBool
-    val menuVisible = showActions && canManage
+    val menuVisible = (showActions && canManage) || showReport
     // П-6a: «Редактировать» — только текстовые записи (честное ограничение
     // wall.edit, см. KDoc выше): вложения/репост/копирайт/подпись — не редактируем.
     val editCovered = post.attachments.isNullOrEmpty() &&
@@ -1462,7 +1603,9 @@ fun WallPostCard(
                             onDismissRequest = { showMenu = false },
                         ) {
                             // Закрепить/Открепить (wall.pin / wall.unpin) — label по post.is_pinned.
-                            if (post.canPinBool || post.ownerId == wallOwnerId) {
+                            // П-7-AB: гейт showActions — manage-пункт не показывается в
+                            // report-only меню (чужая стена, showActions=false).
+                            if (showActions && (post.canPinBool || post.ownerId == wallOwnerId)) {
                                 DropdownMenuItem(
                                     text = { Text(if (post.isPinnedBool) "Открепить" else "Закрепить") },
                                     leadingIcon = { Icon(Icons.Outlined.PushPin, contentDescription = null) },
@@ -1471,7 +1614,8 @@ fun WallPostCard(
                                 )
                             }
                             // Редактировать (wall.edit) — только текстовые записи (editCovered).
-                            if (editCovered && (post.canEditBool || post.ownerId == wallOwnerId)) {
+                            // П-7-AB: гейт showActions — как у «Закрепить» (report-only меню).
+                            if (showActions && editCovered && (post.canEditBool || post.ownerId == wallOwnerId)) {
                                 DropdownMenuItem(
                                     text = { Text("Редактировать") },
                                     leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
@@ -1480,18 +1624,36 @@ fun WallPostCard(
                                 )
                             }
                             // Удалить (wall.delete) — подтверждение на уровне экрана.
-                            DropdownMenuItem(
-                                text = { Text("Удалить", color = Color(0xFFE53935)) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.Delete,
-                                        contentDescription = null,
-                                        tint = Color(0xFFE53935),
-                                    )
-                                },
-                                onClick = { showMenu = false; onDeleteRequest(post) },
-                                enabled = !actionPending,
-                            )
+                            // П-7-AB: гейт showActions && canManage — ранее Delete был
+                            // безусловно виден внутри меню, но само меню открывалось только
+                            // при showActions && canManage; теперь меню может открыться и
+                            // по showReport — управляемые пункты прячем (поведение П-6а
+                            // при showActions=true не меняется).
+                            if (showActions && canManage) {
+                                DropdownMenuItem(
+                                    text = { Text("Удалить", color = Color(0xFFE53935)) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.Delete,
+                                            contentDescription = null,
+                                            tint = Color(0xFFE53935),
+                                        )
+                                    },
+                                    onClick = { showMenu = false; onDeleteRequest(post) },
+                                    enabled = !actionPending,
+                                )
+                            }
+                            // П-7-AB: «Пожаловаться» (wall.markAsSpam) — ЧУЖАЯ запись;
+                            // решение о показе — за вызывающим (showReport). Диалог
+                            // подтверждения и вызов — на уровне экрана (onReportSpam).
+                            if (showReport) {
+                                DropdownMenuItem(
+                                    text = { Text("Пожаловаться") },
+                                    leadingIcon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
+                                    onClick = { showMenu = false; onReportSpam(post) },
+                                    enabled = !actionPending,
+                                )
+                            }
                         }
                     }
                 }

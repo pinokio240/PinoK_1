@@ -24,8 +24,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Call
+// П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи чужой стены.
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -100,6 +104,22 @@ import re.pinok.util.AppLog
  *    is_favorite), скрыть/вернуть в ленту (newsfeed.addBan/deleteBan —
  *    состояние локальное: is_hidden_from_feed модель не парсит);
  *  — секция «Подарки» над лентой (gifts.get, count=9).
+ *
+ *  П-7-AB (остаток правой колонки веба — профиль.этап-П5.решение.md §3):
+ *  — чип «Подписчики» в [CountersRow] кликабелен → список подписчиков
+ *    СОБЕСЕДНИКА (FollowersSubscriptionsScreen, mode=followers, userId=p.id);
+ *  — строка «Подписки» ([SubscriptionsEntryRow]) → подписки собеседника
+ *    (mode=subscriptions); счётчик — параллельный добор
+ *    users.getSubscriptions (как gifts); чипа «Подписки» в CountersRow нет —
+ *    поля subscriptions в модели UserProfile.Counters нет (модель править
+ *    запрещено), строка — как в своём профиле;
+ *  — ЧЕСТНОЕ ОТКЛОНЕНИЕ: чип «Друзья» на чужом профиле НЕ кликабелен —
+ *    существующий Screen.Friends глобальный (без userId) и показывает СВОИХ
+ *    друзей: переход вёл бы к подмене списка собеседника своим; экрана
+ *    «друзья пользователя X» в репо нет;
+ *  — «Пожаловаться» на записи чужой стены ([WallPostCard] showReport=!isSelf):
+ *    wall.markAsSpam с AlertDialog-подтверждением; manage-пункты П-6а по-прежнему
+ *    не активируются на чужой стене (showActions=false — меню только с жалобой).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -115,6 +135,11 @@ fun UserProfileScreen(
     // колбэк ТОЛЬКО если в реестре есть CallStarter (SovaNavHost.callClick);
     // null → кнопка НЕ рендерится (тот же контракт, что FriendsScreen/FeedScreen).
     onCallClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = null,
+    // П-7-AB: тапы правой колонки веба с userId собеседника: чип «Подписчики»
+    // → список подписчиков; строка «Подписки» → подписки. «Друзья» не проводим
+    // (глобальный Screen.Friends показывает СВОИХ друзей — отклонение в KDoc).
+    onFollowersClick: (Long) -> Unit = {},
+    onSubscriptionsClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -145,6 +170,13 @@ fun UserProfileScreen(
     var hiddenFromFeed by remember { mutableStateOf(false) }
     var subscribeInProgress by remember { mutableStateOf(false) }
     var gifts by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    // П-7-AB: счётчик «Подписок» собеседника (users.getSubscriptions →
+    // followSubscriptionsTotal, параллельный добор как gifts); не распознан →
+    // строка «Подписки» без числа (счётчик не имитируется).
+    var subscriptionsCount by remember { mutableStateOf<Int?>(null) }
+    // П-7-AB: «Пожаловаться» на запись чужой стены (wall.markAsSpam).
+    val reportingPost = remember { mutableStateOf<Post?>(null) }
+    var reportInFlight by remember { mutableStateOf(false) }
 
     // Свой профиль? Если да — не показываем «Добавить в друзья».
     val currentUserId = app.exchangeAuthRepository.userId()
@@ -196,6 +228,20 @@ fun UserProfileScreen(
             gifts = app.apiClient.giftsGet(userId, count = 9)
         } catch (e: Exception) {
             AppLog.w("UserProfileScreen", "giftsGet failed: ${e.message}")
+        }
+    }
+
+    // П-7-AB: счётчик «Подписок» собеседника (для строки «Подписки» —
+    // параллельный добор, как gifts). Для своего профиля не грузим — там
+    // свой счётчик считает ProfileScreen. Ошибка → строка без числа.
+    LaunchedEffect(userId, isSelf) {
+        if (isSelf) return@LaunchedEffect
+        try {
+            subscriptionsCount = followSubscriptionsTotal(
+                app.apiClient.usersGetSubscriptions(userId = userId, count = 1),
+            )
+        } catch (e: Exception) {
+            AppLog.w("UserProfileScreen", "subscriptions count failed: ${e.message}")
         }
     }
 
@@ -260,6 +306,30 @@ fun UserProfileScreen(
             .distinctUntilChanged()
             .filter { it }
             .collect { loadMoreWall() }
+    }
+
+    // П-7-AB: жалоба на запись чужой стены (wall.markAsSpam) после подтверждения
+    // в AlertDialog. Успех → тост «Жалоба отправлена»; ошибка → тост lastApiError.
+    // Во время полёта кнопки диалога disabled, повторный вызов игнорируется.
+    fun reportWallPostConfirmed(target: Post) {
+        if (reportInFlight) return
+        reportInFlight = true
+        scope.launch {
+            val ok = try {
+                app.apiClient.wallMarkAsSpam(ownerId = target.ownerId, postId = target.id)
+            } catch (e: Exception) {
+                AppLog.e("UserProfileScreen", "wallMarkAsSpam failed", e)
+                false
+            }
+            reportInFlight = false
+            reportingPost.value = null
+            Toast.makeText(
+                context,
+                if (ok) "Жалоба отправлена"
+                else (app.apiClient.lastApiError ?: "Не удалось отправить жалобу"),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
     }
 
     if (loading) {
@@ -464,7 +534,24 @@ fun UserProfileScreen(
             state = listState,
         ) {
             item { ProfileHeader(profile = p) }
-            item { CountersRow(profile = p) }
+            item {
+                CountersRow(
+                    profile = p,
+                    // П-7-AB: тап по чипу «Подписчики» → подписчики СОБЕСЕДНИКА.
+                    // «Друзья» НЕ проводим: глобальный Screen.Friends показывает
+                    // СВОИХ друзей (отклонение — KDoc экрана выше).
+                    onFollowersClick = { onFollowersClick(p.id) },
+                )
+            }
+            // П-7-AB: строка «Подписки» собеседника (чипа в CountersRow нет —
+            // поля subscriptions в модели Counters нет; строка — как в своём
+            // профиле, см. KDoc SubscriptionsEntryRow).
+            item {
+                SubscriptionsEntryRow(
+                    count = subscriptionsCount,
+                    onClick = { onSubscriptionsClick(p.id) },
+                )
+            }
 
             // Действия: «Написать» + «Добавить в друзья» (кроме себя).
             if (!isSelf) {
@@ -651,6 +738,11 @@ fun UserProfileScreen(
                     onRepostClick = { repostPost.value = it },
                     // Шаг 5 (#32e): тап по комментарию → onCommentClick → PostDetailScreen.
                     onCommentClick = onCommentClick,
+                    // П-7-AB: «Пожаловаться» на записях ЧУЖОЙ стены (wall.markAsSpam).
+                    // showActions по-прежнему false (П-6а: manage-пункты только на
+                    // своём профиле) → меню открывается с одним «Пожаловаться».
+                    showReport = !isSelf,
+                    onReportSpam = { reportingPost.value = it },
                 )
             }
             // Fix #86: футер пагинации.
@@ -708,6 +800,32 @@ fun UserProfileScreen(
             ShareSheet(
                 post = sharing,
                 onDismiss = { repostPost.value = null },
+            )
+        }
+
+        // П-7-AB: подтверждение «Пожаловаться» на запись (wall.markAsSpam).
+        val reportTarget = reportingPost.value
+        if (reportTarget != null) {
+            AlertDialog(
+                onDismissRequest = { if (!reportInFlight) reportingPost.value = null },
+                title = { Text("Пожаловаться на запись?") },
+                text = { Text("Запись будет отправлена на проверку администрации VK.") },
+                confirmButton = {
+                    TextButton(
+                        onClick = { reportWallPostConfirmed(reportTarget) },
+                        enabled = !reportInFlight,
+                    ) {
+                        Text(
+                            if (reportInFlight) "Отправка…" else "Пожаловаться",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { reportingPost.value = null }, enabled = !reportInFlight) {
+                        Text("Отмена")
+                    }
+                },
             )
         }
     }

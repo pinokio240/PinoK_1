@@ -125,6 +125,8 @@ import re.pinok.ui.screens.offline.OfflineManagerScreen
 import re.pinok.ui.screens.offline.StoryOfflinePlayerScreen
 import re.pinok.ui.screens.photos.PhotosScreen
 import re.pinok.ui.screens.profile.EditProfileScreen
+// П-7-AB: экран «Подписчики»/«Подписки» (правая колонка веба — списки).
+import re.pinok.ui.screens.profile.FollowersSubscriptionsScreen
 import re.pinok.ui.screens.profile.ProfileScreen
 import re.pinok.ui.screens.profile.UserProfileScreen
 import re.pinok.ui.screens.search.SearchScreen
@@ -835,6 +837,9 @@ listOf(
         // глобальный ScreenTopBar рисовался бы поверх локального — та же проблема,
         // что Fix #272 / #NOTIF-SETTINGS-DUAL-BAR.
         Screen.ProfileEdit.route,
+        // П-7-AB: у FollowersSubscriptionsScreen («Подписчики»/«Подписки») свой
+        // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и EditProfileScreen.
+        Screen.FollowList.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -1549,6 +1554,17 @@ listOf(
                             PostHolder.last = post
                             nav.navigate(Screen.PostDetail.buildRoute(post.ownerId, post.id))
                         },
+                        // П-7-AB: тапы правой колонки веба (списки) — чипы «Друзья»/
+                        // «Подписчики» CountersRow и строка «Подписки». «Друзья» →
+                        // глобальный Screen.Friends (маршрут без userId — на СВОЁМ
+                        // профиле корректно); списки подписчиков/подписок — по p.id.
+                        onFriendsClick = { nav.navigate(Screen.Friends.route) },
+                        onFollowersClick = { userId ->
+                            nav.navigate(Screen.FollowList.buildRoute(userId, Screen.FollowList.MODE_FOLLOWERS))
+                        },
+                        onSubscriptionsClick = { userId ->
+                            nav.navigate(Screen.FollowList.buildRoute(userId, Screen.FollowList.MODE_SUBSCRIPTIONS))
+                        },
                     )
                 }
                 // П-3 (#PROFILE-SNAP): редактор профиля — свой Scaffold+TopAppBar
@@ -2145,6 +2161,47 @@ composable(Screen.CallsHistory.route) {
                         // через CallStarter (тот же callClick-паттерн, что
                         // FriendsScreen/FeedScreen; null → кнопка не рендерится).
                         onCallClick = callClick,
+                        // П-7-AB: тапы правой колонки веба с userId собеседника:
+                        // «Подписчики» → список подписчиков p.id; строка «Подписки» →
+                        // подписки p.id. «Друзья» не проводим: глобальный
+                        // Screen.Friends показывает СВОИх друзей (отклонение — KDoc
+                        // UserProfileScreen/CountersRow).
+                        onFollowersClick = { targetId ->
+                            nav.navigate(Screen.FollowList.buildRoute(targetId, Screen.FollowList.MODE_FOLLOWERS))
+                        },
+                        onSubscriptionsClick = { targetId ->
+                            nav.navigate(Screen.FollowList.buildRoute(targetId, Screen.FollowList.MODE_SUBSCRIPTIONS))
+                        },
+                    )
+                }
+                // П-7-AB: экран «Подписчики»/«Подписки» (остаток правой колонки
+                // веба — профиль.этап-П5.решение.md §3). mode — query-параметр.
+                composable(
+                    route = Screen.FollowList.route,
+                    arguments = listOf(
+                        navArgument(Screen.FollowList.ARG_USER_ID) { type = NavType.LongType },
+                        navArgument(Screen.FollowList.ARG_MODE) {
+                            type = NavType.StringType
+                            defaultValue = Screen.FollowList.MODE_FOLLOWERS
+                        },
+                    ),
+                ) { entry ->
+                    val listUserId = entry.arguments?.getLong(Screen.FollowList.ARG_USER_ID) ?: 0L
+                    val listMode = entry.arguments?.getString(Screen.FollowList.ARG_MODE)
+                        ?: Screen.FollowList.MODE_FOLLOWERS
+                    FollowersSubscriptionsScreen(
+                        userId = listUserId,
+                        mode = listMode,
+                        onBack = { nav.popBackStack() },
+                        // Тап по подписчику → чужой профиль (паттерн FriendsScreen).
+                        onUserClick = { targetId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(targetId))
+                        },
+                        // Тап по подписке-сообществу → CommunityScreen (маршрут
+                        // сообщества существует; Screen.Group в репо нет).
+                        onGroupClick = { groupId ->
+                            nav.navigate(Screen.Community.buildRoute(groupId))
+                        },
                     )
                 }
                 // Fix #71: экран детального просмотра поста.

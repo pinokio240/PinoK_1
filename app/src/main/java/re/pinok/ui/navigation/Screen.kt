@@ -162,6 +162,25 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     }
 
     /**
+     * П-7-AB: экран «Подписчики»/«Подписки» — остаток правой колонки веба
+     * (профиль.этап-П5.решение.md §3: «счётчики есть, списков нет»). Один экран
+     * с режимом: mode = followers|subscriptions (query-параметр, дефолт
+     * followers). userId — path-параметр, положительный id владельца списка.
+     * Открывается: чип «Подписчики» в CountersRow (свой и чужой профиль),
+     * строка «Подписки» (SubscriptionsEntryRow). Иконка null — суб-экран без
+     * пункта в навбаре (как UserProfile/PostDetail); маршрут в hasOwnTopBar
+     * (SovaNavHost): собственный Scaffold+TopAppBar.
+     */
+    object FollowList : Screen("follow_list/{userId}?mode={mode}", "Подписчики", null) {
+        const val ARG_USER_ID = "userId"
+        const val ARG_MODE = "mode"
+        const val MODE_FOLLOWERS = "followers"
+        const val MODE_SUBSCRIPTIONS = "subscriptions"
+        fun buildRoute(userId: Long, mode: String = MODE_FOLLOWERS): String =
+            "follow_list/$userId?mode=$mode"
+    }
+
+    /**
      * Fix #71: Экран детального просмотра поста.
      * Принимает ownerId/postId как path-параметры. Сам объект Post передаётся
      * через in-memory holder [re.pinok.ui.navigation.PostHolder].
