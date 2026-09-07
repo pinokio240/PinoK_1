@@ -141,6 +141,23 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     }
 
     /**
+     * #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — постраничный
+     * список членов группы через существующий groupsGetMembers (VKA:4106,
+     * VKA заморожен — профили приходят сразу, обогащение не требуется).
+     * Идея-референс OpenVK GroupMembersActivity (AGPL — только семантика
+     * раздела, не код). Принимает groupId как path-параметр (положительный
+     * id группы). Вход: тап по счётчику подписчиков в шапке CommunityScreen.
+     * Иконка Icons.Outlined.Groups — семантическая (суб-экран без пункта в
+     * навбаре, паттерн объектов Blacklist/FeedHidden); маршрут в hasOwnTopBar
+     * (SovaNavHost): собственный Scaffold+TopAppBar. НЕ добавлен в
+     * bottombar/drawer/mainRoutes.
+     */
+    object GroupMembers : Screen("group_members/{groupId}", "Участники", Icons.Outlined.Groups) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "group_members/$groupId"
+    }
+
+    /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query
      * (для TopAppBar). Загружает board.getComments с пагинацией.

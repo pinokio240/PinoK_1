@@ -24,7 +24,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 
 import androidx.compose.material3.Button
@@ -112,8 +111,11 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
     // (VK-дефолт «Отображать в ленте уведомлений» = вкл), честно указано в описании секции.
     var groupNotifyState by remember { mutableStateOf<Map<Long, Boolean>>(emptyMap()) }
     var groupBusy by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    // #SETTINGS-FIX (P2-6, аудит настроек ⚠️4): начальное состояние не читается — геттера
+    // account.getObsceneFilter в VK API/бандлах НЕТ (профиль.снапшоты.инвентарь.md:341 —
+    // оба MISS). Фактическое состояние сервера до первого переключения неизвестно;
+    // показывается честная подпись (ObsceneFilterRow). Запись работает (VKA:14867).
     var obsceneFilter by remember { mutableStateOf(false) }
-    var showOverflow by remember { mutableStateOf(false) }
 
     suspend fun loadAll() {
         loading = true
@@ -147,27 +149,12 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
                 },
-                actions = {
-                    IconButton(onClick = { showOverflow = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Ещё")
-                    }
-                    DropdownMenu(
-                        expanded = showOverflow,
-                        onDismissRequest = { showOverflow = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Сбросить") },
-                            onClick = {
-                                showOverflow = false
-                                Toast.makeText(
-                                    context,
-                                    "Сброс настроек не поддерживается VK API",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            },
-                        )
-                    }
-                },
+                // #SETTINGS-FIX (P3-7, аудит настроек): псевдо-пункт меню «Сбросить» удалён —
+                // он показывал честный тост «не поддерживается VK API», т.е. был пустой
+                // кнопкой (лучше нет пункта, чем мёртвый). Все данные этого экрана —
+                // серверные (BFF/settingsGeneral, silent mode, группы, obscene-фильтр):
+                // локальных push-ключей здесь нет, честная семантика «сброса» отсутствует.
+                actions = {},
             )
         },
     ) { padding ->
@@ -559,13 +546,25 @@ private fun ParamRow(
             }
         }
         "select", "radio" -> {
+            // #SETTINGS-FIX (P3-8, аудит настроек ⚠️5): select/radio БЕЗ options —
+            // рендер значения БЕЗ шеврона/кликабельности/dropdown (пустой dropdown
+            // выглядел как баг). legacy-исключения «…кроме N друзей» в BFF не приходят
+            // (al_settings.php, no-stub §5.6) — честный просмотр значения.
+            val canEdit = param.options.isNotEmpty()
             Box {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .defaultMinSize(minHeight = 44.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { dropdownExpanded = true },
+                        .then(
+                            if (canEdit) {
+                                Modifier.clickable { dropdownExpanded = true }
+                            } else {
+                                Modifier // read-only: options нет — dropdown не открываем
+                            },
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -588,20 +587,24 @@ private fun ParamRow(
                             modifier = Modifier.padding(top = 4.dp),
                         )
                     }
-                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Выбрать")
+                    if (canEdit) {
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Выбрать")
+                    }
                 }
-                DropdownMenu(
-                    expanded = dropdownExpanded,
-                    onDismissRequest = { dropdownExpanded = false },
-                ) {
-                    param.options.forEach { opt ->
-                        DropdownMenuItem(
-                            text = { Text(opt.label) },
-                            onClick = {
-                                dropdownExpanded = false
-                                onSelect(param, opt.value)
-                            },
-                        )
+                if (canEdit) {
+                    DropdownMenu(
+                        expanded = dropdownExpanded,
+                        onDismissRequest = { dropdownExpanded = false },
+                    ) {
+                        param.options.forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.label) },
+                                onClick = {
+                                    dropdownExpanded = false
+                                    onSelect(param, opt.value)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -745,6 +748,17 @@ private fun ObsceneFilterRow(checked: Boolean, onToggle: (Boolean) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(top = 2.dp),
+            )
+            // #SETTINGS-FIX (P2-6, аудит настроек ⚠️4): ЧЕСТНОЕ ОТОБРАЖЕНИЕ СТАТУСА.
+            // Геттера account.getObsceneFilter в VK API/бандлах нет — до первого
+            // переключения положение тумблера НЕ отражает сервер (после переключения —
+            // оптимистично корректно, откат при ошибке).
+            Text(
+                "Состояние сервера не читается (геттера в VK API нет): точное положение " +
+                    "тумблера видно после первого переключения",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
         Switch(checked = checked, onCheckedChange = onToggle)

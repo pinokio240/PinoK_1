@@ -1571,6 +1571,62 @@ fun CallScreen(
         }
     }
 
+    // ══ #SETTINGS-FIX (P2-4, аудит настроек ❌3/❌4, Task 3-b) — дефолты микрофона/камеры ══
+    // Сверка ключей SovaPrefs: callsMicDefault: Flow<String> («type:address», ""=авто),
+    // callsCameraDefault: Flow<String> («front»|«back») — проводка через deps.prefs
+    // (паттерн callsRouteDefault/callsNoiseCancelDefault выше), вне-зонных правок нет.
+
+    // Микрофон по умолчанию (calls_mic_default, З2). Применение: маршрут связи —
+    // AudioManager.setCommunicationDevice(AudioDeviceInfo) (API 31+): в
+    // MODE_IN_COMMUNICATION (движок устанавливает его в setCommunicationMode())
+    // системный маршрут связи гонит И ввод, И вывод на выбранное устройство —
+    // реальное применение без правки WebRtcEngine. Точечный выбор входа
+    // (AudioRecord.setPreferredDevice на AudioRecord внутри JavaAudioDeviceModule)
+    // требует правки WebRtcEngine/WebRtcEngine.kt — вне зоны волны (честно, KDoc).
+    // Значение «type:address» резолвится по AudioManager.getDevices(INPUTS); если
+    // устройство не найдено / API < 31 — молча системный выбор + лог.
+    LaunchedEffect(Unit) {
+        val saved = runCatching { deps.prefs.callsMicDefault.first() }.getOrDefault("")
+        if (saved.isBlank()) return@LaunchedEffect
+        val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+        if (am == null) {
+            AppLog.w("CallScreen", "#SETTINGS-FIX: AudioManager недоступен — mic default '$saved' не применён")
+            return@LaunchedEffect
+        }
+        val parts = saved.split(':', limit = 2)
+        val savedType = parts.getOrNull(0)?.toIntOrNull()
+        val savedAddress = parts.getOrNull(1).orEmpty()
+        if (savedType == null) {
+            AppLog.w("CallScreen", "#SETTINGS-FIX: mic default '$saved' не парсится — выбор системы")
+            return@LaunchedEffect
+        }
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
+            AppLog.w("CallScreen", "#SETTINGS-FIX: mic default '$saved' требует API 31 (setCommunicationDevice) — работает системный выбор")
+            return@LaunchedEffect
+        }
+        // Приоритет: точное совпадение type+address среди доступных comm-устройств,
+        // затем type-only (address меняется между устройств BT).
+        val commDevices = runCatching { am.getAvailableCommunicationDevices() }.getOrDefault(emptyList())
+        val target = commDevices.firstOrNull { it.type == savedType && (it.address ?: "") == savedAddress }
+            ?: commDevices.firstOrNull { it.type == savedType }
+        if (target == null) {
+            AppLog.w("CallScreen", "#SETTINGS-FIX: mic default '$saved' не найден среди comm-устройств (${commDevices.size}) — выбор системы")
+            return@LaunchedEffect
+        }
+        val ok = runCatching { am.setCommunicationDevice(target) }.getOrDefault(false)
+        AppLog.i("CallScreen", "#SETTINGS-FIX: mic default применён (type=$savedType) ok=$ok (setCommunicationDevice)")
+    }
+
+    // Камера по умолчанию (calls_camera_default, З2) — ЧЕСТНОЕ ОТКЛОНЕНИЕ (как 'bt' выше):
+    // WebRtcEngine не имеет видеозахвата (только dummy-видео, startDummyVideoIfNeeded) —
+    // lensFacing применить некуда. Выбор сохранён в prefs и будет применён с появлением
+    // камеры в движке (правка WebRtcEngine — вне зоны волны). no-stub: фейк-переключатель
+    // не рисуем, только лог.
+    LaunchedEffect(Unit) {
+        val cam = runCatching { deps.prefs.callsCameraDefault.first() }.getOrDefault("front")
+        AppLog.w("CallScreen", "#SETTINGS-FIX: calls_camera_default=$cam — применения нет (WebRtcEngine без камеры), выбор сохранён")
+    }
+
     // Ж4: шумодав по умолчанию (calls_noise_cancel_default, З2) → update-media-modifiers
     // ОДНОКРАТНО при входе в ACTIVE при готовом WS. Маппинг Ж0 §9.2 (9644@18175):
     // NEURAL/AUTO={denoise:true,denoiseAnn:true}, SIMPLE={denoise:true,denoiseAnn:false},

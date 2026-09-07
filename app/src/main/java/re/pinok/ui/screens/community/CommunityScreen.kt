@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -107,6 +108,9 @@ fun CommunityScreen(
     onUserClick: (Long) -> Unit = {},
     // Шаг 4 (#32d): тап по теме обсуждения → BoardTopicScreen.
     onTopicClick: (groupId: Long, topicId: Long, title: String) -> Unit = { _, _, _ -> },
+    // #OPVK-EXTRACT (Task 3-c): тап по счётчику подписчиков в шапке →
+    // GroupMembersScreen (список участников, groups.getMembers).
+    onMembersClick: (groupId: Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -530,14 +534,31 @@ fun CommunityScreen(
                             )
                         }
                     }
-                    // Subscriber count
+                    // Subscriber count — #OPVK-EXTRACT (Task 3-c): кликабельная
+                    // строка-вход «Участники»: тап по счётчику подписчиков
+                    // (members_count из GroupInfo) открывает список участников
+                    // (GroupMembersScreen, groups.getMembers). Шеврон — аффорданс;
+                    // тач-таргет ≥ 44dp (defaultMinSize).
                     if (g.membersCount > 0) {
                         val countStr = formatMemberCount(g.membersCount)
-                        Text(
-                            text = "$countStr подписчиков",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row(
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 44.dp)
+                                .clickable { onMembersClick(groupId) },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "$countStr подписчиков",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Участники",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

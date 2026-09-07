@@ -170,6 +170,7 @@ import java.text.DecimalFormat
 import re.pinok.realtime.LongPollEvent
 import re.pinok.ui.components.ForwardDialog
 import re.pinok.ui.components.AttachmentPickerSheet
+import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.util.AppLog
 import re.pinok.util.toChatDate
@@ -1187,8 +1188,10 @@ fun ChatDetailScreen(
     var showTriggerMenu by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
     // P5.3: показ расширенного пикера вложений (Музыка/Видео/Подарки).
+    // #ATTACH-UNIFY: таб заменён с Int на enum (в пикере добавились
+    // табы «Фото»/«Документы» — Int-индексы стали хрупкими).
     var showAttachmentPicker by remember { mutableStateOf(false) }
-    var attachmentPickerTab by remember { mutableIntStateOf(0) } // 0=Музыка, 1=Видео, 2=Подарки
+    var attachmentPickerTab by remember { mutableStateOf(AttachmentPickerTab.Music) }
 
     // P5.3: камера — снимок фото. После снимка URI добавляется в pendingPhotos
     // (превью над полем ввода), отправка идёт через doSend() → uploadPhotoForMessage
@@ -2735,19 +2738,31 @@ fun ChatDetailScreen(
                                     }
                                 },
                                 onVideo = {
-                                    attachmentPickerTab = 1
+                                    attachmentPickerTab = AttachmentPickerTab.Video
                                     showAttachmentPicker = true
                                 },
                                 onAudio = {
-                                    attachmentPickerTab = 0
+                                    attachmentPickerTab = AttachmentPickerTab.Music
                                     showAttachmentPicker = true
                                 },
                                 onGift = {
-                                    attachmentPickerTab = 2
+                                    attachmentPickerTab = AttachmentPickerTab.Gifts
                                     showAttachmentPicker = true
                                 },
                                 onFile = {
                                     multiFilePickerLauncher.launch(arrayOf("*/*"))
+                                },
+                                // #ATTACH-UNIFY (P1.5): фото/файл «Из VK» — табы пикера;
+                                // выбор уходит сообщением через sendWithAttachment.
+                                showPhotoFromVk = true,
+                                onPhotoFromVk = {
+                                    attachmentPickerTab = AttachmentPickerTab.Photos
+                                    showAttachmentPicker = true
+                                },
+                                showFileFromVk = true,
+                                onFileFromVk = {
+                                    attachmentPickerTab = AttachmentPickerTab.Docs
+                                    showAttachmentPicker = true
                                 },
                                 // Подарки только в личных диалогах.
                                 showGift = peerId > 0 && peerId < 2_000_000_000L,
@@ -3341,10 +3356,45 @@ fun ChatDetailScreen(
     }
 
     // P5.3: AttachmentPickerSheet — выбор музыки/видео/подарков из библиотеки VK.
+    // #ATTACH-UNIFY (P1.5): + табы «Фото»/«Документы» — существующий объект VK
+    // уходит сообщением через sendWithAttachment(peerId, attachment) (messages.send
+    // с attachment-строкой из библиотеки, upload не нужен).
     if (showAttachmentPicker) {
         AttachmentPickerSheet(
             onDismiss = { showAttachmentPicker = false },
             initialTab = attachmentPickerTab,
+            showPhotoTab = true,
+            showDocsTab = true,
+            onPickPhotoAttachment = { att ->
+                scope.launch {
+                    uploading = true
+                    try {
+                        val mid = app.apiClient.sendWithAttachment(peerId, att)
+                        if (mid > 0) reloadMessages() else {
+                            AppLog.w("ChatDetailScreen", "sendWithAttachment(photo) returned $mid")
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("ChatDetailScreen", "send photo-from-vk error", e)
+                    } finally {
+                        uploading = false
+                    }
+                }
+            },
+            onPickDocAttachment = { att, _ ->
+                scope.launch {
+                    uploading = true
+                    try {
+                        val mid = app.apiClient.sendWithAttachment(peerId, att)
+                        if (mid > 0) reloadMessages() else {
+                            AppLog.w("ChatDetailScreen", "sendWithAttachment(doc) returned $mid")
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("ChatDetailScreen", "send doc-from-vk error", e)
+                    } finally {
+                        uploading = false
+                    }
+                }
+            },
             onPickAudio = { track ->
                 scope.launch {
                     uploading = true

@@ -1,5 +1,7 @@
 package re.pinok.ui.screens.feed
 
+import android.Manifest
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -95,6 +97,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -115,6 +118,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
 import com.google.gson.JsonObject
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -133,12 +137,14 @@ import re.pinok.media.PlayerConnection
 import re.pinok.ui.navigation.PostHolder
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.AttachmentPickerSheet
+import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
+import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.navigation.FeedDataHolder
 import re.pinok.ui.navigation.FeedScrollHolder
 import re.pinok.ui.navigation.ScrollPosition
@@ -3113,6 +3119,35 @@ private fun formatDocSize(size: Long): String = when {
     else -> String.format("%.1f МБ", size / 1024.0 / 1024.0)
 }
 
+/**
+ * #ATTACH-UNIFY (P0.2): URI для снимка камеры через FileProvider (cache-path
+ * заявлен в manifest, authority «<pkg>.fileprovider» — паттерн 1:1 из
+ * ChatDetailScreen.createCameraImageUri). null — FileProvider не настроен.
+ */
+private fun createCameraImageUri(ctx: android.content.Context): Uri? {
+    return try {
+        val photoFile = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+        androidx.core.content.FileProvider.getUriForFile(
+            ctx,
+            "${ctx.packageName}.fileprovider",
+            photoFile,
+        )
+    } catch (e: Exception) {
+        AppLog.e("CommentsBottomSheet", "createCameraImageUri failed", e)
+        null
+    }
+}
+
+/**
+ * #ATTACH-UNIFY: Saver для Uri — rememberSaveable переживает process death
+ * во время съёмки (паттерн ChatDetailScreen Fix #126: камера может убить
+ * процесс, и без Saver снимок терялся).
+ */
+private val CameraUriSaver: Saver<Uri?, String> = Saver(
+    save = { it?.toString() ?: "" },
+    restore = { saved -> if (saved.isBlank()) null else Uri.parse(saved) },
+)
+
 @Composable
 private fun DocAttachmentCard(doc: Attachment.Doc, onOpen: () -> Unit = {}) {
     Row(
@@ -3173,15 +3208,16 @@ private fun CommentsBottomSheet(
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachmentString by remember { mutableStateOf<String?>(null) }
     var showAttachMenu by remember { mutableStateOf(false) }
-    // Расширенный пикер (Музыка/Видео) — общий с чатом и комментариями к посту.
+    // Расширенный пикер (Музыка/Видео/Фото/Документы) — общий с чатом и комментариями к посту.
     var showAttachmentPicker by remember { mutableStateOf(false) }
-    var attachmentPickerTab by remember { mutableStateOf(0) } // 0=Музыка, 1=Видео
+    var attachmentPickerTab by remember { mutableStateOf(AttachmentPickerTab.Music) }
 
     // Лаунчеры для вложений.
-    val photoLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
+    // #ATTACH-UNIFY (P0.1): фото комментария грузится через ФОТО-пайплайн
+    // (uploadPhotoForComment = photos.getWallUploadServer → upload → saveWallPhoto,
+    // attach "photo{owner}_{id}"), а НЕ через docs — раньше фото уходило как
+    // doc{} (расхождение с VK web и с PostDetailScreen, который делает верно).
+    fun uploadCommentPhoto(uri: Uri) {
         scope.launch {
             uploading = true
             try {
@@ -3189,12 +3225,12 @@ private fun CommentsBottomSheet(
                 val file = File(ctx.cacheDir, "comment_photo_${System.currentTimeMillis()}.jpg")
                 file.outputStream().use { out -> inputStream.copyTo(out) }
                 inputStream.close()
-                val attachment = app.apiClient.uploadDocForComment(file)
+                val attachment = app.apiClient.uploadPhotoForComment(file, "image/*")
                 if (attachment != null) {
                     attachmentString = attachment
                     attachedFileName = "Фото"
                 } else {
-                    AppLog.w("CommentsBottomSheet", "uploadDocForComment returned null")
+                    AppLog.w("CommentsBottomSheet", "uploadPhotoForComment returned null")
                 }
                 file.delete()
             } catch (e: Exception) {
@@ -3202,6 +3238,39 @@ private fun CommentsBottomSheet(
             } finally {
                 uploading = false
             }
+        }
+    }
+    val photoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        uploadCommentPhoto(uri)
+    }
+    // #ATTACH-UNIFY (P0.2): камера в комментариях ленты — TakePicture + FileProvider
+    // (паттерн 1:1 из ChatDetailScreen:1204, был dead-пункт onCamera={}). Снимок
+    // идёт по тому же пути, что фото из галереи → attach "photo{...}".
+    var cameraImageUri by rememberSaveable(stateSaver = CameraUriSaver) { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val uri = cameraImageUri
+        cameraImageUri = null
+        if (!ok || uri == null) return@rememberLauncherForActivityResult
+        uploadCommentPhoto(uri)
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            val uri = createCameraImageUri(ctx)
+            if (uri != null) {
+                cameraImageUri = uri
+                cameraLauncher.launch(uri)
+            } else {
+                AppLog.w("CommentsBottomSheet", "createCameraImageUri returned null")
+            }
+        } else {
+            AppLog.w("CommentsBottomSheet", "CAMERA permission denied")
         }
     }
     val fileLauncher = rememberLauncherForActivityResult(
@@ -3354,16 +3423,42 @@ private fun CommentsBottomSheet(
                         onPhoto = {
                             photoLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
+                        // #ATTACH-UNIFY (P0.2): камера честно прокинута (был dead-пункт).
+                        onCamera = {
+                            val permission = Manifest.permission.CAMERA
+                            if (ContextCompat.checkSelfPermission(ctx, permission) ==
+                                android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                val uri = createCameraImageUri(ctx)
+                                if (uri != null) {
+                                    cameraImageUri = uri
+                                    cameraLauncher.launch(uri)
+                                }
+                            } else {
+                                cameraPermissionLauncher.launch(permission)
+                            }
+                        },
+                        // #ATTACH-UNIFY (P1.5): фото/файл «Из VK» — табы пикера.
+                        showPhotoFromVk = true,
+                        onPhotoFromVk = {
+                            attachmentPickerTab = AttachmentPickerTab.Photos
+                            showAttachmentPicker = true
+                        },
                         onVideo = {
-                            attachmentPickerTab = 1
+                            attachmentPickerTab = AttachmentPickerTab.Video
                             showAttachmentPicker = true
                         },
                         onAudio = {
-                            attachmentPickerTab = 0
+                            attachmentPickerTab = AttachmentPickerTab.Music
                             showAttachmentPicker = true
                         },
                         onFile = {
                             fileLauncher.launch(arrayOf("*/*"))
+                        },
+                        showFileFromVk = true,
+                        onFileFromVk = {
+                            attachmentPickerTab = AttachmentPickerTab.Docs
+                            showAttachmentPicker = true
                         },
                         showGift = false,
                     )
@@ -3415,31 +3510,38 @@ private fun CommentsBottomSheet(
         }
     }
 
-    // Единый пикер «Музыка/Видео» из библиотеки VK — открывается при выборе
-    // соответствующего пункта в UnifiedAttachMenu. Видео/аудио прикрепляются
-    // к комментарию как "video{ownerId}_{id}" / "audio{ownerId}_{id}".
+    // Единый пикер библиотеки VK — открывается при выборе соответствующего
+    // пункта в UnifiedAttachMenu. Видео/аудио прикрепляются к комментарию как
+    // "video{ownerId}_{id}" / "audio{ownerId}_{id}" (сборка через buildVkAttachment).
+    // #ATTACH-UNIFY (P1.4): + табы «Фото»/«Документы» (attach без upload);
+    // таб «Подарки» скрыт — gifts.send в комментариях недоступен (был dead-таб).
     if (showAttachmentPicker) {
         AttachmentPickerSheet(
             onDismiss = { showAttachmentPicker = false },
             initialTab = attachmentPickerTab,
+            showGiftTab = false,
+            showPhotoTab = true,
+            showDocsTab = true,
             onPickAudio = { track ->
-                val att = if (track.accessKey != null) {
-                    "audio${track.ownerId}_${track.id}_${track.accessKey}"
-                } else {
-                    "audio${track.ownerId}_${track.id}"
-                }
+                val att = buildVkAttachment("audio", track.ownerId, track.id, track.accessKey)
                 attachmentString = att
                 attachedFileName = "Музыка: ${track.title}"
                 showAttachmentPicker = false
             },
             onPickVideo = { video ->
-                val att = if (video.accessKey != null) {
-                    "video${video.ownerId}_${video.id}_${video.accessKey}"
-                } else {
-                    "video${video.ownerId}_${video.id}"
-                }
+                val att = buildVkAttachment("video", video.ownerId, video.id, video.accessKey)
                 attachmentString = att
                 attachedFileName = "Видео: ${video.title.ifBlank { "видео" }}"
+                showAttachmentPicker = false
+            },
+            onPickPhotoAttachment = { att ->
+                attachmentString = att
+                attachedFileName = "Фото из VK"
+                showAttachmentPicker = false
+            },
+            onPickDocAttachment = { att, title ->
+                attachmentString = att
+                attachedFileName = "Документ: $title"
                 showAttachmentPicker = false
             },
         )

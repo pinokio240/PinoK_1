@@ -60,7 +60,11 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
-import re.pinok.api.VkMultiAccount
+// FIX-COMPILE #285: VkMultiAccount — вложенный data class внутри VKApiClient
+// (VKApiClient.kt:16231), top-level импорта re.pinok.api.VkMultiAccount не
+// существует → все 16 ошибок «Unresolved reference 'VkMultiAccount'».
+// Паттерн доступа — как у VKApiClient.CitySuggestion в EditProfileScreen:1030.
+import re.pinok.api.VKApiClient
 import re.pinok.util.AppLog
 import re.pinok.util.openUrlExternal
 
@@ -138,7 +142,7 @@ fun VkIdAccountScreen(
 
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
-    var accounts by remember { mutableStateOf<List<VkMultiAccount>>(emptyList()) }
+    var accounts by remember { mutableStateOf<List<VKApiClient.VkMultiAccount>>(emptyList()) }
 
     // Текущий пользователь ядра (UserProfileScreen-паттерн:
     // exchangeAuthRepository.userId()) — для метки, если VK не отдал
@@ -359,7 +363,7 @@ private fun SectionHeader(title: String) {
  * (ExchangeTokenStorage односессионный) — переключение не имитируется.
  */
 @Composable
-private fun MultiAccountRow(account: VkMultiAccount, isCurrent: Boolean) {
+private fun MultiAccountRow(account: VKApiClient.VkMultiAccount, isCurrent: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

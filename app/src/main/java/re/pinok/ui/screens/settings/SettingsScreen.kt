@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +32,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -78,6 +81,10 @@ import re.pinok.data.local.AudioQuality
 import re.pinok.data.model.DownloadState
 import re.pinok.data.model.DownloadStatus
 import re.pinok.data.model.Track
+// #SETTINGS-FIX (P2-5): BFF-модель настроек для EmailNotifyCard. Имя SettingsSection
+// уже занято контрактом re.pinok.contracts.SettingsSection (импорт выше) — алиас.
+import re.pinok.data.model.SettingsParam
+import re.pinok.data.model.SettingsSection as BffSettingsSection
 import re.pinok.ui.theme.SovaColors
 import re.pinok.util.AppLog
 import kotlinx.coroutines.CoroutineScope
@@ -88,6 +95,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DevicesOther
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Call
@@ -1249,7 +1257,8 @@ private fun CallsDefaultDevicesCards(
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    "Применяется при старте звонка (Этап Ж4). Пусто = выбор системой",
+                    "Применяется при старте звонка: маршрут связи (setCommunicationDevice, " +
+                        "Android 12+). Пусто = выбор системой",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1326,6 +1335,13 @@ private fun CallsDefaultDevicesCards(
                     "Камера по умолчанию",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "ВЫБОР СОХРАНЯЕТСЯ на будущее: движок звонков (WebRtcEngine) пока не " +
+                        "имеет видеозахвата — применить lensFacing некуда (честное " +
+                        "отклонение #SETTINGS-FIX)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(4.dp))
                 CallsRadioOptionRow(
@@ -2825,6 +2841,7 @@ private fun NetworkTab(
     app: SovaApp,
     scope: CoroutineScope,
 ) {
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2847,11 +2864,27 @@ private fun NetworkTab(
             ) { scope.launch { app.prefs.setNetUseWebApiGateway(it) } }
         }
 
-        // #SETTINGS-FIX: Proxy UI — настройки HTTP/SOCKS прокси (netProxyEnabled/Host/Port).
+        // #SETTINGS-FIX (P1-1, аудит настроек ❌1): секция «Прокси» теперь РЕАЛЬНО применяется —
+        // SovaApp.onCreate читает netProxyEnabled/Host/Port и ставит builder.proxy(HTTP)
+        // при построении OkHttpClient. Клиент immutable после build → переключение в runtime
+        // невозможно без пересборки всего сетевого стека (LongPoll/Queuev4/auth используют
+        // тот же клиент) — ЧЕСТНАЯ семантика «после перезапуска» (как у SSL pinning выше)
+        // + тост при переключении. Тип — HTTP (Proxy.Type.HTTP); SOCKS-режима в VKA-контуре нет.
         item { SectionHeader("Прокси") }
         item {
-            ToggleRow("Прокси-сервер", s.netProxyEnabled) {
-                scope.launch { app.prefs.setNetProxyEnabled(it) }
+            ToggleRow(
+                title = "Прокси-сервер (применяется после перезапуска)",
+                subtitle = "HTTP-прокси для всего трафика приложения (VK API, LongPoll, загрузки). " +
+                    "Переключение вступает в силу при следующем запуске.",
+                checked = s.netProxyEnabled,
+            ) { enabled ->
+                scope.launch { app.prefs.setNetProxyEnabled(enabled) }
+                android.widget.Toast.makeText(
+                    context,
+                    if (enabled) "Прокси включён — применится после перезапуска приложения"
+                    else "Прокси выключен — применится после перезапуска приложения",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
             }
         }
         if (s.netProxyEnabled) {
@@ -3051,10 +3084,13 @@ private fun SecurityTab(
         }
         item {
             // §49.5.1 #SAFETY-NET-ALERTS: quick toggle в security tab тоже.
+            // #SETTINGS-FIX (P3-10): подпись синхронизирована с дублем во вкладке
+            // «Уведомления» (:4810) — оба тумблера на pushSafetyNetAlerts.
             ToggleRow(
                 title = "Оповещения о входе",
-                subtitle = "Уведомлять о подозрительных входах (новое устройство, город, IP). " +
-                    "Проверка каждые ${s.safetyNetPollIntervalMin} мин.",
+                subtitle = "Уведомлять о подозрительных входах в аккаунт (новое устройство, " +
+                    "город, IP). Проверка каждые ${s.safetyNetPollIntervalMin} мин. " +
+                    "Канал: «Безопасность аккаунта» (высокий приоритет, звук).",
                 checked = s.pushSafetyNetAlerts,
                 onToggle = { v ->
                     scope.launch {
@@ -4534,9 +4570,16 @@ private fun NotificationsTab(
 
         item { SectionHeader("Сообщения") }
         item {
+            // #SETTINGS-FIX (P1-3, аудит настроек ⚠️1): раньше строка называлась
+            // «Звук уведомлений о сообщениях» и ВРАЛА: msgMute — фича-гейт
+            // «Заглушение чатов» (пункт mute/unmute в меню чата, ChatDetailScreen:702,
+            // ChatInfoScreen:161), звук push не трогает. Звук push — «Звук уведомления»
+            // (pushSoundEnabled) ниже по вкладке. Мёртвый второй ключ не создавали —
+            // честная формулировка существующего поведения (дубль MessagesTab).
             ToggleRow(
-                title = "Звук уведомлений о сообщениях",
-                subtitle = "Воспроизводить звук при получении новых сообщений",
+                title = "Заглушение чатов",
+                subtitle = "Пункт mute/unmute в меню чата. Дублирует тумблер вкладки «Сообщения»; " +
+                    "звуком push не управляет (звук — «Звук уведомления» ниже)",
                 checked = s.msgMute,
             ) { scope.launch { app.prefs.setMsgMute(it) } }
         }
@@ -4605,12 +4648,14 @@ private fun NotificationsTab(
         ) { k, v -> toggleNotify(k, v) }
 
         // §1-NOTIF-ARCHIVE: Email-уведомления — частота и категории из архива.
+        // #SETTINGS-FIX (P2-5, аудит настроек ❌2): раньше — локальный radio (emailNotifyFreq),
+        // сохранявшийся в никуда. Теперь — честный серверный контур:
+        // settingsGeneral.getNotifySettings(page="email") (VKA:14566, page-параметр сверен)
+        // + запись через settingsGeneral.toggleNotify/setNotifySettings (тот же BFF-контур,
+        // что и в NotificationSettingsScreen). Локальный pref emailNotifyFreq больше не читается.
         item { SectionHeader("Уведомления на почту") }
         item {
-            EmailNotifyCard(
-                emailFreq = s.emailNotifyFreq,
-                onFreqChange = { freq -> scope.launch { app.prefs.setEmailNotifyFreq(freq) } },
-            )
+            EmailNotifyCard(app = app)
         }
 
         // ────────────────────────────────────────────────────────────────────
@@ -5296,66 +5341,287 @@ private fun Modifier.androidx_clickable(onClick: () -> Unit): Modifier =
     this.then(Modifier.clickable(onClick = onClick))
 
 /**
- * §1-NOTIF-ARCHIVE: Карточка «Уведомления на почту».
- * Из архива m.vk.ru/settings?act=notify — секция «Уведомления по электронной почте»:
- *   - Частота: Всегда / Не чаще одного раза в день / Никогда
- *   - 18 категорий (checkboxes)
+ * §1-NOTIF-ARCHIVE: Карточка «Уведомления на почту» (серверная, BFF).
  *
- * ВК web использует для этого BFF settingsGeneral.setNotifySettings с email_* ключами
- * либо account.setPushSettings. Здесь — локальная настройка частоты (persisted in
- * SovaPrefs); категории пока показываются информационно, т.к. требуют отдельного
- * BFF-эндпоинта для email-настроек (TODO: исследовать settingsGeneral page="email").
+ * #SETTINGS-FIX (P2-5, аудит настроек ❌2): раньше карточка держала ЛОКАЛЬНЫЙ radio
+ * (emailNotifyFreq в SovaPrefs), который никто не читал («сохранение в никуда»).
+ * Теперь — честный серверный контур:
+ *  - чтение: settingsGeneral.getNotifySettings(page="email") — page-параметр VKA:14566
+ *    сверен (KDoc: «other known values: account, privacy, content» — email — допустимое
+ *    значение BFF-страницы; при отсутствии/непарсимости ответа VKA вернёт null — показываем
+ *    честное сообщение, без выдуманных данных, no-stub);
+ *  - запись: settingsGeneral.toggleNotify/setNotifySettings — тот же BFF-контур, что и
+ *    у 50 sn_*-тогглов вкладки (оптимистично, откат при ошибке + тост);
+ *  - параметры без опций/кнопки/предупреждения — read-only (см. EmailParamRow).
+ * Локальный pref emailNotifyFreq больше не читается UI (поле помечено @Deprecated
+ * в SovaPrefs — оставлено из-за конструктора Snapshot в FeedScreen).
  */
 @Composable
-private fun EmailNotifyCard(
-    emailFreq: Int,
-    onFreqChange: (Int) -> Unit,
-) {
+private fun EmailNotifyCard(app: SovaApp) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var sections by remember { mutableStateOf<List<BffSettingsSection>>(emptyList()) }
+    // Ключ перезагрузки для честной кнопки «Повторить» (инкремент перезапускает LaunchedEffect).
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(refreshKey) {
+        loading = true
+        error = null
+        val secs = try {
+            app.apiClient.settingsGeneralGetNotifySettings(page = "email")
+        } catch (e: Exception) {
+            AppLog.w("SettingsScreen", "email notify settings load failed: ${e.message}")
+            null
+        }
+        loading = false
+        if (secs == null) {
+            error = "Сервер не отдал настроек (BFF page=email недоступен или нет сети). " +
+                "Настройки email-уведомлений недоступны."
+        } else {
+            sections = secs
+        }
+    }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "Частота уведомлений",
+                "Уведомления по электронной почте",
                 style = MaterialTheme.typography.bodyLarge,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Как часто ВКонтакте присылает уведомления на почту",
+                "Серверные настройки: как часто ВКонтакте присылает уведомления на почту",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(12.dp))
-            val freqOptions = listOf(
-                0 to "Всегда",
-                1 to "Не чаще одного раза в день",
-                2 to "Никогда",
-            )
-            freqOptions.forEach { (value, label) ->
+            Spacer(Modifier.height(8.dp))
+            // #NULL-EXPLICIT: захват var-делегата error в локальный val — smart-cast
+            // делегированного свойства невозможен (прецедент NotificationSettingsScreen:177).
+            val loadError = error
+            when {
+                loading -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
+                loadError != null -> {
+                    Text(
+                        loadError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { refreshKey++ }) {
+                        Text("Повторить")
+                    }
+                }
+                sections.isEmpty() -> {
+                    Text(
+                        "Сервер не вернул ни одной секции для page=email — настроек email " +
+                            "у аккаунта нет (честный пустой ответ, nothing to render).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                else -> {
+                    sections.forEach { section ->
+                        val sTitle = section.title
+                        if (!sTitle.isNullOrBlank()) {
+                            Text(
+                                sTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                            )
+                        }
+                        section.params.forEach { param ->
+                            EmailParamRow(
+                                param = param,
+                                onToggle = { p, newValue ->
+                                    val prevSections = sections
+                                    sections = sections.map { sec ->
+                                        sec.copy(params = sec.params.map { pp ->
+                                            if (pp.key == p.key) pp.copy(isChecked = newValue) else pp
+                                        })
+                                    }
+                                    scope.launch {
+                                        val ok = app.apiClient.settingsGeneralToggleNotify(p.key, newValue)
+                                        if (!ok) {
+                                            sections = prevSections
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Не удалось изменить",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                },
+                                onSelect = { p, value ->
+                                    val prevSections = sections
+                                    sections = sections.map { sec ->
+                                        sec.copy(params = sec.params.map { pp ->
+                                            if (pp.key == p.key) pp.copy(value = value) else pp
+                                        })
+                                    }
+                                    scope.launch {
+                                        val ok = app.apiClient.settingsGeneralSetNotifySettings(p.key, value)
+                                        if (!ok) {
+                                            sections = prevSections
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Не удалось изменить",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * #SETTINGS-FIX (P2-5): минимальный честный рендер одного BFF-параметра email-страницы.
+ * Зеркало приватного ParamRow из NotificationSettingsScreen (выносить в общий файл —
+ * вне зоны волны; дублирование сознательное и задокументировано).
+ *  - toggle/custom_toggle → Switch + settingsGeneralToggleNotify (запись работает);
+ *  - select/radio С ОПЦИЯМИ → dropdown + settingsGeneralSetNotifySettings;
+ *  - select/radio БЕЗ опций, button, warning, неизвестные типы → read-only значение
+ *    (no-stub: пустой dropdown не открываем, действия не имитируем — см. аудит ⚠️5/§5.5);
+ *  - тач-таргеты ≥ 44dp (defaultMinSize).
+ */
+@Composable
+private fun EmailParamRow(
+    param: SettingsParam,
+    onToggle: (SettingsParam, Boolean) -> Unit,
+    onSelect: (SettingsParam, String) -> Unit,
+) {
+    var dropdownExpanded by remember { mutableStateOf(false) }
+    when (param.type) {
+        "toggle", "custom_toggle" -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 44.dp)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    param.title?.let { Text(it) }
+                    param.description?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                }
+                Switch(
+                    checked = param.isChecked == true,
+                    onCheckedChange = { onToggle(param, it) },
+                )
+            }
+        }
+        "select", "radio" -> {
+            val canEdit = param.options.isNotEmpty()
+            Box {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .androidx_clickable { onFreqChange(value) }
-                        .padding(vertical = 10.dp),
+                        .defaultMinSize(minHeight = 44.dp)
+                        .padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .then(
+                            if (canEdit) {
+                                Modifier.clickable { dropdownExpanded = true }
+                            } else {
+                                Modifier // честный read-only: options нет — клик/dropdown не открываем
+                            },
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    androidx.compose.material3.RadioButton(
-                        selected = emailFreq == value,
-                        onClick = { onFreqChange(value) },
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.weight(1f)) {
+                        param.title?.let { Text(it) }
+                        param.description?.let {
+                            Text(
+                                it,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                        val selectedLabel = param.options.firstOrNull { it.value == param.value }?.label
+                            ?: param.value ?: "—"
+                        Text(
+                            selectedLabel,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    if (canEdit) {
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Выбрать")
+                    }
+                }
+                if (canEdit) {
+                    DropdownMenu(
+                        expanded = dropdownExpanded,
+                        onDismissRequest = { dropdownExpanded = false },
+                    ) {
+                        param.options.forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.label) },
+                                onClick = {
+                                    dropdownExpanded = false
+                                    onSelect(param, opt.value)
+                                },
+                            )
+                        }
+                    }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Категории: события, заявки в друзья, приглашения в сообщества, " +
-                    "грядущие мероприятия, дни рождения, отметки на фото, интересные публикации, " +
-                    "ответы и комментарии, упоминания, личные сообщения, подарки и др. " +
-                    "(настройка категорий будет доступна после подключения email-BFF)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-            )
+        }
+        else -> {
+            // button/warning/прочее — read-only отображение (per-key action-методов
+            // для email-страницы в BFF-бандлах нет — честный отказ, аудит §5.5).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 44.dp)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    param.title?.let { Text(it) }
+                    param.description?.let { it1 ->
+                        Text(
+                            it1,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                }
+                param.value?.let { v ->
+                    Text(
+                        v,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
         }
     }
 }

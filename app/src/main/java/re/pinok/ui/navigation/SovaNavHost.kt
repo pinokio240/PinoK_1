@@ -96,6 +96,8 @@ import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.screens.bookmarks.BookmarksScreen
 import re.pinok.ui.screens.community.BoardTopicScreen
 import re.pinok.ui.screens.community.CommunityScreen
+// #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества».
+import re.pinok.ui.screens.community.GroupMembersScreen
 import re.pinok.ui.screens.documents.DocumentsScreen
 // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты).
 import re.pinok.ui.screens.feed.FeedHiddenSourcesScreen
@@ -850,6 +852,9 @@ listOf(
         // П-7-AB: у FollowersSubscriptionsScreen («Подписчики»/«Подписки») свой
         // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и EditProfileScreen.
         Screen.FollowList.route,
+        // #OPVK-EXTRACT (Task 3-c): у GroupMembersScreen («Участники») свой
+        // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и FollowList.
+        Screen.GroupMembers.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -2151,6 +2156,29 @@ composable(Screen.CallsHistory.route) {
                         // Шаг 4 (#32d): тап по теме обсуждения → BoardTopicScreen.
                         onTopicClick = { gId, topicId, topicTitle ->
                             nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle))
+                        },
+                        // #OPVK-EXTRACT (Task 3-c): тап по счётчику подписчиков в
+                        // шапке → список участников сообщества (groups.getMembers).
+                        onMembersClick = { targetGroupId ->
+                            nav.navigate(Screen.GroupMembers.buildRoute(targetGroupId))
+                        },
+                    )
+                }
+                // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
+                // из шапки CommunityScreen (тап по счётчику подписчиков).
+                composable(
+                    route = Screen.GroupMembers.route,
+                    arguments = listOf(
+                        navArgument(Screen.GroupMembers.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val membersGroupId = entry.arguments?.getLong(Screen.GroupMembers.ARG_GROUP_ID) ?: 0L
+                    GroupMembersScreen(
+                        groupId = membersGroupId,
+                        onBack = { nav.popBackStack() },
+                        // Тап по участнику → чужой профиль (паттерн FollowList-композибла).
+                        onMemberClick = { memberId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(memberId))
                         },
                     )
                 }

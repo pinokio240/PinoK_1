@@ -914,9 +914,20 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val msgLpV14: Boolean,
         /** §52.5 Sprint A (P0): Modern Sync API — messages.getDiff lp_version=21 (default false). */
         val msgModernSync: Boolean,
-        /** P4.4: execute batching — группировка API-вызовов через VKScript (default false). */
+        /** P4.4: execute batching — группировка API-вызовов через VKScript (default false).
+         *  #SETTINGS-FIX (P3-9, Task 3-b): @Deprecated — мёртвое поле: UI-тумблер удалён
+         *  (Fix #REMOVE-DEAD-TOGGLES), потребителей НЕТ (проверено rg по app/core/feature —
+         *  единственное вхождение вне SovaPrefs — конструктор Snapshot в FeedScreen:298,
+         *  хардкод false; потребителем НЕ является). Поле НЕ удалено только ради этого
+         *  конструктора (FeedScreen вне зоны волны 3-b). */
         val msgExecuteBatch: Boolean,
-        /** P4.3: WebSocket transport для каналов (stub, недокументировано, default false). */
+        /** P4.3: WebSocket transport для каналов (stub, недокументировано, default false).
+         *  #SETTINGS-FIX (P3-9, Task 3-b): @Deprecated — мёртвое поле: UI-тумблер удалён
+         *  (Fix #REMOVE-DEAD-TOGGLES), потребителей НЕТ (упоминания в KDoc
+         *  ChannelWebSocketClient.kt:57/74 — комментарии, не чтения; FeedScreen:299 —
+         *  конструктор Snapshot, хардкод false). Поле НЕ удалено ради этого конструктора
+         *  (FeedScreen вне зоны волны 3-b); заготовка ChannelWebSocketClient сохранена
+         *  для будущего WS-перехода. */
         val msgWsChannels: Boolean,
         /** P4.2: последний сохранённый ts LongPoll (для backfill при старте). */
         val lpLastTs: Long,
@@ -1006,7 +1017,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * кэша (используются defaults из NOTIFY_DEFAULTS в SettingsScreen).
          */
         val notifyCacheJson: String,
-        /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
+        /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда).
+         *  #SETTINGS-FIX (P3-9 + P2-5, Task 3-b): @Deprecated — после перевода секции
+         *  «Уведомления на почту» на серверный BFF page=email (settingsGeneralGetNotifySettings)
+         *  UI больше НЕ читает это поле; setter setEmailNotifyFreq больше не вызывается из UI.
+         *  Поле НЕ удалено: конструктор Snapshot в FeedScreen:401 передаёт хардкод 0
+         *  (FeedScreen вне зоны волны 3-b). */
         val emailNotifyFreq: Int,
 
         /**

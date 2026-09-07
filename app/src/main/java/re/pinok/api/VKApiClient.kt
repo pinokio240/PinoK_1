@@ -10837,6 +10837,56 @@ class VKApiClient(
         return true
     }
 
+    /** Результат polls.add: owner_id + id — для attachment-строки «poll{owner_id}_{id}». */
+    data class CreatedPoll(
+        val ownerId: Long,
+        val id: Long,
+    )
+
+    /**
+     * polls.add — создание опроса (пункт «Опрос» меню прикреплений веб-композера
+     * vk.com; внедрение волны #ATTACH-UNIFY, идея-референс — OpenVK legacy, §2
+     * opvk.изучение.вытянуть.md). Wire документирован dev.vk.com (v5.x):
+     * polls.add{question, add_answers="[\"text\",...]" | JSON-объекты [{"text":...}],
+     * is_anonymous} → response = созданный poll {id, owner_id, question, answers[]}.
+     * Прикрепление к посту — attachment-строка poll{owner_id}_{id} в wall.post.
+     *
+     * Гварды: пустой question / <2 непустых ответа → null (VK не примет);
+     * add_answers собирается через gson (JsonArray[{text}]) — экранирование
+     * кавычек/слэшей в текстах ответов на совести gson, НЕ руками.
+     * null при offline/ошибке/битом ответе (нет response.id/owner_id).
+     */
+    suspend fun pollsAdd(
+        question: String,
+        answers: List<String>,
+        isAnonymous: Boolean = false,
+    ): CreatedPoll? {
+        if (isOffline()) return null
+        val cleanQuestion = question.trim()
+        val cleanAnswers = answers.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (cleanQuestion.isEmpty() || cleanAnswers.size < 2) return null
+        val answersJson = com.google.gson.JsonArray().apply {
+            for (text in cleanAnswers) {
+                add(com.google.gson.JsonObject().apply { addProperty("text", text) })
+            }
+        }
+        val args = mapOf(
+            "question" to cleanQuestion,
+            "add_answers" to answersJson.toString(),
+            "is_anonymous" to if (isAnonymous) "1" else "0",
+        )
+        val json = call("polls.add", args) ?: return null
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return null
+            val id = resp.get("id")?.asLong ?: return null
+            val ownerId = resp.get("owner_id")?.asLong ?: return null
+            CreatedPoll(ownerId = ownerId, id = id)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "pollsAdd error", e)
+            null
+        }
+    }
+
     // ─── S7-1: Sliding-window rate limiter ───────────────────────────────
 
     companion object {
@@ -15361,6 +15411,11 @@ class VKApiClient(
      * @param groupId >0 → загрузка в сообщество (для clips — обязательно,
      *  VK принимает clips только от групп; для user-clips через web).
      * @param wallpost 0 = не публиковать на стену (clip будет в clips-ленте)
+     * @param linkUrl НЕ null → video.save(link_url=…) — импорт видео ПО ВНЕШНЕЙ
+     *  ССЫЛКЕ («Добавить по ссылке» меню прикреплений веб-композера vk.com,
+     *  волна #ATTACH-UNIFY; wire dev.vk.com video.save). VK сам скачает видео
+     *  сервером: шаг videoUploadFile НЕ нужен, attachment = video{ownerId}_{videoId}
+     *  из тикета (видео появится после серверной обработки — как у обычного upload).
      * @return [VideoUploadTicket] или null при ошибке
      */
     suspend fun videoSave(
@@ -15369,6 +15424,7 @@ class VKApiClient(
         isClips: Boolean = true,
         groupId: Long? = null,
         wallpost: Int = 0,
+        linkUrl: String? = null,
     ): VideoUploadTicket? {
         if (isOffline()) return null
         val args = mutableMapOf(
@@ -15381,6 +15437,8 @@ class VKApiClient(
         )
         description?.takeIf { it.isNotBlank() }?.let { args["description"] = it }
         groupId?.takeIf { it > 0 }?.let { args["group_id"] = it.toString() }
+        // link_url → импорт по внешней ссылке (VK скачивает сам, upload-шага нет).
+        linkUrl?.takeIf { it.isNotBlank() }?.let { args["link_url"] = it }
         // album_id=-2 → специальный clips-альбом (как в VK web).
         if (isClips) args["album_id"] = "-2"
 

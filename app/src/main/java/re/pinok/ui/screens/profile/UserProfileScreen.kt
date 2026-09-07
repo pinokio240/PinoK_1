@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -120,6 +123,17 @@ import re.pinok.util.AppLog
  *  — «Пожаловаться» на записи чужой стены ([WallPostCard] showReport=!isSelf):
  *    wall.markAsSpam с AlertDialog-подтверждением; manage-пункты П-6а по-прежнему
  *    не активируются на чужой стене (showActions=false — меню только с жалобой).
+ *
+ *  #OPVK-EXTRACT (Task 3-c, идея OpenVK AboutProfileLayout — AGPL, только
+ *  семантика «собирать label/value ТОЛЬКО из непустых значений», не код):
+ *  секция «Информация» ([ProfileInfoSection]) над «Подарками» — карточка со
+ *  строками «О себе»/«Деятельность»/«Интересы»/«Любимая музыка»/
+ *  «Любимые фильмы»/«Любимые книги» ([profileInfoRows]). Никаких новых
+ *  VKA-вызовов: поля уже приходят в usersGetFull→usersGetFullExtended
+ *  (fields профиля) и парсятся в UserProfile. bdate/city НЕ дублируются —
+ *  их уже рисует [ProfileHeader] («День рождения»/«Город»); строка
+ *  «Любимые цитаты» НЕ рисуется — поле quotes запрашивается в fields, но в
+ *  модель UserProfile не парсится (модель вне зоны правок) — no-stub.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -382,6 +396,10 @@ fun UserProfileScreen(
         }
         return
     }
+
+    // #OPVK-EXTRACT: строки «Информация» — только непустые значения; пусто →
+    // секция не рисуется вовсе (no-stub, семантика AboutProfileLayout OpenVK).
+    val infoRows = profileInfoRows(p)
 
     Scaffold(
         topBar = {
@@ -684,6 +702,14 @@ fun UserProfileScreen(
                 }
             }
 
+            // #OPVK-EXTRACT: секция «Информация» (label/value из уже загруженного
+            // UserProfile) — между действиями и «Подарками», как инфо-блок веба.
+            if (infoRows.isNotEmpty()) {
+                item(key = "profile_info") {
+                    ProfileInfoSection(rows = infoRows)
+                }
+            }
+
             // Этап П-2: секция «Подарки» над лентой записей (gifts.get, count=9,
             // инвентарь §1.1.6). Рисуется только при непустом ответе — no-stub.
             if (gifts.isNotEmpty()) {
@@ -848,4 +874,70 @@ private fun giftImageUrl(item: JsonObject): String? {
         if (!v.isNullOrBlank()) return v
     }
     return null
+}
+
+/**
+ * #OPVK-EXTRACT (Task 3-c): строки секции «Информация» из полей UserProfile,
+ * которые УЖЕ приходят в загрузочном флоу экрана (usersGetFull →
+ * usersGetFullExtended, fields about/activities/interests/music/movies/books;
+ * парсинг VKA:13457-13463) — НИКАКИХ новых VKA-вызовов. Только непустые
+ * значения (семантика AboutProfileLayout OpenVK: item добавляется при
+ * непустой строке — идея, не код; AGPL-копирование запрещено).
+ *
+ * ЧЕСТНЫЕ ОГРАНИЧЕНИЯ (no-stub):
+ *  — «Любимые цитаты» (quotes) не рисуется: поле запрашивается в fields
+ *    usersGetFullExtended, но в модель UserProfile НЕ парсится (модель —
+ *    core/data, вне зоны правок), имитировать значение нечем;
+ *  — bdate/city НЕ дублируются: их уже показывает [ProfileHeader]
+ *    («День рождения: …» / «Город: …», ProfileScreen.kt:1526-1541);
+ *  — sex/tv/games/relation/career/education и personal.* приходят не для всех
+ *    страниц/токенов (UserProfile.sex — 0-дефолт без «не задано»-маркера),
+ *    в заданный список строк не входят — не рисуются.
+ */
+private fun profileInfoRows(p: UserProfile): List<Pair<String, String>> {
+    val rows = mutableListOf<Pair<String, String>>()
+    p.about?.takeIf { it.isNotBlank() }?.let { rows.add("О себе" to it) }
+    p.activities?.takeIf { it.isNotBlank() }?.let { rows.add("Деятельность" to it) }
+    p.interests?.takeIf { it.isNotBlank() }?.let { rows.add("Интересы" to it) }
+    p.music?.takeIf { it.isNotBlank() }?.let { rows.add("Любимая музыка" to it) }
+    p.movies?.takeIf { it.isNotBlank() }?.let { rows.add("Любимые фильмы" to it) }
+    p.books?.takeIf { it.isNotBlank() }?.let { rows.add("Любимые книги" to it) }
+    return rows
+}
+
+/**
+ * #OPVK-EXTRACT (Task 3-c): карточка «Информация» чужого профиля — заголовок
+ * в стиле секций экрана («Подарки»/«Записи»: titleMedium) + Card (паттерн
+ * [SubscriptionsEntryRow]: elevation 0) со строками label/value. Рисуется
+ * только при наличии хотя бы одной непустой строки (вызывает только с
+ * непустым [rows] — см. вызов в UserProfileScreen).
+ */
+@Composable
+private fun ProfileInfoSection(rows: List<Pair<String, String>>) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            text = "Информация",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(8.dp))
+        Card(elevation = CardDefaults.cardElevation(0.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                rows.forEachIndexed { index, row ->
+                    val (label, value) = row
+                    if (index > 0) Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+    }
 }

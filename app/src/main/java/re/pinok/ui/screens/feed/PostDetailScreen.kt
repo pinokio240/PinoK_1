@@ -1,6 +1,7 @@
 // File: screens/feed/PostDetailScreen.kt
 package re.pinok.ui.screens.feed
 
+import android.Manifest
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -68,6 +69,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.snapshotFlow
@@ -84,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -104,9 +107,11 @@ import re.pinok.ui.navigation.PostDetailTarget
 import re.pinok.ui.navigation.ScrollPosition
 import re.pinok.ui.navigation.StoriesHolder
 import re.pinok.ui.components.AttachmentPickerSheet
+import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
+import re.pinok.ui.components.buildVkAttachment
 import re.pinok.util.AppLog
 import re.pinok.ui.components.PendingPhotosBar
 import re.pinok.ui.components.PendingPhoto
@@ -184,9 +189,9 @@ fun PostDetailScreen(
     var pendingCommentFiles by remember { mutableStateOf<List<PendingCommentFile>>(emptyList()) }
     // Fix #237 (emoji-панель): вставка эмодзи в текст комментария.
     var showEmojiPanel by remember { mutableStateOf(false) }
-    // Расширенный пикер (Музыка/Видео) — общий с чатом компонент AttachmentPickerSheet.
+    // Расширенный пикер (Музыка/Видео/Фото/Документы) — общий с чатом компонент AttachmentPickerSheet.
     var showAttachmentPicker by remember { mutableStateOf(false) }
-    var attachmentPickerTab by remember { mutableStateOf(0) } // 0=Музыка, 1=Видео
+    var attachmentPickerTab by remember { mutableStateOf(AttachmentPickerTab.Music) }
     val ctx = LocalContext.current
 
     // Лаунчеры для вложений в комментариях.
@@ -258,6 +263,36 @@ fun PostDetailScreen(
             // VK wall.createComment принимает до 10 attachments. Лимит — 10 суммарно.
             pendingCommentFiles = (pendingCommentFiles + newFiles).take(10)
             AppLog.i("PostDetail", "comment filePicker: added ${newFiles.size} files, total=${pendingCommentFiles.size}")
+        }
+    }
+    // #ATTACH-UNIFY (P0.2): камера в комментариях — TakePicture + FileProvider,
+    // паттерн 1:1 из ChatDetailScreen:1204 (раньше пункт «Фото с камеры» был
+    // dead: showCamera=true по дефолту, onCamera={} не передан). Снимок идёт в
+    // общий pendingCommentPhotos (превью + отправка через uploadPhotoForComment).
+    // rememberSaveable + Saver — переживает process death (Fix #126 чата).
+    var cameraImageUri by rememberSaveable(stateSaver = CameraUriSaver) { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val uri = cameraImageUri
+        cameraImageUri = null
+        if (!ok || uri == null) return@rememberLauncherForActivityResult
+        pendingCommentPhotos = (pendingCommentPhotos + PendingPhoto(nextPendingPhotoId(), uri)).take(10)
+        AppLog.i("PostDetail", "camera photo added to pendingCommentPhotos (preview)")
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            val uri = createCameraImageUri(ctx)
+            if (uri != null) {
+                cameraImageUri = uri
+                cameraLauncher.launch(uri)
+            } else {
+                AppLog.w("PostDetail", "createCameraImageUri returned null")
+            }
+        } else {
+            AppLog.w("PostDetail", "CAMERA permission denied")
         }
     }
     // Pull-to-refresh + пагинация комментариев.
@@ -1066,16 +1101,42 @@ fun PostDetailScreen(
                             commentMultiPhotoLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
+                        // #ATTACH-UNIFY (P0.2): камера честно прокинута (был dead-пункт).
+                        onCamera = {
+                            val permission = Manifest.permission.CAMERA
+                            if (ContextCompat.checkSelfPermission(ctx, permission) ==
+                                android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                val uri = createCameraImageUri(ctx)
+                                if (uri != null) {
+                                    cameraImageUri = uri
+                                    cameraLauncher.launch(uri)
+                                }
+                            } else {
+                                cameraPermissionLauncher.launch(permission)
+                            }
+                        },
+                        // #ATTACH-UNIFY (P1.5): фото/файл «Из VK» — табы пикера.
+                        showPhotoFromVk = true,
+                        onPhotoFromVk = {
+                            attachmentPickerTab = AttachmentPickerTab.Photos
+                            showAttachmentPicker = true
+                        },
                         onVideo = {
-                            attachmentPickerTab = 1
+                            attachmentPickerTab = AttachmentPickerTab.Video
                             showAttachmentPicker = true
                         },
                         onAudio = {
-                            attachmentPickerTab = 0
+                            attachmentPickerTab = AttachmentPickerTab.Music
                             showAttachmentPicker = true
                         },
                         onFile = {
                             commentMultiFileLauncher.launch(arrayOf("*/*"))
+                        },
+                        showFileFromVk = true,
+                        onFileFromVk = {
+                            attachmentPickerTab = AttachmentPickerTab.Docs
+                            showAttachmentPicker = true
                         },
                         // Подарки в комментариях не поддерживаются VK API.
                         showGift = false,
@@ -1257,10 +1318,11 @@ fun PostDetailScreen(
         }
     }
 
-    // Единый пикер «Музыка/Видео» из библиотеки VK — открывается при выборе
-    // соответствующего пункта в UnifiedAttachMenu. Видео/аудио прикрепляются
-    // к комментарию как "video{ownerId}_{id}" / "audio{ownerId}_{id}".
-    // Fix #234 (multi-photo preview): полноэкранный просмотрщик фото.
+    // Единый пикер библиотеки VK — открывается при выборе соответствующего
+    // пункта в UnifiedAttachMenu. Видео/аудио прикрепляются к комментарию как
+    // "video{ownerId}_{id}" / "audio{ownerId}_{id}" (сборка через buildVkAttachment).
+    // #ATTACH-UNIFY (P1.4): + табы «Фото»/«Документы» (attach без upload);
+    // таб «Подарки» скрыт — gifts.send в комментариях недоступен (был dead-таб).
     val pvi = previewPhotoIndex
     if (pvi != null && pendingCommentPhotos.isNotEmpty()) {
         PhotoViewer(
@@ -1273,25 +1335,30 @@ fun PostDetailScreen(
         AttachmentPickerSheet(
             onDismiss = { showAttachmentPicker = false },
             initialTab = attachmentPickerTab,
+            showGiftTab = false,
+            showPhotoTab = true,
+            showDocsTab = true,
             onPickAudio = { track ->
                 // Формируем attachment-string для wall.createComment.
-                val att = if (track.accessKey != null) {
-                    "audio${track.ownerId}_${track.id}_${track.accessKey}"
-                } else {
-                    "audio${track.ownerId}_${track.id}"
-                }
+                val att = buildVkAttachment("audio", track.ownerId, track.id, track.accessKey)
                 attachmentString = att
                 attachedFileName = "Музыка: ${track.title}"
                 showAttachmentPicker = false
             },
             onPickVideo = { video ->
-                val att = if (video.accessKey != null) {
-                    "video${video.ownerId}_${video.id}_${video.accessKey}"
-                } else {
-                    "video${video.ownerId}_${video.id}"
-                }
+                val att = buildVkAttachment("video", video.ownerId, video.id, video.accessKey)
                 attachmentString = att
                 attachedFileName = "Видео: ${video.title.ifBlank { "видео" }}"
+                showAttachmentPicker = false
+            },
+            onPickPhotoAttachment = { att ->
+                attachmentString = att
+                attachedFileName = "Фото из VK"
+                showAttachmentPicker = false
+            },
+            onPickDocAttachment = { att, title ->
+                attachmentString = att
+                attachedFileName = "Документ: $title"
                 showAttachmentPicker = false
             },
         )
@@ -2135,6 +2202,34 @@ data class PendingCommentFile(
 /** Генератор уникальных id для [PendingCommentFile]. */
 private val commentFileIdCounter = java.util.concurrent.atomic.AtomicLong(0)
 fun nextPendingCommentFileId(): Long = commentFileIdCounter.incrementAndGet()
+
+/**
+ * #ATTACH-UNIFY (P0.2): URI для снимка камеры через FileProvider (cache-path
+ * заявлен в manifest, authority «<pkg>.fileprovider» — паттерн 1:1 из
+ * ChatDetailScreen.createCameraImageUri). null — FileProvider не настроен.
+ */
+private fun createCameraImageUri(ctx: android.content.Context): Uri? {
+    return try {
+        val photoFile = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+        androidx.core.content.FileProvider.getUriForFile(
+            ctx,
+            "${ctx.packageName}.fileprovider",
+            photoFile,
+        )
+    } catch (e: Exception) {
+        AppLog.e("PostDetail", "createCameraImageUri failed", e)
+        null
+    }
+}
+
+/**
+ * #ATTACH-UNIFY: Saver для Uri — rememberSaveable переживает process death
+ * во время съёмки (паттерн ChatDetailScreen Fix #126).
+ */
+private val CameraUriSaver: Saver<Uri?, String> = Saver(
+    save = { it?.toString() ?: "" },
+    restore = { saved -> if (saved.isBlank()) null else Uri.parse(saved) },
+)
 
 /**
  * Fix #237 (multi-file): бар выбранных файлов над полем ввода комментария.

@@ -1045,6 +1045,35 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             AppLog.i("SovaApp", "SSL Pinning disabled (netSslPinning=false)")
         }
 
+        // #SETTINGS-FIX (P1-1, аудит настроек ❌1): применяем HTTP-прокси из настроек
+        // (netProxyEnabled/netProxyHost/netProxyPort — SovaPrefs, UI: SettingsScreen NetworkTab).
+        // Раньше секция «Прокси» только сохраняла значения — потребителей не было вовсе.
+        // Архитектура: OkHttpClient собирается ОДИН раз при старте процесса (immutable
+        // после build), поэтому прокси применяется ТОЛЬКО при старте — как SSL pinning.
+        // Runtime-переключение в NetworkTab даёт честный тост «применится после перезапуска».
+        // Не конфликтует с интерцепторами: proxy() действует на уровне RouteSelector
+        // (выбор соединения), а AwayBypass/AdBlock/StaleConnection/NetworkRetry/VkCookieJar
+        // работают с запросом/ответом и прокси не видят. DNS-пиннинг calls.okcdn.ru
+        // при прокси обходится естественно: hostname резолвится на стороне прокси (CONNECT).
+        // HTTP-тип (Proxy.Type.HTTP) — SOCKS-режим UI не имеет (нет селектора типа),
+        // рисовать SOCKS без переключателя = ложная надежда (no-stub).
+        if (initialSnap.netProxyEnabled && initialSnap.netProxyHost.isNotBlank()) {
+            runCatching {
+                builder.proxy(
+                    java.net.Proxy(
+                        java.net.Proxy.Type.HTTP,
+                        java.net.InetSocketAddress(initialSnap.netProxyHost, initialSnap.netProxyPort),
+                    ),
+                )
+                AppLog.i("SovaApp", "Proxy ENABLED (HTTP) — ${initialSnap.netProxyHost}:${initialSnap.netProxyPort}")
+            }.onFailure { e ->
+                // Невалидный порт/хост не должен валить приложение — трафик идёт напрямую.
+                AppLog.w("SovaApp", "Proxy setup failed — traffic goes direct: ${e.message}")
+            }
+        } else {
+            AppLog.i("SovaApp", "Proxy disabled (netProxyEnabled=false или пустой хост)")
+        }
+
         httpClient = builder
             .addInterceptor { chain ->
                 val original = chain.request()
@@ -1208,6 +1237,29 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 ClipVideoDownloadManager.enforceCacheLimit(snap.storyCacheLimitMb)
                 // Fix #110: применяем autoCacheAudio к PlayerConnection (initial).
                 PlayerConnection.autoCacheAudio = snap.autoCacheAudio
+
+                // #SETTINGS-FIX (P1-2, аудит настроек ⚠️2/⚠️3): пути скачивания переживают
+                // рестарт. TrackDownloadManager.init/VideoDownloadManager.init (выше,
+                // синхронно) хардкодят filesDir; reconfigurePath вызывался ТОЛЬКО из
+                // SettingsScreen при смене пути — после перезапуска загрузки шли во
+                // внутреннюю папку, а UI показывал сохранённый кастомный путь.
+                // Применяем сохранённые пути при старте (корутина на Dispatchers.IO —
+                // reconfigurePath переносит файлы, на main нельзя).
+                // Музыка: дефолт SovaPrefs «/Music/PinoK/» НЕ применяем — иначе дефолтным
+                // пользователям внутренний filesDir-режим неожиданно сменится на external
+                // (поведенческое изменение вне фикс-семантики). Видео: дефолт — пустая строка.
+                if (snap.musicDownloadPath.isNotBlank() &&
+                    snap.musicDownloadPath != "/Music/PinoK/" // дефолт SovaPrefs MUSIC_DOWNLOAD_PATH
+                ) {
+                    runCatching { TrackDownloadManager.reconfigurePath(snap.musicDownloadPath) }
+                        .onFailure { e -> AppLog.w("SovaApp", "music path reconfigure failed: ${e.message}") }
+                    AppLog.i("SovaApp", "Saved music download path applied: ${snap.musicDownloadPath}")
+                }
+                if (snap.videoDownloadPath.isNotBlank()) {
+                    runCatching { VideoDownloadManager.reconfigurePath(snap.videoDownloadPath) }
+                        .onFailure { e -> AppLog.w("SovaApp", "video path reconfigure failed: ${e.message}") }
+                    AppLog.i("SovaApp", "Saved video download path applied: ${snap.videoDownloadPath}")
+                }
             } catch (e: Exception) {
                 AppLog.w("SovaApp", "Failed to load prefs", e)
             }

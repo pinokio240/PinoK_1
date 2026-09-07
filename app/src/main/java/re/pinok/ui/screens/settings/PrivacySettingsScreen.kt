@@ -468,6 +468,11 @@ private fun PrivacyParamRow(
             }
         }
         "select", "radio" -> {
+            // #SETTINGS-FIX (P3-8, аудит настроек ⚠️5): select/radio БЕЗ options —
+            // рендер значения БЕЗ шеврона/кликабельности/dropdown (пустой dropdown
+            // выглядел как баг). legacy-исключения «…кроме N друзей» живут в
+            // al_settings.php и в BFF не приходят (no-stub §5.6) — честный просмотр.
+            val canEdit = param.options.isNotEmpty()
             Box {
                 Row(
                     modifier = Modifier
@@ -475,7 +480,13 @@ private fun PrivacyParamRow(
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                         .defaultMinSize(minHeight = 44.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { dropdownExpanded = true },
+                        .then(
+                            if (canEdit) {
+                                Modifier.clickable { dropdownExpanded = true }
+                            } else {
+                                Modifier // read-only: options нет — dropdown не открываем
+                            },
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -504,24 +515,26 @@ private fun PrivacyParamRow(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
                         )
-                    } else {
+                    } else if (canEdit) {
                         Icon(Icons.Default.ArrowDropDown, contentDescription = "Выбрать")
                     }
                 }
-                DropdownMenu(
-                    expanded = dropdownExpanded,
-                    onDismissRequest = { dropdownExpanded = false },
-                ) {
-                    // Опции приходит только из BFF-ответа; если секция их не
-                    // отдала — dropdown пуст (no-stub: ничего не придумываем).
-                    param.options.forEach { opt ->
-                        DropdownMenuItem(
-                            text = { Text(opt.label) },
-                            onClick = {
-                                dropdownExpanded = false
-                                onSelect(param, opt.value)
-                            },
-                        )
+                if (canEdit) {
+                    DropdownMenu(
+                        expanded = dropdownExpanded,
+                        onDismissRequest = { dropdownExpanded = false },
+                    ) {
+                        // Опции приходит только из BFF-ответа; если секция их не
+                        // отдала — dropdown пуст (no-stub: ничего не придумываем).
+                        param.options.forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.label) },
+                                onClick = {
+                                    dropdownExpanded = false
+                                    onSelect(param, opt.value)
+                                },
+                            )
+                        }
                     }
                 }
             }
