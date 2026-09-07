@@ -2435,7 +2435,9 @@ private fun ArticlesTabSection(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            itemsIndexed(items, key = { idx, item -> "article_${idx}_${item.title}" }) { _, item ->
+            // FIX-COMPILE: itemsIndexed — extension LazyListScope, в обычном Column
+            // недоступна (статьи ≤20, ленивость не нужна) → forEach.
+            items.forEach { item ->
                 ProfileArticleRow(item = item, onOpen = onOpenArticle)
             }
         }

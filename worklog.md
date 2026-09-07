@@ -7352,3 +7352,17 @@ Work Log:
 
 Stage Summary:
 - Очередь воспроизведения = полному плейлисту (до 6000, страховка 60 страниц); 5 мест закрыты одним изменением API-слоя; обратная совместимость сигнатур сохранена; BuildStamp не тронут.
+---
+Task ID: FIX-COMPILE-PWAVE-9
+Agent: orchestrator (main, сам)
+Task: Fix #284 — compile errors волны П из сборки юзера (ProfileScreen:2438 itemsIndexed в Column; BlacklistScreen:234 LaunchedEffect import)
+
+Work Log:
+- Диагноз по логу :app:compileDebugKotlin юзера: (1) ProfileScreen.kt:2438 — itemsIndexed (extension LazyListScope) внутри обычного Column в ArticlesTabSection (П-6b); 5 остальных вызовов файла — в LazyRow, валидны; K2-каскад inference-ошибок (idx/item/title/@Composable). (2) BlacklistScreen.kt:234 — пропущен import androidx.compose.runtime.LaunchedEffect (П-4).
+- Фиксы: ArticlesTabSection → items.forEach (статьи ≤20, ленивость/ключ в статическом Column не нужны); BlacklistScreen — импорт добавлен.
+- Проактивный аудит того же класса по 7 файлам волны: импорт-аудит 28 compose/runtime символов — чисто (2 false positive SovaNavHost: runtime.saveable-импорт и fully-qualified AnimatedVisibility); 4 вызова items() подтверждены в LazyColumn-скоупах (PrivacySettings:304, Blacklist:347, NotifSettings:268/342); EditProfileScreen без lazy-вызовов.
+- Верификация: скобки string-aware OK (дельта −1/−1 = убранный лямбда-блок; ProfileScreen {582,582}/(1159,1159), BlacklistScreen {151,151}/(280,280)); nested-comments ALL CLEAN 164; itemsIndexed-импорт живой (5 вызовов).
+- HISTORY.md запись Fix #284; коммит + push origin PinoK.
+
+Stage Summary:
+- Все 7 ошибок компиляции из лога юзера закрыты 2 правками (1 вызов + 1 импорт); тот же класс дефектов по волне П вычищен проактивно. VKApiClient/BuildStamp не тронуты. Юзеру: git pull + assembleDebug; при новых ошибках — фикс за фиксом.

@@ -11892,3 +11892,19 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Верификация:** string-aware скобки — дельта VKApiClient/MusicScreen/MusicLibraryScreens сбалансирована (дисбаланс −1/−1 в VKApiClient — преждесуществующий артефакт сканера на `${}`-интерполяциях, подтверждён базлайном HEAD 2592/2593); check-nested-comments ALL CLEAN; onProgress 11/1 упоминаний; MAX_PLAYLIST_PAGES в companion.
 
 **Док:** МУЗЫКА-ПЛЕЙЛИСТ-ПАГИНАЦИЯ-ФИКС.md (диагноз, 5 мест, матрица проверки 6 пунктов).
+
+---
+
+## 2026-09-07 — fix(profile): Fix #284 — compile fixes волны П (сборка юзера)
+
+**Запрос:** лог `:app:compileDebugKotlin` юзера — 7 ошибок в 2 файлах волны П.
+
+**Дефекты и фиксы:**
+1. `ProfileScreen.kt:2438` (П-6b, ArticlesTabSection): `itemsIndexed(...)` — extension на `LazyListScope` — вызывалась внутри обычного `Column` (5 остальных вызовов файла — внутри LazyRow, там валидно). K2-каскад: Cannot infer type 'idx'/'item', Unresolved 'title', @Composable invocations. Фикс: статьи ≤20 — ленивость не нужна → `items.forEach { item -> ProfileArticleRow(...) }` (+ комментарий FIX-COMPILE). Импорт itemsIndexed остаётся — 5 живых вызовов.
+2. `BlacklistScreen.kt:234` (П-4): `Unresolved reference 'LaunchedEffect'` — пропущен импорт `androidx.compose.runtime.LaunchedEffect` (аудит импортов П-4 его не поймал). Фикс: импорт добавлен (алфавитная позиция Composable→LaunchedEffect→getValue).
+
+**Аудит того же класса дефектов по файлам волны (проактивно):** (a) импорт-аудит 28 compose/runtime/foundation символов по 7 файлам (Profile/EditProfile/Privacy/Blacklist/NotifSettings/Settings/SovaNavHost) — других пропусков нет (2 флага SovaNavHost — false positive: rememberSaveable импортирован из runtime.saveable, AnimatedVisibility — fully-qualified вызов); (b) все 4 вызова `items(...)` (PrivacySettings:304, Blacklist:347, NotifSettings:268/342) подтверждены внутри LazyColumn-скоупов; (c) EditProfileScreen — lazy-вызовов нет вовсе.
+
+**Верификация:** string-aware скобки ProfileScreen {582,582}/(1159,1159) (дельта −1/−1 = ровно убранный itemsIndexed-лямбда-блок с key-лямбдой), BlacklistScreen {151,151}/(280,280); check-nested-comments ALL CLEAN (164 файла); dangling-импортов нет.
+
+**Статус:** sandbox без Android SDK — юзеру пересобрать assembleDebug; при новых ошибках — фикс за фиксом (паттерн #102/#108).
