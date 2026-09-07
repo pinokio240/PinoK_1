@@ -103,12 +103,15 @@ import androidx.compose.material.icons.outlined.Equalizer
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Lock
+// IMP-VKID: иконка строки-входа «Аккаунт VK ID» в SECURITY-таб.
+import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Newspaper
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.outlined.CloudOff
@@ -346,6 +349,12 @@ fun SettingsScreen(
     // callback-паттерн навигации, что и onOpenNotificationSettings.
     onOpenPrivacySettings: () -> Unit = {},
     onOpenBlacklist: () -> Unit = {},
+    // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты,
+    // newsfeed.getBanned/unban) — тот же callback-паттерн навигации.
+    onOpenHiddenSources: () -> Unit = {},
+    // IMP-VKID: экран «Аккаунт VK ID» (мультипрофили account.getMulti +
+    // deeplink-ячейки кабинета id.vk.com) — тот же callback-паттерн навигации.
+    onOpenVkIdAccount: () -> Unit = {},
 ) {
     val app = SovaApp.get()
     val snap by app.prefs.data.collectAsState(initial = null)
@@ -399,7 +408,7 @@ fun SettingsScreen(
             when (val p = pages[page]) {
                 is SettingsPage.Core -> when (p.tab) {
                     SettingsTab.INTERFACE -> InterfaceTab(s, app, scope)
-                    SettingsTab.NEWS -> NewsTab(s, app, scope)
+                    SettingsTab.NEWS -> NewsTab(s, app, scope, onOpenHiddenSources)
                     SettingsTab.MESSAGES -> MessagesTab(s, app, scope)
                     SettingsTab.MUSIC -> MusicTab(s, app, scope, context)
                     SettingsTab.OFFLINE -> OfflineTab(s, app, scope, context)
@@ -408,7 +417,7 @@ fun SettingsScreen(
                     SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings, onOpenBlacklist)
                     SettingsTab.PANELS -> PanelEditorTab(s, app, scope)
                     SettingsTab.PRIVACY -> PrivacyTab(s, app, scope, onOpenPrivacySettings)
-                    SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices)
+                    SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices, onOpenVkIdAccount)
                     SettingsTab.LOGGING -> LoggingTab(s, app, scope)
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
                 }
@@ -1490,6 +1499,7 @@ private fun NewsTab(
     s: SovaPrefs.Snapshot,
     app: SovaApp,
     scope: CoroutineScope,
+    onOpenHiddenSources: () -> Unit = {},
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -1499,6 +1509,45 @@ private fun NewsTab(
         item { ToggleRow("Блокировка рекламы", s.newsAdsBlocked) { scope.launch { app.prefs.setNewsAdsBlocked(it) } } }
         item { ToggleRow("Скрывать репосты", s.newsRepostsHidden) { scope.launch { app.prefs.setNewsRepostsHidden(it) } } }
         item { ToggleRow("Скрывать промо", s.newsPromoHidden) { scope.launch { app.prefs.setNewsPromoHidden(it) } } }
+        // IMP-FEED-2: строка-вход в экран «Скрытые источники» (менеджер мьютов
+        // ленты, web: «Редактировать» правого меню) — стиль навигационных строк
+        // экрана (иконка+текст+шеврон, как «Чёрный список» в NotificationsTab).
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth()
+                    .androidx_clickable { onOpenHiddenSources() },
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.VisibilityOff,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Скрытые источники",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            "Пользователи и сообщества, скрытые из ленты",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         item { SectionHeader("Интерфейс ленты") }
         item {
             ToggleRow(
@@ -2920,6 +2969,9 @@ private fun SecurityTab(
     app: SovaApp,
     scope: CoroutineScope,
     onOpenDevices: () -> Unit = {},
+    // IMP-VKID: вход в экран «Аккаунт VK ID» — callback-паттерн
+    // onOpenHiddenSources/onOpenDevices (строка-вход в секции «Аккаунт VK»).
+    onOpenVkIdAccount: () -> Unit = {},
 ) {
     // #SETTINGS-FIX: состояние диалога создания PIN-кода.
     var showPinSetup by remember { mutableStateOf(false) }
@@ -2950,6 +3002,41 @@ private fun SecurityTab(
                         )
                         Text(
                             "Просмотр активных сессий и удалённое завершение",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        // IMP-VKID: строка-вход в экран «Аккаунт VK ID» (мультипрофили
+        // account.getMulti + deeplink-ячейки кабинета id.vk.com: пароль,
+        // 2FA, сервисы, VK Pay). Стиль строки «Устройства и сессии» выше.
+        item {
+            Card(modifier = Modifier.fillMaxWidth().clickable { onOpenVkIdAccount() }) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.ManageAccounts,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.size(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Аккаунт VK ID",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            "Мультипрофили, пароль, 2FA, сервисы, VK Pay",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

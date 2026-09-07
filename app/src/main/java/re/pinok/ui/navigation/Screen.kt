@@ -23,7 +23,9 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -323,6 +325,35 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * «Чёрный список».
      */
     object Blacklist : Screen("blacklist", "Чёрный список", Icons.Default.Block)
+
+    /**
+     * IMP-FEED-2: экран «Скрытые источники» — менеджер мьютов ленты (web:
+     * правое меню ленты → «Редактировать», al_settings.php?act=a_edit_owners_list;
+     * лента.снапшоты.парсинг.полный.md §3.4/§4 п.7).
+     * Список — newsfeed.getBanned (extended=1: profiles[] + groups[]), возврат
+     * источника — newsfeed.unban (документированная семантика «вернуть в ленту»;
+     * newsfeed.deleteBan — легаси-пара web-бандла профиля, для точечного возврата
+     * одного источника выбирается unban).
+     * Суб-экран без пункта в навбаре (иконка — семантическая, по паттерну объекта
+     * Blacklist); маршрут в hasOwnTopBar (SovaNavHost): собственный
+     * Scaffold+TopAppBar. Без параметров — данные свои (getBanned не требует входа).
+     */
+    object FeedHidden : Screen("feed_hidden", "Скрытые источники", Icons.Outlined.VisibilityOff)
+
+    /**
+     * IMP-VKID: экран «Аккаунт VK ID» — мультипрофили (account.getMulti,
+     * метод подтверждён парсингом account.bundle VK ID-кабинета,
+     * vkid.снапшоты.парсинг.полный.md §2.1/§3.4/§4 п.4) + ссылочные ячейки
+     * разделов кабинета id.vk.com (Безопасность, VK Pay) через
+     * Linkify.openUrlExternal. Списки сессий/сервисов, установка 2FA, смена
+     * пароля, VK Pay-платежи — wire в снапшоте не снят (§3) → честные
+     * deeplink-ячейки, не имитируются; переключение аккаунтов не реализовано
+     * (токен-exchange флоу не снят, ExchangeTokenStorage односессионный).
+     * Суб-экран без пункта в навбаре (иконка — семантическая, по паттерну
+     * объектов Blacklist/FeedHidden); маршрут в hasOwnTopBar (SovaNavHost):
+     * собственный Scaffold+TopAppBar. Без параметров — данные свои.
+     */
+    object VkIdAccount : Screen("vkid_account", "Аккаунт VK ID", Icons.Outlined.ManageAccounts)
     /** #CALLS: история звонков (пропущенные/входящие/исходящие). */
     object CallsHistory  : Screen("calls_history", "Звонки",       Icons.Filled.Call)
     object About         : Screen("about",         "О приложении", null)

@@ -97,6 +97,8 @@ import re.pinok.ui.screens.bookmarks.BookmarksScreen
 import re.pinok.ui.screens.community.BoardTopicScreen
 import re.pinok.ui.screens.community.CommunityScreen
 import re.pinok.ui.screens.documents.DocumentsScreen
+// IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты).
+import re.pinok.ui.screens.feed.FeedHiddenSourcesScreen
 import re.pinok.ui.screens.feed.FeedScreen
 import re.pinok.ui.screens.feed.PostDetailScreen
 import re.pinok.ui.screens.feed.StoryViewerScreen
@@ -135,6 +137,8 @@ import re.pinok.ui.screens.settings.BlacklistScreen
 import re.pinok.ui.screens.settings.LogScreen
 import re.pinok.ui.screens.settings.PrivacySettingsScreen
 import re.pinok.ui.screens.settings.SettingsScreen
+// IMP-VKID: экран «Аккаунт VK ID» (мультипрофили + deeplink-ячейки кабинета).
+import re.pinok.ui.screens.settings.VkIdAccountScreen
 import re.pinok.ui.screens.superapp.ServicesScreen
 import re.pinok.ui.screens.video.VideoScreen
 import re.pinok.ui.screens.videoplayer.VideoPlatformRouter
@@ -823,6 +827,12 @@ listOf(
         // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и NotificationSettings.
         Screen.SettingsPrivacy.route,
         Screen.Blacklist.route,
+        // IMP-FEED-2: у FeedHiddenSourcesScreen («Скрытые источники») собственный
+        // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и BlacklistScreen.
+        Screen.FeedHidden.route,
+        // IMP-VKID: у VkIdAccountScreen («Аккаунт VK ID») собственный
+        // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и BlacklistScreen.
+        Screen.VkIdAccount.route,
         // #MUSIC-PORT: у музыкальных экранов собственный LibraryTopBar
         // (← Название). Маршруты не были в списке → глобальный ScreenTopBar
         // (← PinoK) рисовался поверх локального → две панели.
@@ -1918,6 +1928,16 @@ composable(Screen.CallsHistory.route) {
                         onOpenBlacklist = {
                             nav.navigate(Screen.Blacklist.route)
                         },
+                        // IMP-FEED-2: «Скрытые источники» — тот же callback-паттерн
+                        // навигации, что и onOpenBlacklist.
+                        onOpenHiddenSources = {
+                            nav.navigate(Screen.FeedHidden.route)
+                        },
+                        // IMP-VKID: «Аккаунт VK ID» (VkIdAccountScreen) — тот же
+                        // callback-паттерн навигации, что и onOpenHiddenSources.
+                        onOpenVkIdAccount = {
+                            nav.navigate(Screen.VkIdAccount.route)
+                        },
                     )
                 }
                 composable(Screen.NotificationSettings.route) {
@@ -1931,6 +1951,31 @@ composable(Screen.CallsHistory.route) {
                 // NotificationSettingsScreen, инвентарь §1.6).
                 composable(Screen.Blacklist.route) {
                     BlacklistScreen(onBack = { nav.popBackStack() })
+                }
+                // IMP-FEED-2: «Скрытые источники» — менеджер мьютов ленты
+                // (newsfeed.getBanned + newsfeed.unban). Тап по источнику —
+                // профиль/сообщество (паттерн FollowList-композибла П-7-AB).
+                composable(Screen.FeedHidden.route) {
+                    FeedHiddenSourcesScreen(
+                        onBack = { nav.popBackStack() },
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
+                        onGroupClick = { groupId ->
+                            nav.navigate(Screen.Community.buildRoute(groupId))
+                        },
+                    )
+                }
+                // IMP-VKID: «Аккаунт VK ID» — мультипрофили (account.getMulti) +
+                // deeplink-ячейки кабинета id.vk.com. Строка «Редактировать
+                // профиль» — вход в существующий EditProfileScreen (П-3).
+                composable(Screen.VkIdAccount.route) {
+                    VkIdAccountScreen(
+                        onBack = { nav.popBackStack() },
+                        onOpenEditProfile = {
+                            nav.navigate(Screen.ProfileEdit.route)
+                        },
+                    )
                 }
                 // §49.6 Sprint VK-ID-1.2: Управление сессиями/устройствами аккаунта.
                 composable(Screen.Devices.route) {

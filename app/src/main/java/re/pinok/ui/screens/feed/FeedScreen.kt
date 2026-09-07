@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PushPin
@@ -114,6 +115,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.google.gson.JsonObject
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -158,7 +160,16 @@ import kotlin.math.roundToInt
 // ALL → newsfeed.get. RECOMMENDED → newsfeed.getRecommended.
 // LIKES → likes.getList (5 подтабов: Все/Посты/Комментарии/Клипы/Видео).
 // PHOTOS → client-side фильтр поверх ALL.
-// FRIENDS → friends.getRecommendations. SEARCH → newsfeed.search.
+//   IMP-FEED-1 отклонение (п.6): server-side newsfeed.get(filters="photo")
+//   НЕ подключён — с этим фильтром VK возвращает items type="photo"
+//   (псевдо-посты без id/from_id поста), которые parseNewsfeedResponse
+//   отбрасывает stub-гвардом (postId<=0) → таб стал бы пустым. Правка
+//   потребовала бы менять VKA-парсер (в IMP-FEED-1 заморожен — единственный
+//   допустимый дифф там: newsfeedGet sourceIds). Оставлен client-side фильтр.
+// FRIENDS → лента постов друзей: newsfeed.get(source_ids из friends.get)
+//   (IMP-FEED-1, снапшот §1.2: section=friends = посты друзей, НЕ «возможные
+//   друзья»; блок рекомендаций друзей сохранён над лентой — прежнее поведение).
+// SEARCH → newsfeed.search.
 private enum class FeedFilter(val label: String, val apiFilters: String?, val recommended: Boolean) {
     ALL("Все новости", "post,photo,video", false),
     RECOMMENDED("Рекомендации", null, true),
@@ -169,6 +180,9 @@ private enum class FeedFilter(val label: String, val apiFilters: String?, val re
 }
 
 // #FEED-REACTIONS: подтабы для раздела «Реакции» (соответствует VK likes.getList type).
+// IMP-FEED-1: WALL_REPLY («Комментарии») рендерит CommentCard из сырых items
+// likes.getList(type="comment"); CLIPS/VIDEO оба type="video" — моб. API
+// их неразличает (снапшот §3.3/§5.7, честное ограничение).
 private enum class LikesFilter(val label: String, val apiType: String) {
     ALL("Все", "post"),
     WALL("Посты", "post"),
@@ -508,6 +522,120 @@ fun FeedScreen(
     var likesItems by remember { mutableStateOf<List<Post>>(emptyList()) }
     var likesLoading by remember { mutableStateOf(false) }
     var likesTotalCount by remember { mutableIntStateOf(0) }
+    // IMP-FEED-1: группы из wallGetById для списка «Реакций» (кнопка
+    // подписки в PostCard — состояние из GroupInfo.isMember, если VK его отдал).
+    var likesGroups by remember { mutableStateOf<Map<Long, VKApiClient.GroupInfo>>(emptyMap()) }
+
+    // #FEED-LIKES-COMMENTS (IMP-FEED-1, п.3): лайкнутые комментарии
+    // (likes.getList type="comment") + профили авторов (usersGetByIds).
+    var likedComments by remember { mutableStateOf<List<LikedComment>>(emptyList()) }
+    var likedCommentAuthors by remember { mutableStateOf<Map<Long, UserProfile>>(emptyMap()) }
+
+    // #FEED-LIKES-PHOTOS (IMP-FEED-1, п.4): лайкнутые фото (likes.getList
+    // type="photo"). Пагинация: offset += страница; hasMore = страница полная.
+    var likedPhotos by remember { mutableStateOf<List<LikedPhoto>>(emptyList()) }
+    var likedPhotosTotal by remember { mutableIntStateOf(0) }
+    var likedPhotosOffset by remember { mutableIntStateOf(0) }
+    var likedPhotosHasMore by remember { mutableStateOf(false) }
+    var likedPhotosLoadingMore by remember { mutableStateOf(false) }
+
+    // #FEED-SUBSCRIBE (IMP-FEED-1, п.2): оптимистичное состояние подписки
+    // на авторов постов (key = fromId). Значение: true → «Отписаться»,
+    // false → «Подписаться». ОТСУТСТВУЕТ в мапе = состояние неизвестно →
+    // PostCard рисует дефолт «Подписаться» (честно: VK не отдаёт состояние
+    // подписки на юзера в newsfeed.get; для групп is_member запрошен в
+    // fields, но parseNewsfeedResponse его в GroupInfo не кладёт — только
+    // fallback-путь parseGroupsJsonArray).
+    val subscribeState = remember { mutableStateMapOf<String, Boolean>() }
+    // «Пожаловаться» / подписка работают только с ЧУЖИХ записей — нужен
+    // свой id (UserProfileScreen-паттерн: exchangeAuthRepository.userId()).
+    val myUserId = remember { app.exchangeAuthRepository.userId() }
+
+    // ══ П-7-AB (IMP-FEED-1, п.1): «Пожаловаться» на пост ленты ══
+    // Паттерн 1:1 из ProfileScreen.reportWallPostConfirmed (wall.markAsSpam):
+    // state-цель + in-flight флаг + AlertDialog подтверждения (низ экрана).
+    val reportingPost = remember { mutableStateOf<Post?>(null) }
+    var reportInFlight by remember { mutableStateOf(false) }
+    fun reportWallPostConfirmed(target: Post) {
+        if (reportInFlight) return
+        reportInFlight = true
+        scope.launch {
+            val ok = try {
+                app.apiClient.wallMarkAsSpam(ownerId = target.ownerId, postId = target.id)
+            } catch (e: Exception) {
+                AppLog.e("FeedScreen", "wallMarkAsSpam failed", e)
+                false
+            }
+            reportInFlight = false
+            reportingPost.value = null
+            android.widget.Toast.makeText(
+                app.applicationContext,
+                if (ok) "Жалоба отправлена"
+                else (app.apiClient.lastApiError ?: "Не удалось отправить жалобу"),
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    // #FEED-SUBSCRIBE (IMP-FEED-1, п.2): подписка на автора поста.
+    // Юзер (fromId>0) → newsfeed.subscribe/unsubscribe(type="wall", ownerId=fromId,
+    // itemId=fromId); сообщество (fromId<0) → groups.join/leave(-fromId).
+    // Оптимистично: состояние в [subscribeState], ошибка → откат + тост lastApiError.
+    fun toggleSubscribe(post: Post) {
+        val key = post.fromId.toString()
+        if (post.fromId == 0L || post.fromId == myUserId) return
+        val current = subscribeState[key]
+            ?: if (post.fromId < 0) (likesGroups[-post.fromId] ?: groups[-post.fromId])?.let { it.isMember == 1 } else null
+        val target = !(current ?: false)
+        subscribeState[key] = target // оптимистично
+        scope.launch {
+            val ok = if (target) {
+                if (post.fromId < 0) app.apiClient.groupsJoin(-post.fromId)
+                else app.apiClient.newsfeedSubscribe(type = "wall", ownerId = post.fromId, itemId = post.fromId)
+            } else {
+                if (post.fromId < 0) app.apiClient.groupsLeave(-post.fromId)
+                else app.apiClient.newsfeedUnsubscribe(type = "wall", ownerId = post.fromId, itemId = post.fromId)
+            }
+            if (!ok) {
+                // Откат: absent-состояние дефолтит в false («Подписаться») —
+                // ровно то, что пользователь видел до тапа.
+                subscribeState[key] = current ?: false
+                android.widget.Toast.makeText(
+                    app.applicationContext,
+                    app.apiClient.lastApiError ?: "Не удалось изменить подписку",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    // #FEED-LIKES-PHOTOS (IMP-FEED-1, п.4): загрузка страницы лайкнутых фото.
+    // reset=true — первая страница (offset 0); иначе offset += последняя страница.
+    fun loadLikedPhotos(reset: Boolean) {
+        if (likedPhotosLoadingMore) return
+        val page = 30
+        val offset = if (reset) 0 else likedPhotosOffset
+        scope.launch {
+            likedPhotosLoadingMore = true
+            try {
+                val (total, items) = app.apiClient.likesGetList(type = "photo", count = page, offset = offset)
+                val parsed = items.mapNotNull { parseLikedPhoto(it) }
+                likedPhotosTotal = total
+                likedPhotosOffset = offset + items.size
+                likedPhotos = if (reset) parsed
+                else (likedPhotos + parsed).distinctBy { "${it.ownerId}_${it.photoId}" }
+                // hasMore = страница была ПОЛНОЙ (items.size) И не дошли до total (Pair.first).
+                likedPhotosHasMore = items.size >= page && likedPhotos.size < total
+                AppLog.i("FeedScreen", "likesGetList(photo): $total total, +${parsed.size} parsed (offset=$offset)")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("FeedScreen", "likesGetList(photo) failed", e)
+            } finally {
+                likedPhotosLoadingMore = false
+            }
+        }
+    }
 
     // Загрузка друзей-рекомендаций при переключении на вкладку «Друзья».
     LaunchedEffect(feedFilterName) {
@@ -526,37 +654,74 @@ fun FeedScreen(
     }
 
     // Загрузка реакций (likes.getList) при переключении на вкладку «Реакции».
+    // IMP-FEED-1: подтаб «Комментарии» (WALL_REPLY) → type="comment" возвращает
+    // ПОЛНЫЕ объекты комментариев (id/from_id/text/date/likes.count) — рендерим
+    // CommentCard (см. ниже), а не wallGetById-посты.
     LaunchedEffect(feedFilterName, likesFilterName) {
         if (feedFilterName == FeedFilter.LIKES.name && !likesLoading) {
             likesLoading = true
             try {
-                val (totalCount, items) = app.apiClient.likesGetList(
-                    type = likesFilter.apiType,
-                    count = 30,
-                )
-                likesTotalCount = totalCount
-                // Преобразуем items в посты через wall.getById
-                if (items.isNotEmpty()) {
-                    val postIds = items.mapNotNull { it ->
-                        val ownerId = it.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
-                        val itemId = it.get("item_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
-                        ownerId to itemId
-                    }
-                    if (postIds.isNotEmpty()) {
-                        val result = app.apiClient.wallGetById(postIds)
-                        likesItems = result.posts
-                        AppLog.i("FeedScreen", "likesGetList: $totalCount total, ${likesItems.size} posts loaded")
+                if (likesFilter == LikesFilter.WALL_REPLY) {
+                    // #FEED-LIKES-COMMENTS: сырые JsonObject → LikedComment
+                    // patient-парсинг (parseLikedComment). Профили: likesGetList
+                    // запрашивает extended=1, НО VKA-сигнатура возвращает только
+                    // items (Pair<Int, List<JsonObject>>) — profiles[] ответа
+                    // теряются; VKA в IMP-FEED-1 заморожен, поэтому авторы
+                    // обогащаются отдельным usersGetByIds по from_id; не найден →
+                    // дефолт-карточка (буква-фоллбэк, см. KDoc CommentCard).
+                    likedComments = emptyList()
+                    likedCommentAuthors = emptyMap()
+                    val (totalCount, items) = app.apiClient.likesGetList(type = "comment", count = 30)
+                    likesTotalCount = totalCount
+                    val parsed = items.mapNotNull { parseLikedComment(it) }
+                    likedComments = parsed
+                    val fromIds = parsed.map { it.fromId }.filter { it > 0 }.distinct()
+                    likedCommentAuthors = if (fromIds.isEmpty()) emptyMap() else app.apiClient.usersGetByIds(fromIds)
+                    AppLog.i("FeedScreen", "likesGetList(comment): $totalCount total, ${parsed.size} parsed")
+                } else {
+                    val (totalCount, items) = app.apiClient.likesGetList(
+                        type = likesFilter.apiType,
+                        count = 30,
+                    )
+                    likesTotalCount = totalCount
+                    // Преобразуем items в посты через wall.getById
+                    if (items.isNotEmpty()) {
+                        val postIds = items.mapNotNull { it ->
+                            val ownerId = it.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
+                            val itemId = it.get("item_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
+                            ownerId to itemId
+                        }
+                        if (postIds.isNotEmpty()) {
+                            val result = app.apiClient.wallGetById(postIds)
+                            likesItems = result.posts
+                            likesGroups = result.groups
+                            AppLog.i("FeedScreen", "likesGetList: $totalCount total, ${likesItems.size} posts loaded")
+                        } else {
+                            likesItems = emptyList()
+                            likesGroups = emptyMap()
+                        }
                     } else {
                         likesItems = emptyList()
+                        likesGroups = emptyMap()
                     }
-                } else {
-                    likesItems = emptyList()
                 }
             } catch (e: Exception) {
                 AppLog.e("FeedScreen", "likesGetList error", e)
             } finally {
                 likesLoading = false
             }
+        }
+    }
+
+    // #FEED-LIKES-PHOTOS (IMP-FEED-1): первая страница лайкнутых фото —
+    // только на подтабе «Все» (снапшот §1.5: feed_likes_tabs_photo — НЕ таб,
+    // а блок «Фотографии | Показать все» внутри вкладки «Все»).
+    LaunchedEffect(feedFilterName, likesFilterName) {
+        if (feedFilterName == FeedFilter.LIKES.name &&
+            likesFilterName == LikesFilter.ALL.name &&
+            likedPhotos.isEmpty() && !likedPhotosLoadingMore
+        ) {
+            loadLikedPhotos(reset = true)
         }
     }
 
@@ -572,7 +737,34 @@ fun FeedScreen(
                 return VKApiClient.NewsfeedResult(emptyList(), emptyMap(), emptyMap(), null)
             }
             f == FeedFilter.FRIENDS -> {
-                return VKApiClient.NewsfeedResult(emptyList(), emptyMap(), emptyMap(), null)
+                // #FEED-FRIENDS-FEED (IMP-FEED-1, п.5): «Друзья» = лента постов
+                // друзей (снапшот §1.2: vk.ru/feed?section=friends — посты
+                // друзей, НЕ «возможные друзья»). Моб. аналог: newsfeed.get с
+                // source_ids из friends.get (аддитивный параметр newsfeedGet).
+                // ЛИМИТ VK API: source_ids ≤ 100 id — берём первых 100 друзей
+                // (friends.get c count=1000, сортировка order=hints как везде);
+                // при >100 друзей лента покрывает первых 100 — задокументированное
+                // ограничение (выше требует execute-батчей, вне скоупа IMP-FEED-1).
+                // Ошибка/пусто friendsGet → пустой NewsfeedResult: caller
+                // (reloadFeed/refreshFeed) покажет честное состояние
+                // «Ошибка API: …»/«Лента пуста» через lastApiError-гейт.
+                val friendIds = try {
+                    app.apiClient.friendsGet(count = 1000).map { it.id }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.e("FeedScreen", "friendsGet for friends feed failed", e)
+                    emptyList()
+                }
+                if (friendIds.isEmpty()) {
+                    return VKApiClient.NewsfeedResult(emptyList(), emptyMap(), emptyMap(), null)
+                }
+                return app.apiClient.newsfeedGet(
+                    count = count,
+                    startFrom = startFrom,
+                    filters = "post,photo,video",
+                    sourceIds = friendIds.distinct().take(100),
+                )
             }
             f == FeedFilter.SEARCH -> {
                 if (feedSearchQuery.isBlank()) return VKApiClient.NewsfeedResult(emptyList(), emptyMap(), emptyMap(), null)
@@ -1200,10 +1392,54 @@ fun FeedScreen(
             }
             // #FEED-REACTIONS: список реакций (likes.getList).
             if (feedFilter == FeedFilter.LIKES) {
+                // #FEED-LIKES-PHOTOS (IMP-FEED-1, п.4): блок «Понравившиеся фото» —
+                // только на подтабе «Все» (снапшот §1.5). Рендер — LikedPhotosSection
+                // (Chunked-rows сетка 3×квадрат, LazyVerticalGrid внутри LazyColumn нельзя).
+                if (likesFilter == LikesFilter.ALL && likedPhotos.isNotEmpty()) {
+                    item(key = "likes_photos_block") {
+                        LikedPhotosSection(
+                            photos = likedPhotos,
+                            total = likedPhotosTotal,
+                            hasMore = likedPhotosHasMore,
+                            loadingMore = likedPhotosLoadingMore,
+                            onLoadMore = { loadLikedPhotos(reset = false) },
+                            onPhotoClick = { urls, idx ->
+                                saveScrollPosition()
+                                photoViewerState.value = urls to idx
+                            },
+                        )
+                    }
+                }
                 if (likesLoading) {
                     item {
                         Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()
+                        }
+                    }
+                } else if (likesFilter == LikesFilter.WALL_REPLY) {
+                    // #FEED-LIKES-COMMENTS (IMP-FEED-1, п.3): подтаб «Комментарии».
+                    // Карточки лайкнутых комментариев (CommentCard). «Пожаловаться»
+                    // на коммент НЕ добавлен — моб. wire отсутствует (reports.php
+                    // legacy web; wall.markAsSpam работает только с постами),
+                    // отклонение задокументировано в KDoc CommentCard.
+                    if (likedComments.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Text("Нет лайкнутых комментариев", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        items(likedComments, key = { "like_comment_${it.ownerId}_${it.commentId}" }) { comment ->
+                            CommentCard(
+                                comment = comment,
+                                author = likedCommentAuthors[comment.fromId],
+                                onAuthorClick = { authorId ->
+                                    // Тап по карточке → профиль автора
+                                    // (юзер → UserProfileScreen, сообщество → CommunityScreen).
+                                    if (authorId < 0) onGroupClickSavePos(-authorId)
+                                    else onUserClickSavePos(authorId)
+                                },
+                            )
                         }
                     }
                 } else if (likesItems.isEmpty()) {
@@ -1217,8 +1453,12 @@ fun FeedScreen(
                         PostCard(
                             post = post,
                             profiles = emptyMap(),
-                            groups = emptyMap(),
+                            groups = likesGroups,
                             likesState = likesState,
+                            myUserId = myUserId,
+                            subscriptionState = subscribeState,
+                            onSubscribe = { toggleSubscribe(it) },
+                            onReportSpam = { reportingPost.value = it },
                             onLikeToggle = { clickedPost ->
                                 val key = "${clickedPost.ownerId}_${clickedPost.id}"
                                 val current = likesState[key] ?: (false to 0)
@@ -1254,6 +1494,11 @@ fun FeedScreen(
                 }
             }
             // #FEED-FILTER-FRIENDS: список рекомендованных друзей.
+            // IMP-FEED-1: вкладка «Друзья» теперь = лента постов друзей
+            // (#FEED-FRIENDS-FEED, items(posts) ниже); блок рекомендаций
+            // сохранён НАД лентой (прежняя функциональность не удалялась).
+            // Раньше он был фактически недостижим: пустая FRIENDS-страница
+            // выставляла errorText → экран заменялся ErrorView.
             if (feedFilter == FeedFilter.FRIENDS) {
                 if (friendsLoading) {
                     item {
@@ -1261,13 +1506,9 @@ fun FeedScreen(
                             CircularProgressIndicator()
                         }
                     }
-                } else if (recommendedFriends.isEmpty()) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("Нет рекомендаций друзей", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                } else {
+                } else if (recommendedFriends.isNotEmpty()) {
+                    // Пусто → честно ничего не рисуем: пустые ленты/ошибки
+                    // friendsGet покрывает ErrorView (errorText) или items(posts).
                     items(recommendedFriends, key = { "fr_${it.id}" }) { friend ->
                         Row(
                             modifier = Modifier
@@ -1341,6 +1582,11 @@ fun FeedScreen(
                     profiles = profiles,
                     groups = groups,
                     likesState = likesState,
+                    // IMP-FEED-1: подписка (п.2) + «Пожаловаться» (п.1).
+                    myUserId = myUserId,
+                    subscriptionState = subscribeState,
+                    onSubscribe = { toggleSubscribe(it) },
+                    onReportSpam = { reportingPost.value = it },
                     onLikeToggle = { clickedPost ->
                         val key = "${clickedPost.ownerId}_${clickedPost.id}"
                         val current = likesState[key] ?: (false to 0)
@@ -1563,6 +1809,35 @@ fun FeedScreen(
             onDismiss = { sharePost.value = null },
         )
     }
+
+    // ══ П-7-AB (IMP-FEED-1, п.1): подтверждение «Пожаловаться на запись?» ══
+    // Паттерн 1:1 из ProfileScreen (reportTarget + reportInFlight: кнопки
+    // disabled в полёте, повторный вызов игнорируется; успех → тост
+    // «Жалоба отправлена», ошибка → тост lastApiError).
+    val reportTarget = reportingPost.value
+    if (reportTarget != null) {
+        AlertDialog(
+            onDismissRequest = { if (!reportInFlight) reportingPost.value = null },
+            title = { Text("Пожаловаться на запись?") },
+            text = { Text("Запись будет отправлена на проверку администрации VK.") },
+            confirmButton = {
+                TextButton(
+                    onClick = { reportWallPostConfirmed(reportTarget) },
+                    enabled = !reportInFlight,
+                ) {
+                    Text(
+                        if (reportInFlight) "Отправка…" else "Пожаловаться",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { reportingPost.value = null }, enabled = !reportInFlight) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
 }
 
 // #FEED-FILTER: кнопка-переключатель раздела ленты (аналог VK rightmenu
@@ -1644,6 +1919,16 @@ private fun PostCard(
     onBanSource: (Post) -> Unit = {},
     // Реакции: (post, reactionEntry) — пользователь выбрал эмодзи-реакцию.
     onReaction: (Post, ReactionEntry) -> Unit = { _, _ -> },
+    // ══ IMP-FEED-1 ══
+    // Свой id (для гейтов «Пожаловаться»/«Подписаться» — только на чужих записях).
+    myUserId: Long = 0L,
+    // #FEED-SUBSCRIBE: состояние подписки на автора (key = fromId).
+    // absent = неизвестно → рисуем дефолт «Подписаться» (VK не отдаёт состояние
+    // подписки на юзера в newsfeed.get — честный дефолт, см. задачу IMP-FEED-1).
+    subscriptionState: Map<String, Boolean> = emptyMap(),
+    onSubscribe: (Post) -> Unit = {},
+    // П-7-AB: «Пожаловаться» (wall.markAsSpam) — диалог и вызов на уровне экрана.
+    onReportSpam: (Post) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val authorName: String
@@ -1784,6 +2069,33 @@ private fun PostCard(
                         )
                     }
                 }
+                // #FEED-SUBSCRIBE (IMP-FEED-1, п.2): компактная кнопка подписки
+                // в хедере карточки (снапшот: post-header-subscription-button,
+                // раздел «Реакции»). Чип-стиль (pill, primary-текст). Скрыта на
+                // своих постах (fromId == myUserId) и у постов без автора.
+                // Состояние: override из subscriptionState; absent → дефолт
+                // «Подписаться» (для сообществ — из GroupInfo.isMember, если
+                // VK отдал is_member; для юзеров newsfeed.get состояние не отдаёт).
+                if (post.fromId != 0L && post.fromId != myUserId) {
+                    val subscribed: Boolean? = subscriptionState[post.fromId.toString()]
+                        ?: if (post.fromId < 0) groups[-post.fromId]?.let { it.isMember == 1 } else null
+                    Text(
+                        text = if (subscribed == true) "Отписаться" else "Подписаться",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (subscribed == true) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (subscribed == true) MaterialTheme.colorScheme.surfaceVariant
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            )
+                            .clickable { onSubscribe(post) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
                 // VKUI: flex-grow spacer (pushes menu to right)
                 // VKUI: vkuiIconButton__densityCompact 44x44, more_horizontal_24
                 Box {
@@ -1831,6 +2143,18 @@ private fun PostCard(
                             leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
                             onClick = { showMenu = false; onBanSource(post) },
                         )
+                        // П-7-AB (IMP-FEED-1, п.1): «Пожаловаться» — wall.markAsSpam
+                        // (снапшот §1.6: global_report_spam; VK-семантика — ЧУЖАЯ
+                        // запись, гейт ownerId != myUserId как в ProfileScreen).
+                        // Диалог подтверждения и вызов — на уровне экрана (П-7
+                        // паттерн 1:1). Disabled-поведение — в диалоге (reportInFlight).
+                        if (post.ownerId != myUserId) {
+                            DropdownMenuItem(
+                                text = { Text("Пожаловаться") },
+                                leadingIcon = { Icon(Icons.Outlined.Flag, null) },
+                                onClick = { showMenu = false; onReportSpam(post) },
+                            )
+                        }
                         if (post.canDeleteBool) {
                             DropdownMenuItem(
                                 text = { Text("Удалить пост", color = Color(0xFFE53935)) },
@@ -2313,6 +2637,324 @@ private fun PhotoGrid(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// IMP-FEED-1: раздел «Реакции» — лайкнутые фото (п.4) и комментарии (п.3).
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Сырое лайкнутое фото из likes.getList(type="photo") (IMP-FEED-1, п.4).
+ * url — максимальный width из sizes[] (parseLikedPhoto).
+ */
+private data class LikedPhoto(
+    val ownerId: Long,
+    val photoId: Long,
+    val url: String,
+)
+
+/**
+ * Сырой лайкнутый комментарий из likes.getList(type="comment") (IMP-FEED-1, п.3).
+ * VK возвращает items как ПОЛНЫЕ объекты комментариев (id/from_id/text/date/
+ * likes.count) — парсинг patient-стиль (parseLikedComment).
+ */
+private data class LikedComment(
+    val ownerId: Long,
+    val commentId: Long,
+    val fromId: Long,
+    val text: String,
+    val date: Long,
+    val likesCount: Int,
+)
+
+/**
+ * Patient-парсинг фото-объекта likes.getList(type="photo"): owner_id/id/
+ * sizes[] → url максимального width. Битые элементы (нет id/owner_id/sizes/
+ * url) пропускаются (null → mapNotNull отфильтрует).
+ */
+private fun parseLikedPhoto(o: JsonObject): LikedPhoto? {
+    return try {
+        val ownerId = o.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return null
+        val photoId = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return null
+        val sizes = o.get("sizes")?.takeIf { it.isJsonArray }?.asJsonArray ?: return null
+        var bestUrl: String? = null
+        var bestWidth = -1
+        sizes.forEach { s ->
+            if (!s.isJsonObject) return@forEach
+            val so = s.asJsonObject
+            val w = so.get("width")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+            val url = so.get("url")?.takeIf { !it.isJsonNull }?.asString ?: return@forEach
+            if (w > bestWidth) {
+                bestWidth = w
+                bestUrl = url
+            }
+        }
+        LikedPhoto(ownerId = ownerId, photoId = photoId, url = bestUrl ?: return null)
+    } catch (e: Exception) {
+        AppLog.w("FeedScreen", "parseLikedPhoto failed: ${e.message}")
+        null
+    }
+}
+
+/**
+ * Patient-парсинг комментария likes.getList(type="comment"): id/from_id/text/
+ * date/likes.count. Битые элементы (нет id/from_id) пропускаются.
+ */
+private fun parseLikedComment(o: JsonObject): LikedComment? {
+    return try {
+        val commentId = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return null
+        val fromId = o.get("from_id")?.takeIf { !it.isJsonNull }?.asLong ?: return null
+        val ownerId = o.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+        val text = o.get("text")?.takeIf { !it.isJsonNull }?.asString ?: ""
+        val date = o.get("date")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+        val likesCount = o.get("likes")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("count")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+        LikedComment(
+            ownerId = ownerId,
+            commentId = commentId,
+            fromId = fromId,
+            text = text,
+            date = date,
+            likesCount = likesCount,
+        )
+    } catch (e: Exception) {
+        AppLog.w("FeedScreen", "parseLikedComment failed: ${e.message}")
+        null
+    }
+}
+
+/**
+ * #FEED-LIKES-PHOTOS (IMP-FEED-1, п.4): сетка «Понравившиеся фото» в разделе
+ * «Реакции», подтаб «Все» (снапшот §1.5: likes-feed-photo0..19, 96×96;
+ * §3.3 — UI-сетки раньше не было).
+ *
+ * Данные: likes.getList(type="photo"), items — сырые фото-объекты
+ * ([parseLikedPhoto]: sizes[] → url максимального width, битые пропускаются).
+ *
+ * Сетка: 3 колонки КВАДРАТНЫХ ячеек. LazyVerticalGrid нельзя внутри LazyColumn
+ * (вложенный скролл) — используем Chunked-rows по 3 ячейки (Row + weight(1f) +
+ * aspectRatio(1f)); неполный ряд добивается Spacer'ами (weight-выравнивание).
+ *
+ * Тап по фото → существующий photoViewerState FeedScreen (largestUrl — url
+ * максимального width; передаётся список ВСЕХ загруженных url + index).
+ *
+ * Пагинация «Загрузить ещё»: offset += страница (30, advanced по сырому
+ * items.size, чтобы битые элементы не съедали курсор); hasMore = страница
+ * была полной (items.size >= PAGE) И loaded < total (Pair.first).
+ */
+@Composable
+private fun LikedPhotosSection(
+    photos: List<LikedPhoto>,
+    total: Int,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    onPhotoClick: (List<String>, Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Понравившиеся фото",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (total > 0) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = total.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        photos.chunked(3).forEachIndexed { rowIdx, row ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                row.forEachIndexed { colIdx, photo ->
+                    val flatIndex = rowIdx * 3 + colIdx
+                    AsyncImage(
+                        model = photo.url,
+                        contentDescription = "Фотография",
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onPhotoClick(photos.map { it.url }, flatIndex) },
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+                // Добивка неполного ряда — квадратные ячейки сохраняют ширину 1/3.
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        if (hasMore) {
+            TextButton(onClick = onLoadMore, enabled = !loadingMore) {
+                Text(
+                    text = if (total > 0) "Загрузить ещё (${photos.size}/${total})" else "Загрузить ещё",
+                )
+            }
+        }
+    }
+}
+
+/**
+ * #FEED-LIKES-COMMENTS (IMP-FEED-1, п.3): карточка лайкнутого комментария
+ * в подтабе «Комментарии» раздела «Реакции» (снапшот §1.5:
+ * wall_comments_layout_root — автор/текст/дата/`comment-like`).
+ *
+ * Источник данных: likes.getList(type="comment") — ПОЛНЫЕ объекты
+ * комментариев ([parseLikedComment]). VKA-вызов likesGetList уже шлёт
+ * extended=1, но сигнатура возвращает только items — profiles[] ответа
+ * теряются; VKA в IMP-FEED-1 заморожен, поэтому автор обогащается отдельным
+ * usersGetByIds на уровне экрана; не найден → дефолт (буква-фоллбэк).
+ *
+ * Лайк: ВСЕ элементы likes-фида уже лайкнуты пользователем (likes.getList
+ * filter="likes"), поэтому начальное состояние liked=true; тап = toggle:
+ *  - снять — likes.delete(type="comment") (String-тип — работает с комментами,
+ *    этот путь уже используется в CommentRow CommentsBottomSheet; возвращает
+ *    точный новый счётчик),
+ *  - вернуть — wallLikeComment (likes.add type="comment"), счётчик
+ *    оптимистично +1.
+ * Ошибка → откат оптимистичного состояния.
+ *
+ * Тап по карточке → профиль автора (onUserClick/onGroupClick экрана).
+ *
+ * ОТКЛОНЕНИЕ (честно): «Пожаловаться» на комментарий НЕ добавлено —
+ * web-путь comment_action_report ведёт на reports.php (legacy), в мобильном
+ * API аналога нет; wall.markAsSpam работает только с постами.
+ */
+@Composable
+private fun CommentCard(
+    comment: LikedComment,
+    author: UserProfile?,
+    onAuthorClick: (Long) -> Unit = {},
+) {
+    val app = SovaApp.get()
+    val scope = rememberCoroutineScope()
+    val name = author?.let { "${it.firstName} ${it.lastName}" }
+        ?: if (comment.fromId < 0) "Сообщество" else "id${comment.fromId}"
+    val photo = author?.photo100
+    // Элементы likes-фида уже лайкнуты (filter="likes") — стартуем liked=true.
+    var isLiked by remember(comment.commentId) { mutableStateOf(true) }
+    var likeCount by remember(comment.commentId) { mutableStateOf(comment.likesCount) }
+    var likeInFlight by remember(comment.commentId) { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clickable(enabled = comment.fromId != 0L) { onAuthorClick(comment.fromId) },
+        elevation = CardDefaults.cardElevation(0.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            // Аватар: AsyncImage с фоллбэком-буквой (паттерн CommentRow).
+            if (photo != null) {
+                AsyncImage(
+                    model = photo,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(36.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = name.take(1).uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (comment.text.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = comment.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = comment.date.toRelativeTime(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    // Лайк-кнопка комментария (toggle). Disabled в полёте.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clickable(enabled = !likeInFlight && comment.ownerId != 0L && comment.commentId > 0) {
+                                likeInFlight = true
+                                val newLiked = !isLiked
+                                isLiked = newLiked
+                                likeCount = (likeCount + if (newLiked) 1 else -1).coerceAtLeast(0)
+                                scope.launch {
+                                    val rolledBack = try {
+                                        if (newLiked) {
+                                            !app.apiClient.wallLikeComment(ownerId = comment.ownerId, commentId = comment.commentId)
+                                        } else {
+                                            val newCount = app.apiClient.likesDelete(type = "comment", ownerId = comment.ownerId, itemId = comment.commentId)
+                                            if (newCount >= 0) {
+                                                // Точный счётчик от сервера.
+                                                likeCount = newCount.coerceAtLeast(0)
+                                                false
+                                            } else true
+                                        }
+                                    } catch (e: Exception) {
+                                        AppLog.e("FeedScreen", "comment like toggle failed", e)
+                                        true
+                                    }
+                                    if (rolledBack) {
+                                        // Ошибка — откат оптимистичного состояния.
+                                        isLiked = !newLiked
+                                        likeCount = (likeCount + if (newLiked) -1 else 1).coerceAtLeast(0)
+                                    }
+                                    likeInFlight = false
+                                }
+                            }
+                            .padding(4.dp),
+                    ) {
+                        Icon(
+                            if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
+                        )
+                        if (likeCount > 0) {
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                text = likeCount.toString(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
                 }
             }
         }

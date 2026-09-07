@@ -11947,3 +11947,28 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Отклонения (KDoc):** UserProfileScreen — 0 правок (лайки там не прокинуты решением П-6а, nullable onReaction исключает dead-пикер); при отсутствии post.reactions от сервера — пикер без предвыделения, смена идёт по идемпотентной цепочке C; преждесуществующее расхождение emoji-маппинга пикера с KDoc VKA (в API уходит только Int) — унаследовано от FeedScreen, не чинилось (зона).
 
 **Приёмка оркестратора:** diff-union ровно ReactionPicker.kt (+17/0) + ProfileScreen.kt (+250/−10); VKApiClient/FeedScreen/core-data — 0 diff; скобки OK оба файла; nested-comments ALL CLEAN (165); selectedReactionId/reactionStates/applyWallPostReaction — по 1 декларации; вызовы likesAdd/likesDelete (named reactionId) сверены с декларациями :5092/:5130; combinedClickable+ExperimentalFoundationApi импортированы (7 упоминаний); Post.Reactions.userReacted подтверждён в core-модели.
+
+---
+
+## 2026-09-07 — feat(feed+vkid): снапшоты Лента.zip + VK_ID.zip — тотальное изучение и внедрение
+
+**Запрос:** «еще по профилю и по ленте снапшотов тотальное изучение и внедрение» + VK_ID.zip/Лента.zip → upload/ (не трекается). Протокол: парсинг-волна (2 агента) → внедрение (2 волны, 3 агента).
+
+**Парсинг-волна (код не тронут):**
+- `лента.снапшоты.парсинг.полный.md` (41.8KB): 5 страниц vk.com-ленты, §0..§5; GAP: ✅31/❗13/⚠️9; wire-каталог: newsfeed.* SPA (44 метода: get/getFeed/getByType/getLikesFeed/search/ignoreItem/getBanned/unsubscribe...), legacy al_feed.php ~30 актов, al_wall.php ~33, like.php, al_search; факт: sort-ключи web (asc/desc/smart→oldest/latest/popular) — statlog, моб. параметр не снят; apiPrefetchCache пуст — живого JSON ленты нет (честно §5).
+- `vkid.снапшоты.парсинг.полный.md` (~32KB): 5 страниц id.vk.com; GAP: ✅7/❗9/⚠️9; endpoint-следы account.bundle: users.get, account.{getProfileInfo,saveProfileInfo,getToggles,getMulti,getPasskeyDevices,deletePassword}, photos.{getOwnerPhotoUploadServer,saveOwnerPhoto,delete}, VKWebAppAuthByExchangeToken* (= ядро auth/exchange), OAuth-провайдеры; платёжных endpoint'ов 0 → VK Pay честный отказ; vk_куки_локалстордж.txt — 0 байт.
+
+**Внедрение волна 1 (параллельно, IMP-FEED-1 + IMP-FEED-2):**
+- FeedScreen (+670/−28): «Пожаловаться» в меню поста (wallMarkAsSpam, паттерн П-7, гейт ownerId≠myId); кнопка-чип «Подписаться» в хедере карточки (newsfeedSubscribe/Unsubscribe:3730/3713; сообщества → groupsJoin/Leave:9342/9374; состояние unknown → дефолт-подписка, задокументировано); подтаб «Комментарии» Реакций (likesGetList type="comment":5206 → CommentCard: аватар/имя/текст/дата/toggle-лайк wallLikeComment:3907 + likesDelete type="comment", тап → профиль; жалоба на коммент — моб. wire нет, отклонение); сетка «Понравившиеся фото» (type="photo", Chunked-rows 3 колонки → photoViewerState, пагинация, блок на подтабе «Все»); «Друзья» = реальная лента друзей (friendsGet → id-шники → take(100) → newsfeedGet(sourceIds)); блок рекомендаций друзей починен (был недостижим за ErrorView).
+- VKA +89/−1: newsfeedGet +параметр sourceIds (аддитивно, KDoc #FEED-FRIENDS-FEED; −1 = замена строки сигнатуры).
+- FeedHiddenSourcesScreen (NEW 492): «Скрытые источники» (newsfeedGetBanned:3624 → секции Пользователи/Сообщества, «Вернуть в ленту» = newsfeedUnban точечно (семантика unban обоснована в KDoc; deleteBan — легаси-пара web-флоу), optimistic с rollback на прежний index, фильтр по имени, pull-to-refresh, тапы → UserProfile/Community); маршрут Screen.FeedHidden ("feed_hidden", hasOwnTopBar); вход: SettingsScreen → NewsTab «Фильтрация ленты» → строка «Скрытые источники» (callback onOpenHiddenSources).
+- Отклонение: «Фотографии»-таб оставлен client-side (filters="photo" даёт псевдо-посты, отбрасываемые stub-гвардом VKA-парсера; починка = правка парсера — VKA заморожен сверх согласованных точек).
+
+**Внедрение волна 2 (IMP-VKID):**
+- VKA +1 метод: data class VkMultiAccount + accountGetMulti() (account.getMulti, wire из бандла; парсинг {count,accounts[]}|массив, name|first+last, is_logged_in; скобочно-нейтрально).
+- VkIdAccountScreen (NEW 488) «Аккаунт VK ID»: секция «Аккаунты» (строки мультипрофиля, текущий помечен is_logged_in|id-match; ПЕРЕКЛЮЧЕНИЕ честно НЕ реализовано — ExchangeTokenStorage односессионный, token-exchange wire не снят; отклонение в 4 местах + видимая подпись); секция «Безопасность» + «VK Pay» — deeplink-ячейки openUrlExternal (id.vk.com/ru/manage/{security,services}, vkpay) с подписью «Откроется в браузере»; «Редактировать профиль» → существующий Screen.ProfileEdit (анкета не дублируется); 2FA — только ссылка (account.getInfo в бандле отсутствует, статус не подтверждён — no-stub); НЕ нарисованы: passkey, телеметрия, FAQ, удаление аккаунта, сессии/сервисы-списки (wire нет).
+- Маршрут Screen.VkIdAccount ("vkid_account", hasOwnTopBar); вход: SettingsScreen SECURITY-таб строка «Аккаунт VK ID» (callback onOpenVkIdAccount).
+
+**Приёмка оркестратора:** diff-union ровно ожидаемые 6 модиф. + 2 новых экрана + 2 дока; скобки 7/7 OK (VKA {1136,1134} = базлайн-артефакт −2, дельта волны нейтральна); nested-comments ALL CLEAN (167); маршруты 1×; callbacks симметричны (12 упоминаний Settings↔SovaNavHost); VKA = 2 согласованных аддитивных точки (newsfeedGet.sourceIds, accountGetMulti), остальные 0; модели core/data, FeedScreen-зоны агентов не пересеклись; worklog: 5 секций (SNAP-FEED-PARSE, SNAP-VKID-PARSE-2, IMP-FEED-1, IMP-FEED-2, IMP-VKID).
+
+**Честные отказы (обоснованы в доках):** VK Pay/платежи/голоса/подписки-биллинг (мини-апп, endpoint'ов нет), 16 тумблеров al_settings, сортировка ленты (statlog-only), passkey (Credential Manager вне скоупа), переключение аккаунтов (token-exchange wire не снят), жалоба на коммент (reports.php legacy).

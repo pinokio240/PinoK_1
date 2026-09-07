@@ -254,7 +254,12 @@ class VKApiClient(
         val type: String? = null,
     )
 
-    suspend fun newsfeedGet(count: Int = 30, startFrom: String? = null, filters: String = "post,photo,video"): NewsfeedResult {
+    // IMP-FEED-1 (#FEED-FRIENDS-FEED): sourceIds — аддитивный параметр
+    // newsfeed.get (source_ids) для раздела «Друзья» = лента постов друзей
+    // (снапшот «Лента» §1.2: vk.ru/feed?section=friends показывает посты
+    // друзей, а НЕ «возможных друзей»). VK API лимит source_ids — 100 id
+    // (гейт на вызывающей стороне, FeedScreen.fetchFeedPage).
+    suspend fun newsfeedGet(count: Int = 30, startFrom: String? = null, filters: String = "post,photo,video", sourceIds: List<Long>? = null): NewsfeedResult {
         if (isOffline()) {
             AppLog.w("VKApiClient", "newsfeedGet: offline mode — skipping API call")
             return NewsfeedResult(emptyList(), emptyMap(), emptyMap())
@@ -270,6 +275,7 @@ class VKApiClient(
             "fields" to NEWSFEED_FIELDS,
         )
         if (startFrom != null) args["start_from"] = startFrom
+        if (sourceIds != null) args["source_ids"] = sourceIds.joinToString(",") { it.toString() }
         val json = call("newsfeed.get", args) ?: return NewsfeedResult(emptyList(), emptyMap(), emptyMap())
         return parseNewsfeedResponse(json)
     }
@@ -16188,6 +16194,89 @@ class VKApiClient(
             }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "databaseGetCities parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #SNAP-VKID (2026-09-08, IMP-VKID): account.getMulti — список мультипрофилей
+     * аккаунта. Метод подтверждён парсингом account.bundle VK ID-кабинета
+     * (vkid.снапшоты.парсинг.полный.md §2.1, §3.4, рекомендация §4 п.4: бандл
+     * кабинета вызывает account.getMulti для переключения юзера; в ядре до
+     * этого потребителя не было).
+     *
+     * VK API: account.getMulti {} → формат ответа в снятом бандле НЕ зафиксирован
+     * (минифицированный JS, §5.3/§5.5), поэтому парсинг терпеливый по ожидаемой
+     * VK-структуре: response = { count: Int, accounts: [{ id: Long,
+     * name: String | first_name+last_name, photo_100: String?,
+     * is_logged_in: 0/1|true/false? }] }; допустим и голый массив в response.
+     * Гварды: не-объекты пропускаются, элементы без id<=0 и без имени считаются
+     * битыми и пропускаются (как databaseGetCities). is_logged_in опционален —
+     * в модели Boolean? (null = VK поле не отдал; UI тогда помечает текущий
+     * аккаунт по совпадению id с ExchangeAuthRepository.userId()).
+     *
+     * ПЕРЕКЛЮЧЕНИЕ АККАУНТОВ сознательно НЕ делается (no-stub, честное
+     * отклонение): для второго аккаунта нужен свой AuthResult (access_token +
+     * exchange_token + session-куки), добываемый только через токен-exchange
+     * флоу auth_by_exchange_token, wire которого в снапшоте не снят; хранилище
+     * ядра ExchangeTokenStorage — плоский набор ключей под ОДНУ сессию
+     * (второй слот отсутствует). Метод отдаёт только справочный список.
+     *
+     * Возврат — ЛОКАЛЬНЫЙ VkMultiAccount: модели re.pinok.data.model править
+     * правилами этапа запрещено (прецеденты локальных data class в этом файле —
+     * MessageSearchResult/UploadedPhoto/ContentTab/CitySuggestion). Пустой
+     * список при offline/null/ошибке парсинга; isOffline-гвард и идиомы
+     * парсинга — как у соседей (#NULL-EXPLICIT: без safe-call/элвиса/!!).
+     */
+    data class VkMultiAccount(
+        val id: Long,
+        val name: String,
+        val photo100: String?,
+        /** 1=true / 0=false в ответе VK; null — поле не пришло. */
+        val isLoggedIn: Boolean?,
+    )
+
+    suspend fun accountGetMulti(): List<VkMultiAccount> {
+        if (isOffline()) return emptyList()
+        val json = call("account.getMulti", emptyMap())
+        if (json == null) return emptyList()
+        return try {
+            val resp = getObj(json, "response")
+            val accounts = if (resp != null) {
+                getArr(resp, "accounts")
+            } else {
+                // Терпеливый формат: response может прийти голым массивом аккаунтов.
+                getArr(json, "response")
+            }
+            if (accounts == null) {
+                emptyList()
+            } else {
+                val out = ArrayList<VkMultiAccount>()
+                for (el in accounts) {
+                    if (!el.isJsonObject) continue
+                    val obj = el.asJsonObject
+                    val id = safeLongNullable(obj.get("id"))
+                    if (id == null || id <= 0) continue
+                    var name = safeString(obj.get("name"))
+                    if (name == null) {
+                        val firstName = safeString(obj.get("first_name"))
+                        val lastName = safeString(obj.get("last_name"))
+                        name = listOfNotNull(firstName, lastName).joinToString(" ").trim()
+                    }
+                    if (name == null || name.isBlank()) continue
+                    val photo = safeString(obj.get("photo_100"))
+                    val loggedRaw = safeIntNullable(obj.get("is_logged_in"))
+                    val isLoggedIn = when (loggedRaw) {
+                        1 -> true
+                        0 -> false
+                        else -> null
+                    }
+                    out.add(VkMultiAccount(id = id, name = name, photo100 = photo, isLoggedIn = isLoggedIn))
+                }
+                out
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "accountGetMulti parse error", e)
             emptyList()
         }
     }
