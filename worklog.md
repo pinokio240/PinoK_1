@@ -7338,3 +7338,17 @@ Work Log:
 
 Stage Summary:
 - П-план Профиля закрыт ПОЛНОСТЬЮ по коду: П-0..П-4 реализованы, П-5 решён (прототип, не контейнеризовать), остатки П-1/П-2 (действия поста, лайк, 3 вкладки, рекомендации) закрыты волной-6. 3 новых экрана (EditProfile/PrivacySettings/Blacklist), 3 новых маршрута, ~3.3k строк. Сборка assembleDebug юзером обязательна.
+---
+Task ID: MUSIC-PLAYLIST-FULL-8
+Agent: orchestrator (main, сам)
+Task: Fix #283 — плейлист 100+ треков: очередь воспроизведения не соответствовала количеству
+
+Work Log:
+- Диагноз: 5 call-site грузят плейлист одной страницей (audio.get кап ~100): openPlaylistAndPlay count=50 дефолт, PlaylistDetailScreen 100, PlaylistsDialog ×3 count=50 дефолт, PlaylistAttachmentCard 100; PlayerConnection.playTrackList лимита очереди НЕ имеет (проверено) — узкое место в загрузке.
+- VKApiClient: audioGetPlaylistTracks → цикл-догрузчик (page=count.coerceIn(10,100), total-гейт, dedup (ownerId,id), MAX_PLAYLIST_PAGES=60 в companion, hq один раз до цикла); audioGetPlaylistById → inline audios[] = страница 1 + догрузка до playlist.count с dedup на стыке; +onProgress trailing default null (совместимость всех вызовов); ветка сообществ через авто-догрузчик.
+- UI: PlaylistDetailScreen — loadProgress-стейт + «Загружено N из M…» под спиннером; MusicScreen.openPlaylistAndPlay — count=100.
+- Верификация: дельта скобок сбалансирована (−1/−1 VKApiClient — преждесуществующий артефакт сканера, базлайн HEAD тот же), nested-comments ALL CLEAN, прежние сигнатуры вызовов не задеты (trailing-параметр), фильтр url-less сохранён честно.
+- Доки: МУЗЫКА-ПЛЕЙЛИСТ-ПАГИНАЦИЯ-ФИКС.md + HISTORY; worklog APPEND; коммит+push.
+
+Stage Summary:
+- Очередь воспроизведения = полному плейлисту (до 6000, страховка 60 страниц); 5 мест закрыты одним изменением API-слоя; обратная совместимость сигнатур сохранена; BuildStamp не тронут.

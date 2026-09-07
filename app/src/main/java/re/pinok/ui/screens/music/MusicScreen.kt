@@ -730,6 +730,8 @@ fun MusicScreen(
                         playlistId = pl.id,
                         ownerId = pl.ownerId,
                         accessKey = pl.accessKey,
+                        // Fix #283: страницы по 100 (метод сам догружает весь плейлист).
+                        count = 100,
                     )
                     val filtered = plTracks.filter { it.id > 0L && !it.url.isNullOrBlank() }
                     if (filtered.isNotEmpty()) {

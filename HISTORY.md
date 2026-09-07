@@ -11878,3 +11878,17 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Приёмка оркестратором (сквозная):** string-aware скобочный баланс 8 файлов = OK (ProfileScreen 583/583 + (1160/1160), SovaNavHost 532/532, все новые самобалансны); check-nested-comments ALL CLEAN (164 файла); кросс-агентные дубли деклараций = 0 (21+15+16 новых имён — по 1); VKApiClient.kt не тронут (0 diff-строк) во всех 4 волнах; маршруты Screen.ProfileEdit/SettingsPrivacy/Blacklist уникальны; забытых banned-ссылок в NotificationSettingsScreen нет (перенос чистый); сигнатуры 14 вызываемых VKA-методов = по 1 декларации каждая. Компиляция в песочнице невозможна — сборка юзером обязательна.
 
 **Остаток П-плана:** П-7-кандидаты (по запросу): экраны подписчиков/подписок (API готов), wall.markAsSpam, реакции постов, города-поиск; полный список честных отклонений — профиль.этап-П5.решение.md §3.
+
+---
+
+## 2026-09-07 — fix(music): Fix #283 — очередь воспроизведения плейлиста обрезана страницей VK (100+ треков)
+
+**Запрос:** «Почему при воспроизведении плейлиста в 100 треков или более в список на воспроизведения не соответствует количеству треков».
+
+**Диагноз:** VK отдаёт `audio.get{album_id}` страницами (кап ~100/запрос); PinoK грузил плейлист ОДНОЙ страницей в 5 местах: `openPlaylistAndPlay` (дефолт 50!), `PlaylistDetailScreen` (100), PlaylistsDialog ×3 (дефолт 50), `PlaylistAttachmentCard` (100). Очередь `PlayerConnection` лимита не имеет — узкое место только в загрузке.
+
+**Фикс (центральный, API-слой):** (1) `audioGetPlaylistTracks` — авто-догрузчик: цикл страниц `count.coerceIn(10,100)` до `total`/пустой/неполной страницы, дедуп (ownerId,id) паттерном Fix #281, `MAX_PLAYLIST_PAGES=60` (≤6000), `quality=hq` читается до цикла; (2) `audioGetPlaylistById` — inline `audios[]` = первая страница + догрузка до `playlist.count`, dedup на стыке offset; trailing `onProgress(loaded,total)` (дефолт null — вызовы совместимы); ветка сообществ покрыта авто-догрузчиком; (3) `PlaylistDetailScreen` — «Загружено N из M…» под спиннером; (4) `openPlaylistAndPlay` — count=100. Парсер/audioGet/поиск/PlayerConnection не тронуты. Фильтр url-less перед playTrackList сохранён (рестрикты невоспроизводимы — честно).
+
+**Верификация:** string-aware скобки — дельта VKApiClient/MusicScreen/MusicLibraryScreens сбалансирована (дисбаланс −1/−1 в VKApiClient — преждесуществующий артефакт сканера на `${}`-интерполяциях, подтверждён базлайном HEAD 2592/2593); check-nested-comments ALL CLEAN; onProgress 11/1 упоминаний; MAX_PLAYLIST_PAGES в companion.
+
+**Док:** МУЗЫКА-ПЛЕЙЛИСТ-ПАГИНАЦИЯ-ФИКС.md (диагноз, 5 мест, матрица проверки 6 пунктов).

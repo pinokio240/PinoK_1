@@ -2829,7 +2829,19 @@ class VKApiClient(
         }
     }
 
-    /** Получить треки из плейлиста. VK: audio.get с album_id */
+    /**
+     * Треки плейлиста: audio.get{album_id}.
+     *
+     * #MUSIC-PLAYLIST-FULL (Fix #283, 2026-09-07): VK отдаёт audio.get СТРАНИЦАМИ
+     * (жёсткий кап ~100 на запрос), поэтому плейлисты 100+ треков приходили
+     * обрезанными первой страницей — очередь воспроизведения не соответствовала
+     * числу треков плейлиста (жалоба: «в плейлисте 100 треков или более список
+     * на воспроизведение не соответствует количеству»). Теперь метод ДОГРУЖАЕТ
+     * все страницы циклом до total/конца (страница = count.coerceIn(10,100),
+     * дедуп (ownerId,id) как Fix #281, страховка MAX_PLAYLIST_PAGES=60 →
+     * ≤6000 треков). Возвращает (total из первого ответа, ВСЕ треки от offset).
+     * Все прежние вызовы без ручной пагинации получают полный плейлист.
+     */
     suspend fun audioGetPlaylistTracks(
         playlistId: Long,
         ownerId: Long = 0,
@@ -2838,17 +2850,37 @@ class VKApiClient(
         offset: Int = 0,
     ): Pair<Int, List<Track>> {
         if (isOffline()) return 0 to emptyList()
-        val args = mutableMapOf(
-            "album_id" to playlistId.toString(),
-            "count" to count.toString(),
-            "offset" to offset.toString(),
-        )
-        if (ownerId != 0L) args["owner_id"] = ownerId.toString()
-        if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
-        // Fix #147: quality=hq для максимального качества в треках плейлиста.
-        if (prefs.data.first().musicHighQuality) args["quality"] = "hq"
-        val json = call("audio.get", args)
-        return json?.let { parseAudioResponseWithCount(it) } ?: (0 to emptyList())
+        val hq = prefs.data.first().musicHighQuality
+        val pageSize = count.coerceIn(10, 100)
+        val all = ArrayList<Track>()
+        val seen = HashSet<String>()
+        var total = 0
+        var cur = offset
+        var pages = 0
+        while (pages < MAX_PLAYLIST_PAGES) {
+            val args = mutableMapOf(
+                "album_id" to playlistId.toString(),
+                "count" to pageSize.toString(),
+                "offset" to cur.toString(),
+            )
+            if (ownerId != 0L) args["owner_id"] = ownerId.toString()
+            if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
+            // Fix #147: quality=hq для максимального качества в треках плейлиста.
+            if (hq) args["quality"] = "hq"
+            val json = call("audio.get", args) ?: break
+            val (pageTotal, page) = parseAudioResponseWithCount(json)
+            if (total == 0) total = pageTotal
+            if (page.isEmpty()) break
+            for (t in page) {
+                val key = "${t.ownerId}_${t.id}"
+                if (seen.add(key)) all.add(t)
+            }
+            cur += page.size
+            pages++
+            if (total > 0 && all.size >= total) break
+            if (page.size < pageSize) break
+        }
+        return total to all
     }
 
     /** Рекомендации музыки. VK: audio.getRecommendations */
@@ -3401,6 +3433,10 @@ class VKApiClient(
     /**
      * audio.getPlaylistById — открыть плейлист с треками.
      * Возвращает пару (плейлист, список треков).
+     *
+     * #MUSIC-PLAYLIST-FULL (Fix #283): возвращает ПОЛНЫЙ плейлист — inline
+     * audios[] (первая страница) + догрузка пагинацией до playlist.count;
+     * onProgress(loaded, total) — опциональный колбэк прогресса (может быть null).
      */
     suspend fun audioGetPlaylistById(
         playlistId: Long,
@@ -3408,6 +3444,7 @@ class VKApiClient(
         accessKey: String? = null,
         count: Int = 50,
         offset: Int = 0,
+        onProgress: ((loaded: Int, total: Int) -> Unit)? = null,
     ): Pair<re.pinok.data.model.AudioPlaylist?, List<Track>> {
         if (isOffline()) return null to emptyList()
         // #MUSIC-PORT-FIX: audio.getPlaylistById требует owner_id и playlist_id
@@ -3448,7 +3485,7 @@ class VKApiClient(
             // Треки (#MUSIC-PORT-FIX: поле может быть "audios" или "audio").
             val audioArr = resp.getAsJsonArray("audios") ?: resp.getAsJsonArray("audio")
             if (audioArr != null) {
-                val tracks = audioArr.mapNotNull { el ->
+                val firstPage = audioArr.mapNotNull { el ->
                     if (!el.isJsonObject) return@mapNotNull null
                     val o = el.asJsonObject
                     Track(
@@ -3464,15 +3501,47 @@ class VKApiClient(
                         lyricsId = o.get("lyrics_id")?.takeIf { !it.isJsonNull }?.asLong,
                     )
                 }
+                // #MUSIC-PLAYLIST-FULL (Fix #283): inline audios[] — только ПЕРВАЯ
+                // страница (кап VK). Плейлисты 100+ догружаем пагинацией до
+                // playlist.count, иначе очередь воспроизведения обрезана.
+                val tracks = ArrayList<Track>(firstPage)
+                val seen = HashSet<String>()
+                firstPage.forEach { seen.add("${it.ownerId}_${it.id}") }
+                val total = playlist?.count ?: 0
+                if (total > tracks.size) {
+                    val pageSize = count.coerceIn(10, 100)
+                    var pages = 0
+                    while (tracks.size < total && pages < MAX_PLAYLIST_PAGES) {
+                        val (_, page) = audioGetPlaylistTracks(
+                            playlistId = playlistId,
+                            ownerId = effectiveOwnerId,
+                            accessKey = accessKey,
+                            count = pageSize,
+                            offset = offset + tracks.size,
+                        )
+                        if (page.isEmpty()) break
+                        for (t in page) {
+                            val key = "${t.ownerId}_${t.id}"
+                            if (seen.add(key)) tracks.add(t)
+                        }
+                        pages++
+                        onProgress?.invoke(tracks.size, total)
+                        if (page.size < pageSize) break
+                    }
+                }
+                onProgress?.invoke(tracks.size, if (total > 0) total else tracks.size)
                 playlist to tracks
             } else {
                 // #PLAYLIST-COMMUNITY: audios нет в ответе — грузим audio.get(album_id).
-                val (_, tracks) = audioGetPlaylistTracks(
+                // (Fix #283: audioGetPlaylistTracks теперь сам догружает все страницы.)
+                val (total, tracks) = audioGetPlaylistTracks(
                     playlistId = playlistId,
                     ownerId = effectiveOwnerId,
                     accessKey = accessKey,
                     count = count,
+                    offset = offset,
                 )
+                onProgress?.invoke(tracks.size, if (total > 0) total else tracks.size)
                 playlist to tracks
             }
         } catch (e: Exception) {
@@ -10767,6 +10836,10 @@ class VKApiClient(
     companion object {
         private const val MAX_REQUESTS_PER_SECOND = 3
         private const val RATE_WINDOW_MS = 1000L
+
+        // #MUSIC-PLAYLIST-FULL (Fix #283): страховка цикла догрузки плейлиста
+        // (страницы ≤100) — 60 страниц = максимум 6000 треков на плейлист.
+        private const val MAX_PLAYLIST_PAGES = 60
 
         // #CALLS: vchat API base + apiKey из calls SDK.
         // apiKey для VK web/MVK = CGMMEJLGDIHBABABA (подтверждён из vchat.clientStats

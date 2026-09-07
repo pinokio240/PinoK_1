@@ -169,15 +169,19 @@ fun PlaylistDetailScreen(
     var playlist by remember { mutableStateOf<AudioPlaylist?>(null) }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    // #MUSIC-PLAYLIST-FULL (Fix #283): прогресс пагинации для плейлистов 100+.
+    var loadProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     LaunchedEffect(ownerId, playlistId, accessKey) {
         loading = true
+        loadProgress = null
         try {
             val (pl, plTracks) = app.apiClient.audioGetPlaylistById(
                 playlistId = playlistId,
                 ownerId = ownerId,
                 accessKey = accessKey,
                 count = 100,
+                onProgress = { loaded, total -> loadProgress = loaded to total },
             )
             playlist = pl
             tracks = plTracks.filter { it.id > 0L && !it.url.isNullOrBlank() }
@@ -195,7 +199,19 @@ fun PlaylistDetailScreen(
         LibraryTopBar(playlist?.title ?: "Плейлист", onBack)
         if (loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = VK_ACCENT)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = VK_ACCENT)
+                    loadProgress?.let { (loaded, total) ->
+                        if (total > 0) {
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "Загружено $loaded из $total…",
+                                color = VK_TEXT_SECONDARY,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
             }
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
