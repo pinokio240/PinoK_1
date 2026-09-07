@@ -3611,6 +3611,25 @@ class VKApiClient(
         return json?.has("response") == true
     }
 
+    /**
+     * #PROFILE-SNAP (PROFILE-P0-2): newsfeed.deleteBan — вернуть автора в ленту
+     * (пара к newsfeedAddBan: «Скрыть из ленты» → «Вернуть записи автора»,
+     * инвентарь §2.9 + Приложение А, план П-2). Бандл pageProfile.a8b48616.js
+     * литерально зовёт newsfeed.addBan/deleteBan; существующий newsfeedUnban
+     * идёт на легаси newsfeed.unban, поэтому добавлено ТОЧНОЕ имя
+     * newsfeed.deleteBan (как в снапшоте). Параметры: user_ids и/или
+     * group_ids (CSV) — как у newsfeedAddBan.
+     */
+    suspend fun newsfeedDeleteBan(userIds: List<Long>? = null, groupIds: List<Long>? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf<String, String>()
+        userIds?.takeIf { it.isNotEmpty() }?.let { args["user_ids"] = it.joinToString(",") }
+        groupIds?.takeIf { it.isNotEmpty() }?.let { args["group_ids"] = it.joinToString(",") }
+        if (args.isEmpty()) return false
+        val json = call("newsfeed.deleteBan", args)
+        return json?.has("response") == true
+    }
+
     // ========================================================================
     //  SOVA_2_lenta: Подписки в ленте
     // ========================================================================
@@ -5827,6 +5846,26 @@ class VKApiClient(
     }
 
     /**
+     * #PROFILE-SNAP (PROFILE-P0-2): photos.getProfileUploadServer — шаг 1
+     * смены главного фото (аватара), инвентарь §1.1.1/§2.2/§4.1, план П-3;
+     * в VKA был MISS (photosGetWallUploadServer — для фото на стену, не для
+     * аватара). VK API: photos.getProfileUploadServer {} — owner-контекст
+     * берётся из токена. Дальше: multipart POST файла на upload_url
+     * (photosUploadWallPhoto годится как транспорт) → photos.save с
+     * album_id=-6 (photosSave).
+     */
+    suspend fun photosGetProfileUploadServer(): String? {
+        if (isOffline()) return null
+        val json = call("photos.getProfileUploadServer", emptyMap()) ?: return null
+        return try {
+            json.getAsJsonObject("response")?.get("upload_url")?.takeIf { !it.isJsonNull }?.asString
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosGetProfileUploadServer parse error", e)
+            null
+        }
+    }
+
+    /**
      * Получить URL для загрузки фото в личное сообщение.
      * В отличие от getWallUploadServer, принимает peer_id.
      */
@@ -6177,6 +6216,43 @@ class VKApiClient(
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "photosSaveWallPhoto parse error", e)
             -1L to -1L
+        }
+    }
+
+    /**
+     * #PROFILE-SNAP (PROFILE-P0-2): photos.save — сохранить фото после
+     * multipart-загрузки; шаг 3 цепочки смены главного фото (аватара),
+     * инвентарь §2.2/§4.1 («photos.getWallUploadServer+photos.save»), план
+     * П-3. В VKA был MISS (saveWallPhoto/saveMessagesPhoto — другие методы).
+     * VK API: photos.save { owner_id?, album_id, server, photos, hash } —
+     * для главного фото album_id = -6 (album «profile»); upload-URL даёт
+     * photosGetProfileUploadServer. response — массив фото-объектов
+     * (owner_id/id/sizes[...]): возвращаем List<JsonObject> — аватар-цепочка
+     * (П-3) возьмёт owner_id+id, просмотрщик — sizes (стиль возвратов блока
+     * #PROFILE-SNAP: сырые JsonObject, резолвятся в :app).
+     */
+    suspend fun photosSave(
+        albumId: Int,
+        server: Int,
+        photos: String,
+        hash: String,
+        ownerId: Long? = null,
+    ): List<JsonObject> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "album_id" to albumId.toString(),
+            "server" to server.toString(),
+            "photos" to photos,
+            "hash" to hash,
+        )
+        if (ownerId != null && ownerId != 0L) args["owner_id"] = ownerId.toString()
+        val json = call("photos.save", args) ?: return emptyList()
+        return try {
+            val arr = json.getAsJsonArray("response")
+            if (arr == null) emptyList() else profileSnapObjList(arr)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosSave parse error", e)
+            emptyList()
         }
     }
 
@@ -13134,6 +13210,11 @@ class VKApiClient(
      * ждут расширения UserProfile на П-1/П-2; счётчики clips приходят внутри
      * counters (уже запрошен). extraFields — опциональное расширение списка
      * вызывающим (дефолт null, существующие вызовы не ломает).
+     * #PROFILE-SNAP (PROFILE-P0-2): расширение UserProfile ПОДКЛЮЧЕНО —
+     * хвост конструктора UserProfile(...) парсит mutual/owner_state/
+     * stories_archive_count/image_status/deactivated/blacklist-флаги/
+     * permissions (can_*), verify-флаги (is_sber/tinkoff/esia_verified) и
+     * clips-счётчики (инвентарь §2.0/§4.1, §1.1.2); всё безопасно-nullable.
      */
     suspend fun usersGetFullExtended(userId: Long? = null, extraFields: String? = null): UserProfile? {
         if (isOffline()) return null
@@ -13212,6 +13293,12 @@ class VKApiClient(
                         audios = safeInt(c.get("audios")).takeIf { it != 0 },
                         groups = safeInt(c.get("groups")).takeIf { it != 0 },
                         gifts = safeInt(c.get("gifts")).takeIf { it != 0 },
+                        // #PROFILE-SNAP (PROFILE-P0-2): кластер clips* — реально
+                        // возвращаемые поля counters снапшота (инвентарь §1.1.2).
+                        clips = safeInt(c.get("clips")).takeIf { it != 0 },
+                        clipsFollowers = safeInt(c.get("clips_followers")).takeIf { it != 0 },
+                        clipsViews = safeInt(c.get("clips_views")).takeIf { it != 0 },
+                        clipsLikes = safeInt(c.get("clips_likes")).takeIf { it != 0 },
                     )
                 },
                 domain = safeString(obj.get("domain")),
@@ -13259,6 +13346,35 @@ class VKApiClient(
                         alcohol = safeInt(p.get("alcohol")),
                     )
                 },
+                // #PROFILE-SNAP (PROFILE-P0-2): парсинг веб-набора полей профиля
+                // (инвентарь §2.0/§4.1). Безопасно-nullable: VK отдаёт поля не
+                // для всех токенов/страниц; флаги бывают и 0/1, и true/false —
+                // safeIntNullable терпит оба (прецедент Fix #321).
+                mutual = obj.getAsJsonObject("mutual")?.let { m ->
+                    UserProfile.Mutual(count = safeInt(m.get("count")))
+                },
+                ownerState = safeIntNullable(obj.get("owner_state")),
+                storiesArchiveCount = safeIntNullable(obj.get("stories_archive_count")),
+                imageStatus = safeString(obj.get("image_status")),
+                deactivated = safeString(obj.get("deactivated")),
+                blacklisted = safeIntNullable(obj.get("blacklisted")),
+                blacklistedByMe = safeIntNullable(obj.get("blacklisted_by_me")),
+                noIndex = safeIntNullable(obj.get("no_index")),
+                friendLists = getArr(obj, "lists")?.mapNotNull { el ->
+                    if (!el.isJsonPrimitive) null else try { el.asInt } catch (_: Exception) { null }
+                },
+                canInviteToChats = safeIntNullable(obj.get("can_invite_to_chats")),
+                canSeeWishes = safeIntNullable(obj.get("can_see_wishes")),
+                canBan = safeIntNullable(obj.get("can_ban")),
+                canSeeGifts = safeIntNullable(obj.get("can_see_gifts")),
+                canCall = safeIntNullable(obj.get("can_call")),
+                canSendFriendRequest = safeIntNullable(obj.get("can_send_friend_request")),
+                canSeeAllPosts = safeIntNullable(obj.get("can_see_all_posts")),
+                canSubscribeStories = safeIntNullable(obj.get("can_subscribe_stories")),
+                isSubscribedStories = safeIntNullable(obj.get("is_subscribed_stories")),
+                isSberVerified = safeIntNullable(obj.get("is_sber_verified")),
+                isTinkoffVerified = safeIntNullable(obj.get("is_tinkoff_verified")),
+                isEsiaVerified = safeIntNullable(obj.get("is_esia_verified")),
             )
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "usersGetFull parse error", e)

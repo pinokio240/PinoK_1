@@ -67,6 +67,33 @@ data class UserProfile(
     @SerializedName("relation")        val relation: Int = 0,
     val cover: Cover? = null,
     val personal: Personal? = null,
+    // --- #PROFILE-SNAP (PROFILE-P0-2, 2026-09-05): веб-набор полей профиля
+    // (инвентарь §2.0/§4.1, Приложение А; fields usersGetFullExtended
+    // расширен волной П-0, парсинг подключён этим этапом). Все поля честные
+    // nullable: VK отдаёт их не для всех токенов/страниц (закрытый профиль,
+    // чужой, групповой токен). Флаги в ответе приходят и 0/1, и true/false —
+    // парсинг через safeIntNullable (терпит оба, прецедент Fix #321).
+    @SerializedName("mutual")       val mutual: Mutual? = null,
+    @SerializedName("owner_state")  val ownerState: Int? = null,
+    @SerializedName("stories_archive_count") val storiesArchiveCount: Int? = null,
+    @SerializedName("image_status") val imageStatus: String? = null,
+    @SerializedName("deactivated")  val deactivated: String? = null,
+    @SerializedName("blacklisted")  val blacklisted: Int? = null,
+    @SerializedName("blacklisted_by_me") val blacklistedByMe: Int? = null,
+    @SerializedName("no_index")     val noIndex: Int? = null,
+    @SerializedName("lists")        val friendLists: List<Int>? = null,
+    @SerializedName("can_invite_to_chats") val canInviteToChats: Int? = null,
+    @SerializedName("can_see_wishes") val canSeeWishes: Int? = null,
+    @SerializedName("can_ban")      val canBan: Int? = null,
+    @SerializedName("can_see_gifts") val canSeeGifts: Int? = null,
+    @SerializedName("can_call")     val canCall: Int? = null,
+    @SerializedName("can_send_friend_request") val canSendFriendRequest: Int? = null,
+    @SerializedName("can_see_all_posts") val canSeeAllPosts: Int? = null,
+    @SerializedName("can_subscribe_stories") val canSubscribeStories: Int? = null,
+    @SerializedName("is_subscribed_stories") val isSubscribedStories: Int? = null,
+    @SerializedName("is_sber_verified") val isSberVerified: Int? = null,
+    @SerializedName("is_tinkoff_verified") val isTinkoffVerified: Int? = null,
+    @SerializedName("is_esia_verified") val isEsiaVerified: Int? = null,
 ) {
     val fullName: String get() = "$firstName $lastName"
     val isOnline: Boolean get() = online == 1
@@ -86,7 +113,17 @@ data class UserProfile(
         @SerializedName("audios")         val audios: Int? = null,
         @SerializedName("groups")         val groups: Int? = null,
         @SerializedName("gifts")          val gifts: Int? = null,
+        // #PROFILE-SNAP (PROFILE-P0-2): кластер clips* — реально возвращаемые
+        // поля counters из снапшота (инвентарь §1.1.2: 18 полей counters,
+        // среди них clips/clips_followers/clips_views/clips_likes).
+        @SerializedName("clips")           val clips: Int? = null,
+        @SerializedName("clips_followers") val clipsFollowers: Int? = null,
+        @SerializedName("clips_views")     val clipsViews: Int? = null,
+        @SerializedName("clips_likes")     val clipsLikes: Int? = null,
     )
+    /** #PROFILE-SNAP (PROFILE-P0-2): mutual в users.get приходит объектом
+     *  {count:N} (веб-запрашивает field mutual, инвентарь §2.0/§4.1). */
+    data class Mutual(@SerializedName("count") val count: Int = 0)
     /** Обложка профиля (из investigation: cover.enabled, cover.images[]) */
     data class Cover(
         val enabled: Boolean = false,
