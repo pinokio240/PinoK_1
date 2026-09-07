@@ -2124,9 +2124,22 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // не делаем холостых HTTP-вызовов. refreshMutex внутри ensureFreshToken
             // сериализует concurrent вызовы (keepAlive / reactive err-handler / этот).
             if (::exchangeAuthRepository.isInitialized) {
-                val canSilent = try { exchangeAuthRepository.hasSilentReloginMeans() } catch (_: Exception) { false }
-                if (canSilent) {
-                    keepAliveScope.launch {
+                keepAliveScope.launch {
+                    // #NET-SWITCH-AUTH-FIX (2026-09-07): ДО гварда silent-средств
+                    // синкаем session cookies CookieManager → storage (локальный
+                    // patch, БЕЗ сети). Раньше гвард hasSilentReloginMeans() читал
+                    // СТЕЙЛОВЫЙ storage: если VK ротейтнул remixsid, а CookieManager
+                    // уже держит свежий — гвард ложно говорил «средств нет», proactive
+                    // refresh пропускался (оставался только медленный #SESSION-HOLD
+                    // WebView-capture ≤10с), и первой API-задачей на новом интерфейсе
+                    // занимался reactive err=5-контур. Теперь: sync → гвард → refresh.
+                    try {
+                        exchangeAuthRepository.refreshSessionCookiesFromCookieManager()
+                    } catch (e: Exception) {
+                        AppLog.w("SovaApp", "#NET-SWITCH-AUTH-FIX: cookie sync after switch failed: ${e.message}")
+                    }
+                    val canSilent = try { exchangeAuthRepository.hasSilentReloginMeans() } catch (_: Exception) { false }
+                    if (canSilent) {
                         try {
                             val refreshed = exchangeAuthRepository.ensureFreshToken(force = true)
                             if (refreshed != null) {
@@ -2139,18 +2152,18 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         } catch (e: Exception) {
                             AppLog.w("SovaApp", "Proactive silent refresh after network switch failed: ${e.message}")
                         }
-                    }
-                } else {
-                    AppLog.i("SovaApp", "Proactive silent refresh skipped — no silent relogin means (user not logged in)")
-                    // #SESSION-HOLD: нет silent-средств (remixsid/p/trusted_hash/exchange_token),
-                    // но web-токен может быть валиден (типично для VK-app SSO — токен без
-                    // remixsid). Best-effort: пытаемся захватить remixsid из CookieManager
-                    // через скрытый WebView. Если app WebView имеет VK-сессию — Path 1.5
-                    // станет доступной, и следующие смены сети будут тихими. Дешёво
-                    // (≤10с в фоне), не блокирует UI.
-                    val signedIn = try { exchangeAuthRepository.isSignedIn() } catch (_: Exception) { false }
-                    if (signedIn) {
-                        keepAliveScope.launch {
+                    } else {
+                        AppLog.i("SovaApp", "Proactive silent refresh skipped — no silent relogin means (user not logged in)")
+                        // #SESSION-HOLD: нет silent-средств (remixsid/p/trusted_hash/exchange_token),
+                        // но web-токен может быть валиден (типично для VK-app SSO — токен без
+                        // remixsid). Best-effort: пытаемся захватить remixsid из CookieManager
+                        // через скрытый WebView. Если app WebView имеет VK-сессию — Path 1.5
+                        // станет доступной, и следующие смены сети будут тихими. Дешёво
+                        // (≤10с в фоне), не блокирует UI. (#NET-SWITCH-AUTH-FIX: инлайн
+                        // вместо отдельной корутины — тот же keepAliveScope, последовательное
+                        // исполнение после sync, поведение не изменено.)
+                        val signedIn = try { exchangeAuthRepository.isSignedIn() } catch (_: Exception) { false }
+                        if (signedIn) {
                             try {
                                 val captured = RemixsidCapturer.capture(this@SovaApp)
                                 if (captured != null) {

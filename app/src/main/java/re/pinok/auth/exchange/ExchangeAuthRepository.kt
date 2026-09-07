@@ -1317,6 +1317,24 @@ class ExchangeAuthRepository(
         if (force) {
             AppLog.i(TAG, "ensureFreshToken: FORCE refresh — bypassing hasValidAccessToken " +
                 "(err=5/1130 or network switch — token rejected by VK, refreshing via Path 1.5/5)")
+            // #NET-SWITCH-AUTH-FIX (2026-09-07): синхронизируем session cookies
+            // CookieManager → storage ДО Path 1.5. Корень бага «смена сети → просит
+            // авторизацию при целых куках»: VK ротейтит remixsid (security events),
+            // storage содержит СТЕЙЛОВУЮ копию (#SESSION-COOKIES-BG-REFRESH), Path 1.5
+            // шлёт её → VK явно отвергает → Fix #49 clearRemixsid() → silent-средства
+            // уничтожены → reactive err=5-контур теряет Path 1.5 → AuthActivity.
+            // Свежая копия ВСЕГДА в CookieManager (WebView обновляет при любой
+            // web-навигации) — забираем её ДО первой попытки. Sync локальный
+            // (CookieManager + patch в storage), БЕЗ сети; при отказе VK даже свежего
+            // remixsid контракт Fix #49 (clear → FULL re-login) сохранён — сессия
+            // тогда действительно мертва. Вызов только на force=true (err=5/1130,
+            // proactive network-switch, keepAlive §44) — не дёргаем на обычных
+            // hasValidAccessToken()-short-circuit возвратах.
+            try {
+                refreshSessionCookiesFromCookieManager()
+            } catch (e: Exception) {
+                AppLog.w(TAG, "#NET-SWITCH-AUTH-FIX: cookie sync before force refresh failed: ${e.message}")
+            }
         }
 
         // #NETWORK-RESILIENCE (2026-08-04): offline-guard.

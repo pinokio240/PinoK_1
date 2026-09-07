@@ -11996,3 +11996,22 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Приёмка оркестратора:** git-union ровно 18 код-файлов (3 зоны + VKA/VkIdAccount оркестратора) + 3 дока + worklog; скобки 17/19 OK, 2 MISMATCH = преждесуществующие артефакты с нейтральными дельтами (VKA {2616,2617}→{2626,2627} +10/+10; SettingsScreen {1112,1113}→{1168,1169} +56/+56); nested-comments ALL CLEAN (168); дубли ключевых символов = 0 (buildVkAttachment/pollsAdd/CreatedPoll/GroupMembersScreen/onMembersClick — по 1 декларации; посторонние pollsAdd-матчи = преждесуществующий pollsAddVote); spot-check P0 (photo-пайплайн) и proxy-проводки — корректны; Models.kt/core-data-модели не тронуты.
 
 **Честные отклонения:** авто-обновление стены после поста (reloadWallTrigger вне зоны), камера-по-умолчанию звонков (WebRtcEngine без видеозахвата), SOCKS (нет селектора), obscene-статус (геттера нет), quotes (не парсится в модель), заметки notes.* — следующий кандидат (нужен VKA-контур). Сборка assembleDebug — юзером.
+
+---
+
+## 2026-09-07 — fix(auth): #NET-SWITCH-AUTH-FIX — смена сети больше не роняет сессию в re-login при целых куках
+
+**Симптом:** mobile→Wi-Fi → приложение «не сразу понимает, что делать» и требует авторизацию, хотя куки/localStorage целы.
+
+**Root-cause (2 сценария, разобраны в auth.смена-сети.разбор-и-фикс.md §2):**
+(A) Path 1.5 (silentRefreshViaRemixsid) шлёт СТЕЙЛОВЫЙ storage-remixsid (VK ротейтит куку; свежая — в CookieManager) → VK явно отвергает → Fix #49 clearRemixsid() УНИЧТОЖАЕТ silent-средства → reactive err=5/1130-контур остаётся без Path 1.5 → hasSilentReloginMeans()=false → #RELOGIN-FORCE → clearAccessToken + AuthActivity.
+(B) Гонка: первый 5/1130 через новый default route приходит РАНЬШЕ тика DEFAULT onAvailable (grace-timestamp ещё не выставлен) → grace #175 пропущен → холодный путь → мгновенный clear.
+
+**Фикс (3 точки, оркестратор):**
+1. `ExchangeAuthRepository.ensureFreshToken`: при force=true — `refreshSessionCookiesFromCookieManager()` ДО Path 1.5 (локальный sync CookieManager→storage, без сети; контракт Fix #49 сохранён — отвержение уже свежего куки = честная смерть сессии).
+2. `SovaApp.registerGlobalNetworkWatcher`: проактивный блок = sync → гвард silent-средств → ensureFreshToken(force=true); #SESSION-HOLD инлайн (поведение сохранено).
+3. `VKApiClient` err=5-хендлер (attempt==0 и attempt>0): `graceEligible = recentlySwitched || isIpMismatch` — subcode 1130 сам является доказательством смены IP → grace-семантика без ожидания тика колбэка.
+
+**Приёмка:** VKA скобка-дельта 0; SovaApp +1/+1; ExRepo +2/+2; nested-comments ALL CLEAN (168); diff-union ровно 3 файла. Контракты #49/#175/#230/#IP-BINDING-RETRY/#GRACE-NO-CLEAR/#SESSION-HOLD сохранены.
+
+**Проверка юзером:** смена Wi-Fi↔mobile → ни AuthActivity, ни потери ленты; logcat-метки `#NET-SWITCH-AUTH-FIX` / `silent refresh via remixsid OK` / `НЕ чистим токен…`.

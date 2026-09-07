@@ -7667,3 +7667,22 @@ Stage Summary:
 - Fix #285 закрыт (16 ошибок); attach-меню унифицировано по VK web во всех поверхностях (3 P0-бага починены, «Из VK» подключено, опрос/видео-по-ссылке — новые VKA-методы); настройки: 10 правок по аудиту (прокси/пути/звук/mic/email…), мёртвое убрано/честно подписано; OpenVK топ-2 внедрены (Информация профиля, Участники сообщества).
 - Следующий кандидат: заметки notes.* (P2, нужен VKA-контур 3-4 метода + экраны).
 - Коммит+push origin PinoK оркестратором; assembleDebug — юзером (SDK в песочнице нет).
+
+---
+Task ID: 5
+Agent: orchestrator (Z.ai Code)
+Task: фикс «смена сети (mobile→Wi-Fi) → приложение не сразу понимает, что делать, и требует авторизацию при целых куках» (#NET-SWITCH-AUTH-FIX) + документирование
+
+Work Log:
+- Реконн: NetworkObserver (lastDefaultNetworkSwitchTs ← DEFAULT onAvailable/onLinkPropertiesChanged), VKA err=5/1117-семейство (#96/#175/#230/#IP-MISMATCH-GRACE/#IP-BINDING-RETRY/#GRACE-NO-CLEAR/#RELOGIN-FORCE), ExchangeAuthRepository.ensureFreshToken (Path 1.5 silentRefreshViaRemixsid + Path 5), Fix #49 clearRemixsid, hasSilentReloginMeans (только storage!), refreshSessionCookiesFromCookieManager, SovaApp #VKID-SEAMLESS/#SESSION-HOLD.
+- Root-cause: (A) Path 1.5 шлёт СТЕЙЛОВЫЙ storage-remixsid → VK явно отвергает → Fix #49 УНИЧТОЖАЕТ remixsid → silent-средств нет (куки-то целы в CookieManager!) → reactive err=5 → #RELOGIN-FORCE → AuthActivity; (B) гонка: первый 5/1130 через новый интерфейс приходит РАНЬШЕ тика DEFAULT onAvailable → grace пропущен → холодный путь с мгновенным clear.
+- Фикс 1 (ExchangeAuthRepository:1317): при force=true — refreshSessionCookiesFromCookieManager() ДО Path 1.5 (локальный sync без сети; контракт Fix #49 сохранён — отвержение свежего куки = честная смерть сессии).
+- Фикс 2 (SovaApp registerGlobalNetworkWatcher): проактивный блок перестроен sync → гвард → ensureFreshToken(force=true); #SESSION-HOLD инлайн в ту же корутину.
+- Фикс 3 (VKA attempt==0 + attempt>0): graceEligible = recentlySwitched || isIpMismatch — 1130 сам arm'ит grace (subcode = доказательство смены IP), закрывает гонку B.
+- Приёмка: скобки VKA дельта 0 ({2626,2627}→{2626,2627}), SovaApp +1/+1, ExRepo +2/+2 — сбалансированы; nested-comments ALL CLEAN (168); diff-union ровно 3 файла; иероглиф-опечатка в комментарии найдена и исправлена до коммита.
+
+Stage Summary:
+- Смена сети больше не приводит к re-login при живых куки: sync до Path 1.5 (все force-пути), sync до гварда silent-средств, 1130-arm'ит grace.
+- Док auth.смена-сети.разбор-и-фикс.md (§0-§6: карта контуров, root-cause таймлайны, фиксы, сохранённые контракты, инструкция проверки по logcat-меткам, остатки).
+- Сознательно не тронуто: no-token путь call() (нет error-контекста), дебаунс clearRemixsid (синк-до-Path-1.5 уже решает), FULL-фолбэк после MAX_SILENT_FAILURES.
+- Коммит+push оркестратором; assembleDebug юзером.

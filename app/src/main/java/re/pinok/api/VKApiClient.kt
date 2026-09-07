@@ -10508,6 +10508,20 @@ class VKApiClient(
             if (isTokenExpiredOrInvalid && attempt == 0 && authRepo != null) {
                 // Fix #175: grace period check.
                 val recentlySwitched = isNetworkRecentlySwitched(30_000L)
+                // #NET-SWITCH-AUTH-FIX (2026-09-07): subcode 1130 («access_token was
+                // given to another ip address») сам по себе — ДОКАЗАТЕЛЬСТВО смены IP:
+                // VK не вернул бы 1130, если бы IP не менялся. Раньше grace armed
+                // только по timestamp NetworkObserver — гонка: первый запрос через
+                // новый default route может получить 5/1130 РАНЬШЕ, чем сработает
+                // DEFAULT onAvailable (dispatch через main-хендлер) → grace пропущен
+                // → холодный путь: force refresh → (без silent means) мгновенный
+                // clearAccessToken + AuthActivity. Симптом юзера: «приложение не
+                // сразу понимает, что делать, и требует авторизацию, хотя куки целы».
+                // Теперь 1130 сам arm'ит grace (то же окно/циклы, что при switch).
+                // Контракты сохранены: без silent means — #IP-BINDING-RETRY
+                // (single retry старым токеном), при настоящей смерти сессии
+                // (VK отверг даже свежий remixsid) — Fix #49 clear → AuthActivity.
+                val graceEligible = recentlySwitched || isIpMismatch
                 // #IP-MISMATCH-GRACE (2026-08-01): Fix #230 пропускал grace period
                 // при IP mismatch (subcode 1130) — но при network switch (Wi-Fi↔Mobile)
                 // VK ВСЕГДА меняет IP и временно возвращает 5/1130. Без grace period
@@ -10526,7 +10540,7 @@ class VKApiClient(
                 // recentlySwitched=true. За 5 сек либо VK обновит IP binding,
                 // либо ensureFreshToken (Path 1.5 silentRefreshViaRemixsid) получит
                 // новый токен для нового IP.
-                if (recentlySwitched) {
+                if (graceEligible) {
                     // #RELOGIN-FORCE (2026-08-02): EARLY check hasSilentMeans BEFORE delay.
                     // Web OAuth tokens (6287487) — permanently IP-bound. VK НЕ обновляет
                     // IP binding (logcat 19:32-19:33: 60+ сек стабильно err=5/1130).
@@ -10737,8 +10751,11 @@ class VKApiClient(
                 // #IP-MISMATCH-GRACE: grace period работает и при IP mismatch (1130)
                 // при network switch — VK временно возвращает 5/1130 при смене IP.
                 val recentlySwitched = isNetworkRecentlySwitched(30_000L)
-                if (recentlySwitched) {
-                    AppLog.w("VKApiClient", "API error $code${if (isIpMismatch) "/1130" else ""} on $method (attempt=$attempt) — сеть недавно переключилась, НЕ чистим токен и НЕ запускаем AuthActivity (Fix #175 grace period). Возвращаем null.")
+                // #NET-SWITCH-AUTH-FIX: и на повторной попытке 1130 = доказательство
+                // смены IP → НЕ чистим токен (тот же аргумент, что в attempt==0).
+                val graceEligibleRetry = recentlySwitched || isIpMismatch
+                if (graceEligibleRetry) {
+                    AppLog.w("VKApiClient", "API error $code${if (isIpMismatch) "/1130" else ""} on $method (attempt=$attempt) — сеть недавно переключилась (или 1130: IP сменился), НЕ чистим токен и НЕ запускаем AuthActivity (Fix #175 grace period + #NET-SWITCH-AUTH-FIX). Возвращаем null.")
                     return null
                 }
                 // #RELOGIN-FORCE (2026-08-02): no silent means + retry exhausted →
