@@ -13658,6 +13658,140 @@ class VKApiClient(
         }
     }
 
+    // ─── Волна 18: VKA-преадды оркестратора (18-θ/18-ε) ─────────────────
+    // Паттерн Task 4: VKA-файл готовится ОРКЕСТРАТОРОМ до запуска параллельных
+    // субагентов, чтобы ни один агент волны не трогал VKApiClient.kt (гонка за
+    // общий файл исключена). Методы следуют друзьям-паттерну friendsGetOnline.
+
+    /**
+     * VK: messages.setActivity — «печатает» на исходящую сторону (18-θ).
+     *
+     * VK web: при наборе текста в диалоге шлёт messages.setActivity
+     * type=typing, peer_id=<диалог> — оппонент видит «Печатает…» в списке
+     * диалогов и в шапке чата. SDK-аналог sendMessageRequestActivity.
+     * Вызывающая сторона (ChatDetailScreen) обязана дебаунсить (3-5с) и слать
+     * ТОЛЬКО при реальном изменении текста — VK ограничивает частоту.
+     *
+     * @param peerId ID диалога (user_id положительный, -gid для бесед-сообществ;
+     *               для обычных бесед 2000000000+chat_id).
+     * @param type   "typing" (VK поддерживает также voice_message_start/photo_upload —
+     *               оставлено параметром на будущее, дефолт typing).
+     * @return true = VK подтвердил (response == 1), false = ошибка/офлайн.
+     *         Реальные ошибки логируются меткой #TYPING-SEND и НЕ роняют чат.
+     */
+    suspend fun setActivity(peerId: Long, type: String = "typing"): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "peer_id" to peerId.toString(),
+            "type" to type,
+        )
+        val json = call("messages.setActivity", args) ?: return false
+        return try {
+            // NULL-ЯВНО: Gson-цепочка ответа (response приходит числом 1,
+            // но терпим объектный ответ — парсинг консервативный).
+            val resp = json.get("response")
+            if (resp != null && resp.isJsonPrimitive) resp.asInt == 1 else false
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#TYPING-SEND setActivity parse: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * VK: friends.getSuggestions — «Возможные друзья» (18-ε, правое меню ленты).
+     *
+     * VK web правая колонка vk.com/feed блок «Возможные друзья» =
+     * friends.getSuggestions (снапшот ленты; filter=suggestions по умолчанию
+     * возвращает всех кандидатов: friends_of_friends, imports и пр.).
+     *
+     * @param count  до 500 по API; правое меню запрашивает 10-20.
+     * @param offset пагинация (секция «Показать ещё»).
+     * @return List<UserProfile> (fields photo_100,photo_200,online,mutual_count);
+     *         битые элементы пропускаются; при офлайне/ошибке — пустой список
+     *         (паттерн friendsGetOnline).
+     */
+    suspend fun friendsGetSuggestions(count: Int = 20, offset: Int = 0): List<UserProfile> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "fields" to "photo_100,photo_200,online,mutual_count",
+        )
+        val json = call("friends.getSuggestions", args) ?: return emptyList()
+        return try {
+            // NULL-ЯВНО: Gson-цепочки парсинга (соглашение волны 18-β).
+            val resp = json.getAsJsonObject("response")
+            val arr = resp?.getAsJsonArray("items")
+            if (arr == null) {
+                AppLog.w("VKApiClient", "friendsGetSuggestions: no items, resp=${resp != null}")
+                return emptyList()
+            }
+            arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = o.get("id")
+                if (id == null || id.isJsonNull) return@mapNotNull null
+                UserProfile(
+                    id = id.asLong,
+                    firstName = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    lastName = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
+                    photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
+                    online = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "friendsGetSuggestions error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * VK: groups.getCatalog — «Рекомендуемые сообщества» (18-ε, правое меню ленты).
+     *
+     * VK web правая колонка блок «Возможные вы / Рекомендуемые сообщества» =
+     * groups.getCatalog (без category_id — VK сам подбирает рекомендации по
+     * интересам; это тот же вызов, что шлёт web-SPA каталога сообществ).
+     *
+     * @param count  до 1000 по API; правое меню запрашивает 10-20.
+     * @return List<GroupInfo> (id/name/screenName/photo200/membersCount/type);
+     *         при офлайне/ошибке — пустой список (паттерн friendsGetOnline).
+     */
+    suspend fun groupsGetCatalog(count: Int = 20): List<GroupInfo> {
+        if (isOffline()) return emptyList()
+        val args = mutableMapOf(
+            "count" to count.toString(),
+            "fields" to "members_count,description,activity,type",
+        )
+        val json = call("groups.getCatalog", args) ?: return emptyList()
+        return try {
+            // NULL-ЯВНО: Gson-цепочки парсинга (соглашение волны 18-β).
+            val resp = json.getAsJsonObject("response")
+            val arr = resp?.getAsJsonArray("items")
+            if (arr == null) {
+                AppLog.w("VKApiClient", "groupsGetCatalog: no items, resp=${resp != null}")
+                return emptyList()
+            }
+            arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = o.get("id")
+                if (id == null || id.isJsonNull) return@mapNotNull null
+                GroupInfo(
+                    id = id.asLong,
+                    name = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    screenName = o.get("screen_name")?.takeIf { !it.isJsonNull }?.asString,
+                    photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
+                    membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetCatalog error", e)
+            emptyList()
+        }
+    }
+
     // ─── #68: Новые API методы из архивов Уведомления + Мессенджер_чат ──
 
     /**
