@@ -26,7 +26,7 @@ import kotlin.coroutines.resume
  *   4. Мы читаем токен из localStorage через evaluateJavascript()
  *
  * **Доказательство** — дамп ВК.txt (m.vk.com localStorage):
- *   7879029:web_token:login:auth -> {"access_token":"vk1.a.P4tc8s8CLC...",
+ *   7879029:web_token:login:auth -> {"access_token":"vk1.a.XXXXX...",
  *       "expires":1784309646,"user_id":171093180,"logout_hash":"b749bef3e56b2d0742"}
  *
  * **Преимущества** перед прямыми HTTP-запросами к login.vk.com:

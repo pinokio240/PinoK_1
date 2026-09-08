@@ -84,6 +84,8 @@ import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
 // #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
 import re.pinok.ui.components.PostPhotoGrid
+// Fix #366: общий компонент карусели видео поста.
+import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
@@ -776,7 +778,14 @@ fun CommunityScreen(
                 authorName = g.name,
                 authorPhoto = g.photo200 ?: g.photo100,
                 onVideoClick = onVideoClick,
-                onPostClick = onPostClick,
+                // Fix #365: пробрасываем группы в PostHolder для имени сообщества
+                // в PostDetailScreen (тот же паттерн, что в FeedScreen) — работает
+                // и для репост-карточек (клик по карточке репоста открывает
+                // оригинальный пост через этот же колбэк).
+                onPostClick = { post ->
+                    PostHolder.lastGroups = mapOf(groupId to g)
+                    onPostClick(post)
+                },
                 onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
                 // 22-B: карусель фото (общий SovaPrefs-флаг, см. выше).
                 carouselEnabled = carouselEnabled,
@@ -1269,13 +1278,23 @@ private fun CommunityPostCard(
             }
             // #WALL-CLIPS: клипы (isClip) рендерим вертикальной карточкой,
             // обычные видео — горизонтальной VideoThumbnail (16:9).
-            videoAttachments.forEach { attach ->
-                val v = attach.video
-                if (v != null) {
-                    if (v.isClip) {
-                        ClipThumbnail(video = v, onClick = onVideoClick)
-                    } else {
-                        VideoThumbnail(video = v, onClick = onVideoClick)
+            // Fix #366: >1 видео и включена карусель — общий PostVideoCarousel
+            // (тот же флаг, что у PostPhotoGrid выше); иначе прежний стопк.
+            if (carouselEnabled && videoAttachments.size > 1) {
+                PostVideoCarousel(
+                    videos = videoAttachments.mapNotNull { it.video },
+                    carouselEnabled = carouselEnabled,
+                    onVideoClick = onVideoClick,
+                )
+            } else {
+                videoAttachments.forEach { attach ->
+                    val v = attach.video
+                    if (v != null) {
+                        if (v.isClip) {
+                            ClipThumbnail(video = v, onClick = onVideoClick)
+                        } else {
+                            VideoThumbnail(video = v, onClick = onVideoClick)
+                        }
                     }
                 }
             }
@@ -1298,18 +1317,52 @@ private fun CommunityPostCard(
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                         .clip(RoundedCornerShape(8.dp))
+                        // Fix #365: репост-карточка ЦЕЛИКОМ открывает оригинальный
+                        // пост (onPostClick → PostHolder.last + PostDetail, роут
+                        // Community в SovaNavHost). clickable ПОСЛЕ clip — риппл по
+                        // скруглению; вложенные клики (фото/видео ниже) перехватываются
+                        // раньше — просмотр открывается как раньше, а не пост.
+                        .clickable { onPostClick(repost) }
                         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
                     elevation = CardDefaults.cardElevation(0.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 ) {
                     Column(modifier = Modifier.padding(8.dp)) {
                         if (repost.text.isNotBlank()) {
+                            // Fix #365: текст репоста — паттерн Fix #345 (см. пост
+                            // выше): «Показать ещё» при реальном переполнении
+                            // (hasVisualOverflow); тап по свёрнутому тексту =
+                            // развернуть, по развёрнутому (и по короткому) = открыть
+                            // пост целиком.
+                            var repostTextExpanded by remember { mutableStateOf(false) }
+                            var repostTextOverflowed by remember { mutableStateOf(false) }
                             Text(
                                 text = repost.text,
                                 style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 8,
+                                modifier = Modifier.clickable {
+                                    if (repostTextOverflowed && !repostTextExpanded) {
+                                        repostTextExpanded = true
+                                    } else {
+                                        onPostClick(repost)
+                                    }
+                                },
+                                onTextLayout = { result ->
+                                    if (!repostTextExpanded && result.hasVisualOverflow) repostTextOverflowed = true
+                                },
+                                maxLines = if (repostTextExpanded) Int.MAX_VALUE else 8,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            if (repostTextOverflowed && !repostTextExpanded) {
+                                Text(
+                                    text = "Показать ещё",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color(0xFF1976D2),
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .padding(top = 2.dp)
+                                        .clickable { repostTextExpanded = true },
+                                )
+                            }
                         }
                         if (rPhotos.isNotEmpty()) {
                             // 22-B: общий PostPhotoGrid (см. пост выше).
@@ -1319,13 +1372,23 @@ private fun CommunityPostCard(
                                 carouselEnabled = carouselEnabled,
                             )
                         }
-                        rVideos.forEach { att ->
-                            val v = att.video
-                            if (v != null) {
-                                if (v.isClip) {
-                                    ClipThumbnail(video = v, onClick = onVideoClick)
-                                } else {
-                                    VideoThumbnail(video = v, onClick = onVideoClick)
+                        // Fix #366: несколько видео в репосте и включённая карусель
+                        // → общий PostVideoCarousel; иначе прежний стопк (клип/видео).
+                        if (carouselEnabled && rVideos.size > 1) {
+                            PostVideoCarousel(
+                                videos = rVideos.mapNotNull { it.video },
+                                carouselEnabled = carouselEnabled,
+                                onVideoClick = onVideoClick,
+                            )
+                        } else {
+                            rVideos.forEach { att ->
+                                val v = att.video
+                                if (v != null) {
+                                    if (v.isClip) {
+                                        ClipThumbnail(video = v, onClick = onVideoClick)
+                                    } else {
+                                        VideoThumbnail(video = v, onClick = onVideoClick)
+                                    }
                                 }
                             }
                         }

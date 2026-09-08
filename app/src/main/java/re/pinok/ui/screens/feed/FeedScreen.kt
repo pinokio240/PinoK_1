@@ -138,6 +138,7 @@ import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.PostPhotoGrid
+import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.FeedRightPanel
@@ -146,6 +147,8 @@ import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.navigation.FeedDataHolder
 import re.pinok.ui.navigation.FeedScrollHolder
+// Fix #363: регистрация кнопки «меню ленты» на глобальном TopAppBar.
+import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.ui.navigation.ScrollPosition
 import re.pinok.util.AppLog
 import re.pinok.util.toCountString
@@ -557,6 +560,12 @@ fun FeedScreen(
     var likedPhotosHasMore by remember { mutableStateOf(false) }
     var likedPhotosLoadingMore by remember { mutableStateOf(false) }
 
+    // Fix #364 #FEED-REACTIONS-VIDEO: лайкнутые видео/клипы (подтабы «Клипы»/
+    // «Видео»). likes.getList(type="video") отдаёт только owner_id/item_id —
+    // полные объекты (превью/длительность/название) догружаются
+    // video.get(videos=…) → сюда. Сбрасывается при каждой загрузке вкладки.
+    var likesVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
+
     // #FEED-SUBSCRIBE (IMP-FEED-1, п.2): оптимистичное состояние подписки
     // на авторов постов (key = fromId). Значение: true → «Отписаться»,
     // false → «Подписаться». ОТСУТСТВУЕТ в мапе = состояние неизвестно →
@@ -680,6 +689,39 @@ fun FeedScreen(
                     val fromIds = parsed.map { it.fromId }.filter { it > 0 }.distinct()
                     likedCommentAuthors = if (fromIds.isEmpty()) emptyMap() else app.apiClient.usersGetByIds(fromIds)
                     AppLog.i("FeedScreen", "likesGetList(comment): $totalCount total, ${parsed.size} parsed")
+                } else if (likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO) {
+                    // Fix #364 #FEED-REACTIONS-VIDEO: подтабы «Клипы»/«Видео».
+                    // Раньше owner_id/item_id видео прогонялись через wallGetById
+                    // (ожидает ПОСТЫ) → вкладки были пустыми/мусорными. Теперь:
+                    // likes.getList(type="video") → список «ownerId_itemId» →
+                    // video.get(videos=…) → полные Video (превью/длительность).
+                    // Моб. API клипы/видео не различает (LikesFilter выше) — обе
+                    // вкладки показывают одно и то же, соответствие эталону по
+                    // возможностям API (снапшот §3.3/§5.7).
+                    // Сброс всех состояний подтабов: ветка постов ниже НЕ гейтится
+                    // по likesFilter (else-цепочка рендера) — не убрав likesItems,
+                    // получили бы посты прошлой вкладки на «Клипах».
+                    likesItems = emptyList()
+                    likesGroups = emptyMap()
+                    likedComments = emptyList()
+                    likedCommentAuthors = emptyMap()
+                    likesVideos = emptyList()
+                    val (totalCount, items) = app.apiClient.likesGetList(type = "video", count = 30)
+                    likesTotalCount = totalCount
+                    // NULL-ЯВНО: элементы likes.getList могут не иметь owner_id/item_id
+                    // (или JsonNull) — явные проверки вместо ?./?:.
+                    val videoIds = items.mapNotNull { raw ->
+                        val ownerIdEl = raw.get("owner_id")
+                        if (ownerIdEl == null || ownerIdEl.isJsonNull) return@mapNotNull null
+                        val itemIdEl = raw.get("item_id")
+                        if (itemIdEl == null || itemIdEl.isJsonNull) return@mapNotNull null
+                        "${ownerIdEl.asLong}_${itemIdEl.asLong}"
+                    }.distinct()
+                    // video.get возвращает только ДОСТУПНЫЕ видео (удалённые/приватные
+                    // VK молча пропускает) — результат может быть меньше videoIds.
+                    likesVideos = if (videoIds.isEmpty()) emptyList()
+                    else app.apiClient.videoGet(videoIds).distinctBy { "${it.ownerId}_${it.id}" }
+                    AppLog.i("FeedScreen", "likesGetList(video): $totalCount total, ${likesVideos.size} videos loaded")
                 } else {
                     val (totalCount, items) = app.apiClient.likesGetList(
                         type = likesFilter.apiType,
@@ -833,6 +875,37 @@ fun FeedScreen(
     val sharePost = remember { mutableStateOf<Post?>(null) }
     // #FEED-RIGHTPANEL (19-A): правое боковое меню ленты открыто.
     var showRightPanel by remember { mutableStateOf(false) }
+
+    // Fix #363 #FEED-MENU-TOPBAR-2: кнопка «меню ленты» на ГЛОБАЛЬНОЙ верхней
+    // панели. SovaNavHost рендерит TopAppBar вне зоны FeedScreen и подставляет
+    // ScreenTopBar.actions в слот actions (прецедент Fix #256/#260/#262:
+    // NotificationsScreen/FriendsScreen/GroupsScreen/VideoScreen). Раньше кнопка
+    // была в закреплённой строке над лентой (Fix #359) — она отъедала высоту
+    // контента; теперь лента занимает весь экран (см. Column ниже).
+    //
+    // Токен-паттерн: configure() возвращает токен-владельца, clear(token) в
+    // onDispose сносит конфигурацию ТОЛЬКО если это всё ещё наша конфигурация —
+    // при навигации Feed → X: X.configure() → Feed.onDispose.clear(tokenFeed)
+    // = no-op, конфиг X не затирается.
+    //
+    // Ключ DisposableEffect(Unit): лямбда actions только ПИШЕТ showRightPanel
+    // (захват state-делегата), изменчивых читаемых значений нет —
+    // переконфигурация при рекомпозиции не нужна (в отличие от
+    // NotificationsScreen, где ключ = showSearch/showFilters/unreadCount).
+    DisposableEffect(Unit) {
+        val token = ScreenTopBar.configure(
+            actions = {
+                IconButton(onClick = { showRightPanel = true }) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.MenuOpen,
+                        contentDescription = "Меню ленты",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+        )
+        onDispose { ScreenTopBar.clear(token) }
+    }
 
     // Клиентская фильтрация ленты по настройкам.
     // VK API частично фильтрует рекламу (тип=ads пропускается в VKApiClient),
@@ -1317,31 +1390,13 @@ fun FeedScreen(
     // #238: обёрнут в Box чтобы наложить scroll-to-top FAB (PullToRefreshBox
     // сам по себе не принимает overlay-контент).
     //
-    // Fix #359 #FEED-MENU-TOPBAR: ЗАКРЕПЛЁННАЯ ВЕРХНЯЯ ПАНЕЛЬ ленты — кнопка
-    // «меню ленты» перенесена из первого item LazyColumn (уезжала при скролле)
-    // в постоянную панель над списком (юзер: «кнопка "меню ленты" должна быть
-    // на верхней панели ленты»). Глобальный TopAppBar в SovaNavHost вне зоны
-    // FeedScreen (прецедент #FEED-MENU-VKWEB волны 23), поэтому верхняя панель
-    // ленты = эта закреплённая строка. Контент скроллится под ней (Box weight 1f).
+    // Fix #359 → Fix #363 #FEED-MENU-TOPBAR-2: закреплённая строка с кнопкой
+    // «меню ленты» УДАЛЕНА — кнопка переехала на глобальный TopAppBar через
+    // ScreenTopBar.configure (DisposableEffect выше, токен-паттерн Fix #256/#262).
+    // Раньше она пришла сюда из первого item LazyColumn (Fix #359), теперь
+    // финальное место — слот actions глобального TopAppBar (SovaNavHost).
+    // Column сохранён как обёртка скролл-зоны (Box weight 1f + FAB-оверлей).
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = { showRightPanel = true },
-                modifier = Modifier.size(48.dp),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.MenuOpen,
-                    contentDescription = "Меню ленты",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
         Box(modifier = Modifier.weight(1f)) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
@@ -1351,9 +1406,9 @@ fun FeedScreen(
             LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             item(key = "stories_row") {
                 Column {
-                    // Fix #359 #FEED-MENU-TOPBAR: кнопка «меню ленты» ПЕРЕНЕСЕНА
-                    // из этого item в закреплённую верхнюю панель над списком
-                    // (см. Column выше) — в VK web верхняя панель всегда видна.
+                    // Fix #359 → Fix #363: кнопка «меню ленты» ПЕРЕНЕСЕНА из этого
+                    // item сначала в закреплённую панель (#359), затем на глобальный
+                    // TopAppBar (#363, ScreenTopBar.configure) — над списком её больше нет.
                     // #FEED-FILTER-TOGGLE: панель разделов скрывается настройкой.
                     if (feedPrefs.feedShowFilter) {
                         FeedFilterBar(
@@ -1491,6 +1546,24 @@ fun FeedScreen(
                                     else onUserClickSavePos(authorId)
                                 },
                             )
+                        }
+                    }
+                } else if (likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO) {
+                    // Fix #364 #FEED-REACTIONS-VIDEO: лайкнутые видео/клипы.
+                    // Рендер — VideoThumbnail (тот же компонент, что у видео-вложений
+                    // постов), onClick → onVideoClickSavePos → VideoHolder.open
+                    // (overlay-плеер, позиция ленты сохраняется перед уходом — Fix #100).
+                    // Пустая вкладка → честное «Нет реакций» (лайкнутых видео нет
+                    // ИЛИ VK не вернул недоступные).
+                    if (likesVideos.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Text("Нет реакций", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        items(likesVideos, key = { "like_video_${it.ownerId}_${it.id}" }) { video ->
+                            VideoThumbnail(video = video, onClick = onVideoClickSavePos)
                         }
                     }
                 } else if (likesItems.isEmpty()) {
@@ -1743,8 +1816,8 @@ fun FeedScreen(
                 }
             }
         }
-        }  // closes Box (weight 1f — зона скролла под топ-панелью)
-    }  // closes Column (#FEED-MENU-TOPBAR: топ-панель + контент)
+        }  // closes Box (weight 1f — скролл-зона ленты)
+    }  // closes Column (Fix #363: закреплённая строка удалена, кнопка — на TopAppBar)
 
     // #FEED-MENU-VKWEB (Fix #353): правое боковое меню ленты — навигация
     // РАЗДЕЛОВ ленты («Список ленты» VK web, rightmenu §1.0.2 снапшота):
@@ -2251,10 +2324,21 @@ private fun PostCard(
                     carouselEnabled = carouselEnabled,
                 )
             }
-            videoAttachments.forEach { attach ->
-                val v = attach.video
-                if (v != null) {
-                    VideoThumbnail(video = v, onClick = onVideoClick)
+            // Fix #366 (#VIDEO-CAROUSEL-POSTS): >1 видео и включена карусель —
+            // общий PostVideoCarousel (тот же флаг, что у PostPhotoGrid выше);
+            // иначе прежний вертикальный стопк VideoThumbnail (одно видео).
+            if (carouselEnabled && videoAttachments.size > 1) {
+                PostVideoCarousel(
+                    videos = videoAttachments.mapNotNull { it.video },
+                    carouselEnabled = carouselEnabled,
+                    onVideoClick = onVideoClick,
+                )
+            } else {
+                videoAttachments.forEach { attach ->
+                    val v = attach.video
+                    if (v != null) {
+                        VideoThumbnail(video = v, onClick = onVideoClick)
+                    }
                 }
             }
             // Аудио вложения в посте.
@@ -2406,6 +2490,13 @@ private fun PostCard(
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .clip(RoundedCornerShape(8.dp))
+                        // Fix #365: репост-карточка ЦЕЛИКОМ открывает оригинальный
+                        // пост (тот же колбэк onPostClick, что у тела поста:
+                        // saveScrollPosition → PostHolder.last → PostDetail).
+                        // clickable ПОСЛЕ clip — риппл по скруглению; вложенные
+                        // клики (имя автора ниже, ссылки в тексте) перехватываются
+                        // раньше — потомки кликабельнее родителя по умолчанию.
+                        .clickable { onPostClick(original) }
                         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
                     elevation = CardDefaults.cardElevation(0.dp),
                     colors = CardDefaults.cardColors(
@@ -2472,6 +2563,13 @@ private fun PostCard(
                         }
                         if (original.text.isNotBlank()) {
                             Spacer(modifier = Modifier.height(4.dp))
+                            // Fix #365: текст репоста разворачивается на месте —
+                            // паттерн Fix #345 (CommunityScreen): «Показать ещё»
+                            // только при реальном переполнении (hasVisualOverflow);
+                            // тап по свёрнутому тексту = развернуть, по развёрнутому
+                            // (и по короткому) = открыть пост целиком.
+                            var repostExpanded by remember { mutableStateOf(false) }
+                            var repostOverflowed by remember { mutableStateOf(false) }
                             Text(
                                 text = re.pinok.util.linkifyVkText(
                                     text = original.text,
@@ -2480,9 +2578,35 @@ private fun PostCard(
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 6,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (repostOverflowed && !repostExpanded) {
+                                            repostExpanded = true
+                                        } else {
+                                            onPostClick(original)
+                                        }
+                                    },
+                                onTextLayout = { result ->
+                                    if (!repostExpanded && result.hasVisualOverflow) repostOverflowed = true
+                                },
+                                maxLines = if (repostExpanded) Int.MAX_VALUE else 6,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            if (repostOverflowed && !repostExpanded) {
+                                // Стиль «Показать ещё» — как у основного текста поста выше.
+                                Text(
+                                    text = "Показать ещё",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 2.dp)
+                                        .clickable { repostExpanded = true },
+                                )
+                            }
                         }
                         // Фото из оригинального поста.
                         val origPhotos = original.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()

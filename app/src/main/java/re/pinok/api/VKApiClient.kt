@@ -7943,6 +7943,88 @@ class VKApiClient(
         }
     }
 
+    /**
+     * Fix #364 #FEED-REACTIONS-VIDEO: video.get по ЯВНОМУ списку
+     * идентификаторов «ownerId_itemId» (опционально «ownerId_itemId_accessKey»).
+     *
+     * Раздел «Реакции» ленты, подтабы «Клипы»/«Видео»: likes.getList(type="video")
+     * отдаёт ТОЛЬКО owner_id/item_id — без превью, длительности и названия,
+     * а VideoThumbnail'у они нужны. Догружаем полные объекты тем же endpoint'ом
+     * video.get { videos=<id>[,<id>…], extended=1 }.
+     *
+     * Перегрузка над videoGet(ownerId, …): тот же endpoint, но выборка по
+     * списку id из likes.getList, а не по владельцу. Лимит VK API: videos/count
+     * ≤ 200 за вызов — ужимаем (страница Реакций = 30, запас есть).
+     *
+     * Недоступные/удалённые видео VK просто не возвращает в response.items[] —
+     * они выпадают из результата (результат может быть меньше входа).
+     *
+     * @param videos список «ownerId_itemId[_accessKey]» (id из likes.getList).
+     * @return список Video (image[]/photo_*, duration, title, access_key, files).
+     */
+    suspend fun videoGet(videos: List<String>): List<Video> {
+        if (isOffline() || videos.isEmpty()) return emptyList()
+        val args = mapOf(
+            "videos" to videos.joinToString(","),
+            // extended=1 — иначе нет image[] (превью) и files (как в videoGetById).
+            "extended" to "1",
+            // VK API: не более 200 идентификаторов/объектов за вызов.
+            "count" to videos.size.coerceAtMost(200).toString(),
+        )
+        // NULL-ЯВНО: call() возвращает null при сетевой/API-ошибке —
+        // явная проверка вместо ?:.
+        val json = call("video.get", args)
+        if (json == null) return emptyList()
+        return try {
+            val resp = json.getAsJsonObject("response")
+            if (resp == null) return emptyList()
+            val items = resp.getAsJsonArray("items")
+            if (items == null) return emptyList()
+            items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                // NULL-ЯВНО: поля ответа VK могут отсутствовать/быть JsonNull —
+                // явные проверки вместо ?./?: (политика #NULL-EXPLICIT).
+                val idEl = o.get("id")
+                val ownerIdEl = o.get("owner_id")
+                val titleEl = o.get("title")
+                val durationEl = o.get("duration")
+                val dateEl = o.get("date")
+                val viewsEl = o.get("views")
+                val playerEl = o.get("player")
+                val accessKeyEl = o.get("access_key")
+                val isClipsEl = o.get("is_clips")
+                val widthEl = o.get("width")
+                val heightEl = o.get("height")
+                val typeEl = o.get("type")
+                val v = Video(
+                    id = if (idEl != null && !idEl.isJsonNull) idEl.asLong else 0L,
+                    ownerId = if (ownerIdEl != null && !ownerIdEl.isJsonNull) ownerIdEl.asLong else 0L,
+                    title = if (titleEl != null && !titleEl.isJsonNull) titleEl.asString else "",
+                    duration = if (durationEl != null && !durationEl.isJsonNull) durationEl.asInt else 0,
+                    date = if (dateEl != null && !dateEl.isJsonNull) dateEl.asLong else 0L,
+                    views = if (viewsEl != null && !viewsEl.isJsonNull) viewsEl.asInt else 0,
+                    player = if (playerEl != null && !playerEl.isJsonNull) playerEl.asString else null,
+                    files = parseVideoFiles(o),
+                    accessKey = if (accessKeyEl != null && !accessKeyEl.isJsonNull) accessKeyEl.asString else null,
+                    image = parseVideoThumbs(o),
+                    likes = parseLikes(o.getAsJsonObject("likes")),
+                    // is_clips/width/height/type — для isClip-геттера (роутинг
+                    // клипов в плеере §37.12): video.get их отдаёт.
+                    height = if (heightEl != null && !heightEl.isJsonNull) heightEl.asInt else 0,
+                    width = if (widthEl != null && !widthEl.isJsonNull) widthEl.asInt else 0,
+                    isClips = if (isClipsEl != null && !isClipsEl.isJsonNull) isClipsEl.asInt else null,
+                    type = if (typeEl != null && !typeEl.isJsonNull) typeEl.asString else null,
+                )
+                // OK-IMPL-1: типизированная платформа + externalId (как в videoGet).
+                v.withDetectedPlatform()
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "videoGet(videos) parse error", e)
+            emptyList()
+        }
+    }
+
     // ========================================================================
     //  #35: Полный функционал соцсети ВК — расширенные API-методы
     //  Добавлено: friends.get, groups.get, photos.getAlbums, photos.get,

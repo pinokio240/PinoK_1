@@ -53,8 +53,8 @@
 | Cookie | Значение | Expires | HttpOnly | Secure | Назначение |
 |---|---|---|---|---|---|
 | `httoken` | `UZ9GGXrMOU8qJnZIJpIgb146r4BcEDNFnzg3BobZoUDjCYcZPCd7gbpMKgjGDdKnK0qLRuaAazuz3_r1zkfrZG6ySbngNdAnnw-CDVa2cKLdx-NREEzxeO054H0hbzxbZGg` | 2026-08-07T12:48:19Z (1 нед) | ✓ | ✓ | CSRF/HTTP-token для login.vk.ru |
-| `sua` | `yY0D64FbIkX-50Oq6tgoKU8Q8R9l0stVOiAzkll1lOc#171093180^vk1.a.tw1L4Ph3uNh_as82yajyKq3qrIhnoJSVi3sOyGQwoSSqwbUgxwQJJ1MbEzuPBkHExsuAFBsfJvK_P1wbBQxHmuWd3cwZ12mmIoifBs_MdYqGkyVraecc3qdHuCGI5GsZeR0BtqeZaFne3GP7U4tYVgoAGBh04jWKN8GcSQ0JIiB9QwdnvNK0H4OUkPukPJVz^1784535986` | 2027-07-27T14:06:37Z (1 год) | ✓ | ✓ | **Signed-User-Auth**: содержит `#171093180` (user_id) + `vk1.a...` (токен) + `^1784535986` (expire epoch). **Пользователь УЖЕ идентифицирован** до логина — cookie помнит прошлую сессию. |
-| `sui` | `171093180%2CnRF21W_rVgCfE6-iFlMvzY9SAQOwRQRPUtouuwBs99A` | 2027-07-27T14:06:37Z | ✓ | ✓ | **Session-User-ID**: `171093180,nRF21W_rVgCfE6-iFlMvzY9SAQOwRQRPUtouuwBs99A`. Зеркало user_id из `sua`. |
+| `sua` | `XXXXX#171093180^vk1.a.XXXXX^1784535986` | 2027-07-27T14:06:37Z (1 год) | ✓ | ✓ | **Signed-User-Auth**: содержит `#171093180` (user_id) + `vk1.a...` (токен) + `^1784535986` (expire epoch). **Пользователь УЖЕ идентифицирован** до логина — cookie помнит прошлую сессию. |
+| `sui` | `171093180%2CXXXXX` | 2027-07-27T14:06:37Z | ✓ | ✓ | **Session-User-ID**: `171093180,XXXXX`. Зеркало user_id из `sua`. |
 
 #### Cookies `.api.vk.ru` (1)
 
@@ -117,7 +117,7 @@
 
 ```json
 {
-  "access_token": "vk1.a.0UR3YM7wkIdifhRCZ5UFt4HJ9cAvdsabxv_aHOzfe97fVz9RLRBQuQmXFIEgT-lClngkNqbqnQZq-uX3u2Ly88UgwiXbuquG2eTHf68aRnoY_zq1bK74muKCmZLNnguyRVGA1JVrA4LpGTs63kEqvhmlNWXzBT7eBAP6_M-VUlpmTASObGwePflx-4rKgoI_YWt5RnfetBfLVGYYtxSuAA",
+  "access_token": "vk1.a.XXXXX",
   "expires": 1786104708,
   "user_id": 171093180,
   "logout_hash": "2f10b630b372245ee2"
@@ -126,7 +126,7 @@
 
 | Поле | Значение | Расшифровка |
 |---|---|---|
-| `access_token` | `vk1.a.0UR3YM7wkIdifhRCZ5UFt4HJ9cAvdsabxv_aHOzfe97fVz9RLRBQuQmXFIEgT-lClngkNqbqnQZq-uX3u2Ly88UgwiXbuquG2eTHf68aRnoY_zq1bK74muKCmZLNnguyRVGA1JVrA4LpGTs63kEqvhmlNWXzBT7eBAP6_M-VUlpmTASObGwePflx-4rKgoI_YWt5RnfetBfLVGYYtxSuAA` | Web-token формата `vk1.a.<base64>`, длина 248 символов |
+| `access_token` | `vk1.a.XXXXX` | Web-token формата `vk1.a.<base64>`, длина 248 символов |
 | `expires` | `1786104708` | Fri Aug 7 12:11:48 UTC 2026 (~24 часа с момента выдачи) |
 | `user_id` | `171093180` | **Совпадает с `sui` cookie из Stage 1!** |
 | `logout_hash` | `2f10b630b372245ee2` | Hash для OAuth-logout endpoint |
@@ -149,7 +149,7 @@
 
 | Cookie | Значение | Expires | Назначение |
 |---|---|---|---|
-| `p` | `vk1.a.w_Wz_dIAGD61FIi-fmNByJP6mhy3j2so02okwaWF4NFboOBKLnWlFb0o9Gn5Y3Ii0IgCTzcuig7-X-wnurDem0rVWVeoJ2stWV3ikd4CYtrPW4JaYka83x6nqhEzMk_NCf0Hiei7maBQhRrgcXM7pfHgQtUxNZ-o-ISTlsToYqA` | 2027-08-07T11:56:47Z (1 год) | **Login-persistent token**: формат `vk1.a.<base64>`, 178 байт. Это «долгая память» о залогиненном состоянии. |
+| `p` | `vk1.a.XXXXX` | 2027-08-07T11:56:47Z (1 год) | **Login-persistent token**: формат `vk1.a.<base64>`, 178 байт. Это «долгая память» о залогиненном состоянии. |
 
 #### НОВАЯ cookie `vk.ru`
 
@@ -162,9 +162,9 @@
 | Cookie | Значение | Expires | Назначение |
 |---|---|---|---|
 | `remixdmgr_tmp` | `93a3f1a3541719074c0150f5ccc83661486da7ac134551f1d9270caa38436631` | 2026-08-07T15:56:47Z (3 часа) | **Device-manager temporary hash** — sha256, 64 hex. Временный — через 3 часа превратится в `remixdmgr` (финальный, Stage 3). |
-| `remixnsid` (на `vk.ru`) | `vk1.a.zT3qON99f0Smqxl7Ng0YnAqaK2dfzgAArs0hkm1n1Bif43tjDIo7VGyfgovpn6XfSWmxtYGDlahOD2llA62c_7J7RGLvuKuDDFE9TPGOFqcMu97xjzMxBlld4n8AVAuMB1HuAbqgYK35WFlFse4Y5JSmHj3egIt7LAWY2BGlX1gDwOW9kzy7H-W6yCzMwiIm` | 2027-07-28T12:45:18Z | **New Session ID** на домене vk.ru (207 байт) |
-| `remixnsid` (на `id.vk.ru`) | `vk1.a.kIyihknpBc5fIgHq3dWbK5V_n7Cz_Y7hPoNsU077eejUAw4w-a5zOeTnO7ITwhN6yIELSg-BKtgroBz5S7gF0Q-FuJunph2UoGerGp2AXL0fqr69vOsiO6iP8_JeF06cpWzOVjv_W5OeJMg65uaB3WnxjgJqWKj8SLM3bt-7WVCPFNKq8sdzxkJ21bvtkj7-` | 2027-08-08T18:55:54Z | **New Session ID** на домене id.vk.ru (другое значение!) — параллельная сессия для домена id.vk.ru |
-| `remixnttpid` | `vk1.a.lw1eC5PTUBC6Gy3A5DGdRFlp3kGwjvpNjTJ8kkzC55G8iJlLBqWx_U_HpUhBj_4gE7zyHgicF-suW-j30aj2G_13O7b5wJXwmtvc6rBo0mO5yBwSO8a70CRjKnKFj5PC5od7FGEt0RDVIgIZ6fYRVoA7XLxLrQjdZ0DjcrP7wYIPaAs_sVATQM4WCzIXHPjT` | 2026-08-14T11:56:47Z (1 нед) | **Notification Push Token ID**: 209 байт, `vk1.a.<base64>` |
+| `remixnsid` (на `vk.ru`) | `vk1.a.XXXXX` | 2027-07-28T12:45:18Z | **New Session ID** на домене vk.ru (207 байт) |
+| `remixnsid` (на `id.vk.ru`) | `vk1.a.XXXXX` | 2027-08-08T18:55:54Z | **New Session ID** на домене id.vk.ru (другое значение!) — параллельная сессия для домена id.vk.ru |
+| `remixnttpid` | `vk1.a.XXXXX` | 2026-08-14T11:56:47Z (1 нед) | **Notification Push Token ID**: 209 байт, `vk1.a.<base64>` |
 | `remixsid` | `1_CnI-7BSCaB2LUl93I-DtrxOlSyWg6mS5_hsRYTEaEtczd4eEeYUCw3GpTTT71zJ_2u9Q5etBAkBjqfdKGHt5FA` | 2027-08-01T20:48:58Z | **Главный SESSION-ID** на домене `.vk.ru` (96 байт). Это и есть «вход выполнен». |
 
 ### Cookies — ИЗМЕНЁННЫЕ (3 штуки)
@@ -178,7 +178,7 @@
 
 | Cookie | Домен | Что было |
 |---|---|---|
-| `sua` | `.login.vk.ru` | `yY0D64FbIkX-50Oq6tgoKU8Q8R9l0stVOiAzkll1lOc#171093180^vk1.a.tw1L...^1784535986` (272 байта) |
+| `sua` | `.login.vk.ru` | `XXXXX#171093180^vk1.a.tw1L...^1784535986` (272 байта) |
 
 **Почему удалили `sua`?** После успешного логина VK заменяет «старую подпись» `sua` (которая хранила user_id + устаревший токен из прошлой сессии) на **свежий `p` cookie** (долгоживущий login-persistent). `sua` больше не нужна — её роль выполняет связка `p` + `remixsid` + `remixnsid`.
 
@@ -219,7 +219,7 @@ URL: `https://vk.ru/` → редирект → `https://vk.ru/feed`
 
 ```json
 {
-  "access_token": "anonym.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbm9ueW1faWQiOjY5ODMyODc0NiwiYXBwX2lkIjo2Mjg3NDg3LCJpYXQiOjE3ODQzMTA4MDIsImlzX3ZlcmlmaWVkIjpmYWxzZSwiZXhwIjoxNzg0Mzk3MjAyLCJzaWduZWRfdGltZSI6bnVsbCwiYW5vbnltX2lkX2xvbmciOjkwNzA0OTEwODAwNzI5NTEyMTQsInNjb3BlIjo3ODgxMjk5MzQ3ODk4MzY4fQ.tfVPZJbzlMIm79TTxYN2RhyNrBzvb_ABPr_eS1mwlzo",
+  "access_token": "anonym.XXXXX",
   "expired_at": 1784397202,
   "expires": 1784397202
 }
@@ -257,7 +257,7 @@ URL: `https://vk.ru/` → редирект → `https://vk.ru/feed`
 
 ```json
 {
-  "access_token": "vk1.a.fxqX3lgtfMqLm2DiwnR9_hUxPtR19_0OlAeGwGOJ9GrXJup03caXR7ZpuJmZHxzl7D0sqa_CXJ8KR-GD889z9yQxU9pIloBOO-a-Gn9O_KFUf_Dxyr4JJxBMeOOyqvLwokbabjq-dh1jj015AouzXL6IXokHqire8VY-hqnzwihWS3XH8RSLpYHbS7eJEil0OozE62WytfZtYq_cEDiMaw",
+  "access_token": "vk1.a.XXXXX",
   "expires": 1786104854,
   "user_id": 0,
   "logout_hash": ""
@@ -266,7 +266,7 @@ URL: `https://vk.ru/` → редирект → `https://vk.ru/feed`
 
 | Поле | Значение | Расшифровка |
 |---|---|---|
-| `access_token` | `vk1.a.fxqX3lgtfMqLm2DiwnR9_hUx...` | Web-token для app_id=6287487, 248 символов |
+| `access_token` | `vk1.a.XXXXX...` | Web-token для app_id=6287487, 248 символов |
 | `expires` | `1786104854` | Fri Aug 7 12:14:14 UTC 2026 (~24 часа) |
 | `user_id` | `0` | **НЕ АВТОРИЗОВАН для этого app_id!** |
 | `logout_hash` | `""` | Пустой — нет logout-строка (нет пользователя) |
@@ -435,7 +435,7 @@ URL: `https://vk.ru/` → редирект → `https://vk.ru/feed`
 | `remixdmgr` | `74cd6d884...` | `8965867ce9da1a17...` (другой hash!) |
 | `remixdt` | `0` | `0` |
 | `remixlang` | `0` | `0` |
-| `remixnsid` | `vk1.a.Rb8qmm9ie3UkW_pvO2SV...` | (нет дубля на vk.com) |
+| `remixnsid` | `vk1.a.XXXXX...` | (нет дубля на vk.com) |
 | `remixsid` | `1_D0J0META0ol3kElHNhsneBqP...` | `1_lIvTHQ4FVTYTFVmGd_PnTnxhhj1HhxJzZ8Ua6ThfdDPOQzuOznjznLxVnZhQjCvhOc-HDqLREWgPg8BPdTRP7g` (другой! expires 2027-08-04T16:51:58Z) |
 | `remixstid` | `698328746_zinIypCImEkbpZi2lUzBBZteN1TxBhZwnp2LwKz3ljH` | то же |
 | `remixstlid` | `9070491080072951214_7qLF3PX20dJ5M0RJEkMdeoM4AZAqz1Z6xA7cNDEkZGg` | то же |
@@ -486,8 +486,8 @@ URL: `https://vk.ru/` → редирект → `https://vk.ru/feed`
 | Stage | app_id=7344294 web_token | app_id=6287487 web_token | app_id=6287487 anonym_token | user_id |
 |---|---|---|---|---|
 | 1 (до входа) | — | — | — | — |
-| 2 (после входа) | ✓ `vk1.a.0UR3YM7wkIdi...`, user_id=171093180, expires Aug 7 12:11 | — | — | 171093180 |
-| 3 (vk.ru/feed) | ✓ (без изменений) | ✓ `vk1.a.fxqX3lgtfMqLm...`, **user_id=0** (placeholder!), expires Aug 7 12:14 | ✓ `anonym.eyJhbGc...`, **anonym_id=698328746**, exp Sat Jul 18 17:53 | 171093180 |
+| 2 (после входа) | ✓ `vk1.a.XXXXX...`, user_id=171093180, expires Aug 7 12:11 | — | — | 171093180 |
+| 3 (vk.ru/feed) | ✓ (без изменений) | ✓ `vk1.a.XXXXX...`, **user_id=0** (placeholder!), expires Aug 7 12:14 | ✓ `anonym.eyJhbGc...`, **anonym_id=698328746**, exp Sat Jul 18 17:53 | 171093180 |
 
 ### Cookies по доменам
 
@@ -533,12 +533,12 @@ URL: `https://vk.ru/` → редирект → `https://vk.ru/feed`
 
 ### 2. `sua` cookie — « подписанная сессия из прошлого»
 
-Stage 1 содержит `sua` = `yY0D64FbIkX-50Oq6tgoKU8Q8R9l0stVOiAzkll1lOc#171093180^vk1.a.tw1L4Ph3uNh_as82yajyKq3qrIhnoJSVi3sOyGQwoSSqwbUgxwQJJ1MbEzuPBkHExsuAFBsfJvK_P1wbBQxHmuWd3cwZ12mmIoifBs_MdYqGkyVraecc3qdHuCGI5GsZeR0BtqeZaFne3GP7U4tYVgoAGBh04jWKN8GcSQ0JIiB9QwdnvNK0H4OUkPukPJVz^1784535986`
+Stage 1 содержит `sua` = `XXXXX#171093180^vk1.a.XXXXX^1784535986`
 
 Декодировано:
-- `yY0D64FbIkX-50Oq6tgoKU8Q8R9l0stVOiAzkll1lOc` — подпись (43 символа, base64url)
+- `XXXXX` — подпись (43 символа, base64url)
 - `#171093180` — user_id (разделитель `#`)
-- `^vk1.a.tw1L4Ph3uNh_as82yajyKq3qrIhnoJSVi3sOyGQwoSSqwbUgxwQJJ1MbEzuPBkHExsuAFBsfJvK_P1wbBQxHmuWd3cwZ12mmIoifBs_MdYqGkyVraecc3qdHuCGI5GsZeR0BtqeZaFne3GP7U4tYVgoAGBh04jWKN8GcSQ0JIiB9QwdnvNK0H4OUkPukPJVz` — старый access_token (248 символов, разделитель `^`)
+- `^vk1.a.XXXXX` — старый access_token (248 символов, разделитель `^`)
 - `^1784535986` — expires (epoch sec, = Mar 18 2027)
 
 **После Stage 2 эта cookie удаляется** — VK заменяет «подписанную память о прошлой сессии» на свежий `p` cookie (login-persistent token на 1 год). Это **защита от cookie-hijacking**: старый `sua`-токен инвалидируется при новом логине.
@@ -548,7 +548,7 @@ Stage 1 содержит `sua` = `yY0D64FbIkX-50Oq6tgoKU8Q8R9l0stVOiAzkll1lOc#17
 | Свойство | Значение |
 |---|---|
 | Домен | `.login.vk.ru` |
-| Значение | `vk1.a.w_Wz_dIAGD61FIi-fmNByJP6mhy3j2so02okwaWF4NFboOBKLnWlFb0o9Gn5Y3Ii0IgCTzcuig7-X-wnurDem0rVWVeoJ2stWV3ikd4CYtrPW4JaYka83x6nqhEzMk_NCf0Hiei7maBQhRrgcXM7pfHgQtUxNZ-o-ISTlsToYqA` (178 байт) |
+| Значение | `vk1.a.XXXXX` (178 байт) |
 | Expires | 2027-08-07T11:56:47Z (**1 год**) |
 | HttpOnly | ✓ |
 | Secure | ✓ |
@@ -561,8 +561,8 @@ Stage 1 содержит `sua` = `yY0D64FbIkX-50Oq6tgoKU8Q8R9l0stVOiAzkll1lOc#17
 
 | Ключ | app_id | access_token | user_id | expires | Назначение |
 |---|---:|---|---:|---:|---|
-| `7344294:web_token:login:auth` | 7344294 | `vk1.a.0UR3YM7wkIdi...` | 171093180 | 1786104708 (Aug 7 12:11) | VKID Account app (для id.vk.ru) |
-| `6287487:web_token:login:auth` | 6287487 | `vk1.a.fxqX3lgtfMqL...` | **0** (placeholder!) | 1786104854 (Aug 7 12:14) | Main VK Web App (для vk.ru) |
+| `7344294:web_token:login:auth` | 7344294 | `vk1.a.XXXXX...` | 171093180 | 1786104708 (Aug 7 12:11) | VKID Account app (для id.vk.ru) |
+| `6287487:web_token:login:auth` | 6287487 | `vk1.a.XXXXX...` | **0** (placeholder!) | 1786104854 (Aug 7 12:14) | Main VK Web App (для vk.ru) |
 
 **Важно:** `user_id=0` во втором токене — это **временное состояние** сразу после редиректа с `id.vk.ru/account` на `vk.ru/feed`. Web-приложение ещё не успело обменять silent_token на полноценный web_token с user_id=171093180. В этот момент API-вызовы идут через **anonym_token** (который уже есть в localStorage).
 

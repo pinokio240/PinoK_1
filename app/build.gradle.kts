@@ -35,7 +35,7 @@ android {
         // VK Web client_id — единый canonical ID для web-token flow (audit Medium #1).
         // Значение 6287487 (vk.com desktop web) подтверждено дампом ВК.txt:
         //   6287487:get_anonym_token → anonym.eyJ...
-        //   6287487:web_token        → vk1.a.38fKxG41... (рабочий access_token)
+        //   6287487:web_token        → vk1.a.XXXXX... (рабочий access_token)
         // Используется в OAuthWebViewActivity.kt (Implicit Grant flow).
         // WebTokenAuth.kt использует hardcoded WEB_APP_IDS list (7879029 + 6287487)
         // с retry — см. #49.

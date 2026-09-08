@@ -77,7 +77,7 @@
 - Пользователь сообщил, что мессенджер не работает, остальные части приложения работают.
 - Прислал лог VK из `m.vk.com/im` на ПК с критически важными данными:
   - `7879029:get_anonym_token:login:auth` → `anonym.eyJ...` (анонимный токен, app_id **7879029** = m.vk.com web)
-  - `7879029:web_token:login:auth` → `vk1.a.EpLFrgp6...` (access_token, expires=1781626687, user_id=171093180, logout_hash=68ce4c413b3d0f81aa)
+  - `7879029:web_token:login:auth` → `vk1.a.XXXXX...` (access_token, expires=1781626687, user_id=171093180, logout_hash=68ce4c413b3d0f81aa)
   - `queue_credential_calls_cache_171093180_7879029` → `{"data":{"key":"aa6b197...","ts":378871722,"url":"https://queuev4.vk.com/im1180","id":171093180},"lastUpdate":1781625789157}` — **LongPoll v4 credentials для IM**.
 - Прислал архив `месс1.zip` с двумя сохранёнными HTML-страницами мобильного мессенджера (`Мессенджер_1.html`, `Мессенджер_2.html`) + ресурсы.
 

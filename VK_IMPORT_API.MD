@@ -13297,7 +13297,7 @@ commit pending на `PinoK`.
      &v=1.58.5                                ← VK Music API version
      &redirect_uri=https://music.vk.ru/
      &uuid=BGuDXzcibQq05hWzN6u-B              ← session/device id (base64url 16 bytes)
-     &redirect_state=eyJmbG93IjoiZ3JvdXBfc3Vic2NyaXB0aW9uIiwicGFyYW1zIjp7
+     &redirect_state=XXXXX
         ImNvcnJlbGF0aW9uSWQiOiJlYTdhMTJlYy0xZjUzLTQ2ZDAtOTI0Yi1iMTExY2NkZTNjM2Ui
         LCJvZmZlck5hbWUiOiIifX0=
      ← base64({"flow":"group_subscription","params":{"correlationId":"...","offerName":""}})
@@ -18302,7 +18302,7 @@ PromoShowed_8223270     1
 deviceId        87v-we10y1_697oTiTmI8
 landings:unauthId       1993657547
 tracer-device-id        2eb52052-a521-4bf2-93d3-7877e933fbb6
-7344294:web_token:login:auth    {"access_token":"vk1.a.qy_SlkapaxfhS2R6S5Xe-DX1x_B3OA143_IonomnUOK6lH1tYSjv2ECzMnuY5VKFBSo3G5Wzbq0Yu2LHrfEvCPqIsh5pEdimZikL3QVMAMM44ffiEzZY2m6HSOfLSb1ftYF43YFYwP0ailAt0XuE9jv0KnsliiCwAMhHT5YR03ZkUHYN1pT1_aaHv3ppB3ufd_XiB9SWCc1XVo5AIyEj6w","expires":1785855515,"user_id":171093180,"logout_hash":"8e1c761c3209748c99"}
+7344294:web_token:login:auth    {"access_token":"vk1.a.XXXXX","expires":1785855515,"user_id":171093180,"logout_hash":"8e1c761c3209748c99"}
 ```
 
 #### 49.1.2. Расшифровка ключей localStorage (новое, не было в §41)
@@ -18676,7 +18676,7 @@ tracer-device-id        2eb52052-a521-4bf2-93d3-7877e933fbb6
 **Значение (JSON):**
 ```json
 {
-  "access_token": "vk1.a.qy_SlkapaxfhS2R6...",
+  "access_token": "vk1.a.XXXXX...",
   "expires": 1785855515,           // unix seconds
   "user_id": 171093180,
   "logout_hash": "8e1c761c3209748c99"
@@ -20111,7 +20111,7 @@ fun OfflineBanner(
 
 Факт из `ВК_локал_куки.txt`:
 ```
-6287487:web_token:login:auth → access_token: vk1.a.GB78pbfI...
+6287487:web_token:login:auth → access_token: vk1.a.XXXXX...
 oauth.vk.com/authorize?client_id=6287487&scope=...audio,video...
 ```
 → Веб-версия (m.vk.ru) работает на **том же web-токене `vk1.a.*`** и **том же
