@@ -193,7 +193,7 @@ class NotificationsPoller(
                 // Notifier сам фильтрует (quiet hours, per-user mute, category,
                 // source, sn_*) и группирует (none/category/community/user).
                 // #NOTIF-FEED-FILTER (19-B.3): очередь постановки сортируется —
-                // диалоговые типы (message*/mail/group_chats, класс A) постятся
+                // диалоговые типы (message*, mail/group_chats, класс A) постятся
                 // РАНЬШЕ новостных (класс B), внутри классов порядок VK (стабильно).
                 val orderedItems = sortDialogsFirst(newItems)
                 val dialogCount = orderedItems.count { VkNotificationsNotifier.isMessageClassType(it.type) }
@@ -217,7 +217,7 @@ class NotificationsPoller(
 
     /**
      * #NOTIF-FEED-FILTER (19-B.3): стабильная двухклассовая сортировка пакетной
-     * очереди постановки сплывающих — диалоговые типы (message*/mail/group_chats,
+     * очереди постановки сплывающих — диалоговые типы (message*, mail/group_chats,
      * класс A, см. VkNotificationsNotifier.isMessageClassType) постятся РАНЬШЕ
      * новостных (класс B), внутри классов исходный порядок VK (sortedBy —
      * стабильный, состав списка не меняется).

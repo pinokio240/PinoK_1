@@ -922,10 +922,31 @@ fun MusicScreen(
                     isOwn = track.ownerId == app.exchangeAuthRepository.userId(),
                     onAdd = {
                         scope.launch {
-                            try {
-                                app.apiClient.audioAdd(track.id, track.ownerId)
-                            } catch (e: Exception) {
-                                AppLog.e("MusicScreen", "audioAdd error", e)
+                            // #AUDIO-ADD-WEB (2026-09-08): раньше результат
+                            // audio.add игнорировался — при ошибке VK (для
+                            // web-токенов audio.add обычно закрыт правами)
+                            // меню просто закрывалось и трек молча НЕ
+                            // добавлялся («не могу добавить трек в свою
+                            // музыку»). Теперь audioAddReliable: audio.add →
+                            // web-fallback al_audio.php?act=add (паттерн VK
+                            // web) + честные тосты с РЕАЛЬНОЙ ошибкой.
+                            val (ok, err) = app.apiClient.audioAddReliable(track)
+                            if (ok) {
+                                android.widget.Toast.makeText(
+                                    app.applicationContext,
+                                    "Добавлено в мою музыку",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                AppLog.w("MusicScreen", "#AUDIO-ADD-WEB add failed: $err")
+                                // NULL-ЯВНО: err — nullable Pair-компонент; для
+                                // тоста честный фолбэк на общий текст сети.
+                                val shownErr = if (err != null) err else "ошибка сети"
+                                android.widget.Toast.makeText(
+                                    app.applicationContext,
+                                    "Не удалось добавить: $shownErr",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
                             }
                         }
                     },

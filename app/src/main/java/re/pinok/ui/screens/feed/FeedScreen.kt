@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,13 +39,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -108,6 +110,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -2810,56 +2813,66 @@ private fun FeedPhotoCarousel(
                 color = Color.White,
             )
         }
-        // Стрелка «назад» — по левому краю по вертикальному центру.
+        // #FEED-CAROUSEL (19-A) + VK web vkuiCarouselBase (2026-09-08): органы
+        // управления по паттерну VK web attachmentCarousel (снапшот Лента,
+        // «Лента_ фотографии.html»: vkuiCarouselBase__arrow + vkuiScrollArrow__sizeS):
+        // полновысотная зона нажатия по краю слайда (arrowAreaFit,
+        // --arrow-area-height = высота слайда) + тонкий шеврон 12×16 по центру
+        // по вертикали, БЕЗ кружка-фона (VK web рендерит голый шеврон);
+        // рендерится только применимая стрелка (на первом слайде только «вперёд» —
+        // в снапшоте ровно так: arrowStart отсутствует, есть только arrowEnd).
+        // Стрелка — отдельный клик-таргет поверх пейджера: клик НЕ доходит до фото.
         if (pagerState.currentPage > 0) {
-            IconButton(
-                onClick = {
-                    scope.launch {
-                        pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                    }
-                },
+            Box(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .size(40.dp),
+                    .fillMaxHeight()
+                    .width(44.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {
+                        scope.launch {
+                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
+                Icon(
+                    Icons.Filled.ChevronLeft,
+                    contentDescription = "Предыдущее фото",
+                    tint = Color.White,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Filled.KeyboardArrowLeft,
-                        contentDescription = "Предыдущее фото",
-                        tint = Color.White,
-                    )
-                }
+                        .size(28.dp)
+                        .shadow(4.dp, CircleShape),
+                )
             }
         }
-        // Стрелка «вперёд» — по правому краю по вертикальному центру.
+        // Стрелка «вперёд» — по правому краю, та же VK web-геометрия.
         if (pagerState.currentPage < photosWithUrl.lastIndex) {
-            IconButton(
-                onClick = {
-                    scope.launch {
-                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                    }
-                },
+            Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .size(40.dp),
+                    .fillMaxHeight()
+                    .width(44.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {
+                        scope.launch {
+                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = "Следующее фото",
+                    tint = Color.White,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Filled.KeyboardArrowRight,
-                        contentDescription = "Следующее фото",
-                        tint = Color.White,
-                    )
-                }
+                        .size(28.dp)
+                        .shadow(4.dp, CircleShape),
+                )
             }
         }
     }

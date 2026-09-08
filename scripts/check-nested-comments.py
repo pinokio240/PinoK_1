@@ -37,7 +37,15 @@ def find_dangerous_patterns(text):
     Правильный nested-comment парсер Kotlin.
     Возвращает список (line, kind, content):
       kind='NESTED_OPEN'  — `/*` (не `/**`) внутри block comment
+      kind='EARLY_CLOSE'  — `*/` внутри KDoc НЕ в конце строки (следом текст)
       kind='UNBALANCED'   — файл заканчивается с level != 0
+
+    EARLY_CLOSE (2026-09-08, реальный случай волны 19): текст вида
+    `(message*/mail/group_chats)` внутри KDoc — последовательность `*/`
+    ЗАКРЫВАЕТ комментарий досрочно, весь хвост KDoc становится кодом и
+    даёт каскад «Syntax error: Expecting member declaration»
+    (NotificationsPoller.kt:220, VkNotificationsNotifier.kt:226,
+    NotificationsScreen.kt:233 — 318 ошибок компиляции).
     """
     findings = []
     lines = text.split('\n')
@@ -45,6 +53,7 @@ def find_dangerous_patterns(text):
     i = 0
     n = len(text)
     pos_line = 1
+    in_kdoc = False  # текущий block comment открыт как `/**` (KDoc)
     while i < n:
         if text[i] == '\n':
             pos_line += 1
@@ -57,10 +66,27 @@ def find_dangerous_patterns(text):
                     content = lines[pos_line - 1] if pos_line - 1 < len(lines) else ''
                     findings.append((pos_line, 'NESTED_OPEN', content))
                 level += 1
+                in_kdoc = in_kdoc or (i + 2 < n and text[i + 2] == '*')
                 i += 2
                 continue
             if text[i:i+2] == '*/':
+                # EARLY_CLOSE: `*/` внутри KDoc, после которого на той же
+                # строке есть НЕ-пробелы (например `*/mail`) — комментарий
+                # закрывается досрочно, хвост строки становится кодом.
+                if in_kdoc:
+                    j = i + 2
+                    premature = False
+                    while j < n and text[j] != '\n':
+                        if text[j] not in ' \t':
+                            premature = True
+                            break
+                        j += 1
+                    if premature:
+                        content = lines[pos_line - 1] if pos_line - 1 < len(lines) else ''
+                        findings.append((pos_line, 'EARLY_CLOSE', content))
                 level -= 1
+                if level == 0:
+                    in_kdoc = False
                 i += 2
                 continue
             i += 1
@@ -73,7 +99,9 @@ def find_dangerous_patterns(text):
                     i += 1
                 continue
             if text[i:i+2] == '/*':
+                is_kdoc = i + 2 < n and text[i + 2] == '*'
                 level += 1
+                in_kdoc = is_kdoc
                 i += 2
                 continue
             # string literal "..."
@@ -151,6 +179,12 @@ def main():
                     print(f'     │ {content.rstrip()}')
                     print(f'     └ fix: replace `/*` with `…` or `/<path>`, '
                           f'or use `//` line-comment')
+                elif kind == 'EARLY_CLOSE':
+                    print(f'   line {line}: PREMATURE `*/` inside KDoc (text follows on same line)')
+                    print(f'     │ {content.rstrip()}')
+                    print(f'     └ fix: reword so that `*/` is NOT followed by text '
+                          f'(e.g. `message*/mail` → `message, mail`) — '
+                          f'the `*/` CLOSES the KDoc early')
                 elif kind == 'UNBALANCED':
                     print(f'   line {line}: UNBALANCED block comments ({content})')
                     print(f'     └ fix: ensure every `/*` has a matching `*/`')

@@ -3930,6 +3930,27 @@ class VKApiClient(
         return json.has("response")
     }
 
+    /**
+     * #AUDIO-ADD-WEB (2026-09-08): надёжное «Добавить в мою музыку» —
+     * audio.add API, а при его отказе (web-токены vk1.a.*: audio.add закрыт
+     * правами) — web-fallback AlAudioFallback.addTrackToMyMusic
+     * (al_audio.php?act=add — ТО, ЧЕМ добавляет сам VK web, дамп
+     * audio.a39c029f.js; hash = tuple[13][0] reload_audio или access_key —
+     * VK web сам подставляет access_key как addHash).
+     *
+     * @return true — добавлено; false — lastApiError/возвращённый errorText
+     *         содержат РЕАЛЬНУЮ причину (no-stub, без маскировки).
+     */
+    suspend fun audioAddReliable(track: Track): Pair<Boolean, String?> {
+        val ok = audioAdd(track.id, track.ownerId)
+        if (ok) return true to null
+        val apiErr = lastApiError
+        AppLog.w("VKApiClient", "#AUDIO-ADD-WEB audio.add failed (err=$apiErr) — web-fallback al_audio act=add")
+        val (webOk, webErr) = AlAudioFallback(httpClient, exchangeAuthRepository).addTrackToMyMusic(track)
+        if (webOk) return true to null
+        return false to (webErr ?: apiErr)
+    }
+
     /** audio.delete — удалить трек из своих. */
     suspend fun audioDelete(audioId: Long, ownerId: Long): Boolean {
         if (isOffline()) return false
@@ -10275,6 +10296,18 @@ class VKApiClient(
         skipOffline: Boolean = false,
         silent: Boolean = false,
     ): JsonObject? {
+        // #STALE-ERR-FIX (2026-09-08): error-стейт живёт ОДИН вызов. Раньше
+        // lastApiError/lastApiErrorCode перезаписывались только следующей
+        // ОШИБКОЙ — и провал НЕСВЯЗАННОГО вызова «выстреливал» позже в чужом
+        // UI: queue.subscribe (старт call-сигналинга, SovaApp:1569, invalid
+        // queue name) → lastApiError = «queue.subscribe: One of the parameters
+        // …» → открытие диалога канала с пустой историей читало этот СТАРЫЙ
+        // error (ChatDetailScreen:1906 «Ошибка: $err») вместо честного
+        // «Нет сообщений». Каждый вызов начинается с чистого стейта: читатель
+        // после call() видит ошибку ИМЕННО этого вызова (или чистоту).
+        lastApiError = null
+        lastApiErrorCode = 0
+
         // S7-1: Rate limiter — max 3 requests per second to avoid Flood Control.
         rateLimitWait()
 
@@ -16568,7 +16601,14 @@ class VKApiClient(
                         val lastName = safeString(obj.get("last_name"))
                         name = listOfNotNull(firstName, lastName).joinToString(" ").trim()
                     }
-                    if (name == null || name.isBlank()) continue
+                    // WARN-FIX (2026-09-08, «Condition is always 'false'» на
+                    // этом месте в K2): null-проверка здесь мёртвая — после
+                    // блока выше name заведомо non-null на ОБОИХ путях
+                    // (else-ветка: смарт-каст по гварду if (name == null);
+                    // then-ветка: реассайн не-null trim()-строкой). K2
+                    // доказывает это сам и предупреждал на каждой сборке.
+                    // Оставляем только честную проверку пустоты.
+                    if (name.isBlank()) continue
                     val photo = safeString(obj.get("photo_100"))
                     val loggedRaw = safeIntNullable(obj.get("is_logged_in"))
                     val isLoggedIn = when (loggedRaw) {

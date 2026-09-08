@@ -187,7 +187,7 @@ import re.pinok.util.toRelativeTime
 //     group_invites/group_invite его не ловил);
 //   • Сообщения/Групповые чаты — сохранены по ТЗ (класс «диалогов»,
 //     класс A сортировки 19-B.2); честная оговорка: парсеры VKA сегодня
-//     type message*/mail НЕ производят (rg-проверка), но неизвестный
+//     type message*, mail НЕ производят (rg-проверка), но неизвестный
 //     entity.type проходит redesign-парсер как есть (VKApiClient:14743),
 //     поэтому матч оставлен живым; типы topic/podcast фильтра не имеют
 //     и видны в «Все».
@@ -230,7 +230,7 @@ private val NOTIFICATION_FILTERS = listOf(
 
 /**
  * #NOTIF-FEED-FILTER (19-B.2): стабильная двухклассовая сортировка списка
- * уведомлений — класс A (сообщения/диалоги: message*/mail/group_chats/chat,
+ * уведомлений — класс A (сообщения/диалоги: message*, mail/group_chats/chat,
  * см. [re.pinok.realtime.VkNotificationsNotifier.isMessageClassType])
  * располагается ВЫШЕ новостных (класс B: лайки/комментарии/посты/...).
  * Внутри классов исходный порядок VK сохраняется (sortedBy — стабильный),
@@ -529,7 +529,7 @@ fun NotificationsScreen(
                         "birthday" -> item.type == "birthday_reminder"
                         "gifts" -> item.type == "gift"
                         // #NOTIF-FEED-FILTER: класс A сортировки 19-B.2. Парсеры
-                        // VKA сегодня message*/mail не производят, но неизвестный
+                        // VKA сегодня message*, mail не производят, но неизвестный
                         // entity.type проходит redesign как есть (VKApiClient:14743).
                         "messages" -> item.type.startsWith("message") || item.type == "mail"
                         "group_chats" -> item.type.startsWith("group") || item.type == "chat"

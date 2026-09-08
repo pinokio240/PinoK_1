@@ -12125,3 +12125,67 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Фикс (2 файла, оркестратор):** ChatDetailScreen — при изменении текста ввода messages.setActivity(type=typing, peer_id) через VKA-преадд: мгновенно на первом изменении после паузы, дальше не чаще раза в 3с (VK ограничивает частоту; индикатор оппонента живёт ~5с и не гаснет между продлениями); при остановке набора сигнал прекращается — индикатор гаснет сам; режим редактирования сигнал не шлёт; каналы недостижимы (поле ввода скрыто); сбой — без тоста, честный лог. MessageNotifier — setSortKey("0") (пара к "1" новостных из 19-B): диалоговые уведомления выше новостных в шторке.
 
 **Проверка юзером:** начать набирать в диалоге → у оппонента (или в вебе VK) появляется «Печатает…», живёт при наборе, гаснет через ~5с после остановки; logcat-метка `#TYPING-SEND setActivity peer=… ok=…`.
+
+---
+
+## 2026-09-08 — fix(build): Fix #346 — 318 ошибок компиляции: `message*/mail` внутри KDoc досрочно закрывал комментарий (#KDOC-EARLY-CLOSE)
+
+**Симптом (лог юзера):** `:app:compileDebugKotlin` упал — 318× «Syntax error: Expecting member declaration» в NotificationsPoller.kt:220-229, VkNotificationsNotifier.kt:226+, NotificationsScreen.kt.
+
+**Root-cause:** волна 19-B написала в KDoc: «диалоговые типы (message*/mail/group_chats…)». Последовательность `*/` внутри KDoc — это ЗАКРЫТИЕ комментария; весь хвост KDoc становится кодом → каскад синтакс-ошибок. Сканер check-nested-comments.py ловил только вложенные `/*` (nested-open), а ранние `*/` — нет: файл считался «ALL CLEAN» при сломанной компиляции.
+
+**Фикс:** (1) все `message*/mail` → `message*, mail` (6 вхождений, 3 файла); (2) сканер расширен правилом **EARLY_CLOSE**: `*/` внутри KDoc, после которого на той же строке есть текст — находка с подсказкой по исправлению; (3) правило добавлено в обязательный прогон (169 файлов — ALL CLEAN).
+
+**Проверка юзером:** сборка проходит; `python3 scripts/check-nested-comments.py` → ALL CLEAN.
+
+---
+
+## 2026-09-08 — fix(build): Fix #347 — предупреждение «Condition is always 'false'» (VKApiClient:16437)
+
+**Симптом:** каждая сборка — `w: VKApiClient.kt:16437:25 Condition is always 'false'` (×2).
+
+**Root-cause:** в accountGetMulti: `var name = safeString(...)` → `if (name == null) { name = …trim() }` → следующая проверка `if (name == null || name.isBlank())` — на обоих путях name уже non-null (смарт-каст по гварду + реассайн не-null строкой), K2 доказывает это сам и предупреждает.
+
+**Фикс:** мёртвая null-проверка убрана — `if (name.isBlank()) continue` + комментарий с обоснованием (NULL-политика не нарушена: явная проверка пустоты осталась).
+
+**Проверка юзером:** сборка без w: на этой строке.
+
+---
+
+## 2026-09-08 — fix(im): Fix #348 — диалог канала показывал «Ошибка: queue.subscribe … invalid queue name» вместо содержимого (#STALE-ERR-FIX, #CHANNEL-DELETED-TITLE)
+
+**Симптом (скриншот юзера):** раздел «Каналы» → открытие диалога канала → пустой экран, шапка «DELETED», по центру «Ошибка: queue.subscribe: One of the parameters specified was missing or invalid: invalid queue name».
+
+**Root-cause (двухслойный):**
+1. **Утечка глобальной ошибки.** `VKApiClient.lastApiError` перезаписывался только СЛЕДУЮЩЕЙ ошибкой. При старте приложения call-сигналинг шлёт `queue.subscribe` (fallback через обычный call, VKA:11392) — VK отвечает «invalid queue name» — и этот ЧУЖОЙ застрявший error потом читал ChatDetailScreen:1906 при пустой истории канала («Ошибка: $err»).
+2. **Титул «DELETED»:** VK в messages.getConversationsById для канальных диалогов иногда отдаёт peer.title = «DELETED» (peer без groups[]-привязки), и шапка перебивала нормальное имя из списка.
+
+**Фикс:** (1) #STALE-ERR-FIX — callInternal сбрасывает lastApiError/lastApiErrorCode в начале КАЖДОГО вызова: читатель после call() видит ошибку именно этого вызова (или чистоту); (2) #CHANNEL-DELETED-TITLE — для peerId<0 с титулом «DELETED»/«Диалог»/пустым имя+фото резолвятся через groups.getById(-peerId).
+
+**Честное отклонение:** сам сбой queue.subscribe (имя очереди входящих звонков) не вылечен — нужно сниффить VK web (давний FIXME в ChannelWebSocketClient.kt); теперь эта ошибка видна только в logcat и не протекает в UI. Пустая история канала → честное «Нет сообщений».
+
+**Проверка юзером:** открыть канал → заголовок с именем канала, без красной ошибки; logcat: `#CHANNEL-DELETED-TITLE` (если фолбэк сработал); входящие звонки по-прежнему требуют отдельной волны.
+
+---
+
+## 2026-09-08 — feat(feed): карусель ленты приведена к VK web vkuiCarouselBase (#FEED-CAROUSEL-VKWEB)
+
+**Запрос юзера:** найти в VK web `class="attachmentCarousel … vkuiCarouselBase__host vkuiCarouselBase__draggable …"` и импортировать «вместе с органами управления».
+
+**Найдено в снапшоте (snapЛента, «Лента_ фотографии.html»):** контейнер attachmentCarousel = vkuiCarouselBase__host/__draggable (drag-свайп через translate3d-слой), слайды `vkuiCarouselBase__slide` (role=group, aria «1 из 6»), стрелки `vkuiCarouselBase__arrow` + `vkuiScrollArrow__sizeS` — тонкий шеврон 12×16 по центру полновысотной зоны нажатия (arrowAreaFit, `--arrow-area-height` = высоте слайда), счётчик `data-testid="carousel-counter"` «1/6» (Caption accent) чипом у верхнего края, точек НЕТ, и на первом слайде монтируется ТОЛЬКО arrowEnd («вперёд») — applicable-стрелка.
+
+**Фикс (FeedScreen/FeedPhotoCarousel):** стрелки — полновысотные (fillMaxHeight) клик-зоны 44dp по краям + ChevronLeft/Right 28dp с лёгкой тенью (вместо кружка 40dp), клик по зоне не доходит до фото; edge-guard сохранён (совпал с VK web); счётчик «n/N» и свайп уже соответствовали. Сверка функционала с VK web — без точек, applicable-стрелка, drag/swipe, тап → фотопросмотр.
+
+**Проверка юзером:** пост с 4+ фото → карусель со стрелками VK web-стиля; на первом слайде стрелка «назад» отсутствует; свайп и клик по фото работают; настройка «Карусель фото в ленте» выключает всё как раньше.
+
+---
+
+## 2026-09-08 — fix(music): Fix #349 — «не могу добавить трек в свою музыку» (#AUDIO-ADD-WEB)
+
+**Симптом:** меню трека → «Добавить в мою музыку» → ничего не происходит.
+
+**Root-cause:** MusicScreen.onAdd вызывал `audioAdd` (audio.add) и ИГНОРИРОВАЛ результат: для web-токенов vk1.a.* метод закрыт правами → молчаливый провал. Как добавляет сам VK web (дамп Музыка.zip, audio.a39c029f.js): `ajax.post("al_audio.php?act=add", {group_id:0, audio_owner_id, audio_id, hash: a.addHash})`. Источник addHash доказан бандлом core_spa: AUDIO_ITEM_INDEX_HASHES=13 → tuple[13] = «addHash/editHash/…», а для API-объектов сериализатор сам подставляет `{addHash: e.access_key}` — access_key валиден как hash.
+
+**Фикс:** AlAudioFallback + `addTrackToMyMusic`: hash из tuple[13] reload_audio → фолбэк access_key → если оба пусты, честный отказ; POST act=add с remixsid-cookie; парсер payload (числовой ≥1 = успех; JSON error → error_msg; сырой ответ — в ошибку без маскировки). VKA + `audioAddReliable(track)`: audio.add → web-fallback → (ok, реальная причина). MusicScreen.onAdd: тост «Добавлено в мою музыку» / «Не удалось добавить: <реальная причина VK>». Общий fetchReloadTuple — один сетевой запрос для URL и hash.
+
+**Проверка юзером:** трек из поиска/рекомендаций → «…» → «Добавить в мою музыку» → тост успеха, трек появляется в «Моей музыке» (после обновления раздела); при отказе VK — тост с реальной причиной; logcat `#AUDIO-ADD-WEB`.

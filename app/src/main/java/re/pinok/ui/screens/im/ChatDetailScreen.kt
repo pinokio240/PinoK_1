@@ -1979,6 +1979,37 @@ fun ChatDetailScreen(
             chat?.peer?.photo?.takeIf { it.isNotBlank() }?.let {
                 if (it != currentPhoto) currentPhoto = it
             }
+            // #CHANNEL-DELETED-TITLE (2026-09-08): VK в messages.getConversationsById
+            // для КАНАЛЬНЫх диалогов (peerId = -gid) иногда отдаёт peer.title =
+            // «DELETED» (peer-запись без привязки к groups[]) — шапка чата
+            // перескакивала с нормального имени (из списка диалогов) на DELETED.
+            // Фолбэк: для отрицательного peerId с битым/пустым титулом резолвим
+            // имя/фото через groups.getById(-peerId) — тот же источник, что и
+            // список диалогов. Пустой ответ (канал недоступен/удалён) честно
+            // оставляет текущие значения.
+            if (peerId < 0) {
+                val badTitle = currentTitle.isBlank() ||
+                    currentTitle == "Диалог" || currentTitle == "DELETED"
+                if (badTitle) {
+                    try {
+                        val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
+                        if (g != null && g.name.isNotBlank()) {
+                            if (g.name != currentTitle) currentTitle = g.name
+                            // NULL-ЯВНО: elvis на nullable-модели GroupInfo
+                            // (photo200 может отсутствовать — фолбэк на photo100,
+                            // паттерн рендера аватарок всего проекта).
+                            val gPhoto = g.photo200 ?: g.photo100
+                            if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
+                                currentPhoto = gPhoto
+                            }
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        AppLog.w("ChatDetailScreen", "#CHANNEL-DELETED-TITLE groupsGetById failed: ${e.message}")
+                    }
+                }
+            }
         } catch (ce: kotlinx.coroutines.CancellationException) {
             throw ce
         } catch (_: Exception) {

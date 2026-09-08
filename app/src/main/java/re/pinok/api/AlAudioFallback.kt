@@ -153,4 +153,206 @@ class AlAudioFallback(
             null
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #AUDIO-ADD-WEB (2026-09-08): «Добавить в мою музыку» web-fallback.
+    //
+    // VK web добавляет трек к себе запросом
+    //   ajax.post("al_audio.php?act=add",
+    //     { group_id: 0, audio_owner_id: a.ownerId, audio_id: a.id, hash: a.addHash })
+    // (дамп audio.a39c029f.js, снапшот Музыка.zip). API-метод audio.add для
+    // web-токенов vk1.a.* обычно отдаёт ошибку прав — поэтому порядок такой:
+    // сначала audio.add (вдруг токен умеет), затем этот web-путь.
+    //
+    // Источник hash (addHash), доказательства из бандлов core_spa:
+    //  1. AUDIO_ITEM_INDEX_HASHES = 13: tuple[13] сериализатора audio-объекта —
+    //     строка "addHash/editHash/actionHash/deleteHash/replaceHash/urlHash/restoreHash"
+    //     → addHash = первый сегмент.
+    //  2. Для API-объектов тот же сериализатор делает
+    //     {addHash: e.access_key, ...} — VK web сам подставляет access_key как
+    //     addHash. Значит access_key — валидный hash для act=add.
+    // Порядок кандидатов: tuple[13] из reload_audio → access_key трека.
+    // Оба пустые → честный отказ (без выдуманных хешей).
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Добавить трек в «Мою музыку» web-запросом al_audio.php?act=add.
+     *
+     * @return Pair(ok, errorText): ok=true — добавлено; ok=false — errorText
+     *         содержит РЕАЛЬНЫЙ ответ/ошибку VK (без маскировки), готовый
+     *         для показа пользователю.
+     */
+    suspend fun addTrackToMyMusic(track: Track): Pair<Boolean, String?> {
+        if (track.id <= 0L || track.ownerId == 0L) {
+            return false to "Трек без корректного id/owner_id — добавление невозможно"
+        }
+        val tag = "#${track.ownerId}_${track.id}"
+        val remixsid = exchangeAuthRepository?.remixsid()
+        if (remixsid == null || remixsid.isBlank()) {
+            return false to "Нет web-сессии (remixsid) — перевойдите в приложение"
+        }
+
+        // 1) Кандидат hash: tuple[13] reload_audio, первый сегмент (= addHash).
+        // 2) Фолбэк: access_key — VK web сам подставляет его как addHash.
+        // NULL-ЯВНО: elvis-фолбэк между двумя равнозначными источниками hash
+        // (доказано сериализатором core_spa: addHash = access_key для API-объектов).
+        val tupleHash = extractAddHashFromReload(track)
+        val hash = tupleHash ?: track.accessKey
+        if (hash.isNullOrBlank()) {
+            AppLog.w(TAG, "#AUDIO-ADD-WEB $tag: нет addHash (tuple) и access_key — отказ")
+            return false to "VK не отдал хеш добавления (addHash/access_key) для этого трека"
+        }
+        AppLog.d(TAG, "#AUDIO-ADD-WEB $tag: hash source = ${if (tupleHash != null) "tuple[13]" else "access_key"}")
+
+        val form = FormBody.Builder()
+            .add("act", "add")
+            .add("al", "1")
+            .add("group_id", "0")
+            .add("audio_owner_id", track.ownerId.toString())
+            .add("audio_id", track.id.toString())
+            .add("hash", hash)
+            .build()
+        val req = Request.Builder()
+            .url(AL_AUDIO_URL)
+            .post(form)
+            .header("User-Agent", WEB_UA)
+            .header("Cookie", "remixsid=$remixsid")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Accept", "text/plain, */*; q=0.01")
+            .header("Referer", "https://vk.com/audio")
+            .build()
+
+        return try {
+            // NULL-ЯВНО: okhttp-цепочки (body?.string) — сетевой слой, паттерн
+            // всего файла (fetchReloadAudio выше — те же цепочки).
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    val msg = "HTTP ${resp.code}: ${body.take(160)}"
+                    AppLog.w(TAG, "#AUDIO-ADD-WEB $tag http fail: $msg")
+                    return false to msg
+                }
+                parseAlAudioPayload(body, tag)
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "#AUDIO-ADD-WEB $tag request fail: ${e.message}")
+            false to "${e.message}"
+        }
+    }
+
+    /**
+     * Парсинг payload VK ajax для act=add.
+     * Форматы: "<!>…<!>1" (числовой payload ≥ 1 = успех), JSON {"error":…},
+     * произвольный текст — показываем пользователю как есть (no-stub).
+     * @return Pair(ok, errorText для пользователя; null при успехе).
+     */
+    private fun parseAlAudioPayload(body: String, tag: String): Pair<Boolean, String?> {
+        val payload = body.substringAfterLast("<!>").trim()
+        AppLog.d(TAG, "#AUDIO-ADD-WEB payload for $tag: ${body.take(200)}")
+        if (payload.isEmpty()) {
+            return false to "Пустой ответ al_audio.php"
+        }
+        val asInt = payload.toIntOrNull()
+        if (asInt != null) {
+            // Числовой payload: ≥1 = подтверждение act=add (onDone-протокол vk web).
+            return if (asInt >= 1) true to null
+            else false to "VK отклонил добавление (payload=$asInt)"
+        }
+        return try {
+            val json = JsonParser.parseString(payload)
+            if (json.isJsonObject) {
+                val o = json.asJsonObject
+                val errEl = o.get("error")
+                if (errEl != null && !errEl.isJsonNull) {
+                    // VK web-ошибка: {"error": "..."} или {"error": {"error_msg": "..."}}.
+                    val msg: String = if (errEl.isJsonObject) {
+                        val msgEl = errEl.asJsonObject.get("error_msg")
+                        if (msgEl != null && msgEl.isJsonPrimitive) msgEl.asString
+                        else errEl.toString().take(160)
+                    } else if (errEl.isJsonPrimitive) {
+                        errEl.asString
+                    } else {
+                        errEl.toString().take(160)
+                    }
+                    false to msg
+                } else {
+                    // JSON-объект без error — подтверждение (протокол допускает data-ответ).
+                    true to null
+                }
+            } else {
+                false to "Неизвестный ответ al_audio.php: ${payload.take(120)}"
+            }
+        } catch (e: Exception) {
+            // Не-JSON payload без error-маркеров во всём теле — считаем успехом
+            // (vk ajax иногда присыпает ответ разметкой).
+            if (body.contains("\"error\"")) {
+                false to "Ошибка al_audio.php: ${payload.take(120)}"
+            } else {
+                true to null
+            }
+        }
+    }
+
+    /**
+     * addHash из reload_audio: tuple[13] = "addHash/editHash/…" (сериализатор
+     * core_spa, AUDIO_ITEM_INDEX_HASHES = 13). Первый сегмент; null если нет
+     * tuple/поля/сегмент пуст.
+     */
+    private suspend fun extractAddHashFromReload(track: Track): String? {
+        val tuple = fetchReloadTuple(track) ?: return null
+        if (tuple.size() <= 13) return null
+        val hashesEl = tuple.get(13)
+        if (hashesEl == null || hashesEl.isJsonNull || !hashesEl.isJsonPrimitive) return null
+        val addHash = hashesEl.asString.split("/").firstOrNull().orEmpty().trim()
+        return if (addHash.isBlank()) null else addHash
+    }
+
+    /**
+     * Сырой audio-tuple из reload_audio (общий источник для URL-парсера и
+     * hash-экстрактора — ОДИН сетевой запрос, без дублей).
+     */
+    private suspend fun fetchReloadTuple(track: Track): com.google.gson.JsonArray? {
+        val remixsid = exchangeAuthRepository?.remixsid()
+        if (remixsid == null || remixsid.isBlank()) return null
+        val audioId = "${track.ownerId}_${track.id}"
+        val formBuilder = FormBody.Builder()
+            .add("act", "reload_audio")
+            .add("al", "1")
+            .add("ids", audioId)
+        // #ARCH-CONTAINERS 3.7-1: smart cast чужого модуля невозможен — захват в val.
+        val fallbackAccessKey = track.accessKey
+        if (!fallbackAccessKey.isNullOrBlank()) {
+            formBuilder.add("access_keys", fallbackAccessKey)
+        }
+        val req = Request.Builder()
+            .url(AL_AUDIO_URL)
+            .post(formBuilder.build())
+            .header("User-Agent", WEB_UA)
+            .header("Cookie", "remixsid=$remixsid")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Accept", "text/plain, */*; q=0.01")
+            .header("Referer", "https://vk.com/audio")
+            .build()
+        return try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    AppLog.w(TAG, "fetchReloadTuple: HTTP ${resp.code} for #$audioId")
+                    return null
+                }
+                val body = resp.body?.string()
+                if (body.isNullOrBlank()) {
+                    AppLog.w(TAG, "fetchReloadTuple: empty body for #$audioId")
+                    return null
+                }
+                val jsonStr = body.substringAfterLast("<!>")
+                if (jsonStr.isBlank()) return null
+                val json = JsonParser.parseString(jsonStr)
+                if (!json.isJsonArray) return null
+                json.asJsonArray.firstOrNull { it.isJsonArray }?.asJsonArray
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "fetchReloadTuple: failed for #$audioId: ${e.message}")
+            null
+        }
+    }
 }
