@@ -7703,3 +7703,16 @@ Stage Summary:
 - 3 фикса: компиляция :app (K2-строгость), восстановление сообщества после process death (Telegram-семантика: смерть на сообществе → возврат в сообщество на той же позиции стены; обычный back → авто-возврата нет), разворот длинного текста/названия в стене сообществ.
 - Ограничения: смерть при ПОСТДЕТАЙЛЕ поверх Community не восстанавливает пост (контекст стирается при уходе вперёд); FeedScreen/ProfileScreen имеют те же приватные VideoThumbnail-копии с maxLines=2 (следующий проход); restore срабатывает и после swipe-away из сообщества (сознательно, Telegram-стиль).
 - Приёмка: NULL-операторы в новых строках — только NULL-ЯВНО в Snapshot; nested-comments ALL CLEAN (168); скобки HEAD/WORK OK ×3; assembleDebug — юзером.
+
+---
+Task ID: 18-plan (план волны 18: шеринг/каналы/печатает/карусель/уведомления/правое меню/снапшоты)
+Agent: Z.ai Code (Sergey)
+Task: исследование 7 зон по заданию пользователя, план, пуш, запуск волны 18-α/18-β
+
+Work Log:
+- Факты: typing приём есть в ChatDetail (2212-2223, msgTypingIndicator), в MessagesScreen потребления НЕТ; LongPollClient/ChannelWebSocketClient эмитят Typing; каналы классифицированы (#DIALOGS-TAB isChannel); ShareSheet: wall.repost (214) + repostToGroup (VKApiClient:5879, wall.post owner_id=-gid attachments=wall…) + self-chat «Избранное» (#FAVE-SELF-CHAT); bookmarksAdd в VKApiClient отсутствует; NotificationsScreen = notificationsGet; «сплывающие»-агрегация трассируется в 18-δ; PinoK_vs_VKWeb_compare.json = сырой LLM-ответ (не гэп-лист), реальные доки — opvk/vkid/FEED_RESEARCH.
+- План: план.волна-18.шеринг-каналы-карусель.2026-09-08.md — 18-α мессенджер (печатает приём + каналы: счётчики вне unread + сеть), 18-β шеринг (полный SharePanel: стена/сообщества/чаты/закладки/избранное/файлы), 18-γ карусель+настройка, 18-δ порядок уведомлений, 18-ε правое меню ленты (все API), 18-ζ снапшоты, 18-θ setActivity-интеграция.
+- Зоны 18-α/18-β непересекаются (VKApiClient — только β; setActivity — 18-θ оркестратором).
+
+Stage Summary:
+- План запушен; субагенты 18-α (opus) и 18-β (opus) запущены параллельно; волны 19 — после приёмки.
