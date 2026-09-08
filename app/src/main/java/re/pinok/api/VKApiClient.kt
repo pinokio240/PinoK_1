@@ -14747,37 +14747,50 @@ class VKApiClient(
             "$header $actionText"
         }
 
-        // --- type: вычисляем из parentType (action.entity.type) ---
-        // Это нужно чтобы фильтры в NotificationsScreen работали.
-        // Маппим типы сущностей на типы уведомлений:
-        //   "post" → "new_posts" (фильтр "Новые посты")
-        //   "photo" → "photo"
-        //   "video" → "video"
-        //   "clip" → "clip"
-        //   "comment" → "comment"
-        //   "topic" → "topic"
-        //   "market_item" → "market"
-        //   "story" → "story"
-        //   "app" → "app"
-        //   "podcast_episode" → "podcast"
-        // Если parentType пустой — fallback на "new_posts" (типичный случай для redesign).
-        val type = when (parentType) {
-            "post", "wall" -> "new_posts"
-            "photo" -> "photo"
-            "video" -> "video"
-            "clip" -> "clip"
-            "comment" -> "comment"
-            "topic" -> "topic"
-            "market_item" -> "market"
-            "story" -> "story"
-            "app" -> "app"
-            "podcast_episode" -> "podcast"
-            "" -> "new_posts"  // неизвестный тип — считаем новым постом
-            else -> parentType  // используем как есть
+        // --- #NOTIF-FILTER-ACTION (Fix #354): категория уведомления ---
+        // (Реакции/Комментарии/Подписки/Репосты/Упоминания/…) для фильтров
+        // NotificationsScreen (#NOTIF-FEED-FILTER).
+        //
+        // Прежний код вычислял type ИЗ parentType (action.entity.type) — то есть
+        // из ТИПА ОБЪЕКТА: «Костя оценил фотографию» получал type="photo",
+        // «подписался на обновления» — type="new_posts". Экранные фильтры
+        // («Реакции» → like*, «Подписки» → follow/friend*, «Репосты» → copy) на
+        // таких типах матчили 0 items — «в уведомлениях фильтр почти не
+        // работает» (репорт юзера 2026-09-08; ядро-фильтры работали только для
+        // legacy-токенов notifications.get).
+        //
+        // Машинно-читаемая категория есть В САМОМ ОТВЕТЕ (доказано
+        // VK_IMPORT_API.MD ЧАСТЬ 34, реальный лог 211KB от 2026-07-26):
+        //   dots_menu: [{type:"open_setting", name:"new_posts"}, …]
+        // Приоритет разрешения типа (первый непустой сигнал, см.
+        // resolveRedesignNotificationType):
+        //   1. dots_menu.name — категория настроек VK, она же фильтр-категория;
+        //   2. глагол действия из item.text («оценил/прокомментировал/…»);
+        //   3. прежний маппинг entity.type (контентные типы без action-глагола:
+        //      «новая фотография сообщества» остаётся photo — честно);
+        //   4. пустой entity.type → "new_posts" (прежний fallback, ЧАСТЬ 34:
+        //      типичный случай redesign).
+        var settingsName: String? = null
+        val dotsEl = o.get("dots_menu")
+        if (dotsEl != null && dotsEl.isJsonArray) {
+            for (d in dotsEl.asJsonArray) {
+                if (!d.isJsonObject) continue
+                val dobj = d.asJsonObject
+                val dType = dobj.get("type")?.takeIf { !it.isJsonNull }?.asString // NULL-ЯВНО
+                if (dType == "open_setting" || dType == "unsubscribe") {
+                    val n = dobj.get("name")?.takeIf { !it.isJsonNull }?.asString // NULL-ЯВНО
+                    if (!n.isNullOrBlank()) {
+                        settingsName = n
+                        break
+                    }
+                }
+            }
         }
+        val type = resolveRedesignNotificationType(settingsName, actionText, parentType)
 
-        // --- dots_menu → actions (пока не используем, но парсим для будущего) ---
-        // dots_menu: [{type: "open_setting", name: "new_posts"}, {type: "unsubscribe", query: "...", name: "new_posts"}, {type: "hide_notification", query: "..."}]
+        // --- dots_menu → settingsName (разобран ВЫШЕ) + actions ---
+        // dots_menu теперь РАЗБИРАЕТСЯ (#NOTIF-FILTER-ACTION): name пунктов
+        // open_setting/unsubscribe — машинно-читаемая категория уведомления.
         // Это контекстное меню (настройки уведомлений, отписка, скрыть).
         // Кнопки действий (Ответить, Подарить в ответ) в redesign-формате отсутствуют —
         // их нет в redesigned items. Если в будущем понадобится — добавим.
@@ -14808,6 +14821,106 @@ class VKApiClient(
             parentOwnerIdLegacy = parentOwnerId,
             rawId = redesignId,
         )
+    }
+
+    /**
+     * #NOTIF-FILTER-ACTION (Fix #354): разрешение типа redesign-уведомления
+     * (notifications.getRedesign, у items НЕТ поля type — см. KDoc
+     * [parseRedesignNotificationItem]).
+     *
+     * Приоритет сигналов (первый непустой выигрывает):
+     *
+     * 1. [settingsName] — `dots_menu[].name` пунктов open_setting/unsubscribe.
+     *    Это категория НАСТРОЕК уведомлений VK — то есть ровно та же таксономия,
+     *    которой пользуются фильтры экрана («wall_likes» → Реакции,
+     *    «wall_comments» → Комментарии, …). Точное значение доказано только
+     *    для "new_posts" (VK_IMPORT_API.MD ЧАСТЬ 34), остальные матчит
+     *    substring-ом (contains) — устойчиво к «wall_»-префиксам и числам.
+     *    Порядок when-веток важен: частное раньше общего ("friend" раньше
+     *    "follow", "birthday" раньше "birth"-подстрок и т.п.).
+     *
+     * 2. Глагол действия в [actionText] (`item.text`, human-readable строка
+     *    вида «оценил вашу запись»). Русские глаголы матчятся префиксными
+     *    подстроками, покрывающими оба рода («оценил» покрывает «оценила»).
+     *    Порядок веток важен: «ответил (на комментарий)» раньше
+     *    «прокомментировал/комментарий», иначе reply уйдёт в comment.
+     *
+     * 3. Прежний маппинг [parentType] (action.entity.type) — контентные типы
+     *    БЕЗ action-глагола («опубликовала новую фотографию») честно остаются
+     *    контент-типом (photo/video/clip/…): фильтры «Фото/Видео/Клипы»
+     *    продолжают работать, а «Новые посты» собирают остальное.
+     *
+     * 4. Пустой entity.type → "new_posts" (прежний fallback, ЧАСТЬ 34).
+     *
+     * @return type в терминах NotificationItem/NotificationsScreen
+     *   (like/comment/reply_comment/mention/copy/follow/friend_accepted/gift/
+     *    birthday_reminder/group_invites + контентные photo/video/clip/story/
+     *    market/app/podcast/topic/new_posts)
+     */
+    private fun resolveRedesignNotificationType(
+        settingsName: String?,
+        actionText: String,
+        parentType: String,
+    ): String {
+        // 1) dots_menu.name — категория настроек VK (машинно-читаемая).
+        if (!settingsName.isNullOrBlank()) {
+            val n = settingsName.lowercase()
+            val bySettings = when {
+                n.contains("friend") -> "friend_accepted"
+                n.contains("birthday") -> "birthday_reminder"
+                n.contains("gift") -> "gift"
+                n.contains("invite") -> "group_invites"
+                n.contains("mention") -> "mention"
+                n.contains("like") -> "like"
+                n.contains("comment") -> "comment"
+                n.contains("cop") -> "copy"          // copy/copies/wall_copies
+                n.contains("follow") || n.contains("subscri") -> "follow"
+                n.contains("market") -> "market"
+                n.contains("podcast") -> "podcast"
+                n.contains("topic") -> "topic"
+                n.contains("story") -> "story"
+                n.contains("clip") -> "clip"
+                n.contains("photo") -> "photo"
+                n.contains("video") -> "video"
+                n.contains("app") -> "app"
+                n.contains("post") || n.contains("wall") -> "new_posts"
+                else -> null
+            }
+            if (bySettings != null) return bySettings
+        }
+        // 2) Глагол действия из item.text («оценил/прокомментировал/…»).
+        if (actionText.isNotBlank()) {
+            val t = actionText.lowercase()
+            val byVerb = when {
+                t.contains("ответил") -> "reply_comment"
+                t.contains("оценил") || t.contains("реакцию") -> "like"
+                t.contains("прокомментировал") || t.contains("комментарий") -> "comment"
+                t.contains("упомянул") -> "mention"
+                t.contains("поделил") || t.contains("репост") -> "copy"
+                t.contains("подписал") -> "follow"
+                t.contains("в друзья") || t.contains("заявк") -> "friend_accepted"
+                t.contains("подарил") || t.contains("подарок") -> "gift"
+                t.contains("день рождения") -> "birthday_reminder"
+                t.contains("пригласил") || t.contains("приглашени") -> "group_invites"
+                else -> null
+            }
+            if (byVerb != null) return byVerb
+        }
+        // 3) Прежний маппинг entity.type (контентные типы).
+        return when (parentType) {
+            "post", "wall" -> "new_posts"
+            "photo" -> "photo"
+            "video" -> "video"
+            "clip" -> "clip"
+            "comment" -> "comment"
+            "topic" -> "topic"
+            "market_item" -> "market"
+            "story" -> "story"
+            "app" -> "app"
+            "podcast_episode" -> "podcast"
+            "" -> "new_posts"  // неизвестный тип — считаем новым постом
+            else -> parentType  // используем как есть
+        }
     }
 
     /** notifications.getUnreadCounters — счётчики непрочитанных по категориям. */

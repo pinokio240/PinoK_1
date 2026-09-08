@@ -161,6 +161,22 @@ import re.pinok.util.toRelativeTime
 //     buildNotificationText VKApiClient:7495): like_*, comment, reply_comment,
 //     mention*, copy, wall, follow, friend_accepted, friend_requested, gift,
 //     birthday_reminder.
+//   • #NOTIF-FILTER-ACTION (Fix #354): redesign-парсер (parseRedesignNotificationItem)
+//     больше НЕ сводит тип к типу ОБЪЕКТА (было: post→new_posts, photo→photo —
+//     «Костя оценил фотографию» уходил в «Фото», поэтому «Реакции/Репосты/
+//     Подписки/Упоминания» на web-токенах матчили 0 items — «фильтр почти не
+//     работает», репорт юзера 2026-09-08). Теперь категория берётся из
+//     dots_menu.name (категория настроек VK, доказана ЧАСТЬ 34:
+//     {type:"open_setting", name:"new_posts"}), фолбэк — глагол действия в
+//     item.text: «оценил»→like, «прокомментировал»→comment, «ответил»→
+//     reply_comment, «упомянул»→mention, «поделился»→copy, «подписал»→follow,
+//     «в друзья/заявк»→friend_accepted, «подарил»→gift, «пригласил»→
+//     group_invites, «день рождения»→birthday_reminder
+//     (VKApiClient.resolveRedesignNotificationType). Контентные типы без
+//     action-глагола (photo/video/clip/…) сохранены — фильтры «Фото/Видео/
+//     Клипы» работают как раньше; matching-ветки when ниже НЕ менялись:
+//     startsWith("like")/("comment")/("mention")/"copy"/"follow"+
+//     startsWith("friend") уже покрывают новые значения.
 //
 // Честный след по каждому пункту ПРЕЖНЕГО списка (ничего не удалено
 // молча):

@@ -35,7 +35,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.AttachFile
@@ -174,7 +173,8 @@ import kotlin.math.roundToInt
 //   допустимый дифф там: newsfeedGet sourceIds). Оставлен client-side фильтр.
 // FRIENDS → лента постов друзей: newsfeed.get(source_ids из friends.get)
 //   (IMP-FEED-1, снапшот §1.2: section=friends = посты друзей, НЕ «возможные
-//   друзья»; блок рекомендаций друзей сохранён над лентой — прежнее поведение).
+//   друзья»; блок рекомендаций над лентой УДАЛЕН — #FEED-MENU-VKWEB Fix #353,
+//   в VK web раздел «Друзья» — чистая лента постов друзей).
 // SEARCH → newsfeed.search.
 private enum class FeedFilter(val label: String, val apiFilters: String?, val recommended: Boolean) {
     ALL("Все новости", "post,photo,video", false),
@@ -211,6 +211,10 @@ fun FeedScreen(
     onStoryViewerClick: () -> Unit = {},
     // Офлайн-менеджер: кнопка «Офлайн» при отсутствии сети.
     onOpenOfflineManager: () -> Unit = {},
+    // #FEED-MENU-VKWEB (Fix #353): «Редактировать» из правого меню ленты →
+    // «Скрытые источники» (Screen.FeedHidden, newsfeed.getBanned + unban,
+    // IMP-FEED-2). Эквивалент web-акта al_settings.php?act=a_edit_owners_list.
+    onOpenHiddenSources: () -> Unit = {},
     // #CALLS: кнопка «Позвонить» на карточке друга.
     // #ARCH-CONTAINERS (Этап 1.4): nullable — хост передаёт колбэк ТОЛЬКО если
     // в реестре есть CallStarter (контейнер звонков). null → кнопка НЕ рендерится
@@ -522,10 +526,6 @@ fun FeedScreen(
     // #FEED-FILTER-SEARCH: поисковый запрос для вкладки «Поиск».
     var feedSearchQuery by remember { mutableStateOf("") }
 
-    // #FEED-FILTER-FRIENDS: список рекомендованных друзей (вкладка «Друзья»).
-    var recommendedFriends by remember { mutableStateOf<List<re.pinok.data.model.Friend>>(emptyList()) }
-    var friendsLoading by remember { mutableStateOf(false) }
-
     // #FEED-REACTIONS: подтаб внутри «Реакций» (Все/Посты/Комментарии/Клипы/Видео).
     var likesFilterName by rememberSaveable { mutableStateOf(LikesFilter.ALL.name) }
     val likesFilter = runCatching { LikesFilter.valueOf(likesFilterName) }.getOrDefault(LikesFilter.ALL)
@@ -643,22 +643,6 @@ fun FeedScreen(
                 AppLog.e("FeedScreen", "likesGetList(photo) failed", e)
             } finally {
                 likedPhotosLoadingMore = false
-            }
-        }
-    }
-
-    // Загрузка друзей-рекомендаций при переключении на вкладку «Друзья».
-    LaunchedEffect(feedFilterName) {
-        if (feedFilterName == FeedFilter.FRIENDS.name && recommendedFriends.isEmpty() && !friendsLoading) {
-            friendsLoading = true
-            try {
-                val list = app.apiClient.friendsGetRecommendations(50)
-                recommendedFriends = list
-                AppLog.i("FeedScreen", "Loaded ${list.size} recommended friends")
-            } catch (e: Exception) {
-                AppLog.e("FeedScreen", "friendsGetRecommendations error", e)
-            } finally {
-                friendsLoading = false
             }
         }
     }
@@ -1315,11 +1299,12 @@ fun FeedScreen(
             LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             item(key = "stories_row") {
                 Column {
-                    // #FEED-RIGHTPANEL (19-A): кнопка открытия правого бокового меню
-                    // ленты (VK web: правая колонка vk.com/feed). Глобальный TopAppBar
-                    // в SovaNavHost вне зоны → кнопка в верхней зоне FeedScreen над
-                    // списком (рядом с фильтр-чипами — допустимо по ТЗ). 48dp,
-                    // contentDescription для accessibility.
+                    // #FEED-MENU-VKWEB (Fix #353): кнопка открытия правого бокового
+                    // меню ленты = «Список ленты» VK web (rightmenu §1.0.2:
+                    // навигация разделов Лента/Фотографии/Друзья/Поиск/Реакции +
+                    // «Редактировать»). Глобальный TopAppBar в SovaNavHost вне
+                    // зоны → кнопка в верхней зоне FeedScreen над списком (как
+                    // и в 19-A). 48dp, contentDescription для accessibility.
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1530,85 +1515,6 @@ fun FeedScreen(
                     }
                 }
             }
-            // #FEED-FILTER-FRIENDS: список рекомендованных друзей.
-            // IMP-FEED-1: вкладка «Друзья» теперь = лента постов друзей
-            // (#FEED-FRIENDS-FEED, items(posts) ниже); блок рекомендаций
-            // сохранён НАД лентой (прежняя функциональность не удалялась).
-            // Раньше он был фактически недостижим: пустая FRIENDS-страница
-            // выставляла errorText → экран заменялся ErrorView.
-            if (feedFilter == FeedFilter.FRIENDS) {
-                if (friendsLoading) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                } else if (recommendedFriends.isNotEmpty()) {
-                    // Пусто → честно ничего не рисуем: пустые ленты/ошибки
-                    // friendsGet покрывает ErrorView (errorText) или items(posts).
-                    items(recommendedFriends, key = { "fr_${it.id}" }) { friend ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onUserClickSavePos(friend.id) }
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            val photo = friend.photo100 ?: friend.photo200
-                            if (photo != null) {
-                                AsyncImage(
-                                    model = photo,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(48.dp).clip(CircleShape),
-                                    contentScale = ContentScale.Crop,
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier.size(48.dp).clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(friend.firstName.take(1), style = MaterialTheme.typography.titleMedium)
-                                }
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(friend.fullName, style = MaterialTheme.typography.bodyLarge)
-                                if (friend.online == 1) {
-                                    Text("онлайн", color = Color(0xFF4CAF50), fontSize = 13.sp)
-                                }
-                            }
-                            // #CALLS: кнопка звонка другу (data-testid="friends_call_button").
-                            // #ARCH-CONTAINERS (Этап 1.4): рисуем только при живом
-                            // CallStarter (onCallClick != null).
-                            if (onCallClick != null) {
-                                IconButton(
-                                    onClick = { onCallClick(friend.id, friend.fullName, friend.photo100 ?: friend.photo200) },
-                                ) {
-                                    Icon(Icons.Filled.Call, contentDescription = "Позвонить",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            }
-                            // Кнопка «Добавить».
-                            OutlinedButton(onClick = {
-                                scope.launch {
-                                    val res = app.apiClient.friendsAdd(friend.id)
-                                    if (res > 0) {
-                                        android.widget.Toast.makeText(
-                                            app.applicationContext,
-                                            "Заявка отправлена",
-                                            android.widget.Toast.LENGTH_SHORT,
-                                        ).show()
-                                    }
-                                }
-                            }) {
-                                Text("Добавить")
-                            }
-                        }
-                    }
-                }
-            }
             // Кнопка «Создать пост» убрана из ленты (user request 2026-07-12):
             // как в оригинальном VK, на ленте остаются только истории (StoriesRow),
             // а кнопка создания поста перенесена в профиль (ProfileScreen.kt).
@@ -1808,34 +1714,27 @@ fun FeedScreen(
         }
     }  // closes Box (PullToRefreshBox wrapper)
 
-    // #FEED-RIGHTPANEL (19-A): правое боковое меню ленты — оверлей поверх
-    // контента FeedScreen (Scrim + панель справа). Всегда в композиции
-    // (visible-флаг) → AnimatedVisibility проигрывает и вход, и выход.
-    // Колбэки — реальные навигационные функции экрана; при переходе панель
-    // закрывается (не остаётся открытой над новым экраном).
+    // #FEED-MENU-VKWEB (Fix #353): правое боковое меню ленты — навигация
+    // РАЗДЕЛОВ ленты («Список ленты» VK web, rightmenu §1.0.2 снапшота):
+    // Лента/Фотографии/Друзья/Поиск/Реакции переключают feedFilterName с
+    // перезагрузкой (см. onSelect у FeedFilterBar), «Редактировать» уводит
+    // на «Скрытые источники» (Screen.FeedHidden). Прежние секции 19-A
+    // (друзья онлайн/возможные друзья/сообщества/закладки) удалены по
+    // требованию юзера — в VK web rightmenu их нет.
     FeedRightPanel(
         visible = showRightPanel,
+        currentFilterName = feedFilterName,
         onDismiss = { showRightPanel = false },
-        onUserClick = { userId ->
+        onSectionSelected = { filterName ->
             showRightPanel = false
-            onUserClickSavePos(userId)
+            if (filterName != feedFilterName) {
+                feedFilterName = filterName
+                reloadFeed()
+            }
         },
-        onGroupClick = { groupId ->
+        onOpenHiddenSources = {
             showRightPanel = false
-            onGroupClickSavePos(groupId)
-        },
-        onPostClick = { post ->
-            showRightPanel = false
-            onPostClickSavePos(post)
-        },
-        onVideoClick = { video ->
-            showRightPanel = false
-            onVideoClickSavePos(video)
-        },
-        onPhotoClick = { urls, index ->
-            showRightPanel = false
-            saveScrollPosition()
-            photoViewerState.value = urls to index
+            onOpenHiddenSources()
         },
     )
 

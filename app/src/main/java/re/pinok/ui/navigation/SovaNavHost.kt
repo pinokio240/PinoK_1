@@ -1434,6 +1434,12 @@ listOf(
                         onOpenOfflineManager = {
                             nav.navigate(Screen.OfflineManager.route)
                         },
+                        // #FEED-MENU-VKWEB (Fix #353): «Редактировать» в правом меню
+                        // ленты → «Скрытые источники» (Screen.FeedHidden) — тот же
+                        // callback-паттерн навигации, что и в SettingsScreen (:1975).
+                        onOpenHiddenSources = {
+                            nav.navigate(Screen.FeedHidden.route)
+                        },
                         // #ARCH-CONTAINERS (Этап 1.4): запуск звонка — только через
                         // реестр (CallStarter). callClick == null → кнопка звонка
                         // в ленте НЕ рендерится (условие композиции).

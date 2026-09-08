@@ -209,8 +209,11 @@ object VkNotificationsNotifier {
      */
     fun channelForType(type: String): String {
         return when {
-            type.startsWith("like_") -> CHANNEL_LIKES
-            type.startsWith("comment_") -> CHANNEL_COMMENTS
+            // #NOTIF-FILTER-ACTION (Fix #354): redesign-парсер теперь отдаёт и
+            // точные generic-типы ("like"/"comment") — раньше были только
+            // legacy like_*/comment_* с подчёркиванием.
+            type.startsWith("like_") || type == "like" -> CHANNEL_LIKES
+            type.startsWith("comment_") || type == "comment" -> CHANNEL_COMMENTS
             type == "reply_comment" || type == "reply_to_comment" -> CHANNEL_REPLIES
             type == "follow" || type == "friend_accepted" -> CHANNEL_FOLLOWS
             type.startsWith("mention") -> CHANNEL_MENTIONS
@@ -244,8 +247,9 @@ object VkNotificationsNotifier {
      */
     fun titleForType(type: String, count: Int): String {
         val singular = when {
-            type.startsWith("like_") -> "Новый лайк"
-            type.startsWith("comment_") -> "Новый комментарий"
+            // #NOTIF-FILTER-ACTION (Fix #354): + generic "like"/"comment" (redesign).
+            type.startsWith("like_") || type == "like" -> "Новый лайк"
+            type.startsWith("comment_") || type == "comment" -> "Новый комментарий"
             type == "reply_comment" || type == "reply_to_comment" -> "Новый ответ"
             type == "follow" -> "Новый подписчик"
             type == "friend_accepted" -> "Заявка принята"
@@ -264,8 +268,9 @@ object VkNotificationsNotifier {
      */
     private fun pluralTitle(type: String, count: Int): String {
         val word = when {
-            type.startsWith("like_") -> pluralize(count, "лайк", "лайка", "лайков")
-            type.startsWith("comment_") -> pluralize(count, "комментарий", "комментария", "комментариев")
+            // #NOTIF-FILTER-ACTION (Fix #354): + generic "like"/"comment" (redesign).
+            type.startsWith("like_") || type == "like" -> pluralize(count, "лайк", "лайка", "лайков")
+            type.startsWith("comment_") || type == "comment" -> pluralize(count, "комментарий", "комментария", "комментариев")
             type == "reply_comment" || type == "reply_to_comment" -> pluralize(count, "ответ", "ответа", "ответов")
             type == "follow" -> pluralize(count, "подписчик", "подписчика", "подписчиков")
             type == "friend_accepted" -> pluralize(count, "заявка", "заявки", "заявок")
@@ -894,9 +899,10 @@ object VkNotificationsNotifier {
     private fun buildActionVerb(type: String, count: Int): String {
         val plural = count > 1
         return when {
-            type.startsWith("like_") ->
+            // #NOTIF-FILTER-ACTION (Fix #354): + generic "like"/"comment" (redesign).
+            type.startsWith("like_") || type == "like" ->
                 if (plural) "оценили ($count)" else "оценил(а)"
-            type.startsWith("comment_") ->
+            type.startsWith("comment_") || type == "comment" ->
                 if (plural) "прокомментировали ($count)" else "оставил(а) комментарий"
             type == "reply_comment" || type == "reply_to_comment" ->
                 if (plural) "ответили ($count)" else "ответил(а)"
@@ -975,7 +981,9 @@ object VkNotificationsNotifier {
      */
     private fun canReplyToType(type: String): Boolean {
         return when {
-            type.startsWith("like_") -> false
+            // #NOTIF-FILTER-ACTION (Fix #354): + generic "like" (redesign) —
+            // на лайк, как и на like_*, ответить нельзя.
+            type.startsWith("like_") || type == "like" -> false
             type == "follow" || type == "friend_accepted" -> false
             type == "gift" -> false
             type == "invite_group" -> false
