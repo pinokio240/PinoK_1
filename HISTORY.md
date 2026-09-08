@@ -12015,3 +12015,46 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 **Приёмка:** VKA скобка-дельта 0; SovaApp +1/+1; ExRepo +2/+2; nested-comments ALL CLEAN (168); diff-union ровно 3 файла. Контракты #49/#175/#230/#IP-BINDING-RETRY/#GRACE-NO-CLEAR/#SESSION-HOLD сохранены.
 
 **Проверка юзером:** смена Wi-Fi↔mobile → ни AuthActivity, ни потери ленты; logcat-метки `#NET-SWITCH-AUTH-FIX` / `silent refresh via remixsid OK` / `НЕ чистим токен…`.
+
+---
+
+## 2026-09-08 — fix(app+calls): Fix #343 — компиляция :app + warnings :feature:calls (лог пользователя)
+
+**Симптом:** `:app:compileDebugKotlin FAILED` — `AttachmentPickerSheet.kt:129:70 Initializer type mismatch: expected '(String, String) -> Unit', actual '() -> Unit'`; warnings CallScreen.kt:1610 (мёртвый elvis) и 2392 (deprecated Icons.Filled.Chat).
+
+**Root-cause:** K2 не выводит дефолт `{}` как конформный двухпараметрическому функциональному типу (нулевой лямбда-литерал = `() -> Unit`); `AudioDeviceInfo.address` — non-null String → elvis всегда брал левый операнд; иконка переехала в AutoMirrored-пакет.
+
+**Фикс:** дефолт `onPickDocAttachment` → `{ _, _ -> }`; elvis убран (`it.address == savedAddress`); `Icons.Default.Chat` → `Icons.AutoMirrored.Filled.Chat` (+import). Скан репо: остальные `= {}` однопараметрические — K2-валидны, других мест класса ошибки нет.
+
+**Поведение:** не менялось (элвис был мёртв, AutoMirrored — тот же глиф). Calls-логика не тронута, тест calls-2026.09.02-5 в силе.
+
+---
+
+## 2026-09-08 — fix(nav): Fix #344 — возврат в сообщество после смерти процесса (#NAV-GROUP-VIDEO-RESTORE)
+
+**Симптом:** группа → пост → долго смотреть видео → возврат → список групп вместо сообщества/поста.
+
+**Root-cause:** видео — оверлей (VideoHolder/VideoPlatformRouter, #90) поверх NavHost: в живой сессии возврат корректен всегда. Но долгий просмотр → система убивает процесс (память/сворачивание) → холодный старт ставит startDestination = lastRoute, где Community — detail-экран и не сохраняется (пишутся только mainRoutes) → пользователь попадает в последнее main-таб = список групп.
+
+**Фикс (3 файла):**
+1. SovaPrefs: `lastCommunityId` / `lastCommunityScroll` (Keys + Snapshot + сеттеры).
+2. SovaNavHost: однократный restore — `rememberSaveable`-флаг `communityRestoreDone` (переживает recreation Activity — без дубля в стеке; умирает с процессом — restore нужен снова) → `data.first()` → `navigate(Screen.Community.buildRoute(id))` + handoff позиции через `CommunityRestoreHolder.pendingScroll`; очистка контекста при уходе с Community (watcher: prevRawRoute==Community && rawRoute!=Community — смерть процесса watcher не запускает, контекст выживает).
+3. CommunityScreen: запись id после успешной загрузки; позиция стены пишется на каждой остановке скролла и после загрузки постов (posts в ключах — против протухшего индекса); однократный `scrollToItem` после загрузки (индексы в координатах LazyColumn идентичны — хедер+табы+посты).
+
+**Семантика:** смерть на сообществе → возврат в то же сообщество на той же позиции стены; обычный back из сообщества → авто-возврата при следующем запуске нет. Аналог — восстановление чата в Telegram.
+
+**Ограничения (сознательно):** смерть при PostDetail поверх Community не восстанавливает пост (уход вперёд стирает контекст); restore срабатывает и после swipe-away из сообщества (Telegram-стиль); deep-pagination позиция (>30 постов) клампится к концу загруженной страницы.
+
+**Проверка юзером:** открыть группу → промотать стену → включить видео → убить процесс (or `adb shell am kill`) → открыть приложение → должно оказаться в сообществе на той же позиции; logcat-метка `#NAV-GROUP-VIDEO-RESTORE: restore community`.
+
+---
+
+## 2026-09-08 — feat(feed): Fix #345 — разворот длинного текста поста и названия видео (#POST-TEXT-EXPAND)
+
+**Симптом:** в стене сообщества длинный текст поста обрезался на 10 строках, название видео в карточке — на 2; посмотреть остальное было нельзя.
+
+**Фикс (CommunityScreen):** текст поста — тап по свёрнутому тексту разворачивает на месте; ссылка «Показать ещё» появляется ТОЛЬКО при реальном переполнении (hasVisualOverflow через onTextLayout); тап по развёрнутому тексту = открыть пост (прежнее поведение). Заголовок VideoThumbnail — тот же паттерн: тап разворачивает, тап по развёрнутому / по превью открывает видео. Паттерн согласован с descExpanded экрана (#30).
+
+**Не тронуто:** ClipThumbnail — заголовок-оверлей на постере 9:16 фиксированной пропорции (разворот ломает вёрстку; полное название видно в плеере); приватные копии VideoThumbnail в FeedScreen/ProfileScreen — следующий проход.
+
+**Проверка юзером:** пост с длинным текстом → «Показать ещё» → полный текст; видео с длинным названием → тап по названию разворачивает, тап по превью открывает плеер.

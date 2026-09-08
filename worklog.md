@@ -7686,3 +7686,20 @@ Stage Summary:
 - Док auth.смена-сети.разбор-и-фикс.md (§0-§6: карта контуров, root-cause таймлайны, фиксы, сохранённые контракты, инструкция проверки по logcat-меткам, остатки).
 - Сознательно не тронуто: no-token путь call() (нет error-контекста), дебаунс clearRemixsid (синк-до-Path-1.5 уже решает), FULL-фолбэк после MAX_SILENT_FAILURES.
 - Коммит+push оркестратором; assembleDebug юзером.
+
+---
+Task ID: 17-a (Fix #343 compile + Fix #344 nav-restore + Fix #345 text-expand)
+Agent: Z.ai Code (Sergey, интеграция — самостоятельно, без субагентов: Task-таймаут на старте)
+Task: лог сборки пользователя (Fix #343) + баг «возврат из видео в группе = список групп» (Fix #344) + баг «длинное название/текст поста не посмотреть» (Fix #345)
+
+Work Log:
+- Синхронизация: локальная копия отставала от origin/PinoK на 10+ коммитов (0ee02217..e606a2b7) — ff-merge; ошибки прошлого лога (UserProfileScreen:836 when-exhaustive) уже не существуют в e606a2b7.
+- Fix #343 (034f2d3c): AttachmentPickerSheet:129 K2 не принимает дефолт {} у 2-параметрического onPickDocAttachment → { _, _ -> }; CallScreen:1610 мёртвый elvis (address non-null String); CallScreen:2392 Icons.Default.Chat → AutoMirrored (+import). Скан репо: остальные = {} однопараметрические — K2-валидны; сканер скобок CallScreen даёт ложный UNCLOSED и на HEAD (та же позиция 2359-2366) — файл компилировался, правки брейс-нейтральны.
+- Трассировка #344: видео — ОВЕРЛЕЙ VideoHolder/VideoPlatformRouter поверх NavHost (#90), VideoPlatformRouter не трогает навигацию (rg navigate/popBackStack = 0), у CommunityScreen нет lifecycle-перенавигаций → в сессии возврат из видео всегда корректен. Холодный старт: startDestination = initialRoute = prefs.lastRoute, в lastRoute пишутся ТОЛЬКО mainRoutes (634-637), Community — detail-экран → после смерти процесса (долгий просмотр видео, память/сворачивание) пользователь возвращается в последнее main-таб = СПИСОК ГРУПП. Диагноз подтверждён архитектурно.
+- Фикс #344: SovaPrefs +lastCommunityId/lastCommunityScroll (Keys, Snapshot, сеттеры; ?: в Snapshot-мапе помечены // NULL-ЯВНО — паттерн всего конструктора); SovaNavHost: однократный restore (rememberSaveable-флаг communityRestoreDone — переживает recreation Activity, умирает с процессом; LaunchedEffect(Unit) → data.first() → navigate(Screen.Community.buildRoute(id)) + CommunityRestoreHolder.pendingScroll) + очистка контекста при уходе с Community (watcher prevRawRoute==Community && rawRoute!=Community — смерть процесса watcher не запускает, контекст выживает); CommunityScreen: запись id после загрузки (LaunchedEffect(groupInfo)), запись позиции стены при каждой остановке скролла и после загрузки постов (posts в ключах — против протухшего индекса), однократный scrollToItem после загрузки (LaunchedEffect(posts), pendingScroll consumed).
+- Фикс #345: CommunityScreen — текст поста: maxLines 10 + разворот по тапу/«Показать ещё» только при реальном hasVisualOverflow; развёрнутый тап = onPostClick (прежнее поведение). VideoThumbnail (приватная, community): заголовок maxLines 2 → тап разворачивает, тап по развёрнутому = открыть видео, превью открывает как раньше. Паттерн повторяет descExpanded экрана (#30) + overflow-детект. ClipThumbnail НЕ тронут: заголовок-оверлей на постере 9:16 фиксированной пропорции — разворот ломает вёрстку; полное название видно в плеере.
+
+Stage Summary:
+- 3 фикса: компиляция :app (K2-строгость), восстановление сообщества после process death (Telegram-семантика: смерть на сообществе → возврат в сообщество на той же позиции стены; обычный back → авто-возврата нет), разворот длинного текста/названия в стене сообществ.
+- Ограничения: смерть при ПОСТДЕТАЙЛЕ поверх Community не восстанавливает пост (контекст стирается при уходе вперёд); FeedScreen/ProfileScreen имеют те же приватные VideoThumbnail-копии с maxLines=2 (следующий проход); restore срабатывает и после swipe-away из сообщества (сознательно, Telegram-стиль).
+- Приёмка: NULL-операторы в новых строках — только NULL-ЯВНО в Snapshot; nested-comments ALL CLEAN (168); скобки HEAD/WORK OK ×3; assembleDebug — юзером.
