@@ -1715,11 +1715,31 @@ fun VideoPlayerScreen(
              *    перекомпоновке (свёрнуто — hasVisualOverflow, развёрнуто — false):
              *    кнопка появляется только когда текст реально не влез, и исчезает,
              *    если текст обновился на короткий.
-             * 5. Клик-зоны не пересекаются: clickable висит ТОЛЬКО на своём тексте/
-             *    кнопке, VideoActionBar ниже не затронут. Просмотры — без изменений.
-             *    Immersive/landscape-ветку (useFillMax == true) не трогаем.
+             * 5. Fix #350 (20-A, скрин юзера 08.09.2026 16:45 «нет пагинации»):
+             *    инфо-блок занимает ОСТАТОК экрана (weight(1f) внутри внешнего
+             *    Column, плеер — выше с aspectRatio 16:9) и ПРОКРУЧИВАЕТСЯ
+             *    (verticalScroll). До фикса колонка росла вниз без скролла:
+             *    развёрнутый текст (тап «Показать ещё») обрезался нижней
+             *    границей экрана, «Свернуть» оставалась за вьюпортом — текст
+             *    дальше был недостижим. Та же обрезка грозила и свёрнутому
+             *    состоянию на малых экранах (2 строки титула + 4 описания +
+             *    действия > остаток экрана).
+             * 6. Порядок — как в приложении VK на странице видео: заголовок →
+             *    просмотры → строка действий (VideoActionBar) → описание.
+             *    VideoActionBar поднят НАД описанием: лайк/шеринг/скачивание
+             *    доступны сразу, без прокрутки через развёрнутый текст (раньше
+             *    стоял под ним и уезжал за экран вместе с ним).
+             * 7. Клик-зоны не пересекаются: clickable висит ТОЛЬКО на своём
+             *    тексте/кнопке. Просмотры — без изменений. Immersive/
+             *    landscape-ветку (useFillMax == true) не трогаем.
              */
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+            ) {
                 // ── Заголовок: свёрнут до 2 строк, тап-toggle при переполнении ──
                 var titleExpanded by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
                 var titleOverflowed by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
@@ -1747,6 +1767,10 @@ fun VideoPlayerScreen(
                     color = VK_TEXT_SECONDARY,
                     fontSize = 14.sp,
                 )
+                Spacer(modifier = Modifier.height(12.dp))
+                // 20-A: строка действий ПЕРЕД описанием (порядок VK; была под ним
+                // и уезжала за экран вместе с развёрнутым текстом — см. KDoc п.6).
+                VideoActionBar(video = resolvedVideo, subTextColor = VK_TEXT_SECONDARY)
                 val desc = resolvedVideo.description
                 if (!desc.isNullOrBlank()) {
                     // ── Описание: свёрнуто до 4 строк, тап-toggle + кнопка-текст ──
@@ -1784,9 +1808,6 @@ fun VideoPlayerScreen(
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                VideoActionBar(video = resolvedVideo, subTextColor = VK_TEXT_SECONDARY)
             }
             }
         }
