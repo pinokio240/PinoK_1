@@ -2116,6 +2116,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             AppLog.i("SovaApp", "Default network SWITCHED to $ctype — soft reset (evictAll, NO cancelAll) + reprepare player")
             try { httpClient.connectionPool.evictAll() } catch (_: Exception) {}
             try { apiClient.resetNetworkErrorCounter() } catch (_: Exception) {}
+            // Fix #367: смена сети — верный момент снять ЗАСТРЯВШИЙ АВТО-офлайн:
+            // новая сеть может быть рабочей, а watcher isOnlineFlow при switch
+            // без onLost не срабатывает (сеть «не терялась»). keepAliveScope —
+            // приватный scope приложения, переживающий экраны.
+            try {
+                if (apiClient.isAutoOfflineActive()) {
+                    keepAliveScope.launch { runCatching { apiClient.clearAutoOffline() } }
+                }
+            } catch (_: Exception) {}
             try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true, forceReprepare = true) } catch (_: Exception) {}
 
             // #VKID-SEAMLESS (vk.id.md P0-5): PROACTIVE silent refresh на смене сети.
@@ -2207,6 +2216,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 if (!wasOnline && online) {
                     AppLog.i("SovaApp", "Network restored (offline→online) — resetting API error counter")
                     try { apiClient.resetNetworkErrorCounter() } catch (_: Exception) {}
+                    // Fix #367: сеть восстановилась — снимаем застрявший АВТО-офлайн
+                    // (раньше watcher снимал только счётчик, а сам режим оставался
+                    // до перезапуска приложения).
+                    try {
+                        if (apiClient.isAutoOfflineActive()) apiClient.clearAutoOffline()
+                    } catch (_: Exception) {}
                     try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true) } catch (_: Exception) {}
                     // #NET-SWITCH-POPUP: сеть восстановилась → Idle (скрыть popup).
                     setNetworkSwitchState(NetworkSwitchState.Idle)

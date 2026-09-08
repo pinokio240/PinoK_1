@@ -183,6 +183,8 @@ fun MusicScreen(
     // audio.edit, только свои треки). track — что правим.
     var editTrackDialog by remember { mutableStateOf<Track?>(null) }
     var apiErrorMessage by remember { mutableStateOf<String?>(null) }
+    // Fix #367: тик принудительной перезагрузки (кнопка «Повторить» / возврат сети).
+    var reloadTick by remember { mutableStateOf(0) }
     // #TRACKS-CACHE: hasMore=true по умолчанию (как в оригинале). Если кэш свежий
     // и все треки уже загружены — loadMoreTracksSuspend сам вернёт false и остановится.
     var hasMore by remember { mutableStateOf(true) }
@@ -259,7 +261,7 @@ fun MusicScreen(
     // — корутина в rememberCoroutineScope переживает LaunchedEffect и при уходе
     // экрана кидает ForgottenCoroutineScopeException. Теперь корутина живёт в
     // scope самого LaunchedEffect.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(reloadTick) {
         // #TRACKS-CACHE: если кэш свежий (<5 мин) — не перегружаем первую
         // страницу, список уже показан из синглтона. Фоновая подгрузка ниже
         // (loadMore) доберёт остальные страницы если нужно. Это убирает
@@ -272,6 +274,13 @@ fun MusicScreen(
         loading = true
         apiErrorMessage = null
         hasMore = true
+        // Fix #367: честная проверка сети ДО запроса — офлайн-гейт
+        // audioGetWithCount вернул бы пусто, и UI показал «Нет музыки» вместо правды.
+        if (app.networkObserver.isOffline()) {
+            apiErrorMessage = "Нет сети. Подключитесь к интернету — музыка загрузится автоматически."
+            loading = false
+            return@LaunchedEffect
+        }
         try {
             val (total, raw) = app.apiClient.audioGetWithCount(count = pageSize, offset = 0)
             val firstPage = raw
@@ -287,11 +296,17 @@ fun MusicScreen(
             if (firstPage.isEmpty()) {
                 val errCode = app.apiClient.lastApiErrorCode
                 val errStr = app.apiClient.lastApiError
-                apiErrorMessage = when (errCode) {
-                    3 -> "VK audio API недоступен для этого типа авторизации.\n\n" +
+                apiErrorMessage = when {
+                    // Fix #367: авто-офлайн (3 сетевых сбоя подряд — частый сценарий
+                    // на нестабильном Wi-Fi) раньше выглядел как «Нет музыки»: гейт
+                    // audioGetWithCount молча возвращал пусто без сети и без ошибки.
+                    app.apiClient.isAutoOfflineActive() ->
+                        "Музыка остановлена: 3 сетевых сбоя подряд → авто-офлайн " +
+                            "(частая причина — нестабильный Wi-Fi). Нажмите «Повторить»."
+                    errCode == 3 -> "VK audio API недоступен для этого типа авторизации.\n\n" +
                         "Попробуйте выйти и войти через «Войти через VK (веб)» — " +
                         "это даст web-токен с доступом к audio.getCatalog."
-                    15 -> "Доступ к аудио запрещён VK (error 15)."
+                    errCode == 15 -> "Доступ к аудио запрещён VK (error 15)."
                     else -> if (errStr != null) "Ошибка: $errStr" else "Нет музыки"
                 }
             }
@@ -300,9 +315,28 @@ fun MusicScreen(
             throw e
         } catch (e: Exception) {
             AppLog.e("MusicScreen", "Failed to load tracks", e)
-            apiErrorMessage = "Ошибка загрузки: ${e.message}"
+            // Fix #367: если трип произошёл прямо в этом запросе — называем вещи
+            // своими именами вместо голого «Ошибка загрузки: …».
+            apiErrorMessage = if (app.apiClient.isAutoOfflineActive()) {
+                "Ошибка сети (${e.javaClass.simpleName}): 3 сбоя подряд → авто-офлайн. Нажмите «Повторить»."
+            } else {
+                "Ошибка загрузки: ${e.message}"
+            }
         } finally {
             loading = false
+        }
+    }
+
+    // Fix #367: сеть вернулась — автоматическая перезагрузка пустого экрана
+    // с ошибкой (без ручного «Повторить»). Работает и для «Нет сети», и для
+    // снятого авто-офлайна.
+    LaunchedEffect(Unit) {
+        var wasOnline = app.networkObserver.isOnline()
+        app.networkObserver.isOnlineFlow.collect { online ->
+            if (online && !wasOnline && tracks.isEmpty() && apiErrorMessage != null) {
+                reloadTick++
+            }
+            wasOnline = online
         }
     }
 
@@ -773,6 +807,13 @@ fun MusicScreen(
                 secondaryColor = vkTextSecondary,
                 accentColor = vkAccent,
                 apiErrorMessage = apiErrorMessage,
+                // Fix #367: retry — снимает авто-офлайн и перезагружает первую страницу.
+                onRetry = {
+                    scope.launch {
+                        runCatching { app.apiClient.clearAutoOffline() }
+                        reloadTick++
+                    }
+                },
                 onOpenPlaylists = onOpenPlaylists,
                 onOpenAlbums = onOpenAlbums,
                 onOpenArtists = onOpenArtists,
@@ -1367,6 +1408,7 @@ private fun MusicMyTracksTab(
     secondaryColor: Color,
     accentColor: Color,
     apiErrorMessage: String?,
+    onRetry: (() -> Unit)? = null,
     onOpenPlaylists: () -> Unit = {},
     onOpenAlbums: () -> Unit = {},
     onOpenArtists: () -> Unit = {},
@@ -1493,6 +1535,16 @@ private fun MusicMyTracksTab(
                     color = MaterialTheme.colorScheme.error,
                     fontSize = 14.sp,
                 )
+                // Fix #367: честный retry — снимает авто-офлайн и перезагружает
+                // первую страницу (раньше экран мог застрять в «Нет музыки» навсегда).
+                if (onRetry != null) {
+                    TextButton(
+                        onClick = onRetry,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    ) {
+                        Text("Повторить", color = accentColor)
+                    }
+                }
             }
         }
 

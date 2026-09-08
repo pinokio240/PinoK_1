@@ -10489,6 +10489,34 @@ class VKApiClient(
         }
     }
 
+    // Fix #367 (#MUSIC-NET-DIAG): маркер АВТО-офлайна. privacyOfflineMode
+    // ставится в true ТОЛЬКО отсюда (авто-трип после 3 сбоев) — маркер хранит
+    // момент трипа. Раньше режим снимался ТОЛЬКО успешной авторизацией
+    // (ExchangeAuthRepository), а watcher'ы сети сбрасывали только счётчик:
+    // если сеть «не терялась» по мнению ConnectivityManager (избоевый Wi-Fi,
+    // switch без onLost), isOnlineFlow не срабатывал → 293 гейта isOffline()
+    // молча возвращали пустоту навсегда — раздел «Музыка» (самый тяжёлый по
+    // запросам, трипается первым) «переставал работать» на Wi-Fi.
+    @Volatile private var autoOfflineAt: Long = 0L
+    private val AUTO_OFFLINE_COOLDOWN_MS = 30_000L
+
+    /** Fix #367: активен ли АВТО-офлайн (включён самим клиентом после сетевых сбоев). */
+    fun isAutoOfflineActive(): Boolean = autoOfflineAt != 0L
+
+    /**
+     * Fix #367: снять авто-офлайн (сетевой watcher SovaApp или кнопка «Повторить»
+     * в UI). Ручного оффлайн-переключателя этого префа нет — ставится он только
+     * авто-трипом, поэтому снятие безопасно всегда.
+     */
+    suspend fun clearAutoOffline() {
+        if (autoOfflineAt == 0L) return
+        autoOfflineAt = 0L
+        consecutiveNetworkErrors = 0
+        lastNetworkErrorTs = 0L
+        runCatching { prefs.setPrivacyOfflineMode(false) }
+        AppLog.i("VKApiClient", "#MUSIC-NET-DIAG: auto-offline cleared (self-heal)")
+    }
+
     /**
      * Sprint 1, P0-3 (#76): обработчик VK Captcha (error 14).
      *
@@ -10553,8 +10581,18 @@ class VKApiClient(
         // Fix #99: LongPoll сервер должен пытаться переподключиться даже
         // при кратковременной потере сети, иначе приложение «теряет» соединение навсегда.
         if (!skipOffline && isOffline()) {
-            AppLog.d("VKApiClient", "call($method): offline, returning null")
-            return null
+            // Fix #367: АВТО-офлайн — не вечная стена. Если режим включил сам
+            // клиент (autoOfflineAt > 0) и кулдаун 30с истёк — пропускаем запрос
+            // как self-heal probe: успех снимет режим (см. блок успеха ниже),
+            // провал перезапустит трип (счётчик снова дойдёт до порога).
+            // Раньше гейт возвращал null БЕЗ сети → нечему было снять режим →
+            // дедлок до перезапуска приложения.
+            val nowMs = System.currentTimeMillis()
+            if (autoOfflineAt == 0L || nowMs - autoOfflineAt < AUTO_OFFLINE_COOLDOWN_MS) {
+                AppLog.d("VKApiClient", "call($method): offline, returning null")
+                return null
+            }
+            AppLog.i("VKApiClient", "#MUSIC-NET-DIAG: auto-offline cooldown passed — probe $method")
         }
 
         // PrivacyMods: читаем snapshot один раз на вызов (безопасно, prefs — DataStore).
@@ -10770,6 +10808,9 @@ class VKApiClient(
                             "VKApiClient",
                             "Auto-enabling offline mode after $consecutiveNetworkErrors consecutive network failures — switching to OfflineManager",
                         )
+                        // Fix #367: фиксируем момент АВТО-трипа — через 30с гейт
+                        // начнёт пропускать запросы как probe (самолечение).
+                        autoOfflineAt = System.currentTimeMillis()
                         // callInternal — suspend fun, prefs.setPrivacyOfflineMode тоже suspend.
                         // runCatching глотает возможные исключения DataStore (маловероятно, но безопасно).
                         runCatching { prefs.setPrivacyOfflineMode(true) }
@@ -10798,6 +10839,13 @@ class VKApiClient(
                 // счётчик обнулён, и следующая серия начнётся сначала.
                 if (consecutiveNetworkErrors > 0) {
                     consecutiveNetworkErrors = 0
+                }
+                // Fix #367: успешный ответ при АВТО-офлайне — сеть рабочая,
+                // снимаем режим немедленно (self-heal, см. маркер autoOfflineAt).
+                if (autoOfflineAt != 0L) {
+                    autoOfflineAt = 0L
+                    runCatching { prefs.setPrivacyOfflineMode(false) }
+                    AppLog.i("VKApiClient", "#MUSIC-NET-DIAG: auto-offline cleared by successful $method")
                 }
                 return raw
             }

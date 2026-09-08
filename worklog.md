@@ -8068,3 +8068,21 @@ Work Log:
 Stage Summary:
 - Волна 25-2 завершена: Fix #363 (меню ленты на TopAppBar), #364 (Клипы/Видео через likes.getList→video.get), #365 (репосты открываются целиком + expand), #366 (PostVideoCarousel), #SEC-KEYS-MASK (токены → XXXXX в md/txt, история git остаётся носителем — рекомендация filter-repo/BFG)
 - Коммит + push в origin/PinoK (см. следующий коммит)
+
+---
+Task ID: 25-d
+Agent: main (Z.ai Code)
+Task: Диагноз «Музыка не работает на Wi-Fi (на мобильной — работает)» → Fix #367 авто-офлайн дедлок + честные ошибки (#MUSIC-NET-DIAG)
+
+Work Log:
+- Разведка: NetworkObserver/NetworkInterceptors/NetworkMods/AlAudioFallback/AudioUrlUnmasker/SovaApp OkHttp (DNS-пин только calls.okcdn.ru — не при чём; SSL pinning деактивирован Audit #40)
+- Ключевая находка: VKApiClient #38 auto-offline — 3 IOException за 60с → prefs.setPrivacyOfflineMode(true) → NetworkMods.isOfflineForced → isOffline()=true → 293 гейта callInternal молча возвращают null БЕЗ сети
+- ДЕДЛОК: pref снимался ТОЛЬКО успешной авторизацией (ExchangeAuthRepository:548/1073/2343); watcher'ы сети (SovaApp:2118/2209) сбрасывали только счётчик; если сеть «не терялась» (isбоевый Wi-Fi / switch без onLost) — isOnlineFlow не срабатывает → режим висит до перезапуска
+- Почему музыка: самый тяжёлый запрашиватель (50-трековые страницы + фоновая предзагрузка + плейлисты) — первым набирает 3 сбоя после Wi-Fi-свитча (stale-соединения/DNS/MTU)
+- Fix #367: (1) VKA маркер autoOfflineAt + clearAutoOffline() + isAutoOfflineActive(); (2) гейт callInternal — после 30с кулдауна пропускает запрос как probe (успех снимает режим, провал перезапускает трип); (3) успешный ответ снимает режим немедленно; (4) SovaApp: снятие на default-network-changed и offline→online; (5) MusicScreen: честная предпроверка сети, ветка «авто-офлайн» в when (вместо «Нет музыки»), сообщение в catch, кнопка «Повторить» (clearAutoOffline + reloadTick), авто-перезагрузка при возврате сети (isOnlineFlow collect)
+- Верификация: check-nested-comments ALL CLEAN; NULL-операторы в новых строках — 0; скобки HEAD→WORK дельта 0 (VKA +1 — pre-existing)
+
+Stage Summary:
+- Авто-офлайн теперь самолечится ≤30с (probe) / мгновенно при смене сети / по кнопке «Повторить» / авто-перезагрузкой при возврате сети
+- UI музыки показывает ПРАВДУ: «Нет сети», «3 сбоя подряд → авто-офлайн», реальные VK-ошибки
+- Рекомендация юзеру: если проблема осталась на конкретном роутере — смотреть logcat #MUSIC-NET-DIAG / NetRetry (тип IOException укажет: DNS/timeout/reset)
