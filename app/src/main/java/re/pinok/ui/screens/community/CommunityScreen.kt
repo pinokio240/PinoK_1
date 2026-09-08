@@ -1119,11 +1119,15 @@ fun CommunityScreen(
     }
 
     // ShareSheet: расширенный диалог «Поделиться».
+    // #SHARE-18B: onSuccess → refreshWall — после репоста на стену сообщества
+    // (или публикации вложения) стена сразу показывает новый пост,
+    // как в PostDetailScreen (doRefresh).
     val sharing = repostPost.value
     if (sharing != null) {
         ShareSheet(
             post = sharing,
             onDismiss = { repostPost.value = null },
+            onSuccess = { refreshWall() },
         )
     }
 }

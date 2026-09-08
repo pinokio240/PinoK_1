@@ -7716,3 +7716,17 @@ Work Log:
 
 Stage Summary:
 - План запушен; субагенты 18-α (opus) и 18-β (opus) запущены параллельно; волны 19 — после приёмки.
+
+---
+Task ID: 18-α/18-β (субагенты opus, прерваны таймаутом ПОСЛЕ правок ДО отчёта; интеграторская приёмка — Z.ai Code)
+Task: 18-α мессенджер (typing+каналы/счётчики+сеть) и 18-β шеринг (полный SharePanel)
+
+Work Log:
+- Оба Task-запуска упали по «context deadline exceeded», но правки легли (~920 строк, 7 файлов). Интеграторская приёмка: прочитаны ВСЕ хунки всех диффов; «UNCLOSED скобки» ShareSheet/VKApiClient/LongPoll/ChatDetail = АРТЕФАКТ сканера (// внутри строковых URL `https://…` ломал стринг-трекинг) — диффы сбалансированы вручную.
+- 18-α: LongPollClient — логи #TYPING-FIX 61/62 (формат верифицирован); ChatDetailScreen — НАЙДЕН И ПОЧИНЕН реальный баг залипания «печатает» (ключ LaunchedEffect (typingEnabled, typingUsers.isNotEmpty()) не перезапускал таймер при обновлении непустой карты → просрочка оставалась навсегда; теперь ключ typingUsers, таймаут 6с→5с VK web); MessagesScreen — typing в списке диалогов (typingPeers+таймаут+кеш имён users.get для бесед, respect настройки msgTypingIndicator), #CHANNEL-NET — дозагрузка каналов/запросов с debounce-рефетчем по LP-событиям; UnreadMessagesCounter — #COUNTER-CHANNELS: бейдж дока теперь клиентский подсчёт только диалогов (isChannel исключены), single-flight Mutex+coalescing против шторма LP 1/2/3/80, peerId<0 события → точный recompute; честная граница пагинации (3×200) задокументирована.
+- 18-β: ShareSheet — полный SharePanel VK web: 4 quick-action (На своей стене: wall.repost пост / wall.post вложения; В закладки: НОВЫЙ VKApiClient.bookmarksAdd (bookmarks.add, честный fallback fave.addPost/addVideo/addClip ТОЛЬКО при err=3, иначе реальная ошибка API); Избранное self-chat через exchangeAuthRepository.userId(); Копировать ссылку: канонические vk.com/<type>… через parseAttachmentRef); вкладка Сообщества — groups.get filter=admin,editor,moder + мои, честный фильтр can_post==1, wall.post owner_id=-gid (repostToGroup пост / wallPostWithAttachments файлы); Диалоги — sendPostToChat пост / sendWithAttachment файлы, каналы с can_write.allowed=false исключены из выбора; VKApiClient +bookmarksAdd/+parseWallPostId (3 формата response, логи); ShareSheet(post: Post?) теперь принимает attachments: List<String> — шеринг сырых файлов; CommunityScreen onSuccess=refreshWall.
+- NULL-EXPLICIT доводка интегратором: MessagesScreen lpRefetchJob?.cancel() → val-захват+if; VKApiClient parseWallPostId/bookmarksAdd Gson-цепочки помечены // NULL-ЯВНО (остальные пометки агента на месте); заглушек нет (rg TODO/stub = 0).
+
+Stage Summary:
+- Волна 18-α/β принята: typing чинен (залипание) + показ в диалогах; бейдж дока без каналов; шеринг = полный SharePanel без заглушек. В зоне α VKApiClient не тронут (соблюдено).
+- Не проверено без сборки: компиляция (юзером). Волны 19 (карусель/уведомления/правое меню/снапшоты) — по плану; 18-θ setActivity — интегратором после сборки.

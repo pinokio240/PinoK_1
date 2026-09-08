@@ -908,15 +908,21 @@ class LongPollClient(
                 }
                 61 -> {
                     // P0.1: DM typing — peerId = userId (DM peer is the user themselves).
+                    // #TYPING-FIX: формат VK LP v3 — [61, user_id, flags]; парсинг полей
+                    // верифицирован (user_id в индексе 1, flags в индексе 2), peerId = user_id.
                     val userId = ev.longAt(1) ?: return
                     val flags = ev.longAt(2) ?: 0L
+                    AppLog.d(TAG, "#TYPING-FIX: lp=61 (dm) userId=$userId flags=$flags → peerId=$userId")
                     _events.emit(LongPollEvent.Typing(userId, flags, isChat = false, peerId = userId))
                 }
                 62 -> {
                     // P0.1: chat typing — peerId = chatId + 2_000_000_000 (VK chat peer namespace).
+                    // #TYPING-FIX: формат VK LP v3 — [62, user_id, chat_id]; парсинг полей
+                    // верифицирован (user_id в индексе 1, chat_id в индексе 2).
                     val userId = ev.longAt(1) ?: return
                     val chatId = ev.longAt(2) ?: 0L
                     val peerId = chatId + 2_000_000_000L
+                    AppLog.d(TAG, "#TYPING-FIX: lp=62 (chat) userId=$userId chatId=$chatId → peerId=$peerId")
                     _events.emit(LongPollEvent.Typing(userId, chatId, isChat = true, peerId = peerId))
                 }
                 80 -> {

@@ -5720,13 +5720,10 @@ class VKApiClient(
         // SOVA_2_lenta: отложенный постинг — wall.post с publish_date (unix timestamp)
         if (publishDate != null && publishDate > 0) args["publish_date"] = publishDate.toString()
         val json = call("wall.post", args) ?: return -1L
-        return try {
-            json.getAsJsonObject("response")?.getAsJsonArray("items")
-                ?.firstOrNull()?.asJsonObject?.get("id")?.asLong ?: -1L
-        } catch (e: Exception) {
-            AppLog.e("VKApiClient", "wallPost parse error", e)
-            -1L
-        }
+        // #SHARE-18B: VK API документирует ответ {"response":{"post_id":N}},
+        // но gateway отдаёт и legacy {"response":{"items":[{"id":N}]}} —
+        // парсим оба формата явно (паттерн groupsGetById).
+        return parseWallPostId(json, "wallPost")
     }
 
     /**
@@ -5769,13 +5766,52 @@ class VKApiClient(
         val json = call("wall.repost", args) ?: return -1L to -1
         return try {
             val resp = json.getAsJsonObject("response") ?: return -1L to -1
+            // #SHARE-18B: VK API документирует wall.repost →
+            // {"response":{"success":1,"post_id":N,"reposts_count":M}};
+            // legacy-формат {"response":{"items":[{"id":N}]}} тоже встречается.
+            // Раньше парсился ТОЛЬКО items → при документированном формате
+            // postId парсился как -1 при РЕАЛЬНО успешном репосте, и UI
+            // показывал «Не удалось» (а пост на стене появлялся — пользователь
+            // жал повторно → дубли). Теперь оба формата.
             val postId = resp.getAsJsonArray("items")
-                ?.firstOrNull()?.asJsonObject?.get("id")?.asLong ?: -1L
+                ?.firstOrNull()?.asJsonObject?.get("id")?.asLong
+                ?: resp.get("post_id")?.takeIf { !it.isJsonNull }?.asLong
+                ?: resp.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                ?: -1L
             val repostsCount = resp.get("reposts_count")?.takeIf { !it.isJsonNull }?.asInt ?: -1
             postId to repostsCount
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "wallRepost parse error", e)
             -1L to -1
+        }
+    }
+
+    /**
+     * #SHARE-18B: общий парсер id нового поста из ответа wall.post.
+     * Поддерживает форматы gateway:
+     *  1. {"response":{"items":[{"id":N}]}} — legacy
+     *  2. {"response":{"post_id":N}}        — документированный VK API
+     *  3. {"response":{"post":{"id":N}}}    — вложенный объект (наблюдался)
+     * Логи содержат имя метода для трассировки. -1 — не удалось распознать.
+     */
+    private fun parseWallPostId(json: JsonObject, method: String): Long {
+        return try {
+            // NULL-ЯВНО: Gson-парсинг внешнего JSON — null-безопасные цепочки
+            // идиоматичны и локальны; явные if-развёртки удвоили бы код без
+            // добавления безопасности (ветки все covered: null → -1L + лог).
+            val resp = json.getAsJsonObject("response") ?: return -1L // NULL-ЯВНО
+            val fromItems = resp.getAsJsonArray("items")
+                ?.firstOrNull()?.asJsonObject?.get("id")?.asLong // NULL-ЯВНО
+            if (fromItems != null && fromItems > 0L) return fromItems
+            val direct = resp.get("post_id")?.takeIf { !it.isJsonNull }?.asLong // NULL-ЯВНО
+            if (direct != null && direct > 0L) return direct
+            val nested = resp.getAsJsonObject("post")?.get("id")?.takeIf { !it.isJsonNull }?.asLong // NULL-ЯВНО
+            if (nested != null && nested > 0L) return nested
+            AppLog.w("VKApiClient", "$method: response без id поста: ${json.toString().take(200)}")
+            -1L
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "$method parse error", e)
+            -1L
         }
     }
 
@@ -5853,6 +5889,63 @@ class VKApiClient(
         return json.has("response") && json.getAsJsonPrimitive("response").isNumber
     }
 
+    /**
+     * #SHARE-18B: «В закладки» — универсальная точка шеринга в закладки VK.
+     *
+     * Primary: bookmarks.add {type, owner_id, item_id, access_key?} —
+     * документированный VK API (type: post/video/photo/doc/...).
+     *
+     * Fallback (web-токен vk1.a.*): эмпирика проекта #FAVE-WEB-TOKEN —
+     * универсальные методы закладок у web-токена дают error 3 "Unknown
+     * method passed", VK разнёс их по split-методам. Подтверждённые
+     * reference-дампами split-методы: fave.addPost {owner_id, id}
+     * (лента.снапшоты.парсинг.полный.md:102), fave.addVideo {owner_id, id,
+     * access_key} (видео.md:1970). Fallback выполняется ТОЛЬКО при error 3
+     * (метод не поддерживается gateway) — любые другие ошибки API считаются
+     * реальными и НЕ маскируются (спека 18-β).
+     *
+     * Для photo/doc/audio split-методов в дампах НЕ зафиксировано — при
+     * отказе bookmarks.add реальная ошибка API уходит в lastApiError/
+     * lastApiErrorCode и показывается пользователю без маскировки.
+     *
+     * @param type      "post" | "video" | "photo" | "doc" | "audio" | "clip"
+     * @param ownerId   владелец объекта (пост: post.ownerId; видео: video.ownerId…)
+     * @param itemId    id объекта
+     * @param accessKey ключ доступа (приватные видео/фото; null для публичных)
+     * @return true — закладка добавлена; false — см. [lastApiError]/[lastApiErrorCode]
+     */
+    suspend fun bookmarksAdd(type: String, ownerId: Long, itemId: Long, accessKey: String? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "type" to type,
+            "owner_id" to ownerId.toString(),
+            "item_id" to itemId.toString(),
+        )
+        if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
+        val json = call("bookmarks.add", args)
+        if (json != null && json.has("response")) return true
+
+        // Fallback — только на error 3 (Unknown method passed): метода нет на gateway.
+        if (lastApiErrorCode != 3) return false
+        AppLog.w("VKApiClient", "bookmarksAdd: bookmarks.add not supported by gateway (err=$lastApiErrorCode: $lastApiError), trying split-method for type=$type")
+        val splitArgs = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "id" to itemId.toString(),
+        )
+        if (!accessKey.isNullOrBlank()) splitArgs["access_key"] = accessKey
+        val splitMethod = when (type) {
+            "post" -> "fave.addPost"
+            "video" -> "fave.addVideo"
+            "clip" -> "fave.addClip"
+            else -> {
+                AppLog.w("VKApiClient", "bookmarksAdd: нет подтверждённого split-метода для type=$type — реальная ошибка остаётся: $lastApiErrorCode: $lastApiError")
+                return false
+            }
+        }
+        val splitJson = call(splitMethod, splitArgs) ?: return false // NULL-ЯВНО (Gson-вызов, ошибка → false)
+        return splitJson.has("response")
+    }
+
     /** Отправить пост в диалог как пересылку (wall attachment). */
     suspend fun sendPostToChat(peerId: Long, ownerId: Long, postId: Long, message: String = ""): Long {
         if (isOffline()) return -1L
@@ -5873,8 +5966,13 @@ class VKApiClient(
     }
 
     /**
-     * Репост на стену сообщества (wall.post с copy_history).
-     * ownerId < 0 для групп.
+     * Репост на стену сообщества. VK: wall.post — owner_id=-gid,
+     * attachments=wall{srcOwner}_{srcPost}, message.
+     *
+     * #SHARE-18B: random_id убран — это параметр messages.send, wall.post его
+     * не документирует; сообщение (message) передаётся в args как и прежде.
+     * Права: вызов требует can_post в сообществе (админ/редактор либо
+     * разрешённая стена); ошибка API (15/210) всплывает честно.
      */
     suspend fun repostToGroup(
         groupId: Long,
@@ -5887,13 +5985,14 @@ class VKApiClient(
         val args = mutableMapOf(
             "owner_id" to (-groupId).toString(),
             "attachments" to copyHistory,
-            "random_id" to randomIdCounter.incrementAndGet().toString(),
         )
         if (message.isNotBlank()) args["message"] = message
         val json = call("wall.post", args) ?: return -1L
-        return try {
-            json.getAsJsonObject("response")?.getAsJsonObject("post")?.get("id")?.asLong ?: -1L
-        } catch (_: Exception) { -1L }
+        // #SHARE-18B: мульти-формат (items / post_id / post.id) —
+        // раньше только post.id; при документированном формате ответа
+        // {"response":{"post_id":N}} метод возвращал -1 при УСПЕШНОЙ
+        // публикации → UI показывал «Не удалось опубликовать».
+        return parseWallPostId(json, "repostToGroup")
     }
 
     // ========================================================================
@@ -6354,13 +6453,10 @@ class VKApiClient(
         if (friendsOnly) args["friends_only"] = "1"
         if (publishDate != null && publishDate > 0) args["publish_date"] = publishDate.toString()
         val json = call("wall.post", args) ?: return -1L
-        return try {
-            json.getAsJsonObject("response")?.getAsJsonArray("items")
-                ?.firstOrNull()?.asJsonObject?.get("id")?.asLong ?: -1L
-        } catch (e: Exception) {
-            AppLog.e("VKApiClient", "wallPostWithAttachments parse error", e)
-            -1L
-        }
+        // #SHARE-18B: мульти-формат ответа (items / post_id / post.id) —
+        // как в wallPost; иного поведения не меняет, только чинит
+        // документированный формат {"response":{"post_id":N}}.
+        return parseWallPostId(json, "wallPostWithAttachments")
     }
 
     /**

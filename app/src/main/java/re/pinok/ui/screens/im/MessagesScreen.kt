@@ -98,6 +98,12 @@ import re.pinok.util.toMsgTime
 import re.pinok.ui.components.SkeletonChatList
 import re.pinok.ui.components.ErrorView
 
+// #TYPING-FIX: таймаут-гашение индикатора «печатает…» в списке диалогов.
+// VK web паттерн: VK шлёт typing-событие каждые ~4с пока пользователь печатает;
+// если новое событие не пришло за ~5с — индикатор гаснет. Тот же интервал,
+// что и в ChatDetailScreen (TYPING_TIMEOUT_MS = 5_000L).
+private const val TYPING_TIMEOUT_MS = 5_000L
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessagesScreen(
@@ -113,6 +119,70 @@ fun MessagesScreen(
     // показываем его как pinned-entry в начале списка «Диалоги».
     // #MSG-FAVORITES-TOGGLE: скрывается настройкой msgShowFavorites.
     val myUserId = remember { app.exchangeAuthRepository.userId() }
+
+    // #TYPING-FIX: приёмный контур typing в списке диалогов.
+    // Раньше Typing-события потреблял только ChatDetailScreen (шапка чата),
+    // а список диалогов их не показывал вообще (rg Typing = 0 вхождений).
+    val typingEnabled by app.prefs.data
+        .map { it.msgTypingIndicator }
+        .collectAsState(initial = true)
+    // peerId → (userId печатающего, timestamp последнего события, мс).
+    var typingPeers by remember { mutableStateOf<Map<Long, Pair<Long, Long>>>(emptyMap()) }
+    // Кеш имён для typing в беседах (код 62): userId → «Имя Фамилия».
+    // ЛС (код 61) — имя не нужно (там «печатает…» без имени, peer и есть юзер).
+    var typingNames by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
+
+    LaunchedEffect(typingEnabled) {
+        if (!typingEnabled) {
+            typingPeers = emptyMap()
+            return@LaunchedEffect
+        }
+        app.longPollClient.events.collect { ev ->
+            if (ev !is LongPollEvent.Typing) return@collect
+            // Не показываем свой typing (события о себе не приходят, но guard как в чате).
+            if (ev.userId == myUserId) return@collect
+            typingPeers = typingPeers + (ev.peerId to Pair(ev.userId, System.currentTimeMillis()))
+            AppLog.d("MessagesScreen",
+                "#TYPING-FIX: dialog-list typing peer=${ev.peerId} user=${ev.userId} isChat=${ev.isChat}")
+            // В беседах (код 62) нужно имя печатающего: резолвим один раз на userId
+            // (точечный users.get — только при новом typing в беседе, не по таймеру).
+            if (ev.isChat && !typingNames.containsKey(ev.userId)) {
+                scope.launch {
+                    try {
+                        val profiles = app.apiClient.usersGetByIds(listOf(ev.userId))
+                        val profile = profiles[ev.userId]
+                        if (profile != null) {
+                            val name = "${profile.firstName} ${profile.lastName}".trim()
+                            if (name.isNotBlank()) {
+                                typingNames = typingNames + (ev.userId to name)
+                            }
+                        }
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        AppLog.w("MessagesScreen", "#TYPING-FIX: name resolve failed: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    // #TYPING-FIX: таймаут-гашение. Эффект keyed на typingPeers: любое обновление
+    // карты (новое событие — то же или от другого пира) перезапускает таймер,
+    // через TYPING_TIMEOUT_MS без продления запись удаляется (см. разбор бага
+    // залипания в ChatDetailScreen — здесь сразу правильная схема).
+    LaunchedEffect(typingPeers) {
+        val current = typingPeers
+        if (current.isEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.delay(TYPING_TIMEOUT_MS)
+        val now = System.currentTimeMillis()
+        val fresh = current.filterValues { entry -> now - entry.second < TYPING_TIMEOUT_MS }
+        if (fresh.size != current.size) {
+            typingPeers = fresh
+            AppLog.d("MessagesScreen", "#TYPING-FIX: dialog-list typing expired, remaining=${fresh.size}")
+        }
+    }
+
     var chats by remember { mutableStateOf<List<Chat>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -207,6 +277,74 @@ fun MessagesScreen(
     //    потом остальные pinned (по VK major_id DESC), потом unpinned.
     var localPinnedOrder by remember { mutableStateOf<List<Long>>(emptyList()) }
 
+    // #CHANNEL-NET: каналы/«Запросы», дозагруженные ПОСЛЕ основного getConversations
+    // (legacy getConversations отдаёт не все каналы — #MODERN-SYNC-CURSOR; «Запросы»
+    // идут отдельным filter=message_request). Сохраняются между LP re-fetch, чтобы
+    // дозагруженные записи не исчезали из списка при каждом входящем сообщении.
+    // Обновляются ТОЛЬКО полными загрузками (первичная / pull-to-refresh) —
+    // в LP re-fetch entries живут в своей последней версии до следующей полной.
+    var mergedExtras by remember { mutableStateOf<List<Chat>>(emptyList()) }
+
+    // #CHANNEL-NET: полный контур загрузки списка диалогов — getConversations +
+    // merge «Запросы» (filter=message_request, §44) + merge каналов
+    // (messagesGetAllChannels, #MODERN-SYNC-CURSOR). ЕДИНАЯ точка для первичной
+    // загрузки и pull-to-refresh: раньше refreshChats() перезаписывал `chats`
+    // голым ответом getConversations — дозагруженные каналы и запросы исчезали
+    // при каждом обновлении (жалоба: «сброс списка при обновлении», каналы
+    // пропадали из вкладки «Каналы»).
+    suspend fun fetchConversationsMerged(): List<Chat> {
+        var list = app.apiClient.messagesGetConversations(count = pageSize)
+            .distinctBy { it.peer.id }
+        val extras = ArrayList<Chat>()
+        // §44 #MSG-REQUESTS: merge запросов от не-друзей (non-fatal — пустые
+        // запросы или ошибка фильтра не ломают основной список).
+        if (list.isNotEmpty()) {
+            try {
+                val requests = app.apiClient.messagesGetConversationRequests(count = 50)
+                if (requests.isNotEmpty()) {
+                    val existingIds = list.map { it.peer.id }.toHashSet()
+                    val newRequests = requests.filter { it.peer.id !in existingIds }
+                    if (newRequests.isNotEmpty()) {
+                        list = (list + newRequests)
+                            // NULL-ЯВНО: сортировочный ключ, null-ветка тривиальна
+                            // (нет даты последнего сообщения = 0, дефолт для UI).
+                            .sortedByDescending { it.lastMessage?.date ?: 0L }
+                        extras.addAll(newRequests)
+                        AppLog.i("MessagesScreen",
+                            "#CHANNEL-NET: merged ${newRequests.size} message_request(s) into conversation list")
+                    }
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen",
+                    "#CHANNEL-NET: message_request merge failed (non-fatal): ${e.message}")
+            }
+        }
+        // #MODERN-SYNC-CURSOR: merge каналов, которых нет в legacy getConversations
+        // (non-fatal). ВАЖНО: после основного списка, не внутри retry-цикла —
+        // иначе следующий while-цикл перезапишет список и каналы пропадут.
+        try {
+            val allChannels = app.apiClient.messagesGetAllChannels()
+            if (allChannels.isNotEmpty()) {
+                val existingIds = list.map { it.peer.id }.toHashSet()
+                val missing = allChannels.filter { it.peer.id !in existingIds }
+                if (missing.isNotEmpty()) {
+                    list = (list + missing).distinctBy { it.peer.id }
+                    extras.addAll(missing)
+                    AppLog.i("MessagesScreen",
+                        "#CHANNEL-NET: merged ${missing.size} missing channels via getItems")
+                }
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.w("MessagesScreen", "#CHANNEL-NET: getAllChannels failed (non-fatal): ${e.message}")
+        }
+        mergedExtras = extras
+        return list
+    }
+
     // Первичная загрузка диалогов.
     LaunchedEffect(Unit) {
         // FIX: используем корутину LaunchedEffect напрямую вместо scope.launch,
@@ -233,9 +371,9 @@ fun MessagesScreen(
         var lastException: Exception? = null
         while (attempt < 3) {
             try {
-                list = app.apiClient.messagesGetConversations(count = pageSize)
-                    // Fix #53: защитная дедупликация — LazyColumn keys должны быть уникальны.
-                    .distinctBy { it.peer.id }
+                // #CHANNEL-NET: полный контур (getConversations + «Запросы» + каналы)
+                // с защитной дедупликацией по peer.id (Fix #53 — внутри).
+                list = fetchConversationsMerged()
                 lastException = null
                 break
             } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -253,52 +391,12 @@ fun MessagesScreen(
             }
         }
         try {
-            // §44 #MSG-REQUESTS: догружаем папку «Запросы» (сообщения от не-друзей).
-            // VK возвращает их отдельным filter=message_request — default getConversations
-            // их исключает. Мерджим в общий список, дедуплицируем по peer.id.
-            // Запросы могут быть пустыми (нет запросов) или вернуть err (фильтр не
-            // поддерживается) — в обоих случаях не ломаем основной список.
-            if (list.isNotEmpty()) {
-                try {
-                    val requests = app.apiClient.messagesGetConversationRequests(count = 50)
-                    if (requests.isNotEmpty()) {
-                        val existingIds = list.map { it.peer.id }.toHashSet()
-                        val newRequests = requests.filter { it.peer.id !in existingIds }
-                        if (newRequests.isNotEmpty()) {
-                            list = (list + newRequests)
-                                .sortedByDescending { it.lastMessage?.date ?: 0L }
-                            AppLog.i("MessagesScreen",
-                                "loadChats: merged ${newRequests.size} message_request(s) " +
-                                    "from non-friends into conversation list")
-                        }
-                    }
-                } catch (ce: kotlinx.coroutines.CancellationException) {
-                    throw ce
-                } catch (e: Exception) {
-                    // Не ломаем основной список если requests-fetch упал.
-                    AppLog.w("MessagesScreen", "loadChats: message_request fetch failed (non-fatal): ${e.message}")
-                }
-            }
+            // #CHANNEL-NET: merge «Запросов» и каналов теперь внутри
+            // fetchConversationsMerged() (см. выше) — тот же порядок и non-fatal
+            // семантика, что и раньше, но контур переиспользуется pull-to-refresh'ом.
             chats = list
             // Fix #127: если VK вернул меньше запрошенного — больше страниц нет.
             if (list.size < pageSize) hasMore = false
-            // #MODERN-SYNC-CURSOR: legacy getConversations отдаёт не все каналы
-            // (2 из 10) — догружаем полный список через messages.getItems.
-            // ВАЖНО: вызываем ПОСЛЕ цикла пагинации, а не внутри — иначе
-            // следующий while-цикл перезапишет chats = list и каналы пропадут.
-            try {
-                val allChannels = app.apiClient.messagesGetAllChannels()
-                if (allChannels.isNotEmpty()) {
-                    val existingIds = chats.map { it.peer.id }.toHashSet()
-                    val missing = allChannels.filter { it.peer.id !in existingIds }
-                    if (missing.isNotEmpty()) {
-                        chats = (chats + missing).distinctBy { it.peer.id }
-                        AppLog.i("MessagesScreen", "loadChats: merged ${missing.size} missing channels via getItems")
-                    }
-                }
-            } catch (e: Exception) {
-                AppLog.w("MessagesScreen", "loadChats: getAllChannels failed (non-fatal): ${e.message}")
-            }
             if (list.isEmpty()) {
                 // Fix #339: приоритет — lastException (transient IOException после 3 retry).
                 // Иначе VK API errCode может быть 0/stale → покажем «Нет диалогов» вместо
@@ -334,11 +432,15 @@ fun MessagesScreen(
             isRefreshing = true
             hasMore = true  // Fix #127: сброс пагинации при refresh.
             try {
-                val list = app.apiClient.messagesGetConversations(count = pageSize)
-                    .distinctBy { it.peer.id }
+                // #CHANNEL-NET: полный контур (getConversations + «Запросы» + каналы).
+                // Раньше здесь был голый getConversations — при каждом обновлении
+                // списка дозагруженные каналы и «Запросы» исчезали (сброс списка).
+                val list = fetchConversationsMerged()
                 chats = list
                 if (list.size < pageSize) hasMore = false
                 errorText = null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.w("MessagesScreen", "refreshChats failed: ${e.message}")
             } finally {
@@ -348,6 +450,11 @@ fun MessagesScreen(
     }
 
     // Real-time обновление списка диалогов через LongPoll.
+    // #CHANNEL-NET: single-flight — один активный re-fetch; новое событие ОТМЕНЯЕТ
+    // предыдущий запрос (раньше каждый event запускал СВОЙ getConversations: во
+    // время активности параллельные запросы шли друг за другом, старший ответ мог
+    // перезаписать свежий — гонка + повторные запросы + риск rate-limit).
+    var lpRefetchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     LaunchedEffect(Unit) {
         app.longPollClient.events.collect { ev ->
             val relevant = when (ev) {
@@ -360,13 +467,22 @@ fun MessagesScreen(
             }
             if (!relevant) return@collect
             if (loading || isRefreshing) return@collect
-            scope.launch {
+            // NULL-EXPLICIT: захват var-делегата в val — явная проверка вместо ?.
+            val refetchJob = lpRefetchJob
+            if (refetchJob != null) refetchJob.cancel()
+            lpRefetchJob = scope.launch {
                 try {
                     val targetCount = maxOf(chats.size, pageSize)
                     val fresh = app.apiClient.messagesGetConversations(count = targetCount)
                         .distinctBy { it.peer.id }
                     if (fresh.isNotEmpty()) {
-                        chats = fresh
+                        // #CHANNEL-NET: сохраняем дозагруженные каналы/«Запросы»
+                        // (mergedExtras), которых нет в свежем ответе — иначе каналы
+                        // (те, что legacy getConversations не отдаёт) и запросы
+                        // исчезали из списка при КАЖДОМ входящем сообщении.
+                        val freshIds = fresh.map { it.peer.id }.toHashSet()
+                        val preserved = mergedExtras.filter { it.peer.id !in freshIds }
+                        chats = if (preserved.isEmpty()) fresh else (fresh + preserved)
                         errorText = null
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -440,10 +556,13 @@ fun MessagesScreen(
             var result = chats
             if (foldersEnabled) {
                 // P3.3: динамические табы — 0=Все, 1..N=папки, N+1=Непрочитанные.
+                // #COUNTER-CHANNELS: «Непрочитанные» — только диалоги, без каналов
+                // (каналы читаются в своей вкладке/списке, их непрочитанное не
+                // входит в «непрочитанные» по требованию пользователя).
                 val unreadIdx = folders.size + 1
                 when {
                     activeTab == 0 -> {} // Все
-                    activeTab == unreadIdx -> result = result.filter { it.unreadCount > 0 }
+                    activeTab == unreadIdx -> result = result.filter { it.unreadCount > 0 && !it.isChannel }
                     activeTab in 1..folders.size -> {
                         val folder = folders[activeTab - 1]
                         result = result.filter { it.peer.id in folder.peerIds }
@@ -453,10 +572,12 @@ fun MessagesScreen(
                 // Legacy 3-tab mode: 0=Диалоги, 1=Каналы, 2=Непрочитанные.
                 // #DIALOGS-TAB: «Диалоги» — всё КРОМЕ каналов (broadcast-сообщества);
                 // «Каналы» — только каналы (isChannel = group && can_write.allowed=false).
+                // #COUNTER-CHANNELS: «Непрочитанные» — только диалоги, без каналов
+                // (бейдж и содержимое консистентны: оба без каналов).
                 when (activeTab) {
                     0 -> result = result.filter { !it.isChannel }
                     1 -> result = result.filter { it.isChannel }
-                    2 -> result = result.filter { it.unreadCount > 0 }
+                    2 -> result = result.filter { it.unreadCount > 0 && !it.isChannel }
                     else -> {}
                 }
             }
@@ -501,14 +622,19 @@ fun MessagesScreen(
     // пользователь видел «залипшие» счётчики. Теперь все три бейджа отражают
     // непрочитанное и сбрасываются при просмотре:
     //  - dialogsUnreadSum  = сумма unreadCount по ДИАЛОГАМ (не каналам) — бейдж «Диалоги»
-    //  - totalUnreadSum    = сумма unreadCount по ВСЕМ чатам (для папок-режима «Все»)
+    //  - totalUnreadSum    = сумма unreadCount по ДИАЛОГАМ — бейдж «Все» в папках-режиме
     //  - channelUnreadSum  = сумма unreadCount только по каналам — бейдж «Каналы»
     //  - unreadCount       = сколько ДИАЛОГОВ имеют непрочитанные (для вкладки «Непрочитанные»)
+    // #COUNTER-CHANNELS (требование пользователя: «счетчик количество сообщений
+    // каналов не должны входить в счетчик сообщений диалогов или непрочитанные»):
+    // totalUnreadSum и unreadCount ИСКЛЮЧАЮТ каналы (isChannel = group &&
+    // can_write.allowed=false, #DIALOGS-TAB). Бейджи самих каналов в списке
+    // (chat.unreadCount в ChatCard) и бейдж вкладки «Каналы» НЕ тронуты.
     val dialogsUnreadSum by remember(chats) {
         derivedStateOf { chats.filter { !it.isChannel }.sumOf { it.unreadCount } }
     }
     val totalUnreadSum by remember(chats) {
-        derivedStateOf { chats.sumOf { it.unreadCount } }
+        derivedStateOf { chats.filter { !it.isChannel }.sumOf { it.unreadCount } }
     }
     val channelUnreadSum by remember(chats) {
         derivedStateOf {
@@ -517,7 +643,7 @@ fun MessagesScreen(
         }
     }
     val unreadCount by remember(chats) {
-        derivedStateOf { chats.count { it.unreadCount > 0 } }
+        derivedStateOf { chats.count { it.unreadCount > 0 && !it.isChannel } }
     }
     // P3.3: сумма непрочитанных по каждой папке (параллельно списку folders).
     // Нужно для бейджей на чипах папок в FolderTabRow.
@@ -719,9 +845,25 @@ fun MessagesScreen(
                         val isPinned = isPinnedChat(chat)
                         // Fix #274: ищем позицию этого чата среди pinned (для drag-swap).
                         val pinnedIndex = if (isPinned) pinnedPeerIdsInOrder.indexOf(chat.peer.id) else -1
+                        // #TYPING-FIX: «печатает…» вместо сниппета при живом typing пира.
+                        // ЛС (код 61) — «печатает…»; беседа (код 62, peer >= 2e9) —
+                        // «Имя печатает…» (имя из typingNames, резолвится через users.get).
+                        val typingEntry = typingPeers[chat.peer.id]
+                        val typingText: String? = if (typingEntry == null) {
+                            null
+                        } else {
+                            val typingUserId = typingEntry.first
+                            if (chat.peer.id >= 2_000_000_000L) {
+                                val name = typingNames[typingUserId]
+                                if (name != null) "$name печатает…" else "печатает…"
+                            } else {
+                                "печатает…"
+                            }
+                        }
                         ChatCard(
                             chat = chat,
                             isPinned = isPinned,
+                            typingText = typingText,
                             onClick = { onChatClick(chat) },
                             onMarkAsRead = { peerId, lastMsgId ->
                                 // §44 #DNR-MARK-READ-UX: при включённом DNR («не читалка»)
@@ -1041,6 +1183,10 @@ fun MessagesScreen(
 private fun ChatCard(
     chat: Chat,
     isPinned: Boolean = false,
+    // #TYPING-FIX: живой typing для этого пира — заменяет сниппет последнего
+    // сообщения («печатает…» / «Имя печатает…»); null = typing нет. Гаснет
+    // по таймауту на стороне списка (см. LaunchedEffect(typingPeers)).
+    typingText: String? = null,
     onClick: () -> Unit = {},
     onMarkAsRead: (peerId: Long, lastMessageId: Long) -> Unit = { _, _ -> },
     onToggleMute: (peerId: Long, mute: Boolean) -> Unit = { _, _ -> },
@@ -1278,8 +1424,17 @@ private fun ChatCard(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = preview, style = MaterialTheme.typography.bodySmall,
-                            color = if (hasUnread)
+                        // #TYPING-FIX: при живом typing пира показываем «печатает…»
+                        // (в беседах — имя печатающего) ВМЕСТО сниппета последнего
+                        // сообщения — как в VK web. Гашение по таймауту — в списке.
+                        // Не ломает подстановку превью: typingText == null → прежний
+                        // preview (текст/метка вложения/action-текст/«Вы: » префикс).
+                        Text(
+                            text = if (typingText != null) typingText else preview,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (typingText != null)
+                                MaterialTheme.colorScheme.primary
+                            else if (hasUnread)
                                 MaterialTheme.colorScheme.onSurface
                             else
                                 MaterialTheme.colorScheme.onSurfaceVariant,

@@ -212,7 +212,10 @@ private val REACTION_EMOJIS = listOf(
 
 // P0.1: typing indicator — VK resends typing events every ~4s while user keeps typing.
 // If no new event arrives within this window, we assume the user stopped typing.
-private const val TYPING_TIMEOUT_MS = 6_000L
+// #TYPING-FIX: 6с → 5с — VK web паттерн: индикатор живёт ~5 секунд без продления
+// (VK присылает событие каждые ~4с, окно 5с не мигает между событиями и гаснет
+// через 5с после последнего).
+private const val TYPING_TIMEOUT_MS = 5_000L
 
 // Fix #244: multi-select — передаём состояние выбора во вложенные Composable
 // (PhotoGrid, VideoAttachmentCard, VoiceMessageBubble, LinkAttachmentCard,
@@ -2219,23 +2222,40 @@ fun ChatDetailScreen(
             typingUsers = emptyMap()
             return@LaunchedEffect
         }
+        // #TYPING-FIX: сброс стейта при входе в эффект — смена peerId (та же
+        // composition) или toggle настройки не должны оставлять typing-записи
+        // предыдущего чата активными в новом.
+        typingUsers = emptyMap()
         app.longPollClient.events.collect { ev ->
             if (ev !is LongPollEvent.Typing) return@collect
             if (ev.peerId != peerId) return@collect
             // Don't show typing for yourself (shouldn't happen, but just in case).
             if (ev.userId == myUserId) return@collect
             typingUsers = typingUsers + (ev.userId to System.currentTimeMillis())
+            AppLog.d("ChatDetailScreen",
+                "#TYPING-FIX: typing accepted peer=${ev.peerId} user=${ev.userId} isChat=${ev.isChat}")
         }
     }
 
     // P0.1: cleanup stale typing entries (older than TYPING_TIMEOUT_MS).
-    LaunchedEffect(typingEnabled, typingUsers.isNotEmpty()) {
-        if (!typingEnabled || typingUsers.isEmpty()) return@LaunchedEffect
-        kotlinx.coroutines.delay(TYPING_TIMEOUT_MS / 2)
+    // #TYPING-FIX (баг залипания): БЫЛО — ключ LaunchedEffect был
+    // (typingEnabled, typingUsers.isNotEmpty()), т.е. эффект перезапускался
+    // только при переходе пусто↔непусто. Второе typing-событие (VK шлёт их
+    // каждые ~4с) обновляло НЕПУСТУЮ карту — ключ не менялся, запущенный
+    // таймер не перезапускался, его фильтр работал по устаревшему снапшоту
+    // и завершался без записи → новая просрочка оставалась навсегда, индикатор
+    // «печатает…» зависал до выхода с экрана. ТЕПЕРЬ — ключ typingUsers: любое
+    // изменение карты перезапускает таймер, индикатор гаснет ровно через
+    // TYPING_TIMEOUT_MS после последнего события (VK web ~5с).
+    LaunchedEffect(typingEnabled, typingUsers) {
+        val current = typingUsers
+        if (!typingEnabled || current.isEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.delay(TYPING_TIMEOUT_MS)
         val now = System.currentTimeMillis()
-        val fresh = typingUsers.filter { (_, ts) -> now - ts < TYPING_TIMEOUT_MS }
-        if (fresh.size != typingUsers.size) {
+        val fresh = current.filterValues { ts -> now - ts < TYPING_TIMEOUT_MS }
+        if (fresh.size != current.size) {
             typingUsers = fresh
+            AppLog.d("ChatDetailScreen", "#TYPING-FIX: typing expired, remaining=${fresh.size}")
         }
     }
 
