@@ -189,6 +189,9 @@ fun ProfileScreen(
     val prefsSnap by app.prefs.data.collectAsState(initial = null)
     // NULL-ЯВНО: Snapshot-initial до первого эмита; дефолт true = SovaPrefs default.
     val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
+    // Fix #360 #PROFILE-SUGGEST-TOGGLE: блок «Возможно, вы знакомы» показывается
+    // ТОЛЬКО при включённой настройке (Настройки → Приватность → «Профиль»).
+    val showFriendSuggestions: Boolean = prefsSnap?.profileFriendSuggestions ?: false  // NULL-ЯВНО (prefs-паттерн carouselEnabled выше)
     var profile by remember { mutableStateOf<UserProfile?>(null) }
     var posts by remember { mutableStateOf<List<Post>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -321,11 +324,16 @@ fun ProfileScreen(
                     }
                     // П-6b (#PROFILE-GAP-6b): «Возможно, вы знакомы» — параллельный
                     // добор (паттерн подарков П-1). Пусто/ошибка → секция не рисуется.
-                    scope.launch {
-                        try {
-                            friendSuggestions = app.apiClient.friendsGetRecommendations(count = 10)
-                        } catch (e: Exception) {
-                            AppLog.e("ProfileScreen", "Friend suggestions load failed", e)
+                    // Fix #360 #PROFILE-SUGGEST-TOGGLE: загрузка ТОЛЬКО когда блок
+                    // включён в настройках (по умолчанию выключен) — лишний
+                    // friends.getRecommendations при выключенном блоке не делаем.
+                    if (showFriendSuggestions) {
+                        scope.launch {
+                            try {
+                                friendSuggestions = app.apiClient.friendsGetRecommendations(count = 10)
+                            } catch (e: Exception) {
+                                AppLog.e("ProfileScreen", "Friend suggestions load failed", e)
+                            }
                         }
                     }
                     // П-7-AB: счётчик «Подписок» правой колонки (users.getSubscriptions
@@ -1046,7 +1054,9 @@ fun ProfileScreen(
             }
             // П-6b (#PROFILE-GAP-6b): «Возможно, вы знакомы» (friends.getRecommendations)
             // — на вкладке Стена сверху, как в VK web. Пусто/ошибка — не рисуем.
-            val suggestions = friendSuggestions
+            // Fix #360 #PROFILE-SUGGEST-TOGGLE: рендер только при включённой
+            // настройке (Настройки → Приватность → «Профиль», default ВЫКЛ).
+            val suggestions = if (showFriendSuggestions) friendSuggestions else null
             if (!suggestions.isNullOrEmpty()) {
                 item {
                     FriendSuggestionsSection(

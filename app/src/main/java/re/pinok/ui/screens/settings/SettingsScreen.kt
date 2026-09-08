@@ -2996,6 +2996,20 @@ private fun PrivacyTab(
         item { ToggleRow("Маскировка устройства", s.privacyDeviceMask) { scope.launch { app.prefs.setPrivacyDeviceMask(it) } } }
         item { ToggleRow("Анти-телеметрия", s.privacyAntiTelemetry) { scope.launch { app.prefs.setPrivacyAntiTelemetry(it) } } }
         item { ToggleRow("Скрывать «был в сети»", s.privacyHideLastSeen) { scope.launch { app.prefs.setPrivacyHideLastSeen(it) } } }
+
+        // Fix #360 #PROFILE-SUGGEST-TOGGLE: включатель раздела «Возможно, вы
+        // знакомы» в профиле (friends.getRecommendations, вкладка «Стена»).
+        // Юзер: «включатель для отключения раздела (по умолчанию выкл)» —
+        // default false (секция скрыта), включается здесь.
+        item { SectionHeader("Профиль") }
+        item {
+            ToggleRow(
+                title = "Блок «Возможно, вы знакомы» в профиле",
+                subtitle = "Показывать на вкладке «Стена» вашего профиля рекомендации " +
+                    "друзей (friends.getRecommendations). По умолчанию выключен.",
+                checked = s.profileFriendSuggestions,
+            ) { v -> scope.launch { app.prefs.setProfileFriendSuggestions(v) } }
+        }
     }
 }
 

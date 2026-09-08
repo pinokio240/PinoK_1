@@ -555,6 +555,44 @@ object PlayerConnection {
     }
 
     /**
+     * Fix #362 #AUDIO-MENU-REAL: «Воспроизвести следующей» из меню трека (⋮).
+     * Вставляет трек В ОЧЕРЕДЬ сразу после текущего (playlist + контроллер),
+     * НЕ прерывая воспроизведение. Очередь пуста → честный фолбэк: трек
+     * становится текущим (playTrackList из одного элемента).
+     */
+    fun playNext(track: Track) {
+        withController { ctrl ->
+            if (playlist.isEmpty() || ctrl.mediaItemCount == 0) {
+                AppLog.i(TAG, "playNext: очередь пуста → играем трек #${track.id} сразу")
+                playTrackList(listOf(track), 0)
+                return@withController
+            }
+            // Дублей в очереди быть не должно: если трек уже стоит следующим —
+            // повторная вставка создаст копию (клоник в списке на слух не
+            // отличается, но счётчик/переходы задвоятся). Раньше ставили —
+            // теперь убираем прежний экземпляр перед вставкой.
+            val cleaned = playlist.filter { it.id != track.id || it.ownerId != track.ownerId }
+            // controller.currentMediaItemIndex — позиция в КОНТРОЛЛЕРЕ; после
+            // фильтрации дублей вставляемая позиция в playlist совпадает с
+            // контроллерной только если дубли стояли ПОСЛЕ текущего. Для
+            // честности пересчитываем: вставка всегда строго после текущего.
+            val insertIdx = (ctrl.currentMediaItemIndex + 1).coerceAtMost(cleaned.size)
+            // toMediaItem() — приватная extension в этом же объекте (Fix #170:
+            // без I/O, гибридный онлайн/офлайн URI уже решает).
+            val mediaItem = track.toMediaItem()
+            playlist = buildList {
+                addAll(cleaned)
+                add(insertIdx, track)
+            }
+            ctrl.addMediaItems(insertIdx, listOf(mediaItem))
+            // onMediaItemTransition сработает только при ПЕРЕХОДЕ, а queue в
+            // PlayerState должен показать вставку сразу — публикуем состояние.
+            publishStateImmediate()
+            AppLog.i(TAG, "playNext: #${track.id} вставлен на позицию $insertIdx (очередь ${playlist.size})")
+        }
+    }
+
+    /**
      * Поставить аудиоплеер на паузу (например, при открытии видео).
      * Возвращает true, если плеер играл и был поставлен на паузу.
      */

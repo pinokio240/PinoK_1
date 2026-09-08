@@ -179,6 +179,9 @@ fun MusicScreen(
     var moreMenuTrack by remember { mutableStateOf<Track?>(null) }
     var moreMenuExpanded by remember { mutableStateOf(false) }
     var lyricsSheetTrackId by remember { mutableStateOf<Long?>(null) }
+    // Fix #362 #AUDIO-MENU-REAL: диалог правки трека («Редактировать трек» —
+    // audio.edit, только свои треки). track — что правим.
+    var editTrackDialog by remember { mutableStateOf<Track?>(null) }
     var apiErrorMessage by remember { mutableStateOf<String?>(null) }
     // #TRACKS-CACHE: hasMore=true по умолчанию (как в оригинале). Если кэш свежий
     // и все треки уже загружены — loadMoreTracksSuspend сам вернёт false и остановится.
@@ -951,21 +954,59 @@ fun MusicScreen(
                         }
                     },
                     onDelete = {
+                        val t = track
                         scope.launch {
+                            // Fix #362 #AUDIO-MENU-REAL: раньше удаляли «в молоко»
+                            // — трек исчезал только с сервера, в списке оставался,
+                            // фидбека не было («пункты меню не работают»). Теперь:
+                            // API-результат → тост с реальной ошибкой + удаление
+                            // из локального списка и кэша экрана.
+                            var ok = false
+                            var errText: String? = null
                             try {
-                                app.apiClient.audioDelete(track.id, track.ownerId)
+                                ok = app.apiClient.audioDelete(t.id, t.ownerId)
+                                if (!ok) errText = app.apiClient.lastApiError
                             } catch (e: Exception) {
                                 AppLog.e("MusicScreen", "audioDelete error", e)
+                                errText = e.message
+                            }
+                            if (ok) {
+                                tracks = tracks.filter { it.ownerId != t.ownerId || it.id != t.id }
+                                totalCount = (totalCount - 1).coerceAtLeast(0)
+                                MusicTracksCache.update(tracks, totalCount)
+                                android.widget.Toast.makeText(
+                                    app.applicationContext,
+                                    "Удалено из моей музыки",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                val shown = errText ?: "ошибка сети"
+                                android.widget.Toast.makeText(
+                                    app.applicationContext,
+                                    "Не удалось удалить: $shown",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
                             }
                         }
                     },
                     onRestore = {
+                        val t = track
                         scope.launch {
+                            // Fix #362 #AUDIO-MENU-REAL: фидбек на «Восстановить»
+                            // (audio.restore). Трек вернётся в конец библиотеки —
+                            // попадёт в список при следующей подгрузке страниц.
+                            var ok = false
+                            var errText: String? = null
                             try {
-                                app.apiClient.audioRestore(track.id, track.ownerId)
+                                ok = app.apiClient.audioRestore(t.id, t.ownerId)
+                                if (!ok) errText = app.apiClient.lastApiError
                             } catch (e: Exception) {
                                 AppLog.e("MusicScreen", "audioRestore error", e)
+                                errText = e.message
                             }
+                            val msg = if (ok) "Трек восстановлен — появится в конце списка"
+                                      else "Не удалось восстановить: ${errText ?: "ошибка сети"}"
+                            android.widget.Toast.makeText(app.applicationContext, msg, android.widget.Toast.LENGTH_SHORT).show()
                         }
                     },
                     onShare = {
@@ -1023,12 +1064,29 @@ fun MusicScreen(
                         track.lyricsId?.let { lyricsSheetTrackId = it }
                     },
                     onShowRecommendations = {
+                        val t = track
                         scope.launch {
                             try {
-                                // Возвращает Pair<totalCount, tracks> — берём только треки.
-                                val (_, recs) = app.apiClient.audioGetRecommendations(count = 30)
+                                // Fix #362 #AUDIO-MENU-REAL: «Похожие» считаются по
+                                // ЭТОМУ треку (audio.getRecommendations target_audio
+                                // = ownerId_id), а не общий поток рекомендаций.
+                                val (_, recs) = app.apiClient.audioGetRecommendations(
+                                    count = 30,
+                                    targetAudio = "${t.ownerId}_${t.id}",
+                                )
                                 if (recs.isNotEmpty()) {
                                     PlayerConnection.playTrackList(recs, 0)
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Похожие на «${t.title}» — ${recs.size} треков",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Похожие не найдены",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
                                 }
                             } catch (e: Exception) {
                                 AppLog.e("MusicScreen", "getRecommendations error", e)
@@ -1036,16 +1094,40 @@ fun MusicScreen(
                         }
                     },
                     onDislike = {
+                        val t = track
                         scope.launch {
+                            // Fix #362 #AUDIO-MENU-REAL: фидбек на «Не нравится».
+                            var ok = false
+                            var errText: String? = null
                             try {
-                                app.apiClient.audioAddDislike(
-                                    listOf("${track.ownerId}_${track.id}")
+                                ok = app.apiClient.audioAddDislike(
+                                    listOf("${t.ownerId}_${t.id}")
                                 )
+                                if (!ok) errText = app.apiClient.lastApiError
                             } catch (e: Exception) {
                                 AppLog.e("MusicScreen", "addDislike error", e)
+                                errText = e.message
                             }
+                            val msg = if (ok) "Учтено в рекомендациях"
+                                      else "Не удалось: ${errText ?: "ошибка сети"}"
+                            android.widget.Toast.makeText(app.applicationContext, msg, android.widget.Toast.LENGTH_SHORT).show()
                         }
                     },
+                    // Fix #362 #AUDIO-MENU-REAL: «Редактировать трек» (свои) —
+                    // audio.edit через диалог правки артиста/названия.
+                    onEdit = { editTrackDialog = track },
+                    // Fix #362 #AUDIO-MENU-REAL: «Открыть альбом» — навигация
+                    // (параметр onOpenAlbum у экрана уже есть, раньше не
+                    // подключался к меню — мёртвая кнопка).
+                    onOpenAlbum = {
+                        val albumId = track.albumId
+                        if (albumId != null && albumId != 0L) {
+                            onOpenAlbum(track.ownerId, albumId, track.accessKey)
+                        }
+                    },
+                    // Fix #362 #AUDIO-MENU-REAL: «Воспроизвести следующей» —
+                    // вставка в очередь после текущего (PlayerConnection.playNext).
+                    onSetNext = { PlayerConnection.playNext(track) },
                 )
             }
         }
@@ -1055,6 +1137,24 @@ fun MusicScreen(
             re.pinok.ui.components.LyricsSheet(
                 lyricsId = lid,
                 onDismiss = { lyricsSheetTrackId = null },
+            )
+        }
+
+        // Fix #362 #AUDIO-MENU-REAL: диалог правки трека — открыт когда
+        // editTrackDialog != null («Редактировать трек» из меню ⋮).
+        // NULL-ЯВНО: паттерн moreMenuTrack?/lyricsSheetTrackId? выше по файлу.
+        editTrackDialog?.let { t ->  // NULL-ЯВНО (паттерн moreMenuTrack? выше)
+            EditTrackDialog(
+                track = t,
+                onDismiss = { editTrackDialog = null },
+                onSaved = { updated ->
+                    editTrackDialog = null
+                    // Обновляем трек в списке + кэше экрана (паттерн onDelete).
+                    tracks = tracks.map {
+                        if (it.ownerId == updated.ownerId && it.id == updated.id) updated else it
+                    }
+                    MusicTracksCache.update(tracks, totalCount)
+                },
             )
         }
     } // end Column
@@ -1077,6 +1177,111 @@ fun MusicScreen(
             }
         }
     } // end outer Box
+}
+
+// ─── Fix #362 #AUDIO-MENU-REAL: диалог правки трека (audio.edit) ─────────────
+
+/**
+ * Диалог «Редактировать трек» — правка артиста и названия СВОЕГО трека через
+ * audio.edit (VKA.audioEdit). Поля предзаполнены текущими значениями.
+ *
+ * onSaved вызывается ТОЛЬКО при успешном ответе VK (response=1) и получает
+ * обновлённый Track — caller обновляет список/кэш. При ошибке — честный
+ * тост с текстом ошибки VK (audio.edit может быть закрыт для web-токена,
+ * как audio.add — замалчивать нельзя, no-stub политика).
+ */
+@Composable
+private fun EditTrackDialog(
+    track: Track,
+    onDismiss: () -> Unit,
+    onSaved: (Track) -> Unit,
+) {
+    val app = SovaApp.get()
+    // Управляемый scope диалога (НЕ MainScope — тот утекал бы при закрытии).
+    val scope = rememberCoroutineScope()
+    var artist by remember { mutableStateOf(track.artist) }
+    var title by remember { mutableStateOf(track.title) }
+    var saving by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Редактировать трек") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = artist,
+                    onValueChange = { artist = it },
+                    label = { Text("Артист") },
+                    singleLine = true,
+                    enabled = !saving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Название") },
+                    singleLine = true,
+                    enabled = !saving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                // NULL-ЯВНО: errorText — nullable state, рендер только при значении.
+                if (errorText != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = errorText ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !saving && title.isNotBlank(),
+                onClick = {
+                    saving = true
+                    errorText = null
+                    scope.launch {
+                        var ok = false
+                        var err: String? = null
+                        try {
+                            ok = app.apiClient.audioEdit(
+                                ownerId = track.ownerId,
+                                audioId = track.id,
+                                artist = artist.trim(),
+                                title = title.trim(),
+                            )
+                            if (!ok) err = app.apiClient.lastApiError
+                        } catch (e: Exception) {
+                            AppLog.e("MusicScreen", "audioEdit error", e)
+                            err = e.message
+                        }
+                        saving = false
+                        if (ok) {
+                            android.widget.Toast.makeText(
+                                app.applicationContext,
+                                "Трек обновлён",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                            onSaved(
+                                track.copy(artist = artist.trim(), title = title.trim()),
+                            )
+                        } else {
+                            // Честный текст ошибки VK (права/сеть) — не молчим.
+                            errorText = "Не удалось сохранить: ${err ?: "ошибка сети"}"
+                        }
+                    }
+                },
+            ) {
+                Text(if (saving) "Сохранение…" else "Сохранить")
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !saving, onClick = onDismiss) { Text("Отмена") }
+        },
+    )
 }
 
 // ─── Header с 5 вкладками ────────────────────────────────────────────────────

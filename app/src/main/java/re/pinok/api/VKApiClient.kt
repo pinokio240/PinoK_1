@@ -1541,7 +1541,10 @@ class VKApiClient(
         val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
         if (!resp.isJsonPrimitive) return false
         return try {
-            if (resp.isBoolean) resp.asBoolean else resp.asInt == 1
+            // Fix #357: isBoolean есть только у JsonPrimitive (у JsonElement —
+            // Unresolved reference), поэтому берём примитив после проверки выше.
+            val prim = resp.asJsonPrimitive
+            if (prim.isBoolean) prim.asBoolean else prim.asInt == 1
         } catch (_: Exception) { false }
     }
 
@@ -1560,7 +1563,10 @@ class VKApiClient(
         val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
         if (!resp.isJsonPrimitive) return false
         return try {
-            if (resp.isBoolean) resp.asBoolean else resp.asInt == 1
+            // Fix #357: isBoolean есть только у JsonPrimitive (у JsonElement —
+            // Unresolved reference), поэтому берём примитив после проверки выше.
+            val prim = resp.asJsonPrimitive
+            if (prim.isBoolean) prim.asBoolean else prim.asInt == 1
         } catch (_: Exception) { false }
     }
 
@@ -3013,6 +3019,10 @@ class VKApiClient(
     suspend fun audioGetRecommendations(
         count: Int = 30,
         offset: Int = 0,
+        // Fix #362 #AUDIO-MENU-REAL: target_audio ("ownerId_id") — «Показать
+        // похожие» из меню трека ДОЛЖНЫ считать по ЭТОМУ треку (VK web
+        // audio.getRecommendations target_audio), а не выдавать общий поток.
+        targetAudio: String? = null,
     ): Pair<Int, List<Track>> {
         if (isOffline()) return 0 to emptyList()
         // Fix #147: quality=hq для максимального качества в рекомендациях.
@@ -3020,9 +3030,36 @@ class VKApiClient(
             "count" to count.toString(),
             "offset" to offset.toString(),
         )
+        if (!targetAudio.isNullOrBlank()) args["target_audio"] = targetAudio
         if (prefs.data.first().musicHighQuality) args["quality"] = "hq"
         val json = call("audio.getRecommendations", args)
         return json?.let { parseAudioResponseWithCount(it) } ?: (0 to emptyList())
+    }
+
+    /**
+     * Fix #362 #AUDIO-MENU-REAL: audio.edit — правка СВОЕГО трека (артист/
+     * название) из меню «⋮» на вкладке «Моя музыка». Честный вызов VK API:
+     * для web-токена audio.edit может быть закрыт правами (как audio.add) —
+     * caller показывает реальную ошибку тостом, локальный апдейт списка
+     * только после успешного ответа.
+     *
+     * @return true если VK ответил {"response": 1}.
+     */
+    suspend fun audioEdit(ownerId: Long, audioId: Long, artist: String, title: String): Boolean {
+        if (isOffline()) return false
+        val args = mapOf(
+            "owner_id" to ownerId.toString(),
+            "audio_id" to audioId.toString(),
+            "artist" to artist,
+            "title" to title,
+        )
+        val json = call("audio.edit", args) ?: return false  // NULL-ЯВНО (Gson)
+        val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
+        if (!resp.isJsonPrimitive) return false
+        return try {
+            val prim = resp.asJsonPrimitive
+            if (prim.isBoolean) prim.asBoolean else prim.asInt == 1
+        } catch (_: Exception) { false }
     }
 
     /**

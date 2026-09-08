@@ -248,6 +248,10 @@ fun FeedScreen(
             // Fix #228: масштаб стикер-фото (default 0% = исходный размер).
             stickerPhotoScale = 0,
             privacyOfflineMode = false,
+            // Fix #360 #PROFILE-SUGGEST-TOGGLE: Snapshot расширился — dummy-snapshot
+            // обязан передать новое поле (класс бага Fix #276/#356). Default false
+            // синхрон с SovaPrefs (секция «Возможно, вы знакомы» скрыта по умолчанию).
+            profileFriendSuggestions = false,
             // Fix #DEFAULTS-OFF (2026-08-04): default=true → false (синхрон с SovaPrefs).
             privacyDeviceMask = false,
             privacyAntiTelemetry = true,
@@ -905,7 +909,19 @@ fun FeedScreen(
                 }
                 // Fix #100: синхронизируем кэш для следующего возврата из VideoPlayer.
                 FeedDataHolder.snapshot(allPosts, profiles, groups, nextFrom, endReached)
-                if (allPosts.isEmpty()) {
+                // Fix #358 #FEED-SECTION-EMPTY-GATE: разделы Реакции (LIKES) и Поиск
+                // (SEARCH) УМЫШЛЕННО возвращают пустой NewsfeedResult из fetchFeedPage
+                // (Реакции грузятся отдельным LaunchedEffect через likes.getList,
+                // Поиск ждёт запрос по полю ввода). Ставить сюда «Лента пуста» =
+                // убивать гейтом (errorText != null && posts.isEmpty()) весь UI
+                // раздела — поле поиска и подтабы Реакций становились недостижимы
+                // («в меню ленты поиск и реакции не работает ни то не другое»).
+                // Пусто в этих разделах — НОРМАЛЬНОЕ состояние; свои ошибки их
+                // loader'ы показывают сами (likesLoading/apiErrorMessage).
+                if (allPosts.isEmpty() &&
+                    feedFilterName != FeedFilter.LIKES.name &&
+                    feedFilterName != FeedFilter.SEARCH.name
+                ) {
                     val err = app.apiClient.lastApiError
                     errorText = if (err != null) "Ошибка API: $err" else "Лента пуста"
                 }
@@ -1033,7 +1049,13 @@ fun FeedScreen(
                     likesState[key] = (l.userLikes == 1) to l.count
                 }
             }
-            if (allPosts.isEmpty()) {
+            // Fix #358 #FEED-SECTION-EMPTY-GATE: тот же гейт, что в reloadFeed —
+            // первичная загрузка тоже может стартовать в разделе LIKES/SEARCH
+            // (feedFilterName — rememberSaveable, переживает process death).
+            if (allPosts.isEmpty() &&
+                feedFilterName != FeedFilter.LIKES.name &&
+                feedFilterName != FeedFilter.SEARCH.name
+            ) {
                 val err = app.apiClient.lastApiError
                 errorText = if (err != null) "Ошибка API: $err" else "Лента пуста"
             }
@@ -1294,7 +1316,33 @@ fun FeedScreen(
     // но аннотация пока остаётся.
     // #238: обёрнут в Box чтобы наложить scroll-to-top FAB (PullToRefreshBox
     // сам по себе не принимает overlay-контент).
-    Box(modifier = Modifier.fillMaxSize()) {
+    //
+    // Fix #359 #FEED-MENU-TOPBAR: ЗАКРЕПЛЁННАЯ ВЕРХНЯЯ ПАНЕЛЬ ленты — кнопка
+    // «меню ленты» перенесена из первого item LazyColumn (уезжала при скролле)
+    // в постоянную панель над списком (юзер: «кнопка "меню ленты" должна быть
+    // на верхней панели ленты»). Глобальный TopAppBar в SovaNavHost вне зоны
+    // FeedScreen (прецедент #FEED-MENU-VKWEB волны 23), поэтому верхняя панель
+    // ленты = эта закреплённая строка. Контент скроллится под ней (Box weight 1f).
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { showRightPanel = true },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.MenuOpen,
+                    contentDescription = "Меню ленты",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Box(modifier = Modifier.weight(1f)) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshFeed() },
@@ -1303,30 +1351,9 @@ fun FeedScreen(
             LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             item(key = "stories_row") {
                 Column {
-                    // #FEED-MENU-VKWEB (Fix #353): кнопка открытия правого бокового
-                    // меню ленты = «Список ленты» VK web (rightmenu §1.0.2:
-                    // навигация разделов Лента/Фотографии/Друзья/Поиск/Реакции +
-                    // «Редактировать»). Глобальный TopAppBar в SovaNavHost вне
-                    // зоны → кнопка в верхней зоне FeedScreen над списком (как
-                    // и в 19-A). 48dp, contentDescription для accessibility.
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(
-                            onClick = { showRightPanel = true },
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.MenuOpen,
-                                contentDescription = "Правое меню ленты",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+                    // Fix #359 #FEED-MENU-TOPBAR: кнопка «меню ленты» ПЕРЕНЕСЕНА
+                    // из этого item в закреплённую верхнюю панель над списком
+                    // (см. Column выше) — в VK web верхняя панель всегда видна.
                     // #FEED-FILTER-TOGGLE: панель разделов скрывается настройкой.
                     if (feedPrefs.feedShowFilter) {
                         FeedFilterBar(
@@ -1716,7 +1743,8 @@ fun FeedScreen(
                 }
             }
         }
-    }  // closes Box (PullToRefreshBox wrapper)
+        }  // closes Box (weight 1f — зона скролла под топ-панелью)
+    }  // closes Column (#FEED-MENU-TOPBAR: топ-панель + контент)
 
     // #FEED-MENU-VKWEB (Fix #353): правое боковое меню ленты — навигация
     // РАЗДЕЛОВ ленты («Список ленты» VK web, rightmenu §1.0.2 снапшота):

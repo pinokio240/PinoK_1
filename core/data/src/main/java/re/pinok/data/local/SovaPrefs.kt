@@ -148,6 +148,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Починка — отдельная задача (нужен periodic account.setOnline
             // ping через WorkManager, либо возврат filterUsersFields).
             privacyHideLastSeen = p[Keys.PRIVACY_HIDE_LAST_SEEN] ?: false,
+            // Fix #360 #PROFILE-SUGGEST-TOGGLE: показ блока «Возможно, вы знакомы»
+            // в профиле (вкладка «Стена», friends.getRecommendations).
+            // Default = FALSE — юзер: «включатель для отключения раздела
+            // (по умолчанию выкл)», т.е. секция по умолчанию СКРЫТА.
+            profileFriendSuggestions = p[Keys.PROFILE_FRIEND_SUGGESTIONS] ?: false,
 
             // Messages
             msgDnr             = p[Keys.MSG_DNR]                ?: false,
@@ -492,6 +497,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setFeedShowFilter(v: Boolean)             = put(Keys.FEED_SHOW_FILTER, v)
     /** #FEED-CAROUSEL (19-A): карусель фото в ленте (default true). */
     suspend fun setFeedCarouselEnabled(v: Boolean)      = put(Keys.FEED_CAROUSEL_ENABLED, v)
+    /** Fix #360 #PROFILE-SUGGEST-TOGGLE: показывать блок «Возможно, вы знакомы» в профиле (default false). */
+    suspend fun setProfileFriendSuggestions(v: Boolean) = put(Keys.PROFILE_FRIEND_SUGGESTIONS, v)
     /** #NET-SWITCH-POPUP: включить/выключить popup переключения сети. */
     suspend fun setNetSwitchPopupEnabled(v: Boolean)    = put(Keys.NET_SWITCH_POPUP_ENABLED, v)
 
@@ -883,6 +890,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val feedShowFilter: Boolean,
         /** #FEED-CAROUSEL (19-A): карусель фото в ленте для ЛЮБОГО числа фото >1 (default true). */
         val feedCarouselEnabled: Boolean,
+        /** Fix #360 #PROFILE-SUGGEST-TOGGLE: блок «Возможно, вы знакомы» в профиле (default false — скрыт). */
+        val profileFriendSuggestions: Boolean,
         /** #NET-SWITCH-POPUP: popup при переключении сети (default true). */
         val netSwitchPopupEnabled: Boolean,
         // Privacy
@@ -1203,6 +1212,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val FEED_SHOW_FILTER = booleanPreferencesKey("feed_show_filter")
         // #FEED-CAROUSEL (19-A): карусель фото в ленте (default true).
         val FEED_CAROUSEL_ENABLED = booleanPreferencesKey("feed_carousel_enabled")
+        /** Fix #360 #PROFILE-SUGGEST-TOGGLE: блок «Возможно, вы знакомы» в профиле (default false). */
+        val PROFILE_FRIEND_SUGGESTIONS = booleanPreferencesKey("profile_friend_suggestions")
         // #NET-SWITCH-POPUP: popup при переключении сети (default true).
         val NET_SWITCH_POPUP_ENABLED = booleanPreferencesKey("net_switch_popup_enabled")
         // Privacy
