@@ -1488,8 +1488,10 @@ private fun InterfaceTab(
                 checked = s.feedShowScrollFab,
             ) { scope.launch { app.prefs.setFeedShowScrollFab(it) } }
         }
-        // #FEED-CAROUSEL (19-A, волна 18-γ): карусель фото в ленте.
-        // Default: true — как в VK web (photo_page_carousel).
+        // #FEED-CAROUSEL (19-A, волна 18-γ) + #POST-CAROUSEL-EVERYWHERE (волна 22):
+        // ОДИН флаг управляет каруселью фото на ВСЕХ поверхностях — лента,
+        // сообщество, профиль, открытый пост. Default: true — как в VK web
+        // (photo_page_carousel / attachmentCarousel).
         item {
             FeedCarouselToggleRow(s = s, app = app, scope = scope)
         }
@@ -3645,13 +3647,14 @@ private fun FeedCarouselToggleRow(
         ) {
             Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
-                    "Карусель фото в ленте",
+                    "Карусель фото в постах",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
-                    "Посты с несколькими фото листаются свайпом и стрелками " +
-                        "со счётчиком. При выключении — прежний вид: 1-2 фото " +
-                        "листаются, 3+ показываются сеткой.",
+                    "Лента, сообщества, профили и открытый пост: несколько " +
+                        "фото листаются свайпом и стрелками со счётчиком. " +
+                        "При выключении — прежний вид: 1-2 фото листаются, " +
+                        "3+ показываются сеткой.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
