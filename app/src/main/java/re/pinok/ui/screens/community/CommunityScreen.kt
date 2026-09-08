@@ -84,6 +84,7 @@ import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
 import re.pinok.util.toCountString
@@ -202,6 +203,33 @@ fun CommunityScreen(
             } finally {
                 loading = false
             }
+        }
+    }
+
+    // #NAV-GROUP-VIDEO-RESTORE (Fix #344): сообщество загружено — пишем контекст
+    // восстановления (id). Стирание — в SovaNavHost при уходе с экрана Community.
+    LaunchedEffect(groupInfo) {
+        if (groupInfo != null) {
+            app.prefs.setLastCommunityId(groupId)
+        }
+    }
+    // #NAV-GROUP-VIDEO-RESTORE (Fix #344): однократная прокрутка стены к позиции
+    // до смерти процесса. Индекс сохраняется/восстанавливается в одних координатах
+    // LazyColumn (хедер + табы + посты) — пространство индексов идентично.
+    LaunchedEffect(posts) {
+        val target = CommunityRestoreHolder.pendingScroll
+        if (posts.isNotEmpty() && target >= 0 && selectedTab == 0) {
+            CommunityRestoreHolder.pendingScroll = -1
+            listState.scrollToItem(target)
+        }
+    }
+    // #NAV-GROUP-VIDEO-RESTORE (Fix #344): позиция стены пишется на каждой
+    // остановке скролла и после каждой загрузки постов (posts в ключах —
+    // иначе после загрузки без скролла в prefs остался бы протухший индекс).
+    // Process death dispose не вызывает, поэтому пишем постоянно, а не в onDispose.
+    LaunchedEffect(listState.isScrollInProgress, selectedTab, posts) {
+        if (selectedTab == 0 && !listState.isScrollInProgress && posts.isNotEmpty()) {
+            app.prefs.setLastCommunityScroll(listState.firstVisibleItemIndex)
         }
     }
 
@@ -1176,14 +1204,40 @@ private fun CommunityPostCard(
                 }
             }
             if (post.text.isNotBlank()) {
+                // #POST-TEXT-EXPAND (Fix #345): длинный текст разворачивается на
+                // месте; «Показать ещё» — только когда текст реально не влезает
+                // (hasVisualOverflow). Тап по свёрнутому тексту = развернуть,
+                // по развёрнутому = открыть пост (как раньше).
+                var textExpanded by remember { mutableStateOf(false) }
+                var textOverflowed by remember { mutableStateOf(false) }
                 Text(
                     text = post.text,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        .clickable { onPostClick(post) },
-                    maxLines = 10,
+                        .clickable {
+                            if (textExpanded) {
+                                onPostClick(post)
+                            } else {
+                                textExpanded = true
+                            }
+                        },
+                    onTextLayout = { result ->
+                        if (!textExpanded && result.hasVisualOverflow) textOverflowed = true
+                    },
+                    maxLines = if (textExpanded) Int.MAX_VALUE else 10,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (textOverflowed && !textExpanded) {
+                    Text(
+                        text = "Показать ещё",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF1976D2),
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .padding(start = 12.dp, bottom = 6.dp)
+                            .clickable { textExpanded = true },
+                    )
+                }
             }
             if (photoAttachments.isNotEmpty()) {
                 PhotoGrid(
@@ -1377,13 +1431,39 @@ private fun VideoThumbnail(video: Video, onClick: (Video) -> Unit) {
             if (video.title.isNotBlank() || video.views > 0 || video.commentsCount > 0) {
                 Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                     if (video.title.isNotBlank()) {
+                        // #POST-TEXT-EXPAND (Fix #345): длинное название видео
+                        // разворачивается тапом (перехватывает клик карточки;
+                        // тап по превью открывает видео как раньше, а тап по
+                        // развёрнутому названию — тоже открывает видео).
+                        var titleExpanded by remember { mutableStateOf(false) }
+                        var titleOverflowed by remember { mutableStateOf(false) }
                         Text(
                             text = video.title,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
-                            maxLines = 2,
+                            modifier = Modifier.clickable {
+                                if (titleExpanded) {
+                                    onClick(video)
+                                } else {
+                                    titleExpanded = true
+                                }
+                            },
+                            onTextLayout = { result ->
+                                if (!titleExpanded && result.hasVisualOverflow) titleOverflowed = true
+                            },
+                            maxLines = if (titleExpanded) Int.MAX_VALUE else 2,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        if (titleOverflowed && !titleExpanded) {
+                            Text(
+                                text = "Показать ещё",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF1976D2),
+                                modifier = Modifier
+                                    .padding(top = 2.dp)
+                                    .clickable { titleExpanded = true },
+                            )
+                        }
                     }
                     if (video.views > 0 || video.commentsCount > 0) {
                         val meta = buildList {

@@ -347,6 +347,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
             // Navigation
             lastRoute          = p[Keys.LAST_ROUTE]            ?: "feed",
+            // #NAV-GROUP-VIDEO-RESTORE (Fix #344): контекст сообщества для
+            // восстановления после смерти процесса (0 = нет контекста).
+            // NULL-ЯВНО: DataStore возвращает null при отсутствии ключа — дефолт
+            // обязателен; паттерн идентичен всему Snapshot-конструктору выше.
+            lastCommunityId     = p[Keys.LAST_COMMUNITY_ID]     ?: 0L, // NULL-ЯВНО
+            lastCommunityScroll = p[Keys.LAST_COMMUNITY_SCROLL] ?: 0,  // NULL-ЯВНО
 
             // Fix #189: Auth Domains Config — настраиваемые VK домены (.com/.ru)
             // Доступны ДО авторизации через шестерёнку на LandingScreen.
@@ -748,6 +754,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     suspend fun setLastRoute(v: String)                     = put(Keys.LAST_ROUTE, v)
 
+    // #NAV-GROUP-VIDEO-RESTORE (Fix #344): контекст сообщества для восстановления
+    // после смерти процесса. Стирание — в SovaNavHost при уходе с экрана Community.
+    suspend fun setLastCommunityId(v: Long)    = put(Keys.LAST_COMMUNITY_ID, v)
+    suspend fun setLastCommunityScroll(v: Int) = put(Keys.LAST_COMMUNITY_SCROLL, v)
+
     // Fix #189: Auth Domains Config setters — настраиваемые VK домены.
     suspend fun setAuthOauthHost(v: String)            = put(Keys.AUTH_OAUTH_HOST, v.trim())
     suspend fun setAuthIdHost(v: String)               = put(Keys.AUTH_ID_HOST, v.trim())
@@ -1000,6 +1011,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val lockerOnBackground: Boolean,
         // Navigation
         val lastRoute: String,
+        // #NAV-GROUP-VIDEO-RESTORE (Fix #344): сообщество для восстановления
+        // после смерти процесса (долгий просмотр видео).
+        val lastCommunityId: Long = 0L,
+        val lastCommunityScroll: Int = 0,
         // Fix #189: Auth Domains Config — настраиваемые VK домены.
         // Хосты без scheme (например "oauth.vk.com" или "oauth.vk.ru").
         // Scheme добавляется в AuthDomainsConfig при формировании URL.
@@ -1278,6 +1293,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val LOCKER_ON_BACKGROUND= booleanPreferencesKey("locker_on_background")
         // Navigation
         val LAST_ROUTE           = stringPreferencesKey("last_route")
+        // #NAV-GROUP-VIDEO-RESTORE (Fix #344): контекст сообщества.
+        val LAST_COMMUNITY_ID    = longPreferencesKey("last_community_id")
+        val LAST_COMMUNITY_SCROLL = intPreferencesKey("last_community_scroll")
         // Fix #189: Auth Domains Config — настраиваемые VK домены.
         val AUTH_OAUTH_HOST      = stringPreferencesKey("auth_oauth_host")
         val AUTH_ID_HOST         = stringPreferencesKey("auth_id_host")

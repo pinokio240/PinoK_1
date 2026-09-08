@@ -86,6 +86,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.contracts.CallStarter
@@ -634,6 +635,42 @@ fun SovaNavHost(
         if (rawRoute != null && rawRoute in mainRoutes) {
             app.prefs.setLastRoute(rawRoute)
         }
+    }
+
+    // #NAV-GROUP-VIDEO-RESTORE (Fix #344): восстановление сообщества после смерти
+    // процесса. Сценарий: пользователь в сообществе смотрит видео (оверлей), система
+    // убивает процесс (долгий просмотр/память). Холодный старт ставит
+    // startDestination = lastRoute, но Community — detail-экран и в lastRoute
+    // не пишется → пользователь попадает в СПИСОК ГРУПП. Здесь однократно
+    // восстанавливаем контекст (id + позиция скролла стены).
+    // rememberSaveable-флаг: переживает recreation Activity (без дубля в стеке),
+    // умирает вместе с процессом (после смерти восстановление нужно снова).
+    var communityRestoreDone by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (communityRestoreDone) return@LaunchedEffect
+        communityRestoreDone = true
+        val snap = app.prefs.data.first()
+        if (snap.lastCommunityId > 0L) {
+            AppLog.i(
+                "SovaNavHost",
+                "#NAV-GROUP-VIDEO-RESTORE: restore community ${snap.lastCommunityId}, scroll=${snap.lastCommunityScroll}",
+            )
+            CommunityRestoreHolder.pendingScroll = snap.lastCommunityScroll
+            nav.navigate(Screen.Community.buildRoute(snap.lastCommunityId))
+        }
+    }
+    // Уход с Community (back или вперёд на другой экран) — контекст восстановления
+    // больше не нужен: обычный выход из сообщества не должен «авто-возвращать»
+    // при следующем запуске. Смерть процесса этот эффект не запускает →
+    // контекст выживает → восстановление сработает.
+    var prevRawRoute by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(rawRoute) {
+        val prev = prevRawRoute
+        if (prev == Screen.Community.route && rawRoute != Screen.Community.route) {
+            app.prefs.setLastCommunityId(0L)
+            app.prefs.setLastCommunityScroll(0)
+        }
+        prevRawRoute = rawRoute
     }
 
     // Fix #52-B: истории обновляются при возврате на Feed из детальных экранов.
@@ -2590,6 +2627,18 @@ object VideoHolder {
     fun close() {
         _active.value = null
     }
+}
+
+/**
+ * #NAV-GROUP-VIDEO-RESTORE (Fix #344): индекс стены сообщества (в координатах
+ * LazyColumn: хедер + табы + посты), на который прокрутиться после однократного
+ * восстановления контекста. Ставится в SovaNavHost перед navigate, потребляется
+ * (сброс в -1) в CommunityScreen после загрузки постов. Шаблон — как
+ * VideoHolder/PostHolder: процессная синглтоны, переживают recreation Activity.
+ */
+object CommunityRestoreHolder {
+    @Volatile
+    var pendingScroll: Int = -1
 }
 
 /**
