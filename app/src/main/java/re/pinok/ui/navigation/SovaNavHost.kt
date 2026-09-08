@@ -22,6 +22,8 @@ import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+// Fix #369: иконка «Выйти из аккаунта» в drawer (уже используется в ProfileScreen).
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.outlined.MenuOpen
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CloudOff
@@ -793,6 +795,23 @@ listOf(
             .filter { it.route !in bottomHiddenRoutes }
     }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    // Fix #370 #LOGOUT-HOLDER-CLEAR: обёртка над onLogout — ПЕРЕД сменой аккаунта
+    // сбрасываем in-memory кэши UI (holders — package-level объекты в хвосте
+    // этого файла). Без этого после повторного входа ДРУГИМ аккаунтом FeedScreen
+    // мигает чужой лентой (FeedDataHolder.allPosts читается в FeedScreen при
+    // инициализации), PostDetail показывает чужой пост (PostHolder.last),
+    // истории — чужие (StoriesHolder). Вызовы идут ДО mainActivity-логики
+    // (longPoll stop → signOut → cookies/storage clear → AuthActivity):
+    // кэш не должен пережить logout. FeedDataHolder.clear() дополнительно
+    // сбрасывает FeedScrollHolder.position — идемпотентно.
+    val onLogoutWithHoldersClear: () -> Unit = {
+        VideoHolder.clear()
+        PostHolder.clear()
+        FeedScrollHolder.clear()
+        FeedDataHolder.clear()
+        StoriesHolder.clear()
+        onLogout()
+    }
     // #247: отдельный диалог выхода из приложения (не из аккаунта).
     // Авторизация при этом сохраняется — при следующем запуске пользователь
     // сразу попадёт в ленту без повторного логина.
@@ -964,14 +983,16 @@ listOf(
     // Раньше было 280dp * fontScale (240..420dp) — пользователь видел слишком
     // широкий drawer. Теперь измеряем самый длинный заголовок через
     // TextMeasurer и добавляем отступы (иконка + padding + запас).
-    // Самые длинные пункты: «Выйти из приложения» (19), «Уведомления» (11),
-    // «Сообщества» (10), «Документы» (9).
+    // Самые длинные пункты: «Выйти из приложения» (19), «Выйти из аккаунта» (18),
+    // «Уведомления» (11), «Сообщества» (10), «Документы» (9).
     val textMeasurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val drawerTextStyle = MaterialTheme.typography.labelLarge
     val longestDrawerText = remember(allScreens, containerNavEntries) {
-        // allScreens + контейнерные NavEntry + «Выйти из приложения» (отдельная кнопка в drawer).
-        val titles = allScreens.map { it.title } + containerNavEntries.map { it.title } + "Выйти из приложения"
+        // allScreens + контейнерные NavEntry + фиксированный хвост drawer:
+        // «Выйти из приложения» И «Выйти из аккаунта» (Fix #369 — отдельные кнопки).
+        val titles = allScreens.map { it.title } + containerNavEntries.map { it.title } +
+            listOf("Выйти из приложения", "Выйти из аккаунта")
         titles.maxByOrNull { it.length } ?: "PinoK"
     }
     val drawerWidth = remember(textMeasurer, longestDrawerText, density.fontScale) {
@@ -1136,10 +1157,27 @@ listOf(
                             Icon(Screen.Settings.icon ?: Icons.Default.Settings, contentDescription = null)
                         },
                     )
+                    // Fix #369: «Выйти из аккаунта» — ПОЛНЫЙ logout: диалог-
+                    // предупреждение → onLogoutWithHoldersClear (сброс in-memory
+                    // кэшей holders → mainActivity-логика: longPoll stop →
+                    // signOut → cookies+storage clear → AuthActivity). Раньше
+                    // полный logout жил только глубоко в ProfileScreen. ЭТО
+                    // РАЗНОЕ действие с пунктом ниже («Выйти из приложения» —
+                    // finishAffinity с СОХРАНЕНИЕМ авторизации). Порядок хвоста:
+                    // Настройки → Выйти из аккаунта → Выйти из приложения.
+                    NavigationDrawerItem(
+                        label = { Text("Выйти из аккаунта") },
+                        selected = false,
+                        onClick = {
+                            scope.launch { drawerState.close() }
+                            showLogoutDialog = true
+                        },
+                        icon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                    )
                     // #247: «Выйти из приложения» — закрывает приложение целиком,
                     // сохраняя авторизацию. При следующем запуске пользователь
-                    // сразу попадёт в ленту. Полный logout из аккаунта —
-                    // в ProfileScreen (отдельная кнопка «Выйти из аккаунта»).
+                    // сразу попадёт в ленту. Полный logout из аккаунта — пункт
+                    // ВЫШЕ «Выйти из аккаунта» (Fix #369) и в ProfileScreen.
                     NavigationDrawerItem(
                         label = { Text("Выйти из приложения") },
                         selected = false,
@@ -1586,7 +1624,10 @@ listOf(
                 }
                 composable(Screen.Profile.route) {
                     ProfileScreen(
-                        onLogout = onLogout,
+                        // Fix #370 #LOGOUT-HOLDER-CLEAR: обёртка с сбросом
+                        // in-memory кэшей holders перед mainActivity-логикой
+                        // (та же обёртка, что у drawer-пункта «Выйти из аккаунта»).
+                        onLogout = onLogoutWithHoldersClear,
                         // Fix #70: навигация на видеоплеер из постов на стене профиля.
                         onVideoClick = { video ->
                             VideoHolder.open(video)
@@ -2496,14 +2537,24 @@ composable(Screen.CallsHistory.route) {
         )
     }
     if (showLogoutDialog) {
+        // Fix #369: диалог-предупреждение перед ПОЛНЫМ logout. Confirm —
+        // onLogoutWithHoldersClear (сброс in-memory кэшей + mainActivity-логика:
+        // longPoll stop → signOut → clearAllVkCookies + storage.clear() →
+        // PendingAuthResult.clear → authVersion++ → AuthActivity).
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
             title = { Text("Выйти из аккаунта?") },
+            text = {
+                Text(
+                    "Сессия будет остановлена, куки авторизации будут очищены. " +
+                        "Потребуется повторный вход."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     showLogoutDialog = false
-                    onLogout()
-                }) { Text("Да") }
+                    onLogoutWithHoldersClear()
+                }) { Text("Выйти") }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) { Text("Отмена") }
@@ -2633,6 +2684,16 @@ object VideoHolder {
     fun close() {
         _active.value = null
     }
+
+    /**
+     * Fix #370 #LOGOUT-HOLDER-CLEAR: полный сброс при logout — и overlay-состояние
+     * (active), и запомненный ролик (last). Иначе после повторного входа другим
+     * аккаунтом VideoHolder «подхватывает» видео предыдущей сессии.
+     */
+    fun clear() {
+        last = null
+        _active.value = null
+    }
 }
 
 /**
@@ -2658,6 +2719,16 @@ object PostHolder {
     // Fix #99: группы для отображения имени сообщества в PostDetailScreen.
     @Volatile
     var lastGroups: Map<Long, re.pinok.api.VKApiClient.GroupInfo>? = null
+
+    /**
+     * Fix #370 #LOGOUT-HOLDER-CLEAR: сброс последнего поста и мапы групп при
+     * logout — PostDetailScreen после повторного входа другим аккаунтом не
+     * должен показывать пост предыдущей сессии.
+     */
+    fun clear() {
+        last = null
+        lastGroups = null
+    }
 }
 
 /**
@@ -2708,6 +2779,15 @@ data class ScrollPosition(val index: Int, val offset: Int)
 
 object FeedScrollHolder {
     @Volatile var position = ScrollPosition(0, 0)
+
+    /**
+     * Fix #370 #LOGOUT-HOLDER-CLEAR: сброс сохранённой позиции скролла ленты —
+     * индексы ленты предыдущего аккаунта не имеют смысла после смены аккаунта.
+     * (Вызывается также из FeedDataHolder.clear() — идемпотентно.)
+     */
+    fun clear() {
+        position = ScrollPosition(0, 0)
+    }
 }
 
 /**

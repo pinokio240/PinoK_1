@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
 import android.content.SharedPreferences
+import android.webkit.CookieManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.compose.runtime.getValue
@@ -335,6 +336,26 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     val tokenInvalidationTicks: MutableStateFlow<Int> = MutableStateFlow(0)
 
     /**
+     * Fix #377 #DOZE-RESUME-RELOAD: счётчик возвратов приложения в foreground.
+     *
+     * Инкрементируется НЕМЕДЛЕННО (без debounce) в ProcessLifecycleOwner
+     * ON_RESUME-хуке — см. [setupCookieBackgroundRefresh]. Экраны собирают этот
+     * Flow и перезагружают «застрявшее» ошибочное состояние после глубокого сна:
+     * LaunchedEffect(Unit) у экрана НЕ перезапускается на resume (композиция
+     * пережила сон), а cache-guard'ы пропускают первичную загрузку — без тика
+     * экран навсегда показывает ошибку, даже когда сеть уже восстановилась.
+     *
+     * StateFlow (не SharedFlow) — новые подписчики сразу получают текущее
+     * значение; первый тик после композиции экрана отфильтровывается
+     * проверкой tick > 0 у потребителя (перезагрузка нужна только на СМЕНЕ
+     * состояния foreground, а не на первом кадре).
+     *
+     * Сейчас потребители: FeedScreen (Fix #377 — лента). Другие экраны сознательно
+     * не расширяются (scope — лента; музыка уже имеет свой авто-reload Fix #367).
+     */
+    val foregroundTicks: MutableStateFlow<Int> = MutableStateFlow(0)
+
+    /**
      * Fix #176-auth-loop: throttle для notifyTokenInvalidated.
      *
      * Сценарий из лога 2026-08-04 12:36:43–12:37:10: после первого error 5
@@ -476,6 +497,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     private val foregroundSyncMutex = kotlinx.coroutines.sync.Mutex()
 
                     override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
+                        // Fix #377 #DOZE-RESUME-RELOAD: инкремент foreground-тика
+                        // НЕМЕДЛЕННО, до debounce-cookie-sync — экраны (сейчас
+                        // FeedScreen) ждут этот сигнал чтобы перезагрузить
+                        // «застрявшее» ошибочное состояние после глубокого сна.
+                        val prevForegroundTick = foregroundTicks.value
+                        foregroundTicks.value = prevForegroundTick + 1
                         val now = System.currentTimeMillis()
                         // Debounce 30с: быстрые activity transitions не должны
                         // вызывать множественные CookieManager reads.
@@ -512,6 +539,16 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                                         "remixnsid=${if (result.remixnsidChanged) "rotated" else "same"}")
                                 } else {
                                     AppLog.d("SovaApp", "cookieSync: foreground sync — no changes (all 3 match CookieManager)")
+                                }
+                                // Fix #377 #DOZE-COOKIE-FLUSH: после чтения кукисов
+                                // сбрасываем CookieManager на диск. Doze может убить
+                                // WebView-процесс — незаflush'енные ротации (remixsid/p/
+                                // remixnsid) при этом теряются, и Path 1.5 остаётся со
+                                // stale-копией. flush() — дешёвый sync-вызов, безопасен.
+                                try {
+                                    CookieManager.getInstance().flush()
+                                } catch (e: Exception) {
+                                    AppLog.w("SovaApp", "cookieSync: CookieManager.flush() failed: ${e.message}")
                                 }
                             } catch (e: Exception) {
                                 AppLog.w("SovaApp", "cookieSync: foreground sync failed: ${e.message}")
@@ -1014,17 +1051,35 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // exchangeStorage создан выше (строка ~662) — доступен здесь.
             .cookieJar(re.pinok.mods.network.VkCookieJar(exchangeStorage))
             // #CALLS: OkHttp/Java InetAddress не резолвит calls.okcdn.ru (IPv6-проблема),
-            // хотя системный WebView резолвит. Для okcdn-хостов используем захардкоженный
-            // IPv4 (из ping: 155.212.204.12). Для остальных — стандартный Dns.SYSTEM.
+            // хотя системный WebView резолвит. Для okcdn-хостов используем IPv4
+            // (из ping: 155.212.204.12 — file-level константа AUTO_IP ниже).
+            // Для остальных хостов — стандартный Dns.SYSTEM.
+            //
+            // #CALLS-DNS-PIN (Task 26-2-b): ручной IPv4 из Настройки → Звонки
+            // (prefs.callsDnsPinIp) перекрывает встроенный AUTO_IP. lookup()
+            // вызывается OkHttp на КАЖДОЕ новое соединение, поэтому читаем
+            // @Volatile prefsSnapshot прямо здесь — смена IP применяется БЕЗ
+            // перезапуска (уже установленный WS-сигналинг не рвём — новый
+            // адрес возьмётся при ближайшем reconnect). Пустой/невалидный
+            // ручной IP → авто (AUTO_IP). Прокси-режим не конфликтует: при
+            // CONNECT hostname резолвит прокси-сторона (см. комментарий про
+            // proxy ниже), этот Dns просто не вызывается.
             .dns(object : okhttp3.Dns {
-                private val pinned = mapOf(
-                    "calls.okcdn.ru" to "155.212.204.12",
-                    "calls-test.okcdn.ru" to "155.212.204.12",
-                    "api.mycdn.me" to "155.212.204.12",
+                private val pinnedHosts = setOf(
+                    "calls.okcdn.ru",
+                    "calls-test.okcdn.ru",
+                    "api.mycdn.me",
                 )
                 override fun lookup(hostname: String): List<java.net.InetAddress> {
-                    val ip = pinned[hostname.lowercase()]
-                    if (ip != null) {
+                    if (hostname.lowercase() in pinnedHosts) {
+                        var ip = AUTO_IP
+                        val snap = prefsSnapshot
+                        if (snap != null) {
+                            val manual = snap.callsDnsPinIp.trim()
+                            if (manual.isNotEmpty() && isValidIpv4(manual)) {
+                                ip = manual
+                            }
+                        }
                         return listOf(java.net.InetAddress.getByName(ip))
                     }
                     return okhttp3.Dns.SYSTEM.lookup(hostname)
@@ -2334,4 +2389,40 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         fun get(context: Context): SovaApp =
             context.applicationContext as? SovaApp ?: get()
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  #CALLS-DNS-PIN (Task 26-2-b): file-level хелперы DNS-пина звонков.
+//
+//  Встроенный IPv4 для okcdn-доменов звонков (calls.okcdn.ru /
+//  calls-test.okcdn.ru / api.mycdn.me). OkHttp/Java InetAddress не резолвит
+//  calls.okcdn.ru (IPv6-проблема) — см. Dns-объект в onCreate. Ручной IP из
+//  Настройки → Звонки (callsDnsPinIp) перекрывает это значение; пустой/
+//  невалидный ручной IP → снова встроенный.
+//  File-level private — виден только внутри SovaApp.kt (политика #NULL-ЯВНО
+//  распространяется на сами проверки в lookup, а не на имена хелперов).
+// ══════════════════════════════════════════════════════════════════════════
+private const val AUTO_IP = "155.212.204.12"
+
+/**
+ * #CALLS-DNS-PIN: проверка строкового IPv4 — ровно 4 октета, только цифры,
+ * каждый 0..255, длина октета 1..3 символа. Ведущие нули отсечены намеренно:
+ * java.net.InetAddress.getByName трактует «012» как ВОСЬМЕРИЧНУЮ запись, и
+ * пин ушёл бы на другой адрес, чем показал бы валидатор/поле настроек.
+ * Дубликат с SettingsScreen.kt (там своя file-level private копия) —
+ * допустим по спецификации задачи: file-level private наружу не виден.
+ */
+private fun isValidIpv4(s: String): Boolean {
+    val parts = s.split(".")
+    if (parts.size != 4) return false
+    for (part in parts) {
+        if (part.isEmpty() || part.length > 3) return false
+        for (ch in part) {
+            if (ch < '0' || ch > '9') return false
+        }
+        if (part.length > 1 && part[0] == '0') return false
+        val octet = part.toInt()
+        if (octet < 0 || octet > 255) return false
+    }
+    return true
 }

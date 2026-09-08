@@ -1271,9 +1271,22 @@ object WebTokenAuth {
      * Удаляет ВСЕ ключи localStorage, заканчивающиеся на ":web_token:login:auth".
      * Нужно перед reload m.vk.ru — иначе JS видит существующий (пусть и истёкший)
      * токен и не делает POST login.vk.com/?act=web_token.
+     *
+     * Fix #370 #LOGOUT-WEBTOKEN-CLEAR: видимость private → internal — вызывается
+     * также из Auth-flow при запуске после logout (см. [clearAllWebTokenKeysNow]).
      */
-    private suspend fun clearAllWebTokenKeys(webView: WebView) {
-        val js = "(function(){var keys=Object.keys(localStorage);" +
+    internal suspend fun clearAllWebTokenKeys(webView: WebView) {
+        val removed = evaluateJsSafely(webView, CLEAR_WEB_TOKEN_KEYS_JS)
+        val removedLog = if (removed != null) removed else "(none)"
+        AppLog.i(TAG, "clearAllWebTokenKeys: removed keys = $removedLog")
+    }
+
+    // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: JS для удаления ВСЕХ ключей localStorage,
+    // заканчивающихся на ":web_token:login:auth" (тот же, что в §49
+    // #WEB-TOKEN-RELOAD). Вынесен в const — общий для suspend-варианта
+    // [clearAllWebTokenKeys] и fire-and-forget [clearAllWebTokenKeysNow].
+    private const val CLEAR_WEB_TOKEN_KEYS_JS =
+        "(function(){var keys=Object.keys(localStorage);" +
             "var removed=[];" +
             "keys.forEach(function(k){" +
             "  if(k.indexOf(':web_token:login:auth')>-1 && k.length - ':web_token:login:auth'.length === k.lastIndexOf(':web_token:login:auth')){" +
@@ -1282,8 +1295,22 @@ object WebTokenAuth {
             "});" +
             "return removed.join(',');" +
             "})()"
-        val removed = evaluateJsSafely(webView, js)
-        AppLog.i(TAG, "clearAllWebTokenKeys: removed keys = ${removed ?: "(none)"}")
+
+    /**
+     * Fix #370 #LOGOUT-WEBTOKEN-CLEAR: НЕ-suspend (fire-and-forget) вариант
+     * [clearAllWebTokenKeys] — для вызова из WebViewClient.onPageFinished
+     * (там нет suspend-контекста). Тот же JS ([CLEAR_WEB_TOKEN_KEYS_JS]),
+     * список удалённых ключей логируется в evaluateJavascript-callback.
+     *
+     * Контракт: вызывать на UI-потоке и только когда WebView УЖЕ на origin
+     * m.vk.ru/m.vk.com — localStorage действует на origin текущего документа
+     * (на about:blank/id.vk.ru очистка ушла бы в другой storage).
+     */
+    internal fun clearAllWebTokenKeysNow(webView: WebView) {
+        webView.evaluateJavascript(CLEAR_WEB_TOKEN_KEYS_JS) { removed ->
+            val logValue = if (removed != null) removed else "(none)"
+            AppLog.i(TAG, "clearAllWebTokenKeysNow: removed keys = $logValue")
+        }
     }
 
     /**

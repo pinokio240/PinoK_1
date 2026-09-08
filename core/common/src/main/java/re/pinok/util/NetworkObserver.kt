@@ -362,6 +362,29 @@ class NetworkObserver(private val context: Context) {
 
     fun isOffline(): Boolean = !_isOnline.value
 
+    /**
+     * Fix #377 #DOZE-RESUME-NET: принудительный FRESH-снапшот сети.
+     *
+     * После глубокого сна (Doze) колбэки ConnectivityManager могли не прийти
+     * (система не доставляет их заблокированному процессу) → [_isOnline] держит
+     * STALE-значение (например true с прошлого foreground). Первый silent
+     * re-login при возврате в приложение играет гонку с ещё-поднимающимся
+     * Wi-Fi: WebView-таймаут 30с → RESULT_CANCELED → вечный StartupLoadingScreen
+     * (StateFlow давно true — НОВОЙ emission не будет, Fix #341 не срабатывает).
+     *
+     * [MainActivity.onResume] вызывает это ПЕРВЫМ делом при isBackgrounded —
+     * до checkTokenValidity — чтобы весь resume-контур auth/retry читал
+     * реальное состояние сети. Вызов идемпотентен: если значение не изменилось,
+     * StateFlow не эмитит (дедуп равных значений).
+     */
+    fun refreshNow() {
+        val fresh = checkOnline()
+        if (fresh != _isOnline.value) {
+            AppLog.i("NetworkObserver", "refreshNow: stale ${_isOnline.value} → fresh $fresh (Fix #377 #DOZE-RESUME-NET)")
+        }
+        _isOnline.value = fresh
+    }
+
     /** Connection type string for display (e.g. in settings). */
     fun connectionType(): String {
         val connectivityManager = cm ?: return "none"

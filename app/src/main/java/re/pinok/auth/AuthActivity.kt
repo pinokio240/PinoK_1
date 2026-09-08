@@ -208,6 +208,18 @@ class AuthActivity : ComponentActivity() {
             setTheme(R.style.Theme_PinoK_Silent)
             AppLog.i(TAG, "onCreate — SILENT mode (transparent theme, Fix #339)")
         }
+        // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: причина запуска. "logout" →
+        // WebView-шаг 1 очистит старые web_token-ключи из localStorage m.vk.ru
+        // до первого обмена (см. VkAuthWebViewScreenV2.clearStoredWebTokenOnLoad).
+        val authIntent = intent
+        val clearStoredWebToken = if (authIntent != null) {
+            authIntent.getStringExtra(EXTRA_AUTH_REASON) == "logout"
+        } else {
+            false
+        }
+        if (clearStoredWebToken) {
+            AppLog.i(TAG, "onCreate — reason=logout: web_token localStorage будет очищен в WebView-шаге 1")
+        }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         AppLog.i(TAG, "onCreate — WebView m.vk.ru (primary) + Direct Auth (deep fallback)")
@@ -265,6 +277,9 @@ class AuthActivity : ComponentActivity() {
                         AuthScreen(
                             viewModel = viewModel,
                             silentMode = silentMode,
+                            // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: запуск после logout —
+                            // WebView-шаг 1 очистит старые web_token-ключи.
+                            clearStoredWebToken = clearStoredWebToken,
                             onSuccess = {
                                 AppLog.i(TAG, "Auth success — finishing with RESULT_OK")
                                 PendingAuthResult.clear()
@@ -499,6 +514,17 @@ class AuthActivity : ComponentActivity() {
          */
         const val EXTRA_SILENT_MODE = "silent_mode"
 
+        /**
+         * Fix #370 #LOGOUT-WEBTOKEN-CLEAR: причина запуска AuthActivity.
+         * MainActivity ставит "logout" в logout-пути (launchAuth). При
+         * reason="logout" WebView-шаг 1 (VkAuthWebViewScreenV2) удаляет ВСЕ
+         * ключи *:web_token:login:auth из localStorage m.vk.ru ДО первого
+         * обмена — иначе валидный web_token предыдущего аккаунта оставался
+         * в localStorage и следующий логин мог «молча» вернуть токен старого
+         * аккаунта (WebTokenAuth.tryReadWebToken берёт первый валидный ключ).
+         */
+        const val EXTRA_AUTH_REASON = "auth_reason"
+
         fun launch(activity: Activity) {
             activity.startActivity(Intent(activity, AuthActivity::class.java))
         }
@@ -531,6 +557,10 @@ private fun AuthScreen(
     onOfflineMode: () -> Unit,
     onLaunchWebView: () -> Unit,
     silentMode: Boolean = false,
+    // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: запуск после logout (EXTRA_AUTH_REASON=
+    // "logout") — WebView-шаг 1 удаляет старые *:web_token:login:auth ключи
+    // из localStorage m.vk.ru до первого обмена (см. VkAuthWebViewScreenV2).
+    clearStoredWebToken: Boolean = false,
     // Fix #187: запуск внешнего браузера (Chrome/Яндекс) для OAuth.
     // AuthActivity передаёт сюда лямбду, которая вызывает ExternalBrowserLauncher.
     onLaunchExternalBrowser: () -> Unit = {},
@@ -703,6 +733,15 @@ private fun AuthScreen(
                                 remixmvkFp = cookies.remixmvkFp,
                             )
                             app.exchangeAuthRepository.saveRemixsid(captured)
+                            // Fix #377 #DOZE-COOKIE-FLUSH: после сохранения cookie-set
+                            // сбрасываем CookieManager на диск — иначе незаflush'енные
+                            // ротации кукисов теряются при смерти WebView-процесса
+                            // (Doze), и Path 1.5 остаётся со stale-копией.
+                            try {
+                                CookieManager.getInstance().flush()
+                            } catch (e: Exception) {
+                                AppLog.w("AuthActivity", "#DOZE-COOKIE-FLUSH: CookieManager.flush() failed: ${e.message}")
+                            }
                             AppLog.i("AuthActivity",
                                 "#VKAUTH-V2: cookie-set сохранён в storage " +
                                 "(remixsid len=${remixsid.length}, " +
@@ -762,6 +801,9 @@ private fun AuthScreen(
                     }
                 },
                 silentMode = silentMode,
+                // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: проброс причины "logout" в
+                // WebView-шаг 1 — очистка старых web_token-ключей localStorage.
+                clearStoredWebTokenOnLoad = clearStoredWebToken,
                 modifier = Modifier.fillMaxSize(),
             )
             AuthPhase.TWO_FA -> ValidationCodeForm(

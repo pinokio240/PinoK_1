@@ -1007,6 +1007,44 @@ fun FeedScreen(
         }
     }
 
+    // Fix #377 #DOZE-RESUME-RELOAD (H3 из разведки 26-1-d): после глубокого сна
+    // экраны кроме музыки не перезагружаются на resume. Лента «застревает» на
+    // ошибке: LaunchedEffect(Unit) первичной загрузки НЕ перезапускается
+    // (композиция пережила сон), а cache-guard (FeedDataHolder.allPosts != null)
+    // пропускает повторную загрузку. Сеть к моменту возврата уже поднялась,
+    // но никто не перечитывает ленту — помогает только свернуть/развернуть app.
+    //
+    // Паттерн 1:1 MusicScreen (Fix #367: авто-перезагрузка при возврате сети),
+    // расширенный foreground-тиком из SovaApp.foregroundTicks (инкремент в
+    // ProcessLifecycleOwner ON_RESUME — немедленно, без debounce).
+    // Условия перезагрузки: экран в ошибочном состоянии (errorText != null),
+    // постов нет, сеть реально есть (isOffline=false — значение читается из
+    // состояния в момент emission), авто-офлайн (#38) не активен — иначе
+    // reloadFeed молча вернёт пусто и ошибка перезапишется впустую.
+    // reloadFeed сам защищён feedJobRunning-гардом от параллельных запусков.
+    LaunchedEffect(Unit) {
+        // (1) Возврат в foreground после сна — немедленная перезагрузка.
+        launch {
+            app.foregroundTicks.collect { tick ->
+                if (tick <= 0) return@collect
+                val hasError = errorText != null
+                if (hasError && posts.isEmpty() && !isOffline && !feedPrefs.privacyOfflineMode) {
+                    AppLog.i("FeedScreen", "foregroundTick=$tick — лента с ошибкой и без постов, авто-reload (#DOZE-RESUME-RELOAD)")
+                    reloadFeed()
+                }
+            }
+        }
+        // (2) Восстановление сети, пока экран открыт с ошибкой — как в MusicScreen.
+        var wasOnline = app.networkObserver.isOnline()
+        app.networkObserver.isOnlineFlow.collect { online ->
+            if (online && !wasOnline && errorText != null && posts.isEmpty() && !feedPrefs.privacyOfflineMode) {
+                AppLog.i("FeedScreen", "сеть восстановилась при открытой ошибке — авто-reload (#DOZE-RESUME-RELOAD)")
+                reloadFeed()
+            }
+            wasOnline = online
+        }
+    }
+
     // Sprint 1, P0-4 (#77): pull-to-refresh — перезагрузка ленты с spinner'ом.
     fun refreshFeed() {
         if (feedJobRunning) return
@@ -1331,6 +1369,43 @@ fun FeedScreen(
             AppLog.d("FeedScreen", "Scroll restore skip: saved index=0 (top), feedReloadKey=$feedReloadKey")
         }
         scrollRestored = true
+    }
+
+    // ─── #FEED-MENU-VKWEB (Fix #353) → Fix #368: правое боковое меню ленты ───
+    // Размещён ДО loading/error-ранних return'ов — панель меню открывается из
+    // любого состояния экрана (триггер в глобальном TopBar). Раньше вызов стоял
+    // после return'ов: на скелетоне/ошибке showRightPanel=true записывался
+    // «в пустоту» (панель вне композиции) и «сама выскакивала» после загрузки.
+    // Прецедент: NotificationsScreen (bottom-sheet «Фильтр» до return'ов).
+    //
+    // zIndex(1f): этот вызов стоит ВЫШЕ контента по коду (иначе ранние return'
+    // его пропускают), а сиблинги в Compose рисуются в порядке композиции —
+    // без zIndex Scrim/панель оказались бы ПОД карточками ленты. zIndex
+    // поднимает оверлей над всеми сиблингами (лента/FAB — zIndex 0).
+    //
+    // Навигация РАЗДЕЛОВ ленты («Список ленты» VK web, rightmenu §1.0.2
+    // снапшота): Лента/Фотографии/Друзья/Поиск/Реакции переключают
+    // feedFilterName с перезагрузкой (см. onSelect у FeedFilterBar),
+    // «Редактировать» уводит на «Скрытые источники» (Screen.FeedHidden).
+    // Прежние секции 19-A (друзья онлайн/возможные друзья/сообщества/закладки)
+    // удалены по требованию юзера — в VK web rightmenu их нет.
+    Box(modifier = Modifier.zIndex(1f)) {
+        FeedRightPanel(
+            visible = showRightPanel,
+            currentFilterName = feedFilterName,
+            onDismiss = { showRightPanel = false },
+            onSectionSelected = { filterName ->
+                showRightPanel = false
+                if (filterName != feedFilterName) {
+                    feedFilterName = filterName
+                    reloadFeed()
+                }
+            },
+            onOpenHiddenSources = {
+                showRightPanel = false
+                onOpenHiddenSources()
+            },
+        )
     }
 
     if (loading) {
@@ -1819,29 +1894,9 @@ fun FeedScreen(
         }  // closes Box (weight 1f — скролл-зона ленты)
     }  // closes Column (Fix #363: закреплённая строка удалена, кнопка — на TopAppBar)
 
-    // #FEED-MENU-VKWEB (Fix #353): правое боковое меню ленты — навигация
-    // РАЗДЕЛОВ ленты («Список ленты» VK web, rightmenu §1.0.2 снапшота):
-    // Лента/Фотографии/Друзья/Поиск/Реакции переключают feedFilterName с
-    // перезагрузкой (см. onSelect у FeedFilterBar), «Редактировать» уводит
-    // на «Скрытые источники» (Screen.FeedHidden). Прежние секции 19-A
-    // (друзья онлайн/возможные друзья/сообщества/закладки) удалены по
-    // требованию юзера — в VK web rightmenu их нет.
-    FeedRightPanel(
-        visible = showRightPanel,
-        currentFilterName = feedFilterName,
-        onDismiss = { showRightPanel = false },
-        onSectionSelected = { filterName ->
-            showRightPanel = false
-            if (filterName != feedFilterName) {
-                feedFilterName = filterName
-                reloadFeed()
-            }
-        },
-        onOpenHiddenSources = {
-            showRightPanel = false
-            onOpenHiddenSources()
-        },
-    )
+    // Fix #368: FeedRightPanel ПЕРЕНЕСЁН выше — до loading/error-ранних
+    // return'ов (перед `if (loading)`), т.к. return пропускал панель из
+    // композиции: на скелетоне/ошибке меню не открывалось. См. вызов выше.
 
     // Bottom sheet комментариев — #43.
     // Волна 22: шит САМОДОСТАТОЧЕН — отправку wallCreateComment (включая
@@ -3080,8 +3135,10 @@ private fun ActionIcon(
     }
 }
 
+// Fix #376: internal — карточка link/page-вложений переиспользуется ProfileScreen
+// (паритет постов Профиля с Лентой; подпись/поведение не менялись).
 @Composable
-private fun LinkCard(link: Attachment.Link, onClick: () -> Unit = {}) {
+internal fun LinkCard(link: Attachment.Link, onClick: () -> Unit = {}) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
@@ -3181,8 +3238,10 @@ private val CameraUriSaver: Saver<Uri?, String> = Saver(
     restore = { saved -> if (saved.isBlank()) null else Uri.parse(saved) },
 )
 
+// Fix #376: internal — карточка doc-вложений переиспользуется ProfileScreen
+// (паритет постов Профиля с Лентой; подпись/поведение не менялись).
 @Composable
-private fun DocAttachmentCard(doc: Attachment.Doc, onOpen: () -> Unit = {}) {
+internal fun DocAttachmentCard(doc: Attachment.Doc, onOpen: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3948,9 +4007,11 @@ private fun CommentRow(
 
 /**
  * Sprint 4: Карточка опроса в ленте.
+ * Fix #376: internal — переиспользуется ProfileScreen (паритет постов Профиля
+ * с Лентой; подпись/поведение не менялись, голосование — через колбэк onVote).
  */
 @Composable
-private fun PollCard(
+internal fun PollCard(
     poll: re.pinok.data.model.Poll,
     onVote: (List<Long>) -> Unit,
 ) {

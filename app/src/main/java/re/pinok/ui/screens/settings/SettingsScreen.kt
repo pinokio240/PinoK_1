@@ -545,6 +545,82 @@ private fun CallsTab(
             }
         }
 
+        // #CALLS-DNS-PIN (Task 26-2-b): ручной IPv4 для пина okcdn-доменов звонков.
+        // Потребитель — Dns-объект OkHttpClient в SovaApp.onCreate: lookup() читает
+        // @Volatile prefsSnapshot на каждое НОВОЕ соединение, поэтому смена IP
+        // применяется без перезапуска (живой WS-сигналинг возьмёт адрес при
+        // reconnect). Медиапоток (WebRTC ICE/TURN) резолвится нативным libwebrtc —
+        // ручной IP на него НЕ влияет (только сигналинг + vchat API).
+        // Пусто = авто (встроенный 155.212.204.12).
+        item { SectionHeader("DNS-пин звонков") }
+        item {
+            // Поле НЕ сохраняет каждый символ: промежуточные значения невалидны
+            // («15», «155.»), а lookup() сразу применил бы кривой IP к новым
+            // соединениям. Сохранение — только по кнопке «Сохранить».
+            // remember(s.callsDnsPinIp): пересев локального состояния при внешнем
+            // изменении префа (после Сохранить/Сбросить снапшот придёт свежим).
+            var ipText by remember(s.callsDnsPinIp) { mutableStateOf(s.callsDnsPinIp) }
+            val ipValid = ipText.isBlank() || isValidIpv4(ipText.trim())
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Ручной IP для calls.okcdn.ru / calls-test.okcdn.ru / api.mycdn.me (сигналинг и API звонков). Пусто — встроенный адрес 155.212.204.12. Медиапоток (TURN) резолвится отдельно.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = ipText,
+                        onValueChange = { v ->
+                            // Десятичная клавиатура в ru-локале может дать запятую
+                            // вместо точки — заменяем, чтобы IP вводился без смены
+                            // раскладки. Валидация ниже остаётся строгой (точки).
+                            ipText = v.replace(',', '.')
+                        },
+                        singleLine = true,
+                        placeholder = { Text("авто (155.212.204.12)") },
+                        isError = !ipValid,
+                        keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                        supportingText = {
+                            Text(
+                                if (ipValid) "Формат: четыре числа 0–255 через точки"
+                                else "Некорректный IPv4 — кнопка «Сохранить» недоступна",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            enabled = ipValid,
+                            onClick = {
+                                val trimmed = ipText.trim()
+                                scope.launch { app.prefs.setCallsDnsPinIp(trimmed) }
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (trimmed.isEmpty()) "Сохранено — авто (155.212.204.12)"
+                                    else "IP сохранён — применится для новых соединений звонков",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                        ) { Text("Сохранить") }
+                        OutlinedButton(
+                            onClick = {
+                                ipText = ""
+                                scope.launch { app.prefs.setCallsDnsPinIp("") }
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Сброшено на авто",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                        ) { Text("Сбросить (авто)") }
+                    }
+                }
+            }
+        }
+
         // #CALLS-AUTO (2026-08-23): session_key и queue-credential получаются
         // автоматически (как браузер): get_anonym_token → auth.anonymLogin →
         // session_key; queue.subscribe → queue-credential. Ручной ввод убран.
@@ -3561,6 +3637,29 @@ private fun SectionHeader(title: String) {
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
     )
+}
+
+/**
+ * #CALLS-DNS-PIN (Task 26-2-b): проверка строкового IPv4 — ровно 4 октета,
+ * только цифры, каждый 0..255, длина октета 1..3, ведущие нули запрещены
+ * (java.net.InetAddress трактует «012» как восьмеричную запись — пин ушёл бы
+ * на другой адрес, чем показал валидатор). Потребитель — секция
+ * «DNS-пин звонков» в CallsTab. Дубликат file-level private isValidIpv4 из
+ * SovaApp.kt (там он наружу не виден) — допустим по спецификации задачи.
+ */
+private fun isValidIpv4(s: String): Boolean {
+    val parts = s.split(".")
+    if (parts.size != 4) return false
+    for (part in parts) {
+        if (part.isEmpty() || part.length > 3) return false
+        for (ch in part) {
+            if (ch < '0' || ch > '9') return false
+        }
+        if (part.length > 1 && part[0] == '0') return false
+        val octet = part.toInt()
+        if (octet < 0 || octet > 255) return false
+    }
+    return true
 }
 
 // ВАЖНО: onToggle должен быть ПОСЛЕДНИМ параметром, чтобы работала

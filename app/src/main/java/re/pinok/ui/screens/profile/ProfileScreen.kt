@@ -88,6 +88,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+// Fix #371/#373: «Показать ещё» — underline link style (паттерн FeedScreen VKUI).
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,13 +111,24 @@ import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
 // #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
 import re.pinok.ui.components.PostPhotoGrid
+// Fix #372/#373: карусель видео в постах/репостах профиля — общий компонент
+// (тот же, что в ленте/сообществах, Fix #366).
+import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
 // (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
+// Fix #376: link/poll/doc вложения — карточки ленты, сделаны internal
+// (FeedScreen). Порядок/параметры рендера 1:1 с PostCard ленты.
+import re.pinok.ui.screens.feed.DocAttachmentCard
+import re.pinok.ui.screens.feed.LinkCard
+import re.pinok.ui.screens.feed.PollCard
 import re.pinok.ui.screens.feed.ReactionEntry
 import re.pinok.ui.screens.feed.ReactionPicker
 import re.pinok.util.AppLog
+// Fix #371: VK inline-ссылки [#alias|display|url] + URL в тексте поста кликабельны
+// (тот же линкер, что в ленте FeedScreen:2280).
+import re.pinok.util.linkifyVkText
 import re.pinok.util.openUrlExternal
 import re.pinok.util.toCountString
 import re.pinok.util.toRelativeTime
@@ -1090,6 +1103,11 @@ fun ProfileScreen(
                     authorName = p.fullName,
                     authorPhoto = p.photo200 ?: p.photo100,
                     onVideoClick = onVideoClick,
+                    // Fix #374: тап по посту/репосту → PostDetailScreen (экран-параметр
+                    // onPostClick :172; обёртка SovaNavHost: PostHolder.last + buildRoute
+                    // уже работала для пост-закладок — теперь и для карточек стены,
+                    // паритет с UserProfileScreen:770 и лентой).
+                    onPostClick = onPostClick,
                     onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
                     // 22-B: карусель фото (общий SovaPrefs-флаг, см. выше).
                     carouselEnabled = carouselEnabled,
@@ -1763,6 +1781,9 @@ fun WallPostCard(
         (post.postType == null || post.postType == "post")
     // П-6a: состояние «⋯»-меню (паттерн FeedScreen.PostCard).
     var showMenu by remember { mutableStateOf(false) }
+    // Fix #371/#376: контекст для linkify-кликов и открытия link/doc-вложений
+    // (openUrlExternal / startActivity) — один захват на карточку.
+    val ctx = LocalContext.current
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1884,15 +1905,77 @@ fun WallPostCard(
                     }
                 }
             }
-            if (post.text.isNotBlank()) {
+            // Fix #375 (#PROFILE-PINNED-LABEL): индикатор закреплённой записи —
+            // паритет с лентой (FeedScreen: «Закреплённый пост» под шапкой).
+            if (post.isPinnedBool) {
                 Text(
-                    text = post.text,
+                    text = "Закреплённый пост",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp),
+                )
+            }
+            // Fix #375 (паритет с лентой): индикатор копирайта-источника.
+            // NULL-ЯВНО: модель в :core:data — захват ДО проверки (без ?.-операторов).
+            val postCopyright = post.copyright
+            if (postCopyright != null) {
+                val copyrightName = postCopyright.name
+                if (copyrightName != null) {
+                    Text(
+                        text = copyrightName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (post.text.isNotBlank()) {
+                // Fix #371 (#PROFILE-POST-TEXT): паритет с лентой — паттерн Fix #345
+                // (CommunityScreen) + linkifyVkText (FeedScreen:2280): длинный текст
+                // разворачивается на месте, «Показать ещё» — только при реальном
+                // переполнении (hasVisualOverflow); #alias/URL внутри текста кликабельны
+                // (link-аннотации перехватывают клик раньше текста — потомок приоритетнее).
+                // Тап по свёрнутому тексту = развернуть, по развёрнутому/короткому =
+                // открыть пост (onPostClick → PostDetail). ctx — общий val карточки выше.
+                var textExpanded by remember { mutableStateOf(false) }
+                var textOverflowed by remember { mutableStateOf(false) }
+                Text(
+                    text = linkifyVkText(
+                        text = post.text,
+                        linkColor = MaterialTheme.colorScheme.primary,
+                        onUrlClick = { url -> openUrlExternal(ctx, url) },
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        .clickable { onPostClick(post) },
-                    maxLines = 10,
+                        .clickable {
+                            if (textOverflowed && !textExpanded) {
+                                textExpanded = true
+                            } else {
+                                onPostClick(post)
+                            }
+                        },
+                    onTextLayout = { result ->
+                        if (!textExpanded && result.hasVisualOverflow) textOverflowed = true
+                    },
+                    maxLines = if (textExpanded) Int.MAX_VALUE else 10,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (textOverflowed && !textExpanded) {
+                    Text(
+                        text = "Показать ещё",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier
+                            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
+                            .clickable { textExpanded = true },
+                    )
+                }
             }
             if (photoAttachments.isNotEmpty()) {
                 // 22-B: общий PostPhotoGrid — карусель при включённой настройке
@@ -1903,8 +1986,23 @@ fun WallPostCard(
                     carouselEnabled = carouselEnabled,
                 )
             }
-            // Fix #70: рендерим video-вложения (как в FeedScreen).
-            videoAttachments.forEach { attach -> attach.video?.let { VideoThumbnail(video = it, onClick = onVideoClick) } }
+            // Fix #372 (#PROFILE-VIDEO-CAROUSEL): >1 видео и включена карусель —
+            // общий PostVideoCarousel (тот же флаг, что у PostPhotoGrid выше);
+            // иначе прежний вертикальный стопк VideoThumbnail (одно видео).
+            if (carouselEnabled && videoAttachments.size > 1) {
+                PostVideoCarousel(
+                    videos = videoAttachments.mapNotNull { it.video },
+                    carouselEnabled = carouselEnabled,
+                    onVideoClick = onVideoClick,
+                )
+            } else {
+                videoAttachments.forEach { attach ->
+                    val v = attach.video
+                    if (v != null) {
+                        VideoThumbnail(video = v, onClick = onVideoClick)
+                    }
+                }
+            }
             // #30 (audio attachments): рендерим audio-вложения (как в FeedScreen).
             if (audioAttachments.isNotEmpty()) {
                 AudioAttachmentList(tracks = audioAttachments.mapNotNull { it.audio })
@@ -1912,12 +2010,111 @@ fun WallPostCard(
             // #30 (playlists): audio_playlist вложения.
             val playlistAttachments = post.attachments?.filter { it.type == "audio_playlist" && it.audioPlaylist != null }.orEmpty()
             playlistAttachments.forEach { att -> att.audioPlaylist?.let { PlaylistAttachmentCard(playlist = it) } }
+            // Fix #376 (#PROFILE-LINK-POLL-DOC): link/page/poll/doc вложения —
+            // паритет с лентой (FeedScreen PostCard; LinkCard/PollCard/DocAttachmentCard
+            // сделаны internal). Порядок и параметры 1:1 с FeedScreen:2352-2480.
+            val linkAttachments = post.attachments.orEmpty()
+                .filter { (it.type == "link" || it.type == "page") && it.link != null }
+            linkAttachments.forEach { attach ->
+                val link = attach.link
+                if (link != null) {
+                    LinkCard(link = link, onClick = {
+                        // Fix #51-A: нормализация URL как в ленте — VK отдаёт короткие
+                        // ссылки (vk.cc/abc) без схемы; валидация + resolveActivity.
+                        val rawUrl = link.url.orEmpty().trim()
+                        if (rawUrl.isEmpty()) {
+                            AppLog.w("ProfileScreen", "LinkCard: url is empty, cannot open")
+                            Toast.makeText(ctx, "Ссылка недоступна", Toast.LENGTH_SHORT).show()
+                            return@LinkCard
+                        }
+                        val normalizedUrl = if (rawUrl.contains("://")) rawUrl else "https://$rawUrl"
+                        val uri = try {
+                            android.net.Uri.parse(normalizedUrl)
+                        } catch (e: Exception) {
+                            AppLog.w("ProfileScreen", "LinkCard: invalid url=$rawUrl", e)
+                            Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
+                            return@LinkCard
+                        }
+                        if (uri.scheme == null || uri.host == null) {
+                            AppLog.w("ProfileScreen", "LinkCard: no scheme/host in url=$normalizedUrl")
+                            Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
+                            return@LinkCard
+                        }
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            uri,
+                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        if (intent.resolveActivity(ctx.packageManager) == null) {
+                            AppLog.w("ProfileScreen", "LinkCard: no app to handle url=$normalizedUrl")
+                            Toast.makeText(ctx, "Нет приложения для открытия ссылки", Toast.LENGTH_SHORT).show()
+                            return@LinkCard
+                        }
+                        try {
+                            ctx.startActivity(intent)
+                            AppLog.i("ProfileScreen", "LinkCard: opened url=$normalizedUrl")
+                        } catch (e: Exception) {
+                            AppLog.w("ProfileScreen", "Failed to open link: $normalizedUrl", e)
+                            Toast.makeText(ctx, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show()
+                        }
+                    })
+                }
+            }
+            // Опросы (Sprint 4): голосование через polls.addVote (как в ленте).
+            val pollAtt = post.attachments.orEmpty().firstOrNull { it.type == "poll" && it.poll != null }
+            if (pollAtt != null) {
+                val poll = pollAtt.poll
+                if (poll != null) {
+                    val pollVoteScope = rememberCoroutineScope()
+                    val pollVoteApp = SovaApp.get()
+                    PollCard(poll = poll, onVote = { answerIds ->
+                        pollVoteScope.launch {
+                            pollVoteApp.apiClient.pollsAddVote(poll.id, poll.ownerId, answerIds)
+                        }
+                    })
+                }
+            }
+            // Документ-вложения (как в ленте).
+            val docAttachments = post.attachments.orEmpty().filter { it.type == "doc" && it.doc != null }
+            if (docAttachments.isNotEmpty()) {
+                docAttachments.forEach { attach ->
+                    val doc = attach.doc
+                    if (doc != null) {
+                        DocAttachmentCard(doc = doc, onOpen = {
+                            // Fix #51-A: та же нормализация URL, что и для LinkCard выше.
+                            val rawUrl = doc.url.orEmpty().trim()
+                            if (rawUrl.isEmpty()) {
+                                Toast.makeText(ctx, "Ссылка недоступна", Toast.LENGTH_SHORT).show()
+                                return@DocAttachmentCard
+                            }
+                            val normalizedUrl = if (rawUrl.contains("://")) rawUrl else "https://$rawUrl"
+                            val uri = android.net.Uri.parse(normalizedUrl)
+                            if (uri.scheme == null || uri.host == null) {
+                                Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
+                                return@DocAttachmentCard
+                            }
+                            val intent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW, uri,
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            try {
+                                ctx.startActivity(intent)
+                                AppLog.i("ProfileScreen", "DocCard: opened url=$normalizedUrl")
+                            } catch (e: Exception) {
+                                AppLog.w("ProfileScreen", "Failed to open doc: $normalizedUrl", e)
+                                Toast.makeText(ctx, "Не удалось открыть документ", Toast.LENGTH_SHORT).show()
+                            }
+                        })
+                    }
+                }
+            }
             // Fix #70: рендерим репост (copy_history) — первый элемент.
             post.copyHistory?.firstOrNull()?.let { repost ->
                 RepostBlock(
                     repost = repost,
                     onPhotoClick = onPhotoClick,
                     onVideoClick = onVideoClick,
+                    // Fix #373: тап по карточке репоста/развёрнутому тексту →
+                    // PostDetail оригинала (тот же колбэк, что у тела поста).
+                    onPostClick = onPostClick,
                     carouselEnabled = carouselEnabled,
                 )
             }
@@ -2048,13 +2245,25 @@ fun RepostBlock(
     repost: Post,
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
     onVideoClick: (Video) -> Unit = {},
+    // Fix #373 (#PROFILE-REPOST-OPEN): тап по карточке репоста / по развёрнутому
+    // или короткому тексту → открытие поста-оригинала (PostDetail через onPostClick
+    // вызывающей карточки; колбэк пробрасывается из WallPostCard, дефолт {} —
+    // как у соседей, прежние вызовы совместимы).
+    onPostClick: (Post) -> Unit = {},
     // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, пробрасывается
     // из WallPostCard). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
     carouselEnabled: Boolean = true,
 ) {
+    // Fix #373: контекст для linkify-кликов в тексте репоста (openUrlExternal).
+    val ctx = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp)),
+            .clip(RoundedCornerShape(8.dp))
+            // Fix #373: карточка репоста ЦЕЛИКОМ открывает оригинальный пост.
+            // clickable ПОСЛЕ clip — риппл по скруглению; вложенные клики
+            // (PostPhotoGrid/видео/аудио/ссылки ниже) перехватываются раньше —
+            // открывается просмотр, а не пост (потомок кликабельнее родителя).
+            .clickable { onPostClick(repost) },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         ),
@@ -2087,12 +2296,46 @@ fun RepostBlock(
             }
             if (repost.text.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
+                // Fix #373 (#PROFILE-REPOST-EXPAND): текст репоста — паттерн Fix #345
+                // (CommunityScreen:1337-1365 / FeedScreen:2571-2609) + linkify: «Показать
+                // ещё» только при реальном переполнении (hasVisualOverflow); тап по
+                // свёрнутому тексту = развернуть, по развёрнутому/короткому = открыть
+                // пост целиком (onPostClick).
+                var repostTextExpanded by remember { mutableStateOf(false) }
+                var repostTextOverflowed by remember { mutableStateOf(false) }
                 Text(
-                    text = repost.text,
+                    text = linkifyVkText(
+                        text = repost.text,
+                        linkColor = MaterialTheme.colorScheme.primary,
+                        onUrlClick = { url -> openUrlExternal(ctx, url) },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        if (repostTextOverflowed && !repostTextExpanded) {
+                            repostTextExpanded = true
+                        } else {
+                            onPostClick(repost)
+                        }
+                    },
+                    onTextLayout = { result ->
+                        if (!repostTextExpanded && result.hasVisualOverflow) repostTextOverflowed = true
+                    },
+                    maxLines = if (repostTextExpanded) Int.MAX_VALUE else 5,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (repostTextOverflowed && !repostTextExpanded) {
+                    Text(
+                        text = "Показать ещё",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp)
+                            .clickable { repostTextExpanded = true },
+                    )
+                }
             }
             // Фото из репоста
             val repostPhotos = repost.attachments
@@ -2111,10 +2354,23 @@ fun RepostBlock(
             val repostVideos = repost.attachments
                 ?.filter { it.type == "video" && it.video != null }
                 .orEmpty()
-            repostVideos.forEach { att ->
-                att.video?.let {
-                    Spacer(Modifier.height(6.dp))
-                    VideoThumbnail(video = it, onClick = onVideoClick)
+            // Fix #373: несколько видео в репосте и включённая карусель —
+            // общий PostVideoCarousel (как в посте выше и в ленте, Fix #366);
+            // иначе прежний вертикальный стопк VideoThumbnail (одно видео).
+            if (carouselEnabled && repostVideos.size > 1) {
+                Spacer(Modifier.height(6.dp))
+                PostVideoCarousel(
+                    videos = repostVideos.mapNotNull { it.video },
+                    carouselEnabled = carouselEnabled,
+                    onVideoClick = onVideoClick,
+                )
+            } else {
+                repostVideos.forEach { att ->
+                    val v = att.video
+                    if (v != null) {
+                        Spacer(Modifier.height(6.dp))
+                        VideoThumbnail(video = v, onClick = onVideoClick)
+                    }
                 }
             }
             // #PROFILE-REPOST-ATTACH: аудио в репосте.

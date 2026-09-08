@@ -142,6 +142,13 @@ fun VkAuthWebViewScreenV2(
     onOfflineMode: () -> Unit = {},
     onSilentTokenExchanged: (accessToken: String, userId: Long) -> Unit = { _, _ -> },
     silentMode: Boolean = false,
+    // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: запуск после logout (AuthActivity передаёт
+    // reason="logout" из EXTRA_AUTH_REASON). При ПЕРВОМ onPageFinished на хосте
+    // m.vk.ru/m.vk.com удаляем ВСЕ ключи *:web_token:login:auth из localStorage
+    // (WebTokenAuth.clearAllWebTokenKeysNow) — РОВНО ОДИН раз, до ввода логина,
+    // чтобы валидный web_token предыдущего аккаунта не подобрался «молча» при
+    // следующем логине, а свежий токен новой сессии не затрагивался.
+    clearStoredWebTokenOnLoad: Boolean = false,
     // #VKID-ONLY (vk.id.md F-apply): стартовый URL WebView. По умолчанию —
     // VK ID entry (m.vk.ru/login?app_id=6287487), чтобы кнопка «Войти через VK»
     // авторизовала ТОЛЬКО через VK ID SDK (silent_token exchange). Caller может
@@ -227,6 +234,19 @@ fun VkAuthWebViewScreenV2(
                             isExchanging = true
                             statusText = "Сессия найдена, получаем токен…"
                             onTokenExchange(remixsid, cookies, wv)
+                            // Fix #377 #DOZE-COOKIE-FLUSH: после успешного обмена
+                            // сбрасываем CookieManager на диск. Раньше flush был
+                            // только в normal-mode перед loadUrl; в silent-ветке
+                            // (Doze re-login) ротации кукисов, полученные WebView
+                            // во время обмена, оставались только в памяти процесса —
+                            // смерть WebView-процесса (Doze) их теряла, и следующий
+                            // silent refresh шёл со stale-куками.
+                            try {
+                                CookieManager.getInstance().flush()
+                                AppLog.i(TAG, "CookieManager.flush() после onTokenExchange (silent re-login, #DOZE-COOKIE-FLUSH)")
+                            } catch (e: Exception) {
+                                AppLog.w(TAG, "CookieManager.flush() failed: ${e.message}")
+                            }
                         }
                     } else {
                         AppLog.w(TAG, "remixsid найден, но webViewRef == null")
@@ -377,6 +397,10 @@ fun VkAuthWebViewScreenV2(
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     CookieManager.getInstance().setAcceptCookie(true)
 
+                    // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: one-shot флаг очистки —
+                    // scoped к этому WebView-инстансу (factory выполняется один раз).
+                    var webTokenCleanupDone = false
+
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
@@ -517,6 +541,27 @@ fun VkAuthWebViewScreenV2(
                             loading = false
                             AppLog.i(TAG, "onPageFinished: $url")
                             statusText = "Войдите в VK, чтобы продолжить"
+                            // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: запуск после logout — на
+                            // ПЕРВОЙ странице origin m.vk.ru/m.vk.com удаляем все
+                            // *:web_token:login:auth ключи из localStorage (валидный
+                            // web_token предыдущего аккаунта иначе остался бы и
+                            // tryReadWebToken «молча» вернул бы его при следующем логине).
+                            // РОВНО ОДИН раз — свежий токен новой сессии (появится после
+                            // логина) не затрагиваем. Очистка строго ПОСЛЕ загрузки
+                            // m.vk.ru: localStorage действует на origin текущего
+                            // документа (на about:blank/id.vk.ru — другой storage).
+                            if (clearStoredWebTokenOnLoad && !webTokenCleanupDone && url != null) {
+                                val pageHost = Uri.parse(url).host
+                                if (pageHost != null && (pageHost == "m.vk.ru" || pageHost == "m.vk.com")) {
+                                    webTokenCleanupDone = true
+                                    AppLog.i(TAG, "onPageFinished: reason=logout — чистим web_token из localStorage ($url)")
+                                    try {
+                                        re.pinok.auth.exchange.WebTokenAuth.clearAllWebTokenKeysNow(view)
+                                    } catch (e: Exception) {
+                                        AppLog.w(TAG, "clearAllWebTokenKeysNow failed: ${e.message}")
+                                    }
+                                }
+                            }
                             // P2-8 fix (восстановление): повторная инъекция после полной загрузки.
                             // React может ре-рендерить input после navigation (SPA) —
                             // повторная инъекция гарантирует что listeners повешены.

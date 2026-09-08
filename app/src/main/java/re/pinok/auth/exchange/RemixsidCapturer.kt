@@ -152,6 +152,8 @@ object RemixsidCapturer {
             // 1. Быстрая проверка — remixsid может уже быть в CookieManager
             val existing = readAllCookiesFromCookieManager()
             if (existing != null) {
+                // Fix #377 #DOZE-COOKIE-FLUSH: после чтения — сброс на диск.
+                flushCookieManager()
                 AppLog.i(TAG, "session cookies already in CookieManager " +
                     "(remixsid len=${existing.remixsid.length}, " +
                     "p=${if (existing.pCookie != null) "yes" else "no"}, " +
@@ -204,6 +206,11 @@ object RemixsidCapturer {
                         "VK likely showed login page (no existing session in CookieManager). " +
                         "Path 1.5 unavailable — user should try in-app WebView login once.")
                 }
+
+                // Fix #377 #DOZE-COOKIE-FLUSH: после чтения кукисов сбрасываем
+                // CookieManager на диск — незаflush'енные ротации (remixsid/p/remixnsid)
+                // теряются при смерти WebView-процесса (Doze).
+                flushCookieManager()
 
                 found
             } finally {
@@ -444,7 +451,14 @@ object RemixsidCapturer {
      *         Если null — caller должен сам сохранить хотя бы remixsid через
      *         [ExchangeAuthRepository.saveRemixsid] (string overload).
      */
-    fun snapshotCookies(): CapturedCookies? = readAllCookiesFromCookieManager()
+    fun snapshotCookies(): CapturedCookies? {
+        val snapshot = readAllCookiesFromCookieManager()
+        // Fix #377 #DOZE-COOKIE-FLUSH: после чтения кукисов сбрасываем CookieManager
+        // на диск — читающие пути фиксируют ротации, но без flush() они теряются
+        // при смерти WebView-процесса (Doze). Дешёвый sync-вызов, безопасен.
+        flushCookieManager()
+        return snapshot
+    }
 
     /**
      * #CALLS (2026-08-24): полный Cookie-заголовок VK из CookieManager —
@@ -477,6 +491,25 @@ object RemixsidCapturer {
         } catch (e: Exception) {
             AppLog.w(TAG, "buildVkCookieHeader error: ${e.message}")
             ""
+        }
+    }
+
+    /**
+     * Fix #377 #DOZE-COOKIE-FLUSH: принудительный сброс CookieManager на диск.
+     *
+     * CookieManager пишет ротации кукисов (remixsid/p/remixnsid — средства
+     * silent-продления сессии Path 1.5) в память процесса; на диск они попадают
+     * только при flush()/упорядоченном завершении. Doze может УБИТЬ процесс
+     * WebView — незаflush'енные ротации теряются, и silent refresh остаётся со
+     * stale-копией → VK отвергает сессию → юзеру приходится перелогиниваться.
+     *
+     * Вызывается после каждого ЧТЕНИЯ кукисов ([capture]/[snapshotCookies]).
+     */
+    private fun flushCookieManager() {
+        try {
+            CookieManager.getInstance().flush()
+        } catch (e: Exception) {
+            AppLog.w(TAG, "CookieManager.flush() failed: ${e.message}")
         }
     }
 

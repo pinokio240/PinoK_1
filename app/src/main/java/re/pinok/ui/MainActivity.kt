@@ -41,8 +41,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
 import re.pinok.auth.AuthActivity
 import re.pinok.BuildConfig
@@ -94,6 +97,21 @@ class MainActivity : ComponentActivity() {
 
         /** Окно SSO-защиты: 90 сек с момента запуска AuthActivity. */
         private const val SSO_GUARD_WINDOW_MS = 90_000L
+    }
+
+    // Fix #377 #DOZE-RESUME-AUTH: окно проактивного обновления токена (5 минут
+    // до истечения — окно совпадает с keepAlive-окном Fix #216 в репозитории).
+    private companion object {
+        const val PROACTIVE_REFRESH_WINDOW_MS = 300_000L
+        // Минимальный интервал между проактивными ensureFreshToken (не дёргать
+        // HTTP при каждом resume — сетевой путь и так лёгкий, но throttle нужен).
+        const val PROACTIVE_REFRESH_THROTTLE_MS = 30_000L
+        // Задержка повторной silent-попытки после RESULT_CANCELED (уважает
+        // throttle launchAuth 20с — к моменту запуска throttle уже истёк).
+        const val SILENT_RETRY_DELAY_MS = 20_000L
+        // Пул OkHttp чистим на resume, если прошло больше 5 минут (после Doze
+        // stale keep-alive TCP-соединения мертвы — сервер их уже закрыл).
+        const val STALE_POOL_WINDOW_MS = 5 * 60_000L
     }
 
     /**
@@ -148,6 +166,16 @@ class MainActivity : ComponentActivity() {
                 "silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES (Fix #49)" +
                 (if (silentFailCount >= MAX_SILENT_FAILURES)
                     " → next launch will be FULL (visible)" else ""))
+            // Fix #377 #SILENT-RETRY-AFTER-DOZE: SILENT-попытка после Doze обычно
+            // проваливается из-за гонки с ещё-поднимающимся Wi-Fi (WebView-таймаут
+            // 30с на неготовой сети). Раньше после RESULT_CANCELED никто не
+            // перезапускал auth: boot-эффект не ретриггерится, Fix #341 ждёт НОВУЮ
+            // emission isOnlineFlow (StateFlow давно true — её не будет) → юзер
+            // навсегда на StartupLoadingScreen и был вынужден свернуть/развернуть
+            // приложение (второй ON_RESUME срабатывал #BG-AUTH-LOOP-FIX).
+            // Теперь: через ~20с сами повторяем SILENT-попытку — сеть к этому
+            // моменту поднялась, обмен проходит, юзер ничего не делает.
+            scheduleSilentAuthRetryAfterCancel()
         }
         // Триггерим recompose независимо от результата —
         // если пользователь отменил, но токен уже был сохранён, покажем главный экран.
@@ -315,6 +343,125 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Fix #377 #DOZE-RESUME-PROACTIVE-REFRESH: проактивное обновление токена
+     * при возврате из фона, ДО того как первый API-вызов упрётся в err 5/1117
+     * и запустит реактивный контур (H2 из разведки 26-1-d).
+     *
+     * Условия (вызывается из onResume при isBackgrounded):
+     *  - до истечения web-токена < 5 минут (TTL web_token 15мин-24ч — после
+     *    сна он часто уже на исходе), ИЛИ
+     *  - токен помечен invalidated (VK уже отверг его err 5/1117).
+     *
+     * ensureFreshToken(force = true) — лёгкий HTTP-путь (Path 1.5 remixsid /
+     * Path 5 connect_exchange_token, ~200мс-2с) в app-скоупе, НЕ блокирует main.
+     * Он НЕ трипает авто-офлайн (#38 живёт только в VKApiClient.callInternal) и
+     * НЕ инкрементит tokenInvalidationTicks — при неудаче просто вернёт null.
+     *
+     * БЕЗОПАСНОСТЬ ГОНКИ с launchAuth: если токен уже невалиден, параллельно
+     * отработает штатный контур (checkTokenValidity → tick → LaunchedEffect →
+     * launchAuth и #BG-AUTH-LOOP-FIX). launchAuth имеет authActivityShowing +
+     * throttle 20с + SSO-guard 90с — второй AuthActivity не откроется. Если
+     * ensureFreshToken успел обновить токен ДО запуска этих путей — они
+     * пропустят запуск сами (проверяют hasValidToken). Если после — SILENT
+     * AuthActivity просто пройдёт поверх (прозрачная), обе записи токена валидны.
+     * Успех здесь → authVersion++ (в Main-контексте) → recompose на главный
+     * экран без всякого AuthActivity.
+     */
+    private fun maybeProactiveTokenRefresh(app: SovaApp) {
+        val now = System.currentTimeMillis()
+        val last = lastProactiveTokenRefreshMs
+        if (last > 0L && now - last < PROACTIVE_REFRESH_THROTTLE_MS) return
+        val invalidated = app.exchangeStorage.isAccessTokenInvalidated()
+        val expiresAtMs = app.exchangeAuthRepository.expiresAt()
+        val expiresSoon = expiresAtMs != 0L && (expiresAtMs - now) < PROACTIVE_REFRESH_WINDOW_MS
+        val tokenValid = app.tokenStorage.hasValidToken()
+        if (!invalidated && !expiresSoon) return
+        if (!tokenValid && !invalidated) {
+            // Токен уже невалиден БЕЗ флага invalidated (истёк по времени) —
+            // обновит его штатный реактивный контур (tick → launchAuth) или
+            // #BG-AUTH-LOOP-FIX; дублировать ensureFreshToken не требуется.
+            // (expiresSoon здесь true лишь для «уже истёкшего» токена.)
+            return
+        }
+        lastProactiveTokenRefreshMs = now
+        AppLog.i("MainActivity", "Proactive token refresh on resume: expiresAt=$expiresAtMs, " +
+            "invalidated=$invalidated → ensureFreshToken(force=true) (#DOZE-RESUME-AUTH)")
+        app.appScope.launch {
+            val refreshed = try {
+                app.exchangeAuthRepository.ensureFreshToken(force = true)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("MainActivity", "Proactive ensureFreshToken failed: ${e.message} (#DOZE-RESUME-AUTH)")
+                null
+            }
+            if (refreshed != null) {
+                AppLog.i("MainActivity", "Proactive token refresh OK — authVersion++ (#DOZE-RESUME-AUTH)")
+                // Snapshot-state пишем из Main-контекста (дисциплина проекта).
+                withContext(Dispatchers.Main) {
+                    authVersion++
+                }
+            }
+        }
+    }
+
+    /**
+     * Fix #377 #SILENT-RETRY-AFTER-DOZE: одноразовая отложенная (~20с) повторная
+     * silent-попытка после провала SILENT AuthActivity (RESULT_CANCELED).
+     *
+     * Цель: юзер НЕ должен сворачивать/разворачивать приложение — retry придёт
+     * сам, когда сеть поднимется, и succeed'ится.
+     *
+     * Защиты от мусорных запусков (все проверяются в момент срабатывания):
+     *  - одна попытка за раз ([silentRetryScheduled]);
+     *  - приложение опять в фоне → следующий onResume прогонит #BG-AUTH-LOOP-FIX;
+     *  - токен уже появился (успел обновиться проактивным/штатным путём) → skip;
+     *  - AuthActivity уже показывается → skip (не наслаиваем Activity);
+     *  - offline/guest-режим или сеть ещё не поднялась → skip (#341 дождётся
+     *    emission isOnlineFlow и запустит retry сам).
+     *
+     * Запуск идёт через общий [launchAuth] (throttle 20с + SSO-guard 90с +
+     * authActivityShowing — вторая AuthActivity поверх невозможна), silent-режим
+     * выбирается по тем же правилам, что и существующие пути (Fix #49/#176).
+     */
+    private fun scheduleSilentAuthRetryAfterCancel() {
+        if (silentRetryScheduled) return
+        silentRetryScheduled = true
+        val app = SovaApp.get(this)
+        app.appScope.launch {
+            try {
+                delay(SILENT_RETRY_DELAY_MS)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                silentRetryScheduled = false
+                throw e
+            }
+            withContext(Dispatchers.Main) {
+                silentRetryScheduled = false
+                if (isBackgrounded) {
+                    AppLog.d("MainActivity", "SILENT retry: app backgrounded again — #BG-AUTH-LOOP-FIX handles on next resume")
+                    return@withContext
+                }
+                if (isOfflineMode) return@withContext
+                if (app.tokenStorage.hasValidToken()) return@withContext
+                if (authActivityShowing) return@withContext
+                if (!app.networkObserver.isOnline()) {
+                    AppLog.i("MainActivity", "SILENT retry: сеть ещё не поднялась — #341 дождётся emission (#SILENT-RETRY-AFTER-DOZE)")
+                    return@withContext
+                }
+                val hasRemixsid = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
+                val useSilent = hasRemixsid && silentFailCount < MAX_SILENT_FAILURES
+                    && !app.forceFullReloginOnNextLaunch
+                AppLog.i("MainActivity", "SILENT retry after cancel — relaunching auth " +
+                    "[${if (useSilent) "SILENT" else "FULL"}] (#SILENT-RETRY-AFTER-DOZE)")
+                val intent = Intent(this@MainActivity, AuthActivity::class.java).apply {
+                    if (useSilent) putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
+                }
+                launchAuth(intent, reason = "silent-retry-after-cancel")
+            }
+        }
+    }
+
+    /**
      * Fix #154 full forwarding: контент полученный через системный share
      * (ACTION_SEND). Когда не null — показываем ShareToChatSheet с выбором
      * диалога для пересылки. Очищается после отправки или отмены.
@@ -359,6 +506,30 @@ class MainActivity : ComponentActivity() {
      * Без этого флага LockerActivity показывался только при холодном старте приложения.
      */
     private var isBackgrounded = false
+
+    /**
+     * Fix #377 #DOZE-STALE-POOL: timestamp последнего resume из фона.
+     * Если между resume прошло > [STALE_POOL_WINDOW_MS] (типичный глубокий сон)
+     * — чистим OkHttp connection pool: keep-alive TCP-соединения за Doze мертвы
+     * (сервер закрыл), первый API-вызов на них виснет/падает → лишний err 5/1117
+     * и трип авто-офлайна (#38). evictAll дешёвый и безопасный.
+     */
+    @Volatile
+    private var lastResumeAt: Long = 0L
+
+    /**
+     * Fix #377 #DOZE-RESUME-PROACTIVE-REFRESH: throttle проактивного
+     * ensureFreshToken(force = true) — не чаще [PROACTIVE_REFRESH_THROTTLE_MS].
+     */
+    @Volatile
+    private var lastProactiveTokenRefreshMs: Long = 0L
+
+    /**
+     * Fix #377 #SILENT-RETRY-AFTER-DOZE: защита от наложения отложенных retry'ев.
+     * Один SILENT-провал = максимум одна запланированная повторная попытка.
+     */
+    @Volatile
+    private var silentRetryScheduled = false
 
     /**
      * Fix #169: кэш последнего SovaPrefs Snapshot, обновляемый из Compose-подписки
@@ -654,22 +825,24 @@ class MainActivity : ComponentActivity() {
                 // 3с чтобы не дёргать на каждом мелькании сети.
                 LaunchedEffect(Unit) {
                     var lastRetryMs = 0L
-                    app.networkObserver.isOnlineFlow.collect { online ->
-                        if (!online) return@collect
+                    // Тело retry вынесено в локальную fun — используется и в
+                    // немедленной однократной проверке ниже, и в collect (#341).
+                    fun networkRestoredAuthRetry(online: Boolean) {
+                        if (!online) return
                         // debounce: не retry чаще раза в 3 сек
                         val now = System.currentTimeMillis()
-                        if (now - lastRetryMs < 3_000L) return@collect
+                        if (now - lastRetryMs < 3_000L) return
                         // только если токена реально нет
-                        if (app.tokenStorage.hasValidToken()) return@collect
+                        if (app.tokenStorage.hasValidToken()) return
                         // не мешаем офлайн-режиму
                         if (isOfflineMode) {
                             AppLog.i("MainActivity", "Network restored but offline mode — skip auth retry (#341)")
-                            return@collect
+                            return
                         }
                         // не запускаем второй AuthActivity
                         if (authActivityShowing) {
                             AppLog.i("MainActivity", "Network restored but AuthActivity already showing — skip (#341)")
-                            return@collect
+                            return
                         }
                         // Fix #DOUBLE-FLICKER (§41.23): если в буфере обмена УЖЕ есть
                         // OAuth token (юзер только что вернулся из Chrome, скопировав
@@ -694,7 +867,7 @@ class MainActivity : ComponentActivity() {
                         // триггерит authVersion++ → Compose перерисует главный экран.
                         if (trySaveOAuthTokenFromClipboard()) {
                             AppLog.i("MainActivity", "Clipboard has OAuth token — saved directly, skip AuthActivity launch (#DOUBLE-FLICKER)")
-                            return@collect
+                            return
                         }
                         lastRetryMs = now
                         val hasRemixsid = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
@@ -710,6 +883,18 @@ class MainActivity : ComponentActivity() {
                             if (useSilent) putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
                         }
                         launchAuth(retryIntent, reason = "network-restored-no-token")
+                    }
+                    // Fix #377 #NET-RESTORE-IMMEDIATE-CHECK: StateFlow может быть
+                    // true УЖЕ ДАВНО (Doze-сон: колбэки не приходили, новых emission
+                    // не будет) — collect ниже не сработал бы вечно, и юзер сидел
+                    // бы на StartupLoadingScreen пока не свернёт/развернёт app.
+                    // Поэтому ОДНА немедленная проверка ПЕРЕД подпиской — тот же
+                    // код, что в collect (безопасно: launchAuth внутри гуардится
+                    // authActivityShowing/throttle, и boot-эффект выше к этому
+                    // моменту уже запустил AuthActivity — тогда мы просто skip).
+                    networkRestoredAuthRetry(app.networkObserver.isOnline())
+                    app.networkObserver.isOnlineFlow.collect { online ->
+                        networkRestoredAuthRetry(online)
                     }
                 }
 
@@ -851,7 +1036,17 @@ class MainActivity : ComponentActivity() {
                                         // Fix #233 (P1): launchAuth с reason=logout —
                                         // throttle ОТКЛЮЧЕН для ручного logout (пользователь
                                         // явно хочет войти обратно, не ждём 60с).
-                                        launchAuth(Intent(this@MainActivity, AuthActivity::class.java), reason = "logout")
+                                        launchAuth(
+                                            Intent(this@MainActivity, AuthActivity::class.java)
+                                                // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: причина
+                                                // передаётся в AuthActivity — там WebView-шаг 1
+                                                // удалит старые *:web_token:login:auth ключи из
+                                                // localStorage m.vk.ru ДО первого обмена
+                                                // (иначе следующий логин мог «молча» подобрать
+                                                // web_token предыдущего аккаунта).
+                                                .putExtra(AuthActivity.EXTRA_AUTH_REASON, "logout"),
+                                            reason = "logout",
+                                        )
                                     }
                                 },
                                 // #247: выход из приложения целиком (с сохранением
@@ -1183,10 +1378,42 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val app = SovaApp.get(this)
+
+        // Fix #377 #DOZE-RESUME-NET: ПЕРВОЕ дело при возврате из фона — свежий
+        // снапшот сети. После глубокого сна isOnlineFlow может держать stale-
+        // значение (колбэки ConnectivityManager не приходили) — весь дальнейший
+        // resume-контур (checkTokenValidity / #BG-AUTH-LOOP-FIX / silent retry)
+        // должен видеть реальное состояние сети, а не значение до сна.
+        if (isBackgrounded) {
+            app.networkObserver.refreshNow()
+            // Fix #377 #DOZE-STALE-POOL: keep-alive TCP-соединения за Doze мертвы
+            // (сервер закрыл их) — первый API-вызов на stale-соединении виснет
+            // или падает IOException'ом (мусорит счётчик авто-офлайна #38).
+            // Чистим пул, если с прошлого resume прошло > 5 минут.
+            val resumeNow = System.currentTimeMillis()
+            if (lastResumeAt > 0L && resumeNow - lastResumeAt > STALE_POOL_WINDOW_MS) {
+                try {
+                    app.httpClient.connectionPool.evictAll()
+                    AppLog.i("MainActivity", "onResume: OkHttp connectionPool.evictAll() after ${((resumeNow - lastResumeAt) / 1000)}s background (#DOZE-STALE-POOL)")
+                } catch (e: Exception) {
+                    AppLog.w("MainActivity", "onResume: connectionPool.evictAll failed: ${e.message}")
+                }
+            }
+            lastResumeAt = resumeNow
+        }
+
         // Пробуждаем LongPoll при возврате на передний план —
         // сбрасываем backoff, очищаем stale TCP, прерываем текущий wait
         // и отменяем in-flight poll call (Fix #112).
         app.longPollClient.notifyResumed()
+
+        // Fix #377 #DOZE-RESUME-PROACTIVE-REFRESH: проактивно обновляем токен
+        // лёгким HTTP-путём (Path 1.5/5), если он на исходе или уже помечен
+        // invalidated — ДО checkTokenValidity/launchAuth, чтобы по возможности
+        // обойтись вообще без AuthActivity (см. KDoc метода — анализ гонок).
+        if (isBackgrounded && !isOfflineMode) {
+            maybeProactiveTokenRefresh(app)
+        }
 
         // Fix #112: проактивная проверка — истёк ли токен по времени пока
         // приложение было в фоне. Если да — немедленно сообщаем MainActivity

@@ -460,6 +460,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // #CALLS-SWDECODE (01.09): принудительный SW-декодер — диагностика
             // чёрного экрана при доказанном рендере (TextureView, 1354 кадра).
             callsVideoSwDecode = p[Keys.CALLS_VIDEO_SW_DECODE] ?: false,
+            // #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков.
+            // Пустая строка = авто (встроенный 155.212.204.12). Потребитель —
+            // Dns-объект OkHttpClient в SovaApp.onCreate (lookup читает
+            // prefsSnapshot на каждое новое соединение — применяется без
+            // перезапуска). Оператор-дефолт — file-стиль соседей по маппингу.
+            callsDnsPinIp = p[Keys.CALLS_DNS_PIN_IP] ?: "",
         )
     }
 
@@ -850,6 +856,16 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
     // #CALLS-SWDECODE: принудительный программный декодер видео.
     suspend fun setCallsVideoSwDecode(v: Boolean)      = put(Keys.CALLS_VIDEO_SW_DECODE, v)
+
+    /**
+     * #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
+     * (calls.okcdn.ru / calls-test.okcdn.ru / api.mycdn.me — сигналинг и
+     * vchat API). Пустая строка = авто (встроенный 155.212.204.12).
+     * Обрезает пробелы по краям (вставка из буфера); валидность формата
+     * проверяет UI (isValidIpv4 в SettingsScreen) и сам Dns.lookup в SovaApp
+     * — невалидное значение игнорируется в пользу авто.
+     */
+    suspend fun setCallsDnsPinIp(v: String)            = put(Keys.CALLS_DNS_PIN_IP, v.trim())
     /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
     suspend fun setEmailNotifyFreq(v: Int)              = put(Keys.EMAIL_NOTIFY_FREQ, v)
 
@@ -1184,6 +1200,19 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          *  перезапуска приложения (фабрика создаётся один раз на процесс).
          *  Default false. */
         val callsVideoSwDecode: Boolean,
+        /**
+         * #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
+         * (calls.okcdn.ru / calls-test.okcdn.ru / api.mycdn.me — сигналинг
+         * и vchat API). Пустая строка = авто (встроенный 155.212.204.12).
+         * Читается Dns.lookup() из @Volatile prefsSnapshot на каждое НОВОЕ
+         * соединение — смена применяется без перезапуска приложения.
+         *
+         * Дефолт "" задан явно (единственное поле с дефолтом в Snapshot):
+         * все конструкторы именованные, но initial-конструкция в
+         * FeedScreen (collectAsState) живёт в чужом файле — с дефолтом она
+         * продолжает собираться без правок.
+         */
+        val callsDnsPinIp: String = "",
     )
 
     private object Keys {
@@ -1393,6 +1422,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
         val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
+        // #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
+        // (пустая строка = авто — встроенный 155.212.204.12).
+        val CALLS_DNS_PIN_IP        = stringPreferencesKey("calls_dns_pin_ip")
     }
 
     // Fix #189: defaults для Auth Domains Config.
