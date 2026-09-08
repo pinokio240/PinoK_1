@@ -93,10 +93,8 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import java.io.File
 import re.pinok.SovaApp
-import re.pinok.data.model.Attachment
 import re.pinok.data.model.Comment
 import re.pinok.data.model.Post
-import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
@@ -108,7 +106,11 @@ import re.pinok.ui.navigation.ScrollPosition
 import re.pinok.ui.navigation.StoriesHolder
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
+// #POST-CAROUSEL-EVERYWHERE (22-B): общие компоненты волны 22 — карусель фото
+// поста и рендер вложений комментария (включая стикеры).
+import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.buildVkAttachment
@@ -143,6 +145,18 @@ fun PostDetailScreen(
     onGroupClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
+    // #POST-CAROUSEL-EVERYWHERE (22-B): флаг карусели фото — один общий
+    // SovaPrefs.feedCarouselEnabled (управляет лентой/сообществами/профилями/
+    // пост-детейлом; настройка «Настройки → Лента → „Карусель фото в постах"»).
+    // СКОУП-РЕШЕНИЕ: читается ОДИН раз на уровне экрана (здесь, где уже есть
+    // app) — выше и блока фото поста, и CommentRow/ReplyRow. Подъём на общий
+    // уровень вместо двух чтений: CommentAttachmentsView карусели НЕ имеет
+    // (комментарии — компактная сетка всегда, как в VK web), поэтому флаг
+    // нужен только блоку фото поста, но объявлен на уровне экрана — на случай
+    // будущих поверхностей внутри этого экрана.
+    val prefsSnap by app.prefs.data.collectAsState(initial = null)
+    // NULL-ЯВНО: Snapshot-initial до первого эмита; дефолт true = SovaPrefs default.
+    val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
     val scope = rememberCoroutineScope()
     // Fix #233 (Q&A Bug B): post может быть «stub» (text="", нет attachments)
     // когда переход из Ответов/Уведомлений — SovaNavHost создаёт минимальный
@@ -699,30 +713,22 @@ fun PostDetailScreen(
 
                             // Вложения.
                             val attachments = post.attachments ?: emptyList()
+                            // #22B-POST-PHOTOS (волна 22): фото поста собираются заранее
+                            // и рендерятся ОДНИМ блоком PostPhotoGrid ПОСЛЕ when-цикла —
+                            // раньше каждое фото шло отдельным 16:9-кропом внутри цикла.
+                            // СМЕНА ПОРЯДКА РЕНДЕРА при перемешанных вложениях
+                            // (фото+видео вперемешку) — осознанная: VK web группирует
+                            // все фото поста в один блок-карусель, а видео/аудио/плейлисты
+                            // остаются на своих местах. mapNotNull: attachment.photo
+                            // опционален по схеме Gson; фото без sizes отфильтрует сам
+                            // PostPhotoGrid (прежняя семантика клика не изменилась —
+                            // photoViewerState получает (urls, index) по всем показанным
+                            // фото, как и раньше).
+                            val postPhotos = attachments
+                                .filter { it.type == "photo" }
+                                .mapNotNull { att -> att.photo }
                             for (attachment in attachments) {
                                 when (attachment.type) {
-                                    "photo" -> {
-                                        val photoSizes = attachment.photo?.sizes
-                                        val photoUrl = PhotoSizes.bestUrl(photoSizes)
-                                        if (photoUrl != null) {
-                                            AsyncImage(
-                                                model = photoUrl,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .aspectRatio(16f / 9f)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .clickable {
-                                                        val allPhotos = attachments
-                                                            .filter { it.type == "photo" && it.photo?.sizes != null }
-                                                            .mapNotNull { PhotoSizes.bestUrl(it.photo?.sizes) }
-                                                        val idx = allPhotos.indexOf(photoUrl)
-                                                        photoViewerState.value = allPhotos to maxOf(0, idx)
-                                                    },
-                                                contentDescription = "Фото",
-                                                contentScale = ContentScale.Crop,
-                                            )
-                                        }
-                                    }
                                     "video" -> {
                                         val video = attachment.video
                                         if (video != null) {
@@ -758,6 +764,19 @@ fun PostDetailScreen(
                                     }
                                     else -> {}
                                 }
+                            }
+                            // #22B-POST-PHOTOS: единый блок фото поста (общий
+                            // PostPhotoGrid): при carouselEnabled и фото > 1 — карусель
+                            // VK web vkuiCarouselBase (свайп + стрелки + счётчик),
+                            // иначе прежний вид (1-2 — пейджер, 3+ — сетка).
+                            // Клик → photoViewerState — семантика прежняя; urls
+                            // для просмотрщика формирует сам компонент.
+                            if (postPhotos.isNotEmpty()) {
+                                PostPhotoGrid(
+                                    photos = postPhotos,
+                                    onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+                                    carouselEnabled = carouselEnabled,
+                                )
                             }
 
                             // Action bar (лайк/коммент/репост/просмотры).
@@ -1554,9 +1573,13 @@ private fun CommentItem(
                 )
             }
 
-            // Fix #237: вложения комментария (фото/видео/аудио/документ/ссылка/голосовое).
-            // Раньше рендерился только текст — вложения терялись.
-            CommentAttachments(
+            // Fix #237 / #COMMENT-ATTACH-EVERYWHERE (22-B): вложения комментария —
+            // общий CommentAttachmentsView (фото/видео/аудио/док/голосовое/ссылка
+            // + СТИКЕР: у wall-комментариев VK отдаёт {sticker_id, product_id}
+            // БЕЗ images → общий компонент строит URL по CDN-паттерну VK web,
+            // доказанному дампом). Колбэки прежние (источник — параметры экрана,
+            // проброшенные в CommentRow: onVideoClick/onPhotoClick).
+            CommentAttachmentsView(
                 attachments = comment.attachments ?: emptyList(),
                 onVideoClick = onVideoClick,
                 onPhotoClick = onPhotoClick,
@@ -1801,9 +1824,10 @@ private fun ReplyItem(
             // Вложения ответа (если есть).
             // §37.12 #328 fix: attachments nullable — smart-cast через локальную val
             // + isNullOrEmpty() (без non-null assertion и ?. — пользователь явно просил избегать).
+            // 22-B: рендер — общий CommentAttachmentsView (был приватный CommentAttachments).
             val replyAttachments = reply.attachments
             if (!replyAttachments.isNullOrEmpty()) {
-                CommentAttachments(
+                CommentAttachmentsView(
                     attachments = replyAttachments,
                     onVideoClick = onVideoClick,
                     onPhotoClick = onPhotoClick,
@@ -1865,252 +1889,6 @@ private fun ReplyItem(
                 }
             }
         }
-    }
-}
-
-/**
- * Fix #237: рендер вложений комментария. Переиспользует паттерны из рендера
- * поста (фото-сетка, видео-превью, аудио-строка), но в компактном виде для
- * комментария. Поддерживаемые VK типы вложений в wall.createComment / getComments:
- * photo, video, audio, doc, link, audio_message (голосовое), graffiti, poll.
- */
-@Composable
-private fun CommentAttachments(
-    attachments: List<Attachment>,
-    onVideoClick: (Video) -> Unit = {},
-    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
-) {
-    if (attachments.isEmpty()) return
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        // Фото: собираем все фото-вложения в единую сетку (как в посте, но компактнее).
-        val photoUrls = attachments
-            .filter { it.type == "photo" && it.photo != null }
-            .mapNotNull { it.photo?.largestUrl }
-        if (photoUrls.isNotEmpty()) {
-            CommentPhotoGrid(urls = photoUrls, onClick = { idx -> onPhotoClick(photoUrls, idx) })
-        }
-
-        // Остальные вложения по порядку (видео/аудио/документ/ссылка/голосовое).
-        for (att in attachments) {
-            when (att.type) {
-                "photo" -> { /* уже в сетке выше */ }
-                "video" -> att.video?.let { v ->
-                    CommentVideoThumb(video = v, onClick = { onVideoClick(v) })
-                }
-                "audio" -> att.audio?.let { track ->
-                    PostDetailAudioRow(track = track)
-                }
-                "doc" -> att.doc?.let { doc ->
-                    if (!doc.isVoiceMessage) CommentDocChip(doc = doc)
-                    else CommentVoiceChip(duration = doc.audioMsg?.duration ?: 0)
-                }
-                "audio_message" -> att.audioMessage?.let { am ->
-                    CommentVoiceChip(duration = am.duration)
-                }
-                "link" -> att.link?.let { link -> CommentLinkCard(link = link) }
-                else -> { /* poll / graffiti / gift — пока пропускаем */ }
-            }
-        }
-    }
-}
-
-/** Fix #237: компактная сетка фото комментария (1 — крупно, 2 — в ряд,
- *  3-4 — 2×2, 5+ — первая крупно + остальные сеткой). */
-@Composable
-private fun CommentPhotoGrid(urls: List<String>, onClick: (Int) -> Unit) {
-    val cols = when { urls.size == 1 -> 1; urls.size == 2 -> 2; else -> 3 }
-    val rows = (urls.size + cols - 1) / cols
-    val cellSize = if (cols == 1) 200.dp else 96.dp
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp)),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        for (r in 0 until rows) {
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (c in 0 until cols) {
-                    val idx = r * cols + c
-                    if (idx >= urls.size) {
-                        // Заполнитель для выравнивания последнего ряда.
-                        Spacer(modifier = Modifier.size(cellSize))
-                    } else {
-                        AsyncImage(
-                            model = urls[idx],
-                            contentDescription = "Фото комментария",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(cellSize)
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onClick(idx) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Fix #237: превью видео в комментарии — миниатюра с play-иконкой. */
-@Composable
-private fun CommentVideoThumb(video: Video, onClick: () -> Unit) {
-    val thumb = video.thumbUrl
-    Box(
-        modifier = Modifier
-            .size(width = 160.dp, height = 90.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black.copy(alpha = 0.85f))
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (thumb != null) {
-            AsyncImage(
-                model = thumb,
-                contentDescription = "Видео комментария",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        Icon(
-            Icons.Outlined.PlayArrow,
-            contentDescription = "Воспроизвести",
-            tint = Color.White,
-            modifier = Modifier
-                .size(32.dp)
-                .background(
-                    color = Color.Black.copy(alpha = 0.4f),
-                    shape = CircleShape,
-                )
-                .padding(4.dp),
-        )
-    }
-}
-
-/** Fix #237: чип документа в комментарии (иконка + имя + расширение + размер). */
-@Composable
-private fun CommentDocChip(doc: Attachment.Doc) {
-    val ctx = LocalContext.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .clickable {
-                // Открываем URL документа во внешнем браузере (VK doc url — прямой).
-                if (doc.url.isNotBlank()) re.pinok.util.openUrlExternal(ctx, doc.url)
-            }
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Outlined.AttachFile,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = doc.title.ifBlank { "document.${doc.ext}" },
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = "${doc.ext.uppercase()} · ${formatFileSize(doc.size)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** Fix #237: карточка ссылки в комментарии. */
-@Composable
-private fun CommentLinkCard(link: Attachment.Link) {
-    val ctx = LocalContext.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            .clickable { re.pinok.util.openUrlExternal(ctx, link.url) }
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        link.photo?.largestUrl?.let { url ->
-            AsyncImage(
-                model = url,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-        } ?: run {
-            Icon(
-                Icons.Outlined.AttachFile,
-                contentDescription = null,
-                modifier = Modifier.size(28.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = link.title ?: link.url,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast чужого модуля
-            // невозможен; захват в локальный val.
-            val linkDescription = link.description
-            if (!linkDescription.isNullOrBlank()) {
-                Text(
-                    text = linkDescription,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-/** Fix #237: чип голосового сообщения в комментарии. */
-@Composable
-private fun CommentVoiceChip(duration: Int) {
-    val m = duration / 60
-    val s = duration % 60
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Outlined.PlayArrow,
-            contentDescription = "Голосовое",
-            modifier = Modifier.size(18.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = "🎤 ${m}:${"%02d".format(s)}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
     }
 }
 

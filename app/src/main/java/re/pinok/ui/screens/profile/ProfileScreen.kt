@@ -97,11 +97,9 @@ import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
-import re.pinok.data.model.Attachment
 import re.pinok.data.model.Bookmark
 import re.pinok.data.model.Friend
 import re.pinok.data.model.Post
-import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
@@ -109,6 +107,8 @@ import re.pinok.media.PlayerConnection
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
+// #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
+import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
@@ -180,6 +180,15 @@ fun ProfileScreen(
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
+    // #POST-CAROUSEL-EVERYWHERE (22-B): флаг карусели фото — один общий
+    // SovaPrefs.feedCarouselEnabled (управляет лентой/сообществами/профилями/
+    // пост-детейлом; настройка «Настройки → Лента → „Карусель фото в постах"»).
+    // СКОУП-РЕШЕНИЕ: читается ОДИН раз на уровне экрана (здесь, где уже есть
+    // app) и пробрасывается параметром в WallPostCard → RepostBlock (два
+    // места рендера фото — пост и репост-карточка), а не читается на каждый кадр.
+    val prefsSnap by app.prefs.data.collectAsState(initial = null)
+    // NULL-ЯВНО: Snapshot-initial до первого эмита; дефолт true = SovaPrefs default.
+    val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
     var profile by remember { mutableStateOf<UserProfile?>(null) }
     var posts by remember { mutableStateOf<List<Post>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -1072,6 +1081,8 @@ fun ProfileScreen(
                     authorPhoto = p.photo200 ?: p.photo100,
                     onVideoClick = onVideoClick,
                     onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+                    // 22-B: карусель фото (общий SovaPrefs-флаг, см. выше).
+                    carouselEnabled = carouselEnabled,
                     onRepostClick = { repostPost.value = it },
                     // Шаг 5 (#32e): тап по комментарию → onCommentClick → PostDetailScreen.
                     onCommentClick = onCommentClick,
@@ -1694,6 +1705,13 @@ fun WallPostCard(
     // вызовы (без параметра) меню не расширяют.
     showReport: Boolean = false,
     onReportSpam: (Post) -> Unit = {},
+    // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, читается
+    // на уровне экрана ProfileScreen). Дефолт true — легаси-вызовы совместимы
+    // (паттерн 19-A). ЧЕСТНОЕ ОГРАНИЧЕНИЕ: второй вызов WallPostCard —
+    // UserProfileScreen:757 — ВНЕ зоны 22-B, параметр там не прокинут;
+    // карусель на чужом профиле всегда включена (дефолт), независимо от
+    // настройки. Проброс prefs-флага в UserProfileScreen — follow-up оркестратору.
+    carouselEnabled: Boolean = true,
 ) {
     val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
     // Fix #70: ранее video-вложения вообще не отображались на стене профиля.
@@ -1867,9 +1885,12 @@ fun WallPostCard(
                 )
             }
             if (photoAttachments.isNotEmpty()) {
-                PhotoGrid(
+                // 22-B: общий PostPhotoGrid — карусель при включённой настройке
+                // и фото > 1, иначе прежний вид (1-2 пейджер, 3+ сетка).
+                PostPhotoGrid(
                     photos = photoAttachments.mapNotNull { it.photo },
                     onPhotoClick = onPhotoClick,
+                    carouselEnabled = carouselEnabled,
                 )
             }
             // Fix #70: рендерим video-вложения (как в FeedScreen).
@@ -1883,7 +1904,12 @@ fun WallPostCard(
             playlistAttachments.forEach { att -> att.audioPlaylist?.let { PlaylistAttachmentCard(playlist = it) } }
             // Fix #70: рендерим репост (copy_history) — первый элемент.
             post.copyHistory?.firstOrNull()?.let { repost ->
-                RepostBlock(repost = repost, onPhotoClick = onPhotoClick, onVideoClick = onVideoClick)
+                RepostBlock(
+                    repost = repost,
+                    onPhotoClick = onPhotoClick,
+                    onVideoClick = onVideoClick,
+                    carouselEnabled = carouselEnabled,
+                )
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
@@ -1955,40 +1981,6 @@ fun WallPostCard(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun PhotoGrid(
-    photos: List<Attachment.Photo>,
-    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
-) {
-    val photosWithUrl = photos.mapNotNull { photo ->
-        val size = PhotoSizes.best(photo.sizes)
-        val url = size?.url ?: return@mapNotNull null
-        val ratio = if (size.height > 0) size.width.toFloat() / size.height.toFloat() else 1f
-        Triple(photo, url, ratio)
-    }
-    if (photosWithUrl.isEmpty()) return
-    val allUrls = photosWithUrl.map { it.second }
-    val colCount = when { photosWithUrl.size == 1 -> 1; photosWithUrl.size <= 4 -> 2; else -> 3 }
-    FlowRow(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        maxItemsInEachRow = colCount,
-    ) {
-        photosWithUrl.forEachIndexed { index, (_, url, ratio) ->
-            Card(
-                modifier = Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 2f)).clip(RoundedCornerShape(8.dp))
-                    .clickable { onPhotoClick(allUrls, index) },
-                elevation = CardDefaults.cardElevation(0.dp),
-            ) {
-                AsyncImage(model = url, contentDescription = null,
-                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            }
-        }
-    }
-}
-
 // Fix #70: VideoThumbnail для video-вложений на стене (аналог FeedScreen.VideoThumbnail).
 @Composable
 fun VideoThumbnail(video: Video, onClick: (Video) -> Unit) {
@@ -2046,6 +2038,9 @@ fun RepostBlock(
     repost: Post,
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
     onVideoClick: (Video) -> Unit = {},
+    // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, пробрасывается
+    // из WallPostCard). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
+    carouselEnabled: Boolean = true,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
@@ -2095,9 +2090,11 @@ fun RepostBlock(
                 .orEmpty()
             if (repostPhotos.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
-                PhotoGrid(
+                // 22-B: общий PostPhotoGrid (см. WallPostCard выше).
+                PostPhotoGrid(
                     photos = repostPhotos.mapNotNull { it.photo },
                     onPhotoClick = onPhotoClick,
+                    carouselEnabled = carouselEnabled,
                 )
             }
             // #PROFILE-REPOST-ATTACH: видео в репосте (как в WallPostCard).

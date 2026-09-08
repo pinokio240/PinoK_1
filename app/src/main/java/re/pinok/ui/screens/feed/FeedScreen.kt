@@ -5,22 +5,18 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,14 +29,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Call
@@ -110,7 +102,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -137,7 +128,6 @@ import re.pinok.api.VKApiClient
 import re.pinok.data.model.Attachment
 import re.pinok.data.model.Comment
 import re.pinok.data.model.Post
-import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.media.PlayerConnection
@@ -145,8 +135,10 @@ import re.pinok.ui.navigation.PostHolder
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
+import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PlaylistAttachmentCard
+import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.FeedRightPanel
@@ -1847,25 +1839,20 @@ fun FeedScreen(
         },
     )
 
-    // Bottom sheet комментариев — #43: показываем список + добавляем новый.
+    // Bottom sheet комментариев — #43.
+    // Волна 22: шит САМОДОСТАТОЧЕН — отправку wallCreateComment (включая
+    // reply_to_comment, Fix #209) и перезагрузку wallGetComments он делает сам
+    // (внутри есть SovaApp и scope), поэтому колбэк onSubmitComment удалён.
+    // Навигационные колбэки — реальные механизмы этого экрана: видео →
+    // onVideoClickSavePos (сохранение скролл-позиции перед уходом, Fix #100),
+    // фото → photoViewerState (полноэкранный PhotoViewer ниже).
     val commenting = commentingPost.value
     if (commenting != null) {
         CommentsBottomSheet(
             post = commenting,
             onDismiss = { commentingPost.value = null },
-            onSubmitComment = { message, attachment ->
-                scope.launch {
-                    val id = app.apiClient.wallCreateComment(
-                        commenting.ownerId, commenting.id, message,
-                        attachments = attachment,
-                    )
-                    if (id > 0) {
-                        AppLog.i("FeedScreen", "Comment added: id=$id")
-                    } else {
-                        AppLog.w("FeedScreen", "Comment failed for post ${commenting.id}")
-                    }
-                }
-            },
+            onVideoClick = onVideoClickSavePos,
+            onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
         )
     }
 
@@ -2323,7 +2310,11 @@ private fun PostCard(
                 }
             }
             if (photoAttachments.isNotEmpty()) {
-                PhotoGrid(
+                // #POST-CAROUSEL-EVERYWHERE (волна 22): общий ui/components-компонент вместо
+                // приватных дубликатов 19-A (семантика 1:1 — VK web vkuiCarouselBase:
+                // свайп + полновысотные зоны-стрелки + счётчик; carouselEnabled=false →
+                // прежний вид: ≤2 пейджер, 3+ сетка). Флаг пробрасывается параметром.
+                PostPhotoGrid(
                     photos = photoAttachments.mapNotNull { it.photo },
                     onPhotoClick = onPhotoClick,
                     carouselEnabled = carouselEnabled,
@@ -2630,248 +2621,6 @@ private fun PostCard(
                     text = timeStr,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
-@Composable
-private fun PhotoGrid(
-    photos: List<Attachment.Photo>,
-    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
-    // #FEED-CAROUSEL (19-A): настройка feedCarouselEnabled (SovaPrefs, default true).
-    // false → поведение ИДЕНТИЧНО прежнему: ≤2 фото — пейджер, 3+ — сетка FlowRow.
-    carouselEnabled: Boolean = true,
-) {
-    val photosWithUrl = photos.mapNotNull { photo ->
-        val size = PhotoSizes.best(photo.sizes)
-        val url = size?.url ?: return@mapNotNull null
-        val ratio = if (size.height > 0) size.width.toFloat() / size.height.toFloat() else 1f
-        Triple(photo, url, ratio)
-    }
-    if (photosWithUrl.isEmpty()) return
-    val allUrls = photosWithUrl.map { it.second }
-
-    // #FEED-CAROUSEL (19-A): при включённой настройке ЛЮБОЕ число фото >1 —
-    // карусель с пейджером, стрелками и счётчиком (VK web photo_page_carousel).
-    if (carouselEnabled && photosWithUrl.size > 1) {
-        FeedPhotoCarousel(
-            photosWithUrl = photosWithUrl,
-            allUrls = allUrls,
-            onPhotoClick = onPhotoClick,
-        )
-        return
-    }
-
-    // 1-2 фото — карусель с счётчиком N/M (как в ВК).
-    if (photosWithUrl.size <= 2) {
-        val pagerState = rememberPagerState(pageCount = { photosWithUrl.size })
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-                .clip(RoundedCornerShape(8.dp))
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxWidth(),
-            ) { page ->
-                val (_, url, ratio) = photosWithUrl[page]
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(ratio.coerceIn(0.5f, 2f))
-                        .clickable { onPhotoClick(allUrls, page) },
-                    elevation = CardDefaults.cardElevation(0.dp),
-                ) {
-                    AsyncImage(
-                        model = url, contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-            }
-            // Счётчик "N/M" в правом верхнем углу (если > 1 фото).
-            if (photosWithUrl.size > 1) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = "${pagerState.currentPage + 1}/${photosWithUrl.size}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                    )
-                }
-            }
-        }
-    } else {
-        // 3+ фото — сетка (FlowRow).
-        val colCount = if (photosWithUrl.size <= 4) 2 else 3
-        FlowRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            maxItemsInEachRow = colCount,
-        ) {
-            photosWithUrl.forEachIndexed { index, (_, url, ratio) ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(ratio.coerceIn(0.5f, 2f))
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onPhotoClick(allUrls, index) },
-                    elevation = CardDefaults.cardElevation(0.dp),
-                ) {
-                    AsyncImage(
-                        model = url, contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * #FEED-CAROUSEL (19-A): карусель фото поста для ЛЮБОГО количества фото >1
- * (VK web photo_page_carousel). HorizontalPager + стрелки < > по краям
- * (полупрозрачный фон-кружок, видны только когда страниц >1 — здесь всегда >1,
- * т.к. вызывается гардом из [PhotoGrid]) + счётчик «n/N» в прежнем стиле.
- *
- * Поведение:
- * - aspectRatio контейнера = ratio ТЕКУЩЕЙ страницы (pagerState.currentPage),
- *   coerceIn(0.5f, 2f) — как в прежних ветках; высота меняется ПЛАВНО
- *   (Modifier.animateContentSize) — честный выбор: без него высота прыгала бы
- *   скачком при смене currentPage (переключение происходит в момент укладки
- *   страницы после свайпа).
- * - клик по фото → onPhotoClick(allUrls, page) — как раньше;
- * - клик по стрелкам НЕ триггерит клик по фото: стрелки — отдельные IconButton
- *   поверх пейджера, их клик поглощается кнопкой и не доходит до карточки.
- * - на крайних страницах соответствующая стрелка скрыта (честный гвард
- *   currentPage>0 / currentPage<lastIndex, анимация на недоступную страницу
- *   невозможна).
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FeedPhotoCarousel(
-    photosWithUrl: List<Triple<Attachment.Photo, String, Float>>,
-    allUrls: List<String>,
-    onPhotoClick: (List<String>, Int) -> Unit,
-) {
-    val pagerState = rememberPagerState(pageCount = { photosWithUrl.size })
-    val scope = rememberCoroutineScope()
-    // Ratio текущей страницы (индекс всегда в диапазоне: pageCount == photosWithUrl.size).
-    val currentRatio = photosWithUrl[pagerState.currentPage].third.coerceIn(0.5f, 2f)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            // animateContentSize ДО aspectRatio: анимирует смену высоты,
-            // которую производит aspectRatio текущей страницы.
-            .animateContentSize()
-            .aspectRatio(currentRatio),
-    ) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize(),
-        ) { page ->
-            val (_, url, _) = photosWithUrl[page]
-            Card(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable { onPhotoClick(allUrls, page) },
-                elevation = CardDefaults.cardElevation(0.dp),
-            ) {
-                AsyncImage(
-                    model = url, contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-        }
-        // Счётчик "N/M" в правом верхнем углу — стиль прежнего пейджера сохранён.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp)
-                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            Text(
-                text = "${pagerState.currentPage + 1}/${photosWithUrl.size}",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White,
-            )
-        }
-        // #FEED-CAROUSEL (19-A) + VK web vkuiCarouselBase (2026-09-08): органы
-        // управления по паттерну VK web attachmentCarousel (снапшот Лента,
-        // «Лента_ фотографии.html»: vkuiCarouselBase__arrow + vkuiScrollArrow__sizeS):
-        // полновысотная зона нажатия по краю слайда (arrowAreaFit,
-        // --arrow-area-height = высота слайда) + тонкий шеврон 12×16 по центру
-        // по вертикали, БЕЗ кружка-фона (VK web рендерит голый шеврон);
-        // рендерится только применимая стрелка (на первом слайде только «вперёд» —
-        // в снапшоте ровно так: arrowStart отсутствует, есть только arrowEnd).
-        // Стрелка — отдельный клик-таргет поверх пейджера: клик НЕ доходит до фото.
-        if (pagerState.currentPage > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .width(44.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {
-                        scope.launch {
-                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.ChevronLeft,
-                    contentDescription = "Предыдущее фото",
-                    tint = Color.White,
-                    modifier = Modifier
-                        .size(28.dp)
-                        .shadow(4.dp, CircleShape),
-                )
-            }
-        }
-        // Стрелка «вперёд» — по правому краю, та же VK web-геометрия.
-        if (pagerState.currentPage < photosWithUrl.lastIndex) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(44.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {
-                        scope.launch {
-                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.ChevronRight,
-                    contentDescription = "Следующее фото",
-                    tint = Color.White,
-                    modifier = Modifier
-                        .size(28.dp)
-                        .shadow(4.dp, CircleShape),
                 )
             }
         }
@@ -3416,12 +3165,36 @@ private fun DocAttachmentCard(doc: Attachment.Doc, onOpen: () -> Unit = {}) {
 // — используется в FeedScreen, ProfileScreen, UserProfileScreen, CommunityScreen.
 
 
+/**
+ * Волна 22 (#COMMENT-REPLY-FEED): шит комментариев поста ИЗ ЛЕНТЫ — самодостаточный:
+ * сам загружает wallGetComments, сам отправляет wallCreateComment (включая
+ * reply_to_comment — ответ на комментарий, паттерн 1:1 из PostDetailScreen Fix #209),
+ * сам перезагружает список после успешной отправки. Раньше отправка шла через
+ * колбэк onSubmitComment наверх (wallCreateComment БЕЗ replyToComment, результат
+ * игнорировался, список никогда не обновлялся с сервера) — колбэк УДАЛЁН.
+ *
+ * - Reply: кнопка «Ответить» в CommentRow → превью цели над композером →
+ *   reply_to_comment при отправке; оптимистичный комментарий несёт
+ *   replyToUser/replyToComment → «Ответ X» виден сразу.
+ * - Перезагрузка после отправки: серверный список wallGetComments — источник
+ *   истины. Решение (честно): локальные оптимистичные чистятся ТОЛЬКО при
+ *   успешной перезагрузке (loadComments() == true); если она упала (сеть
+ *   мигнула сразу после успешной отправки) — оптимистичные ОСТАЮТСЯ, чтобы
+ *   отправленный комментарий не исчез из UI до следующего открытия шита.
+ * - Содержимое комментариев (#COMMENT-ATTACH-EVERYWHERE): CommentRow рендерит
+ *   comment.attachments через общий CommentAttachmentsView (фото/видео/аудио/
+ *   doc/voice/link/стикер по CDN-паттерну VK web).
+ * - onVideoClick/onPhotoClick — реальные навигационные колбэки FeedScreen
+ *   (см. место вызова); по умолчанию пустые — контекст без навигации рендерит
+ *   вложения без перехода (честный no-op, не заглушка-обещание).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CommentsBottomSheet(
     post: Post,
     onDismiss: () -> Unit,
-    onSubmitComment: (String, String?) -> Unit,
+    onVideoClick: (Video) -> Unit = {},
+    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
     val ctx = LocalContext.current
@@ -3434,6 +3207,8 @@ private fun CommentsBottomSheet(
     var sending by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
     var localComments by remember { mutableStateOf<List<Comment>>(emptyList()) }
+    // Волна 22: комментарий, на который отвечаем (reply-режим); null = обычный комментарий.
+    var replyingToComment by remember { mutableStateOf<Comment?>(null) }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachmentString by remember { mutableStateOf<String?>(null) }
     var showAttachMenu by remember { mutableStateOf(false) }
@@ -3530,20 +3305,28 @@ private fun CommentsBottomSheet(
         }
     }
 
-    // Загружаем комментарии при открытии sheet.
-    LaunchedEffect(post.id) {
-        scope.launch {
-            loading = true
-            try {
-                val result = app.apiClient.wallGetComments(post.ownerId, post.id, count = 50)
-                comments = result.comments
-                profiles = result.profiles
-            } catch (e: Exception) {
-                AppLog.e("FeedScreen", "Failed to load comments", e)
-            } finally {
-                loading = false
-            }
+    // Загружаем комментарии: при открытии sheet и после успешной отправки
+    // (волна 22 — серверный список становится источником истины). Раньше
+    // загрузка была одноразовой (внутри LaunchedEffect) и после отправки
+    // список никогда не обновлялся с сервера.
+    // suspend + Boolean-результат: отправке нужно ЗНАТЬ, пришёл ли серверный
+    // список, чтобы решить, чистить ли оптимистичные (см. KDoc шита).
+    suspend fun loadComments(): Boolean {
+        loading = true
+        try {
+            val result = app.apiClient.wallGetComments(post.ownerId, post.id, count = 50)
+            comments = result.comments
+            profiles = result.profiles
+            return true
+        } catch (e: Exception) {
+            AppLog.e("FeedScreen", "Failed to load comments", e)
+            return false
+        } finally {
+            loading = false
         }
+    }
+    LaunchedEffect(post.id) {
+        loadComments()
     }
 
     ModalBottomSheet(
@@ -3585,6 +3368,12 @@ private fun CommentsBottomSheet(
                                 comment = comment,
                                 author = profiles[comment.fromId],
                                 postOwnerId = post.ownerId,
+                                // Волна 22: reply-режим — кнопка «Ответить» и «Ответ X»
+                                // (profiles нужен для имени автора цели ответа).
+                                onReply = { replyingToComment = comment },
+                                profiles = profiles,
+                                onVideoClick = onVideoClick,
+                                onPhotoClick = onPhotoClick,
                             )
                         }
                     }
@@ -3620,6 +3409,85 @@ private fun CommentsBottomSheet(
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = { attachedFileName = null; attachmentString = null }, modifier = Modifier.size(24.dp)) {
+                        Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                    }
+                }
+            }
+
+            // Волна 22: превью комментария, на который отвечаем (reply-режим).
+            // Паттерн 1:1 из PostDetailScreen Fix #209: аватар автора + «Ответ {имя}»
+            // + первые 60 символов текста + ✕ для отмены. Клик по превью — НЕ действие
+            // (отменяет только ✕), как в VK web.
+            val replyTarget = replyingToComment
+            if (replyTarget != null) {
+                val replyAuthor = profiles[replyTarget.fromId]
+                // Честный фолбэк: VK скрывает профиль удалённого/закрытого юзера —
+                // без профиля показываем нейтральное имя (заголовок «Ответ пользователю»).
+                val replyAuthorName: String = if (replyAuthor != null) {
+                    replyAuthor.fullName
+                } else {
+                    "пользователю"
+                }
+                // Явная развязка вместо элвиса (NULL-EXPLICIT).
+                val replyAuthorAvatar: String? = if (replyAuthor != null) replyAuthor.photo100 else null
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Аватар автора цели: из profiles; без профиля/фото — кружок
+                    // с первой буквой (или «?», если имени нет).
+                    if (replyAuthorAvatar != null) {
+                        AsyncImage(
+                            model = replyAuthorAvatar,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = if (replyAuthor != null) replyAuthorName.take(1).uppercase() else "?",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Ответ $replyAuthorName",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            // До 60 символов; пустой текст (комментарий-вложение) → «(вложение)».
+                            text = replyTarget.text.take(60).ifBlank { "(вложение)" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(
+                        onClick = { replyingToComment = null },
+                        modifier = Modifier.size(24.dp),
+                    ) {
                         Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                     }
                 }
@@ -3707,22 +3575,73 @@ private fun CommentsBottomSheet(
                         val msg = inputText.trim()
                         val hasContent = msg.isNotBlank() || attachedFileName != null
                         if (!hasContent || sending || uploading) return@TextButton
+                        // Волна 22: фиксируем reply-цель ДО очистки состояния
+                        // (паттерн 1:1 из PostDetailScreen Fix #209). Явная развязка
+                        // вместо элвиса: id цели > 0 → отвечаем на неё; иначе
+                        // (обычный комментарий) reply-параметры не передаются вовсе.
+                        val replyTarget = replyingToComment
+                        val replyToCommentId: Long? = if (replyTarget != null && replyTarget.id > 0) replyTarget.id else null
+                        val optimisticId = -System.currentTimeMillis()
                         val optimistic = Comment(
-                            id = -System.currentTimeMillis(),
+                            id = optimisticId,
                             fromId = 0,
                             date = System.currentTimeMillis() / 1000,
                             text = if (msg.isBlank()) "📎 $attachedFileName" else msg,
+                            // Волна 22: reply-контекст в оптимистичном комментарии —
+                            // «Ответ {имя}» виден сразу, до перезагрузки с сервера.
+                            replyToUser = if (replyTarget != null) replyTarget.fromId else null,
+                            replyToComment = replyToCommentId,
                         )
                         localComments = localComments + optimistic
                         val textToSend = msg
                         val attachmentToSend = attachmentString
-                        val hadAttachment = attachedFileName != null
+                        // Прячем UI сразу — оптимистичный UX (как в PostDetailScreen).
                         inputText = ""
                         attachedFileName = null
                         attachmentString = null
+                        replyingToComment = null
                         scope.launch {
                             sending = true
-                            onSubmitComment(textToSend, attachmentToSend)
+                            // Волна 22: отправка В САМОМ шите (раньше — колбэк onSubmitComment
+                            // наверх без replyToComment, результат игнорировался, список не
+                            // обновлялся). reply_to_comment поддержан VKA с Fix #209.
+                            val id = app.apiClient.wallCreateComment(
+                                post.ownerId, post.id, textToSend,
+                                attachments = attachmentToSend,
+                                replyToComment = replyToCommentId,
+                            )
+                            if (id > 0) {
+                                AppLog.i("CommentsBottomSheet", "Comment added: id=$id")
+                                // Серверный список — источник истины: перезагружаем с сервера.
+                                // Решение (честно, см. KDoc шита): оптимистичные чистим
+                                // ТОЛЬКО при успешной перезагрузке; если сеть упала сразу
+                                // после успешной отправки — комментарий остаётся видимым
+                                // локально до следующего открытия шита, а не исчезает.
+                                val reloaded = loadComments()
+                                if (reloaded) {
+                                    localComments = emptyList()
+                                }
+                            } else {
+                                // Провал отправки: откатываем оптимистичный (по id) и
+                                // показываем честную причину (lastApiError VKA, сбрасывается
+                                // в начале каждого вызова — #STALE-ERR-FIX).
+                                localComments = localComments.filter { it.id != optimisticId }
+                                AppLog.w("CommentsBottomSheet", "Comment failed for post ${post.id}")
+                                val apiErr = app.apiClient.lastApiError
+                                if (apiErr != null && apiErr.isNotBlank()) {
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        "Не удалось отправить комментарий: $apiErr",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        "Не удалось отправить комментарий",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
                             sending = false
                         }
                     },
@@ -3777,8 +3696,30 @@ private fun CommentsBottomSheet(
     }
 }
 
+/**
+ * Строка комментария в CommentsBottomSheet (аватар/имя/дата/текст/вложения/действия).
+ *
+ * Волна 22 (#COMMENT-REPLY-FEED + #COMMENT-ATTACH-EVERYWHERE):
+ * - onReply — колбэк кнопки «Ответить» рядом с лайком (как в VK web);
+ *   null = кнопка скрыта (контекст без reply-режима). Рендерится ТОЛЬКО при
+ *   id > 0: оптимистичный комментарий (id < 0) ещё не отправлен — отвечать
+ *   на него нельзя.
+ * - profiles — профили участников: имя автора комментария-цели для метки
+ *   «Ответ {имя}» над текстом; без профиля — честный фолбэк «Ответ
+ *   пользователю» (VK скрывает профиль удалённого/закрытого юзера).
+ * - onVideoClick/onPhotoClick — переходы из вложений комментария через общий
+ *   CommentAttachmentsView; дефолтные пустые = вложения без навигации.
+ */
 @Composable
-private fun CommentRow(comment: Comment, author: UserProfile?, postOwnerId: Long = 0L) {
+private fun CommentRow(
+    comment: Comment,
+    author: UserProfile?,
+    postOwnerId: Long = 0L,
+    onReply: (() -> Unit)? = null,
+    profiles: Map<Long, UserProfile> = emptyMap(),
+    onVideoClick: (Video) -> Unit = {},
+    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+) {
     val name = author?.let { "${it.firstName} ${it.lastName}" } ?: "id${comment.fromId}"
     val photo = author?.photo100
     // Sprint 2, P1-2 (#89): локальное состояние лайка комментария.
@@ -3822,47 +3763,109 @@ private fun CommentRow(comment: Comment, author: UserProfile?, postOwnerId: Long
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
+            // Волна 22: контекст ответа — «Ответ {имя}» над текстом комментария
+            // (reply_to_user — uid автора родителя; VK web рендерит такую метку).
+            val replyToUserId = comment.replyToUser
+            if (replyToUserId != null) {
+                val replyToProfile = profiles[replyToUserId]
+                val replyLabel: String = if (replyToProfile != null) {
+                    "Ответ ${replyToProfile.fullName}"
+                } else {
+                    // Честный фолбэк: профиль не в выборке / скрыт VK.
+                    "Ответ пользователю"
+                }
+                Text(
+                    text = replyLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = comment.text,
                 style = MaterialTheme.typography.bodySmall,
             )
-            // Sprint 2, P1-2 (#89): кликабельная кнопка лайка комментария.
-            if (postOwnerId != 0L && comment.id > 0) {
+            // Волна 22 (#COMMENT-ATTACH-EVERYWHERE): содержимое комментария —
+            // фото/видео/аудио/doc/voice/link/стикер через общий компонент
+            // (раньше вложения комментариев ленты не отображались вовсе).
+            val commentAttachments = comment.attachments
+            if (commentAttachments != null) {
+                CommentAttachmentsView(
+                    attachments = commentAttachments,
+                    onVideoClick = onVideoClick,
+                    onPhotoClick = onPhotoClick,
+                )
+            }
+            // Действия: «Ответить» + лайк в одной строке (как в VK web).
+            // Sprint 2, P1-2 (#89): лайк кликабелен при postOwnerId != 0 и id > 0;
+            // «Ответить» (волна 22) — при onReply != null и id > 0 (см. KDoc).
+            if (comment.id > 0 && (postOwnerId != 0L || onReply != null)) {
                 Spacer(modifier = Modifier.height(2.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable {
-                        val newLiked = !isLiked
-                        isLiked = newLiked
-                        likeCount = (likeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
-                        scope.launch {
-                            val newCount = if (newLiked) {
-                                app.apiClient.likesAdd("comment", postOwnerId, comment.id)
-                            } else {
-                                app.apiClient.likesDelete("comment", postOwnerId, comment.id)
-                            }
-                            if (newCount >= 0) {
-                                likeCount = newCount
-                            } else {
-                                isLiked = !newLiked
-                                likeCount = (likeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (postOwnerId != 0L) {
+                        // Sprint 2, P1-2 (#89): кликабельная кнопка лайка комментария.
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable {
+                                val newLiked = !isLiked
+                                isLiked = newLiked
+                                likeCount = (likeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
+                                scope.launch {
+                                    val newCount = if (newLiked) {
+                                        app.apiClient.likesAdd("comment", postOwnerId, comment.id)
+                                    } else {
+                                        app.apiClient.likesDelete("comment", postOwnerId, comment.id)
+                                    }
+                                    if (newCount >= 0) {
+                                        likeCount = newCount
+                                    } else {
+                                        isLiked = !newLiked
+                                        likeCount = (likeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
+                                    }
+                                }
+                            }.padding(vertical = 2.dp),
+                        ) {
+                            Icon(
+                                if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
+                                null,
+                                modifier = Modifier.size(14.dp),
+                                tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
+                            )
+                            if (likeCount > 0) {
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = likeCount.toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
+                                )
                             }
                         }
-                    }.padding(vertical = 2.dp),
-                ) {
-                    Icon(
-                        if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                        null,
-                        modifier = Modifier.size(14.dp),
-                        tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
-                    )
-                    if (likeCount > 0) {
-                        Spacer(modifier = Modifier.width(3.dp))
+                    } else if (likeCount > 0) {
+                        // Лайк недоступен (postOwnerId == 0) — счётчик без клика.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Outlined.FavoriteBorder,
+                                null,
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.outline,
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = likeCount.toString(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                    // Волна 22: «Ответить» — labelSmall/primary, кликабельно.
+                    // onReply != null гарантируется условием рендера выше.
+                    if (onReply != null) {
+                        Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = likeCount.toString(),
+                            text = "Ответить",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { onReply() }.padding(vertical = 2.dp),
                         )
                     }
                 }

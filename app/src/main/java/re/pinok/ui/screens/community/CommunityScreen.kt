@@ -51,6 +51,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,11 +79,11 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
-import re.pinok.data.model.Attachment
 import re.pinok.data.model.Post
-import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
+// #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
+import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
@@ -115,6 +116,15 @@ fun CommunityScreen(
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
+    // #POST-CAROUSEL-EVERYWHERE (22-B): флаг карусели фото — один общий
+    // SovaPrefs.feedCarouselEnabled (управляет лентой/сообществами/профилями/
+    // пост-детейлом; настройка «Настройки → Лента → „Карусель фото в постах"»).
+    // СКОУП-РЕШЕНИЕ: читается ОДИН раз на уровне экрана (здесь, где уже есть
+    // app) и пробрасывается параметром в CommunityPostCard (два места рендера
+    // фото — пост и репост-карточка — внутри неё), а не читается на каждый кадр.
+    val prefsSnap by app.prefs.data.collectAsState(initial = null)
+    // NULL-ЯВНО: Snapshot-initial до первого эмита; дефолт true = SovaPrefs default.
+    val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
     var groupInfo by remember { mutableStateOf<VKApiClient.GroupInfo?>(null) }
     var posts by remember { mutableStateOf<List<Post>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -768,6 +778,8 @@ fun CommunityScreen(
                 onVideoClick = onVideoClick,
                 onPostClick = onPostClick,
                 onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+                // 22-B: карусель фото (общий SovaPrefs-флаг, см. выше).
+                carouselEnabled = carouselEnabled,
                 onRepostClick = { repostPost.value = it },
                 onLikeToggle = { ownerId, postId, currentlyLiked ->
                     val key = "${ownerId}_${postId}"
@@ -1149,6 +1161,9 @@ private fun CommunityPostCard(
     onCommentClick: (ownerId: Long, postId: Long) -> Unit = { _, _ -> },
     // S6-4: переопределение лайков для оптимистичного UI.
     likesOverride: Pair<Boolean, Int>? = null,
+    // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, читается
+    // на уровне экрана). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
+    carouselEnabled: Boolean = true,
 ) {
     val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
     val videoAttachments = post.attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
@@ -1244,9 +1259,12 @@ private fun CommunityPostCard(
                 }
             }
             if (photoAttachments.isNotEmpty()) {
-                PhotoGrid(
+                // 22-B: общий PostPhotoGrid — карусель при включённой настройке
+                // и фото > 1, иначе прежний вид (1-2 пейджер, 3+ сетка).
+                PostPhotoGrid(
                     photos = photoAttachments.mapNotNull { it.photo },
                     onPhotoClick = onPhotoClick,
+                    carouselEnabled = carouselEnabled,
                 )
             }
             // #WALL-CLIPS: клипы (isClip) рендерим вертикальной карточкой,
@@ -1294,9 +1312,11 @@ private fun CommunityPostCard(
                             )
                         }
                         if (rPhotos.isNotEmpty()) {
-                            PhotoGrid(
+                            // 22-B: общий PostPhotoGrid (см. пост выше).
+                            PostPhotoGrid(
                                 photos = rPhotos.mapNotNull { it.photo },
                                 onPhotoClick = onPhotoClick,
+                                carouselEnabled = carouselEnabled,
                             )
                         }
                         rVideos.forEach { att ->
@@ -1347,40 +1367,6 @@ private fun CommunityPostCard(
                             fontSize = 11.sp)
                     }
                 }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun PhotoGrid(
-    photos: List<Attachment.Photo>,
-    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
-) {
-    val photosWithUrl = photos.mapNotNull { photo ->
-        val size = PhotoSizes.best(photo.sizes)
-        val url = size?.url ?: return@mapNotNull null
-        val ratio = if (size.height > 0) size.width.toFloat() / size.height.toFloat() else 1f
-        Triple(photo, url, ratio)
-    }
-    if (photosWithUrl.isEmpty()) return
-    val allUrls = photosWithUrl.map { it.second }
-    val colCount = when { photosWithUrl.size == 1 -> 1; photosWithUrl.size <= 4 -> 2; else -> 3 }
-    FlowRow(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        maxItemsInEachRow = colCount,
-    ) {
-        photosWithUrl.forEachIndexed { index, (_, url, ratio) ->
-            Card(
-                modifier = Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 2f)).clip(RoundedCornerShape(8.dp))
-                    .clickable { onPhotoClick(allUrls, index) },
-                elevation = CardDefaults.cardElevation(0.dp),
-            ) {
-                AsyncImage(model = url, contentDescription = null,
-                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             }
         }
     }

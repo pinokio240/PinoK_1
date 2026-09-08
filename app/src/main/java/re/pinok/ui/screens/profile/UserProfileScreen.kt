@@ -49,6 +49,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -158,6 +159,12 @@ fun UserProfileScreen(
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    // #POST-CAROUSEL-EVERYWHERE (волна 22): ОДИН флаг карусели на все поверхности —
+    // follow-up 22-B (UserProfileScreen был вне зоны агента: дефолт true без флага,
+    // настройка «Карусель фото в постах» здесь бы не работала).
+    val prefsSnap by app.prefs.data.collectAsState(initial = null)
+    // NULL-ЯВНО: Snapshot-initial до первого эмита; дефолт true = SovaPrefs default.
+    val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
     var profile by remember { mutableStateOf<UserProfile?>(null) }
     var posts by remember { mutableStateOf<List<Post>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -758,6 +765,7 @@ fun UserProfileScreen(
                     post = post,
                     authorName = p.fullName,
                     authorPhoto = p.photo200 ?: p.photo100,
+                    carouselEnabled = carouselEnabled,
                     onVideoClick = onVideoClick,
                     onPostClick = onPostClick,
                     onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
