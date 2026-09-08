@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+// Fix #378: закреплённая кнопка выхода — поднимаем её над жестовой навигацией.
+import androidx.compose.foundation.layout.navigationBarsPadding
 // П-8-REACT: пикер реакций всплывает НАД кнопкой лайка (паттерн FeedScreen :2198).
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -65,6 +67,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+// Fix #378: разделитель над закреплённой кнопкой выхода.
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -307,6 +311,10 @@ fun ProfileScreen(
     var reportInFlight by remember { mutableStateOf(false) }
     // Диалог правки статуса (status.set).
     var showStatusDialog by remember { mutableStateOf(false) }
+    // Fix #378: подтверждение выхода из аккаунта (тот же диалог-предупреждение,
+    // что у пункта «Выйти из аккаунта» в боковом drawer — Fix #369): кнопка теперь
+    // закреплена внизу экрана и легко нажимается случайно — без подтверждения нельзя.
+    var showLogoutConfirm by remember { mutableStateOf(false) }
     var statusSaving by remember { mutableStateOf(false) }
     var statusError by remember { mutableStateOf<String?>(null) }
 
@@ -960,7 +968,12 @@ fun ProfileScreen(
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
     // ProfileScreen в hasOwnTopBar списке SovaNavHost, но своего Scaffold нет
     // (глобальный TopAppBar не рисуется) → insets применяем сами.
-    LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+    // Fix #378 (#PROFILE-LOGOUT-PINNED): LazyColumn обёрнут в Column с weight(1f),
+    // чтобы ПОД ним всегда была видна закреплённая кнопка «Выйти из аккаунта» —
+    // раньше она была ПОСЛЕДНИМ item этого LazyColumn и была видна только после
+    // прокрутки всей стены (сотни постов) — юзер не находил её при входе в раздел.
+    Column(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(modifier = Modifier.weight(1f).statusBarsPadding()) {
         // П-1: тап по статусу → диалог правки (status.set).
         item {
             ProfileHeader(
@@ -1233,16 +1246,65 @@ fun ProfileScreen(
                 )
             }
         }
-        // Кнопка выхода — видна на любой вкладке (единственный вход в логаут).
-        item {
-            Button(
-                onClick = onLogout,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
-                Text("  Выйти из аккаунта")
-            }
-        }
+        // Fix #378: кнопка выхода ПЕРЕНЕСЕНА из последнего item в закреплённую
+        // строку под LazyColumn (см. ниже) — видна сразу при входе в раздел,
+        // на любой вкладке, без прокрутки стены.
+    }
+
+    // Fix #378 (#PROFILE-LOGOUT-PINNED): закреплённая кнопка «Выйти из аккаунта» —
+    // всегда видна внизу экрана профиля (вне скролла), на любой вкладке контента.
+    // Стиль строки — как соседняя «Редактировать профиль» (иконка 20dp + текст
+    // bodyMedium в primary); высота с пэддингами ≥ 48dp (touch-target).
+    // navigationBarsPadding — не уезжает под жестовую навигацию (Scaffold нет,
+    // insets применяем сами — см. комментарий Fix #43 выше).
+    HorizontalDivider()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showLogoutConfirm = true }
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.AutoMirrored.Filled.Logout,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "Выйти из аккаунта",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+    }
+
+    // Fix #378: диалог-подтверждение — тот же текст, что у drawer-пункта (Fix #369):
+    // юзер явно требовал предупреждение про остановку сессии и очистку кукисов.
+    // Confirm ведёт в onLogout — в SovaNavHost это уже обёртка
+    // onLogoutWithHoldersClear (Fix #370): сброс holders → signOut → куки/токен.
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Выйти из аккаунта?") },
+            text = {
+                Text(
+                    "Сессия будет остановлена, куки авторизации будут очищены. " +
+                        "Потребуется повторный вход."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLogoutConfirm = false
+                    onLogout()
+                }) { Text("Выйти") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) { Text("Отмена") }
+            },
+        )
     }
 
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.

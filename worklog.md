@@ -8172,3 +8172,20 @@ Stage Summary:
 - Волна 26 завершена: Fix #368 (меню ленты открывается из ЛЮБОГО состояния экрана), #369/#370 (закреплённый logout в drawer + предупреждение + дочистка holders/web_token), #CALLS-DNS-PIN (ручной IP в Настройки→Звонки, применяется без перезапуска), #377 (resume-цепочка после Doze: fresh-сеть → проактивный токен → silent-retry 20с → немедленный #341 → foreground-reload ленты → cookie flush ×4), #371-#376 (профиль = паритет с лентой: expand+linkify, карусели видео, кликабельный репост, link/poll/doc, «Закреплённый пост»)
 - HISTORY.md дополнен волной 26 (Симптом/Root-cause/Фиксы/Проверка юзером)
 - Коммит + push в origin/PinoK (следующий коммит)
+
+---
+Task ID: 26-1
+Agent: main (Z.ai Code)
+Task: Fix #378 — кнопка «Выйти из аккаунта» не видна при входе в Профиль → закреплена внизу экрана (#PROFILE-LOGOUT-PINNED) + docs + git
+
+Work Log:
+- Диагноз: кнопка была ПОСЛЕДНИМ item LazyColumn ProfileScreen (за всей стеной) — при входе в раздел невидима; drawer-пункт Fix #369 юзер не связал с профилем
+- ProfileScreen.kt: LazyColumn обёрнут в Column(fillMaxSize), список → weight(1f); добавлены HorizontalDivider + закреплённая Row «Выйти из аккаунта» (иконка Logout 20dp primary + bodyMedium primary, clickable, navigationBarsPadding, touch-target ≥48dp) — стиль строки «Редактировать профиль»
+- Добавлен showLogoutConfirm + AlertDialog с тем же текстом предупреждения, что в drawer (Fix #369): «Сессия будет остановлена, куки авторизации будут очищены. Потребуется повторный вход.»; confirm → onLogout (= onLogoutWithHoldersClear из SovaNavHost, Fix #370)
+- Старый последний-item Button удалён (единственная точка входа; Button жив в error-ветке :552); импорты +navigationBarsPadding, +HorizontalDivider
+- Сканеры: check-nested-comments ALL CLEAN (173); скобки {} () HEAD→WORK 0/0→0/0 OK; NULL-скан '+'-строк: 0 хитов
+- HISTORY.md: волна 26-1 (Симптом/Root-cause/Фиксы/Проверка юзером)
+
+Stage Summary:
+- Кнопка «Выйти из аккаунта» теперь закреплена внизу экрана Профиля: видна СРАЗУ при входе, на любой вкладке, не уезжает при прокрутке и под жестовую навигацию; выход защищён диалогом с предупреждением; механизм logout общий с drawer (holders clear → signOut → куки/токен)
+- Коммит + push в origin/PinoK (следующий коммит)
