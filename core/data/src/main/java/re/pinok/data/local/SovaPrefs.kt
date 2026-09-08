@@ -205,6 +205,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // token (выдаётся только по запросу в support), недоступен нашему web-token,
             // поэтому закрепление хранится локально + sync-попытка API best-effort.
             pinnedConvsData    = p[Keys.PINNED_CONVS_DATA]        ?: "",
+            // Fix #356 #MSG-ARCHIVE: JSON-массив peer_id архивных диалогов.
+            // messages.archiveConversation/unarchiveConversation для web-токена
+            // вероятен err=8/15 → локальный source of truth (паттерн pin #276);
+            // серверный вызов — best-effort.
+            archivedConvsData  = p[Keys.ARCHIVED_CONVS_DATA]       ?: "", // NULL-ЯВНО
             // P3.7: bubble-less дизайн — flat layout сообщений (без Card/bubble).
             // Аналог m.vk.ru: ConvoMessageWithoutBubble. Default false (opt-in, экспериментально).
             msgBubbleless      = p[Keys.MSG_BUBBLELESS]           ?: false,
@@ -536,6 +541,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setMsgFoldersData(v: String)             = put(Keys.MSG_FOLDERS_DATA, v)
     /** Fix #276: JSON-массив peer_id закреплённых диалогов (в порядке). */
     suspend fun setPinnedConvsData(v: String)            = put(Keys.PINNED_CONVS_DATA, v)
+    /** Fix #356 #MSG-ARCHIVE: JSON-массив peer_id архивных диалогов. */
+    suspend fun setArchivedConvsData(v: String)          = put(Keys.ARCHIVED_CONVS_DATA, v)
 
     // ─── #CALLS-SNAP (2026-09-05): Этап А3 плана «звонки.перенос.план.md» ───
     // Конфигурация сайдбара раздела «Звонки» («Настройка пунктов меню»):
@@ -926,6 +933,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val msgFoldersData: String,
         /** Fix #276: JSON-массив peer_id закреплённых диалогов (в порядке, source of truth). */
         val pinnedConvsData: String,
+        /** Fix #356 #MSG-ARCHIVE: JSON-массив peer_id архивных диалогов (source of truth). */
+        val archivedConvsData: String,
         /** P3.7: bubble-less дизайн — flat layout (без Card/bubble), default false. */
         val msgBubbleless: Boolean,
         /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий (default false). */
@@ -1226,6 +1235,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val MSG_FOLDERS_DATA      = stringPreferencesKey("msg_folders_data")
         // Fix #276: локальное хранилище закреплённых диалогов (JSON array of peer_id).
         val PINNED_CONVS_DATA     = stringPreferencesKey("pinned_convs_data")
+        // Fix #356 #MSG-ARCHIVE: локальное хранилище архивных диалогов (JSON array of peer_id).
+        val ARCHIVED_CONVS_DATA   = stringPreferencesKey("archived_convs_data")
         // #CALLS-SNAP (2026-09-05): конфигурация сайдбара «Звонков» (Этап А3)
         val CALLS_SIDEBAR_CFG     = stringPreferencesKey("calls_sidebar_cfg")
         // #CALLS-Z (2026-09-05): Этап З2 — дефолты устройств/шумодава звонков

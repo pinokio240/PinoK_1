@@ -1522,6 +1522,48 @@ class VKApiClient(
         return json.has("response")
     }
 
+    /**
+     * Fix #356 #MSG-ARCHIVE: messages.archiveConversation — убрать диалог из
+     * списка в архив (VK v5.135+; архивный диалог исчезает из getConversations
+     * filter=all и доступен через filter=archived).
+     *
+     * Для web-токена вероятен err=8/15 (недостаточно прав) — caller делает
+     * вызов best-effort и держит ЛОКАЛЬНЫЙ source of truth
+     * (ArchivedConversationsRepository; прецедент pin — Fix #274/#276).
+     *
+     * @return true если VK ответил {"response": 1} / boolean true.
+     */
+    suspend fun messagesArchiveConversation(peerId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("messages.archiveConversation", mapOf(
+            "peer_id" to peerId.toString(),
+        )) ?: return false  // NULL-ЯВНО (Gson)
+        val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
+        if (!resp.isJsonPrimitive) return false
+        return try {
+            if (resp.isBoolean) resp.asBoolean else resp.asInt == 1
+        } catch (_: Exception) { false }
+    }
+
+    /**
+     * Fix #356 #MSG-ARCHIVE: messages.unarchiveConversation — вернуть диалог
+     * из архива в основной список (VK v5.135+; см. KDoc messagesArchiveConversation
+     * про web-токен и локальный source of truth).
+     *
+     * @return true если VK ответил {"response": 1} / boolean true.
+     */
+    suspend fun messagesUnarchiveConversation(peerId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("messages.unarchiveConversation", mapOf(
+            "peer_id" to peerId.toString(),
+        )) ?: return false  // NULL-ЯВНО (Gson)
+        val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
+        if (!resp.isJsonPrimitive) return false
+        return try {
+            if (resp.isBoolean) resp.asBoolean else resp.asInt == 1
+        } catch (_: Exception) { false }
+    }
+
     /** messages.restore — восстановить удалённое сообщение. */
     suspend fun messagesRestore(messageId: Long): Boolean {
         if (isOffline()) return false
@@ -1696,19 +1738,92 @@ class VKApiClient(
         return try {
             val resp = json.getAsJsonObject("response") ?: return emptyList()
             val items = resp.getAsJsonArray("items") ?: return emptyList()
+            // Fix #355 #MSG-SEARCH-SERVER: extended=1 отдаёт profiles[]/groups[] —
+            // резолвим титул пира для секции «Сообщения» серверного поиска в
+            // списке диалогов (MessagesScreen). Поле peerTitle с дефолтом null —
+            // существующий вызов in-chat поиска (ChatDetailScreen) не ломается.
+            val profileNames = mutableMapOf<Long, String>()
+            resp.getAsJsonArray("profiles")?.forEach { el ->  // NULL-ЯВНО (Gson)
+                if (!el.isJsonObject) return@forEach
+                val p = el.asJsonObject
+                val uid = p.get("id")?.asLong ?: return@forEach  // NULL-ЯВНО (Gson)
+                val first = p.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""  // NULL-ЯВНО (Gson)
+                val last = p.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""    // NULL-ЯВНО (Gson)
+                val name = "$first $last".trim()
+                if (name.isNotBlank()) profileNames[uid] = name
+            }
+            val groupNames = mutableMapOf<Long, String>()
+            resp.getAsJsonArray("groups")?.forEach { el ->  // NULL-ЯВНО (Gson)
+                if (!el.isJsonObject) return@forEach
+                val g = el.asJsonObject
+                val gid = g.get("id")?.asLong ?: return@forEach  // NULL-ЯВНО (Gson)
+                val name = g.get("name")?.takeIf { !it.isJsonNull }?.asString ?: ""  // NULL-ЯВНО (Gson)
+                if (name.isNotBlank()) groupNames[gid] = name
+            }
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
+                val peerIdVal = o.get("peer_id")?.asLong ?: 0L  // NULL-ЯВНО (Gson)
                 MessageSearchResult(
-                    messageId = o.get("id")?.asLong ?: 0L,
-                    peerId = o.get("peer_id")?.asLong ?: 0L,
-                    fromId = o.get("from_id")?.asLong ?: 0L,
-                    text = o.get("text")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                    date = o.get("date")?.asLong ?: 0L,
+                    messageId = o.get("id")?.asLong ?: 0L,  // NULL-ЯВНО (Gson)
+                    peerId = peerIdVal,
+                    fromId = o.get("from_id")?.asLong ?: 0L,  // NULL-ЯВНО (Gson)
+                    text = o.get("text")?.takeIf { !it.isJsonNull }?.asString ?: "",  // NULL-ЯВНО (Gson)
+                    date = o.get("date")?.asLong ?: 0L,  // NULL-ЯВНО (Gson)
+                    peerTitle = if (peerIdVal > 0) profileNames[peerIdVal] else groupNames[-peerIdVal],
                 )
             }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesSearch parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Fix #355 #MSG-SEARCH-SERVER: messages.searchConversations — серверный
+     * поиск ПО ДИАЛОГАМ (m.vk.ru ищет «по чатам и сообщениям»: чаты — этот
+     * метод, сообщения — messages.search выше).
+     *
+     * Ответ: {response: {count, items: [...]}} — items ожидается той же
+     * структуры, что у messages.getConversations (обёртка
+     * {conversation:…, last_message:…}, extended=1 добавляет profiles[]/groups[]).
+     * Снапшот §7.2: wire не снят живым ответом → парсинг ТЕРПЕЛИВЫЙ: если VK
+     * вернул ПЛОСКИЕ объекты conversation (без обёртки) — нормализуем к
+     * обёрнутому виду; last_message может отсутствовать (last_message_id) —
+     * parseConversationItem даёт lastMessage=null (терпимо).
+     *
+     * @param query непустая строка поиска (заголовки чатов/имена участников).
+     * @return найденные диалоги как List<Chat>.
+     */
+    suspend fun messagesSearchConversations(query: String, count: Int = 20): List<Chat> {
+        if (isOffline() || query.isBlank()) return emptyList()
+        val json = call("messages.searchConversations", mapOf(
+            "q" to query.trim(),
+            "count" to count.toString(),
+            "extended" to "1",
+            "fields" to "photo_100,photo_200,online,last_seen",
+        )) ?: return emptyList()  // NULL-ЯВНО (Gson)
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList()  // NULL-ЯВНО (Gson)
+            val items = resp.getAsJsonArray("items") ?: return emptyList()  // NULL-ЯВНО (Gson)
+            val maps = parsePeerMaps(resp)
+            val parsed = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                if (o.has("conversation")) {
+                    parseConversationItem(o, maps)
+                } else {
+                    // Терпеливый парсинг: ПЛОСКИЙ объект conversation без обёртки.
+                    parseConversationItem(
+                        com.google.gson.JsonObject().apply { add("conversation", o) },
+                        maps,
+                    )
+                }
+            }
+            // Fix #128-паттерн: добиваем недостающие имена/аватарки batch-запросом.
+            resolveMissingPeerInfo(parsed)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesSearchConversations parse error", e)
             emptyList()
         }
     }
@@ -2210,6 +2325,11 @@ class VKApiClient(
         val fromId: Long,
         val text: String,
         val date: Long,
+        // Fix #355 #MSG-SEARCH-SERVER: титул пира из extended-ответа
+        // (profiles[].first_name/last_name или groups[].name) — для секции
+        // «Сообщения» серверного поиска в списке диалогов. null = не резолвился
+        // (упрощённые ответы / старые вызовы). Дефолт null — обратная совместимость.
+        val peerTitle: String? = null,
     )
 
     data class HistoryAttachment(

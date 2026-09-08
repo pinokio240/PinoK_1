@@ -295,6 +295,10 @@ fun FeedScreen(
             // «No value passed for parameter 'pinnedConvsData'».
             // (Тот же класс бага что Fix #100 / #110 / #189 — Snapshot расширился.)
             pinnedConvsData = "",
+            // Fix #356 #MSG-ARCHIVE: archivedConvsData — локальные архивные диалоги
+            // (JSON). FeedScreen не использует это поле, но Snapshot расширился —
+            // передаём initial-значение (тот же класс бага, что Fix #276 выше).
+            archivedConvsData = "",
             // P3.7: bubble-less дизайн (default false — opt-in, экспериментально).
             msgBubbleless = false,
             // Sprint 5 (P4.1–P4.4): новые поля Snapshot — должны передаваться

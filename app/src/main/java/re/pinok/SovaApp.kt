@@ -264,6 +264,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         private set
 
     /**
+     * Fix #356 #MSG-ARCHIVE: локальное хранилище архивных диалогов (JSON массив
+     * peer_id в SovaPrefs.archivedConvsData). Source of truth для UI списка
+     * диалогов (messages.archiveConversation/unarchiveConversation для web-token
+     * вероятен err=8/15 — паттерн pinnedConvsRepository, Fix #274/#276).
+     */
+    lateinit var archivedConvsRepository: re.pinok.data.local.ArchivedConversationsRepository
+        private set
+
+    /**
      * Sprint 1, P0-1: Real-time LongPoll-цикл для сообщений.
      *
      * Запускается из [re.pinok.ui.MainActivity] при `tokenStorage.hasValidToken()`,
@@ -1167,6 +1176,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         foldersRepository = re.pinok.data.local.FoldersRepository(prefs)
         // Fix #276: PinnedConversationsRepository — локальные закреплённые диалоги.
         pinnedConvsRepository = re.pinok.data.local.PinnedConversationsRepository(prefs)
+        // Fix #356 #MSG-ARCHIVE: ArchivedConversationsRepository — локальный архив диалогов.
+        archivedConvsRepository = re.pinok.data.local.ArchivedConversationsRepository(prefs)
 
         // #CALLS: Queuev4Client — сигналинг звонков через queuev4.vk.ru.
         queuev4Client = Queuev4Client(httpClient = httpClient, apiClient = apiClient)

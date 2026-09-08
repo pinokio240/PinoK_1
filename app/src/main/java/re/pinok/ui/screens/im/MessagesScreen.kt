@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.Notifications
@@ -48,6 +50,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -88,12 +91,15 @@ import android.widget.Toast
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import re.pinok.SovaApp
+import re.pinok.api.VKApiClient
 import re.pinok.data.model.Chat
 import re.pinok.data.model.ChatFolder
 import re.pinok.realtime.LongPollEvent
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
+import re.pinok.util.toChatDate
 import re.pinok.util.toMsgTime
 import re.pinok.ui.components.SkeletonChatList
 import re.pinok.ui.components.ErrorView
@@ -262,6 +268,66 @@ fun MessagesScreen(
         }
     }
 
+    // ══ Fix #355 #MSG-SEARCH-SERVER: серверный поиск «по чатам и сообщениям» ══
+    // При q ≥ 2 символов — серверный режим (m.vk.ru ищет так же): секция «Чаты»
+    // (messages.searchConversations — НОВЫЙ VKA-метод) + секция «Сообщения»
+    // (messages.search с peerId=null — глобальный поиск). Debounce 400мс:
+    // LaunchedEffect(searchQuery) отменяется при каждом изменении запроса,
+    // API-вызов стартует только после паузы в наборе.
+    // Client-фильтр (ниже в filteredChats) остаётся для q == 1 (одна буква —
+    // серверный поиск не имеет смысла) и как фолбэк при пустом серверном ответе.
+    var searchChats by remember { mutableStateOf<List<Chat>>(emptyList()) }
+    var searchMessages by remember { mutableStateOf<List<VKApiClient.MessageSearchResult>>(emptyList()) }
+    var searchLoading by remember { mutableStateOf(false) }
+    // Ошибка серверного поиска (err=15/8 у web-токена возможны) — показываем
+    // честный текст в пустом стейте; client-совпадения при этом всё равно видны.
+    var searchErrorText by remember { mutableStateOf<String?>(null) }
+    val serverSearchActive = searchQuery.trim().length >= 2
+    LaunchedEffect(searchQuery) {
+        val q = searchQuery.trim()
+        if (q.length < 2) {
+            searchChats = emptyList()
+            searchMessages = emptyList()
+            searchErrorText = null
+            searchLoading = false
+            return@LaunchedEffect
+        }
+        searchLoading = true
+        delay(400) // debounce: отменится при продолжении набора (LaunchedEffect key)
+        try {
+            searchChats = app.apiClient.messagesSearchConversations(q, count = 20)
+            searchMessages = app.apiClient.messagesSearch(q, peerId = null, count = 20)
+            if (searchChats.isEmpty() && searchMessages.isEmpty()) {
+                val err = app.apiClient.lastApiError
+                if (err != null && err.isNotBlank() && app.apiClient.lastApiErrorCode != 0) {
+                    searchErrorText = "Ошибка поиска: $err — показаны только локальные совпадения"
+                } else {
+                    searchErrorText = null
+                }
+            } else {
+                searchErrorText = null
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            searchErrorText = "Ошибка поиска: ${e.message}"
+            AppLog.w("MessagesScreen", "#MSG-SEARCH-SERVER: search failed: ${e.message}")
+        }
+        searchLoading = false
+    }
+
+    // ══ Fix #356 #MSG-ARCHIVE: раздел «Архив» («Убрать чат из списка») ══
+    // localArchivedIds — source of truth UI (ArchivedConversationsRepository,
+    // SovaPrefs.archivedConvsData; паттерн pin Fix #274/#276). API
+    // messages.archiveConversation/unarchiveConversation — best-effort.
+    var localArchivedIds by remember { mutableStateOf<List<Long>>(emptyList()) }
+    var showArchived by remember { mutableStateOf(false) }
+    // Серверный архив (messages.getConversations filter=archived) — если токену
+    // доступен (например диалог заархивирован с другого клиента) — мерджим с
+    // локальным списком. Пустой/ошибочный ответ не фатален (локальный список
+    // самодостаточен).
+    var archivedServerChats by remember { mutableStateOf<List<Chat>>(emptyList()) }
+
     // Fix #274 + Fix #276: локальный override порядка закреплённых диалогов.
     // VK API messages.markAsImportantConversation требует special-scope user
     // token (выдаётся только по запросу в support) ИЛИ community token. Наш
@@ -358,6 +424,16 @@ fun MessagesScreen(
             }
         } catch (e: Exception) {
             AppLog.w("MessagesScreen", "Failed to load local pinned: ${e.message}")
+        }
+        // Fix #356 #MSG-ARCHIVE: грузим локальные архивные peer_id (source of
+        // truth) — до отображения чатов, чтобы основной список сразу исключил их.
+        try {
+            localArchivedIds = app.archivedConvsRepository.load()
+            if (localArchivedIds.isNotEmpty()) {
+                AppLog.d("MessagesScreen", "#MSG-ARCHIVE: loaded ${localArchivedIds.size} archived: $localArchivedIds")
+            }
+        } catch (e: Exception) {
+            AppLog.w("MessagesScreen", "#MSG-ARCHIVE: failed to load local archived: ${e.message}")
         }
         loading = true
         errorText = null
@@ -551,9 +627,12 @@ fun MessagesScreen(
     // Fix #274: + сортировка pinned наверх + локальный reorder.
     // Вычисляется через derivedStateOf для эффективности (пересчёт только при
     // изменении chats, searchQuery, activeTab, folders, foldersEnabled, localPinnedOrder).
-    val filteredChats by remember(chats, searchQuery, activeTab, folders, foldersEnabled, localPinnedOrder) {
+    val filteredChats by remember(chats, searchQuery, activeTab, folders, foldersEnabled, localPinnedOrder, localArchivedIds) {
         derivedStateOf {
             var result = chats
+            // Fix #356 #MSG-ARCHIVE: архивные диалоги исключены из основного
+            // списка (смотрятся в разделе «Архив» — showArchived ниже).
+            result = result.filterNot { it.peer.id in localArchivedIds }
             if (foldersEnabled) {
                 // P3.3: динамические табы — 0=Все, 1..N=папки, N+1=Непрочитанные.
                 // #COUNTER-CHANNELS: «Непрочитанные» — только диалоги, без каналов
@@ -613,6 +692,96 @@ fun MessagesScreen(
             val unpinnedSorted = unpinned.sortedByDescending { it.lastMessage?.date ?: 0L }
             pinnedSorted + unpinnedSorted
         }
+    }
+
+    // Fix #356 #MSG-ARCHIVE: объединённый список раздела «Архив».
+    // Источники: (1) chats, локально заархивированные (peer.id in localArchivedIds —
+    // сервер наш web-token archiveConversation скорее всего отклонил, чат живёт
+    // в обычном ответе getConversations); (2) archivedServerChats — серверный
+    // filter=archived (если диалог заархивирован с другого клиента/сессии).
+    // Dedup по peer.id, сортировка по дате последнего сообщения DESC.
+    val archivedChats by remember(chats, localArchivedIds, archivedServerChats) {
+        derivedStateOf {
+            val seen = mutableSetOf<Long>()
+            val merged = buildList {
+                chats.filter { it.peer.id in localArchivedIds }.forEach { c ->
+                    if (seen.add(c.peer.id)) add(c)
+                }
+                archivedServerChats.forEach { c ->
+                    if (seen.add(c.peer.id)) add(c)
+                }
+            }
+            merged.sortedByDescending { it.lastMessage?.date ?: 0L }  // NULL-ЯВНО
+        }
+    }
+
+    // Fix #356 #MSG-ARCHIVE: обработчики архивации. Паттерн pin (Fix #274/#276):
+    // оптимистичный локальный список (source of truth, персистится в
+    // ArchivedConversationsRepository → SovaPrefs.archivedConvsData) + best-effort
+    // API-вызов в фоне (для web-токена вероятен err=8/15 — НЕ откатываем,
+    // честный AppLog; прецедент — onTogglePin ниже).
+    // Из `chats` архивный чат НЕ удаляется — он скрывается фильтром filteredChats
+    // (peer.id in localArchivedIds) и мгновенно возвращается при разархивации
+    // без перезагрузки списка.
+    val screenContext = LocalContext.current
+    fun onArchiveConversationLocal(peerId: Long) {
+        scope.launch {
+            try {
+                localArchivedIds = app.archivedConvsRepository.archive(peerId)
+                AppLog.i("MessagesScreen",
+                    "#MSG-ARCHIVE: archived locally: peer=$peerId (${localArchivedIds.size} total)")
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen",
+                    "#MSG-ARCHIVE: failed to persist archive($peerId): ${e.message}")
+            }
+        }
+        scope.launch {
+            try {
+                val ok = app.apiClient.messagesArchiveConversation(peerId)
+                if (ok) {
+                    AppLog.i("MessagesScreen", "#MSG-ARCHIVE: archive API sync ok: peer=$peerId")
+                } else {
+                    AppLog.d("MessagesScreen",
+                        "#MSG-ARCHIVE: archive API sync false (expected for web-token, local state preserved): peer=$peerId")
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen",
+                    "#MSG-ARCHIVE: archive API sync error (local state preserved): ${e.message}")
+            }
+        }
+        Toast.makeText(screenContext, "Убрано в архив", Toast.LENGTH_SHORT).show()
+    }
+
+    fun onUnarchiveConversationLocal(peerId: Long) {
+        scope.launch {
+            try {
+                localArchivedIds = app.archivedConvsRepository.unarchive(peerId)
+                AppLog.i("MessagesScreen",
+                    "#MSG-ARCHIVE: unarchived locally: peer=$peerId (${localArchivedIds.size} left)")
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen",
+                    "#MSG-ARCHIVE: failed to persist unarchive($peerId): ${e.message}")
+            }
+        }
+        scope.launch {
+            try {
+                val ok = app.apiClient.messagesUnarchiveConversation(peerId)
+                if (ok) {
+                    AppLog.i("MessagesScreen", "#MSG-ARCHIVE: unarchive API sync ok: peer=$peerId")
+                } else {
+                    AppLog.d("MessagesScreen",
+                        "#MSG-ARCHIVE: unarchive API sync false (expected for web-token, local state preserved): peer=$peerId")
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen",
+                    "#MSG-ARCHIVE: unarchive API sync error (local state preserved): ${e.message}")
+            }
+        }
+        Toast.makeText(screenContext, "Возвращено из архива", Toast.LENGTH_SHORT).show()
     }
 
     // P1.4: badge counts for tabs.
@@ -779,8 +948,192 @@ fun MessagesScreen(
                 }
             }
 
+            // Fix #356 #MSG-ARCHIVE: чип «Архив» — вход в раздел архивных диалогов
+            // (аналог кнопки «Архив» в шапке m.vk.ru). Скрывается в режиме
+            // серверного поиска (q ≥ 2 — список занят результатами поиска).
+            // Открытие раздела догружает серверный архив (filter=archived) —
+            // для web-токена может быть пуст/ошибка; локальный список самодостаточен.
+            if (!serverSearchActive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Start,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip(
+                        selected = showArchived,
+                        onClick = {
+                            showArchived = !showArchived
+                            if (showArchived && archivedServerChats.isEmpty()) {
+                                scope.launch {
+                                    try {
+                                        archivedServerChats = app.apiClient.messagesGetConversations(
+                                            count = 50,
+                                            filter = "archived",
+                                        )
+                                        AppLog.d("MessagesScreen",
+                                            "#MSG-ARCHIVE: server archived loaded: ${archivedServerChats.size}")
+                                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                                        throw ce
+                                    } catch (e: Exception) {
+                                        AppLog.w("MessagesScreen",
+                                            "#MSG-ARCHIVE: server archived load failed (non-fatal): ${e.message}")
+                                    }
+                                }
+                            }
+                        },
+                        label = {
+                            Text(
+                                if (showArchived) "Архив (${archivedChats.size}) — открыть список диалогов"
+                                else "Архив (${archivedChats.size})",
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Archive,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                    )
+                }
+            }
+
             LazyColumn(modifier = Modifier.weight(1f), state = listState) {
-                if (filteredChats.isEmpty() && searchQuery.isNotBlank()) {
+                if (serverSearchActive) {
+                    // ══ Fix #355 #MSG-SEARCH-SERVER: серверный поиск ══
+                    // Секция «Чаты»: локальные совпадения (client-фильтр) + серверные
+                    // (messages.searchConversations) без дублей по peer.id (ключи
+                    // items() должны быть уникальны).
+                    val q = searchQuery.trim()
+                    val clientMatches = chats.filter { it.peer.title?.contains(q, ignoreCase = true) == true }  // NULL-ЯВНО
+                    val clientIds = clientMatches.map { it.peer.id }.toSet()
+                    val serverNew = searchChats.filterNot { it.peer.id in clientIds }
+                    val searchTotal = clientMatches.size + serverNew.size + searchMessages.size
+                    if (searchTotal == 0 && !searchLoading) {
+                        item(key = "search_empty") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    text = "Ничего не найдено",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (searchErrorText != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = searchErrorText ?: "",  // NULL-ЯВНО
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (clientMatches.isNotEmpty() || serverNew.isNotEmpty()) {
+                        item(key = "search_hdr_chats") {
+                            Text(
+                                text = "Чаты",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        items(clientMatches, key = { "c_${it.peer.id}" }) { chat ->
+                            ChatCard(
+                                chat = chat,
+                                // Fix #355: из результатов поиска архив/меню-действия
+                                // недоступны (результат — ссылка на диалог).
+                                showArchiveAction = false,
+                                showListActions = false,
+                                onClick = { onChatClick(chat) },
+                            )
+                        }
+                        items(serverNew, key = { "c_${it.peer.id}" }) { chat ->
+                            ChatCard(
+                                chat = chat,
+                                showArchiveAction = false,
+                                showListActions = false,
+                                onClick = { onChatClick(chat) },
+                            )
+                        }
+                    }
+                    if (searchMessages.isNotEmpty()) {
+                        item(key = "search_hdr_msgs") {
+                            Text(
+                                text = "Сообщения",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        items(searchMessages, key = { "m_${it.messageId}_${it.peerId}_${it.date}" }) { result ->
+                            MessageSearchResultRow(
+                                result = result,
+                                onClick = {
+                                    // Тап — переход в диалог. ChatDetail сам резолвит
+                                    // титул/аватар по peerId (messagesGetConversationsById,
+                                    // прецедент Fix #348).
+                                    onChatClick(
+                                        Chat(
+                                            peer = Chat.Peer(
+                                                id = result.peerId,
+                                                type = if (result.peerId > 0) "user" else "group",
+                                                localId = if (result.peerId > 0) result.peerId else -result.peerId,
+                                                title = result.peerTitle ?: "Диалог",  // NULL-ЯВНО
+                                                photo = null,
+                                            ),
+                                        )
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    if (searchLoading) {
+                        item(key = "search_loading") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                            }
+                        }
+                    }
+                } else if (showArchived) {
+                    // ══ Fix #356 #MSG-ARCHIVE: раздел «Архив» ══
+                    if (archivedChats.isEmpty()) {
+                        item(key = "arch_empty") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Архив пуст",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else {
+                        items(archivedChats, key = { it.peer.id }) { chat ->
+                            ChatCard(
+                                chat = chat,
+                                isArchived = true,
+                                // Fix #356: вне основного списка — только «Вернуть из архива».
+                                showListActions = false,
+                                onArchiveConversation = { peerId -> onUnarchiveConversationLocal(peerId) },
+                                // В архиве drag&drop/pin-логика не имеет смысла.
+                                onDragSwap = { _, _ -> },
+                                pinnedPeerIdsInOrder = emptyList(),
+                                pinnedIndex = -1,
+                                onClick = { onChatClick(chat) },
+                            )
+                        }
+                    }
+                } else if (filteredChats.isEmpty() && searchQuery.isNotBlank()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -828,6 +1181,9 @@ fun MessagesScreen(
                             ChatCard(
                                 chat = favoritesChat,
                                 isPinned = false,
+                                // Fix #356: «Избранное» — виртуальный self-chat,
+                                // архивировать его нельзя → пункт меню скрыт.
+                                showArchiveAction = false,
                                 onClick = { onChatClick(favoritesChat) },
                                 onMarkAsRead = { _, _ -> },
                                 onToggleMute = { _, _ -> },
@@ -1103,6 +1459,11 @@ fun MessagesScreen(
                                     }
                                 }
                             },
+                            // Fix #356 #MSG-ARCHIVE: «Убрать чат из списка» — локальный
+                            // архив (source of truth) + best-effort API. Паттерн pin.
+                            onArchiveConversation = { peerId ->
+                                onArchiveConversationLocal(peerId)
+                            },
                             // Fix #274 + Fix #276: drag&drop — swap с соседним pinned чатом.
                             // Вызывается из ChatCard при detectDragGesturesAfterLongPress,
                             // когда drag пересекает порог соседнего элемента.
@@ -1195,6 +1556,19 @@ private fun ChatCard(
     onToggleUnread: (peerId: Long, unread: Boolean) -> Unit = { _, _ -> },
     // Fix #281: удалить диалог (messages.deleteConversation) — с confirm-диалогом.
     onDeleteConversation: (peerId: Long) -> Unit = { _ -> },
+    // Fix #356 #MSG-ARCHIVE: «Убрать чат из списка»/«Вернуть из архива».
+    // isArchived — карточка рендерится в разделе «Архив» (меняет пункт меню);
+    // showArchiveAction=false скрывает пункт (виртуальный self-chat «Избранное»,
+    // результаты серверного поиска — Fix #355).
+    // showListActions=false — карточка вне основного списка (архив/поиск):
+    // пункты закрепить/заглушить/непрочитанным/удалить СКРЫТЫ (их обработчики
+    // не подключены — иначе были бы мёртвые кнопки, no-stub/honest UI).
+    //   архив: showListActions=false + isArchived=true → меню только «Вернуть из архива»;
+    //   поиск: showListActions=false + isArchived=false → контекст-меню отключено целиком.
+    isArchived: Boolean = false,
+    showArchiveAction: Boolean = true,
+    showListActions: Boolean = true,
+    onArchiveConversation: (peerId: Long) -> Unit = { _ -> },
     onDragSwap: (fromIdx: Int, toIdx: Int) -> Unit = { _, _ -> },
     pinnedPeerIdsInOrder: List<Long> = emptyList(),
     pinnedIndex: Int = -1,
@@ -1291,7 +1665,11 @@ private fun ChatCard(
                 if (hasUnread) onMarkAsRead(chat.peer.id, lastMsgId)
                 onClick()
             },
-            onLongClick = { showContextMenu = true },
+            onLongClick = {
+                // Fix #355/356: в результатах поиска меню нет (действия не
+                // подключены) — long-press не открывает пустой DropdownMenu.
+                if (showListActions || isArchived) showContextMenu = true
+            },
         ),
         colors = CardDefaults.cardColors(
             containerColor = when {
@@ -1473,7 +1851,9 @@ private fun ChatCard(
                 expanded = showContextMenu,
                 onDismissRequest = { showContextMenu = false },
             ) {
-                // Fix #274: Закрепить/Открепить.
+                // Fix #274: Закрепить/Открепить. Скрывается вне основного списка
+                // (архив/поиск — showListActions=false, см. KDoc параметра).
+                if (showListActions) {
                 DropdownMenuItem(
                     text = { Text(if (isPinned) "Открепить" else "Закрепить") },
                     leadingIcon = {
@@ -1489,7 +1869,9 @@ private fun ChatCard(
                         onTogglePin(chat.peer.id, !isPinned)
                     },
                 )
-                // Fix #122: Заглушить/Включить уведомления.
+                }
+                // Fix #122: Заглушить/Включить уведомления (см. showListActions).
+                if (showListActions) {
                 DropdownMenuItem(
                     text = { Text(if (isMuted) "Включить уведомления" else "Заглушить") },
                     leadingIcon = {
@@ -1503,7 +1885,9 @@ private fun ChatCard(
                         onToggleMute(chat.peer.id, !isMuted)
                     },
                 )
-                // Fix #274: Отметить непрочитанным / прочитанным.
+                }
+                // Fix #274: Отметить непрочитанным / прочитанным (см. showListActions).
+                if (showListActions) {
                 DropdownMenuItem(
                     text = { Text(if (hasUnread) "Отметить прочитанным" else "Отметить непрочитанным") },
                     leadingIcon = {
@@ -1517,9 +1901,30 @@ private fun ChatCard(
                         onToggleUnread(chat.peer.id, !hasUnread)
                     },
                 )
+                }
+                // Fix #356 #MSG-ARCHIVE: «Убрать чат из списка» (в VK web — архив)
+                // / «Вернуть из архива» для карточек раздела «Архив». Скрывается
+                // для виртуального self-chat и результатов поиска (showArchiveAction).
+                if (showArchiveAction) {
+                    DropdownMenuItem(
+                        text = { Text(if (isArchived) "Вернуть из архива" else "Убрать чат из списка") },
+                        leadingIcon = {
+                            Icon(
+                                if (isArchived) Icons.Outlined.Unarchive else Icons.Outlined.Archive,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            showContextMenu = false
+                            onArchiveConversation(chat.peer.id)
+                        },
+                    )
+                }
                 // Fix #281: Удалить диалог (messages.deleteConversation).
                 // Деструктивное действие — после tap открывается confirm-диалог,
                 // API вызывается только после подтверждения пользователя.
+                // Скрывается вне основного списка (showListActions=false).
+                if (showListActions) {
                 DropdownMenuItem(
                     text = { Text("Удалить диалог", color = MaterialTheme.colorScheme.error) },
                     leadingIcon = {
@@ -1534,6 +1939,7 @@ private fun ChatCard(
                         showDeleteConfirm = true
                     },
                 )
+                }
             }
             // Fix #281: confirm-диалог удаления диалога.
             // VK API messages.deleteConversation удаляет ВСЮ переписку
@@ -1714,4 +2120,64 @@ private fun attachmentPreviewLabel(att: re.pinok.data.model.Attachment): String 
     "story" -> "История"
     "call" -> "Звонок"
     else -> "Вложение"
+}
+
+/**
+ * Fix #355 #MSG-SEARCH-SERVER: строка результата поиска ПО СООБЩЕНИЯМ
+ * (секция «Сообщения» серверного поиска в списке диалогов — m.vk.ru ищет
+ * «по чатам и сообщениям»). Титул — из extended-ответа messages.search
+ * ([VKApiClient.MessageSearchResult.peerTitle]); дата — человекочитаемая
+ * (toChatDate: «Сегодня»/«Вчера»/«12 июля»). Тап — переход в диалог
+ * (ChatDetail сам резолвит титул/аватар по peerId, прецедент Fix #348).
+ */
+@Composable
+private fun MessageSearchResultRow(
+    result: VKApiClient.MessageSearchResult,
+    onClick: () -> Unit,
+) {
+    val title = result.peerTitle ?: "Диалог ${if (result.peerId < 0) -result.peerId else result.peerId}"  // NULL-ЯВНО
+    val dateText = if (result.date > 0L) result.date.toChatDate() else ""
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (dateText.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = dateText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = result.text.ifBlank { "Вложение" },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
