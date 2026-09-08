@@ -26,7 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 // #CALLS-ZH (Этап Ж, 5-b): иконки новых кнопок футера/виджета (Chat/Group/EmojiEmotions/PanTool — extended).
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Group
@@ -1607,7 +1607,7 @@ fun CallScreen(
         // Приоритет: точное совпадение type+address среди доступных comm-устройств,
         // затем type-only (address меняется между устройств BT).
         val commDevices = runCatching { am.getAvailableCommunicationDevices() }.getOrDefault(emptyList())
-        val target = commDevices.firstOrNull { it.type == savedType && (it.address ?: "") == savedAddress }
+        val target = commDevices.firstOrNull { it.type == savedType && it.address == savedAddress }
             ?: commDevices.firstOrNull { it.type == savedType }
         if (target == null) {
             AppLog.w("CallScreen", "#SETTINGS-FIX: mic default '$saved' не найден среди comm-устройств (${commDevices.size}) — выбор системы")
@@ -2389,7 +2389,7 @@ fun CallScreen(
                             // Ж3: чат звонка (calls_call_footer_button_chat) — готовый
                             // CallChatScreen (Этап Д) с активным callId.
                             CallControlButton(
-                                icon = Icons.Default.Chat,
+                                icon = Icons.AutoMirrored.Filled.Chat,
                                 label = "Чат",
                                 color = if (showCallChat) Color(0xFF43A047) else Color(0xFF37474F),
                                 onClick = {

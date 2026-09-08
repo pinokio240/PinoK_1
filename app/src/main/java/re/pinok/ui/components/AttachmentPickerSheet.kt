@@ -126,7 +126,7 @@ fun AttachmentPickerSheet(
     onPickVideo: (Video) -> Unit = {},
     onPickGift: (GiftItem) -> Unit = {},
     onPickPhotoAttachment: (String) -> Unit = {},
-    onPickDocAttachment: (attachment: String, title: String) -> Unit = {},
+    onPickDocAttachment: (attachment: String, title: String) -> Unit = { _, _ -> },
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val app = SovaApp.get()
