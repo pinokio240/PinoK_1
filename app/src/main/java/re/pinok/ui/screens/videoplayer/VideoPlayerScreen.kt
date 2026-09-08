@@ -86,6 +86,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1695,15 +1696,49 @@ fun VideoPlayerScreen(
             }
 
             if (!useFillMax) {
-            Spacer(modifier = Modifier.height(12.dp))
-
+            /**
+             * #VIDEO-TEXT-EXPAND (волна 18-η): пагинация текста под открытым видео
+             * (портретный режим, useFillMax == false). Паттерн Fix #345
+             * (CommunityScreen): свёрнутый текст с maxLines + Ellipsis, детект
+             * РЕАЛЬНОГО переполнения через TextLayoutResult.hasVisualOverflow
+             * (onTextLayout), разворот по тапу. Задокументированные решения:
+             * 1. Заголовок — maxLines 2; тап по переполненному разворачивает,
+             *    повторный тап по развёрнутому СВОРАЧИВАЕТ (VK web не возвращает,
+             *    но честный toggle удобнее — разрешено ТЗ; без overflow текст
+             *    некликабелен — нет ложной клик-зоны).
+             * 2. Описание — maxLines 4; текстовая кнопка «Показать ещё»/«Свернуть»
+             *    (акцентный синий Fix #345, 14sp) + тап по самому тексту тоже
+             *    разворачивает/сворачивает.
+             * 3. Состояния разворота — rememberSaveable (переживают recreation
+             *    и process death), ключ resolvedVideo.id — смена видео сбрасывает.
+             * 4. Флаг overflow синхронизируется с фактическим лэйаутом на каждой
+             *    перекомпоновке (свёрнуто — hasVisualOverflow, развёрнуто — false):
+             *    кнопка появляется только когда текст реально не влез, и исчезает,
+             *    если текст обновился на короткий.
+             * 5. Клик-зоны не пересекаются: clickable висит ТОЛЬКО на своём тексте/
+             *    кнопке, VideoActionBar ниже не затронут. Просмотры — без изменений.
+             *    Immersive/landscape-ветку (useFillMax == true) не трогаем.
+             */
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                // ── Заголовок: свёрнут до 2 строк, тап-toggle при переполнении ──
+                var titleExpanded by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
+                var titleOverflowed by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
                 Text(
                     text = resolvedVideo.title,
                     style = MaterialTheme.typography.titleLarge,
                     color = VK_WHITE,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 20.sp,
+                    modifier = if (titleOverflowed || titleExpanded) {
+                        Modifier.clickable { titleExpanded = !titleExpanded }
+                    } else {
+                        Modifier
+                    },
+                    onTextLayout = { result ->
+                        titleOverflowed = !titleExpanded && result.hasVisualOverflow
+                    },
+                    maxLines = if (titleExpanded) Int.MAX_VALUE else 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -1714,13 +1749,40 @@ fun VideoPlayerScreen(
                 )
                 val desc = resolvedVideo.description
                 if (!desc.isNullOrBlank()) {
+                    // ── Описание: свёрнуто до 4 строк, тап-toggle + кнопка-текст ──
+                    var descExpanded by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
+                    var descOverflowed by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = desc,
                         style = MaterialTheme.typography.bodyMedium,
                         color = VK_WHITE.copy(alpha = 0.9f),
                         fontSize = 14.sp,
+                        modifier = if (descOverflowed || descExpanded) {
+                            Modifier.clickable { descExpanded = !descExpanded }
+                        } else {
+                            Modifier
+                        },
+                        onTextLayout = { result ->
+                            descOverflowed = !descExpanded && result.hasVisualOverflow
+                        },
+                        maxLines = if (descExpanded) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    // «Показать ещё»/«Свернуть» — только при реальном hasVisualOverflow
+                    // (Fix #345: акцентный цвет, bodyMedium = 14sp).
+                    if (descOverflowed || descExpanded) {
+                        Text(
+                            text = if (descExpanded) "Свернуть" else "Показать ещё",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFF1976D2),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .clickable { descExpanded = !descExpanded },
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

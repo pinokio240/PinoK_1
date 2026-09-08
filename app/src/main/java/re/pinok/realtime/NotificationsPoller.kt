@@ -192,9 +192,15 @@ class NotificationsPoller(
                 // §42.2 #PUSH-ENHANCED: передаём все новые items в showBatch.
                 // Notifier сам фильтрует (quiet hours, per-user mute, category,
                 // source, sn_*) и группирует (none/category/community/user).
+                // #NOTIF-FEED-FILTER (19-B.3): очередь постановки сортируется —
+                // диалоговые типы (message*/mail/group_chats, класс A) постятся
+                // РАНЬШЕ новостных (класс B), внутри классов порядок VK (стабильно).
+                val orderedItems = sortDialogsFirst(newItems)
+                val dialogCount = orderedItems.count { VkNotificationsNotifier.isMessageClassType(it.type) }
+                AppLog.i(TAG, "pollOnce: batch order — dialogs=$dialogCount, news=${orderedItems.size - dialogCount}")
                 VkNotificationsNotifier.showBatch(
                     context = context,
-                    items = newItems,
+                    items = orderedItems,
                     snap = snap,
                     categoryFilter = { channel -> isCategoryEnabled(snap, channel) },
                     snStates = snStates,
@@ -206,6 +212,26 @@ class NotificationsPoller(
             } catch (e: Exception) {
                 AppLog.w(TAG, "pollOnce failed: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * #NOTIF-FEED-FILTER (19-B.3): стабильная двухклассовая сортировка пакетной
+     * очереди постановки сплывающих — диалоговые типы (message*/mail/group_chats,
+     * класс A, см. VkNotificationsNotifier.isMessageClassType) постятся РАНЬШЕ
+     * новостных (класс B), внутри классов исходный порядок VK (sortedBy —
+     * стабильный, состав списка не меняется).
+     *
+     * Диалоговые через поллер — редкость (сообщения приходят через
+     * LongPoll → MessageNotifier в канал "messages" IMPORTANCE_HIGH — выше
+     * новостных vk_* каналов; трассировка в KDoc VkNotificationsNotifier.init),
+     * но если getRedesign вернёт такие элементы — они встанут в начало батча.
+     */
+    private fun sortDialogsFirst(
+        items: List<VKApiClient.NotificationItem>,
+    ): List<VKApiClient.NotificationItem> {
+        return items.sortedBy { item ->
+            if (VkNotificationsNotifier.isMessageClassType(item.type)) 0 else 1
         }
     }
 

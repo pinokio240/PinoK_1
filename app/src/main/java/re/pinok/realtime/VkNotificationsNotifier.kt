@@ -125,6 +125,22 @@ object VkNotificationsNotifier {
      *
      * Пользователь может настроить каждый канал отдельно в системных
      * настройках Android (звук/вибрация/важность).
+     *
+     * #NOTIF-FEED-FILTER (19-B.3): порядок «диалоги ВЫШЕ новостных» в шторке
+     * обеспечен РАЗДЕЛЬНЫМИ каналами (честная трассировка, не догадка):
+     *  • диалоговые уведомления о сообщениях ставятся ОТДЕЛЬНЫМ механизмом
+     *    MessageNotifier (LongPollEvent.NewMessage → SovaApp.startMessageNotifier)
+     *    в канал "messages" («Сообщения») с IMPORTANCE_HIGH (sound + heads-up) —
+     *    SovaApp.onCreate инициализирует его (MessageNotifier.init, SovaApp:1302)
+     *    ДО старта поллера (SovaApp:1311);
+     *  • новостные уведомления (этот нотификатор) идут в vk_* каналы с
+     *    IMPORTANCE_DEFAULT. HIGH > DEFAULT ⇒ система ранжирует диалоговые
+     *    выше новостных + показывает их heads-up.
+     * Отдельный канал «Сообщения» здесь НЕ создаётся: он дублировал бы
+     * системный канал MessageNotifier с тем же именем «Сообщения» (в системных
+     * настройках появились бы два одинаковых тумблера). Миграция существующих
+     * vk_* каналов не требуется: их IMPORTANCE_DEFAULT не меняется —
+     * диалоговые и так выше за счёт канала "messages" (HIGH).
      */
     fun init(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -203,6 +219,24 @@ object VkNotificationsNotifier {
             type == "gift" -> CHANNEL_GIFTS
             else -> CHANNEL_OTHER
         }
+    }
+
+    /**
+     * #NOTIF-FEED-FILTER (19-B.2/.3): класс A — «диалоговые» типы уведомлений
+     * (message*/mail/group_chats/chat — сообщения и групповые чаты), против
+     * новостного класса B (лайки/комментарии/посты/прочее).
+     *
+     * Общий предикат двухклассовой сортировки «диалоги → новости»:
+     *  • список экрана «Уведомления» (NotificationsScreen.sortDialogsFirst);
+     *  • пакетная очередь постановки сплывающих (NotificationsPoller.sortDialogsFirst).
+     *
+     * Системные сплывающие о сообщениях идут отдельным механизмом
+     * [MessageNotifier] (канал "messages" с IMPORTANCE_HIGH — выше новостных
+     * vk_* каналов с IMPORTANCE_DEFAULT; трассировка в KDoc [init]).
+     */
+    internal fun isMessageClassType(type: String): Boolean {
+        return type.startsWith("message") || type == "mail" ||
+            type.startsWith("group_chats") || type == "chat"
     }
 
     /**
@@ -498,6 +532,11 @@ object VkNotificationsNotifier {
                 .setStyle(inboxStyle)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+                // #NOTIF-FEED-FILTER (19-B.3): новостные (класс B) ниже диалоговых
+                // в шторке. sortKey работает при РАВНОЙ важности (внутри пакета);
+                // межклассовый порядок обеспечивает importance каналов
+                // (vk_* DEFAULT < "messages" HIGH — трассировка в KDoc init()).
+                .setSortKey("1")
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 .setGroup(groupKey)
@@ -578,6 +617,14 @@ object VkNotificationsNotifier {
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+                // #NOTIF-FEED-FILTER (19-B.3): новостные (класс B) ниже диалоговых
+                // в шторке. sortKey работает при РАВНОЙ важности (внутри пакета);
+                // межклассовый порядок обеспечивает importance каналов
+                // (vk_* DEFAULT < "messages" HIGH — трассировка в KDoc init()).
+                // CATEGORY_MESSAGE + setSortKey("0") для диалогов ставятся в
+                // MessageNotifier (CATEGORY_MESSAGE уже там; sortKey — вне зоны
+                // 19-B, follow-up за оркестратором).
+                .setSortKey("1")
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 // §45 #PUSH-LOOK-AND-FEEL: корректное время события (VK date в секундах →

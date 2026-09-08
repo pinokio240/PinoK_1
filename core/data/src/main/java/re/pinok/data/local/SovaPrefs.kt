@@ -121,6 +121,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             feedShowScrollFab  = p[Keys.FEED_SHOW_SCROLL_FAB]   ?: true,
             // #FEED-FILTER-TOGGLE: показывать панель разделов ленты (FeedFilterBar).
             feedShowFilter      = p[Keys.FEED_SHOW_FILTER]       ?: false,
+            // #FEED-CAROUSEL (19-A, волна 18-γ): карусель фото в ленте.
+            // Default = true — как в VK web (photo_page_carousel). NULL-ЯВНО:
+            // отсутствие ключа DataStore — тривиальный фолбэк на дефолт
+            // (паттерн всего Snapshot-конструктора выше).
+            feedCarouselEnabled = p[Keys.FEED_CAROUSEL_ENABLED] ?: true,
             // #NET-SWITCH-POPUP (2026-08-04): popup при переключении сети.
             // Default = false — popup СКРЫТ по умолчанию (пользователь просил
             // «по умолчанию выключено»). Переключение сети и silent refresh
@@ -480,6 +485,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setFeedShowScrollFab(v: Boolean)         = put(Keys.FEED_SHOW_SCROLL_FAB, v)
     /** #FEED-FILTER-TOGGLE: показывать панель разделов ленты. */
     suspend fun setFeedShowFilter(v: Boolean)             = put(Keys.FEED_SHOW_FILTER, v)
+    /** #FEED-CAROUSEL (19-A): карусель фото в ленте (default true). */
+    suspend fun setFeedCarouselEnabled(v: Boolean)      = put(Keys.FEED_CAROUSEL_ENABLED, v)
     /** #NET-SWITCH-POPUP: включить/выключить popup переключения сети. */
     suspend fun setNetSwitchPopupEnabled(v: Boolean)    = put(Keys.NET_SWITCH_POPUP_ENABLED, v)
 
@@ -867,6 +874,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val feedShowScrollFab: Boolean,
         /** #FEED-FILTER-TOGGLE: показывать панель разделов ленты (default true). */
         val feedShowFilter: Boolean,
+        /** #FEED-CAROUSEL (19-A): карусель фото в ленте для ЛЮБОГО числа фото >1 (default true). */
+        val feedCarouselEnabled: Boolean,
         /** #NET-SWITCH-POPUP: popup при переключении сети (default true). */
         val netSwitchPopupEnabled: Boolean,
         // Privacy
@@ -1183,6 +1192,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val FEED_SHOW_SCROLL_FAB = booleanPreferencesKey("feed_show_scroll_fab")
         // #FEED-FILTER-TOGGLE: показывать панель разделов ленты.
         val FEED_SHOW_FILTER = booleanPreferencesKey("feed_show_filter")
+        // #FEED-CAROUSEL (19-A): карусель фото в ленте (default true).
+        val FEED_CAROUSEL_ENABLED = booleanPreferencesKey("feed_carousel_enabled")
         // #NET-SWITCH-POPUP: popup при переключении сети (default true).
         val NET_SWITCH_POPUP_ENABLED = booleanPreferencesKey("net_switch_popup_enabled")
         // Privacy

@@ -1488,6 +1488,11 @@ private fun InterfaceTab(
                 checked = s.feedShowScrollFab,
             ) { scope.launch { app.prefs.setFeedShowScrollFab(it) } }
         }
+        // #FEED-CAROUSEL (19-A, волна 18-γ): карусель фото в ленте.
+        // Default: true — как в VK web (photo_page_carousel).
+        item {
+            FeedCarouselToggleRow(s = s, app = app, scope = scope)
+        }
 
         item { SectionHeader("Сеть") }
         // #NET-SWITCH-POPUP (2026-08-03): popup при переключении сети.
@@ -3604,6 +3609,77 @@ private fun ToggleRow(
                 )
             }
             Switch(checked = checked, onCheckedChange = onToggle, enabled = enabled)
+        }
+    }
+}
+
+/**
+ * #FEED-CAROUSEL (19-A, волна 18-γ): строка-переключатель «Карусель фото в
+ * ленте» (секция «Лента» вкладки «Интерфейс»).
+ *
+ * Чтение — через SovaPrefs data Flow (snapshot `s`, как у соседних строк).
+ * Запись — ОПТИМИСТИЧНО: локальный override мгновенно отражает переключение,
+ * затем suspend-запись в DataStore; при ошибке записи override сбрасывается
+ * (UI откатывается к значению Snapshot) и показывается Toast с реальной
+ * ошибкой (паттерн CallsUserSettingsCard.toggleUserSetting).
+ */
+@Composable
+private fun FeedCarouselToggleRow(
+    s: SovaPrefs.Snapshot,
+    app: SovaApp,
+    scope: CoroutineScope,
+) {
+    val context = LocalContext.current
+    // null = показываем значение из Snapshot; non-null = optimistic-оверрайд.
+    var optimistic by remember { mutableStateOf<Boolean?>(null) }
+    // NULL-ЯВНО: захват delegated-переменной в локальный val для смарт-каста
+    // (delegated-свойства не смарт-кастятся) + явная развязка вместо elvis.
+    val optimisticValue: Boolean? = optimistic
+    val checked: Boolean = if (optimisticValue == null) s.feedCarouselEnabled else optimisticValue
+
+    Card {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    "Карусель фото в ленте",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "Посты с несколькими фото листаются свайпом и стрелками " +
+                        "со счётчиком. При выключении — прежний вид: 1-2 фото " +
+                        "листаются, 3+ показываются сеткой.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = { newValue ->
+                    // Оптимистичное обновление UI до подтверждения записи.
+                    optimistic = newValue
+                    scope.launch {
+                        try {
+                            app.prefs.setFeedCarouselEnabled(newValue)
+                            // Успех: убираем override — Snapshot Flow уже/скоро
+                            // отдаст записанное значение.
+                            optimistic = null
+                        } catch (e: Exception) {
+                            // Откат: override=null → снова значение из Snapshot.
+                            optimistic = null
+                            AppLog.e("SettingsScreen", "setFeedCarouselEnabled($newValue) failed", e)
+                            android.widget.Toast.makeText(
+                                context,
+                                "Не удалось сохранить: ${e.message}",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                },
+            )
         }
     }
 }

@@ -173,6 +173,12 @@ object MessageNotifier {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                // #NOTIF-FEED-FILTER (19-B/19-E, волна 18-δ): диалоговые уведомления —
+                // ВЫШЕ новостных в шторке. setSortKey сортирует внутри одного пакета
+                // при равной важности: диалогам "0" (MessageNotifier), новостным "1"
+                // (VkNotificationsNotifier showSingle/summary) — пара закрывает
+                // порядок «диалоги → новости» системными средствами.
+                .setSortKey("0")
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 .setDeleteIntent(deletePendingIntent)

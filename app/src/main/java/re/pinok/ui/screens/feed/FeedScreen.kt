@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,11 +36,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -142,6 +146,7 @@ import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.FeedRightPanel
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.buildVkAttachment
@@ -388,6 +393,10 @@ fun FeedScreen(
             feedShowScrollFab = true,
             // #FEED-FILTER-TOGGLE: показывать панель разделов ленты (default true).
             feedShowFilter = false,
+            // #FEED-CAROUSEL (19-A): карусель фото в ленте (default true — как в SovaPrefs).
+            // Snapshot расширился — FeedScreen обязан передать initial-значение
+            // (тот же класс бага что Fix #100/#110/#189/#237/#302/#337).
+            feedCarouselEnabled = true,
             // #MSG-FAVORITES-TOGGLE: показывать «Избранное» в чатах (default true).
             msgShowFavorites = false,
             // #NET-SWITCH-POPUP (2026-08-04): netSwitchPopupEnabled добавлен в
@@ -835,6 +844,8 @@ fun FeedScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 → ShareSheet: расширенный диалог «Поделиться».
     val sharePost = remember { mutableStateOf<Post?>(null) }
+    // #FEED-RIGHTPANEL (19-A): правое боковое меню ленты открыто.
+    var showRightPanel by remember { mutableStateOf(false) }
 
     // Клиентская фильтрация ленты по настройкам.
     // VK API частично фильтрует рекламу (тип=ads пропускается в VKApiClient),
@@ -1309,6 +1320,29 @@ fun FeedScreen(
             LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             item(key = "stories_row") {
                 Column {
+                    // #FEED-RIGHTPANEL (19-A): кнопка открытия правого бокового меню
+                    // ленты (VK web: правая колонка vk.com/feed). Глобальный TopAppBar
+                    // в SovaNavHost вне зоны → кнопка в верхней зоне FeedScreen над
+                    // списком (рядом с фильтр-чипами — допустимо по ТЗ). 48dp,
+                    // contentDescription для accessibility.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(
+                            onClick = { showRightPanel = true },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.MenuOpen,
+                                contentDescription = "Правое меню ленты",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     // #FEED-FILTER-TOGGLE: панель разделов скрывается настройкой.
                     if (feedPrefs.feedShowFilter) {
                         FeedFilterBar(
@@ -1463,6 +1497,8 @@ fun FeedScreen(
                             likesState = likesState,
                             myUserId = myUserId,
                             subscriptionState = subscribeState,
+                            // #FEED-CAROUSEL (19-A): флаг из prefs экрана.
+                            carouselEnabled = feedPrefs.feedCarouselEnabled,
                             onSubscribe = { toggleSubscribe(it) },
                             onReportSpam = { reportingPost.value = it },
                             onLikeToggle = { clickedPost ->
@@ -1591,6 +1627,8 @@ fun FeedScreen(
                     // IMP-FEED-1: подписка (п.2) + «Пожаловаться» (п.1).
                     myUserId = myUserId,
                     subscriptionState = subscribeState,
+                    // #FEED-CAROUSEL (19-A): флаг из prefs экрана.
+                    carouselEnabled = feedPrefs.feedCarouselEnabled,
                     onSubscribe = { toggleSubscribe(it) },
                     onReportSpam = { reportingPost.value = it },
                     onLikeToggle = { clickedPost ->
@@ -1775,6 +1813,37 @@ fun FeedScreen(
         }
     }  // closes Box (PullToRefreshBox wrapper)
 
+    // #FEED-RIGHTPANEL (19-A): правое боковое меню ленты — оверлей поверх
+    // контента FeedScreen (Scrim + панель справа). Всегда в композиции
+    // (visible-флаг) → AnimatedVisibility проигрывает и вход, и выход.
+    // Колбэки — реальные навигационные функции экрана; при переходе панель
+    // закрывается (не остаётся открытой над новым экраном).
+    FeedRightPanel(
+        visible = showRightPanel,
+        onDismiss = { showRightPanel = false },
+        onUserClick = { userId ->
+            showRightPanel = false
+            onUserClickSavePos(userId)
+        },
+        onGroupClick = { groupId ->
+            showRightPanel = false
+            onGroupClickSavePos(groupId)
+        },
+        onPostClick = { post ->
+            showRightPanel = false
+            onPostClickSavePos(post)
+        },
+        onVideoClick = { video ->
+            showRightPanel = false
+            onVideoClickSavePos(video)
+        },
+        onPhotoClick = { urls, index ->
+            showRightPanel = false
+            saveScrollPosition()
+            photoViewerState.value = urls to index
+        },
+    )
+
     // Bottom sheet комментариев — #43: показываем список + добавляем новый.
     val commenting = commentingPost.value
     if (commenting != null) {
@@ -1914,6 +1983,11 @@ private fun PostCard(
     onPostClick: (Post) -> Unit = {},
     // Sprint 2, P1-1 (#88): тап по фото → полноэкранный просмотр. (photos, initialIndex)
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    // #FEED-CAROUSEL (19-A): карусель фото в пост-карточке (настройка
+    // feedCarouselEnabled из SovaPrefs). Читается ОДИН раз на уровне экрана
+    // (существующий collectAsState feedPrefs) и пробрасывается вниз — новых
+    // чтений prefs на каждый кадр нет.
+    carouselEnabled: Boolean = true,
     // Sprint 2, P1-3 (#90): тап по кнопке репоста → диалог подтверждения.
     onRepostClick: (Post) -> Unit = {},
     // SOVA_2_lenta: контекстное меню поста.
@@ -2249,6 +2323,7 @@ private fun PostCard(
                 PhotoGrid(
                     photos = photoAttachments.mapNotNull { it.photo },
                     onPhotoClick = onPhotoClick,
+                    carouselEnabled = carouselEnabled,
                 )
             }
             videoAttachments.forEach { attach ->
@@ -2563,6 +2638,9 @@ private fun PostCard(
 private fun PhotoGrid(
     photos: List<Attachment.Photo>,
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    // #FEED-CAROUSEL (19-A): настройка feedCarouselEnabled (SovaPrefs, default true).
+    // false → поведение ИДЕНТИЧНО прежнему: ≤2 фото — пейджер, 3+ — сетка FlowRow.
+    carouselEnabled: Boolean = true,
 ) {
     val photosWithUrl = photos.mapNotNull { photo ->
         val size = PhotoSizes.best(photo.sizes)
@@ -2572,6 +2650,17 @@ private fun PhotoGrid(
     }
     if (photosWithUrl.isEmpty()) return
     val allUrls = photosWithUrl.map { it.second }
+
+    // #FEED-CAROUSEL (19-A): при включённой настройке ЛЮБОЕ число фото >1 —
+    // карусель с пейджером, стрелками и счётчиком (VK web photo_page_carousel).
+    if (carouselEnabled && photosWithUrl.size > 1) {
+        FeedPhotoCarousel(
+            photosWithUrl = photosWithUrl,
+            allUrls = allUrls,
+            onPhotoClick = onPhotoClick,
+        )
+        return
+    }
 
     // 1-2 фото — карусель с счётчиком N/M (как в ВК).
     if (photosWithUrl.size <= 2) {
@@ -2642,6 +2731,133 @@ private fun PhotoGrid(
                         model = url, contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * #FEED-CAROUSEL (19-A): карусель фото поста для ЛЮБОГО количества фото >1
+ * (VK web photo_page_carousel). HorizontalPager + стрелки < > по краям
+ * (полупрозрачный фон-кружок, видны только когда страниц >1 — здесь всегда >1,
+ * т.к. вызывается гардом из [PhotoGrid]) + счётчик «n/N» в прежнем стиле.
+ *
+ * Поведение:
+ * - aspectRatio контейнера = ratio ТЕКУЩЕЙ страницы (pagerState.currentPage),
+ *   coerceIn(0.5f, 2f) — как в прежних ветках; высота меняется ПЛАВНО
+ *   (Modifier.animateContentSize) — честный выбор: без него высота прыгала бы
+ *   скачком при смене currentPage (переключение происходит в момент укладки
+ *   страницы после свайпа).
+ * - клик по фото → onPhotoClick(allUrls, page) — как раньше;
+ * - клик по стрелкам НЕ триггерит клик по фото: стрелки — отдельные IconButton
+ *   поверх пейджера, их клик поглощается кнопкой и не доходит до карточки.
+ * - на крайних страницах соответствующая стрелка скрыта (честный гвард
+ *   currentPage>0 / currentPage<lastIndex, анимация на недоступную страницу
+ *   невозможна).
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FeedPhotoCarousel(
+    photosWithUrl: List<Triple<Attachment.Photo, String, Float>>,
+    allUrls: List<String>,
+    onPhotoClick: (List<String>, Int) -> Unit,
+) {
+    val pagerState = rememberPagerState(pageCount = { photosWithUrl.size })
+    val scope = rememberCoroutineScope()
+    // Ratio текущей страницы (индекс всегда в диапазоне: pageCount == photosWithUrl.size).
+    val currentRatio = photosWithUrl[pagerState.currentPage].third.coerceIn(0.5f, 2f)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            // animateContentSize ДО aspectRatio: анимирует смену высоты,
+            // которую производит aspectRatio текущей страницы.
+            .animateContentSize()
+            .aspectRatio(currentRatio),
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            val (_, url, _) = photosWithUrl[page]
+            Card(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { onPhotoClick(allUrls, page) },
+                elevation = CardDefaults.cardElevation(0.dp),
+            ) {
+                AsyncImage(
+                    model = url, contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+        }
+        // Счётчик "N/M" в правом верхнем углу — стиль прежнего пейджера сохранён.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
+                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+            Text(
+                text = "${pagerState.currentPage + 1}/${photosWithUrl.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+            )
+        }
+        // Стрелка «назад» — по левому краю по вертикальному центру.
+        if (pagerState.currentPage > 0) {
+            IconButton(
+                onClick = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(40.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.KeyboardArrowLeft,
+                        contentDescription = "Предыдущее фото",
+                        tint = Color.White,
+                    )
+                }
+            }
+        }
+        // Стрелка «вперёд» — по правому краю по вертикальному центру.
+        if (pagerState.currentPage < photosWithUrl.lastIndex) {
+            IconButton(
+                onClick = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .size(40.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.KeyboardArrowRight,
+                        contentDescription = "Следующее фото",
+                        tint = Color.White,
                     )
                 }
             }

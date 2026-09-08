@@ -217,6 +217,11 @@ private val REACTION_EMOJIS = listOf(
 // через 5с после последнего).
 private const val TYPING_TIMEOUT_MS = 5_000L
 
+// 18-θ (#TYPING-SEND): троттлинг исходящего messages.setActivity (type=typing).
+// VK ограничивает частоту вызова; индикатор оппонента живёт ~5с, поэтому троттлинг
+// 3с держит индикатор живым при непрерывном наборе и без спама запросами.
+private const val TYPING_SEND_THROTTLE_MS = 3_000L
+
 // Fix #244: multi-select — передаём состояние выбора во вложенные Composable
 // (PhotoGrid, VideoAttachmentCard, VoiceMessageBubble, LinkAttachmentCard,
 // DocAttachmentCard, WallAttachmentCard, ReplyBadge, PollAttachmentRow) через
@@ -523,6 +528,27 @@ fun ChatDetailScreen(
     var showReactionPicker by remember { mutableStateOf<Long?>(null) }
     // Sprint 3: режим редактирования.
     var editingMsgId by remember { mutableStateOf<Long?>(null) }
+
+    // 18-θ (#TYPING-SEND): исходящий «печатает» — messages.setActivity(type=typing,
+    // peer_id) через VKA setActivity (преадд оркестратора волны 19). Паттерн VK web:
+    // (1) мгновенная отправка на ПЕРВОМ изменении текста после паузы (сейчас - lastTypingSentAt
+    // >= троттлинга); (2) дальше не чаще раза в 3с — VK ограничивает частоту, а индикатор
+    // оппонента живёт ~5с (TYPING_TIMEOUT_MS), так что пауза индикатора не наступает;
+    // (3) при остановке набора отправки прекращаются — индикатор гаснет сам за ~5с.
+    // Редактирование (editingMsgId != null) — НЕ набор сообщения: сигнал не шлём
+    // (VK web так же). Каналы (поле ввода скрыто, can_write.allowed=false) сюда не
+    // доходят — inputText не меняется. Сбой индикации НЕ блокирует чат и НЕ показывает
+    // тост (решение: потеря «печатает» у оппонента несущественна, честно в лог).
+    var lastTypingSentAt by remember(peerId) { mutableStateOf(0L) }
+    LaunchedEffect(peerId, inputText, editingMsgId) {
+        if (inputText.isBlank()) return@LaunchedEffect
+        if (editingMsgId != null) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        if (now - lastTypingSentAt < TYPING_SEND_THROTTLE_MS) return@LaunchedEffect
+        lastTypingSentAt = now
+        val ok = app.apiClient.setActivity(peerId)
+        AppLog.d("ChatDetailScreen", "#TYPING-SEND setActivity peer=$peerId ok=$ok")
+    }
     // #59: reply state — сообщение на которое отвечаем
     var replyingTo by remember { mutableStateOf<Message?>(null) }
     // Fix #206: клик по плашке ответа.
