@@ -62,6 +62,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+// Fix #380 #PIN-DIALOG-FOCUS: авто-фокус поля подтверждения при переходе шага диалога PIN.
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -3105,6 +3108,10 @@ private fun SecurityTab(
 ) {
     // #SETTINGS-FIX: состояние диалога создания PIN-кода.
     var showPinSetup by remember { mutableStateOf(false) }
+    // Fix #380 #LOCKER-MANAGE: диалог смены уже установленного PIN
+    // (раньше смены/сброса PIN не существовало вовсе — единственным способом
+    // был сброс данных приложения).
+    var showPinChange by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -3202,8 +3209,17 @@ private fun SecurityTab(
         // #SETTINGS-FIX: при включении lockerEnabled без PIN — показываем
         // диалог создания PIN. Без этого lockerEnabled=true, а lockerPinHash=""
         // → toggles бесполезны (MainActivity всегда скипает LockerActivity).
+        // Fix #380 #LOCKER-UX: подпись честно описывает семантику. Сами
+        // «пункты ниже не работали» из-за re-lock-цикла и boot-скипа —
+        // починено в MainActivity (Fix #380 #LOCKER-RELOCK-LOOP /
+        // #LOCKER-BOOT-SKIP).
         item {
-            ToggleRow("PIN-код", s.lockerEnabled) {
+            val pinSubtitle = if (s.lockerPinHash.isBlank()) {
+                "Блокировка при запуске приложения. При первом включении предложит создать PIN."
+            } else {
+                "Блокировка при запуске приложения. PIN установлен."
+            }
+            ToggleRow("PIN-код", pinSubtitle, s.lockerEnabled) {
                 scope.launch {
                     if (it && s.lockerPinHash.isBlank()) {
                         showPinSetup = true
@@ -3222,13 +3238,80 @@ private fun SecurityTab(
                         scope.launch {
                             app.prefs.setLockerPinHash(hash)
                             app.prefs.setLockerEnabled(true)
+                            // Fix #380 #LOCKER-UX: PIN создаётся, чтобы приложение
+                            // блокировалось — сразу включаем «Блокировку при возврате
+                            // из фона» (дефолт false после #DEFAULTS-OFF делал фичу
+                            // «мёртвой» на глазах: включённый PIN ничего не делал при
+                            // сворачивании, и юзер справедливо считал его нерабочим).
+                            // Отключить можно отдельным тумблером ниже.
+                            app.prefs.setLockerOnBackground(true)
                         }
                     },
                 )
             }
         }
-        item { ToggleRow("Биометрия (требует PIN)", s.lockerBiometric) { scope.launch { app.prefs.setLockerBiometric(it) } } }
-        item { ToggleRow("Блокировка при возврате из фона", s.lockerOnBackground) { scope.launch { app.prefs.setLockerOnBackground(it) } } }
+        // Fix #380 #LOCKER-MANAGE: смена уже установленного PIN.
+        if (s.lockerPinHash.isNotBlank()) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth().clickable { showPinChange = true }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Lock,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.size(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Сменить PIN-код",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                "Задать новый PIN вместо текущего",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        if (showPinChange) {
+            item {
+                PinSetupDialog(
+                    onDismiss = { showPinChange = false },
+                    onPinSet = { hash ->
+                        showPinChange = false
+                        scope.launch {
+                            app.prefs.setLockerPinHash(hash)
+                        }
+                    },
+                )
+            }
+        }
+        item {
+            ToggleRow(
+                title = "Биометрия (требует PIN)",
+                subtitle = "Отпечаток на экране блокировки вместо ввода PIN. Работает, если устройство поддерживает биометрию.",
+                checked = s.lockerBiometric,
+            ) { scope.launch { app.prefs.setLockerBiometric(it) } }
+        }
+        item {
+            ToggleRow(
+                title = "Блокировка при возврате из фона",
+                subtitle = "Запрашивать PIN при каждом возвращении в приложение из другого приложения. Требует установленный PIN.",
+                checked = s.lockerOnBackground,
+            ) { scope.launch { app.prefs.setLockerOnBackground(it) } }
+        }
     }
 }
 
@@ -5868,6 +5951,8 @@ private fun delayMsLabel(ms: Long): String = when (ms) {
 
 // #SETTINGS-FIX: диалог создания PIN-кода при первом включении блокировки.
 // Вызывается из SecurityTab когда lockerEnabled=true, а lockerPinHash пуст.
+// Fix #380 #LOCKER-MANAGE: используется и для смены уже установленного PIN
+// (SecurityTab «Сменить PIN-код»).
 @Composable
 private fun PinSetupDialog(
     onDismiss: () -> Unit,
@@ -5877,6 +5962,16 @@ private fun PinSetupDialog(
     var confirm by remember { mutableStateOf("") }
     var step by remember { mutableStateOf(0) } // 0=enter, 1=confirm
     var error by remember { mutableStateOf<String?>(null) }
+    // Fix #380 #PIN-DIALOG-FOCUS: при авто-переходе step 0→1 (введена 4-я цифра)
+    // поле ввода заменяется полем подтверждения — без явного FocusRequester
+    // фокус терялся, клавиатура печатала «в никуда», и выглядело как «ввод
+    // сбросился / PIN не работает».
+    val confirmFocus = remember { FocusRequester() }
+    LaunchedEffect(step) {
+        if (step == 1) {
+            confirmFocus.requestFocus()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -5911,7 +6006,7 @@ private fun PinSetupDialog(
                             }
                         },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().focusRequester(confirmFocus),
                         keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
                     )
                 }

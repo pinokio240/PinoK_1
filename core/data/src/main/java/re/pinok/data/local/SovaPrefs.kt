@@ -348,13 +348,18 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
             // Locker
             // Fix #DEFAULTS-OFF (2026-08-04): lockerOnBackground default true → false.
-            // ВАЖНО: подсистема locker ЧАСТИЧНО МЁРТВАЯ — LockerActivity существует
-            // (полноценный PIN-screen + биометрия), но setLockerPinHash() НИКЕМ
-            // не вызывается → lockerPinHash всегда "" → LockerActivity никогда
-            // не запустится. lockerOnBackground триггерится только при
-            // lockerPinHash.isNotBlank(), поэтому по умолчанию бесполезен.
-            // Default=false чтобы не вводить в заблуждение.
-            // Починка PIN-setup диалога — отдельная задача.
+            // Fix #380 (2026-09-09): старый комментарий («подсистема ЧАСТИЧНО
+            // МЁРТВАЯ, Починка PIN-setup диалога — отдельная задача») устарел и
+            // переписан. История:
+            // ранее setLockerPinHash() действительно никем не вызывался, но с
+            // #SETTINGS-FIX (PinSetupDialog, SecurityTab «Настройки → Защита») PIN
+            // создаётся/меняется через UI, и вся цепочка жива. Волна 26 (Fix #380)
+            // починила runtime-дефекты триггеров: #LOCKER-BOOT-SKIP (boot-guard
+            // скипал локер после silent re-login/process death), #LOCKER-RELOCK-LOOP
+            // (бесконечный перезапуск локера после успешного ввода PIN при
+            // включённой блокировке из фона), #LOCKER-UX (создание PIN автоматически
+            // включает lockerOnBackground=true — иначе включённый PIN не блокировал
+            // сворачивание и выглядел нерабочим).
             lockerEnabled      = p[Keys.LOCKER_ENABLED]        ?: false,
             lockerPinHash      = p[Keys.LOCKER_PIN_HASH]       ?: "",
             lockerBiometric    = p[Keys.LOCKER_BIOMETRIC]      ?: false,

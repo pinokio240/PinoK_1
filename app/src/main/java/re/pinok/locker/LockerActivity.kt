@@ -66,7 +66,17 @@ class LockerActivity : FragmentActivity() {
         enableEdgeToEdge()
         setContent {
             SOVATheme {
-                LockerScreen(onUnlocked = { finish() })
+                LockerScreen(onUnlocked = {
+                    // Fix #380 #LOCKER-RELOCK-LOOP: фиксируем успешную разблокировку
+                    // ДО finish() — resume-чек MainActivity в grace-окне 5с не
+                    // перезапустит локер (иначе непрозрачный локер кладёт MainActivity
+                    // в onStop → isBackgrounded=true → после finish() onResume видел
+                    // «возврат из фона» и запускал локер заново — бесконечный цикл
+                    // «ввёл верный PIN — снова просит PIN»). Касается и PIN-пада,
+                    // и биометрии (обе ветки идут через onUnlocked).
+                    LockerActivity.markUnlocked()
+                    finish()
+                })
             }
         }
     }
@@ -84,6 +94,44 @@ class LockerActivity : FragmentActivity() {
             val md = MessageDigest.getInstance("SHA-256")
             val raw = md.digest(("sova2-salt:$pin").toByteArray(Charsets.UTF_8))
             return raw.joinToString("") { "%02x".format(it) }
+        }
+
+        /**
+         * Fix #380 #LOCKER-RELOCK-LOOP: timestamp последней успешной
+         * разблокировки (markUnlocked, ставится перед finish()).
+         *
+         * MainActivity в onResume обязан пропускать перезапуск локера, пока
+         * действует grace-окно [UNLOCK_GRACE_MS]: непрозрачная тема локера
+         * кладёт MainActivity в onStop (isBackgrounded=true), и без grace
+         * успешный ввод PIN приводил к немедленному повторному запуску
+         * LockerActivity из resume-чека «Блокировки при возврате из фона» —
+         * бесконечный цикл запроса PIN.
+         */
+        @Volatile
+        var lastUnlockAtMs: Long = 0L
+            private set
+
+        /** Окно после разблокировки, в котором resume-чек не перезапускает локер. */
+        private const val UNLOCK_GRACE_MS = 5_000L
+
+        /** Зафиксировать успешную разблокировку (вызывается из LockerScreen перед finish()). */
+        fun markUnlocked() {
+            lastUnlockAtMs = System.currentTimeMillis()
+        }
+
+        /**
+         * Одноразовость grace: консюмится первым же resume-чеком, который
+         * пропустил перезапуск по grace — следующий РЕАЛЬНЫЙ уход в фон и
+         * возврат снова блокируется (флаг не «живёт вечно» после разблокировки).
+         */
+        fun consumeUnlockGrace() {
+            lastUnlockAtMs = 0L
+        }
+
+        /** true, пока действует grace-окно после успешной разблокировки. */
+        fun unlockGraceActive(): Boolean {
+            val at = lastUnlockAtMs
+            return at != 0L && System.currentTimeMillis() - at < UNLOCK_GRACE_MS
         }
 
         /** Vibrate the device briefly (used on wrong PIN). */

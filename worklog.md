@@ -8189,3 +8189,26 @@ Work Log:
 Stage Summary:
 - Кнопка «Выйти из аккаунта» теперь закреплена внизу экрана Профиля: видна СРАЗУ при входе, на любой вкладке, не уезжает при прокрутке и под жестовую навигацию; выход защищён диалогом с предупреждением; механизм logout общий с drawer (holders clear → signOut → куки/токен)
 - Коммит + push в origin/PinoK (следующий коммит)
+
+---
+Task ID: 27
+Agent: main (Z.ai Code) + research-агент 27-a (opus, research-only)
+Task: юзер: compile-ошибки MainActivity (двойной companion object + Unresolved references на константы Fix #377); «Настройки - защита - PIN code не работает, и пункты ниже тоже не работают»
+
+Work Log:
+- git fetch: origin/PinoK уехал 93514bef → 2a0383f8 (волна 26 fbb4480d + волна 26-1 2a0383f8 из прошлой сессии; локальный сандбокс отстал) → .gitignore восстановлен (перезатёрт Next.js-скаффолдингом), pull --ff-only на 2a0383f8
+- Fix #379 #SINGLE-COMPANION: root-cause compile-ошибок — волна 26 добавила ВТОРОЙ companion object в MainActivity (private companion с константами #DOZE-RESUME-AUTH), Kotlin разрешает один на класс → «Only one companion object is allowed» + Unresolved PROACTIVE_REFRESH_THROTTLE_MS/WINDOW_MS, SILENT_RETRY_DELAY_MS, STALE_POOL_WINDOW_MS. Константы слиты в единственный companion (private const, visibility сохранена); проверено: 4 имени не используются вне MainActivity
+- Разведка PIN-цепочки вручную: SecurityTab/PinSetupDialog/ToggleRow/SovaPrefs-маппинг/put/LockerActivity/манифест (LockerActivity :329, exported=false, singleTask) — статически всё живо; устаревший комментарий SovaPrefs :351 «подсистема ЧАСТИЧНО МЁРТВАЯ» + юзер с РАБОЧЕЙ сборкой 25-3 снова жалуется → нужен runtime-разбор
+- Агент 27-a (opus, research-only, «тотальное изучение»): вердикты H1-H7. Root-causes: RC1 #LOCKER-RELOCK-LOOP — непрозрачный LockerActivity кладёт MainActivity в onStop (isBackgrounded=true), после успешного ввода PIN (finish) onResume видел «возврат из фона» и при lockerOnBackground запускал локер ЗАНОВО — бесконечный цикл «ввёл верный PIN — снова просит PIN»; RC2 #LOCKER-BOOT-SKIP — bootLocal=true ставился ДО auth-ветки, после silent re-login (authVersion++) и после process-death restore (bootLocal — rememberSaveable) guard `bootLocal && hasValidToken()` уходил в return ДО locker-чека → холодный старт с протухшим web_token открывал приложение БЕЗ PIN; RC3 — lockerOnBackground=false по умолчанию (#DEFAULTS-OFF) → сворачивание не блокировало вовсе; RC4 — нет смены/сброса PIN, тихое включение при существующем hash; RC5 — устаревший комментарий SovaPrefs + потеря фокуса в диалоге (step 0→1). H3/H5/H6 опровергнуты (запись DataStore жива, миграции PIN не стирают, prefs-инстанс один)
+- Fix #380 #LOCKER-RELOCK-LOOP: LockerActivity.companion += lastUnlockAtMs (@Volatile, private set) + markUnlocked() (перед finish(), обе ветки: PIN-пад и биометрия) + UNLOCK_GRACE_MS=5с + unlockGraceActive()/consumeUnlockGrace(); MainActivity onResume: оба чека (cached + cold-fallback runBlocking) требуют !unlockGrace; grace консюмится первым же пропущенным чеком — реальный уход в фон блокируется как раньше
+- Fix #380 #LOCKER-BOOT-SKIP: MainActivity.companion += lockerBootCheckDone (@Volatile static процесса — rotation НЕ переспрашивает локер, process death СБРАСЫВАЕТ → блокирует); guard теперь `lockerBootCheckDone && bootLocal && hasValidToken()`; флаг ставится в точке решения (токен жив) — silent re-login и process-death restore доходят до locker-чека; logout/offline-back флаг не сбрасывается (паритет: после интерактивного входа локер не переспрашивается)
+- Fix #380 #LOCKER-UX: SecurityTab — подписи честной семантики (ToggleRow subtitle-перегрузка): «Блокировка при запуске приложения…»/«PIN установлен.», биометрия и фон-блокировка получили пояснения; при СОЗДАНИИ PIN автоматически включается setLockerOnBackground(true) (иначе включённый PIN не блокировал сворачивание — выглядел мёртвым; отключается тумблером)
+- Fix #380 #LOCKER-MANAGE: строка «Сменить PIN-код» (видна при lockerPinHash.isNotBlank(), стиль строк «Аккаунт VK», иконка Lock) → PinSetupDialog → setLockerPinHash(hash); Fix #380 #PIN-DIALOG-FOCUS: FocusRequester на поле подтверждения (LaunchedEffect(step)) — фокус больше не теряется при авто-переходе 0→1
+- SovaPrefs: устаревший комментарий «ЧАСТИЧНО МЁРТВАЯ» переписан (история #SETTINGS-FIX + Fix #380)
+- Сканеры: check-nested-comments ALL CLEAN (4 файла); скобки {} () — MainActivity/LockerActivity/SovaPrefs 0/0, SettingsScreen -13 parens = артефакт строк (в HEAD тоже -13); NULL-скан '+'-строк: 0 хитов !!/?./?:; git diff построчно ревьюнут
+
+Stage Summary:
+- :app снова компилируется (единственный корень всех 7 ошибок юзера — двойной companion, Fix #379)
+- PIN-блокировка починена end-to-end (Fix #380): верный PIN больше не зацикливает (grace 5с), холодный старт с протухшим токеном БЛОКИРУЕТСЯ (static boot-флаг), создание PIN включает блокировку из фона, есть «Сменить PIN-код», диалог держит фокус
+- «Пункты ниже» (Биометрия / Блокировка при возврате из фона) работоспособны даунстримом: жили только внутри LockerActivity, который раньше либо не показывался (boot-скип), либо зацикливался (re-lock)
+- HISTORY.md дополнен волной 26-2; коммит + push в origin/PinoK (следующий коммит)

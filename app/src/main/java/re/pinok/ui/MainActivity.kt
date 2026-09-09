@@ -97,21 +97,51 @@ class MainActivity : ComponentActivity() {
 
         /** Окно SSO-защиты: 90 сек с момента запуска AuthActivity. */
         private const val SSO_GUARD_WINDOW_MS = 90_000L
-    }
 
-    // Fix #377 #DOZE-RESUME-AUTH: окно проактивного обновления токена (5 минут
-    // до истечения — окно совпадает с keepAlive-окном Fix #216 в репозитории).
-    private companion object {
-        const val PROACTIVE_REFRESH_WINDOW_MS = 300_000L
+        // Fix #377 #DOZE-RESUME-AUTH: окно проактивного обновления токена (5 минут
+        // до истечения — окно совпадает с keepAlive-окном Fix #216 в репозитории).
+        // Fix #379 #SINGLE-COMPANION: константы слиты в ЕДИНСТВЕННЫЙ companion
+        // object класса — волна 26 добавила второй (private companion object),
+        // Kotlin разрешает только один на класс («Only one companion object is
+        // allowed per class»), второй отбрасывался → Unresolved references на
+        // все 4 константы → :app не компилировался.
+        private const val PROACTIVE_REFRESH_WINDOW_MS = 300_000L
+
         // Минимальный интервал между проактивными ensureFreshToken (не дёргать
         // HTTP при каждом resume — сетевой путь и так лёгкий, но throttle нужен).
-        const val PROACTIVE_REFRESH_THROTTLE_MS = 30_000L
+        private const val PROACTIVE_REFRESH_THROTTLE_MS = 30_000L
+
         // Задержка повторной silent-попытки после RESULT_CANCELED (уважает
         // throttle launchAuth 20с — к моменту запуска throttle уже истёк).
-        const val SILENT_RETRY_DELAY_MS = 20_000L
+        private const val SILENT_RETRY_DELAY_MS = 20_000L
+
         // Пул OkHttp чистим на resume, если прошло больше 5 минут (после Doze
         // stale keep-alive TCP-соединения мертвы — сервер их уже закрыл).
-        const val STALE_POOL_WINDOW_MS = 5 * 60_000L
+        private const val STALE_POOL_WINDOW_MS = 5 * 60_000L
+
+        /**
+         * Fix #380 #LOCKER-BOOT-SKIP: boot-решение о запуске LockerActivity
+         * принято ровно один раз за ЖИЗНЬ ПРОЦЕССА. Специально static
+         * (companion), а НЕ rememberSaveable:
+         *  - rotation/рекреация Activity: static ПЕРЕЖИВАЕТ → локер не
+         *    перезапускается при каждом повороте экрана;
+         *  - process death + восстановление из recents: static СБРОШЕН
+         *    (новый процесс) → локер проверяется заново → приложение
+         *    блокируется (раньше bootLocal=true из SavedStateHandle +
+         *    живой токен уводили guard в return ДО locker-чека — RC2b).
+         * Ранее (до Fix #380) guard `bootLocal && hasValidToken()` скипал
+         * локер и после успешного silent re-login: bootLocal ставился true
+         * ДО auth-ветки, authVersion++ перезапускал эффект, guard уходил в
+         * return и до проверки PIN дело никогда не доходило (RC2) — любой
+         * холодный старт с протухшим web_token (>15 мин простоя) открывал
+         * приложение без блокировки.
+         *
+         * При ручном logout/offline-back флаг НЕ сбрасывается: после
+         * интерактивного входа локер не переспрашивается (паритет со старым
+         * поведением — bootLocal=false → auth → после входа guard скипал).
+         */
+        @Volatile
+        private var lockerBootCheckDone: Boolean = false
     }
 
     /**
@@ -622,9 +652,18 @@ class MainActivity : ComponentActivity() {
                 // запускает AuthActivity для silent re-login через remixsid (Fix #107).
                 if (snap != null) {
                     LaunchedEffect(snap.lockerEnabled, snap.lockerPinHash, bootLocal, currentAuthVersion, isOfflineMode) {
-                        // Скип только если уже загрузились AND токен жив.
+                        // Скип только если уже загрузились AND токен жив AND
+                        // boot-решение (локер) в этом процессе уже принято.
                         // Если токен умер — boot должен перезапуститься.
-                        if (bootLocal && app.tokenStorage.hasValidToken()) return@LaunchedEffect
+                        // Fix #380 #LOCKER-BOOT-SKIP: раньше guard был
+                        // `bootLocal && hasValidToken()` и срабатывал сразу после
+                        // bootLocal=true, который ставился ДО auth-ветки → после
+                        // успешного silent re-login (authVersion++ перезапускал
+                        // эффект) и после process-death restore (bootLocal —
+                        // rememberSaveable) до locker-чека дело не доходило —
+                        // холодный старт с протухшим web_token открывал
+                        // приложение БЕЗ PIN. См. KDoc lockerBootCheckDone.
+                        if (lockerBootCheckDone && bootLocal && app.tokenStorage.hasValidToken()) return@LaunchedEffect
                         // Предотвращаем двойной запуск AuthActivity (authLauncher уже активен).
                         if (authActivityShowing) return@LaunchedEffect
                         bootLocal = true
@@ -668,6 +707,12 @@ class MainActivity : ComponentActivity() {
                             launchAuth(intent, reason = "boot-no-token")
                             return@LaunchedEffect
                         }
+                        // Fix #380 #LOCKER-BOOT-SKIP: токен жив — boot-решение
+                        // принято (единственный раз за процесс; повторный вход
+                        // в ветку возможен только после silent re-login или
+                        // process death — ровно те пути, где локер раньше
+                        // терялся).
+                        lockerBootCheckDone = true
                         if (snap.lockerEnabled && snap.lockerPinHash.isNotBlank()) {
                             AppLog.i("MainActivity", "Locker enabled, launching LockerActivity")
                             LockerActivity.launch(this@MainActivity)
@@ -1469,9 +1514,20 @@ class MainActivity : ComponentActivity() {
         if (isBackgrounded) {
             isBackgrounded = false
             val t0 = System.currentTimeMillis()
+            // Fix #380 #LOCKER-RELOCK-LOOP: LockerActivity (непрозрачная
+            // Theme.PinoK) кладёт MainActivity в onStop → isBackgrounded=true.
+            // После успешного ввода PIN (finish) onResume видел «возврат из
+            // фона» и при включённой «Блокировке при возврате из фона» запускал
+            // LockerActivity ЗАНОВО — бесконечный цикл «ввёл верный PIN — снова
+            // просит PIN» (пункт был фактически сломан этим циклом, как и
+            // boot-локер с включённым тумблером). Grace-окно 5с после
+            // LockerActivity.markUnlocked() пропускает РОВНО ОДИН resume-чек,
+            // затем флаг консюмится — реальный уход в фон после разблокировки
+            // блокируется как раньше.
+            val unlockGrace = LockerActivity.unlockGraceActive()
             val cached = lastPrefsSnapshot
             if (cached != null) {
-                if (cached.lockerEnabled && cached.lockerOnBackground && cached.lockerPinHash.isNotBlank()) {
+                if (cached.lockerEnabled && cached.lockerOnBackground && cached.lockerPinHash.isNotBlank() && !unlockGrace) {
                     AppLog.i("MainActivity", "Locker on background (cached snapshot, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
                     re.pinok.locker.LockerActivity.launch(this)
                 } else {
@@ -1484,11 +1540,16 @@ class MainActivity : ComponentActivity() {
                 kotlinx.coroutines.runBlocking {
                     val snap = app.prefs.data.first()
                     lastPrefsSnapshot = snap
-                    if (snap.lockerEnabled && snap.lockerOnBackground && snap.lockerPinHash.isNotBlank()) {
+                    if (snap.lockerEnabled && snap.lockerOnBackground && snap.lockerPinHash.isNotBlank() && !unlockGrace) {
                         AppLog.i("MainActivity", "Locker on background (cold-start fallback, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
                         re.pinok.locker.LockerActivity.launch(this@MainActivity)
                     }
                 }
+            }
+            if (unlockGrace) {
+                // Fix #380: одноразовость grace — следующий РЕАЛЬНЫЙ уход в фон
+                // и возврат снова блокируется, а не живёт вечно после разблокировки.
+                LockerActivity.consumeUnlockGrace()
             }
         }
 
