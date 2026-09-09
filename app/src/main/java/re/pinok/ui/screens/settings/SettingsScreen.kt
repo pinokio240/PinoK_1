@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -62,9 +64,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-// Fix #380 #PIN-DIALOG-FOCUS: авто-фокус поля подтверждения при переходе шага диалога PIN.
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -95,6 +94,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DevicesOther
@@ -133,6 +133,8 @@ import androidx.compose.material.icons.outlined.Delete
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.widget.Toast
 import android.os.Environment
 import android.provider.Settings
 import java.text.DecimalFormat
@@ -1943,6 +1945,84 @@ private fun OfflineTab(
             )
         }
 
+        // ── Фоновая загрузка (Fix #382 #DL-DISPATCH-PERSIST / #DL-WAKELOCK) ──
+        // Персистентная очередь + foreground-сервис + wakelock — в TrackDownloadManager/
+        // MusicDownloadService. Здесь — ключевой системный рычаг: без отключения
+        // оптимизации батареи OEM-менеджеры (MTK/Samsung/Xiaomi) убивают процесс с
+        // очередью при уходе в фон, и никакой диспетчер не поможет.
+        item { SectionHeader("Фоновая загрузка") }
+        item {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            // #NULL-ЯВНО: явная проверка вместо ?. — pm может быть null только при
+            // экзотическом отказе системы; true = «оптимизация включена»
+            // (безопасный дефолт: строка предложит открыть системный диалог).
+            val batteryOptimized = if (pm == null) {
+                true
+            } else {
+                !pm.isIgnoringBatteryOptimizations(context.packageName)
+            }
+            Card(modifier = Modifier.fillMaxWidth().clickable {
+                if (batteryOptimized) {
+                    try {
+                        // Direct-диалог: «Разрешить приложению PinoK не оптимизировать
+                        // батарею?» — требует REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                        // (объявлен в манифесте, Fix #382).
+                        context.startActivity(
+                            Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + context.packageName),
+                            )
+                        )
+                    } catch (e: Exception) {
+                        // Некоторые прошивки убирают direct-intent — открываем системный список.
+                        try {
+                            context.startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        } catch (e2: Exception) {
+                            AppLog.w("MusicTab", "battery optimization intent failed: " + e2.message)
+                            Toast.makeText(context, "Не удалось открыть настройки батареи", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    Toast.makeText(context, "Оптимизация батареи уже отключена для PinoK", Toast.LENGTH_SHORT).show()
+                }
+            }) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.DownloadForOffline,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.size(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Оптимизация батареи",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            if (batteryOptimized) {
+                                "ВКЛЮЧЕНА — Android может убивать загрузки в фоне. " +
+                                    "Нажмите и разрешите работу без оптимизации."
+                            } else {
+                                "Отключена — очередь загрузок доживёт в фоне. " +
+                                    "Очередь сохраняется на диск и восстанавливается после перезапуска."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
         // ── Формат файлов ─────────────────────────────────────────────
         item { SectionHeader("Формат файлов") }
         item {
@@ -3106,6 +3186,7 @@ private fun SecurityTab(
     // onOpenHiddenSources/onOpenDevices (строка-вход в секции «Аккаунт VK»).
     onOpenVkIdAccount: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     // #SETTINGS-FIX: состояние диалога создания PIN-кода.
     var showPinSetup by remember { mutableStateOf(false) }
     // Fix #380 #LOCKER-MANAGE: диалог смены уже установленного PIN
@@ -3213,11 +3294,19 @@ private fun SecurityTab(
         // «пункты ниже не работали» из-за re-lock-цикла и boot-скипа —
         // починено в MainActivity (Fix #380 #LOCKER-RELOCK-LOOP /
         // #LOCKER-BOOT-SKIP).
+        // Fix #381 #PIN-SUBTITLE-HONEST: при выключенном тумблере с
+        // установленным PIN подпись прямо говорит, что PIN есть, но
+        // блокировка выключена (раньше в этом состоянии показывалось
+        // «При первом включении предложит создать PIN» — вводило в
+        // заблуждение, юзер не понимал, что PIN уже стоит).
         item {
-            val pinSubtitle = if (s.lockerPinHash.isBlank()) {
-                "Блокировка при запуске приложения. При первом включении предложит создать PIN."
-            } else {
-                "Блокировка при запуске приложения. PIN установлен."
+            val pinSubtitle = when {
+                s.lockerPinHash.isBlank() ->
+                    "Блокировка при запуске приложения. При первом включении предложит создать PIN."
+                s.lockerEnabled ->
+                    "Блокировка при запуске приложения. PIN установлен."
+                else ->
+                    "PIN установлен, но блокировка выключена — включите тумблер."
             }
             ToggleRow("PIN-код", pinSubtitle, s.lockerEnabled) {
                 scope.launch {
@@ -3229,27 +3318,11 @@ private fun SecurityTab(
                 }
             }
         }
-        if (showPinSetup) {
-            item {
-                PinSetupDialog(
-                    onDismiss = { showPinSetup = false },
-                    onPinSet = { hash ->
-                        showPinSetup = false
-                        scope.launch {
-                            app.prefs.setLockerPinHash(hash)
-                            app.prefs.setLockerEnabled(true)
-                            // Fix #380 #LOCKER-UX: PIN создаётся, чтобы приложение
-                            // блокировалось — сразу включаем «Блокировку при возврате
-                            // из фона» (дефолт false после #DEFAULTS-OFF делал фичу
-                            // «мёртвой» на глазах: включённый PIN ничего не делал при
-                            // сворачивании, и юзер справедливо считал его нерабочим).
-                            // Отключить можно отдельным тумблером ниже.
-                            app.prefs.setLockerOnBackground(true)
-                        }
-                    },
-                )
-            }
-        }
+        // Fix #381 #PIN-DIALOG-OVERLAY: диалоги создания/смены PIN вынесены из
+        // item{} LazyColumn на уровень вкладки (ниже, после LazyColumn).
+        // Айтем LazyColumn, ушедший за viewport при скролле (например, юзер
+        // открыл диалог и пролистал вниз к биометрии), ДИСПОУЗИТСЯ — диалог
+        // молча закрывался посреди ввода, введённый PIN терялся.
         // Fix #380 #LOCKER-MANAGE: смена уже установленного PIN.
         if (s.lockerPinHash.isNotBlank()) {
             item {
@@ -3285,19 +3358,6 @@ private fun SecurityTab(
                 }
             }
         }
-        if (showPinChange) {
-            item {
-                PinSetupDialog(
-                    onDismiss = { showPinChange = false },
-                    onPinSet = { hash ->
-                        showPinChange = false
-                        scope.launch {
-                            app.prefs.setLockerPinHash(hash)
-                        }
-                    },
-                )
-            }
-        }
         item {
             ToggleRow(
                 title = "Биометрия (требует PIN)",
@@ -3312,6 +3372,46 @@ private fun SecurityTab(
                 checked = s.lockerOnBackground,
             ) { scope.launch { app.prefs.setLockerOnBackground(it) } }
         }
+    }
+
+    // Fix #381 #PIN-DIALOG-OVERLAY: диалоги живут на уровне SecurityTab (не в
+    // LazyColumn-айтемах) — не диспоузятся при скролле списка.
+    if (showPinSetup) {
+        PinSetupDialog(
+            onDismiss = { showPinSetup = false },
+            onPinSet = { hash ->
+                showPinSetup = false
+                scope.launch {
+                    app.prefs.setLockerPinHash(hash)
+                    app.prefs.setLockerEnabled(true)
+                    // Fix #380 #LOCKER-UX: PIN создаётся, чтобы приложение
+                    // блокировалось — сразу включаем «Блокировку при возврате
+                    // из фона» (дефолт false после #DEFAULTS-OFF делал фичу
+                    // «мёртвой» на глазах: включённый PIN ничего не делал при
+                    // сворачивании, и юзер справедливо считал его нерабочим).
+                    // Отключить можно отдельным тумблером ниже.
+                    app.prefs.setLockerOnBackground(true)
+                    // Fix #381 #PIN-SAVE-FEEDBACK: явная обратная связь — юзер
+                    // ВИДИТ, что PIN установлен (раньше диалог просто закрывался,
+                    // и без внимательного чтения подписи тумблера невозможно было
+                    // отличить «установлен» от «снова не сработало»).
+                    Toast.makeText(context, "PIN-код установлен", Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+    }
+    if (showPinChange) {
+        PinSetupDialog(
+            onDismiss = { showPinChange = false },
+            onPinSet = { hash ->
+                showPinChange = false
+                scope.launch {
+                    app.prefs.setLockerPinHash(hash)
+                    // Fix #381 #PIN-SAVE-FEEDBACK: см. выше.
+                    Toast.makeText(context, "PIN-код изменён", Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
     }
 }
 
@@ -5953,23 +6053,60 @@ private fun delayMsLabel(ms: Long): String = when (ms) {
 // Вызывается из SecurityTab когда lockerEnabled=true, а lockerPinHash пуст.
 // Fix #380 #LOCKER-MANAGE: используется и для смены уже установленного PIN
 // (SecurityTab «Сменить PIN-код»).
+//
+// Fix #381 #PIN-PAD-DIALOG: полный редизайн — IME-поля убраны, вместо них
+// детерминированный PIN-пад (те же круглые клавиши, что на экране блокировки
+// LockerActivity). Раньше это были два OutlinedTextField: при авто-переходе
+// 0→1 (введена 4-я цифра) поле ввода заменялось полем подтверждения, и
+// FocusRequester.requestFocus() (Fix #380 #PIN-DIALOG-FOCUS) гонялся с
+// удалением прежнего поля из композиции — на части устройств фокус-запрос
+// проигрывал, клавиатура печатала «в никуда», confirm оставался пустым,
+// «Сохранить» отвечало «PIN-коды не совпадают» и всё сбрасывалось по кругу →
+// у юзера «PIN не устанавливается». Клавиатура системы в диалоге больше не
+// участвует вовсе: каждый тап гарантированно попадает в активное поле.
+// Шаг (0=ввод, 1=подтверждение) теперь ВЫВОДИТСЯ из длины pin, а не хранится
+// отдельным стейтом — рассинхрон «шаг уже 1, а pin ещё не 4 цифры» невозможен
+// по построению.
 @Composable
 private fun PinSetupDialog(
     onDismiss: () -> Unit,
     onPinSet: (hash: String) -> Unit,
 ) {
+    val context = LocalContext.current
     var pin by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
-    var step by remember { mutableStateOf(0) } // 0=enter, 1=confirm
     var error by remember { mutableStateOf<String?>(null) }
-    // Fix #380 #PIN-DIALOG-FOCUS: при авто-переходе step 0→1 (введена 4-я цифра)
-    // поле ввода заменяется полем подтверждения — без явного FocusRequester
-    // фокус терялся, клавиатура печатала «в никуда», и выглядело как «ввод
-    // сбросился / PIN не работает».
-    val confirmFocus = remember { FocusRequester() }
-    LaunchedEffect(step) {
-        if (step == 1) {
-            confirmFocus.requestFocus()
+    val step = if (pin.length < 4) 0 else 1 // 0=ввод, 1=подтверждение (derived)
+    val activeValue = if (step == 0) pin else confirm
+
+    fun onKey(k: String) {
+        if (k == "del") {
+            error = null
+            if (step == 0) {
+                if (pin.isNotEmpty()) pin = pin.dropLast(1)
+            } else {
+                if (confirm.isNotEmpty()) confirm = confirm.dropLast(1)
+            }
+            return
+        }
+        // Цифра: не принимаем 5-ю — авто-проверка сработала на 4-й.
+        if (activeValue.length >= 4) return
+        if (step == 0) {
+            pin = pin + k
+        } else {
+            confirm = confirm + k
+            if (confirm.length == 4) {
+                if (confirm == pin) {
+                    onPinSet(re.pinok.locker.LockerActivity.hashPin(pin))
+                } else {
+                    error = "PIN-коды не совпадают — придумайте новый"
+                    // Единый тактильный паттерн с ошибкой неверного PIN на
+                    // экране блокировки (LockerActivity.vibrate).
+                    re.pinok.locker.LockerActivity.vibrate(context)
+                    pin = ""
+                    confirm = ""
+                }
+            }
         }
     }
 
@@ -5977,63 +6114,81 @@ private fun PinSetupDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (step == 0) "Создайте PIN-код" else "Подтвердите PIN-код") },
         text = {
-            Column {
-                if (step == 0) {
-                    Text("Введите 4 цифры для блокировки приложения")
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = pin,
-                        onValueChange = { v ->
-                            if (v.length <= 4 && v.all { it.isDigit() }) {
-                                pin = v
-                                error = null
-                                if (v.length == 4) step = 1
-                            }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
-                    )
-                } else {
-                    Text("Повторите PIN-код")
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = confirm,
-                        onValueChange = { v ->
-                            if (v.length <= 4 && v.all { it.isDigit() }) {
-                                confirm = v
-                                error = null
-                            }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().focusRequester(confirmFocus),
-                        keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
-                    )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    if (step == 0) "4 цифры для блокировки приложения" else "Повторите PIN-код",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(16.dp))
+                // PIN dots — как на экране блокировки LockerActivity.
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    repeat(4) { i ->
+                        val filled = i < activeValue.length
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(if (filled) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                        )
+                    }
                 }
-                error?.let {
-                    Spacer(Modifier.height(4.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                val err = error
+                if (err != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
-            }
-        },
-        confirmButton = {
-            if (step == 1) {
-                TextButton(
-                    onClick = {
-                        if (confirm == pin && confirm.length == 4) {
-                            onPinSet(re.pinok.locker.LockerActivity.hashPin(pin))
-                        } else {
-                            error = "PIN-коды не совпадают"
-                            confirm = ""
-                            step = 0
-                            pin = ""
+                Spacer(Modifier.height(16.dp))
+                // Пад 3×4: 1-9 / del / 0. Клавиши 64dp — touch-таргет ≥48dp.
+                val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "del", "0", "")
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    keys.chunked(3).forEach { rowKeys ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                        ) {
+                            rowKeys.forEach { k ->
+                                if (k.isEmpty()) {
+                                    // Пустой placeholder — сохранить сетку 3×4.
+                                    Box(modifier = Modifier.size(64.dp))
+                                } else {
+                                    PinPadKey(key = k, onClick = { onKey(k) })
+                                }
+                            }
                         }
-                    },
-                ) { Text("Сохранить") }
+                    }
+                }
             }
         },
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Отмена") }
         },
     )
+}
+
+/** Fix #381 #PIN-PAD-DIALOG: круглая клавиша PIN-пада (стиль KeyButton LockerActivity). */
+@Composable
+private fun PinPadKey(key: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (key == "del") {
+            Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "Удалить")
+        } else {
+            Text(key, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+        }
+    }
 }

@@ -8,8 +8,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import re.pinok.R
 import re.pinok.ui.MainActivity
@@ -23,6 +25,23 @@ import re.pinok.util.AppLog
  * [TrackDownloadManager] имеет активные загрузки.
  */
 class MusicDownloadService : Service() {
+
+    /**
+     * #DL-WAKELOCK (Fix #382): локи удержания CPU/Wi-Fi на время активных загрузок.
+     *
+     * Зачем: foreground-сервис сам по себе НЕ гарантирует CPU и Wi-Fi в Doze —
+     * система может усыплять устройство между сетевыми пакетами (stall) и
+     * резать Wi-Fi до low-latency-минимума, из-за чего HLS-загрузки виснут или
+     * падают по таймауту. PARTIAL_WAKE_LOCK держит CPU, WifiLock
+     * (WIFI_MODE_FULL_HIGH_PERF) держит Wi-Fi в высокопроизводительном режиме,
+     * пока сервис жив (а жив он ровно пока есть активные загрузки —
+     * см. maybeStopForegroundService в TrackDownloadManager).
+     *
+     * setReferenceCounted(false): один acquire/release на жизненный цикл сервиса
+     * — onCreate/onDestroy симметричны, счётчик не нужен.
+     */
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     companion object {
         private const val TAG = "MusicDownloadService"
@@ -167,6 +186,43 @@ class MusicDownloadService : Service() {
             AppLog.e(TAG, "startForeground() failed in onCreate(): ${e.javaClass.simpleName}: ${e.message}", e)
         }
         super.onCreate()
+        // #DL-WAKELOCK (Fix #382): держим CPU + Wi-Fi пока сервис живёт (а живёт он
+        // ровно пока есть активные загрузки — см. maybeStopForegroundService).
+        // Каждый acquire в try/catch: сбой локов (нет разрешения, экзотическая
+        // прошивка) НЕ должен ломать запуск сервиса — загрузки продолжатся, просто
+        // с меньшей устойчивостью в Doze.
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm != null) {
+                val lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PinoK:MusicDownload")
+                lock.setReferenceCounted(false)
+                lock.acquire()
+                wakeLock = lock
+                AppLog.i(TAG, "DL-WAKELOCK: PARTIAL_WAKE_LOCK acquired")
+            } else {
+                AppLog.w(TAG, "DL-WAKELOCK: PowerManager недоступен — wakelock пропущен")
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "DL-WAKELOCK: wakelock acquire failed: ${e.message}")
+        }
+        try {
+            val wm = getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (wm != null) {
+                // WIFI_MODE_FULL_HIGH_PERF: помечен deprecated начиная с API 34,
+                // но по-прежнему является рабочим режимом удержания Wi-Fi в
+                // high-perf — подавляем только предупреждение компилятора.
+                @Suppress("DEPRECATION")
+                val lock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "PinoK:MusicDownloadWifi")
+                lock.setReferenceCounted(false)
+                lock.acquire()
+                wifiLock = lock
+                AppLog.i(TAG, "DL-WAKELOCK: WifiLock acquired (FULL_HIGH_PERF)")
+            } else {
+                AppLog.w(TAG, "DL-WAKELOCK: WifiManager недоступен — wifiLock пропущен")
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "DL-WAKELOCK: wifiLock acquire failed: ${e.message}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -186,6 +242,30 @@ class MusicDownloadService : Service() {
 
     override fun onDestroy() {
         AppLog.i(TAG, "onDestroy")
+        // #DL-WAKELOCK (Fix #382): корректно релизим локи ПЕРЕД снятием foreground.
+        // release() только если лок реально held — иначе Android кидает
+        // RuntimeException("WakeLock under-locked"). С null-проверками и try/catch:
+        // onDestroy не должен ронять процесс даже на экзотике.
+        val heldWakeLock = wakeLock
+        if (heldWakeLock != null) {
+            try {
+                if (heldWakeLock.isHeld) heldWakeLock.release()
+                AppLog.i(TAG, "DL-WAKELOCK: PARTIAL_WAKE_LOCK released")
+            } catch (e: Exception) {
+                AppLog.w(TAG, "DL-WAKELOCK: wakelock release failed: ${e.message}")
+            }
+            wakeLock = null
+        }
+        val heldWifiLock = wifiLock
+        if (heldWifiLock != null) {
+            try {
+                if (heldWifiLock.isHeld) heldWifiLock.release()
+                AppLog.i(TAG, "DL-WAKELOCK: WifiLock released")
+            } catch (e: Exception) {
+                AppLog.w(TAG, "DL-WAKELOCK: wifiLock release failed: ${e.message}")
+            }
+            wifiLock = null
+        }
         // Fix #143: явно отменяем notification и выходим из foreground-режима.
         // Раньше onDestroy только вызывал super.onDestroy() — notification с
         // «Загрузка завершена / 100%» оставалась висеть forever, потому что

@@ -18,7 +18,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentLinkedQueue
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import re.pinok.SovaApp
@@ -57,11 +61,28 @@ import javax.crypto.spec.SecretKeySpec
  * текстовый m3u8-плейлист вместо реального аудио.
  * Теперь: парсит m3u8, скачивает все .ts-сегменты, склеивает в один файл.
  * Для прямых MP3-URL — скачивает как раньше (backward compat).
+ *
+ * Fix #382 (#DL-DISPATCH-PERSIST + #DL-DISPATCH-RESTORE): очередь загрузок
+ * персистентна — файл filesDir/downloads/music/.pending_queue.json
+ * перезаписывается при каждом изменении очереди, после смерти процесса
+ * (OEM-киллеры, Doze, memory pressure) остаток очереди восстанавливается
+ * с диска при следующем старте приложения. Восстановленные треки приходят
+ * с url=null (VK-ссылки протухают) и получают свежую ссылку через
+ * audioGetById в момент, когда до них доходит очередь.
  */
 object TrackDownloadManager {
 
     private const val TAG = "TrackDownloadManager"
     private const val DOWNLOAD_DIR = "downloads/music"
+
+    // #DL-DISPATCH-PERSIST (Fix #382): файл персистентной очереди загрузок.
+    // Живёт по ФИКСИРОВАННОМУ пути appContext.filesDir/downloads/music/ (рядом
+    // с дефолтной рабочей директорией) и НЕ зависит от пользовательского
+    // downloadDir (custom path / SD-карта) — при смене пути загрузок файл
+    // остаётся на месте, очередь не теряется.
+    private const val PERSIST_QUEUE_FILE = ".pending_queue.json"
+    // Атомарная запись: сначала во временный файл, затем rename.
+    private const val PERSIST_QUEUE_TMP_FILE = ".pending_queue.json.tmp"
 
     @Volatile
     private var initialized = false
@@ -116,6 +137,30 @@ object TrackDownloadManager {
     @Volatile
     private var queueWorkerStarted = false
     private val queueLock = Any()  // guard для startQueueWorkerIfNeeded()
+
+    // #DL-DISPATCH-PERSIST (Fix #382): сериализация очереди на диск.
+    // persistMutex сериализует записи файла: несколько быстрых enqueue/удалений
+    // подряд дают несколько корутин записи, но каждая внутри локи заново
+    // снимает ПОЛНЫЙ снимок pendingQueue — последняя запись всегда отражает
+    // актуальный остаток очереди (никаких потерянных/смешанных апдейтов).
+    private val persistMutex = Mutex()
+    private val gson = Gson()
+
+    /**
+     * #DL-DISPATCH-PERSIST (Fix #382): элемент JSON-файла очереди.
+     * Формат файла: JSON-массив объектов вида
+     * `{"track": {...VK Track...}, "subDir": "..." | null, "index": N | null, "total": M | null}`.
+     * Track сериализуется штатным Gson (все поля Track размечены @SerializedName —
+     * тот же механизм, которым VKApiClient парсит ответы API, поэтому round-trip
+     * безопасен). Поля со значением null Gson в файл не пишет и при чтении
+     * возвращает как null.
+     */
+    private class PersistedQueueEntry {
+        var track: Track? = null
+        var subDir: String? = null
+        var index: Int? = null
+        var total: Int? = null
+    }
 
     // Fix #249: debounce-Handler для отложенного stopService().
     // Без этого получаем ForegroundServiceDidNotStartInTimeException:
@@ -210,6 +255,10 @@ object TrackDownloadManager {
                     // на SD-карту при следующем reconfigurePath или при новой загрузке).
                     runCatching {
                         downloadDir.listFiles()?.forEach { file ->
+                            // #DL-DISPATCH-PERSIST (Fix #382): файл персистентной очереди
+                            // живёт по фиксированному пути в filesDir и не переезжает
+                            // вместе с рабочей директорией.
+                            if (file.name == PERSIST_QUEUE_FILE || file.name == PERSIST_QUEUE_TMP_FILE) return@forEach
                             file.copyTo(File(internalWorkDir, file.name), overwrite = true)
                         }
                     }
@@ -267,6 +316,10 @@ object TrackDownloadManager {
         val previousDir = downloadDir
         try {
             downloadDir.listFiles()?.forEach { file ->
+                // #DL-DISPATCH-PERSIST (Fix #382): файл персистентной очереди живёт
+                // по фиксированному пути в filesDir — при переносе рабочей директории
+                // его пропускаем (иначе он был бы удалён из filesDir вместе с очередью).
+                if (file.name == PERSIST_QUEUE_FILE || file.name == PERSIST_QUEUE_TMP_FILE) return@forEach
                 file.copyTo(File(newDir, file.name), overwrite = true)
                 file.delete()
             }
@@ -492,6 +545,11 @@ object TrackDownloadManager {
                     AppLog.e(TAG, "init: background init failed — app stays on internal dir", e)
                     runCatching { refreshFromDisk() }
                 }
+                // #DL-DISPATCH-RESTORE (Fix #382): восстанавливаем остаток очереди
+                // с диска ПОСЛЕ refreshFromDisk (все ветки выше его уже вызвали —
+                // dedup по уже скачанным COMPLETED-трекам корректен). Ровно один
+                // раз за жизнь процесса: init() идемпотентен по initialized.
+                restorePersistedQueue()
             }
         }
     }
@@ -594,6 +652,9 @@ object TrackDownloadManager {
         // и будет обработан в следующей итерации цикла.
         pendingQueue.add(request)
         queueSignal.trySend(Unit)
+        // #DL-DISPATCH-PERSIST (Fix #382): трек добавлен в очередь — перезаписываем
+        // файл персистентной очереди (полный текущий остаток, атомарно, на IO).
+        schedulePersistQueue("enqueue #${track.id}")
         AppLog.i(TAG, "queue: enqueued #${track.id}, queueSize=${pendingQueue.size}")
     }
 
@@ -651,6 +712,12 @@ object TrackDownloadManager {
                     // Обрабатываем все накопленные треки последовательно.
                     while (true) {
                         val request = pendingQueue.poll() ?: break
+                        // #DL-DISPATCH-PERSIST (Fix #382): трек взят воркером —
+                        // перезаписываем остаток очереди на диск ДО начала скачивания.
+                        // Если процесс умрёт во время этой загрузки, трек будет потерян
+                        // (осознанный трейд-офф: файл отражает очередь, а не активный
+                        // трек; частичный .tmp дорезюмится при повторном enqueue).
+                        persistQueueSnapshot()
                         processTrackFromQueue(request)
                     }
                 }
@@ -664,12 +731,49 @@ object TrackDownloadManager {
      * activeJobs[track.id] хранит Job для возможности cancel через removeDownload.
      */
     private suspend fun processTrackFromQueue(request: DownloadRequest) {
-        val track = request.track
-        val url = track.url ?: run {
-            AppLog.w(TAG, "queue: track #${track.id} has no URL — skip")
-            removeState(track.id)
-            maybeStopForegroundService()
-            return
+        // #DL-DISPATCH-RESTORE (Fix #382): треки, восстановленные из персистентной
+        // очереди, приходят с url == null (VK-ссылки протухают за часы — restore
+        // обнуляет url осознанно). Для них (и для любых треков без url) свежая
+        // ссылка перезапрашивается через VKApiClient.audioGetById (с al_audio.php
+        // fallback) РОВНО В МОМЕНТ взятия трека из очереди — ссылка максимально
+        // свежая. Если трек недоступен — FAILED с FailReason.NETWORK (retry-able,
+        // как обычная сетевая ошибка), НЕ DEAD_URL: отсутствие url — не приговор.
+        // Нормальные (не восстановленные) треки всегда приходят с url — поведение
+        // существующего пути не меняется.
+        var track = request.track
+        val url: String
+        val initialUrl = track.url
+        if (initialUrl == null) {
+            AppLog.i(TAG, "queue: track #${track.id} has no URL — resolving via audioGetById (#DL-DISPATCH-RESTORE)")
+            val fresh: Track? = try {
+                SovaApp.get().apiClient.audioGetById(track)
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w(TAG, "queue: audioGetById failed for #${track.id}: ${e.message}")
+                null
+            }
+            if (fresh == null) {
+                AppLog.w(TAG, "queue: track #${track.id} — URL resolve failed — FAILED(NETWORK)")
+                updateState(track.id, DownloadState(track.id, DownloadStatus.FAILED, 0,
+                    reason = "Не удалось получить ссылку на трек (нет сети или трек недоступен)",
+                    failReason = FailReason.NETWORK))
+                maybeStopForegroundService()
+                return
+            }
+            val freshUrl = fresh.url
+            if (freshUrl == null) {
+                AppLog.w(TAG, "queue: track #${track.id} — audioGetById вернул трек без url — FAILED(NETWORK)")
+                updateState(track.id, DownloadState(track.id, DownloadStatus.FAILED, 0,
+                    reason = "Трек недоступен (VK не вернул ссылку)",
+                    failReason = FailReason.NETWORK))
+                maybeStopForegroundService()
+                return
+            }
+            track = fresh
+            url = freshUrl
+        } else {
+            url = initialUrl
         }
         // Проверяем — может уже скачали или удалили пока ждал в очереди
         val existing = _downloads.value[track.id]
@@ -763,6 +867,9 @@ object TrackDownloadManager {
         val wasQueued = pendingQueue.removeAll { it.track.id == trackId }
         if (wasQueued) {
             AppLog.i(TAG, "removeDownload: track #$trackId removed from queue (queueSize=${pendingQueue.size})")
+            // #DL-DISPATCH-PERSIST (Fix #382): отмена из UI — перезаписываем файл
+            // очереди, чтобы отменённый трек не resurrectился при следующем старте.
+            schedulePersistQueue("cancel #$trackId")
         }
 
         // Отменить активную загрузку
@@ -971,6 +1078,10 @@ object TrackDownloadManager {
         if (queueCleared > 0) {
             AppLog.i(TAG, "clearAllDownloads: cleared pendingQueue ($queueCleared items)")
         }
+        // #DL-DISPATCH-PERSIST (Fix #382): очередь очищена — файл очереди тоже
+        // обнуляем (пишем пустой массив), чтобы при следующем старте приложения
+        // восстановление не вернуло удалённые треки.
+        schedulePersistQueue("clearAll")
 
         // 2. Cancel все активные загрузки.
         val activeIds = activeJobs.keys.toList()
@@ -1086,6 +1197,9 @@ object TrackDownloadManager {
         if (enqueued > 0) {
             startForegroundService()
             queueSignal.trySend(Unit)
+            // #DL-DISPATCH-PERSIST (Fix #382): батч добавлен в очередь — одна
+            // перезапись файла на весь список (полный текущий остаток).
+            schedulePersistQueue("enqueueAll x$enqueued")
         }
         AppLog.i(TAG, "enqueueAll: enqueued=$enqueued, skippedNoUrl=$skippedNoUrl, " +
             "skippedExisting=$skippedExisting (input=${tracks.size}, alreadyKnown=${skipIds.size - enqueued})")
@@ -1235,6 +1349,186 @@ object TrackDownloadManager {
         if (active == 0) {
             mainHandler.removeCallbacks(stopServiceRunnable)
             mainHandler.postDelayed(stopServiceRunnable, 1500L)
+        }
+    }
+
+    // ─── #DL-DISPATCH-PERSIST / #DL-DISPATCH-RESTORE (Fix #382) ─────
+
+    /**
+     * Путь к файлу персистентной очереди (фиксированный, независимо от
+     * пользовательского downloadDir): appContext.filesDir/downloads/music/.pending_queue.json
+     */
+    private fun persistQueueFile(): File = File(File(appContext.filesDir, DOWNLOAD_DIR), PERSIST_QUEUE_FILE)
+
+    /**
+     * #DL-DISPATCH-PERSIST (Fix #382): атомарно записать ПОЛНЫЙ текущий остаток
+     * pendingQueue в файл очереди.
+     *
+     * Алгоритм:
+     *  1. Снимок очереди берётся УЖЕ внутри локи — несколько параллельных
+     *     вызовов сериализуются, последний всегда пишет актуальное состояние.
+     *  2. Пишем во временный файл .pending_queue.json.tmp.
+     *  3. rename tmp → .pending_queue.json (атомарно на Linux/Android; если
+     *     rename не сработал — copyTo+delete как fallback).
+     *
+     * Любая ошибка I/O логируется и проглатывается: сбой персистентности НЕ
+     * должен ломать саму загрузку (она продолжается в памяти).
+     * Вызывающий поток не блокируется — вся работа внутри withLock на
+     * Dispatchers.IO (вызов через [schedulePersistQueue] или напрямую из
+     * coroutine воркера).
+     */
+    private suspend fun persistQueueSnapshot() {
+        if (!initialized) return
+        persistMutex.withLock {
+            try {
+                val dir = File(appContext.filesDir, DOWNLOAD_DIR)
+                if (!dir.exists()) dir.mkdirs()
+                val snapshot = ArrayList<PersistedQueueEntry>(pendingQueue.size)
+                for (request in pendingQueue) {
+                    val entry = PersistedQueueEntry()
+                    entry.track = request.track
+                    entry.subDir = request.subDir
+                    entry.index = request.index
+                    entry.total = request.total
+                    snapshot.add(entry)
+                }
+                val tmpFile = File(dir, PERSIST_QUEUE_TMP_FILE)
+                tmpFile.writeText(gson.toJson(snapshot))
+                val targetFile = File(dir, PERSIST_QUEUE_FILE)
+                if (!tmpFile.renameTo(targetFile)) {
+                    // Fallback на редких ФС, где rename поверх существующего файла падает.
+                    tmpFile.copyTo(targetFile, overwrite = true)
+                    tmpFile.delete()
+                }
+            } catch (e: Exception) {
+                AppLog.w(TAG, "DL-DISPATCH-PERSIST: queue persist failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * #DL-DISPATCH-PERSIST (Fix #382): асинхронная перезапись файла очереди.
+     * Вызывается из неблокируемых точек (enqueueRequest/removeDownload/
+     * clearAllDownloads/enqueueAll) — сам вызов не делает I/O на потоке
+     * вызывающего, запись уходит в scope (Dispatchers.IO) под persistMutex.
+     *
+     * @param reason человекочитаемая причина записи — только для лога.
+     */
+    private fun schedulePersistQueue(reason: String) {
+        scope.launch(Dispatchers.IO) {
+            AppLog.v(TAG, "DL-DISPATCH-PERSIST: persist queue ($reason), size=${pendingQueue.size}")
+            persistQueueSnapshot()
+        }
+    }
+
+    /**
+     * #DL-DISPATCH-RESTORE (Fix #382): восстановить очередь загрузок с диска
+     * после смерти процесса. Вызывается ОДИН РАЗ из init-пути (после
+     * refreshFromDisk — чтобы dedup по уже скачанным файлам работал).
+     *
+     * Сценарий: юзер поставил 20 треков в очередь → система убила процесс
+     * (OEM-киллер / Doze / memory pressure) → юзер открывает приложение →
+     * здесь файл .pending_queue.json читается и все нескачанные треки
+     * возвращаются в pendingQueue (silent, FIFO-порядок сохранён).
+     *
+     * Dedup (зеркалит enqueueRequest): пропускаются треки уже скачанные /
+     * качающиеся (_downloads) и уже стоящие в очереди (pendingQueue).
+     *
+     * Протухший URL: VK-ссылки живут ограниченное время, поэтому у каждого
+     * восстановленного трека url ОБНУЛЯЕТСЯ — processTrackFromQueue увидит
+     * url == null и перезапросит свежую ссылку через audioGetById ровно в
+     * момент, когда до трека дойдёт очередь (см. комментарий там).
+     *
+     * Foreground-сервис запускается ОДИН раз на весь батч (не на каждый трек) —
+     * дальше работает существующая логика (Fix #134: сервис держит загрузку
+     * в фоне, Fix #249: debounce остановки).
+     */
+    private fun restorePersistedQueue() {
+        val queueFile = persistQueueFile()
+        if (!queueFile.exists()) return
+        var raw: String? = null
+        try {
+            raw = queueFile.readText()
+        } catch (e: Exception) {
+            AppLog.w(TAG, "DL-DISPATCH-RESTORE: cannot read queue file: ${e.message}")
+        }
+        if (raw == null) return
+        if (raw.isBlank()) {
+            try { queueFile.delete() } catch (e: Exception) { /* filesDir всегда writable */ }
+            return
+        }
+        val entries: List<PersistedQueueEntry>?
+        try {
+            val type = object : TypeToken<List<PersistedQueueEntry>>() {}.type
+            entries = gson.fromJson<List<PersistedQueueEntry>>(raw, type)
+        } catch (e: Exception) {
+            // Битый файл (обрыв записи в прошлом сеансе и т.п.) — удаляем,
+            // при следующем изменении очереди он будет перезаписан заново.
+            AppLog.w(TAG, "DL-DISPATCH-RESTORE: queue file corrupted (${e.message}) — removing")
+            try { queueFile.delete() } catch (delErr: Exception) { /* non-fatal */ }
+            return
+        }
+        if (entries == null) {
+            // Gson вернул null только для JSON-литерала "null" — считаем файл пустым.
+            try { queueFile.delete() } catch (delErr: Exception) { /* non-fatal */ }
+            return
+        }
+        if (entries.isEmpty()) {
+            // Файл очереди пуст — мусор не оставляем.
+            try { queueFile.delete() } catch (delErr: Exception) { /* non-fatal */ }
+            return
+        }
+
+        var restored = 0
+        var skippedDone = 0
+        var skippedQueued = 0
+        var skippedBroken = 0
+        for (entry in entries) {
+            val storedTrack = entry.track
+            if (storedTrack == null) {
+                skippedBroken++
+                continue
+            }
+            // Dedup 1: уже скачан или качается (например, файл дожил с прошлой
+            // сессии и refreshFromDisk уже пометил COMPLETED).
+            val existing = _downloads.value[storedTrack.id]
+            if (existing != null && (existing.isCompleted || existing.isInProgress)) {
+                skippedDone++
+                continue
+            }
+            // Dedup 2: уже стоит в очереди (энквью сделанный до restore).
+            val alreadyQueued = pendingQueue.any { it.track.id == storedTrack.id }
+            if (alreadyQueued) {
+                skippedQueued++
+                continue
+            }
+            // Протухший URL: обнуляем — свежую ссылку воркер перезапросит через
+            // audioGetById, когда трек дойдёт до головы очереди (#DL-DISPATCH-RESTORE).
+            val restoredTrack = storedTrack.copy(url = null)
+            updateState(restoredTrack.id, DownloadState(
+                trackId = restoredTrack.id,
+                status = DownloadStatus.QUEUED,
+                progress = 0,
+                title = restoredTrack.title,
+                artist = restoredTrack.artist,
+                ownerId = restoredTrack.ownerId,
+            ))
+            pendingQueue.add(DownloadRequest(restoredTrack, entry.subDir, entry.index, entry.total))
+            restored++
+        }
+
+        if (restored > 0) {
+            queueSignal.trySend(Unit)
+            // Один запуск foreground-сервиса на весь батч (не на каждый трек).
+            startForegroundService()
+            AppLog.i(TAG, "DL-DISPATCH-RESTORE: restored $restored pending downloads from disk " +
+                "(skippedDone=$skippedDone, skippedQueued=$skippedQueued, skippedBroken=$skippedBroken)")
+        } else {
+            // Ничего восстанавливать не нужно — перезаписываем файл актуальным
+            // (пустым или частичным) состоянием очереди.
+            AppLog.i(TAG, "DL-DISPATCH-RESTORE: nothing to restore " +
+                "(skippedDone=$skippedDone, skippedQueued=$skippedQueued, skippedBroken=$skippedBroken)")
+            schedulePersistQueue("restore-cleanup")
         }
     }
 
