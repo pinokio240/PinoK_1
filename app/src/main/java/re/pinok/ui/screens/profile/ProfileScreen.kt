@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Bookmark
@@ -167,6 +168,13 @@ private val PROFILE_CONTENT_TABS: List<Pair<String, String>> = listOf(
 private const val WALL_FILTER_ALL = "all"
 private const val WALL_FILTER_OWNER = "owner"
 private const val WALL_FILTER_ARCHIVED = "archived"
+
+// W33-c: страницы пагинации вкладок профиля («разделы целиком» — запрос
+// юзера волны 33: раньше Музыка=10/Видео=9/Фото=12 жёстко обрезались).
+private const val PROFILE_MUSIC_PAGE = 100
+private const val PROFILE_VIDEO_PAGE = 20
+private const val PROFILE_PHOTO_PAGE = 60
+private const val PROFILE_GIFTS_PAGE = 10
 
 @Composable
 fun ProfileScreen(
@@ -294,6 +302,24 @@ fun ProfileScreen(
     var bookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
     var bookmarksHasMore by remember { mutableStateOf(false) }
     var bookmarksLoadingMore by remember { mutableStateOf(false) }
+
+    // W33-c: пагинация вкладок Музыка/Видео/Фото/Подарки. serverOffset —
+    // по RAW-странице (ДО фильтров), а не по отфильтрованному списку
+    // (урок волны 31 #AUDIO-PAGING: offset от отфильтрованного списка
+    // = сдвиг окна пагинации и ранний «стоп»).
+    var musicServerOffset by remember { mutableStateOf(0) }
+    var musicTotal by remember { mutableStateOf(0) }
+    var musicLoadingMore by remember { mutableStateOf(false) }
+    var musicHasMore by remember { mutableStateOf(false) }
+    var videoServerOffset by remember { mutableStateOf(0) }
+    var videoLoadingMore by remember { mutableStateOf(false) }
+    var videoHasMore by remember { mutableStateOf(false) }
+    var photoServerOffset by remember { mutableStateOf(0) }
+    var photoLoadingMore by remember { mutableStateOf(false) }
+    var photoHasMore by remember { mutableStateOf(false) }
+    var giftsServerOffset by remember { mutableStateOf(0) }
+    var giftsLoadingMore by remember { mutableStateOf(false) }
+    var giftsHasMore by remember { mutableStateOf(false) }
     // «Возможно, вы знакомы» (friends.getRecommendations): null = ещё грузится /
     // ошибка → секция не рисуется (паттерн подарков П-1).
     var friendSuggestions by remember { mutableStateOf<List<Friend>?>(null) }
@@ -336,7 +362,10 @@ fun ProfileScreen(
                     }
                     scope.launch {
                         try {
-                            gifts = app.apiClient.giftsGet(prof.id, count = 10)
+                            val giftPage = app.apiClient.giftsGet(prof.id, count = PROFILE_GIFTS_PAGE)
+                            gifts = giftPage
+                            giftsServerOffset = giftPage.size
+                            giftsHasMore = giftPage.size >= PROFILE_GIFTS_PAGE
                         } catch (e: Exception) {
                             AppLog.e("ProfileScreen", "Gifts load failed", e)
                         }
@@ -438,10 +467,16 @@ fun ProfileScreen(
                 musicLoading = true
                 musicError = null
                 try {
-                    musicTracks = app.apiClient.audioGet(count = 10, ownerId = ownerId)
-                        .filter { it.id > 0L && !it.url.isNullOrBlank() }
+                    // W33-c: полная пагинация (audioGetWithCount → response.total);
+                    // serverOffset = RAW-страница (до фильтра playability).
+                    val (total, page) =
+                        app.apiClient.audioGetWithCount(PROFILE_MUSIC_PAGE, 0, ownerId)
+                    musicTotal = total
+                    musicServerOffset = page.size
+                    musicTracks = page.filter { it.id > 0L && !it.url.isNullOrBlank() }
+                    musicHasMore = musicServerOffset < total
                     musicLoaded = true
-                    AppLog.i("ProfileScreen", "Music tab loaded: ${musicTracks.size} tracks")
+                    AppLog.i("ProfileScreen", "Music tab loaded: ${musicTracks.size} tracks (total=$total)")
                 } catch (e: Exception) {
                     AppLog.e("ProfileScreen", "Music tab load failed", e)
                     musicError = "Ошибка: ${e.message}"
@@ -453,8 +488,12 @@ fun ProfileScreen(
                 videoLoading = true
                 videoError = null
                 try {
-                    videos = app.apiClient.videoGet(ownerId = ownerId, count = 9)
-                        .filter { it.id > 0L }
+                    // W33-c: полная пагинация (total у video.get недоступен —
+                    // hasMore по заполненности RAW-страницы, паттерн закладок).
+                    val page = app.apiClient.videoGet(ownerId = ownerId, count = PROFILE_VIDEO_PAGE)
+                    videoServerOffset = page.size
+                    videos = page.filter { it.id > 0L }
+                    videoHasMore = page.size >= PROFILE_VIDEO_PAGE
                     videoLoaded = true
                     AppLog.i("ProfileScreen", "Video tab loaded: ${videos.size} videos")
                 } catch (e: Exception) {
@@ -468,7 +507,10 @@ fun ProfileScreen(
                 photoLoading = true
                 photoError = null
                 try {
-                    photos = app.apiClient.photosGetAll(ownerId = ownerId, count = 12)
+                    photos = app.apiClient.photosGetAll(
+                        ownerId = ownerId, count = PROFILE_PHOTO_PAGE, offset = 0)
+                    photoServerOffset = photos.size
+                    photoHasMore = photos.size >= PROFILE_PHOTO_PAGE
                     photoLoaded = true
                     AppLog.i("ProfileScreen", "Photo tab loaded: ${photos.size} photos")
                 } catch (e: Exception) {
@@ -961,6 +1003,125 @@ fun ProfileScreen(
         }
     }
 
+    // W33-c: дозагрузка страниц вкладок (Музыка/Видео/Фото/Подарки).
+    // offset — серверный (по RAW-страницам, см. стейт-блок выше); hasMore
+    // у video/photo/gifts — по заполненности RAW-страницы (паттерн закладок),
+    // у music — по response.total (audioGetWithCount).
+    fun loadMoreMusicPage() {
+        if (musicLoadingMore || musicLoading || !musicHasMore) return
+        // NULL-ЯВНО: явная проверка вместо элвиса (правило новых строк).
+        val prof = profile
+        if (prof == null) return
+        scope.launch {
+            musicLoadingMore = true
+            try {
+                val (total, page) = app.apiClient.audioGetWithCount(
+                    PROFILE_MUSIC_PAGE, musicServerOffset, prof.id)
+                musicTotal = total
+                musicServerOffset += page.size
+                musicTracks = musicTracks + page.filter { it.id > 0L && !it.url.isNullOrBlank() }
+                musicHasMore = musicServerOffset < total && page.isNotEmpty()
+                AppLog.i("ProfileScreen",
+                    "Music loadMore: +${page.size} (offset=$musicServerOffset total=$total)")
+            } catch (e: Exception) {
+                AppLog.w("ProfileScreen", "Music loadMore failed: ${e.message}")
+            } finally {
+                musicLoadingMore = false
+            }
+        }
+    }
+
+    fun loadMoreVideoPage() {
+        if (videoLoadingMore || videoLoading || !videoHasMore) return
+        // NULL-ЯВНО: явная проверка вместо элвиса.
+        val prof = profile
+        if (prof == null) return
+        scope.launch {
+            videoLoadingMore = true
+            try {
+                val page = app.apiClient.videoGet(
+                    ownerId = prof.id, count = PROFILE_VIDEO_PAGE, offset = videoServerOffset)
+                videoServerOffset += page.size
+                videos = videos + page.filter { it.id > 0L }
+                videoHasMore = page.size >= PROFILE_VIDEO_PAGE
+            } catch (e: Exception) {
+                AppLog.w("ProfileScreen", "Video loadMore failed: ${e.message}")
+            } finally {
+                videoLoadingMore = false
+            }
+        }
+    }
+
+    fun loadMorePhotoPage() {
+        if (photoLoadingMore || photoLoading || !photoHasMore) return
+        // NULL-ЯВНО: явная проверка вместо элвиса.
+        val prof = profile
+        if (prof == null) return
+        scope.launch {
+            photoLoadingMore = true
+            try {
+                val page = app.apiClient.photosGetAll(
+                    ownerId = prof.id, count = PROFILE_PHOTO_PAGE, offset = photoServerOffset)
+                photoServerOffset += page.size
+                photos = photos + page
+                photoHasMore = page.size >= PROFILE_PHOTO_PAGE
+            } catch (e: Exception) {
+                AppLog.w("ProfileScreen", "Photo loadMore failed: ${e.message}")
+            } finally {
+                photoLoadingMore = false
+            }
+        }
+    }
+
+    fun loadMoreGiftsPage() {
+        if (giftsLoadingMore || !giftsHasMore) return
+        // NULL-ЯВНО: явные проверки вместо элвисов.
+        val prof = profile
+        if (prof == null) return
+        scope.launch {
+            giftsLoadingMore = true
+            try {
+                val page = app.apiClient.giftsGet(
+                    prof.id, count = PROFILE_GIFTS_PAGE, offset = giftsServerOffset)
+                giftsServerOffset += page.size
+                val existingGifts = gifts
+                gifts = if (existingGifts != null) existingGifts + page else page
+                giftsHasMore = page.size >= PROFILE_GIFTS_PAGE
+            } catch (e: Exception) {
+                AppLog.w("ProfileScreen", "Gifts loadMore failed: ${e.message}")
+            } finally {
+                giftsLoadingMore = false
+            }
+        }
+    }
+
+    // W33-c: переход по счётчикам (Фото/Видео/Аудио/Подарки) — после смены
+    // вкладки скроллим LazyColumn к началу её контента. Индекс 5 = первый
+    // item контента (перед ним ProfileHeader / «Редактировать» / счётчики /
+    // «Подписки» / ряд чипов-вкладок). Ждём, пока item'ы вкладки соберутся
+    // в layout (первичная загрузка ленивая).
+    var contentScrollTick by remember { mutableStateOf(0) }
+    LaunchedEffect(selectedContentTab, contentScrollTick) {
+        if (contentScrollTick == 0) return@LaunchedEffect
+        while (mainListState.layoutInfo.totalItemsCount < 6) delay(50)
+        mainListState.animateScrollToItem(5)
+    }
+    // Подарки живут на вкладке Стена ПОСЛЕ ленты (последний item) — скролл
+    // к последнему item после смены вкладки. Подарки грузятся параллельным
+    // добором при открытии профиля — ждём их (таймаут 5с от вечного цикла
+    // при сбое gifts.get; тогда просто скролл к концу ленты).
+    var giftsScrollTick by remember { mutableStateOf(0) }
+    LaunchedEffect(giftsScrollTick) {
+        if (giftsScrollTick == 0) return@LaunchedEffect
+        var waitedMs = 0
+        while (gifts == null && waitedMs < 5000) {
+            delay(100)
+            waitedMs += 100
+        }
+        while (mainListState.layoutInfo.totalItemsCount < 6) delay(50)
+        mainListState.animateScrollToItem(mainListState.layoutInfo.totalItemsCount - 1)
+    }
+
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
     // ProfileScreen в hasOwnTopBar списке SovaNavHost, но своего Scaffold нет
     // (глобальный TopAppBar не рисуется) → insets применяем сами.
@@ -971,6 +1132,11 @@ fun ProfileScreen(
     // закреплённая строка «Выйти из аккаунта» (Fix #378) удалена — выход
     // из аккаунта теперь ТОЛЬКО в боковом drawer (Fix #369).
     val mainListState = rememberLazyListState()
+    // W33-c: состояние плеера для списка «Музыка» и URL-сетка «Фото»
+    // собираются на уровне тела экрана: внутри LazyListScope-веток
+    // composable-вызовы (collectAsState/remember) запрещены.
+    val musicPlayerState = PlayerConnection.playerState.collectAsState().value
+    val photoGridUrls = remember(photos) { photos.mapNotNull { extractPhotoAllUrl(it) } }
     Column(modifier = Modifier.fillMaxSize()) {
     Box(modifier = Modifier.weight(1f)) {
     LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding(), state = mainListState) {
@@ -1020,6 +1186,24 @@ fun ProfileScreen(
                 // список подписчиков p.id (FollowersSubscriptionsScreen).
                 onFriendsClick = onFriendsClick,
                 onFollowersClick = { onFollowersClick(p.id) },
+                // W33-c: счётчики → свои разделы: смена контентной вкладки +
+                // скролл к её началу (контент вкладки — item №5 общего списка).
+                onPhotosClick = {
+                    selectedContentTab = PROFILE_TAB_PHOTO
+                    contentScrollTick++
+                },
+                onVideosClick = {
+                    selectedContentTab = PROFILE_TAB_VIDEO
+                    contentScrollTick++
+                },
+                onAudiosClick = {
+                    selectedContentTab = PROFILE_TAB_MUSIC
+                    contentScrollTick++
+                },
+                onGiftsClick = {
+                    selectedContentTab = PROFILE_TAB_WALL
+                    giftsScrollTick++
+                },
             )
         }
         // П-7-AB: строка «Подписки» — доступ к экрану подписок БЕЗ чипа в
@@ -1174,40 +1358,139 @@ fun ProfileScreen(
                 }
             }
             // П-1: подарки профиля (gifts.get) — ряд открыток под лентой.
+            // NULL-ЯВНО: явная проверка вместо элвиса (строка перенесена W33-c).
+            val pCounters = p.counters
+            val giftTotalCount = if (pCounters != null) pCounters.gifts else 0
             val giftsList = gifts
             if (!giftsList.isNullOrEmpty()) {
                 item {
-                    GiftsSection(gifts = giftsList, totalCount = p.counters?.gifts ?: 0)
+                    GiftsSection(
+                        gifts = giftsList,
+                        totalCount = giftTotalCount,
+                        hasMore = giftsHasMore,
+                        loadingMore = giftsLoadingMore,
+                        onShowMore = { loadMoreGiftsPage() },
+                    )
                 }
             }
         } else if (selectedContentTab == PROFILE_TAB_MUSIC) {
-            item {
-                MusicTabSection(
-                    tracks = musicTracks,
-                    loading = musicLoading,
-                    error = musicError,
-                    onRetry = { contentRetryTick++ },
-                )
+            // W33-c: полный раздел «Музыка» — вертикальный список ВСЕХ треков
+            // с пагинацией «Показать ещё» (раньше — горизонтальная полоса
+            // из 10 карточек). Строки = отдельные item'ы LazyColumn —
+            // виртуализация длинного списка (сотни/тысячи треков).
+            val musicErr = musicError
+            if (musicLoading) {
+                item(key = "music_progress") { TabProgressRow() }
+            } else if (musicErr != null) {
+                item(key = "music_error") {
+                    TabErrorRow(message = musicErr, onRetry = { contentRetryTick++ })
+                }
+            } else if (musicTracks.isEmpty()) {
+                item(key = "music_empty") {
+                    TabEmptyRow("В вашей музыке пока нет треков")
+                }
+            } else {
+                itemsIndexed(
+                    musicTracks,
+                    // Ключ с индексом — crash-proof к дублям (прецедент Fix #281).
+                    key = { idx, track -> "music_${idx}_${track.ownerId}_${track.id}" },
+                ) { idx, track ->
+                    val current = musicPlayerState.currentTrack
+                    val isCurrent = current != null &&
+                        track.id == current.id &&
+                        track.ownerId == current.ownerId
+                    ProfileTrackRow(
+                        track = track,
+                        isPlaying = isCurrent && musicPlayerState.isPlaying,
+                        onClick = {
+                            if (isCurrent) {
+                                PlayerConnection.togglePlayPause()
+                            } else {
+                                PlayerConnection.playTrackList(musicTracks, idx)
+                            }
+                        },
+                    )
+                }
+                if (musicHasMore) {
+                    item(key = "music_more") {
+                        TabShowMoreRow(loading = musicLoadingMore, onClick = { loadMoreMusicPage() })
+                    }
+                }
             }
         } else if (selectedContentTab == PROFILE_TAB_VIDEO) {
-            item {
-                VideoTabSection(
-                    videos = videos,
-                    loading = videoLoading,
-                    error = videoError,
-                    onRetry = { contentRetryTick++ },
-                    onVideoClick = onVideoClick,
-                )
+            // W33-c: полный раздел «Видео» — вертикальная сетка 2 колонки
+            // с пагинацией (раньше — полоса из 9 карточек).
+            val videoErr = videoError
+            if (videoLoading) {
+                item(key = "video_progress") { TabProgressRow() }
+            } else if (videoErr != null) {
+                item(key = "video_error") {
+                    TabErrorRow(message = videoErr, onRetry = { contentRetryTick++ })
+                }
+            } else if (videos.isEmpty()) {
+                item(key = "video_empty") {
+                    TabEmptyRow("У вас пока нет видео")
+                }
+            } else {
+                val videoRows = videos.chunked(2)
+                itemsIndexed(
+                    videoRows,
+                    key = { rowIdx, _ -> "video_row_$rowIdx" },
+                ) { _, rowVideos ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        rowVideos.forEach { video ->
+                            ProfileVideoCard(
+                                video = video,
+                                onClick = { onVideoClick(video) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        // Добиваем последнюю строку пустой ячейкой до 2 колонок.
+                        repeat(2 - rowVideos.size) { Spacer(modifier = Modifier.weight(1f)) }
+                    }
+                }
+                if (videoHasMore) {
+                    item(key = "video_more") {
+                        TabShowMoreRow(loading = videoLoadingMore, onClick = { loadMoreVideoPage() })
+                    }
+                }
             }
         } else if (selectedContentTab == PROFILE_TAB_PHOTO) {
-            item {
-                PhotoTabSection(
-                    photos = photos,
-                    loading = photoLoading,
-                    error = photoError,
-                    onRetry = { contentRetryTick++ },
-                    onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
-                )
+            // W33-c: полный раздел «Фото» — сетка 3 колонки с пагинацией
+            // (раньше жёсткий кап 12 фото). Строки сетки = item'ы LazyColumn.
+            val photoErr = photoError
+            if (photoLoading) {
+                item(key = "photo_progress") { TabProgressRow() }
+            } else if (photoErr != null) {
+                item(key = "photo_error") {
+                    TabErrorRow(message = photoErr, onRetry = { contentRetryTick++ })
+                }
+            } else if (photoGridUrls.isEmpty()) {
+                item(key = "photo_empty") {
+                    TabEmptyRow("У вас пока нет фотографий")
+                }
+            } else {
+                val photoRows = photoGridUrls.chunked(3)
+                itemsIndexed(
+                    photoRows,
+                    key = { rowIdx, _ -> "photo_row_$rowIdx" },
+                ) { rowIdx, rowUrls ->
+                    PhotoGridRow(
+                        urls = rowUrls,
+                        startIndex = rowIdx * 3,
+                        fullList = photoGridUrls,
+                        onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+                    )
+                }
+                if (photoHasMore) {
+                    item(key = "photo_more") {
+                        TabShowMoreRow(loading = photoLoadingMore, onClick = { loadMorePhotoPage() })
+                    }
+                }
             }
         } else if (selectedContentTab == PROFILE_TAB_CLIPS) {
             // П-6b (#PROFILE-GAP-6b): вкладка «Клипы».
@@ -1265,6 +1548,16 @@ fun ProfileScreen(
     // боковом drawer (SovaNavHost, Fix #369 + обёртка Fix #370).
     // Вес list-зоны не изменился: Box(weight(1f)) тянется на весь Column,
     // дыры вёрстки нет.
+    // W33-a FIX (root-cause «~80 Unresolved reference»): в W31-b вместе с
+    // logout-блоком удалилась ЗАКРЫВАЮЩАЯ СКОБКА Column (в диффе ушли
+    // «} }» — if(showLogoutConfirm) И Column). Диалоги ниже провалились
+    // внутрь Column, скобка в конце файла стала закрывать Column, а сам
+    // ProfileScreen остался незакрытым до EOF → все хелперы ниже
+    // (ProfileHeader/CountersRow/WallPostCard/ActionIcon/…) стали
+    // локальными функциями и пропали из UserProfileScreen/ChatDetailScreen
+    // (Syntax error EOF + Unresolved reference WallPostCard и т.д.).
+    // Скобка Column восстановлена.
+    }
 
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     val viewer = photoViewerState.value
@@ -1613,6 +1906,14 @@ fun CountersRow(
     // СВОИХ друзей — честное отклонение (см. KDoc UserProfileScreen).
     onFriendsClick: (() -> Unit)? = null,
     onFollowersClick: (() -> Unit)? = null,
+    // W33-c: счётчики-переходы в свои разделы (запрос юзера волны 33 —
+    // «зелёные» чипы должны открывать разделы). Фото/Видео/Аудио —
+    // переключение контентной вкладки профиля; Подарки — вкладка Стена
+    // (ряд подарков под лентой) + скролл к ним.
+    onPhotosClick: (() -> Unit)? = null,
+    onVideosClick: (() -> Unit)? = null,
+    onAudiosClick: (() -> Unit)? = null,
+    onGiftsClick: (() -> Unit)? = null,
 ) {
     val counters = profile.counters
     val items = mutableListOf<Pair<String, Int>>()
@@ -1639,6 +1940,11 @@ fun CountersRow(
             val chipClick: (() -> Unit)? = when (label) {
                 "Друзья" -> onFriendsClick
                 "Подписчики" -> onFollowersClick
+                // W33-c: счётчики → свои разделы.
+                "Фото" -> onPhotosClick
+                "Видео" -> onVideosClick
+                "Аудио" -> onAudiosClick
+                "Подарки" -> onGiftsClick
                 else -> null
             }
             Card(
@@ -2551,138 +2857,92 @@ private fun TabEmptyRow(message: String) {
     }
 }
 
-/** Вкладка «Музыка»: audio.get → ряд карточек треков; тап — playTrackList. */
+/** W33-c: строка трека полного раздела «Музыка» (вертикальный список,
+ *  виртуализируется общим LazyColumn профиля; тап — playTrackList всей
+ *  загруженной очереди, семантика плейлиста волны 31 #AUDIO-QUEUE-PLAYLIST). */
 @Composable
-private fun MusicTabSection(
-    tracks: List<Track>,
-    loading: Boolean,
-    error: String?,
-    onRetry: () -> Unit,
-) {
-    when {
-        loading -> TabProgressRow()
-        error != null -> TabErrorRow(message = error, onRetry = onRetry)
-        tracks.isEmpty() -> TabEmptyRow("В вашей музыке пока нет треков")
-        else -> {
-            val playerState = PlayerConnection.playerState.collectAsState().value
-            LazyRow(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                itemsIndexed(
-                    tracks,
-                    // Ключ с индексом — crash-proof к дублям (прецедент Fix #281).
-                    key = { idx, track -> "music_${idx}_${track.ownerId}_${track.id}" },
-                ) { idx, track ->
-                    val current = playerState.currentTrack
-                    val isCurrent = current != null &&
-                        track.id == current.id &&
-                        track.ownerId == current.ownerId
-                    ProfileTrackCard(
-                        track = track,
-                        isPlaying = isCurrent && playerState.isPlaying,
-                        onClick = {
-                            if (isCurrent) {
-                                PlayerConnection.togglePlayPause()
-                            } else {
-                                PlayerConnection.playTrackList(tracks, idx)
-                            }
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfileTrackCard(track: Track, isPlaying: Boolean, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.width(140.dp).clip(RoundedCornerShape(12.dp)).clickable { onClick() },
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        ),
-        elevation = CardDefaults.cardElevation(0.dp),
+private fun ProfileTrackRow(track: Track, isPlaying: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
-            Box(
-                modifier = Modifier.size(140.dp).background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
-            ) {
-                val thumb = track.albumThumb
-                if (thumb != null) {
-                    AsyncImage(
-                        model = thumb,
-                        contentDescription = track.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-                Icon(
-                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Outlined.PlayArrow,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
-                        .background(Color.Black.copy(alpha = 0.45f), CircleShape)
-                        .padding(4.dp),
+        Box(
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            val thumb = track.albumThumb
+            if (thumb != null) {
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = track.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
                 )
             }
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-                Text(
-                    text = track.title,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Icon(
+                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Outlined.PlayArrow,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = track.title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (isPlaying) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = track.artist,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (track.duration > 0) {
+            Text(
+                text = "${track.duration / 60}:${"%02d".format(track.duration % 60)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
-/** Вкладка «Видео»: video.get → ряд карточек с превью; тап — плеер видео. */
+/** W33-c: строка «Показать ещё» пагинации вкладок профиля (честные
+ *  состояния: спиннер при дозагрузке, кнопка — когда есть что грузить). */
 @Composable
-private fun VideoTabSection(
-    videos: List<Video>,
-    loading: Boolean,
-    error: String?,
-    onRetry: () -> Unit,
-    onVideoClick: (Video) -> Unit,
+private fun TabShowMoreRow(loading: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+        } else {
+            TextButton(onClick = onClick) { Text("Показать ещё") }
+        }
+    }
+}
+
+/** W33-c: карточка видео сетки раздела «Видео» (вертикальная сетка 2 колонки;
+ *  ширина задаёт вызывающий через [modifier] — weight(1f) в строке-чанке). */
+@Composable
+private fun ProfileVideoCard(
+    video: Video,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    when {
-        loading -> TabProgressRow()
-        error != null -> TabErrorRow(message = error, onRetry = onRetry)
-        videos.isEmpty() -> TabEmptyRow("У вас пока нет видео")
-        else -> {
-            LazyRow(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                itemsIndexed(
-                    videos,
-                    key = { idx, video -> "video_${idx}_${video.ownerId}_${video.id}" },
-                ) { _, video ->
-                    ProfileVideoCard(video = video, onClick = { onVideoClick(video) })
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfileVideoCard(video: Video, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.width(200.dp).clip(RoundedCornerShape(12.dp)).clickable { onClick() },
+        modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable { onClick() },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         ),
@@ -2737,50 +2997,37 @@ private fun ProfileVideoCard(video: Video, onClick: () -> Unit) {
     }
 }
 
-/** Вкладка «Фото»: photos.getAll → сетка 3 колонки; тап — PhotoViewer. */
+/** W33-c: строка сетки «Фото» (3 колонки) — вызывается как item общего
+ *  LazyColumn (виртуализация полного раздела). Тап открывает PhotoViewer
+ *  с ПОЛНЫМ списком URL и глобальным индексом ([startIndex] + колонка). */
 @Composable
-private fun PhotoTabSection(
-    photos: List<JsonObject>,
-    loading: Boolean,
-    error: String?,
-    onRetry: () -> Unit,
+private fun PhotoGridRow(
+    urls: List<String>,
+    startIndex: Int,
+    fullList: List<String>,
     onPhotoClick: (List<String>, Int) -> Unit,
 ) {
-    // П-1: photosGetAll возвращает сырые JsonObject — парсим sizes[] здесь
-    // (VKApiClient не правим), как решено для «сырых» ответов #PROFILE-SNAP.
-    val urls = remember(photos) { photos.mapNotNull { extractPhotoAllUrl(it) } }
-    when {
-        loading -> TabProgressRow()
-        error != null -> TabErrorRow(message = error, onRetry = onRetry)
-        urls.isEmpty() -> TabEmptyRow("У вас пока нет фотографий")
-        else -> {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        urls.forEachIndexed { colIdx, url ->
+            Box(
+                modifier = Modifier.weight(1f).aspectRatio(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onPhotoClick(fullList, startIndex + colIdx) },
             ) {
-                urls.chunked(3).forEachIndexed { rowIdx, rowUrls ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        rowUrls.forEachIndexed { colIdx, url ->
-                            Box(
-                                modifier = Modifier.weight(1f).aspectRatio(1f)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onPhotoClick(urls, rowIdx * 3 + colIdx) },
-                            ) {
-                                AsyncImage(
-                                    model = url,
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop,
-                                )
-                            }
-                        }
-                        // Добиваем последнюю строку пустыми ячейками до 3 колонок.
-                        repeat(3 - rowUrls.size) { Spacer(modifier = Modifier.weight(1f)) }
-                    }
-                }
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
             }
         }
+        // Добиваем последнюю строку пустыми ячейками до 3 колонок.
+        repeat(3 - urls.size) { Spacer(modifier = Modifier.weight(1f)) }
     }
 }
 
@@ -2820,8 +3067,17 @@ private fun extractPhotoAllUrl(photo: JsonObject): String? {
 }
 
 /** Секция «Подарки»: gifts.get → LazyRow открыток. */
+/** П-1: раздел «Подарки» (gifts.get) — ряд открыток; W33-c: + пагинация
+ *  «Показать ещё» (hasMore/loadingMore/onShowMore — дефолты не ломают
+ *  существующие вызовы). */
 @Composable
-private fun GiftsSection(gifts: List<JsonObject>, totalCount: Int) {
+private fun GiftsSection(
+    gifts: List<JsonObject>,
+    totalCount: Int,
+    hasMore: Boolean = false,
+    loadingMore: Boolean = false,
+    onShowMore: () -> Unit = {},
+) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Text(
             text = if (totalCount > 0) "Подарки ($totalCount)" else "Подарки",
@@ -2849,6 +3105,10 @@ private fun GiftsSection(gifts: List<JsonObject>, totalCount: Int) {
                     )
                 }
             }
+        }
+        // W33-c: пагинация «Показать ещё» (дефолт hasMore=false — строки нет).
+        if (hasMore) {
+            TabShowMoreRow(loading = loadingMore, onClick = onShowMore)
         }
     }
 }
@@ -3004,7 +3264,7 @@ private fun ProfileSuggestionCard(
 
 /**
  * Вкладка «Клипы» (§5 п.2): shortVideo.getOwnerVideos → LazyRow вертикальных
- * карточек-превью (паттерн VideoTabSection П-1).
+ * карточек-превью (паттерн бывшей VideoTabSection П-1, W33-c — сетка 2 колонки).
  *
  * ОТКРЫТИЕ КЛИПА (честная механика): выделенного маршрута «конкретный клип» в
  * приложении нет (Screen.Clips — параметless-фид ClipsFeedScreen), поэтому клип

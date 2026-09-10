@@ -12606,3 +12606,31 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 5. Редактирование своего сообщения в ГРУППОВОМ чате — правка сохраняется (cmid-паритет).
 6. Известная особенность: реакции, поставленные ДО этой волны, могут отображаться другим эмодзи (старая карта промахивалась — серверные id остались прежними, миграции нет).
 7. Долги (следующие волны): пиалет «ещё» (полная сетка 42+ реакций через messages.getReactionsAssets), hover-подменю «Переслать» (быстрый выбор чата), «Кто отреагировал» (getReactedPeers).
+
+## Волна 33 (2026-09-10) — W33-PROFILE-STRUCTURE: фикс ~80 ошибок компиляции (потерянная скобка W31-b), полный профиль (счётчики→разделы, табы целиком), ворнинги calls, планы VK ID/админки
+
+### Симптом (ТЗ пользователя + лог :app:compileDebugKotlin + скриншот профиля + отчёт тестировщика)
+- Сборка падает: Unresolved reference 'WallPostCard' (ChatDetailScreen ×3), 'ProfileHeader'/'CountersRow'/… (ProfileScreen/UserProfileScreen), «private not applicable to local function» (ProfileScreen :2423+), Syntax error EOF (:3345).
+- Ворнинги :feature:calls: deprecated Icons.Outlined.OpenInNew, LocalClipboardManager ×2.
+- Профиль (скриншот): «Выйти из аккаунта» жёлтым — убрать; счётчики зелёным — переходы в разделы; табы синим — разделы целиком, профиль над ними. + VK ID «нет полного функционала». + тестировщик: непрочитанное/фото на весь экран/одна галочка.
+
+### Root-cause
+- **80 ошибок = ОДНА скобка**: в W31-b при удалении logout-блока удалился hunk, заканчивавшийся на «} }» — if(showLogoutConfirm) И ЗАКРЫВАЮЩАЯ Column. Диалоги провалились внутрь Column, скобка конца файла закрыла Column, а fun ProfileScreen остался открыт до EOF → все хелперы ниже (ProfileHeader/CountersRow/WallPostCard/ActionIcon/…) стали ЛОКАЛЬНЫМИ функциями: невидимы снаружи (Unresolved в 3 файлах), «private не применим к local» — ошибка синтаксиса, вызовы до объявления — Unresolved, типы лямбд — каскад. Баланс скобок при этом почти сходился — обычный brace-check не ловит; нужен контроль «final depth == 0».
+- Ворнинги: OpenInNew/LocalClipboardManager deprecated в Compose 1.8+ (проект уже на BOM 2025.06.00).
+- «Профиль не открывает разделы»: чипы Фото/Видео/Аудио/Подарки в CountersRow были кликабельны только при переданном колбэке, а колбэки не передавались (только Друзья/Подписчики) — мёртвая нажимаемость отсутствовала вовсе; табы переключали контент, но разделы были превью-полосами (Музыка=10, Видео=9, Фото=12).
+- Тестировщик: все три жалобы уже закрыты в коде (Fix #274 markAsUnreadConversation, Fix #296 ✓✓ по cmid + LP 6/7, P5.1 PhotoViewer) — собранная им APK предшествует фиксам, т.к. волны 31–32 не компилировались. «Непрочитанное у собеседника» — не существует в VK API в принципе.
+
+### Фиксы (план: docs/W33-PROFILE-STRUCTURE-ADMIN-VKID-PLAN.md)
+- **#PROFILE-BRACE-FIX (33-a)**: закрывающая скобка Column восстановлена после Box-weight-зоны (комментарий W33-a FIX с разбором) — закрывает все ~80 ошибок трёх файлов.
+- **#CALLS-DEPRECATION (33-b)**: OpenInNew→Icons.AutoMirrored.Outlined.OpenInNew (CallsRecordingsSection + превентивно VideoPlayerScreen PiP); LocalClipboardManager→платформенный ClipboardManager (паттерн Fix #193 LandingScreen) в CallsScheduleDialog/CallsScheduledSection.
+- **#PROFILE-COUNTERS-NAV (33-c)**: CountersRow +onPhotosClick/onVideosClick/onAudiosClick/onGiftsClick; Фото/Видео/Аудио → смена вкладки + animateScrollToItem(5) (контент сразу под шапкой), Подарки → вкладка Стена + скролл к ряду подарков (ожидание загрузки, таймаут 5с).
+- **#PROFILE-TAB-FULL (33-c)**: разделы целиком с виртуализацией через общий LazyColumn: Музыка — вертикальный список (страницы 100, audioGetWithCount по response.total; ProfileTrackRow с длительностью), Видео — сетка 2 колонки (страницы 20, ProfileVideoCard+modifier), Фото — сетка 3 колонки (страницы 60, PhotoGridRow, PhotoViewer с полным списком URL); «Показать ещё» (TabShowMoreRow: спиннер/кнопка) для Музыки/Видео/Фото/Подарков; server-offset по RAW-странице (урок #AUDIO-PAGING волны 31); collectAsState/remember вынесены из LazyListScope.
+- **#PROFILE-GIFTS-PAGE (33-c)**: VKApiClient.giftsGet(+offset) — gifts.get поддерживает offset официально; раздел подарков пагинирован.
+- **#VKID-ADMIN-PLANS (33-e/33-f)**: docs/W33-…-PLAN.md §1.5–§2.3 — полная карта API кабинета VK ID из бандла (settings.*/cua.*/accountPersonal.*), фазовый план P0–P2; план админки сообществ P0–P2 (роли/from_group/editManager/getSettings/stats/ban), сравнение с «Группа_админ.zip» — долг (zip не приложен); дамп локалсторд_куки.txt разобран (админ-маркеров нет, есть модель composer-а сообществ: sendOptions/ads).
+
+### Проверка пользователем (сборка волны 33)
+1. git pull → :app:compileDebugKotlin — 0 ошибок; :feature:calls — 0 ворнингов.
+2. Профиль: «Выйти из аккаунта» внизу нет (выход — боковая панель).
+3. Счётчики: Фото/Видео/Аудио открывают свои разделы (профиль сверху), Подарки проматывают стену к открыткам, Друзья/Подписчики — свои экраны.
+4. Табы: Музыка — список всех треков + «Показать ещё»; Видео — сетка 2×N + дозагрузка; Фото — сетка 3×N + дозагрузка (тап — полноэкранный просмотр).
+5. Для тестировщика: пересобрать APK — непрочитанное (метка в списке диалогов), ✓✓ при прочтении собеседником, фото сообщения на весь экран — уже в этой сборке; «непрочитанное у собеседника» невозможно по API VK.

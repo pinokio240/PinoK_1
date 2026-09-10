@@ -42,10 +42,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
+// W33-b: LocalClipboardManager deprecated в Compose 1.8+ — пишем в буфер через
+// платформенный ClipboardManager (тот же подход, что Fix #193 в LandingScreen).
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -127,7 +130,10 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
     val repo = LocalCallsSectionRepository.current
     val deps = LocalCallsDeps.current
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    // W33-b: замена deprecated LocalClipboardManager — см. импорт-блок выше.
+    val clipboard = remember(context) {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    }
     val scope = rememberCoroutineScope()
     val state by repo.scheduled.collectAsState()
 
@@ -211,7 +217,7 @@ fun CallsScheduledSection(onNavigateToCall: (Long) -> Unit) {
     }
 
     val copyInvite: (String) -> Unit = { link ->
-        clipboard.setText(AnnotatedString(link))
+        clipboard.setPrimaryClip(ClipData.newPlainText("invite_link", link))
         Toast.makeText(context, "Ссылка-приглашение скопирована", Toast.LENGTH_SHORT).show()
     }
 

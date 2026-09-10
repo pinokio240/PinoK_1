@@ -76,7 +76,8 @@ import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.OpenInNew
+// W33-b: OpenInNew deprecated (иконка зеркалится для RTL) — AutoMirrored-версия.
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.automirrored.outlined.VolumeOff
@@ -1967,7 +1968,7 @@ fun VideoPlayerScreen(
                                             // PiP
                                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                                                 VKControlButton(
-                                                    icon = Icons.Outlined.OpenInNew,
+                                                    icon = Icons.AutoMirrored.Outlined.OpenInNew,
                                                     contentDescription = "Картинка в картинке",
                                                     onClick = {
                                                         // #PIP-VIDEO-ONLY: запускаем отдельную PiP-активность

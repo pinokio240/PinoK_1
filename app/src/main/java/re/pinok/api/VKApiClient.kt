@@ -16922,11 +16922,14 @@ class VKApiClient(
      * оставляем базовый gifts.get). Не путать с существующим giftsGetCatalog —
      * тот отдаёт каталог для отправки.
      */
-    suspend fun giftsGet(userId: Long, count: Int = 6): List<JsonObject> {
+    // W33-c: +offset — gifts.get официально поддерживает offset; пагинация
+    // раздела «Подарки» профиля («разделы целиком», запрос юзера волны 33).
+    suspend fun giftsGet(userId: Long, count: Int = 6, offset: Int = 0): List<JsonObject> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf(
             "user_id" to userId.toString(),
             "count" to count.toString(),
+            "offset" to offset.toString(),
         )
         val json = call("gifts.get", args)
         if (json == null) return emptyList()

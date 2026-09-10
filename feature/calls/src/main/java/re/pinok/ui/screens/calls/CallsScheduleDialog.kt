@@ -2,6 +2,11 @@ package re.pinok.ui.screens.calls
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+// W33-b: LocalClipboardManager deprecated в Compose 1.8+ — пишем в буфер через
+// платформенный ClipboardManager (тот же подход, что Fix #193 в LandingScreen).
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -34,10 +39,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.google.gson.JsonObject
 import java.text.SimpleDateFormat
@@ -205,7 +208,10 @@ fun CallsScheduleCallDialog(
     val repo = LocalCallsSectionRepository.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboardManager.current
+    // W33-b: замена deprecated LocalClipboardManager — см. импорт-блок выше.
+    val clipboard = remember(context) {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    }
 
     val prefill = remember(editItem) { parseSchedulePrefill(editItem) }
     val isEdit = editItem != null
@@ -280,7 +286,7 @@ fun CallsScheduleCallDialog(
         ScheduledCreatedDialog(
             joinLink = createdLink,
             onCopy = {
-                clipboard.setText(AnnotatedString(createdLink))
+                clipboard.setPrimaryClip(ClipData.newPlainText("join_link", createdLink))
                 Toast.makeText(context, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
             },
             onDone = onDismiss,
@@ -651,7 +657,7 @@ fun CallsScheduleCallDialog(
                                 val link = jsonStr(resp, "join_link")
                                 if (link.isNotBlank()) {
                                     // Подпись calls_will_copy_to_clipboard: ссылка копируется сразу.
-                                    clipboard.setText(AnnotatedString(link))
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("join_link", link))
                                     createdJoinLink = link
                                 } else {
                                     Toast.makeText(context, "Звонок запланирован", Toast.LENGTH_SHORT).show()
