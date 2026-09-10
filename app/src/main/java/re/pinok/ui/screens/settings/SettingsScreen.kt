@@ -1705,7 +1705,15 @@ private fun MessagesTab(
         // Pref (msgUndelete / msgUnedit) и логика MessageMods.apply остаются
         // в коде с default=true — функция работает всегда, юзер не может выключить.
         // P2.6: read receipts (✓/✓✓) — статус прочтения исходящих.
-        item { ToggleRow("Статус прочтения (✓/✓✓)", s.msgReadReceipts) { scope.launch { app.prefs.setMsgReadReceipts(it) } } }
+        // #READ-RECEIPTS-DEFAULT (волна 34): subtitle поясняет семантику тумблера;
+        // default ON (см. migrateReadReceiptsDefaultOn в SovaPrefs).
+        item {
+            ToggleRow(
+                title = "Статус прочтения (✓/✓✓)",
+                subtitle = "Двойная галочка ✓✓ на ваших сообщениях, когда собеседник их прочитал",
+                checked = s.msgReadReceipts,
+            ) { scope.launch { app.prefs.setMsgReadReceipts(it) } }
+        }
 
         item { SectionHeader("Список чатов") }
         // #MSG-FAVORITES-TOGGLE: показывать «Избранное» в списке чатов.

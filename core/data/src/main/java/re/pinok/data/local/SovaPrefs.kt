@@ -186,6 +186,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // активирует reply mode (тот же callback что в context menu).
             msgSwipeReply      = p[Keys.MSG_SWIPE_REPLY]           ?: true,
             // P2.6: read receipts (✓/✓✓) — статус прочтения исходящих сообщений.
+            // #READ-RECEIPTS-DEFAULT (волна 34, 2026-09-10): требование пользователя —
+            // «по умолчанию включена должна быть». Default = true и был true с initial
+            // commit, но на устройствах, где тумблер переключали при тестах, в DataStore
+            // осталось false — одноразовый откат в migrateReadReceiptsDefaultOn().
             msgReadReceipts    = p[Keys.MSG_READ_RECEIPTS]         ?: true,
             // P1.4: search bar + tabs (Все/Каналы/Непрочитанные) в MessagesScreen.
             msgSearch          = p[Keys.MSG_SEARCH]                ?: true,
@@ -804,6 +808,40 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
                 p[Keys.PUSH_GROUPING_MODE] = "none"
             }
             p[Keys.PUSH_GROUPING_MIGRATED] = 1
+        }
+        return shouldReset
+    }
+
+    /**
+     * #READ-RECEIPTS-DEFAULT (волна 34, 2026-09-10): одноразовый откат тумблера
+     * «Статус прочтения (✓/✓✓)» к default ON.
+     *
+     * Требование пользователя: «[тумблер статус прочтения] по умолчанию включена
+     * должна быть». Default в коде = true с initial commit, НО на устройствах,
+     * где тумблер переключали в ходе тестов (P2.6/#296), в DataStore persistится
+     * false — и дефолт повторно никогда не применяется (единственный писатель
+     * ключа — сам тумблер, программных записей нет: проверено rg по app/core).
+     *
+     * Миграция: после обновления msg_read_receipts принудительно = true ОДИН раз;
+     * флаг READ_RECEIPTS_MIGRATED не даёт перетирать последующий ОСОЗНАННЫЙ
+     * выбор пользователя «выкл».
+     *
+     * Вызывается из SovaApp.onCreate (рядом с migratePushGroupingDefault).
+     */
+    suspend fun migrateReadReceiptsDefaultOn(): Boolean {
+        val snap = ds.data.first()
+        val cur = snap[Keys.READ_RECEIPTS_MIGRATED] ?: 0
+        if (cur >= 1) return false
+        val stored = snap[Keys.MSG_READ_RECEIPTS]
+        // null = ключа нет = новый пользователь — default true и так применится;
+        // false = persist от старых тестов → откат к ON один раз.
+        // true = уже включён — писать нечего, только ставим флаг.
+        val shouldReset = stored == false
+        ds.edit { p ->
+            if (shouldReset) {
+                p[Keys.MSG_READ_RECEIPTS] = true
+            }
+            p[Keys.READ_RECEIPTS_MIGRATED] = 1
         }
         return shouldReset
     }
@@ -1547,6 +1585,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val PUSH_GROUP_THRESHOLD    = intPreferencesKey("push_group_threshold")
         // §42.6 #PUSH-NO-GROUP-DEFAULT: флаг one-time миграции (0→1).
         val PUSH_GROUPING_MIGRATED  = intPreferencesKey("push_grouping_migrated")
+        // #READ-RECEIPTS-DEFAULT (волна 34): флаг one-time миграции (0→1).
+        val READ_RECEIPTS_MIGRATED  = intPreferencesKey("read_receipts_migrated")
         val PUSH_ACTION_BUTTONS     = booleanPreferencesKey("push_action_buttons")
         // §46 #REMOTE-INPUT: кнопка «Ответить» с RemoteInput.
         val PUSH_REPLY_BUTTON       = booleanPreferencesKey("push_reply_button")

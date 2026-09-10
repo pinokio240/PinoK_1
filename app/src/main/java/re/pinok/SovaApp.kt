@@ -1034,6 +1034,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // посты без pinch-out. Новый default = каждое уведомление отдельно.
             val pushMigrated = prefs.migratePushGroupingDefault()
             if (pushMigrated) AppLog.i("SovaApp", "Push grouping migration: reset 'category'→'none' (individual notifications)")
+            // #READ-RECEIPTS-DEFAULT (волна 34): одноразовый откат «Статус прочтения
+            // (✓/✓✓)» к default ON — на устройствах, где тумблер отключали в тестах,
+            // в DataStore persistился false (единственный писатель — сам тумблер).
+            val readReceiptsMigrated = prefs.migrateReadReceiptsDefaultOn()
+            if (readReceiptsMigrated) AppLog.i("SovaApp", "Read receipts migration: msg_read_receipts false→true (default ON per user request)")
         }
         val initialSnap = runBlocking { prefs.data.first() }
         prefsSnapshot = initialSnap   // Fix #336: seed synchronous cache

@@ -8763,3 +8763,48 @@ Stage Summary:
 - Планы: VK ID (P0: пароль/сервисы/email-телефон через готовый CUA-контур; P1: 2FA/активность/аватар; P2: мультиаккаунт/pay-только-deeplink) и админ сообществ (P0: роли/from_group/меню поста; P1: editManager/getSettings/stats/ban) — ждут снапшот «Группа_админ.zip» для сверки.
 - Изменённые файлы: ProfileScreen.kt (+479/-202 район), VKApiClient.kt (+4/-1), CallsScheduleDialog.kt, CallsScheduledSection.kt, CallsRecordingsSection.kt, VideoPlayerScreen.kt, docs/W33-….md, HISTORY.md, worklog.md.
 - Как проверить юзером: git pull → сборка 0 ошибок/0 ворнингов → профиль: счётчики ведут в разделы, табы — полные списки с «Показать ещё», logout только в drawer → тестировщику пересобрать и перепроверить непрочитанное/✓✓/фото.
+
+---
+Task ID: 34-a
+Agent: main (Z.ai Code)
+Task: Тумблер «Статус прочтения (✓/✓✓)» в Настройки→Сообщения должен быть включён по умолчанию (запрос пользователя 2026-09-10)
+
+Work Log:
+- Диагностика: default в коде УЖЕ true во всех 3 местах (SovaPrefs.kt:189 `?: true`, dummy-Snapshot FeedScreen:281, collectAsState(initial=true) ChatDetailScreen:710) — проверено git log -S со времён initial commit.
+- Единственный писатель ключа MSG_READ_RECEIPTS — сам тумблер (SettingsScreen:1708); программных записей нет (rg по app/core/feature/contracts — 0), бэкап аккаунта (AccountFileBackup) prefs не трогает.
+- Root-cause состояния «выкл» на устройстве: persist false в DataStore от ручных переключений в ходе тестов (P2.6/#296) — дефолт повторно не применяется.
+- SovaPrefs.kt: +ключ READ_RECEIPTS_MIGRATED (intPreferencesKey "read_receipts_migrated"), +suspend fun migrateReadReceiptsDefaultOn() (паттерн migratePushGroupingDefault: флаг one-time, stored==false → перезапись true ОДИН раз, дальнейший осознанный выбор «выкл» не трогается), уточнён KDoc у дефолта.
+- SovaApp.kt onCreate: вызов migrateReadReceiptsDefaultOn() в существующем runBlocking рядом с migratePushGroupingDefault + AppLog-крошка.
+- SettingsScreen.kt MessagesTab: тумблеру добавлен subtitle «Двойная галочка ✓✓ на ваших сообщениях, когда собеседник их прочитал».
+- Валидация: check-nested-comments.py — ALL CLEAN (177 файлов), brace-balance по 3 изменённым .kt — final depth=0.
+- Параллельно: upload/Группа_админ.zip.001+.002 склеены (60.7MB) и распакованы в reference/vk_group_admin/Группа_админ/ — 14 HTML-снапшотов VK web админ-раздела сообщества.
+
+Stage Summary:
+- «Статус прочтения» теперь гарантированно ON после обновления на устройствах с persist false; дефолт для чистых установок не изменился (true). Пользователь сохраняет возможность выключить вручную.
+- Изменённые файлы: core/data/.../SovaPrefs.kt, app/.../SovaApp.kt, app/.../settings/SettingsScreen.kt.
+- Долг волны 33 «сверка Группа_админ» закрыт структурно: снапшоты в reference/vk_group_admin/Группа_админ/ (14 страниц), сверка против §2.3 W33-плана — Task 34-b.
+
+---
+Task ID: 34-b
+Agent: subagent (Explore)
+Task: Сверка админ-плана сообществ (W33 §2.3) со снапшотами «Группа_админ» (14 HTML vk.ru, сообщество «Pluton tut» /pluton240, admin_level=3) — только анализ, код не менялся
+
+Work Log:
+- Прочитан хвост worklog.md (33-g/34-a: долг-сверка Группа_админ, распаковка в reference/vk_group_admin/Группа_админ/) и docs/W33-PROFILE-STRUCTURE-ADMIN-VKID-PLAN.md §1.6/§2.3 (7 долгов-вопросов).
+- Инвентарь 14 страниц + 15 _files-папок; установлено: двойная архитектура vk.ru (новый SPA settings/* на api.vk.ru v5.288 через createApiEffect + легаси-vkcom ?act=* через al_groups.php/groupsedit.php/al_wall.php), у 7 страниц потеряна кириллица (0 символов кириллицы при целых id/JSON), в Pluton tut.html вшит живой webToken access_token (в доки НЕ копировался, юзеру рекомендация не публиковать архив).
+- Извлечён window.cur.apiPrefetchCache главной страницы: groups.getById со ПОЛНЫМ fields-листом веба (~80 полей, admin_level запрошен явно; ответ is_admin:1/admin_level:3/is_advertiser:1/can_post:1/can_message:1/menu/enabled_features), users.get, groups.getMembers(count=40), utils.resolveScreenName.
+- Блок «Управление» на главной: правое меню 11 пунктов с testid group_manage_menu_* и href (Управление=?act=edit, Сообщения=gim165284550, Бизнес-инструменты, Статистика=groups/dashboard/@pluton240, Монетизация=monetization/donut, Реклама сообщества=модалка, Страйки, Комментарии=?act=activity, Упоминания, Архив историй, События) + cover-add-button, community-menu-configure-button, group_publish_block.
+- Карта API нового SPA (rg по всем бандлам): groups.getById/join/leave/getMembers/edit/invite/recallInvitation/isMember/get, groups.setTabsSettings/getContentForTabs (Разделы: order+audios/videos/photos_content_types), groups.removeUser, groups.addAddress/editAddress, wall.get/subscribe/getSuggestedHashtags; НЕТ groups.editManager/getSettings/setSettings/ban*/getBanned/getRequests/stats.get*; enum GroupAdminLevel{USER:0,MODERATOR:1,EDITOR:2,ADMINISTRATOR:3,HOST:4,EVENT_CREATOR:5,CREATOR:6,PSEUDO_LEVEL_ADVERTISER:100} + MemberStatus{NOT_A_MEMBER..INVITED:5}.
+- Легаси-wire: groupsedit.php acts edit_admin/save_admin/main_admin/user_action (роли), bl_edit (бан-лист), save_messages, save_comments{toxic_filter,obscene_filter}, save_sections, show_token/show_create_token_box + longpoll_* (Работа с API/боты), edit_link/reorder_links, invite_links_*; al_wall.php acts get_postponed/publish_postponed/get_suggests/delete_suggested и др.
+- Композер: полный payload al_wall.php act:"post" — official (от имени сообщества; из cur.defaultPostSettings.official/from-oid), signed+check_sign, close_comments, mark_as_ads, ord_is_ad/ord_erid/ord_external_id (ОРД), friends_only/best_friends_only, mute_notifications, fixed, donut-параметры; сверка с моделью sendOptions из дампа локалсторд (новый BFF-композер) — согласуется по смыслу.
+- Карты экранов: список 19 разделов настроек (cs_menu_item_*/search_global_tab_*), Подписчики (settings-subscriber-item-<uid>×30 + role-btn/remove-btn/message-btn/search; диалог ролей — чанк не скачан), Сообщения/Меню/Ссылки/Разделы (list_enabled: Посты…Контакты, disabled: Клипы; setTabsSettings)/Канал/Дополнительно (полный текст: тумблеры Общего, возрастные ограничения 0/16/18+, Авито, RSS-импорт)/Кнопка действия (switch+2 селекта+email, чанк формы не скачан)/Комментарии (?act=activity: toxic/obscene фильтры+стоп-слова, вкладки all/obscene)/Адреса/Чаты/Приложения; Журнал действий: фильтры all/roles/users/wall/content/info/settings/punishments/api/market + per-admin + датапикер, wire записи {action_type,ts,admin_id,object_id,id} (26 записей, типы 20/32/34/35/43; подписи потеряны кодировкой).
+- Статистика: в снапшотах ОТСУТСТВУЕТ (только пункт меню и groups_week_stats* в чанк-манифесте) — stats.get/getPostReach без wire-эталона.
+- Создан docs/админ.сообществ.снапшоты.сверка.md (6 разделов: инвентарь, сверка §2.3 верdict-таблицей, карта API с источниками, карта UI, корректировки P0-P2, отличия от простой группы + команды воспроизводимости). Kotlin-код не менялся.
+
+Stage Summary:
+- Долг W33 §2.3 закрыт: 4/7 долгов-вопросов подтверждены, 1 изменён (getSettings/setSettings → единый groups.edit + groups.getContentForTabs/setTabsSettings — веб их НЕ вызывает), статистика не проверяема, руководители — только легаси-wire (API-план editManager остаётся).
+- admin_level подтверждён: приходит в groups.getById (веб запрашивает явно; is_admin/is_advertiser — автоматически), семантика уровней 1/2/3 + 4/6 хозяин по веб-enum; детектор админа для PinoK = admin_level>=1 (+can_post для композера).
+- «Управление» = правое меню 11 пунктов (с href); админ-отличия от простой группы: меню/Настроить/обложка/композер can_post/Действия постов/19 разделов настроек/стрики/онбординг.
+- Корректировки плана: P0 без изменений; P1 проще (единый groups.edit; приглашения groups.invite/recallInvitation/getFriendsInvitationList подтверждены; новые дешёвые кандидаты — Комментарии-модерация, Чаты, Адреса через groups.addAddress/editAddress); P2 + Кнопка действия/Меню/Канал через groups.edit; tokens/longpoll-боты и ads — вне скоупа.
+- Зоны без данных (реализовывать по докам API): статистика (dashboard), диалог ролей руководителей, бан/заявки/чёрный список, форма типов «Кнопки действия».
+- Документ: docs/админ.сообществ.снапшоты.сверка.md (Task ID 34-b, дата 2026-09-10). SECURITY: в Pluton tut.html живой webToken — архив не публиковать.
