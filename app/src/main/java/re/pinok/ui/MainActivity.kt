@@ -1615,7 +1615,20 @@ class MainActivity : ComponentActivity() {
                         cached.lockerBiometric,
                     )
                 } else {
-                    AppLog.d("MainActivity", "onResume locker check (cached, ${System.currentTimeMillis() - t0}ms): no locker needed")
+                    // W36 #LOCKER-BG-MIGRATION: diagnostic-log с ТОЧНОЙ причиной
+                    // пропуска — следующий logcat от пользователя сразу покажет,
+                    // какое условие не прошло (вместо безликого «no locker needed»).
+                    // Grace — нормальный штатный пропуск (после успешного PIN).
+                    if (unlockGrace) {
+                        AppLog.i("MainActivity", "Locker on background skipped: unlock grace active (just unlocked)")
+                    } else {
+                        AppLog.i(
+                            "MainActivity",
+                            "Locker on background not needed: enabled=${cached.lockerEnabled}, " +
+                                "onBackground=${cached.lockerOnBackground}, " +
+                                "pinHashBlank=${cached.lockerPinHash.isBlank()}",
+                        )
+                    }
                 }
             } else {
                 // Холодный старт: snapshot ещё не пришёл из DataStore. Редкий случай.

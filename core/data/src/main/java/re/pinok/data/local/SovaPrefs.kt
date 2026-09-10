@@ -846,6 +846,46 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         return shouldReset
     }
 
+    /**
+     * #LOCKER-BG-MIGRATION (волна 36, 2026-09-10): одноразовое включение тумблера
+     * «Блокировка при возврате из фона» для устройств с УЖЕ установленным PIN.
+     *
+     * Жалоба пользователя: «Блокировка приложения пин кодом при разворачивании
+     * приложения из фона не срабатывает». Root-cause: #DEFAULTS-OFF (2026-08-04)
+     * поставил дефолт lockerOnBackground=false, а авто-включение при установке
+     * PIN (#LOCKER-UX, Fix #380 от 2026-09-09) появилось ПОЗЖЕ — у всех, кто
+     * задал PIN до этого фикса, в DataStore персистится false: PIN работает
+     * при холодном старте, но НЕ при возврате из фона (resume-чек в
+     * MainActivity корректен — проверено статически — но фильтруется
+     * lockerOnBackground=false), и фича выглядит мёртвой.
+     *
+     * Миграция: если PIN установлен (lockerEnabled && pinHash не пуст) и
+     * lockerOnBackground персистится false — включаем его ОДИН раз. Флаг
+     * LOCKER_BG_MIGRATED не даёт перетирать последующий ОСОЗНАННЫЙ выбор
+     * «выкл» (как в migrateReadReceiptsDefaultOn). Пользователи БЕЗ PIN не
+     * затрагиваются (блокировать нечего — флаг всё равно ставим, чтобы не
+     * проверять повторно).
+     *
+     * Вызывается из SovaApp.onCreate (рядом с migrateReadReceiptsDefaultOn).
+     */
+    suspend fun migrateLockerOnBackgroundOn(): Boolean {
+        val snap = ds.data.first()
+        val cur = snap[Keys.LOCKER_BG_MIGRATED] ?: 0
+        if (cur >= 1) return false
+        val pinSet = (snap[Keys.LOCKER_ENABLED] == true) &&
+            !(snap[Keys.LOCKER_PIN_HASH].isNullOrBlank())
+        // false = persist «до #LOCKER-UX» → включаем один раз; true/null — писать
+        // нечего (true = уже включён; null = PIN отсутствует, блокировать нечего).
+        val shouldEnable = pinSet && snap[Keys.LOCKER_ON_BACKGROUND] == false
+        ds.edit { p ->
+            if (shouldEnable) {
+                p[Keys.LOCKER_ON_BACKGROUND] = true
+            }
+            p[Keys.LOCKER_BG_MIGRATED] = 1
+        }
+        return shouldEnable
+    }
+
     // Fix #100: Stories settings
     suspend fun setAutoCacheStories(v: Boolean)          = put(Keys.AUTO_CACHE_STORIES, v)
     suspend fun setStoryCacheLimitMb(v: Int)             = put(Keys.STORY_CACHE_LIMIT_MB, v)
@@ -1537,6 +1577,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val LOCKER_PIN_HASH     = stringPreferencesKey("locker_pin_hash")
         val LOCKER_BIOMETRIC    = booleanPreferencesKey("locker_biometric")
         val LOCKER_ON_BACKGROUND= booleanPreferencesKey("locker_on_background")
+        // #LOCKER-BG-MIGRATION (волна 36): одноразовый флаг миграции тумблера
+        // «Блокировка при возврате из фона» для устройств с PIN до #LOCKER-UX.
+        val LOCKER_BG_MIGRATED  = intPreferencesKey("locker_bg_migrated")
         // Navigation
         val LAST_ROUTE           = stringPreferencesKey("last_route")
         // #NAV-GROUP-VIDEO-RESTORE (Fix #344): контекст сообщества.

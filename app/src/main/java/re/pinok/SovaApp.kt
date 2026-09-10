@@ -1039,6 +1039,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // в DataStore persistился false (единственный писатель — сам тумблер).
             val readReceiptsMigrated = prefs.migrateReadReceiptsDefaultOn()
             if (readReceiptsMigrated) AppLog.i("SovaApp", "Read receipts migration: msg_read_receipts false→true (default ON per user request)")
+            // #LOCKER-BG-MIGRATION (волна 36): одноразовое включение «Блокировки
+            // при возврате из фона» на устройствах с PIN, заданным ДО #LOCKER-UX
+            // (auto-enable) — там персистился lockerOnBackground=false и PIN
+            // срабатывал только на холодном старте, фича выглядела мёртвой.
+            val lockerBgMigrated = prefs.migrateLockerOnBackgroundOn()
+            if (lockerBgMigrated) AppLog.i("SovaApp", "Locker bg migration: locker_on_background false→true (PIN was set before #LOCKER-UX auto-enable)")
         }
         val initialSnap = runBlocking { prefs.data.first() }
         prefsSnapshot = initialSnap   // Fix #336: seed synchronous cache
