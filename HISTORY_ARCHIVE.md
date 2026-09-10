@@ -110,7 +110,7 @@
 
    **Баг #2 (CRITICAL — рассинхрон app_id):**
    В `WebTokenAuth.kt` используется `WEB_APP_ID = "7879029"` (m.vk.com web) для `get_anonym_token` и `web_token`.
-   В `VKApi.kt` стоит `CLIENT_ID = "6146827"` и `CLIENT_SECRET = "qVxWRF1CwHERuIrKBnqe"` — это другой app (Kate Mobile). Эти константы в `VKApi.kt` НИГДЕ не используются для авторизации (только `TokenManager.accessToken` подставляется через interceptor), но это путает.
+   В `VKApi.kt` стоит `CLIENT_ID = "6146827"` и `CLIENT_SECRET = "qVxW...MASKED...Bnqe"` — это другой app (Kate Mobile). Эти константы в `VKApi.kt` НИГДЕ не используются для авторизации (только `TokenManager.accessToken` подставляется через interceptor), но это путает.
    В `build.gradle.kts` `VKIDClientID = "6146827"` — третий app_id.
 
    **Баг #3 (CRITICAL — нет вызова VK API с нужными scope):**
@@ -225,7 +225,7 @@
    - **Package:** `re.sova.five`, версия 8.38 (versionCode 16786), OTA 1.2.1.
    - **Min SDK 24, Target SDK 31, Compile SDK 33.**
    - **Иерархия Activity:** Activity → ThemableActivity → LockedActivity → LiquidActivity → VKActivity → NavigationDelegateActivity → MainActivity.
-   - **API:** api.vk.com (configurable), client_id=6146827, client_secret=qVxWRF1CwHERuIrKBnqe, API version 5.113/5.116.
+   - **API:** api.vk.com (configurable), client_id=6146827, client_secret=qVxW...MASKED...Bnqe, API version 5.113/5.116.
    - **Auth flows:** Phone+Password, Login+Password, QR, OAuth, Exchange token, Passkey, Sber/Tinkoff/ESIA, Multi-account via AccountManager.
    - **Мод-функции (7 категорий prefs):**
      - `sova_news_prefs` — disable_ads, disableAdsInGroups, disableRecommendedPosts, disableStories, storyDnr, storyAdblock, feed_double_tap_like, rightLikes.
@@ -746,7 +746,7 @@ Unlink of file '.git/objects/pack/pack-43079aafb170da940a1443d5da9ba46134080ca0.
 5. **Подтверждена структура текущей рабочей копии (ветка `SOVA_2_0`):**
    - Пакет: `re.sova.s2`.
    - Application: `SovaApp` (EncryptedSharedPreferences + Coil 3 SingletonImageLoader + PlayerConnection + TrackDownloadManager init).
-   - Auth: `AuthActivity` (VK OAuth WebView, client_id=6146827, secret=qVxWRF1CwHERuIrKBnqe).
+   - Auth: `AuthActivity` (VK OAuth WebView, client_id=6146827, secret=qVxW...MASKED...Bnqe).
    - API: `VKApiClient` (suspend, OkHttp) + `VKEndpoints`.
    - Data: `SovaPrefs` (7 категорий, 28 ключей), `TokenStorage` (encrypted), `Models` (10 DTOs + PlayerState + DownloadState).
    - Locker: `LockerActivity` (PIN SHA-256 + BiometricPrompt) + `BootReceiver`.
@@ -757,7 +757,7 @@ Unlink of file '.git/objects/pack/pack-43079aafb170da940a1443d5da9ba46134080ca0.
 
 6. **Проверка готовности к сборке:**
    - `app/build.gradle.kts`: namespace `re.sova.s2`, compileSdk 36, minSdk 24, targetSdk 36, versionCode 1, versionName "2.0.0".
-   - VK credentials в BuildConfig: VK_CLIENT_ID=6146827, VK_CLIENT_SECRET=qVxWRF1CwHERuIrKBnqe, VK_API_VERSION=5.243, USER_AGENT=VKAndroidApp/8.178-12345.
+   - VK credentials в BuildConfig: VK_CLIENT_ID=6146827, VK_CLIENT_SECRET=qVxW...MASKED...Bnqe, VK_API_VERSION=5.243, USER_AGENT=VKAndroidApp/8.178-12345.
    - Kotlin compiler args: `-Xcontext-receivers`, opt-in Material3/Foundation/Animation/Coroutines experimental.
    - ProGuard: release build с minify+shrink, proguard-rules.pro.
 
@@ -3187,7 +3187,7 @@ OAuth WebView с `client_id=2438161` (VKoffline) получает токен, н
 
 **Реализация:**
 1. **`app/src/main/java/re/sova/s2/api/VkSigner.kt`** (новый):
-   - `APP_ID = 2274003`, `APP_SECRET = "hHbZxrka2uZ6jB1inYsH"` (hardcoded из манифеста VK)
+   - `APP_ID = 2274003`, `APP_SECRET = "hHbZ...MASKED...nYsH"` (hardcoded из манифеста VK)
    - `requiresSig(method)` — whitelist: `messages.*`, `audio.*`, `execute` (остальные методы работают без sig)
    - `sign(method, params, token, version)` — собирает querystring как Android `Uri.Builder`, добавляет `v`/`https`/`access_token`, конкатенирует с `APP_SECRET`, считает MD5 hex lowercase
    - KDoc с указанием файлов-источников в декомпиляте
@@ -7318,7 +7318,7 @@ Stage Summary:
 **User:** ошибка 3 не устранена, посмотри как авторизация устроена на других ветках
 
 **Контекст:** Анализ VK_X_3 (origin/VK_X_3) показал ключевые отличия в WebTokenAuth:
-- VK_X_3 имеет `client_secret = "QbYic1K3lEV5kTGiqlq2"` для desktop app_id=6287487
+- VK_X_3 имеет `client_secret = "QbYi...MASKED...qlq2"` для desktop app_id=6287487
 - VK_X_3 `get_anonym_token` пробует `app_id` + `client_secret` для desktop
 - SOVA_2_0 не имел client_secret → VK мог возвращать ошибку 3/401
 
@@ -11836,7 +11836,7 @@ when {
 - `MessageCacheManager` (cacheConversation, getCachedMessages, cacheAttachments, clearCache)
 - Это **плановая архитектура** для SOVA 2.0 — реализация разошлась: вместо отдельных менеджеров сделаны `TrackDownloadManager` + `VideoDownloadManager` + `OfflineManagerScreen`.
 
-**Интеграция в SOVA 2.0:** `WebTokenAuth.kt` (origin/SOVA_2_0, 743 строки) — primary auth flow: `get_anonym_token` → `web_token` → `sign_in_sat` через `login.vk.com`. `WEB_APP_ID_MOBILE=7879029`, `DESKTOP_CLIENT_SECRET="QbYic1K3lEV5kTGiqlq2"`, `API_VERSION="5.269"`. Chrome 131 Mobile UA обязателен.
+**Интеграция в SOVA 2.0:** `WebTokenAuth.kt` (origin/SOVA_2_0, 743 строки) — primary auth flow: `get_anonym_token` → `web_token` → `sign_in_sat` через `login.vk.com`. `WEB_APP_ID_MOBILE=7879029`, `DESKTOP_CLIENT_SECRET="QbYi...MASKED...qlq2"`, `API_VERSION="5.269"`. Chrome 131 Mobile UA обязателен.
 
 ## Часть C: План улучшений кэширования (приоритизированный)
 

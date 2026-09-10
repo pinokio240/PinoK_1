@@ -402,12 +402,36 @@ class PlayerService : MediaSessionService() {
         // The onConnect() callback re-asserts both per-controller (some controllers
         // ignore the builder-level custom layout and only read what onConnect returns).
         val builder = MediaSession.Builder(this, player)
+            // Fix #VIDEO-SESSION-ID-COLLISION (кейс ciber.txt): media3 требует
+            // уникальный session ID НА ПРОЦЕСС. Без setId() ID = "" у ОБОИХ сервисов
+            // (этот и видео VideoPlaybackService:95) → коллизия пустых ID, когда
+            // в процессе живы обе сессии (аудио + видео в фоне) →
+            // IllegalStateException: "Session ID must be unique" → FATAL EXCEPTION.
+            // Явный уникальный ID снимает коллизию (setId есть с media3 1.0).
+            .setId("pinok-audio-session")
             .setCallback(sessionCallback)
             .setCustomLayout(listOf(buildDownloadButton(enabled = true)))
         if (sessionActivity != null) {
             builder.setSessionActivity(sessionActivity)
         }
-        mediaSession = builder.build()
+        // Defensive-гвард (Fix #VIDEO-SESSION-ID-COLLISION): отказ build() НЕ должен
+        // ронять приложение. Подписчики (startDownloadStateSubscriber) и
+        // audioDeviceCallback ещё НЕ запущены — просто логируем причину, релизим
+        // ПЛЕЕР (владелец — этот сервис; onDestroy по mediaSession==null его
+        // не тронет) и гасим сервис.
+        try {
+            mediaSession = builder.build()
+        } catch (e: IllegalStateException) {
+            AppLog.e("PlayerService", "onCreate: MediaSession build failed: ${e.message} — stopSelf", e)
+            player.release()
+            stopSelf()
+            return
+        } catch (e: IllegalArgumentException) {
+            AppLog.e("PlayerService", "onCreate: MediaSession build failed: ${e.message} — stopSelf", e)
+            player.release()
+            stopSelf()
+            return
+        }
 
         // Subscribe to player state + download state to dynamically enable/disable
         // the download button on the lock screen while a download is in progress.

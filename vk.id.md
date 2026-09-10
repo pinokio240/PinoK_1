@@ -877,7 +877,7 @@ class LongPollClient(
 class VideoPlayerInitializer {
     suspend fun prefetchStatsToken() {
         // Делать при инициализации App, а не при открытии плеера
-        val token = apiClient.videoGetStatsToken()
+        val token = apiC...MASKED...oken()
         statsTokenStore.save(token)
     }
 }

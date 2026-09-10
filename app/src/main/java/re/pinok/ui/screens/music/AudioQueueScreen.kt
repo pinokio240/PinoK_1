@@ -18,7 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -33,10 +34,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -56,10 +59,23 @@ import kotlin.math.abs
  *
  * Моделирован по скриншоту SOVA reference (Screenshot_20260628_185136.png):
  *  — Заголовок «Далее» + кнопка «Сохранить как плейлист» (TODO)
- *  — Список треков из очереди (PlayerState.queue), начиная с currentIndex
+ *  — Список треков очереди
  *  — Текущий трек выделен иконкой play/pause
  *  — Тап по треку → переключение на него (seekToDefaultPosition)
  *  — Нижний ряд контролов: shuffle / list / repeat
+ *
+ * Волна 31 #AUDIO-QUEUE-PLAYLIST: playlist-семантика вместо «потребляемой»
+ * очереди. Раньше рендерился только sublist(currentIndex..end) — пройденные
+ * треки исчезали из списка и очередь «уменьшалась по мере воспроизведения».
+ * Теперь показывается ВСЯ очередь PlayerState.queue (= полный список
+ * загруженных треков источника; для «Моей музыки» — все страницы пейджера,
+ * append догруженных страниц — PlayerConnection.onMyMusicPageLoaded):
+ *  — пройденные (выше текущего) — приглушены (alpha),
+ *  — текущий — выделен (карточка + акцент + play/pause),
+ *  — предстоящие — обычные.
+ * Тап по любому треку — seek по очереди (PlayerConnection.seekToQueueIndex):
+ * список НЕ пересобирается, курсор просто переезжает (prev/next/shuffle/repeat
+ * в PlayerConnection тоже только двигают курсор — треки не удаляются).
  */
 @Composable
 fun AudioQueueScreen(
@@ -77,11 +93,14 @@ fun AudioQueueScreen(
 
     val queue = playerState.queue
     val currentIndex = playerState.currentIndex
-    // Показываем треки начиная с текущего (как в SOVA — «Далее»)
-    val upcoming = if (currentIndex >= 0 && currentIndex < queue.size) {
-        queue.subList(currentIndex, queue.size)
-    } else {
-        queue
+
+    // Волна 31 #AUDIO-QUEUE-PLAYLIST: при открытии экрана сразу показываем
+    // текущую позицию очереди (для длинных списков «Моей музыки» 500+ треков
+    // без этого юзер видит начало списка, а не место воспроизведения).
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        val idx = currentIndex
+        if (idx > 0 && idx < queue.size) listState.scrollToItem(idx)
     }
 
     Column(
@@ -109,9 +128,9 @@ fun AudioQueueScreen(
             // #QUEUE-COUNT (2026-08-01): счётчик треков в очереди. Раньше его не
             // было — пользователь жаловался «не отображается количество треков».
             // Показываем «N треков» (с правильным склонением) рядом с заголовком.
-            if (upcoming.isNotEmpty()) {
+            if (queue.isNotEmpty()) {
                 Spacer(modifier = Modifier.width(8.dp))
-                val n = upcoming.size
+                val n = queue.size
                 val countLabel = when {
                     n % 100 in 11..14 -> "$n треков"
                     n % 10 == 1 -> "$n трек"
@@ -147,7 +166,7 @@ fun AudioQueueScreen(
             modifier = Modifier.fillMaxSize().weight(1f),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
-            if (upcoming.isEmpty()) {
+            if (queue.isEmpty()) {
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth().padding(48.dp),
@@ -166,12 +185,19 @@ fun AudioQueueScreen(
                     }
                 }
             } else {
-                items(upcoming, key = { "${it.ownerId}_${it.id}" }) { track ->
-                    val isCurrent = track.id == playerState.currentTrack?.id &&
-                        track.ownerId == playerState.currentTrack?.ownerId
+                // Волна 31 #AUDIO-QUEUE-PLAYLIST: ВСЯ очередь (пройденные +
+                // текущий + предстоящие). Ключи с индексом — защита от краша
+                // LazyColumn «Key was already used», если в очереди есть дубль
+                // трека (ownerId_id совпадает) — см. finalizeAudioSearchResult.
+                itemsIndexed(
+                    queue,
+                    key = { idx, track -> "queue_${idx}_${track.ownerId}_${track.id}" },
+                ) { idx, track ->
+                    val isCurrent = idx == currentIndex
                     QueueTrackRow(
                         track = track,
                         isCurrent = isCurrent,
+                        isPast = idx < currentIndex,
                         isPlaying = isCurrent && playerState.isPlaying,
                         cardColor = vkCard,
                         textColor = vkTextPrimary,
@@ -179,7 +205,13 @@ fun AudioQueueScreen(
                         accentColor = vkAccent,
                         onClick = {
                             if (!isCurrent) {
-                                PlayerConnection.playTrackById(track.id, upcoming)
+                                // Playlist-семантика: seek по ЖИВОЙ очереди по
+                                // индексу (плейлист НЕ пересобирается, пройденные
+                                // остаются). Индекс в displayed-списке совпадает с
+                                // индексом таймлайна контроллера (queue = playlist,
+                                // currentMediaItemIndex — тоже индекс таймлайна,
+                                // shuffle меняет только ПОРЯДОК движения курсора).
+                                PlayerConnection.seekToQueueIndex(idx)
                             } else {
                                 PlayerConnection.togglePlayPause()
                             }
@@ -243,6 +275,7 @@ fun AudioQueueScreen(
 private fun QueueTrackRow(
     track: Track,
     isCurrent: Boolean,
+    isPast: Boolean,
     isPlaying: Boolean,
     cardColor: Color,
     textColor: Color,
@@ -250,11 +283,16 @@ private fun QueueTrackRow(
     accentColor: Color,
     onClick: () -> Unit,
 ) {
+    // Волна 31 #AUDIO-QUEUE-PLAYLIST: пройденные треки приглушены (как в VK
+    // web queue). alpha стоит ПОСЛЕ background в цепочке — фон текущего трека
+    // не мутнеет, приглушается только контент.
+    val contentAlpha = if (isPast && !isCurrent) 0.45f else 1f
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .background(if (isCurrent) cardColor.copy(alpha = 0.6f) else Color.Transparent)
+            .alpha(contentAlpha)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

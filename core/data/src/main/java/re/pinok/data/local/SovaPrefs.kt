@@ -117,6 +117,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // применяется через AppLog.applyDisabledCategories().
             logCategoriesDisabled = p[Keys.LOG_CATEGORIES_DISABLED]
                 ?: AppLog.NON_CRITICAL_CATEGORY_NAMES,
+            // #LOG-SECTIONS (волна 31-f): CSV выключенных секций логов
+            // ("" = все секции логируются — дефолт по требованию юзера
+            // «в logcat по умолчанию всё»). Читается в SovaApp.onCreate →
+            // парсинг CSV в app-слое → AppLog.setDisabledSections().
+            // Исключение NULL-ЯВНО — DataStore-дефолт-маппинг (соседи выше).
+            logSectionsOff = p[Keys.LOG_SECTIONS_OFF] ?: "",
             // #238: показ FAB «подняться в верх ленты» при прокрутке вниз.
             // Default = true — FAB виден по умолчанию, пользователь может скрыть
             // в настройках (SettingsScreen → Интерфейс → «Кнопка наверх в ленте»).
@@ -474,6 +480,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера
             // (кнопки «±N сек» на lock-screen/в уведомлении). Секунды, default 10.
             videoSeekStepSec = p[Keys.VIDEO_SEEK_STEP_SEC] ?: 10,
+            // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
+            // Серверный offset последней успешной страницы (0 = не начинали/новая
+            // библиотека) — после перезапуска процесса пейджер продолжает с него
+            // (не сбрасывается). Исключение DataStore-дефолт-маппинга (?:) —
+            // прецедент videoSeekStepSec выше.
+            myMusicPagedOffset = p[Keys.MY_MUSIC_PAGED_OFFSET] ?: 0,
+            myMusicTotal = p[Keys.MY_MUSIC_TOTAL] ?: 0,
             // #CALLS: queuev4 credential (ввод вручную из localStorage).
             callsQueueKey = p[Keys.CALLS_QUEUE_KEY] ?: "",
             callsQueueTs = p[Keys.CALLS_QUEUE_TS] ?: 0L,
@@ -524,6 +537,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
      * список отключенных категорий на каждое изменение тумблера.
      */
     suspend fun setLogCategoriesDisabled(v: Set<String>) = put(Keys.LOG_CATEGORIES_DISABLED, v)
+    /**
+     * #LOG-SECTIONS (волна 31-f): CSV выключенных секций логов
+     * ("" = все секции включены). Пишет SettingsScreen LoggingTab;
+     * гейт применяется немедленно вызовом AppLog.setDisabledSections()
+     * сразу после записи (парсинг CSV — в app-слое, core/data логики
+     * не содержит).
+     */
+    suspend fun setLogSectionsOff(v: String) = put(Keys.LOG_SECTIONS_OFF, v)
     /** #238: показ FAB «подняться в верх ленты» в FeedScreen. */
     suspend fun setFeedShowScrollFab(v: Boolean)         = put(Keys.FEED_SHOW_SCROLL_FAB, v)
     /** #FEED-FILTER-TOGGLE: показывать панель разделов ленты. */
@@ -878,6 +899,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды). */
     suspend fun setVideoSeekStepSec(v: Int) = put(Keys.VIDEO_SEEK_STEP_SEC, v)
+    // Волна 31 #AUDIO-BG-PAGER: персист чекпоинта фоновой пагинации «Моя музыка»
+    // (пишет AudioLibraryPager после каждой успешной страницы).
+    suspend fun setMyMusicPagedOffset(v: Int)         = put(Keys.MY_MUSIC_PAGED_OFFSET, v)
+    suspend fun setMyMusicTotal(v: Int)               = put(Keys.MY_MUSIC_TOTAL, v)
     // #CALLS: queuev4 credential для звонков (ввод вручную из localStorage).
     suspend fun setCallsQueueKey(v: String)            = put(Keys.CALLS_QUEUE_KEY, v)
     suspend fun setCallsQueueTs(v: Long)               = put(Keys.CALLS_QUEUE_TS, v)
@@ -1274,6 +1299,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val notifyCommunitiesVibration: Boolean = true,
         /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера в секундах (default 10). */
         val videoSeekStepSec: Int = 10,
+        // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
+        // Поля с дефолтом (прецедент callsDnsPinIp ниже) — существующие
+        // именованные конструкторы Snapshot в чужих файлах собираются без правок.
+        /** Серверный offset последней успешной страницы пейджера (default 0). */
+        val myMusicPagedOffset: Int = 0,
+        /** VK total, сохранённый вместе с чекпоинтом (0 = неизвестен). */
+        val myMusicTotal: Int = 0,
         // #CALLS: queuev4 credential для звонков (можно ввести вручную из localStorage).
         val callsQueueKey: String,
         val callsQueueTs: Long,
@@ -1313,6 +1345,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * продолжает собираться без правок.
          */
         val callsDnsPinIp: String = "",
+        /**
+         * #LOG-SECTIONS (волна 31-f): CSV выключенных секций логов
+         * ("#IM,#AUDIO,…"; "" = все секции логируются). Дефолт задан явно —
+         * прецедент callsDnsPinIp выше: именованные конструкторы Snapshot
+         * в чужих файлах (FeedScreen) собираются без правок.
+         */
+        val logSectionsOff: String = "",
     )
 
     private object Keys {
@@ -1335,6 +1374,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // #LOG-CATEGORIES-DEFAULT-CRITICAL (2026-08-05): default =
         // AppLog.NON_CRITICAL_CATEGORY_NAMES — включены только AUTH+SYSTEM+NETWORK.
         val LOG_CATEGORIES_DISABLED = stringSetPreferencesKey("log_categories_disabled")
+        // #LOG-SECTIONS (волна 31-f): CSV выключенных секций логов по маркерам
+        // ("#IM,#AUDIO,…"; "" = все секции логируются — дефолт). Парсинг CSV →
+        // Set — в app-слое (SovaApp.parseLogSectionsOff), не в core/data.
+        val LOG_SECTIONS_OFF = stringPreferencesKey("log_sections_off")
         // #238: показ FAB «подняться в верх ленты» в FeedScreen.
         val FEED_SHOW_SCROLL_FAB = booleanPreferencesKey("feed_show_scroll_fab")
         // #FEED-FILTER-TOGGLE: показывать панель разделов ленты.
@@ -1521,6 +1564,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NOTIFY_COMMUNITIES_VIBRATION = booleanPreferencesKey("notify_communities_vibration")
         // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды).
         val VIDEO_SEEK_STEP_SEC = intPreferencesKey("video_seek_step_sec")
+        // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
+        val MY_MUSIC_PAGED_OFFSET = intPreferencesKey("my_music_paged_offset")
+        val MY_MUSIC_TOTAL = intPreferencesKey("my_music_total")
         // #CALLS: queuev4 credential для звонков.
         val CALLS_QUEUE_KEY         = stringPreferencesKey("calls_queue_key")
         val CALLS_QUEUE_TS          = longPreferencesKey("calls_queue_ts")

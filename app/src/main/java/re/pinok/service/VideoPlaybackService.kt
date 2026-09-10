@@ -92,13 +92,35 @@ class VideoPlaybackService : MediaSessionService() {
             )
         }
 
+        // Fix #VIDEO-SESSION-ID-COLLISION (кейс ciber.txt): media3 требует уникальный
+        // session ID НА ПРОЦЕСС. Без setId() ID = "" у ОБОИХ сервисов (аудио
+        // PlayerService:404 и этот) → когда в процессе жива аудио-сессия и стартует
+        // видео-сервис (lock-screen при играющем видео), второй build() с тем же
+        // пустым ID кидает IllegalStateException: "Session ID must be unique" →
+        // FATAL EXCEPTION. Явный уникальный ID снимает коллизию (setId есть с media3 1.0).
         val builder = MediaSession.Builder(this, player)
+            .setId("pinok-video-session")
             .setCallback(sessionCallback)
             .setCustomLayout(listOf(buildSeekButton(back = true), buildSeekButton(back = false)))
         if (sessionActivity != null) {
             builder.setSessionActivity(sessionActivity)
         }
-        mediaSession = builder.build()
+        // Defensive-гвард: build() может кинуть IllegalStateException (дубль session
+        // ID — кейс ciber.txt) или IllegalArgumentException (невалидный аргумент).
+        // Сервис опционален для UX — отказ build() НЕ должен ронять приложение:
+        // честно логируем причину и гасим сервис (плеер НЕ релизим — им владеет
+        // видео-экран, сервис держит только ссылку).
+        try {
+            mediaSession = builder.build()
+        } catch (e: IllegalStateException) {
+            AppLog.e("VideoPlaybackService", "onCreate: MediaSession build failed: ${e.message} — stopSelf", e)
+            stopSelf()
+            return
+        } catch (e: IllegalArgumentException) {
+            AppLog.e("VideoPlaybackService", "onCreate: MediaSession build failed: ${e.message} — stopSelf", e)
+            stopSelf()
+            return
+        }
         AppLog.i("VideoPlaybackService", "onCreate: session ready (title=${VideoPlaybackBus.mediaTitle}, step=$seekStepSec)")
     }
 

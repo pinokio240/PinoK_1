@@ -134,6 +134,17 @@ object PlayerConnection {
     private var playlist: List<Track> = emptyList()
 
     /**
+     * Волна 31 #AUDIO-QUEUE-PLAYLIST: живая очередь построена из списка
+     * «Моя музыка» → фоновый пейджер (AudioLibraryPager) аппендит догруженные
+     * страницы в очередь без сброса воспроизведения (onMyMusicPageLoaded).
+     * Ставится при playTrackList/shuffleAll с fromMyMusic=true (вкладки «Моя
+     * музыка» / «Главная» MusicScreen), сбрасывается любым другим источником
+     * (поиск, плейлисты, рекомендации, радио, скачанные) — там append не нужен.
+     */
+    @Volatile
+    private var queueSourceMyMusic: Boolean = false
+
+    /**
      * Fix #135: публичный доступ к текущему треку для PlayerService
      * (custom command "Скачать" на lock screen). PlayerService не имеет
      * доступа к playlist/currentTrack напрямую — вызывает этот метод.
@@ -464,8 +475,14 @@ object PlayerConnection {
      *     точный playable-фильтр, конвертация Track → MediaItem.
      *  3. main: применяем очередь к контроллеру (Media3 требует main), если seq
      *     всё ещё актуален (last-tap-wins при быстрых повторных тапах).
+     *
+     * Волна 31 #AUDIO-QUEUE-PLAYLIST: fromMyMusic=true (вкладки «Моя музыка»/
+     * «Главная» MusicScreen) → очередь = ВСЕ загруженные треки источника и
+     * помечается как appendable (пейджер догружает страницы → append в живую
+     * очередь, см. onMyMusicPageLoaded). Очередь НЕ потребляется: полный
+     * список + курсор (AudioQueueScreen показывает пройденные/текущий/будущие).
      */
-    fun playTrackList(tracks: List<Track>, startIndex: Int = 0) {
+    fun playTrackList(tracks: List<Track>, startIndex: Int = 0, fromMyMusic: Boolean = false) {
         if (tracks.isEmpty()) {
             AppLog.w(TAG, "playTrackList: пустой плейлист")
             return
@@ -494,6 +511,9 @@ object PlayerConnection {
                 return@launch
             }
             playlist = prepared.playable
+            // Волна 31 #AUDIO-QUEUE-PLAYLIST: источник очереди — до применения
+            // к контроллеру (append пейджера возможен сразу после установки).
+            queueSourceMyMusic = fromMyMusic
             // Fix #177: кэшируем ТЕКУЩИЙ трек (startTrack), а НЕ firstTrack.
             val startTrack = prepared.playable[prepared.safeIndex]
             withController { ctrl ->
@@ -589,6 +609,71 @@ object PlayerConnection {
             // PlayerState должен показать вставку сразу — публикуем состояние.
             publishStateImmediate()
             AppLog.i(TAG, "playNext: #${track.id} вставлен на позицию $insertIdx (очередь ${playlist.size})")
+        }
+    }
+
+    /**
+     * Волна 31 #AUDIO-QUEUE-PLAYLIST: append догруженных пейджером треков в
+     * ЖИВУЮ очередь (если она построена из «Моей музыки»), без сброса текущего
+     * воспроизведения. Вызывается AudioLibraryPager после каждой страницы.
+     *
+     * Механика: полный список пейджера мержится с текущей очередью — новые
+     * (ownerId_id + playable) треки добавляются В КОНЕЦ через
+     * ctrl.addMediaItems; существующие позиции не двигаются, курсор
+     * (currentMediaItemIndex) не сбрасывается, звук не прерывается. Передаётся
+     * ПОЛНЫЙ список пейджера (а не только fresh страницы) — это самолечит
+     * гонки «страница завершилась во время подготовки очереди» (пропущенную
+     * страницу допишет следующий вызов).
+     */
+    fun onMyMusicPageLoaded(pagerTracks: List<Track>) {
+        if (!queueSourceMyMusic) return
+        if (pagerTracks.isEmpty()) return
+        if (playlist.isEmpty()) return // нечего аппендить — ничего не играет
+        // Мутации playlist только на main (там же живёт playTrackList/playNext).
+        scope.launch {
+            // Re-check ПОСЛЕ перехода на main: между volatile-проверкой выше и
+            // стартом корутины playTrackList мог сменить источник (тап по
+            // поиску/радио во время догрузки страницы) — тогда append чужих
+            // треков в новую очередь недопустим.
+            if (!queueSourceMyMusic) return@launch
+            val current = playlist
+            val existingKeys = HashSet<String>(current.size * 2)
+            for (t in current) existingKeys.add("${t.ownerId}_${t.id}")
+            val toAppend = ArrayList<Track>()
+            for (t in pagerTracks) {
+                val key = "${t.ownerId}_${t.id}"
+                if (existingKeys.contains(key)) continue
+                // Тот же playable-фильтр, что в prepareQueue: без URL и кэша
+                // трек в очередь не попадает (иначе ExoPlayer ошибка).
+                if (t.url.isNullOrBlank() && !TrackDownloadManager.isDownloaded(t.id)) continue
+                existingKeys.add(key)
+                toAppend.add(t)
+            }
+            if (toAppend.isEmpty()) return@launch
+            playlist = current + toAppend
+            withController { ctrl ->
+                ctrl.addMediaItems(toAppend.map { it.toMediaItem() })
+            }
+            publishStateImmediate()
+            AppLog.i(TAG, "#AUDIO-QUEUE-PLAYLIST: +${toAppend.size} в живую очередь (очередь ${playlist.size})")
+        }
+    }
+
+    /**
+     * Волна 31 #AUDIO-QUEUE-PLAYLIST: перейти к треку по индексу ЖИВОЙ очереди
+     * (playlist-семантика: seek внутри очереди, список НЕ пересобирается,
+     * пройденные треки остаются в очереди). Тап по строке очереди в
+     * AudioQueueScreen — вместо прежнего playTrackById(..., upcoming), который
+     * пересобирал очередь из sublist и ОБРЕЗАЛ пройденные треки.
+     */
+    fun seekToQueueIndex(index: Int) {
+        withController { ctrl ->
+            if (index < 0 || index >= ctrl.mediaItemCount) {
+                AppLog.w(TAG, "seekToQueueIndex: index=$index вне очереди (${ctrl.mediaItemCount}) — skip")
+                return@withController
+            }
+            ctrl.seekToDefaultPosition(index)
+            ctrl.playWhenReady = true
         }
     }
 
@@ -715,7 +800,7 @@ object PlayerConnection {
     }
 
     /** Fix #62: перемешать текущий плейлист и начать воспроизведение с первого трека. */
-    fun shuffleAll(tracks: List<Track>) {
+    fun shuffleAll(tracks: List<Track>, fromMyMusic: Boolean = false) {
         if (tracks.isEmpty()) return
         val seq = ++queueSetSeq
         scope.launch {
@@ -741,6 +826,9 @@ object PlayerConnection {
             }
             // Перемешиваем плейлист и обновляем внутреннее состояние.
             playlist = prepared.first
+            // Волна 31 #AUDIO-QUEUE-PLAYLIST: источник очереди (shuffleAll по
+            // «Моей музыке» тоже appendable — пейджер дозапишет новые страницы).
+            queueSourceMyMusic = fromMyMusic
             withController { ctrl ->
                 if (seq != queueSetSeq) return@withController
                 ctrl.setMediaItems(prepared.second, 0, 0L)

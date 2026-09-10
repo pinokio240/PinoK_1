@@ -361,9 +361,15 @@ fun SovaNavHost(
     // recompose мы бы пытались навигировать снова).
     LaunchedEffect(pendingOpenChatPeerId) {
         val peerId = pendingOpenChatPeerId
-        if (peerId != null && peerId > 0) {
+        // #IM-CHANNEL-OPEN: каналы имеют ОТРИЦАТЕЛЬНЫЙ peerId (-group_id).
+        // Раньше гварды peerId > 0 (здесь и в MainActivity.handleOpenChatIntent)
+        // молча глотали тап по push-уведомлению канала (Fix #390 #NOTIFY-MODES
+        // шлёт их с peer_id<0 через CHANNEL_COMMUNITIES) — «канал не открывается».
+        // Теперь открываем любой ненулевой peerId; 0 = intent без extras (мусор).
+        if (peerId != null && peerId != 0L) {
             val title = pendingOpenChatTitle ?: ""
-            AppLog.i("SovaNavHost", "OPEN_CHAT: navigating to chat peerId=$peerId title='$title'")
+            AppLog.i("SovaNavHost",
+                "#IM-CHANNEL-OPEN OPEN_CHAT: navigating peerId=$peerId title='$title' isChannelPeer=${peerId < 0}")
             nav.navigate(Screen.ChatDetail.buildRoute(peerId, title, null)) {
                 // Не добавляем дубликаты если уже в этом чате.
                 launchSingleTop = true
@@ -1487,8 +1493,22 @@ listOf(
                 composable(Screen.Messages.route) {
                     MessagesScreen(
                         onChatClick = { chat ->
+                            // #IM-CHANNEL-OPEN: хлебная крошка клика по карточке чата —
+                            // точка 1 трассировки. isChannel показывает, чем считал чат
+                            // СПИСОК (peer.id<0 && can_write.allowed==false); peerId<0 —
+                            // сам пир-канал. Если крошки НЕТ в логкате после тапа — клик
+                            // не доходит (проблема в MessagesScreen/ChatCard).
+                            val clickPeerId = chat.peer.id
+                            val rawClickTitle = chat.peer.title
+                            // NULL-ЯВНО: явная if вместо elvis (строка была
+                            // `chat.peer.title ?: "Диалог"` — переписана при правке).
+                            val clickTitle = if (rawClickTitle != null) rawClickTitle else "Диалог"
+                            val clickCanWriteKnown = chat.canWrite != null
+                            AppLog.i("SovaNavHost",
+                                "#IM-CHANNEL-OPEN click: peerId=$clickPeerId isChannel=${chat.isChannel} " +
+                                    "canWriteKnown=$clickCanWriteKnown title='$clickTitle'")
                             nav.navigate(
-                                Screen.ChatDetail.buildRoute(chat.peer.id, chat.peer.title ?: "Диалог", chat.peer.photo)
+                                Screen.ChatDetail.buildRoute(clickPeerId, clickTitle, chat.peer.photo)
                             )
                         },
                         onFoldersSettings = {
@@ -1624,10 +1644,9 @@ listOf(
                 }
                 composable(Screen.Profile.route) {
                     ProfileScreen(
-                        // Fix #370 #LOGOUT-HOLDER-CLEAR: обёртка с сбросом
-                        // in-memory кэшей holders перед mainActivity-логикой
-                        // (та же обёртка, что у drawer-пункта «Выйти из аккаунта»).
-                        onLogout = onLogoutWithHoldersClear,
+                        // W31-b: параметр onLogout УДАЛЁН из ProfileScreen вместе
+                        // с logout-UI экрана — выход из аккаунта ТОЛЬКО в боковом
+                        // drawer (Fix #369, onLogoutWithHoldersClear живёт там).
                         // Fix #70: навигация на видеоплеер из постов на стене профиля.
                         onVideoClick = { video ->
                             VideoHolder.open(video)

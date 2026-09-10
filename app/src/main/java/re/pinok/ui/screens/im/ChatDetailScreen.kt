@@ -204,6 +204,7 @@ import re.pinok.util.toRecordingTimeString
 import androidx.activity.compose.rememberLauncherForActivityResult
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import android.content.Intent
 import android.net.Uri
@@ -1700,6 +1701,10 @@ fun ChatDetailScreen(
                     if (preloaded.size < 30) channelPostsEnd = true
                 } else {
                     val posts = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
+                    // #IM-CHANNEL-OPEN: успех/пустота wall.get — ключевой пункт
+                    // трассировки (пусто + err → честный «Повторить» на экране).
+                    AppLog.i("ChatDetailScreen",
+                        "#IM-CHANNEL-OPEN wallGet initial: posts=${posts.size} peerId=$peerId")
                     channelPosts = posts
                     if (posts.size < 30) channelPostsEnd = true
                     if (posts.isEmpty()) {
@@ -2172,15 +2177,26 @@ fun ChatDetailScreen(
         // Для peerId < 0 сначала спрашиваем chat state; обычные диалоги сообществ
         // (can_write разрешён) идут дальше по обычному пути — эта ветка их не трогает.
         var chatInfoResolved = false
+        // #IM-CHANNEL-OPEN: знает ли chat state поле can_write. VK в редких
+        // ответах НЕ присылает can_write для группового пира → chat.isChannel
+        // (peer.id<0 && canWrite?.allowed==false) = false даже для КАНАЛА —
+        // и без этой метки экран уходил в messages.getHistory с generic-ошибкой.
+        var chatCanWriteKnown = false
+        AppLog.i("ChatDetailScreen",
+            "#IM-CHANNEL-OPEN enter: peerId=$peerId channelModeEnabled=$channelModeEnabled title='$currentTitle'")
         if (peerId < 0 && channelModeEnabled) {
             try {
                 val chats = app.apiClient.messagesGetConversationsById(listOf(peerId))
                 val chat = chats.firstOrNull()
                 if (chat != null) {
                     chatInfoResolved = true
+                    val cw = chat.canWrite
+                    chatCanWriteKnown = cw != null
                     val push = chat.pushSettings
                     muted = if (push != null) push.isMuted() else false
                     isChannel = chat.isChannel
+                    AppLog.i("ChatDetailScreen",
+                        "#IM-CHANNEL-OPEN chat state resolved: isChannel=${chat.isChannel} canWriteKnown=$chatCanWriteKnown")
                     val t = chat.peer.title
                     if (t != null && t.isNotBlank() && t != "Диалог" && t != "DELETED" && t != currentTitle) {
                         currentTitle = t
@@ -2189,6 +2205,11 @@ fun ChatDetailScreen(
                     if (ph != null && ph.isNotBlank() && ph != currentPhoto) {
                         currentPhoto = ph
                     }
+                } else {
+                    // #IM-CHANNEL-OPEN: state пуст (offline/err=запрос отклонён) —
+                    // дальше сработает wallGet-проба; крошка для следующего логката.
+                    AppLog.w("ChatDetailScreen",
+                        "#IM-CHANNEL-OPEN chat state EMPTY (peerId=$peerId, errSet=${app.apiClient.lastApiError != null})")
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -2196,6 +2217,8 @@ fun ChatDetailScreen(
                 AppLog.w("ChatDetailScreen", "#CHANNEL-WALL-MODE conversationsById failed: ${e.message}")
             }
             if (isChannel) {
+                AppLog.i("ChatDetailScreen",
+                    "#IM-CHANNEL-OPEN wall-mode ON (chat state = channel): peerId=$peerId")
                 // Шапка канала: «N подписчиков» (снапшот 29-a) + GroupInfo для
                 // PostHolder.lastGroups (имя сообщества в PostDetailScreen —
                 // паритет CommunityScreen).
@@ -2222,17 +2245,27 @@ fun ChatDetailScreen(
                 loading = false
                 return@LaunchedEffect
             }
-            if (!chatInfoResolved) {
-                // Chat state недоступен (сеть/edge) — по Fix #393 пробуем wallGet
-                // ПЕРВИЧНО: если стена читается — это канал; generic-ошибку history
-                // для негативного пира не показываем никогда.
+            // #IM-CHANNEL-OPEN: пробуем wallGet первично не только при недоступном
+            // chat state (!chatInfoResolved), но и когда state РЕЗОЛВНУЛСЯ БЕЗ
+            // can_write (!chatCanWriteKnown) — иначе канал с таким ответом VK
+            // уходил в messages.getHistory и показывал generic-ошибку (симптом
+            // «диалог канала не открывается»). Если стена читается — это канал;
+            // generic-ошибку history для негативного пира не показываем никогда.
+            if (!chatInfoResolved || !chatCanWriteKnown) {
                 val probe = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
+                AppLog.i("ChatDetailScreen",
+                    "#IM-CHANNEL-OPEN probe wallGet: posts=${probe.size} " +
+                        "apiErr=${app.apiClient.lastApiError != null} resolved=$chatInfoResolved canWriteKnown=$chatCanWriteKnown")
                 if (probe.isNotEmpty() || app.apiClient.lastApiError == null) {
+                    AppLog.i("ChatDetailScreen",
+                        "#IM-CHANNEL-OPEN wall-mode ON (probe): peerId=$peerId posts=${probe.size}")
                     isChannel = true
                     loadChannelPosts(initial = true, preloaded = probe)
                     loading = false
                     return@LaunchedEffect
                 }
+                AppLog.w("ChatDetailScreen",
+                    "#IM-CHANNEL-OPEN probe failed — fallback to messages.getHistory: peerId=$peerId")
             }
         }
         try {
@@ -2243,9 +2276,12 @@ fun ChatDetailScreen(
             if (result.messages.size < pageSize) endReached = true
             if (result.messages.isEmpty()) {
                 val err = app.apiClient.lastApiError
-                if (peerId < 0 && channelModeEnabled && !chatInfoResolved) {
-                    // Fix #393: канал вернул пустую messages-историю — контент
-                    // в wall-режиме, generic-ошибку не показываем.
+                if (peerId < 0 && channelModeEnabled && (!chatInfoResolved || !chatCanWriteKnown)) {
+                    // Fix #393 + #IM-CHANNEL-OPEN: канал вернул пустую messages-историю
+                    // (или can_write неизвестен) — контент в wall-режиме, generic-ошибку
+                    // не показываем.
+                    AppLog.i("ChatDetailScreen",
+                        "#IM-CHANNEL-OPEN history empty → wall-mode: peerId=$peerId resolved=$chatInfoResolved canWriteKnown=$chatCanWriteKnown")
                     loadChannelPosts(initial = true)
                 } else {
                     errorText = if (err != null) "Ошибка: $err" else "Нет сообщений"
@@ -2282,11 +2318,13 @@ fun ChatDetailScreen(
             throw e
         } catch (e: Exception) {
             AppLog.e("ChatDetailScreen", "Failed to load history", e)
-            if (peerId < 0 && channelModeEnabled && !chatInfoResolved) {
-                // Fix #393: messages-история канала упала — переключаемся на
-                // wall-режим (контент канала = посты сообщества) вместо
-                // generic-ошибки. Если wallGet тоже упадёт — честный
+            if (peerId < 0 && channelModeEnabled && (!chatInfoResolved || !chatCanWriteKnown)) {
+                // Fix #393 + #IM-CHANNEL-OPEN: messages-история канала упала —
+                // переключаемся на wall-режим (контент канала = посты сообщества)
+                // вместо generic-ошибки. Если wallGet тоже упадёт — честный
                 // channelPostsError с «Повторить» (честное состояние).
+                AppLog.i("ChatDetailScreen",
+                    "#IM-CHANNEL-OPEN history failed → wall-mode: peerId=$peerId resolved=$chatInfoResolved canWriteKnown=$chatCanWriteKnown")
                 loadChannelPosts(initial = true)
             } else {
                 errorText = "Не удалось загрузить: ${e.message}"
@@ -2326,7 +2364,13 @@ fun ChatDetailScreen(
             hasUnreadMark = chat != null && chat.unreadCount > 0
             // P3.4: канал = группа (peerId < 0) где can_write.allowed == false.
             // Только если feature-flag включён — иначе обычный режим (composer виден).
-            isChannel = channelModeEnabled && chat?.isChannel == true
+            // #IM-CHANNEL-OPEN: НЕ затираем wall-режим, уже включённый ранее в этом
+            // же LaunchedEffect (probe / пустая история): этот второй запрос идёт
+            // ПОСЛЕ fallback-переключения, и state без can_write вернул бы здесь
+            // isChannel=false — «убил» бы уже включённую wall-ленту канала.
+            if (!isChannel) {
+                isChannel = channelModeEnabled && chat?.isChannel == true
+            }
             // Fix #133: добиваем актуальные title/photo из того же ответа.
             // messagesGetConversationsById с extended=1 отдаёт profiles[]/groups[]
             // и сам резолвит имя/аватарку (через resolveMissingPeerInfo). Если
@@ -2372,7 +2416,11 @@ fun ChatDetailScreen(
             throw ce
         } catch (_: Exception) {
             pinnedMessage = null
-            isChannel = false
+            // #IM-CHANNEL-OPEN: сброс только если wall-режим ещё НЕ включён
+            // (см. комментарий у присвоения выше — не убиваем включённый канал).
+            if (!isChannel) {
+                isChannel = false
+            }
         }
     }
 
@@ -2582,6 +2630,11 @@ fun ChatDetailScreen(
                 else -> false
             }
             if (!relevant) return@collect
+            // #IM-CHANNEL-OPEN: у канала (peerId<0, wall-режим) НЕТ messages-истории —
+            // LP-события (Reset/«сообщение» канала) не должны дёргать
+            // messages.getHistory для негативного пира (VK вернёт ошибку:
+            // мусорные вызовы + error-спам). Контент канала — только wall.get.
+            if (isChannel) return@collect
             if (loading || loadingOlder) return@collect
             // P2.6 + Fix #296: ReadOutbox/ReadInbox — обновляем readState локально
             // без re-fetch. Это даёт мгновенное обновление ✓→✓✓ в UI.
@@ -2742,70 +2795,85 @@ fun ChatDetailScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                         }
-                        Text(
-                            text = currentTitle,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        // Fix #122: muted indicator в шапке чата — перечёркнутый
-                        // колокольчик рядом с именем, чтобы пользователь сразу
-                        // видел что уведомления выключены (как в нативном VK).
-                        if (muted) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Icon(
-                                Icons.Outlined.NotificationsOff,
-                                contentDescription = "Уведомления выключены",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                        // #60: online статус под именем.
-                        // P0.1: typing indicator имеет приоритет над online статусом.
-                        val la = lastActivity
-                        // P0.1: resolve typing user names from chatProfiles (group chat)
-                        // or just use peerTitle (DM — only one user can be typing).
-                        val typingIds = typingUsers.keys.toList()
-                        val typingNames = typingIds.mapNotNull { uid ->
-                            chatProfiles[uid]?.fullName?.takeIf { it.isNotBlank() }
-                        }
-                        val statusText = when {
-                            // #CHANNEL-WALL-MODE (Fix #393): в шапке канала — количество
-                            // подписчиков (снапшот 29-a: заголовок + «N подписчиков»);
-                            // typing/online для пиров-каналов не приходят.
-                            isChannel && channelSubscribers >= 0 -> subscribersLabel(channelSubscribers)
-                            typingEnabled && typingIds.isNotEmpty() && isGroupChat && typingNames.isNotEmpty() -> {
-                                // Group chat: show up to 2 names, then "+N"
-                                when {
-                                    typingNames.size == 1 -> "${typingNames[0]} печатает…"
-                                    typingNames.size == 2 -> "${typingNames[0]} и ${typingNames[1]} печатают…"
-                                    else -> "${typingNames[0]} и ещё ${typingNames.size - 1} печатают…"
+                        // 32-b: имя + статус в Column — статус («онлайн»/«был(а) …»/
+                        // «печатает…») теперь ПОД именем, а не рядом с ним в Row.
+                        Column {
+                            // Fix #122: muted indicator остаётся В РЯДУ с именем —
+                            // перечёркнутый колокольчик, чтобы пользователь сразу
+                            // видел что уведомления выключены (как в нативном VK).
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = currentTitle,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    // weight(fill=false): имя занимает свободную ширину
+                                    // строки, но колокольчик не выдавливается за край —
+                                    // при длинном имени усекается само имя.
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (muted) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(
+                                        Icons.Outlined.NotificationsOff,
+                                        contentDescription = "Уведомления выключены",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.outline,
+                                    )
                                 }
                             }
-                            typingEnabled && typingIds.isNotEmpty() -> "печатает…"
-                            la?.online == 1 -> "онлайн"
-                            la != null && la.lastSeen > 0 -> {
-                                val diff = (System.currentTimeMillis() / 1000 - la.lastSeen)
-                                when {
-                                    diff < 60 -> "был(а) только что"
-                                    diff < 3600 -> "был(а) ${diff / 60} мин назад"
-                                    diff < 86400 -> "был(а) ${diff / 3600} ч назад"
-                                    else -> "был(а) ${diff / 86400} д назад"
+                            // #60: online статус под именем.
+                            // P0.1: typing indicator имеет приоритет над online статусом.
+                            val la = lastActivity
+                            // P0.1: resolve typing user names from chatProfiles (group chat)
+                            // or just use peerTitle (DM — only one user can be typing).
+                            val typingIds = typingUsers.keys.toList()
+                            val typingNames = typingIds.mapNotNull { uid ->
+                                val profile = chatProfiles[uid]
+                                if (profile == null) {
+                                    null
+                                } else {
+                                    val fullName = profile.fullName
+                                    if (fullName.isNotBlank()) fullName else null
                                 }
                             }
-                            else -> ""
-                        }
-                        if (statusText.isNotBlank()) {
-                            Text(
-                                text = statusText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (typingEnabled && typingIds.isNotEmpty())
-                                    MaterialTheme.colorScheme.primary
-                                else if (lastActivity?.online == 1)
-                                    MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline,
-                            )
+                            val statusText = when {
+                                // #CHANNEL-WALL-MODE (Fix #393): в шапке канала — количество
+                                // подписчиков (снапшот 29-a: заголовок + «N подписчиков»);
+                                // typing/online для пиров-каналов не приходят.
+                                isChannel && channelSubscribers >= 0 -> subscribersLabel(channelSubscribers)
+                                typingEnabled && typingIds.isNotEmpty() && isGroupChat && typingNames.isNotEmpty() -> {
+                                    // Group chat: show up to 2 names, then "+N"
+                                    when {
+                                        typingNames.size == 1 -> "${typingNames[0]} печатает…"
+                                        typingNames.size == 2 -> "${typingNames[0]} и ${typingNames[1]} печатают…"
+                                        else -> "${typingNames[0]} и ещё ${typingNames.size - 1} печатают…"
+                                    }
+                                }
+                                typingEnabled && typingIds.isNotEmpty() -> "печатает…"
+                                la != null && la.online == 1 -> "онлайн"
+                                // 32-b: до 15 минут — относительное «был(а) N мин назад»,
+                                // дальше время/дата (формат formatLastSeenExtended ниже).
+                                la != null && la.lastSeen > 0 ->
+                                    formatLastSeenExtended(la.lastSeen, System.currentTimeMillis() / 1000)
+                                else -> ""
+                            }
+                            if (statusText.isNotBlank()) {
+                                Text(
+                                    text = statusText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (typingEnabled && typingIds.isNotEmpty()) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else if (la != null && la.online == 1) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outline
+                                    },
+                                )
+                            }
                         }
                     }
                 },
@@ -7412,6 +7480,49 @@ private fun subscribersLabel(count: Int): String {
         else -> "подписчиков"
     }
     return "$count $word"
+}
+
+/**
+ * 32-b: расширенный формат «был(а) …» для шапки диалога — до 15 минут
+ * относительное время, дальше время и дата (как у VK web):
+ *   < 60 сек        → «был(а) только что»
+ *   < 15 мин        → «был(а) N мин назад» (N = 1..14)
+ *   сегодня         → «был(а) в HH:mm»
+ *   вчера           → «был(а) вчера в HH:mm»
+ *   иначе           → «был(а) DD.MM.YYYY в HH:mm»
+ * lastSeen/now — unix-секунды; форматирование локальной таймзоной
+ * устройства. SimpleDateFormat+Calendar, а не java.time: minSdk 24
+ * (java.time недоступен без coreLibraryDesugaring).
+ */
+private fun formatLastSeenExtended(lastSeenSec: Long, nowSec: Long): String {
+    val diff = nowSec - lastSeenSec
+    if (diff < 60) return "был(а) только что"
+    if (diff < 15 * 60) return "был(а) ${diff / 60} мин назад"
+
+    val seenCal = Calendar.getInstance()
+    seenCal.timeInMillis = lastSeenSec * 1000
+    val nowCal = Calendar.getInstance()
+    nowCal.timeInMillis = nowSec * 1000
+
+    val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val time = timeFmt.format(Date(lastSeenSec * 1000))
+
+    val sameDay = seenCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+        seenCal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)
+    if (sameDay) return "был(а) в $time"
+
+    // «Вчера» — календарный день перед сегодняшним; Calendar.add сдвигает
+    // дату целиком, переходы месяца/года корректны (1 янв → 31 дек).
+    val yesterdayCal = Calendar.getInstance()
+    yesterdayCal.timeInMillis = nowSec * 1000
+    yesterdayCal.add(Calendar.DAY_OF_YEAR, -1)
+    val isYesterday = seenCal.get(Calendar.YEAR) == yesterdayCal.get(Calendar.YEAR) &&
+        seenCal.get(Calendar.DAY_OF_YEAR) == yesterdayCal.get(Calendar.DAY_OF_YEAR)
+    if (isYesterday) return "был(а) вчера в $time"
+
+    val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+    val date = dateFmt.format(Date(lastSeenSec * 1000))
+    return "был(а) $date в $time"
 }
 
 /**

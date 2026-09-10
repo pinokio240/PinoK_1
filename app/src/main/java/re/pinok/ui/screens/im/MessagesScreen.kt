@@ -1297,9 +1297,22 @@ fun MessagesScreen(
                                 }
                                 // В фоне вызываем VK API. DNR (Do Not Read) проверяется внутри.
                                 scope.launch {
-                                    val ok = app.apiClient.messagesMarkAsRead(peerId, lastMsgId)
-                                    AppLog.d("MessagesScreen",
-                                        "messagesMarkAsRead(peer=$peerId, upTo=$lastMsgId): $ok")
+                                    try {
+                                        val ok = app.apiClient.messagesMarkAsRead(peerId, lastMsgId)
+                                        AppLog.d("MessagesScreen",
+                                            "messagesMarkAsRead(peer=$peerId, upTo=$lastMsgId): $ok")
+                                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                                        throw ce
+                                    } catch (e: Exception) {
+                                        // #IM-CHANNEL-OPEN: callInternal пробрасывает сетевые
+                                        // IOException (VKApiClient: NETWORK_FAIL → throw) —
+                                        // раньше launch был без catch, непойманное исключение
+                                        // в rememberCoroutineScope крэшило приложение РОВНО
+                                        // в момент тапа по чату с непрочитанным (в т.ч. по
+                                        // каналу) — субъективно «диалог не открывается».
+                                        AppLog.w("MessagesScreen",
+                                            "messagesMarkAsRead(peer=$peerId) network error: ${e.message}")
+                                    }
                                 }
                             },
                             // Fix #122: long-press → mute/unmute из списка диалогов.

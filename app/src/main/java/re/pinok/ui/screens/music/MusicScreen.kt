@@ -84,7 +84,6 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -103,40 +102,6 @@ import re.pinok.util.AppLog
 import kotlin.math.abs
 
 /**
- * #TRACKS-CACHE (2026-08-01): Process-wide кэш списка «Мои треки».
- *
- * Раньше tracks/totalCount жили в `remember { mutableStateOf(...) }` внутри
- * composable-функции MusicScreen. При уходе с экрана (navigate в другой таб /
- * открытие плеера) composable покидает composition → remember очищается →
- * при возврате tracks сбрасывалось в emptyList() и заново грузилась 1-я страница
- * (50 треков). Пользователь видел: «533 / 3233» → ушёл → вернулся → «50 / 3233»
- * → фоновая подгрузка тянет обратно. Выглядело как «число снова обновляется».
- *
- * Теперь: tracks/totalCount инициализируются из этого синглтона, а после каждой
- * загрузки (первичная + loadMore) обновляют кэш. При возврате на экран список
- * показывается мгновенно из кэша (без reset-флэша), а фоновый reload проверяет
- * актуальность. TTL 5 минут — через 5 мин бездействия кэш считается устаревшим
- * и первичная загрузка идёт в сеть (на случай если библиотека изменилась).
- */
-private object MusicTracksCache {
-    @Volatile var tracks: List<Track> = emptyList()
-    @Volatile var totalCount: Int = -1
-    @Volatile var timestampMs: Long = 0L
-    private const val TTL_MS = 5 * 60 * 1000L
-
-    fun isFresh(): Boolean =
-        timestampMs > 0L && (System.currentTimeMillis() - timestampMs) < TTL_MS
-
-    fun snapshot(): Pair<List<Track>, Int> = Pair(tracks, totalCount)
-
-    fun update(tracks: List<Track>, total: Int) {
-        this.tracks = tracks
-        this.totalCount = total
-        this.timestampMs = System.currentTimeMillis()
-    }
-}
-
-/**
  * Экран «Музыка» — нативный интерфейс VK Music (моделирован по SOVA V RE).
  *
  * Fix #62 → P0: переработан на 3 вкладки по реальному каталогу VK.
@@ -144,9 +109,19 @@ private object MusicTracksCache {
  *  — «Главная» и «Обзор» загружают catalog.getAudio
  *  — «Моя музыка»: меню (Недавнее/Плейлисты/Альбомы/Артисты/Скачанная музыка) +
  *    «Мои треки» (count, «Перемешать все», «Списки») + список треков
- *  — Бесконечная лента: при достижении конца списка подгружается следующая
- *    страница через audio.get(offset=tracks.size). Футер «Загрузка…» внизу.
  *  — Мини-плеер внизу тапабелен → открывает полноэкранный плеер.
+ *
+ * Волна 31 #AUDIO-BG-PAGER: список «Мои треки» (tracks/total/loading/hasMore)
+ * — это StateFlow app-level пейджера AudioLibraryPager (источник истины).
+ * Прежний приватный MusicTracksCache и in-композиции циклы догрузки удалены:
+ * пейджер живёт на уровне приложения (SovaApp.onCreate/appScope), переживает
+ * уход с экрана, персистит чекпоинт в SovaPrefs и продолжает после перезапуска
+ * процесса. Скролл-догрузка осталась как UX — вызывает pager.kick() (сокращает
+ * паузы пейджера, Fix #173 pacing сохранён).
+ *
+ * Волна 31 #AUDIO-ADD-INSTANT: «Добавить/удалить в моей музыке» из этого экрана
+ * И из AudioPlayerScreen немедленно мутирует общий стейт пейджера
+ * (addTrackFront/removeTrack) — трек виден без перезапуска приложения.
  *
  * Воспроизведение: PlayerConnection → PlayerService (Media3).
  * Скачивание: TrackDownloadManager → MusicDownloadService.
@@ -167,12 +142,21 @@ fun MusicScreen(
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
-    // #TRACKS-CACHE: инициализируем из синглтона, чтобы при возврате на экран
-    // список не сбрасывался в emptyList (fix «число снова обновляется»).
-    val cached = MusicTracksCache.snapshot()
-    var tracks by remember { mutableStateOf(cached.first) }
-    var loading by remember { mutableStateOf(cached.first.isEmpty()) }
-    var loadingMore by remember { mutableStateOf(false) }
+    // Волна 31 #AUDIO-BG-PAGER: источник истины «Моей музыки» — app-level
+    // пейджер. Ленивый старт (если SovaApp.onCreate его пропустил — auth flow).
+    val pager = remember { re.pinok.data.audio.AudioLibraryPager.get() }
+    val pagerState by pager.state.collectAsState()
+    val tracks = pagerState.tracks
+    val totalCount = pagerState.total
+    val loading = pagerState.initialLoading
+    val loadingMore = pagerState.fetchingPage
+    val hasMore = pagerState.hasMore
+    // Волна 31: ошибка загрузки живёт в пейджере (показывается при пустом списке).
+    val apiErrorMessage = pagerState.error
+
+    LaunchedEffect(Unit) {
+        pager.ensureStarted()
+    }
 
     // Fix #86: AudioMoreMenu + LyricsSheet (из ui/components/AudioMoreMenu.kt).
     // Состояние меню трека и открытой лирики — общее для всех VKTrackRow на экране.
@@ -182,13 +166,6 @@ fun MusicScreen(
     // Fix #362 #AUDIO-MENU-REAL: диалог правки трека («Редактировать трек» —
     // audio.edit, только свои треки). track — что правим.
     var editTrackDialog by remember { mutableStateOf<Track?>(null) }
-    var apiErrorMessage by remember { mutableStateOf<String?>(null) }
-    // Fix #367: тик принудительной перезагрузки (кнопка «Повторить» / возврат сети).
-    var reloadTick by remember { mutableStateOf(0) }
-    // #TRACKS-CACHE: hasMore=true по умолчанию (как в оригинале). Если кэш свежий
-    // и все треки уже загружены — loadMoreTracksSuspend сам вернёт false и остановится.
-    var hasMore by remember { mutableStateOf(true) }
-    var totalCount by remember { mutableStateOf(cached.second) } // #TRACKS-CACHE: init from cache
     var selectedTab by remember { mutableStateOf(0) } // 0=Моя музыка, 1=Главная, 2=Обзор
 
     // ─── Поиск (S5-1) ────────────────────────────────────────────────
@@ -254,143 +231,6 @@ fun MusicScreen(
     val playerState by PlayerConnection.playerState.collectAsState()
     val downloads by TrackDownloadManager.downloads.collectAsState()
 
-    val pageSize = 50
-
-    // ─── Первичная загрузка ────────────────────────────────────────────
-    // Fix #252: убрали anti-pattern `LaunchedEffect(Unit) { scope.launch { ... } }`
-    // — корутина в rememberCoroutineScope переживает LaunchedEffect и при уходе
-    // экрана кидает ForgottenCoroutineScopeException. Теперь корутина живёт в
-    // scope самого LaunchedEffect.
-    LaunchedEffect(reloadTick) {
-        // #TRACKS-CACHE: если кэш свежий (<5 мин) — не перегружаем первую
-        // страницу, список уже показан из синглтона. Фоновая подгрузка ниже
-        // (loadMore) доберёт остальные страницы если нужно. Это убирает
-        // «число снова обновляется» при перезаходе на экран.
-        if (MusicTracksCache.isFresh() && tracks.isNotEmpty()) {
-            AppLog.i("MusicScreen", "Cache fresh (${tracks.size} tracks, total=$totalCount) — skip first-page reload")
-            loading = false
-            return@LaunchedEffect
-        }
-        loading = true
-        apiErrorMessage = null
-        hasMore = true
-        // Fix #367: честная проверка сети ДО запроса — офлайн-гейт
-        // audioGetWithCount вернул бы пусто, и UI показал «Нет музыки» вместо правды.
-        if (app.networkObserver.isOffline()) {
-            apiErrorMessage = "Нет сети. Подключитесь к интернету — музыка загрузится автоматически."
-            loading = false
-            return@LaunchedEffect
-        }
-        try {
-            val (total, raw) = app.apiClient.audioGetWithCount(count = pageSize, offset = 0)
-            val firstPage = raw
-                .filter { it.id > 0L && it.ownerId != 0L && !it.url.isNullOrBlank() }
-                .distinctBy { "${it.ownerId}_${it.id}" }
-            tracks = firstPage
-            totalCount = total
-            // hasMore: если totalCount известен — по нему; иначе по размеру страницы.
-            hasMore = if (total > 0) firstPage.size < total else firstPage.size >= pageSize
-            // #TRACKS-CACHE: сохраняем в синглтон для следующего входа.
-            MusicTracksCache.update(firstPage, total)
-            AppLog.i("MusicScreen", "First page: ${firstPage.size} tracks, total=$total, hasMore=$hasMore")
-            if (firstPage.isEmpty()) {
-                val errCode = app.apiClient.lastApiErrorCode
-                val errStr = app.apiClient.lastApiError
-                apiErrorMessage = when {
-                    // Fix #367: авто-офлайн (3 сетевых сбоя подряд — частый сценарий
-                    // на нестабильном Wi-Fi) раньше выглядел как «Нет музыки»: гейт
-                    // audioGetWithCount молча возвращал пусто без сети и без ошибки.
-                    app.apiClient.isAutoOfflineActive() ->
-                        "Музыка остановлена: 3 сетевых сбоя подряд → авто-офлайн " +
-                            "(частая причина — нестабильный Wi-Fi). Нажмите «Повторить»."
-                    errCode == 3 -> "VK audio API недоступен для этого типа авторизации.\n\n" +
-                        "Попробуйте выйти и войти через «Войти через VK (веб)» — " +
-                        "это даст web-токен с доступом к audio.getCatalog."
-                    errCode == 15 -> "Доступ к аудио запрещён VK (error 15)."
-                    else -> if (errStr != null) "Ошибка: $errStr" else "Нет музыки"
-                }
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // Fix #252: корректная отмена (пользователь ушёл со экрана)
-            throw e
-        } catch (e: Exception) {
-            AppLog.e("MusicScreen", "Failed to load tracks", e)
-            // Fix #367: если трип произошёл прямо в этом запросе — называем вещи
-            // своими именами вместо голого «Ошибка загрузки: …».
-            apiErrorMessage = if (app.apiClient.isAutoOfflineActive()) {
-                "Ошибка сети (${e.javaClass.simpleName}): 3 сбоя подряд → авто-офлайн. Нажмите «Повторить»."
-            } else {
-                "Ошибка загрузки: ${e.message}"
-            }
-        } finally {
-            loading = false
-        }
-    }
-
-    // Fix #367: сеть вернулась — автоматическая перезагрузка пустого экрана
-    // с ошибкой (без ручного «Повторить»). Работает и для «Нет сети», и для
-    // снятого авто-офлайна.
-    LaunchedEffect(Unit) {
-        var wasOnline = app.networkObserver.isOnline()
-        app.networkObserver.isOnlineFlow.collect { online ->
-            if (online && !wasOnline && tracks.isEmpty() && apiErrorMessage != null) {
-                reloadTick++
-            }
-            wasOnline = online
-        }
-    }
-
-    // ─── Функция подгрузки следующей страницы (suspend, для вызова из while-цикла) ──
-    suspend fun loadMoreTracksSuspend(): Boolean {
-        if (loadingMore || !hasMore || loading) return false
-        loadingMore = true
-        try {
-            val currentSize = tracks.size
-            // Fix #141: network call + JSON parsing (163KB+ for 50 tracks) MUST run on IO,
-            // not Main. Previously this suspend fun ran on Main dispatcher (rememberCoroutineScope
-            // returns Main) which blocked UI for 7+ seconds during audio.get — and indirectly
-            // caused ForegroundServiceDidNotStartInTimeException because MusicDownloadService
-            // couldn't call startForeground() in time (main thread blocked).
-            // The state mutation (tracks = ...) still happens on Main via .copyOnWrite.
-            val (total, raw) = withContext(Dispatchers.IO) {
-                app.apiClient.audioGetWithCount(count = pageSize, offset = currentSize)
-            }
-            val next = raw
-                .filter { it.id > 0L && it.ownerId != 0L && !it.url.isNullOrBlank() }
-            if (next.isEmpty()) {
-                hasMore = false
-            } else {
-                // Обновляем totalCount если API его вернул
-                if (total > 0) totalCount = total
-                val existingKeys = tracks.map { "${it.ownerId}_${it.id}" }.toHashSet()
-                val fresh = next.filter { "${it.ownerId}_${it.id}" !in existingKeys }
-                if (fresh.isNotEmpty()) {
-                    tracks = tracks + fresh
-                }
-                // hasMore: по totalCount если известен, иначе по размеру страницы
-                hasMore = if (total > 0) tracks.size < total else next.size >= pageSize
-                // #TRACKS-CACHE: обновляем синглтон после каждой подгрузки —
-                // при следующем входе на экран список будет актуальным.
-                MusicTracksCache.update(tracks, totalCount)
-                AppLog.d("MusicScreen", "Loaded page at offset=$currentSize: ${fresh.size} new, total=${tracks.size}/$total, hasMore=$hasMore")
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // Fix #281: отмена (уход с экрана) — НЕ ошибка загрузки, пробрасываем.
-            // Раньше catch(Exception) глотал отмену и логировал её как failure.
-            throw e
-        } catch (e: Exception) {
-            AppLog.e("MusicScreen", "loadMoreTracks failed", e)
-        } finally {
-            loadingMore = false
-        }
-        return hasMore
-    }
-
-    // ─── Функция подгрузки для вызова из snapshotFlow (fire-and-forget) ──
-    fun loadMoreTracks() {
-        scope.launch { loadMoreTracksSuspend() }
-    }
-
     // ─── Тёмная тема как в нативном ВК Music ───────────────────────────
     val vkBlack = Color(0xFF0F0F10)
     val vkCard = Color(0xFF1C1C1E)
@@ -401,17 +241,19 @@ fun MusicScreen(
 
     val listState = rememberLazyListState()
 
-    // ─── Фоновая подгрузка всех треков (только на вкладке «Моя музыка») ──
-    // После первичной загрузки продолжает подгружать страницы в фоне,
-    // пока hasMore=true. Пользователь может сразу слушать — не нужно
-    // скроллить до конца чтобы подгрузились следующие треки.
-    // tracks.size НЕ в ключе — snapshotFlow сам отслеживает изменения
-    // через Compose snapshot reads. Иначе эффект перезапускается при
-    // каждом добавлении треков → дублирование запросов.
+    // ─── Скролл-догрузка (только на вкладке «Моя музыка») ─────────────
+    // Волна 31 #AUDIO-BG-PAGER: источник истины — app-level пейджер
+    // (AudioLibraryPager), который сам грузит страницы последовательно
+    // (Fix #173: пауза 1500мс, стоп при offline, одна in-flight страница)
+    // независимо от того, открыт ли этот экран. Скролл к концу списка
+    // лишь сокращает текущую паузу пейджера (pager.kick()) — UX отзывчивый,
+    // но без дублирующих запросов. Прежние in-композиции первичная загрузка,
+    // loadMoreTracksSuspend и фоновый preload с maxPreloadPages=10 удалены —
+    // их функции переехали в пейджер (включая честное логирование страниц:
+    // offset/got/fresh/total/hasMore/took — тег AudioLibraryPager).
     LaunchedEffect(listState, selectedTab) {
         if (selectedTab != 0) return@LaunchedEffect
 
-        // 1) Скролл-пагинация: подгружаем при приближении к концу списка.
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
@@ -421,49 +263,8 @@ fun MusicScreen(
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                if (!loadingMore && hasMore && !loading) loadMoreTracks()
+                pager.kick()
             }
-
-        // 2) Фоновая предзагрузка: после первичной загрузки автоматически
-        // подтягиваем следующие страницы, пока пользователь слушает.
-        // Запускается параллельно со скролл-пагинацией.
-    }
-
-    // Фоновая предзагрузка: после первичной загрузки автоматически
-    // подтягиваем ОГРАНИЧЕННОЕ количество страниц фоном.
-    //
-    // Fix #173: РАНЬШЕ цикл грузил ВСЕ 3233 трека (по ~10-13 за запрос) каждые
-    // 0.7-1с = ~340 KB/s непрерывного трафика. При переключении WiFi→Mobile:
-    // десятки in-flight audio.get отменялись → consecutiveNetworkErrors++ →
-    // auto-offline / cascade failures. Теперь:
-    //   1) НЕ больше MAX_PRELOAD_PAGES дополнительных страниц (~500 треков
-    //      достаточно для большинства пользователей; остальное подгрузится
-    //      по скроллу).
-    //   2) Пауза 1500мс между страницами (вместо 300мс) — не мешает другим
-    //      API-запросам (messages.getLongPollHistory, player HLS segment
-    //      fetches и т.д.).
-    //   3) Стоп если приложение офлайн или уже загрузило лимит.
-    LaunchedEffect(selectedTab) {
-        if (selectedTab != 0) return@LaunchedEffect
-        // Ждём завершения первичной загрузки
-        while (loading) delay(100)
-        if (!hasMore) return@LaunchedEffect
-        delay(1200) // пауза чтобы не спамить API сразу после первичной загрузки
-        // Fix #173: ограничиваем количество фоновых страниц.
-        val maxPreloadPages = 10 // ~500 треков поверх первичной страницы (50)
-        var pagesLoaded = 0
-        while (hasMore && pagesLoaded < maxPreloadPages) {
-            // Стоп если сеть пропала — нет смысла спамить отменёнными запросами.
-            if (!app.networkObserver.isOnline()) {
-                AppLog.i("MusicScreen", "Background preload: offline — stopping (loaded ${tracks.size} tracks)")
-                break
-            }
-            val more = loadMoreTracksSuspend()
-            if (!more) break
-            pagesLoaded++
-            delay(1500) // пауза между страницами чтобы не триггерить rate limit и не мешать другим API
-        }
-        AppLog.i("MusicScreen", "Background preload complete: ${tracks.size} tracks loaded (pages=$pagesLoaded, total=$totalCount, stopped=${if (pagesLoaded >= maxPreloadPages) "limit" else "end"})")
     }
 
     // Fix #269: поиск «опущен» во вкладку «Моя музыка» — поле всегда видно
@@ -807,24 +608,29 @@ fun MusicScreen(
                 secondaryColor = vkTextSecondary,
                 accentColor = vkAccent,
                 apiErrorMessage = apiErrorMessage,
-                // Fix #367: retry — снимает авто-офлайн и перезагружает первую страницу.
+                // Fix #367 + волна 31 #AUDIO-BG-PAGER: retry — снимает авто-офлайн
+                // и будит пейджер (сокращает паузу/бэкофф, догружает страницу).
                 onRetry = {
                     scope.launch {
                         runCatching { app.apiClient.clearAutoOffline() }
-                        reloadTick++
+                        pager.ensureStarted()
+                        pager.kick()
                     }
                 },
                 onOpenPlaylists = onOpenPlaylists,
                 onOpenAlbums = onOpenAlbums,
                 onOpenArtists = onOpenArtists,
-                onShuffleAll = { PlayerConnection.shuffleAll(tracks) },
+                // Волна 31 #AUDIO-QUEUE-PLAYLIST: очередь из «Моей музыки» —
+                // все загруженные пейджером треки + append новых страниц в живую
+                // очередь (fromMyMusic=true).
+                onShuffleAll = { PlayerConnection.shuffleAll(tracks, fromMyMusic = true) },
                 onPlayTrack = { track ->
                     val isCurrent = track.id == playerState.currentTrack?.id &&
                         track.ownerId == playerState.currentTrack?.ownerId
                     if (isCurrent) {
                         PlayerConnection.togglePlayPause()
                     } else {
-                        PlayerConnection.playTrackList(tracks, tracks.indexOf(track))
+                        PlayerConnection.playTrackList(tracks, tracks.indexOf(track), fromMyMusic = true)
                     }
                 },
                 onDownloadToggle = { track ->
@@ -850,9 +656,11 @@ fun MusicScreen(
                 secondaryColor = vkTextSecondary,
                 accentColor = vkAccent,
                 apiErrorMessage = apiErrorMessage,
+                // Волна 31 #AUDIO-QUEUE-PLAYLIST: вкладка «Главная» играет из того
+                // же списка «Моей музыки» — очередь тоже appendable (fromMyMusic).
                 onPlayTrack = { idx ->
                     if (tracks.isNotEmpty()) {
-                        PlayerConnection.playTrackList(tracks, idx.coerceIn(0, tracks.lastIndex))
+                        PlayerConnection.playTrackList(tracks, idx.coerceIn(0, tracks.lastIndex), fromMyMusic = true)
                     }
                 },
                 onToggleTrack = { track ->
@@ -861,7 +669,7 @@ fun MusicScreen(
                     if (isCurrent) {
                         PlayerConnection.togglePlayPause()
                     } else {
-                        PlayerConnection.playTrackList(tracks, tracks.indexOf(track))
+                        PlayerConnection.playTrackList(tracks, tracks.indexOf(track), fromMyMusic = true)
                     }
                 },
                 onDownloadToggle = { track ->
@@ -991,9 +799,10 @@ fun MusicScreen(
                                     errText = e.message
                                 }
                                 if (ok) {
-                                    tracks = tracks.filter { it.ownerId != t.ownerId || it.id != t.id }
-                                    totalCount = (totalCount - 1).coerceAtLeast(0)
-                                    MusicTracksCache.update(tracks, totalCount)
+                                    // Волна 31 #AUDIO-ADD-INSTANT: удаление сразу
+                                    // отражается в общем стейте пейджера (в т.ч. на
+                                    // других экранах/при возврате — без перезапуска).
+                                    pager.removeTrack(t)
                                     android.widget.Toast.makeText(
                                         app.applicationContext,
                                         "Удалено из моей музыки",
@@ -1018,6 +827,10 @@ fun MusicScreen(
                                 // web) + честные тосты с РЕАЛЬНОЙ ошибкой.
                                 val (ok, err) = app.apiClient.audioAddReliable(t)
                                 if (ok) {
+                                    // Волна 31 #AUDIO-ADD-INSTANT: трек немедленно
+                                    // в начале «Моей музыки» (общий стейт пейджера,
+                                    // позиция как у VK — новейшие первыми).
+                                    pager.addTrackFront(t)
                                     android.widget.Toast.makeText(
                                         app.applicationContext,
                                         "Добавлено в мою музыку",
@@ -1197,11 +1010,9 @@ fun MusicScreen(
                 onDismiss = { editTrackDialog = null },
                 onSaved = { updated ->
                     editTrackDialog = null
-                    // Обновляем трек в списке + кэше экрана (паттерн onDelete).
-                    tracks = tracks.map {
-                        if (it.ownerId == updated.ownerId && it.id == updated.id) updated else it
-                    }
-                    MusicTracksCache.update(tracks, totalCount)
+                    // Обновляем трек в общем стейте пейджера (волна 31:
+                    // MusicTracksCache удалён, источник истины — пейджер).
+                    pager.replaceTrack(updated)
                 },
             )
         }

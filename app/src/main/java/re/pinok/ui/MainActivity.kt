@@ -1774,13 +1774,18 @@ class MainActivity : ComponentActivity() {
      */
     private fun handleOpenChatIntent(intent: Intent?) {
         if (intent?.action != re.pinok.realtime.MessageNotifier.ACTION_OPEN_CHAT) return
-        val peerId = intent.getLongExtra(re.pinok.realtime.MessageNotifier.EXTRA_PEER_ID, -1L)
-        if (peerId <= 0) {
+        // #IM-CHANNEL-OPEN: раньше getLongExtra(-1L) + гвард peerId <= 0 — каналы
+        // (peer_id = -group_id, пуш Fix #390 CHANNEL_COMMUNITIES) отклонялись как
+        // «invalid» молча для юзера: тап по уведомлению канала ничего не делал.
+        // Теперь валиден ЛЮБОЙ ненулевой peerId; 0/absent — мусорный intent.
+        val peerId = intent.getLongExtra(re.pinok.realtime.MessageNotifier.EXTRA_PEER_ID, 0L)
+        if (peerId == 0L) {
             AppLog.w("MainActivity", "OPEN_CHAT intent: invalid peerId=$peerId")
             return
         }
         val title = intent.getStringExtra(re.pinok.realtime.MessageNotifier.EXTRA_TITLE) ?: ""
-        AppLog.i("MainActivity", "OPEN_CHAT intent: peerId=$peerId title='$title'")
+        AppLog.i("MainActivity",
+            "#IM-CHANNEL-OPEN OPEN_CHAT intent: peerId=$peerId title='$title' isChannelPeer=${peerId < 0}")
         pendingOpenChatPeerId = peerId
         pendingOpenChatTitle = title
     }

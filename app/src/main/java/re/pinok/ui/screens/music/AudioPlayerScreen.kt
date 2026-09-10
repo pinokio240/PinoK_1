@@ -579,6 +579,10 @@ fun AudioPlayerScreen(
                         }
                         if (ok) {
                             ownOverride = false
+                            // Волна 31 #AUDIO-ADD-INSTANT: удаление немедленно
+                            // отражается в общем стейте пейджера «Моей музыки»
+                            // (список и total; курсор выравнивается на −1).
+                            re.pinok.data.audio.AudioLibraryPager.get().removeTrack(t)
                             snackbarHostState.showSnackbar("Удалено из моей музыки")
                         } else {
                             // NULL-ЯВНО: errText nullable — явный if вместо ?:.
@@ -598,6 +602,12 @@ fun AudioPlayerScreen(
                         }
                         if (ok) {
                             ownOverride = true
+                            // Волна 31 #AUDIO-ADD-INSTANT: трек немедленно в
+                            // начале «Моей музыки» (общий стейт пейджера, позиция
+                            // как у VK — новейшие первыми; dedupe по ownerId_id;
+                            // курсор выравнивается на +1). Без этого трек появлялся
+                            // в списке только после перезапуска приложения.
+                            re.pinok.data.audio.AudioLibraryPager.get().addTrackFront(t)
                             snackbarHostState.showSnackbar("Добавлено в мою музыку")
                         } else {
                             // NULL-ЯВНО: errText nullable — явный if вместо ?:.

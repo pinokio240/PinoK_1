@@ -357,6 +357,69 @@ object AppLog {
             "${enabledCategories.size}/${allCats.size} categories enabled")
     }
 
+    // ─── #LOG-SECTIONS (волна 31-f): гейты секций по префиксу ────────────
+    //
+    // Второй уровень фильтрации рядом с #LOG-CATEGORIES. Секция определяется
+    // ПО ПРЕФИКСУ тега ИЛИ сообщения: маркеры диагностических крошек стоят
+    // в начале сообщения ("#IM-CHANNEL-OPEN enter: …", "#AUDIO-PAGING page: …",
+    // "#VIDEO-SESSION …", "#NOTIFY …", "#PIN …"), а «Сеть и API» гейтится
+    // отдельным путём в [api] (маркер "API" не совпадает по префиксу с тегом
+    // "VKApi" — поэтому там явная проверка).
+    //
+    // Это позволяет гейтить целые диагностические паттерны, НЕ правя сотни
+    // вызовов: гейт проверяется в [log] — общем входе всех публичных методов
+    // v/d/i/w (+перегрузки с контекстом, lp/backfill/execute/ws).
+    //
+    // СЕМАНТИКА (требование пользователя, волна 31): по умолчанию множество
+    // ПУСТОЕ — ВСЁ пишется в logcat, ring buffer и persistent.log как раньше.
+    // Выключенная секция полностью скипается (ни logcat, ни буфер, ни файл).
+    // Уровень ERROR не гейтится НИКОГДА (аварийная диагностика — см. [log]).
+    //
+    // Хранение: SovaPrefs.LOG_SECTIONS_OFF — CSV выключенных секций
+    // ("" = все секции включены). Читается в SovaApp.onCreate (парсинг CSV
+    // в Set — в app-слое), меняется из SettingsScreen LoggingTab:
+    // AppLog.setDisabledSections(...) сразу после записи префа.
+
+    /**
+     * Выключенные секции (префиксы тегов/сообщений, например "#AUDIO").
+     * Пустое множество = логируется всё (дефолт). Инвариант: без пустых
+     * строк (пустой префикс «выключил» бы вообще все записи).
+     */
+    @Volatile
+    private var disabledSections: Set<String> = emptySet()
+
+    /**
+     * Заменить множество выключенных секций (потокобезопасно: @Volatile-своп
+     * неизменяемого множества — читатели видят либо старое, либо новое целиком).
+     * Вызывается из SovaApp (старт процесса) и SettingsScreen (тумблер секции,
+     * сразу после записи префа). Пустые/пробельные элементы отбрасываются —
+     * защита от «пустой префикс выключает вообще всё».
+     */
+    fun setDisabledSections(tags: Set<String>) {
+        val cleaned = tags.filter { it.isNotBlank() }.toSet()
+        if (cleaned != disabledSections) {
+            disabledSections = cleaned
+            // Прямой Log.i, не AppLog.i: смена гейта обязана быть видимой
+            // всегда (секционные гейты на системный лог не действуют).
+            Log.i("$PREFIX/AppLog", "disabledSections = $cleaned " +
+                "(prefix match on tag/message; empty set = everything logged)")
+        }
+    }
+
+    /**
+     * Секция выключена, если какой-либо элемент [disabledSections] — префикс
+     * тега [tag] или сообщения [msg] (либо равен им целиком). Пустое множество
+     * = всегда true (дефолт «логируется всё», нулевая цена проверки).
+     */
+    private fun sectionEnabled(tag: String, msg: String): Boolean {
+        val disabled = disabledSections
+        if (disabled.isEmpty()) return true
+        for (s in disabled) {
+            if (tag.startsWith(s) || msg.startsWith(s)) return false
+        }
+        return true
+    }
+
     private val isoFormat = ThreadLocal.withInitial {
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     }
@@ -454,9 +517,15 @@ object AppLog {
             bodySize?.let { append(" ${it}B") }
             apiCode?.let { append(" err=$it") }
         }
+        // #LOG-SECTIONS (волна 31-f): секция «Сеть и API» (маркер "API")
+        // глушит только REQUEST/RESPONSE_OK (d-путь). ERR/NETWORK_FAIL идут
+        // через e() — на ошибки секционные гейты не действуют никогда.
+        // Явная проверка здесь, а не через sectionEnabled(): маркер "API" не
+        // префикс тега "VKApi", общий гейт в log() его бы не поймал.
+        val apiSectionOff = "API" in disabledSections
         when (direction) {
-            ApiDirection.REQUEST -> d(tag, msg, ctx)
-            ApiDirection.RESPONSE_OK -> d(tag, msg, ctx)
+            ApiDirection.REQUEST -> if (!apiSectionOff) d(tag, msg, ctx)
+            ApiDirection.RESPONSE_OK -> if (!apiSectionOff) d(tag, msg, ctx)
             ApiDirection.RESPONSE_ERR -> e(tag, msg, ctx, error)
             ApiDirection.NETWORK_FAIL -> e(tag, msg, ctx, error)
         }
@@ -679,6 +748,16 @@ object AppLog {
         val category = categoryForTag(tag)
         val categoryEnabled = category in enabledCategories
         if (!categoryEnabled && level != Log.WARN && level != Log.ERROR) {
+            return
+        }
+
+        // #LOG-SECTIONS (волна 31-f): гейт секций по префиксу тега/сообщения.
+        // Пустое множество (дефолт) = ничего не меняется, всё пишется как раньше.
+        // Выключенная секция скипается ПОЛНОСТЬЮ (logcat + buffer + persist-файл).
+        // ERROR проходит ВСЕГДА — ошибки не теряются даже в выключенной секции
+        // (аварийная диагностика). Проверка здесь — общий вход v/d/i/w и
+        // перегрузок с контекстом, поэтому сотни вызовов править не нужно.
+        if (level != Log.ERROR && !sectionEnabled(tag, msg)) {
             return
         }
 

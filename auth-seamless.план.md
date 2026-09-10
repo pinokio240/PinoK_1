@@ -275,7 +275,7 @@ class AuthGate(
         return when (level) {
             ApiAuthLevel.PUBLIC_READ -> {
                 // Допускается anonym_token
-                val token = tokenManager.getBestToken()  // web_token OR anonym_token
+                val token = toke...MASKED...oken()  // web_token OR anonym_token
                 block(token)
             }
             ApiAuthLevel.AUTH_READ, ApiAuthLevel.AUTH_WRITE, ApiAuthLevel.ACCOUNT_MGMT -> {
@@ -668,7 +668,7 @@ class App : Application() {
         // Prefetch stats token в фоне
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val token = apiClient.videoGetStatsToken()
+                val token = apiC...MASKED...oken()
                 statsTokenStore.save(token)
                 AppLog.i(TAG, "video.getStatsToken prefetched")
             } catch (e: Exception) {

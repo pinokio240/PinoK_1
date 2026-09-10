@@ -4,7 +4,7 @@
 6287487:get_anonym_token:login:auth	{"access_token":"anonym.XXXXX","expired_at":1773420808,"expires":null}
 6287487:web_token:login:auth	{"access_token":"vk1.a.XXXXX","expires":1782579951,"user_id":171093180,"logout_hash":"d8516f7ebe8e547a92"}
 7913379:get_accounts:login:auth	{"expires":null}
-7913379:sign_in_sat:login:auth	{"token":"dZuo4CFZlvoptYYLwxaiIJwTvy1boujTpt2p3mPekYZmnOxUHzEExefnanQVLvwVMjYwCwa6Zdh_O9c-wB_soGUbDVEv-fogKmUakWesXfu5q3Fk1FE-4dIsoV4Y-w4WVbUaXPRov2WoEotTa0B4NMQwkRY5D2QdBtJYJ4NyuHoI-NWZgDSOe1ZZ3bJVE790nCnKPVslRZXyqAofWBozNJxYxIS5iDPk5jFeFkj86ySLjkZo5KzXXkXnqD2PBbQEP2y7COVf0AyocWfgUFst1w","expires":null}
+7913379:sign_in_sat:login:auth	{"token":"dZuo...MASKED...st1w","expires":null}
 @METRICS_171093180_ADBLOCK_STATS	{"timestamps":{"default":1782495639390}}
 @METRICS_171093180_CERT_STATS	{"timestamps":{"default":1782495639372}}
 @METRICS_171093180_PERFORMANCE_STATS_CORE	{"timestamps":{"profile":1782579053539,"im":1782578267535,"feed":1781587875944,"wall":1782558573674,"group":1782561575234,"groups_list":1782506725911,"docs":1777396660604,"friends":1781085088568,"search":1777283319057,"communities_dashboard":1776016100233,"board":1778698131951,"audio":1782118178384,"settings":1778088878446,"settings_payment":1778088822157,"clips":1778871045090}}

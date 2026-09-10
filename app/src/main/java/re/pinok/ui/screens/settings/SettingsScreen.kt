@@ -59,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateMapOf
@@ -3250,12 +3251,22 @@ private fun SecurityTab(
     onOpenVkIdAccount: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    // #SETTINGS-FIX: состояние диалога создания PIN-кода.
+    // #SETTINGS-FIX: диалог задания PIN-кода. W31-b #PIN-ALWAYS-SETUP: открывается
+    // ПРИ КАЖДОМ включении тумблера — даже когда PIN уже установлен (новый PIN
+    // перезаписывает старый, overwrite-семантика; lockerEnabled=true выставляется
+    // только после успешной установки, тумблер больше не включается «молча»).
     var showPinSetup by remember { mutableStateOf(false) }
     // Fix #380 #LOCKER-MANAGE: диалог смены уже установленного PIN
     // (раньше смены/сброса PIN не существовало вовсе — единственным способом
-    // был сброс данных приложения).
+    // был сброс данных приложения). W31-b #PIN-CHANGE-VERIFY: открывается
+    // ТОЛЬКО после успешного ввода текущего PIN (PinVerifyDialog ниже).
     var showPinChange by remember { mutableStateOf(false) }
+    // W31-b #PIN-CHANGE-VERIFY: ввод текущего PIN перед сменой.
+    var showPinVerifyChange by remember { mutableStateOf(false) }
+    // W31-b #PIN-DISABLE-VERIFY: ввод текущего PIN перед выключением блокировки
+    // (раньше выключалось без всякой проверки — любой, взявший телефон,
+    // мог снять защиту).
+    var showPinVerifyDisable by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -3351,7 +3362,7 @@ private fun SecurityTab(
 
         item { SectionHeader("Блокировка приложения") }
         // #SETTINGS-FIX: при включении lockerEnabled без PIN — показываем
-        // диалог создания PIN. Без этого lockerEnabled=true, а lockerPinHash=""
+        // диалог задания PIN. Без этого lockerEnabled=true, а lockerPinHash=""
         // → toggles бесполезны (MainActivity всегда скипает LockerActivity).
         // Fix #380 #LOCKER-UX: подпись честно описывает семантику. Сами
         // «пункты ниже не работали» из-за re-lock-цикла и boot-скипа —
@@ -3359,24 +3370,37 @@ private fun SecurityTab(
         // #LOCKER-BOOT-SKIP).
         // Fix #381 #PIN-SUBTITLE-HONEST: при выключенном тумблере с
         // установленным PIN подпись прямо говорит, что PIN есть, но
-        // блокировка выключена (раньше в этом состоянии показывалось
-        // «При первом включении предложит создать PIN» — вводило в
-        // заблуждение, юзер не понимал, что PIN уже стоит).
+        // блокировка выключена.
+        // W31-b #PIN-SUBTITLE-HONEST: подписи обновлены под overwrite-семантику
+        // включения — окно «Задайте PIN-код» теперь открывается ПРИ КАЖДОМ
+        // включении (не только при первом), поэтому ни одна ветка не обещает
+        // «тихое» включение.
         item {
             val pinSubtitle = when {
                 s.lockerPinHash.isBlank() ->
-                    "Блокировка при запуске приложения. При первом включении предложит создать PIN."
+                    "Блокировка при запуске приложения. При включении предложит задать PIN-код."
                 s.lockerEnabled ->
-                    "Блокировка при запуске приложения. PIN установлен."
+                    "Блокировка при запуске приложения. PIN установлен. Повторное включение задаст PIN заново."
                 else ->
-                    "PIN установлен, но блокировка выключена — включите тумблер."
+                    "PIN установлен, но блокировка выключена. Включение попросит задать PIN-код."
             }
-            ToggleRow("PIN-код", pinSubtitle, s.lockerEnabled) {
-                scope.launch {
-                    if (it && s.lockerPinHash.isBlank()) {
-                        showPinSetup = true
+            ToggleRow("PIN-код", pinSubtitle, s.lockerEnabled) { enable ->
+                if (enable) {
+                    // W31-b #PIN-ALWAYS-SETUP: окно задания PIN открывается ВСЕГДА,
+                    // даже если PIN уже существует — новый PIN перезаписывает
+                    // старый. Раньше при существующем хэше тумблер молча
+                    // включался (локер продолжал работать со СТАРЫМ PIN,
+                    // возможно забытым).
+                    showPinSetup = true
+                } else {
+                    // W31-b #PIN-DISABLE-VERIFY: выключение — только после ввода
+                    // верного текущего PIN. Без хэша (PIN ещё не задавался,
+                    // защищать нечего) — прямое выключение.
+                    val storedHash = s.lockerPinHash
+                    if (storedHash.isBlank()) {
+                        scope.launch { app.prefs.setLockerEnabled(false) }
                     } else {
-                        app.prefs.setLockerEnabled(it)
+                        showPinVerifyDisable = true
                     }
                 }
             }
@@ -3387,9 +3411,10 @@ private fun SecurityTab(
         // открыл диалог и пролистал вниз к биометрии), ДИСПОУЗИТСЯ — диалог
         // молча закрывался посреди ввода, введённый PIN терялся.
         // Fix #380 #LOCKER-MANAGE: смена уже установленного PIN.
+        // W31-b #PIN-CHANGE-VERIFY: теперь начинается с ввода текущего PIN.
         if (s.lockerPinHash.isNotBlank()) {
             item {
-                Card(modifier = Modifier.fillMaxWidth().clickable { showPinChange = true }) {
+                Card(modifier = Modifier.fillMaxWidth().clickable { showPinVerifyChange = true }) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -3407,7 +3432,7 @@ private fun SecurityTab(
                                 fontWeight = FontWeight.Medium,
                             )
                             Text(
-                                "Задать новый PIN вместо текущего",
+                                "Введите текущий PIN, затем задайте новый",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -3439,6 +3464,9 @@ private fun SecurityTab(
 
     // Fix #381 #PIN-DIALOG-OVERLAY: диалоги живут на уровне SecurityTab (не в
     // LazyColumn-айтемах) — не диспоузятся при скролле списка.
+    // W31-b: включение — PinSetupDialog с overwrite-семантикой (новый PIN
+    // перезаписывает старый), выключение/смена — сперва PinVerifyDialog
+    // с вводом ТЕКУЩЕГО PIN.
     if (showPinSetup) {
         PinSetupDialog(
             onDismiss = { showPinSetup = false },
@@ -3446,19 +3474,24 @@ private fun SecurityTab(
                 showPinSetup = false
                 scope.launch {
                     app.prefs.setLockerPinHash(hash)
+                    // W31-b #PIN-ALWAYS-SETUP: тумблер включается ТОЛЬКО после
+                    // успешной установки (overwrite-семантика включения).
                     app.prefs.setLockerEnabled(true)
-                    // Fix #380 #LOCKER-UX: PIN создаётся, чтобы приложение
+                    // Fix #380 #LOCKER-UX: PIN задаётся, чтобы приложение
                     // блокировалось — сразу включаем «Блокировку при возврате
                     // из фона» (дефолт false после #DEFAULTS-OFF делал фичу
                     // «мёртвой» на глазах: включённый PIN ничего не делал при
                     // сворачивании, и юзер справедливо считал его нерабочим).
                     // Отключить можно отдельным тумблером ниже.
                     app.prefs.setLockerOnBackground(true)
-                    // Fix #381 #PIN-SAVE-FEEDBACK: явная обратная связь — юзер
-                    // ВИДИТ, что PIN установлен (раньше диалог просто закрывался,
-                    // и без внимательного чтения подписи тумблера невозможно было
-                    // отличить «установлен» от «снова не сработало»).
-                    Toast.makeText(context, "PIN-код установлен", Toast.LENGTH_SHORT).show()
+                    // #PIN (волна 31-f): крошка включения блокировки —
+                    // успешная установка (при overwrite старый хэш заменён).
+                    AppLog.i("Settings", "#PIN enabled: hash set " +
+                        "(overwrite=${s.lockerPinHash.isNotBlank()}), locker=true, onBackground=true")
+                    // W31-b #PIN-TOASTS: честный фидбек включения. Текст
+                    // «PIN-код включён» (а не «установлен»): операция включает
+                    // блокировку, PIN при overwrite может быть и повторным.
+                    Toast.makeText(context, "PIN-код включён", Toast.LENGTH_SHORT).show()
                 }
             },
         )
@@ -3470,9 +3503,48 @@ private fun SecurityTab(
                 showPinChange = false
                 scope.launch {
                     app.prefs.setLockerPinHash(hash)
-                    // Fix #381 #PIN-SAVE-FEEDBACK: см. выше.
+                    // #PIN (волна 31-f): крошка смены — сюда попадаем ТОЛЬКО
+                    // после верного текущего PIN (showPinVerifyChange →
+                    // onVerified → showPinChange=true).
+                    AppLog.i("Settings", "#PIN changed: current PIN verified, new hash set")
+                    // Fix #381 #PIN-SAVE-FEEDBACK: явная обратная связь при смене.
                     Toast.makeText(context, "PIN-код изменён", Toast.LENGTH_SHORT).show()
                 }
+            },
+        )
+    }
+    // W31-b #PIN-DISABLE-VERIFY: выключение требует текущий PIN. Неверный —
+    // inline-ошибка «Неверный PIN-код» + вибрация, диалог ОСТАЁТСЯ открытым,
+    // lockerEnabled не меняется (локер продолжает работать).
+    if (showPinVerifyDisable) {
+        PinVerifyDialog(
+            storedHash = s.lockerPinHash,
+            title = "Выключить PIN-код",
+            subtitle = "Введите текущий PIN-код, чтобы отключить блокировку",
+            onDismiss = { showPinVerifyDisable = false },
+            onVerified = {
+                showPinVerifyDisable = false
+                scope.launch {
+                    app.prefs.setLockerEnabled(false)
+                    // #PIN (волна 31-f): крошка выключения — выполняется только
+                    // после верного текущего PIN (PinVerifyDialog onVerified).
+                    AppLog.i("Settings", "#PIN disabled: current PIN verified, locker=false")
+                    Toast.makeText(context, "PIN-код выключен", Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+    }
+    // W31-b #PIN-CHANGE-VERIFY: смена начинается с ввода текущего PIN;
+    // верный → открывается PinSetupDialog для нового (ввод + подтверждение).
+    if (showPinVerifyChange) {
+        PinVerifyDialog(
+            storedHash = s.lockerPinHash,
+            title = "Сменить PIN-код",
+            subtitle = "Введите текущий PIN-код, чтобы задать новый",
+            onDismiss = { showPinVerifyChange = false },
+            onVerified = {
+                showPinVerifyChange = false
+                showPinChange = true
             },
         )
     }
@@ -3487,6 +3559,26 @@ private fun SecurityTab(
 //  (file logging, level filters, log rotation) сюда добавятся соотв.
 //  настройки.
 // ══════════════════════════════════════════════════════════════════════
+
+// #LOG-SECTIONS (волна 31-f): секции логов для тумблеров LoggingTab
+// («Паттерны диагностики»). Левый элемент — маркеры секции: гейт AppLog
+// отключает запись, если маркер — префикс ТЕГА или СООБЩЕНИЯ. Крошки волны 31
+// ставят маркер в начало сообщения ("#AUDIO-PAGING page: …"); для видео секция
+// дополнительно покрывает ЦЕЛЫЕ ТЕГИ (крошки 31-c там уже есть, трогать их
+// запрещено условием задачи — гейтится по тегу): VideoPlayerScreen +
+// VideoPlatformRouter (плеер), VideoPlaybackService (фон). Маркеры пишутся
+// в CSV-преф SovaPrefs.LOG_SECTIONS_OFF и применяются гейтом
+// AppLog.setDisabledSections. Порядок = порядок отображения в UI.
+// Дефолт: все включены (пустой CSV).
+private val LOG_SECTION_TOGGLES: List<Pair<List<String>, String>> = listOf(
+    listOf("#IM") to "Сообщения и каналы",
+    listOf("#AUDIO") to "Аудио: пагинация и плеер",
+    listOf("#VIDEO", "VideoPlayerScreen", "VideoPlatformRouter", "VideoPlaybackService")
+        to "Видео: плеер и фон",
+    listOf("#NOTIFY") to "Уведомления",
+    listOf("#PIN") to "PIN и безопасность",
+    listOf("API") to "Сеть и API",
+)
 
 @Composable
 private fun LoggingTab(
@@ -3615,6 +3707,76 @@ private fun LoggingTab(
                             .toSet()
                         scope.launch { app.prefs.setLogCategoriesDisabled(disabled) }
                     }) { Text("Только критичные") }
+                }
+            }
+        }
+
+        item { SectionHeader("Паттерны диагностики (секции логов)") }
+        // ─── #LOG-SECTIONS (волна 31-f): гейты секций по маркерам крошек ──
+        //
+        // В logcat по умолчанию транслируется ВСЁ (пустой CSV в префе = пустой
+        // гейт в AppLog). Выключение тумблера прячет диагностический паттерн
+        // целиком — по префиксу тега ИЛИ сообщения ("#AUDIO-PAGING page: …"
+        // гейтится секцией "#AUDIO"), без правок сотен вызовов. Ошибки (ERROR)
+        // пишутся всегда, даже в выключенной секции (аварийная диагностика).
+        //
+        // Отличие от блока «Разделы приложения» выше: там 11 широких категорий
+        // по ТЕГАМ (LogCategory + categoryForTag, дефолт — только критичные),
+        // здесь секции = маркеры крошек волны 31 (#IM/#AUDIO/#VIDEO/#NOTIFY/#PIN)
+        // и путь VK API ("API"), дефолт — все включены.
+        //
+        // Состояние: DataStore CSV SovaPrefs.LOG_SECTIONS_OFF (source of truth
+        // для старта процесса, читает SovaApp.onCreate) + локальный
+        // mutableStateListOf для мгновенной реакции между рекомпозициями.
+        // Каждый тумблер: 1) обновить UI-стейт, 2) prefs.setLogSectionsOff(csv),
+        // 3) AppLog.setDisabledSections(...) — гейт применяется НЕМЕДЛЕННО.
+        item {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "В logcat по умолчанию транслируется всё. Выключите шумные секции. " +
+                        "Ошибки (ERROR) пишутся всегда, независимо от тумблеров. " +
+                        "Секции действуют ВМЕСТЕ с блоком «Разделы приложения» выше: " +
+                        "запись проходит, если включены и раздел, и секция.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
+                )
+                val disabledSections = remember {
+                    mutableStateListOf<String>().apply {
+                        addAll(SovaApp.parseLogSectionsOff(s.logSectionsOff))
+                    }
+                }
+                LOG_SECTION_TOGGLES.forEach { (markers, title) ->
+                    ToggleRow(
+                        title = title,
+                        subtitle = "Маркеры «${markers.joinToString(", ")}». " +
+                            "Включённый тумблер = секция логируется.",
+                        checked = markers.none { it in disabledSections },
+                    ) { enabled ->
+                        if (enabled) {
+                            disabledSections.removeAll(markers.toSet())
+                        } else {
+                            disabledSections.addAll(
+                                markers.filter { !disabledSections.contains(it) }
+                            )
+                        }
+                        val csv = disabledSections.joinToString(",")
+                        scope.launch { app.prefs.setLogSectionsOff(csv) }
+                        // Гейт применяется немедленно, без перезапуска приложения —
+                        // сразу после записи префа (тот же набор маркеров).
+                        AppLog.setDisabledSections(disabledSections.toSet())
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = {
+                        disabledSections.clear()
+                        scope.launch { app.prefs.setLogSectionsOff("") }
+                        AppLog.setDisabledSections(emptySet())
+                    }) { Text("Включить все") }
                 }
             }
         }
@@ -6551,10 +6713,10 @@ private fun delayMsLabel(ms: Long): String = when (ms) {
     else -> "${ms / 1000} сек"
 }
 
-// #SETTINGS-FIX: диалог создания PIN-кода при первом включении блокировки.
-// Вызывается из SecurityTab когда lockerEnabled=true, а lockerPinHash пуст.
+// #SETTINGS-FIX: диалог задания PIN-кода при включении блокировки.
 // Fix #380 #LOCKER-MANAGE: используется и для смены уже установленного PIN
-// (SecurityTab «Сменить PIN-код»).
+// (SecurityTab «Сменить PIN-код» — после верного текущего PIN, W31-b
+// #PIN-CHANGE-VERIFY).
 //
 // Fix #381 #PIN-PAD-DIALOG: полный редизайн — IME-поля убраны, вместо них
 // детерминированный PIN-пад (те же круглые клавиши, что на экране блокировки
@@ -6614,7 +6776,9 @@ private fun PinSetupDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (step == 0) "Создайте PIN-код" else "Подтвердите PIN-код") },
+        // W31-b #PIN-ALWAYS-SETUP: «Задайте» вместо «Создайте» — диалог
+        // открывается и при ПОВТОРНОМ включении (overwrite существующего PIN).
+        title = { Text(if (step == 0) "Задайте PIN-код" else "Подтвердите PIN-код") },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -6693,4 +6857,121 @@ private fun PinPadKey(key: String, onClick: () -> Unit) {
             Text(key, fontSize = 22.sp, fontWeight = FontWeight.Medium)
         }
     }
+}
+
+// W31-b #PIN-VERIFY: переиспользуемый диалог ввода ТЕКУЩЕГО PIN-кода — один
+// композабл на оба сценария (#PIN-DISABLE-VERIFY выключение и #PIN-CHANGE-VERIFY
+// смена). Одна фаза ввода, авто-проверка на 4-й цифре — без IME и без кнопки
+// «Подтвердить» (тот же детерминированный пад 3×4 волны 27, что у PinSetupDialog;
+// lessons #PIN-PAD-DIALOG/#PIN-DIALOG-OVERLAY учтены: вызывается ТОЛЬКО на уровне
+// SecurityTab, не внутри item{} LazyColumn).
+//
+// Хэш-сверка — ТОЙ ЖЕ функцией, которой экран блокировки хэширует ввод:
+// re.pinok.locker.LockerActivity.hashPin (SHA-256, соль sova2-salt:) — единый
+// источник алгоритма, локального дубля нет. storedHash передаётся из
+// Snapshot.lockerPinHash — того же поля, что читает MainActivity при запуске
+// LockerActivity.
+//
+// Неверный PIN: inline-ошибка «Неверный PIN-код» + LockerActivity.vibrate (единый
+// тактильный паттерн с экраном блокировки), диалог ОСТАЁТСЯ открытым с пустым
+// вводом — операция НЕ выполняется (локер остаётся включён / PIN не меняется).
+// Консистентно для обоих сценариев.
+@Composable
+private fun PinVerifyDialog(
+    storedHash: String,
+    title: String,
+    subtitle: String,
+    onDismiss: () -> Unit,
+    onVerified: () -> Unit,
+) {
+    val context = LocalContext.current
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun onKey(k: String) {
+        if (k == "del") {
+            error = null
+            if (pin.isNotEmpty()) pin = pin.dropLast(1)
+            return
+        }
+        // Цифра: не принимаем 5-ю — авто-проверка сработала на 4-й.
+        if (pin.length >= 4) return
+        pin = pin + k
+        if (pin.length == 4) {
+            val hash = re.pinok.locker.LockerActivity.hashPin(pin)
+            if (hash == storedHash) {
+                onVerified()
+            } else {
+                // #PIN (волна 31-f): крошка неверного ввода — операция НЕ
+                // выполняется (диалог остаётся открытым, локер не меняется).
+                AppLog.w("Settings", "#PIN verify failed: wrong PIN (dialog='$title')")
+                error = "Неверный PIN-код"
+                re.pinok.locker.LockerActivity.vibrate(context)
+                pin = ""
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(16.dp))
+                // PIN dots — как в PinSetupDialog и на экране блокировки.
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    repeat(4) { i ->
+                        val filled = i < pin.length
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(if (filled) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                        )
+                    }
+                }
+                val err = error
+                if (err != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(16.dp))
+                // Пад 3×4: 1-9 / del / 0. Клавиши 64dp — touch-таргет ≥48dp.
+                val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "del", "0", "")
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    keys.chunked(3).forEach { rowKeys ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                        ) {
+                            rowKeys.forEach { k ->
+                                if (k.isEmpty()) {
+                                    // Пустой placeholder — сохранить сетку 3×4.
+                                    Box(modifier = Modifier.size(64.dp))
+                                } else {
+                                    PinPadKey(key = k, onClick = { onKey(k) })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+        },
+    )
 }

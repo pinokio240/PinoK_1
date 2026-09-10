@@ -990,8 +990,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // изменения применяются мгновенно (без перезапуска приложения).
         runBlocking {
             runCatching {
-                val disabled = prefs.data.first().logCategoriesDisabled
-                AppLog.applyDisabledCategories(disabled)
+                val snap = prefs.data.first()
+                AppLog.applyDisabledCategories(snap.logCategoriesDisabled)
+                // #LOG-SECTIONS (волна 31-f): CSV выключенных секций → гейты
+                // AppLog (префикс тега/сообщения). Пустой CSV = все секции
+                // логируются (дефолт). Изменение из SettingsScreen применяется
+                // немедленно (AppLog.setDisabledSections сразу после записи префа).
+                AppLog.setDisabledSections(parseLogSectionsOff(snap.logSectionsOff))
             }.onFailure { e ->
                 android.util.Log.w("PinoK/SovaApp",
                     "loadLogCategories failed: ${e.message} — default (critical only: AUTH+SYSTEM+NETWORK) used")
@@ -1278,6 +1283,19 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         } else {
             AppLog.i("SovaApp", "skip PlayerConnection.init — no token (auth flow), #AUTH-WEBVIEW-STARVATION-V2")
         }
+        // Волна 31 #AUDIO-BG-PAGER: app-level фоновая пагинация «Моя музыка».
+        // Старт при старте приложения если есть валидная сессия (цикл живёт
+        // в appScope — переживает уход с экрана музыки); в auth flow старт
+        // отложен — MusicScreen при входе вызовет ensureStarted лениво
+        // (идемпотентно). Прогресс персистится в SovaPrefs
+        // (my_music_paged_offset) — после смерти процесса продолжается.
+        if (tokenStorage.hasValidToken()) {
+            try {
+                re.pinok.data.audio.AudioLibraryPager.get().ensureStarted()
+            } catch (e: Exception) {
+                AppLog.w("SovaApp", "#AUDIO-BG-PAGER: ensureStarted failed: ${e.message}")
+            }
+        }
         // Этап 4 EQUALIZER_INTEGRATION_PLAN.md: загрузка кастомных пресетов
         // эквалайзера из JSON-файла (filesDir/equalizer/custom_presets.json).
         // Singleton store, lazy-load через ensureLoaded(), но вызываем явно в
@@ -1338,10 +1356,21 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // snapshot обновляется за ~10-50мс, и следующий auth flow использует
         // новые домены.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            // #NOTIFY (волна 31-f): локальный курсор для крошки смены режима
+            // уведомлений. Первое значение — стартовый режим (без лога «смена»).
+            var lastNotifyMode: Int? = null
             prefs.data.collect { snap ->
                 PlayerConnection.autoCacheAudio = snap.autoCacheAudio
                 re.pinok.auth.exchange.AuthDomainsConfig.update(snap)
                 prefsSnapshot = snap   // Fix #336: keep synchronous cache fresh
+                // #NOTIFY (волна 31-f): крошка смены режима уведомлений
+                // (Настройки → Уведомления / закреплённая панель ленты).
+                val prevMode = lastNotifyMode
+                if (prevMode != null && prevMode != snap.notifyMode) {
+                    AppLog.i("SovaApp", "#NOTIFY mode changed: " +
+                        "${notifyModeName(prevMode)} → ${notifyModeName(snap.notifyMode)}")
+                }
+                lastNotifyMode = snap.notifyMode
             }
         }
 
@@ -1418,6 +1447,19 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     }
 
     /**
+     * #NOTIFY (волна 31-f): человекочитаемое имя режима уведомлений
+     * для крошек старта нотифаера/смены режима (константы — Fix #390
+     * #NOTIFY-MODES, SovaPrefs companion).
+     */
+    private fun notifyModeName(mode: Int): String = when (mode) {
+        SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY -> "MESSAGES_ONLY"
+        SovaPrefs.NOTIFY_MODE_ALL -> "ALL"
+        SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY -> "COMMUNITIES_ONLY"
+        SovaPrefs.NOTIFY_MODE_SILENT -> "SILENT"
+        else -> "UNKNOWN($mode)"
+    }
+
+    /**
      * #32: Запускает корутину которая подписывается на LongPoll events и
      * показывает системное уведомление при входящем сообщении.
      *
@@ -1427,6 +1469,17 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      */
     private fun startMessageNotifier() {
         keepAliveScope.launch {
+            // #NOTIFY (волна 31-f): крошка старта нотифаера с АКТИВНЫМ режимом
+            // (Fix #390 #NOTIFY-MODES: режим читается из снапшота, до первой
+            // итерации collect — одна строка на процесс, не на каждое событие).
+            // Чтение guarded (runCatching → getOrNull + явная null-проверка):
+            // отказ DataStore не должен убивать нотифаер-корутину.
+            val startSnap = runCatching { prefs.data.first() }.getOrNull()
+            if (startSnap != null) {
+                AppLog.i("SovaApp", "#NOTIFY notifier started: mode=${notifyModeName(startSnap.notifyMode)}")
+            } else {
+                AppLog.w("SovaApp", "#NOTIFY notifier started: mode read failed (prefs first() threw)")
+            }
             longPollClient.events.collect { event ->
                 if (event is re.pinok.realtime.LongPollEvent.NewMessage) {
                     try {
@@ -2443,6 +2496,23 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
 
         fun get(context: Context): SovaApp =
             context.applicationContext as? SovaApp ?: get()
+
+        /**
+         * #LOG-SECTIONS (волна 31-f): разбор CSV выключенных секций логов
+         * ("#IM,#AUDIO" → {"#IM", "#AUDIO"}; blank/"" → пустое множество =
+         * все секции логируются). Пустые/пробельные элементы отбрасываются.
+         * Живёт в app-слое по решению задачи 31-f: core/data логики не
+         * содержит (там только CSV-строка в Snapshot.logSectionsOff);
+         * вызывается из SovaApp.onCreate (старт) и SettingsScreen LoggingTab
+         * (тумблер секции — и запись префа, и применение гейта немедленно).
+         */
+        fun parseLogSectionsOff(csv: String): Set<String> {
+            if (csv.isBlank()) return emptySet()
+            return csv.split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        }
     }
 }
 

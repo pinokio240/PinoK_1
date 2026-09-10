@@ -113,7 +113,7 @@
 
 **VK credentials в BuildConfig** (`app/build.gradle.kts:22-50`):
 - `VK_CLIENT_ID=2274003` (official VK Android)
-- `VK_CLIENT_SECRET=hHbZxrka2uZ6jB1inYsH` (хардкод app_secret — норма для VK Android)
+- `VK_CLIENT_SECRET=hHbZ...MASKED...nYsH` (хардкод app_secret — норма для VK Android)
 - `VK_API_VERSION=5.269`
 - `VK_WEB_CLIENT_ID=6287487` (desktop web)
 - `VK_WEB_MOBILE_CLIENT_ID=7879029` (m.vk.com, БЕЗ secret)
@@ -793,7 +793,7 @@ api/
 
 ### 10.5. Безопасность
 - `ВК.txt` (113 KB) содержит **живые access_token** 5 разных appId + `videoplayer_auth_token`. **Заккоммичен в репозиторий** — critical leak. Нужно: удалить файл, добавить в `.gitignore`, уведомить пользователя revoke'нуть все токены.
-- `VK_CLIENT_SECRET=hHbZxrka2uZ6jB1inYsH` хардкод в `build.gradle.kts` — норма для VK Android (public app_secret), но привлекает внимание security audit.
+- `VK_CLIENT_SECRET=hHbZ...MASKED...nYsH` хардкод в `build.gradle.kts` — норма для VK Android (public app_secret), но привлекает внимание security audit.
 - В `ExchangeAuthApi` для `authByPassword`/`authBy2FaCode`/etc. логируются `grant_type` и `username`, но НЕ `password` (корректно).
 
 ---
