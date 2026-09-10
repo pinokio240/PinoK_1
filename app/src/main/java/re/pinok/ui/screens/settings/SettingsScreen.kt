@@ -76,6 +76,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import re.pinok.BuildConfig
+// #IN-APP-UPDATER: BuildStamp живёт в core:common (re.pinok.BuildStamp) — без
+// импорта строка «Штамп сборки» в UpdateTab давала Unresolved reference (:4285).
+import re.pinok.BuildStamp
 import re.pinok.SovaApp
 import re.pinok.contracts.ContainerRegistry
 import re.pinok.contracts.SettingsSection

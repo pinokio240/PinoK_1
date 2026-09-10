@@ -22,7 +22,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ChevronRight
+// #NOTIFY-MODES: Icons.AutoMirrored.Filled.ChevronRight НЕ существует в этом
+// артефакте material-icons (уровень ошибки :app:compileDebugKotlin 25:60) —
+// в кодовой базе прецедент Icons.Filled.ChevronRight (PostPhotoGrid, PostVideoCarousel).
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
@@ -286,7 +289,7 @@ fun FeedRightPanel(
                             )
                         }
                         Icon(
-                            Icons.AutoMirrored.Filled.ChevronRight,
+                            Icons.Filled.ChevronRight,
                             contentDescription = "Изменить режим уведомлений",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),

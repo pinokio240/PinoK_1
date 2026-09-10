@@ -500,15 +500,19 @@ fun VideoScreen(
                                     )
                                 }
                             }
-                        }
 
         // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для видео альбома.
+        // #SCROLL-TOP-FAB-SCOPE (волна 29-2): Box НЕ закрыт до FAB — FAB обязан лежать
+        // в BoxScope (align(Alignment.BottomEnd)); ранее закрывающая скобка else-блока
+        // (наследие волны 28) стояла ПЕРЕД FAB, преждевременно закрывала Box → FAB
+        // выпадал в ColumnScope, где align требует Alignment.Horizontal → ошибка :508.
         ScrollToTopFab(
             listState = albumVideosListState,
             modifier = Modifier.align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp),
         )
         }
+                        }
                     }
                 }
             }

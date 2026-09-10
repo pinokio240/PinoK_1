@@ -87,7 +87,9 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
+// #COMMUNITY-VIDEO-PARITY: дубль импорта ExperimentalMaterial3Api (строки 77 и 90,
+// остался от мержа волны 28) — Kotlin K2 даёт "Conflicting import … is ambiguous".
+// Оставлен единственный импорт на строке 77.
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -2891,8 +2893,12 @@ private fun VideoShareSheet(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     items(chats, key = { c -> c.peer.id }) { chat ->
-                        val title = if (!chat.peer.title.isNullOrBlank()) {
-                            chat.peer.title
+                        // NULL-ЯВНО: chat.peer.title — String? из другого модуля, smart-cast
+                        // по свойству чужого класса невозможен (ошибки :2946/:2954).
+                        // Локальный val с явной проверкой даёт не-null String вниз по коду.
+                        val peerTitle: String? = chat.peer.title
+                        val title: String = if (peerTitle != null && peerTitle.isNotBlank()) {
+                            peerTitle
                         } else {
                             "id${chat.peer.id}"
                         }

@@ -8485,3 +8485,29 @@ Work Log:
 Stage Summary:
 - Fix #393 закрыт: каналы открываются — wall-режим с постами, лайками, комментариями, шапкой с подписчиками, закреп-баннером и футером уведомлений; ошибки messages для каналов больше не показываются
 - Fix #394 закрыт: лупа в шапке КАЖДОГО диалога (IconButton Search) и канала: диалог → поиск по загруженной истории + серверный messages.search (peer_id) с скроллом к сообщению / preview-диалогом догрузки (Fix #206); канал → панель «Поиск по постам» (wall.search, как в вебе VK)
+
+---
+Task ID: 29-2 (hotfix волна 29-2)
+Agent: main agent
+Task: Fix #COMPILE-29 — 8 ошибок :app:compileDebugKotlin из листа юзера (FeedRightPanel ChevronRight ×2, SettingsScreen BuildStamp, VideoScreen Alignment ×1, VideoPlayerScreen dup-import ×2 + nullability ×2)
+
+Work Log:
+- git fetch: HEAD == origin/PinoK (ba42c2f2, волна 29); Android-дерево чистое, кроме моих 4 файлов
+- Локализация всех 8 точек по листу компиляции; root-cause каждого:
+  1. FeedRightPanel.kt:25/289 — Icons.AutoMirrored.Filled.ChevronRight: символа НЕТ в подключённом артефакте иконок (AutoMirrored-набор его не содержит; automirrored.outlined.VolumeUp/VolumeOff при этом существуют — волна 28 собиралась). Прецедент кодовой базы — Icons.Filled.ChevronRight (PostPhotoGrid.kt:25, PostVideoCarousel.kt:23)
+  2. SettingsScreen.kt:4285 — BuildStamp.STAMP без импорта: объект в core:common (re.pinok.BuildStamp), SettingsScreen в re.pinok.ui.screens.settings → Unresolved; SovaApp (package re.pinok) компилился без импорта — same-package
+  3. VideoScreen.kt:508 — структурный сдвиг волны 29: FAB вставлен ТЕКСТУАЛЬНО ПОСЛЕ старого закрывающего brace else-блока ветки «видео альбома» (наследие волны 28, :503) — Box (:477) закрывался преждевременно, FAB выпадал в ColumnScope, где Modifier.align требует Alignment.Horizontal, а передан Alignment.BottomEnd
+  4. VideoPlayerScreen.kt:77+90 — точный дубль import androidx.compose.material3.ExperimentalMaterial3Api (мерж волны 28) — K2: "Conflicting import … is ambiguous" на ОБОИХ строках
+  5. VideoPlayerScreen.kt:2946/2954 — chat.peer.title (String? из другого модуля) не смарт-кастится через isNullOrBlank() по свойству чужого класса → val title выводился String?; title.take(1) на nullable + передача String? в Text(text = String)
+- Фиксы (5 правок в 4 файлах):
+  - FeedRightPanel: import + использование → Icons.Filled.ChevronRight (WHY-комментарий на месте)
+  - SettingsScreen: + import re.pinok.BuildStamp (WHY-комментарий)
+  - VideoScreen: закрывающая скобка else-блока перенесена ЗА Box-end (удалена :503, добавлена после :514) — FAB теперь в BoxScope; + комментарий #SCROLL-TOP-FAB-SCOPE
+  - VideoPlayerScreen: дубль-импорт удалён (строка 90, WHY-комментарий)
+  - VideoPlayerScreen: val peerTitle: String? = chat.peer.title + val title: String = if (peerTitle != null && peerTitle.isNotBlank()) peerTitle else "id${chat.peer.id}" — NULL-ЯВНО (без !!/?./?:); все 3 использования (тост :2916, аватар-буква :2952, Text :2960) получают String
+- Валидация: check-nested-comments ALL CLEAN (174 файла); Python brace-depth VideoScreen: TOTAL 0, 1 -> и 2 -> на одном уровне (depth 4), when на 3; дельта {} () [] vs HEAD по 4 файлам — скобочный рост только внутри комментариев; соседние FAB-блоки (альбомы/разделы/discovery) перечитаны — структурно корректны (юзерский компилятор на них не ругался); gradle НЕ запускался (правило), .gitignore/манифесты не тронуты
+
+Stage Summary:
+- Все 8 ошибок листа юзера закрыты; класс ошибок — семантический (несуществующие символы/типы/структура областей видимости), скобочные и nested-сканеры его не ловят по определению — волну 29 компилировал только юзер
+- Файлы: FeedRightPanel.kt, SettingsScreen.kt, VideoScreen.kt, VideoPlayerScreen.kt; функциональное поведение волны 29 не изменено (фиксы только компиляционные)
+- Проверка юзером: git pull → сборка :app:compileDebugKotlin — 0 ошибок → чек-лист волны 29 из HISTORY.md (9 пунктов)

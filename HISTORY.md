@@ -12463,3 +12463,30 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 7. **Обновления**: Настройки → Обновления → «Проверить обновления» (пока apkUrl пуст — честно «APK ещё не опубликован»; для реального релиза: docs/UPDATER.md — bump versionCode, signed APK, sha256, запись в version.json, push).
 8. **«Добавить в мою музыку»**: плеер → второй ряд кнопок → «＋» → «Добавлено в мою музыку» → галочка; тап по галочке → трек удалён из моей музыки; меню ⋮ строки трека в Музыке → тот же тумблер.
 9. Если что-то не так — прислать логкат и скриншот.
+
+---
+## Волна 29-2 (2026-09-10) — Fix #COMPILE-29 (8 ошибок :app:compileDebugKotlin)
+
+### Симптом (лист компиляции пользователя, Windows E:/ANDROID_APP/PinoK_1, волна 29)
+- FeedRightPanel.kt:25:60 и :289:55 — Unresolved reference 'ChevronRight'.
+- SettingsScreen.kt:4285:44 — Unresolved reference 'BuildStamp'.
+- VideoScreen.kt:508:39 — Argument type mismatch: actual 'Alignment', expected 'Alignment.Horizontal'.
+- VideoPlayerScreen.kt:77:35 и :90:35 — Conflicting import: 'ExperimentalMaterial3Api' is ambiguous.
+- VideoPlayerScreen.kt:2946:53 — Only safe (?.) or non-null asserted (!!.) calls allowed on nullable 'String?'.
+- VideoPlayerScreen.kt:2954:40 — type mismatch: actual 'String?', expected 'String'.
+
+### Root-cause
+1. **ChevronRight**: субагент волны 29 взял `Icons.AutoMirrored.Filled.ChevronRight` — такого символа нет в подключённом артефакте material-icons (в AutoMirrored-наборе его нет; при этом automirrored VolumeUp/VolumeOff существуют — поэтому волна 28 собиралась). В кодовой базе рабочий прецедент — `Icons.Filled.ChevronRight` (PostPhotoGrid, PostVideoCarousel).
+2. **BuildStamp**: объект живёт в core:common (`re.pinok.BuildStamp`); UpdateTab волны 29 использовал его в SettingsScreen (пакет re.pinok.ui.screens.settings) БЕЗ импорта. SovaApp компилился без импорта только потому, что живёт в пакете re.pinok (same-package).
+3. **VideoScreen**: FAB-патч волны 29 вставил ScrollToTopFab ТЕКСТУАЛЬНО ПОСЛЕ старой закрывающей скобки else-блока ветки «видео выбранного альбома» (наследие волны 28) — Box-обёртка закрылась этой скобкой преждевременно, FAB выпал в ColumnScope, где `Modifier.align` принимает Alignment.Horizontal, а передан BottomEnd. Суммарный баланс скобок остался 0 (вставленная субагентом скобка Box-end поглотила закрывающую else) — поэтому скобочный сканер волны 29 поломку не увидел.
+4. **ExperimentalMaterial3Api**: точный дубль импорта (строки 77 и 90) остался от мержа волны 28; K2 превращает дубль в ошибку «Conflicting import … is ambiguous» на ОБЕИХ строках.
+5. **title**: `chat.peer.title` — String? из другого модуля; isNullOrBlank() НЕ даёт smart-cast по свойству чужого класса → `val title` выводился String?; `title.take(1)` (:2946) и `Text(text = title)` (:2954) требуют String.
+
+### Фиксы (волна 29-2 — 5 правок / 4 файла, только компиляционные, поведение не менялось)
+- **FeedRightPanel.kt**: import и использование → `Icons.Filled.ChevronRight` (WHY-комментарий с объяснением отсутствия AutoMirrored-варианта).
+- **SettingsScreen.kt**: добавлен `import re.pinok.BuildStamp` (WHY-комментарий).
+- **VideoScreen.kt**: закрывающая скобка else-блока перенесена ЗА Box-end — FAB теперь внутри BoxScope; комментарий #SCROLL-TOP-FAB-SCOPE; depth-проверка: ветки `1 ->` и `2 ->` на одном уровне, общий баланс 0.
+- **VideoPlayerScreen.kt**: дубль импорта удалён (осталась строка 77); фикс title по NULL-ЯВНО: `val peerTitle: String?` + явная if-проверка → `val title: String` (без !!/?./?:), все 3 использования получают не-null.
+
+### Проверка пользователем
+- `git pull` → сборка `:app:compileDebugKotlin` — должно быть 0 ошибок; далее чек-лист волны 29 (секция выше, 9 пунктов). Особо проверить зоны, которые не компилировались: секция «Режим уведомлений» вверху правой панели ленты (шеврон), вкладка «Обновления» в настройках (строка «Штамп сборки»), шторка «Поделиться» видео (строки чатов с буквенными аватарами вместо фото).
