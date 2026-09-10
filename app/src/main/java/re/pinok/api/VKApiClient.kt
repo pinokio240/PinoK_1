@@ -6749,12 +6749,20 @@ class VKApiClient(
      * Сохранить загруженное фото на стену (после multipart upload).
      * VK: photos.saveWallPhoto — server, photo, hash, owner_id (optional for user wall).
      * Возвращает `Pair<photoId, ownerId>` или `Pair(-1L, -1L)` при ошибке.
+     *
+     * W36 #COMMUNITY-COMPOSER: [groupId] (ПОЛОЖИТЕЛЬНЫЙ id сообщества, конвенция
+     * волны 35 «group_id положительный на проводе») — сохранение фото на стену
+     * СООБЩЕСТВА: VK требует именно `group_id` при upload на
+     * photos.getWallUploadServer(group_id=X); без него фото сохранится на стене
+     * пользователя (или ошибка hash) — пост от имени сообщества с таким фото
+     * не соответствовал бы вебу.
      */
     suspend fun photosSaveWallPhoto(
         server: Int,
         photo: String,
         hash: String,
         ownerId: Long? = null,
+        groupId: Long? = null,
     ): Pair<Long, Long> {
         if (isOffline()) return -1L to -1L
         val args = mutableMapOf(
@@ -6763,6 +6771,7 @@ class VKApiClient(
             "hash" to hash,
         )
         if (ownerId != null && ownerId != 0L) args["owner_id"] = ownerId.toString()
+        if (groupId != null && groupId != 0L) args["group_id"] = groupId.toString()
         val json = call("photos.saveWallPhoto", args) ?: return -1L to -1L
         return try {
             val resp = json.getAsJsonArray("response") ?: return -1L to -1L
@@ -6826,6 +6835,11 @@ class VKApiClient(
         ownerId: Long? = null,
         friendsOnly: Boolean = false,
         publishDate: Long? = null,
+        // W36 #COMMUNITY-COMPOSER: публикация от имени сообщества (from_group=1)
+        // + «подпись автора» (signed=1) — симметрично wallPost (W35-a), карта
+        // веб-флагов official/signed из сверки «Группа_админ» §3.4/§5.
+        fromGroup: Boolean = false,
+        signed: Boolean = false,
     ): Long {
         if (isOffline()) return -1L
         val args = mutableMapOf(
@@ -6835,6 +6849,9 @@ class VKApiClient(
         if (ownerId != null && ownerId != 0L) args["owner_id"] = ownerId.toString()
         if (friendsOnly) args["friends_only"] = "1"
         if (publishDate != null && publishDate > 0) args["publish_date"] = publishDate.toString()
+        // W36 #COMMUNITY-COMPOSER: от имени сообщества / подпись автора.
+        if (fromGroup) args["from_group"] = "1"
+        if (signed) args["signed"] = "1"
         val json = call("wall.post", args) ?: return -1L
         // #SHARE-18B: мульти-формат ответа (items / post_id / post.id) —
         // как в wallPost; иного поведения не меняет, только чинит

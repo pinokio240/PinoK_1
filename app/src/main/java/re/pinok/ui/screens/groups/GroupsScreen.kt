@@ -79,30 +79,38 @@ fun GroupsScreen(onGroupClick: (Long) -> Unit = {}) {
     var endReached by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
+    // FIX #FORGOTTEN-SCOPE (logcat 2026-09-10 23:34:09.545): прежний паттерн
+    // LaunchedEffect(Unit) { scope.launch { … } } — ForgottenCoroutineScopeException:
+    // при быстрой навигации scope экрана уничтожается, а сопрограмма нагрузки
+    // выживает на rememberCoroutineScope и её cancel приходит как исключение
+    // в catch «Failed to load groups». Теперь нагрузка идёт ПРЯМО в корутине
+    // LaunchedEffect (авто-cancel при dispose — штатный жизненный цикл), а
+    // CancellationException не глотается (пробрасывается), как в VKApiClient.
     LaunchedEffect(Unit) {
-        scope.launch {
-            loading = true
-            endReached = false
-            errorText = null
-            try {
-                val list = app.apiClient.groupsGet(count = pageSize)
-                // Fix #53: защитная дедупликация.
-                groups = list.distinctBy { it.id }
-                if (list.size < pageSize) endReached = true
-                AppLog.i("GroupsScreen", "Loaded ${list.size} groups")
-                if (list.isEmpty()) {
-                    errorText = app.apiClient.lastApiError ?: "Вы не состоите в сообществах"
-                }
-            } catch (e: Exception) {
-                AppLog.e("GroupsScreen", "Failed to load groups", e)
-                errorText = "Ошибка: ${e.message}"
-            } finally {
-                loading = false
+        loading = true
+        endReached = false
+        errorText = null
+        try {
+            val list = app.apiClient.groupsGet(count = pageSize)
+            // Fix #53: защитная дедупликация.
+            groups = list.distinctBy { it.id }
+            if (list.size < pageSize) endReached = true
+            AppLog.i("GroupsScreen", "Loaded ${list.size} groups")
+            if (list.isEmpty()) {
+                errorText = app.apiClient.lastApiError ?: "Вы не состоите в сообществах"
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.e("GroupsScreen", "Failed to load groups", e)
+            errorText = "Ошибка: ${e.message}"
+        } finally {
+            loading = false
         }
     }
 
     // Fix #80: pull-to-refresh — перезагрузка первой страницы.
+    // FIX #FORGOTTEN-SCOPE: CancellationException не глотается (класс выше).
     fun refreshGroups() {
         scope.launch {
             isRefreshing = true
@@ -111,6 +119,8 @@ fun GroupsScreen(onGroupClick: (Long) -> Unit = {}) {
                 groups = list.distinctBy { it.id }
                 endReached = (list.size < pageSize)
                 errorText = null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.w("GroupsScreen", "refreshGroups failed: ${e.message}")
             } finally {
@@ -120,6 +130,7 @@ fun GroupsScreen(onGroupClick: (Long) -> Unit = {}) {
     }
 
     // Fix #80: пагинация — подгрузка следующих сообществ через offset.
+    // FIX #FORGOTTEN-SCOPE: CancellationException не глотается (класс выше).
     fun loadMoreGroups() {
         if (loadingMore || endReached || groups.isEmpty()) return
         scope.launch {
@@ -132,6 +143,8 @@ fun GroupsScreen(onGroupClick: (Long) -> Unit = {}) {
                     groups = (groups + page).distinctBy { it.id }
                 }
                 if (page.size < pageSize) endReached = true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.w("GroupsScreen", "loadMoreGroups failed: ${e.message}")
             } finally {

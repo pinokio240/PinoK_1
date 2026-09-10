@@ -142,7 +142,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -1093,26 +1092,47 @@ fun VideoPlayerScreen(
     }
 
     if (exoPlayer != null) {
-        LifecycleStartEffect(exoPlayer) {
-            // W30-2 #VIDEO-BACKGROUND (контракт §2.4): возврат на экран — снимаем
-            // foreground-режим сервиса (НЕ убивая воспроизведение).
-            VideoPlaybackBus.onForegrounded()
-            // #VIDEO-AUTOPLAY: только если включено в настройках. Иначе возврат
-            // из фона не должен форсировать play — пользователь сам ставил на паузу.
-            if (autoplayEnabled) {
-                exoPlayer.playWhenReady = true
+        // W30-2 #VIDEO-BACKGROUND (контракт §2.4): возврат на экран — снимаем
+        // foreground-режим сервиса (НЕ убивая воспроизведение).
+        // FIX #VIDEO-FG-TIME-CALLSITE (краш 2026-09-10, logcat 12.465→12.589):
+        // раньше был LifecycleStartEffect + onStopOrDispose — ВЕТКА DISPOSE
+        // стартовала foreground-сервис при уходе С ЭКРАНА (back-навигация):
+        // onBackgrounded → startForegroundService, и через ~120мс onPlayerReleased
+        // → stopService — сервис умирал БЕЗ startForeground → системный FATAL
+        // ForegroundServiceDidNotStartInTimeException. Теперь onBackgrounded
+        // срабатывает ТОЛЬКО на реальный ON_STOP активити (Home/сворачивание),
+        // где экран жив и плеер продолжает играть; dispose (выход с экрана)
+        // сервис не стартует вовсе — релиз плеера (onPlayerReleased) сам погасит
+        // живущий сервис. #VIDEO-AUTOPLAY и восстановление скорости — как прежде,
+        // на реальном ON_START.
+        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner, exoPlayer) {
+            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                when (event) {
+                    androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                        VideoPlaybackBus.onForegrounded()
+                        // #VIDEO-AUTOPLAY: только если включено в настройках. Иначе
+                        // возврат из фона не должен форсировать play — пользователь
+                        // сам ставил на паузу.
+                        if (autoplayEnabled) {
+                            exoPlayer.playWhenReady = true
+                        }
+                        // W30-STABILITY: восстановление после STOP — reapplied
+                        // сохранённый rate (на некоторых устройствах пересборка
+                        // источника после onStop сбрасывала скорость в 1.0).
+                        exoPlayer.setPlaybackSpeed(playbackRate)
+                    }
+                    androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                        // W30-2 #VIDEO-BACKGROUND: при уходе из активности НЕ ПАУЗИМ
+                        // — звук продолжается, W30-3 запускает foreground-сервис с
+                        // MediaStyle-уведомлением (lock-screen плеер).
+                        VideoPlaybackBus.onBackgrounded(context)
+                    }
+                    else -> {}
+                }
             }
-            // W30-STABILITY: восстановление после STOP — reapplied сохранённый
-            // rate (на некоторых устройствах пересборка источника после onStop
-            // сбрасывала скорость в 1.0).
-            exoPlayer.setPlaybackSpeed(playbackRate)
-            // W30-2 #VIDEO-BACKGROUND: при уходе из активности НЕ ПАУЗИМ — звук
-            // продолжается, W30-3 запускает foreground-сервис с MediaStyle-
-            // уведомлением (lock-screen плеер). Раньше здесь было
-            // `playWhenReady = false` — приложение в фоне глушило видео.
-            // Вызов срабатывает и на dispose экрана: после этого onPlayerReleased()
-            // (DisposableEffect релиза) корректно остановит сервис.
-            onStopOrDispose { VideoPlaybackBus.onBackgrounded(context) }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
         }
     }
 

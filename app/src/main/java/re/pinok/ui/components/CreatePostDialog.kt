@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +112,22 @@ private fun nextPendingPostFileId(): Long = postFileIdCounter.incrementAndGet()
  * Фото-флоу: `photos.getWallUploadServer` → upload → `photos.saveWallPhoto` → attachments.
  * См. VK_IMPORT_API.MD §1.1.
  *
+ * W36 #COMMUNITY-COMPOSER (C0 из плана волны 35, сверка «Группа_админ» §3.4/§3.5):
+ * режим публикации НА СТЕНУ СООБЩЕСТВА — [targetGroupId] (ПОЛОЖИТЕЛЬНЫЙ id).
+ *  • Переключатель автора «От моего имени / От имени сообщества» — виден только
+ *    при [canPostAsGroup] (admin_level>=2 — редактор/администратор, гейт
+ *    wallPost-fromGroup из волны 35); дефолт автора для руководителя —
+ *    «сообщество» (аналог cur.defaultPostSettings.official веба, сверка §3.5).
+ *  • «Подпись автора» ([signed] → wall.post signed=1) — видна только при
+ *    постинге от имени сообщества (веб: signed meaningless без official).
+ *  • friends_only скрывается (не применим к стене сообщества).
+ *  • Фото на стену сообщества: photos.getWallUploadServer(group_id) +
+ *    photos.saveWallPhoto(group_id) — VK требует group_id (положительный),
+ *    иначе фото уйдёт на стену пользователя.
+ *  • Публикация без вложений: [onSubmitGroup] (стена обновляет вызывающий
+ *    экран); с вложениями: [onSubmitGroupWithAttachments], при null —
+ *    самопубликация через wallPostWithAttachments(owner_id=-gid).
+ *
  * @param onDismiss Вызывается при закрытии диалога без публикации.
  * @param onSubmit Легаси-колбэк (message, friendsOnly) — путь без внутренних вложений.
  * @param selectedPhotoUri Легаси: URI одиночного фото от вызывающей стороны.
@@ -118,6 +135,14 @@ private fun nextPendingPostFileId(): Long = postFileIdCounter.incrementAndGet()
  * @param onRemovePhoto Легаси: удаление легаси-фото.
  * @param onSubmitWithAttachments Опциональный колбэк публикации с готовыми
  *        attachment-строками; null → диалог публикует сам (см. выше).
+ * @param targetGroupId W36: положительный id сообщества — режим стены сообщества
+ *        (owner_id=-gid); null → легаси-режим своей/чужой стены.
+ * @param canPostAsGroup W36: право постить ОТ ИМЕНИ сообщества (admin_level>=2,
+ *        isAuthor из волны 35) — включает переключатель автора.
+ * @param onSubmitGroup W36: публикация без вложений на стену сообщества
+ *        (message, fromGroup, signed) — обновление стены на вызывающей стороне.
+ * @param onSubmitGroupWithAttachments W36: публикация с вложениями на стену
+ *        сообщества (message, fromGroup, signed, attachments); null → самопубликация.
  */
 @Composable
 fun CreatePostDialog(
@@ -129,12 +154,25 @@ fun CreatePostDialog(
     onRemovePhoto: () -> Unit = {},
     // #ATTACH-UNIFY: публикация с внутренними вложениями (опционально).
     onSubmitWithAttachments: ((message: String, friendsOnly: Boolean, attachments: List<String>) -> Unit)? = null,
+    // W36 #COMMUNITY-COMPOSER: режим стены сообщества (см. KDoc выше).
+    targetGroupId: Long? = null,
+    canPostAsGroup: Boolean = false,
+    onSubmitGroup: ((message: String, fromGroup: Boolean, signed: Boolean) -> Unit)? = null,
+    onSubmitGroupWithAttachments: ((message: String, fromGroup: Boolean, signed: Boolean, attachments: List<String>) -> Unit)? = null,
 ) {
     val app = SovaApp.get()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf("") }
     var friendsOnly by remember { mutableStateOf(false) }
+    // W36 #COMMUNITY-COMPOSER: автор записи + подпись. Дефолт автора для
+    // руководителя — «сообщество» (сверка §3.5: defaultPostSettings.official).
+    var postAsGroup by remember { mutableStateOf(canPostAsGroup) }
+    var signPost by remember { mutableStateOf(false) }
+    // Эффективные флаги wall.post: signed без from_group не отправляем
+    // (веб: signed meaningless без official).
+    val effFromGroup = postAsGroup && canPostAsGroup
+    val effSigned = effFromGroup && signPost
     // Единое меню «Прикрепить» — тот же UI, что в чате и комментариях.
     var showAttachMenu by remember { mutableStateOf(false) }
     // #ATTACH-UNIFY: внутренние вложения пост-композера.
@@ -236,7 +274,9 @@ fun CreatePostDialog(
             addAll(pendingPhotos)
         }
         for (uri in photoUris) {
-            val uploadUrl = app.apiClient.photosGetWallUploadServer()
+            // W36 #COMMUNITY-COMPOSER: upload URL на стену сообщества — group_id
+            // (ПОЛОЖИТЕЛЬНЫЙ, конвенция волны 35); null → своя стена (легаси).
+            val uploadUrl = app.apiClient.photosGetWallUploadServer(groupId = targetGroupId)
             if (uploadUrl.isNullOrBlank()) {
                 toastLocal("Ошибка подготовки загрузки фото")
                 return
@@ -250,6 +290,7 @@ fun CreatePostDialog(
                 server = uploaded.server,
                 photo = uploaded.photo,
                 hash = uploaded.hash,
+                groupId = targetGroupId,
             )
             if (photoId <= 0L || photoOwnerId <= 0L) {
                 toastLocal("Ошибка сохранения фото")
@@ -290,7 +331,34 @@ fun CreatePostDialog(
             return
         }
         val delegate = onSubmitWithAttachments
-        if (delegate != null) {
+        val gid = targetGroupId
+        if (gid != null) {
+            // W36 #COMMUNITY-COMPOSER: публикация на стену сообщества
+            // (owner_id = -gid; from_group/signed — эффективные флаги).
+            val groupDelegate = onSubmitGroupWithAttachments
+            if (groupDelegate != null) {
+                // Вызывающая сторона сама публикует и обновляет стену.
+                groupDelegate(message, effFromGroup, effSigned, attachments)
+            } else {
+                // Фолбэк: самопубликация — wall.post owner_id=-gid.
+                // Честное отклонение: авто-обновление стены вне зоны (#ATTACH-UNIFY).
+                val postId = app.apiClient.wallPostWithAttachments(
+                    message = message,
+                    attachments = attachments.joinToString(","),
+                    ownerId = -gid,
+                    fromGroup = effFromGroup,
+                    signed = effSigned,
+                )
+                if (postId > 0) {
+                    AppLog.i("CreatePostDialog", "group post created: id=$postId, groupId=$gid, fromGroup=$effFromGroup")
+                    toastLocal("Опубликовано")
+                } else {
+                    AppLog.w("CreatePostDialog", "wallPostWithAttachments(group) failed")
+                    toastLocal("Не удалось опубликовать пост")
+                }
+                onDismiss()
+            }
+        } else if (delegate != null) {
             // Вызывающая сторона сама публикует (аналог легаси-контракта).
             delegate(message, onlyFriends, attachments)
         } else {
@@ -315,13 +383,15 @@ fun CreatePostDialog(
 
     AlertDialog(
         onDismissRequest = { if (!posting) onDismiss() },
-        title = { Text("Новый пост") },
+        title = { Text(if (targetGroupId != null) "Новая запись" else "Новый пост") },
         text = {
             Column {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("Что у вас нового?") },
+                    label = {
+                        Text(if (targetGroupId != null) "Что нового в сообществе?" else "Что у вас нового?")
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 4,
                     maxLines = 10,
@@ -511,16 +581,60 @@ fun CreatePostDialog(
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = friendsOnly,
-                        onCheckedChange = { friendsOnly = it },
-                    )
+                // W36 #COMMUNITY-COMPOSER: переключатель автора записи
+                // (виден только в групповом режиме; «сообщество» — только при
+                // canPostAsGroup=admin_level>=2, гейт волны 35).
+                if (targetGroupId != null) {
                     Text(
-                        text = "Только для друзей",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "Автор записи",
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !effFromGroup,
+                            onClick = { postAsGroup = false },
+                            label = { Text("От моего имени") },
+                        )
+                        if (canPostAsGroup) {
+                            FilterChip(
+                                selected = effFromGroup,
+                                onClick = { postAsGroup = true },
+                                label = { Text("От имени сообщества") },
+                            )
+                        }
+                    }
+                    if (effFromGroup) {
+                        // Веб: подпись автора имеет смысл только при official.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = signPost,
+                                onCheckedChange = { signPost = it },
+                            )
+                            Text(
+                                text = "Подпись автора (ваше имя под записью)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                // friends_only — только для своей стены (к стене сообщества
+                // не применим; веб-композер сообщества этот флаг не показывает).
+                if (targetGroupId == null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = friendsOnly,
+                            onCheckedChange = { friendsOnly = it },
+                        )
+                        Text(
+                            text = "Только для друзей",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },
@@ -535,7 +649,56 @@ fun CreatePostDialog(
                         if (!hasInternalAttachments && message.isBlank() && selectedPhotoUri == null) {
                             return@TextButton
                         }
-                        if (!hasInternalAttachments) {
+                        val gid = targetGroupId
+                        if (gid != null) {
+                            // W36 #COMMUNITY-COMPOSER: групповой режим.
+                            if (!hasInternalAttachments) {
+                                val groupDelegate = onSubmitGroup
+                                if (groupDelegate != null) {
+                                    // Основной путь: вызывающий экран публикует и обновляет стену.
+                                    groupDelegate(message, effFromGroup, effSigned)
+                                } else {
+                                    // Defensive-фолбэк: самопубликация wall.post
+                                    // owner_id=-gid (обновление стены — вне зоны).
+                                    scope.launch {
+                                        posting = true
+                                        try {
+                                            val postId = app.apiClient.wallPost(
+                                                message,
+                                                ownerId = -gid,
+                                                fromGroup = effFromGroup,
+                                                signed = effSigned,
+                                            )
+                                            if (postId > 0) {
+                                                AppLog.i("CreatePostDialog", "group post created: id=$postId, groupId=$gid")
+                                                toastLocal("Опубликовано")
+                                                onDismiss()
+                                            } else {
+                                                AppLog.w("CreatePostDialog", "wallPost(group) failed")
+                                                toastLocal("Не удалось опубликовать пост")
+                                            }
+                                        } catch (e: Exception) {
+                                            AppLog.e("CreatePostDialog", "wallPost(group) error", e)
+                                            toastLocal("Ошибка публикации")
+                                        } finally {
+                                            posting = false
+                                        }
+                                    }
+                                }
+                            } else {
+                                scope.launch {
+                                    posting = true
+                                    try {
+                                        postWithAttachments(message, friendsOnly)
+                                    } catch (e: Exception) {
+                                        AppLog.e("CreatePostDialog", "postWithAttachments(group) error", e)
+                                        toastLocal("Ошибка публикации")
+                                    } finally {
+                                        posting = false
+                                    }
+                                }
+                            }
+                        } else if (!hasInternalAttachments) {
                             // Легаси-путь бит-в-бит: публикация на вызывающей стороне.
                             onSubmit(message, friendsOnly)
                         } else {

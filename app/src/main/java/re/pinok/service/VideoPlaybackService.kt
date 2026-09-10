@@ -1,7 +1,13 @@
 package re.pinok.service
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.Bundle
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
@@ -49,10 +55,35 @@ class VideoPlaybackService : MediaSessionService() {
         private const val ACTION_SEEK_FORWARD = "re.pinok.video.SEEK_FORWARD"
         private val seekBackCommand = SessionCommand(ACTION_SEEK_BACK, Bundle.EMPTY)
         private val seekForwardCommand = SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY)
+
+        // FIX #VIDEO-FG-TIME: канал/id служебной заглушки foreground (см.
+        // promoteToForegroundImmediately). ID произвольный, отличен от media3
+        // DEFAULT_NOTIFICATION_ID=1001 (DefaultMediaNotificationProvider 1.8.0) —
+        // повторный startForeground media3 в любом случае заменяет заглушку:
+        // у сервиса ОДИН foreground-слот, последняя нотификация вытесняет прежнюю.
+        private const val CHANNEL_ID_PLACEHOLDER = "pinok_video_fg_placeholder"
+        private const val NOTIF_ID_PLACEHOLDER = 41102
     }
 
     override fun onCreate() {
         super.onCreate()
+        // FIX #VIDEO-FG-TIME (краш 2026-09-10 23:39:12.911 и 23:41:49.235, HOTWAV
+        // Cyber 15, API 33): ContextCompat.startForegroundService из
+        // VideoPlaybackBus.onBackgrounded создаёт СИСТЕМНОЕ обязательство вызвать
+        // startForeground() в короткое окно — иначе FATAL
+        // RemoteServiceException$ForegroundServiceDidNotStartInTimeException.
+        // Обязательство должно быть погашено ДАЖЕ если сервис немедленно
+        // останавливается (гонка из лога: экран уходит с композиции →
+        // onPlayerReleased → stopService приходит РАНЬШЕ, чем media3 продвинет
+        // нас в foreground — media3 продвигает только на isPlaying-переходе,
+        // которого при релизнутом плеере уже не будет).
+        // Решение: продвигаемся в foreground САМИ первым же действием onCreate —
+        // тихая MIN-приоритетная заглушка; при живом воспроизведении media3
+        // заменит её MediaStyle-уведомлением, при немедленном stopSelf — заглушка
+        // исчезает вместе с сервисом. Все пути stopSelf ниже (playerRef==null,
+        // build-fail, onTaskRemoved, внешний stopService) теперь легальны.
+        promoteToForegroundImmediately()
+
         val player: ExoPlayer? = VideoPlaybackBus.playerRef
         if (player == null) {
             // Экран уже релизнул плеер (гонка при быстром выходе) — сервиса нет.
@@ -125,15 +156,83 @@ class VideoPlaybackService : MediaSessionService() {
     }
 
     /**
-     * Кнопки «−N сек» / «+N сек» в custom layout (Fix #138-паттерн CommandButton).
-     * Иконки — системные android.R.drawable.ic_media_rew / ic_media_ff (гарантированно
-     * существуют на всех уровнях API; на lock-screen рендерятся системой).
+     * FIX #VIDEO-FG-TIME: немедленный startForeground с тихой заглушкой —
+     * гашение системного обязательства из startForegroundService.
+     * ServiceCompat.startForeground с явным типом mediaPlayback (обязателен на
+     * API 34+; permission FOREGROUND_SERVICE_MEDIA_PLAYBACK есть в манифесте).
+     * Всё в try/catch: сервис опционален для UX — отказ нотификации не должен
+     * ронять приложение (класс defensive-гвардов onCreate).
      */
-    private fun buildSeekButton(back: Boolean): CommandButton = CommandButton.Builder()
-        .setSessionCommand(if (back) seekBackCommand else seekForwardCommand)
-        .setDisplayName(if (back) "−${seekStepSec} сек" else "+${seekStepSec} сек")
-        .setIconResId(if (back) android.R.drawable.ic_media_rew else android.R.drawable.ic_media_ff)
-        .build()
+    private fun promoteToForegroundImmediately() {
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+            if (nm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID_PLACEHOLDER,
+                        "Фоновое видео (служебное)",
+                        NotificationManager.IMPORTANCE_MIN,
+                    ).apply { setShowBadge(false) },
+                )
+            }
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID_PLACEHOLDER)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle(VideoPlaybackBus.mediaTitle)
+                .setContentText("Воспроизведение видео")
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setSilent(true)
+                .setShowWhen(false)
+                .setOngoing(true)
+                .build()
+            ServiceCompat.startForeground(
+                this,
+                NOTIF_ID_PLACEHOLDER,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+            )
+            AppLog.d(
+                "VideoPlaybackService",
+                "startForeground: placeholder promoted (обязательство startForegroundService погашено)",
+            )
+        } catch (e: Exception) {
+            AppLog.w("VideoPlaybackService", "startForeground placeholder failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Кнопки «−N сек» / «+N сек» в custom layout (Fix #138-паттерн CommandButton).
+     *
+     * W36 #MEDIA3-DEPRECATION: CommandButton.Builder() и setIconResId(int)
+     * deprecated с media3 1.5.0 — замена по официальному javadoc androidx/media
+     * (CommandButton.java): иконка задаётся конструктором Builder(@Icon int),
+     * «A separate resource id via setIconResId is no longer required unless for
+     * ICON_UNDEFINED». Для шага 5/10/15 есть встроенные константы
+     * ICON_SKIP_BACK_N / ICON_SKIP_FORWARD_N — рендерятся с цифрой («−10»/«+10»)
+     * на lock-screen, вместо системных заглушек ic_media_rew/ff.
+     * Ветки else — defensive (seekStepSec гвардится в {5,10,15} и настройкой,
+     * и collect'ом prefs).
+     */
+    private fun buildSeekButton(back: Boolean): CommandButton {
+        val icon = if (back) {
+            when (seekStepSec) {
+                5 -> CommandButton.ICON_SKIP_BACK_5
+                10 -> CommandButton.ICON_SKIP_BACK_10
+                15 -> CommandButton.ICON_SKIP_BACK_15
+                else -> CommandButton.ICON_SKIP_BACK
+            }
+        } else {
+            when (seekStepSec) {
+                5 -> CommandButton.ICON_SKIP_FORWARD_5
+                10 -> CommandButton.ICON_SKIP_FORWARD_10
+                15 -> CommandButton.ICON_SKIP_FORWARD_15
+                else -> CommandButton.ICON_SKIP_FORWARD
+            }
+        }
+        return CommandButton.Builder(icon)
+            .setSessionCommand(if (back) seekBackCommand else seekForwardCommand)
+            .setDisplayName(if (back) "−${seekStepSec} сек" else "+${seekStepSec} сек")
+            .build()
+    }
 
     private val sessionCallback = object : MediaSession.Callback {
         override fun onConnect(

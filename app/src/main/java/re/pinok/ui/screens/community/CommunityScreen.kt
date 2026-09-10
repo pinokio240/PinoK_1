@@ -81,6 +81,7 @@ import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
+import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
 // #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
 import re.pinok.ui.components.PostPhotoGrid
@@ -146,6 +147,9 @@ fun CommunityScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
+    // W36 #COMMUNITY-COMPOSER (C0 волны 35): композер постинга на стену
+    // сообщества (референс web: group_publish_block, сверка §4.1).
+    var showComposer by remember { mutableStateOf(false) }
     // S6-4: подписка на сообщество.
     var isMember by remember { mutableStateOf(false) }
     // Fix #350: блокируем кнопку подписки на время API-запроса.
@@ -780,6 +784,41 @@ fun CommunityScreen(
         when (selectedTab) {
             0 -> {
                 // Wall — записи сообщества (существующая реализация)
+                // W36 #COMMUNITY-COMPOSER (C0 волны 35): строка композера над
+                // записями (как в web — group_publish_block). Гейт can_post=1 —
+                // право постить на стене (приходит в groups.getById из волны 35;
+                // у обычного участника без права композер не рисуется).
+                if (g.canPost == 1) {
+                    item(key = "community_composer") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .clickable { showComposer = true }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Ава сообщества (место публикации); у руководителя
+                            // дефолтный автор записи — само сообщество (сверка §3.5).
+                            AsyncImage(
+                                model = g.photo200 ?: g.photo100,
+                                contentDescription = "Аватар сообщества",
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop,
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Написать запись…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -1178,6 +1217,74 @@ fun CommunityScreen(
             post = sharing,
             onDismiss = { repostPost.value = null },
             onSuccess = { refreshWall() },
+        )
+    }
+
+    // W36 #COMMUNITY-COMPOSER: диалог создания записи на стене сообщества.
+    // Публикация: wall.post owner_id=-groupId + from_group/signed (переключатель
+    // автора внутри диалога; «сообщество» гейтится canPostAsGroup=isAuthor —
+    // admin_level>=2, волна 35). После публикации — refreshWall() (паттерн
+    // #SHARE-18B): новый пост виден сразу, как в вебе.
+    if (showComposer) {
+        val composerContext = LocalContext.current
+        CreatePostDialog(
+            onDismiss = { showComposer = false },
+            onSubmit = { _, _ -> },
+            targetGroupId = groupId,
+            canPostAsGroup = g.isAuthor,
+            onSubmitGroup = { message, fromGroup, signed ->
+                scope.launch {
+                    try {
+                        val postId = app.apiClient.wallPost(
+                            message,
+                            ownerId = -groupId,
+                            fromGroup = fromGroup,
+                            signed = signed,
+                        )
+                        if (postId > 0) {
+                            AppLog.i(
+                                "CommunityScreen",
+                                "posted to wall: id=$postId, groupId=$groupId, fromGroup=$fromGroup, signed=$signed",
+                            )
+                            Toast.makeText(composerContext, "Запись опубликована", Toast.LENGTH_SHORT).show()
+                            showComposer = false
+                            refreshWall()
+                        } else {
+                            Toast.makeText(composerContext, "Не удалось опубликовать запись", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "wallPost(group) failed", e)
+                        Toast.makeText(composerContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onSubmitGroupWithAttachments = { message, fromGroup, signed, attachments ->
+                scope.launch {
+                    try {
+                        val postId = app.apiClient.wallPostWithAttachments(
+                            message = message,
+                            attachments = attachments.joinToString(","),
+                            ownerId = -groupId,
+                            fromGroup = fromGroup,
+                            signed = signed,
+                        )
+                        if (postId > 0) {
+                            AppLog.i(
+                                "CommunityScreen",
+                                "posted to wall with ${attachments.size} attachments: id=$postId, groupId=$groupId, fromGroup=$fromGroup",
+                            )
+                            Toast.makeText(composerContext, "Запись опубликована", Toast.LENGTH_SHORT).show()
+                            showComposer = false
+                            refreshWall()
+                        } else {
+                            Toast.makeText(composerContext, "Не удалось опубликовать запись", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "wallPostWithAttachments(group) failed", e)
+                        Toast.makeText(composerContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
         )
     }
 }
