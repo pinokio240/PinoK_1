@@ -8849,3 +8849,22 @@ Stage Summary:
 - Композер сообщества C0 реализован: постинг от своего имени И от имени сообщества (+подпись автора), с фото и вложениями VK, с мгновенным обновлением стены.
 - Изменённые файлы: VideoPlaybackService.kt, VideoPlayerScreen.kt, GroupsScreen.kt, VKApiClient.kt, CreatePostDialog.kt, CommunityScreen.kt (+docs/план.волна-35.админ-сообщества.2026-09-10.md).
 - На волну 37: C1-C8 (Сообщения сообщества, Разделы, Бан из меню участника и др.), реестр R1-R4, ВЛ-35 §9 ограничения.
+
+---
+Task ID: 36-c
+Agent: main (Z.ai Code)
+Task: PIN-блокировка при возврате из фона не срабатывает (жалоба пользователя) + отправить на гит
+
+Work Log:
+- Статический разбор всей цепочки: SettingsScreen тумблер → setLockerOnBackground → LOCKER_ON_BACKGROUND → Snapshot → MainActivity.onResume (isBackgrounded → cached.lockerEnabled && lockerOnBackground && pinHash && !unlockGrace → LockerActivity.launch) → LockerActivity (extras, markUnlocked/grace 5с/consume). Chain цел; boot-путь и grace-семантика корректны.
+- Root-cause найден в истории дефолтов: #DEFAULTS-OFF (2026-08-04) — lockerOnBackground default false; авто-включение при установке PIN (#LOCKER-UX, Fix #380) — только 2026-09-09. У всех с PIN до этого фикса персистится false → PIN только на холодном старте, resume-чек честно фильтровался.
+- Фикс: migrateLockerOnBackgroundOn() (SovaPrefs) — одноразовая миграция по паттерну migrateReadReceiptsDefaultOn: ключ LOCKER_BG_MIGRATED (intPreferencesKey), гейт lockerEnabled && pinHash.isNotBlank() && stored==false → true один раз; осознанный «выкл» после миграции не трогается; пользователи без PIN не затрагиваются (флаг ставится в любом случае).
+- SovaApp.onCreate: вызов рядом с read-receipts миграцией + AppLog-крошка.
+- Диагностика на будущее: в resume-чеке MainActivity безликий AppLog.d «no locker needed» заменён i-логом с точной причиной (enabled/onBackground/pinHashBlank, либо «unlock grace active»).
+- Валидация: nested ALL CLEAN (178), secrets OK (74), brace-delta HEAD==CUR ×3 файлов.
+- Коммит a5abd16d (stamp wave36-2026.09.10-c) → push подтверждён (69d11c4b..a5abd16d).
+
+Stage Summary:
+- «Блокировка при возврате из фона» теперь гарантированно ON после обновления на устройствах с установленным PIN; пользователь после сборки увидит PIN-пад при каждом возврате из фона (первый возврат — сразу, grace 5с только после успешного ввода).
+- Изменённые файлы: SovaPrefs.kt, SovaApp.kt, MainActivity.kt.
+- Если после сборки не сработает — логкат покажет «Locker on background not needed: enabled=…, onBackground=…, pinHashBlank=…» — точное условие для следующей итерации.
