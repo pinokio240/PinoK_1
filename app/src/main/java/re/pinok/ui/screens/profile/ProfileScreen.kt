@@ -1095,6 +1095,13 @@ fun ProfileScreen(
         }
     }
 
+    // Fix #389 #SCROLL-TOP-PARITY: состояние главного списка (стена/закладки/статьи)
+    // — выведено наружу, тот же экземпляр используется FAB «наверх» ниже.
+    // W34-FIX (2026-09-10): объявление перенесено ВЫШЕ LaunchedEffect'ов скролла
+    // по счётчикам — Kotlin резолвит локальные val по порядку объявления, ссылки
+    // mainListState в LaunchedEffect ниже падали с «Unresolved reference»
+    // (×5: строки 1106/1107/1121/1122 лога сборки).
+    val mainListState = rememberLazyListState()
     // W33-c: переход по счётчикам (Фото/Видео/Аудио/Подарки) — после смены
     // вкладки скроллим LazyColumn к началу её контента. Индекс 5 = первый
     // item контента (перед ним ProfileHeader / «Редактировать» / счётчики /
@@ -1125,13 +1132,11 @@ fun ProfileScreen(
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
     // ProfileScreen в hasOwnTopBar списке SovaNavHost, но своего Scaffold нет
     // (глобальный TopAppBar не рисуется) → insets применяем сами.
-    // Fix #389 #SCROLL-TOP-PARITY: состояние главного списка (стена/закладки/статьи)
-    // — выведено наружу, тот же экземпляр используется FAB «наверх» ниже.
     // W31-b: обёртка Column→Box(weight(1f)) сохранена — она нужна оверлею FAB
     // (ScrollToTopFab живёт в BoxScope и align-ится к низу weight-зоны);
     // закреплённая строка «Выйти из аккаунта» (Fix #378) удалена — выход
     // из аккаунта теперь ТОЛЬКО в боковом drawer (Fix #369).
-    val mainListState = rememberLazyListState()
+    // W34-FIX: mainListState объявлен выше — до LaunchedEffect'ов скролла.
     // W33-c: состояние плеера для списка «Музыка» и URL-сетка «Фото»
     // собираются на уровне тела экрана: внутри LazyListScope-веток
     // composable-вызовы (collectAsState/remember) запрещены.
@@ -1360,7 +1365,10 @@ fun ProfileScreen(
             // П-1: подарки профиля (gifts.get) — ряд открыток под лентой.
             // NULL-ЯВНО: явная проверка вместо элвиса (строка перенесена W33-c).
             val pCounters = p.counters
-            val giftTotalCount = if (pCounters != null) pCounters.gifts else 0
+            // W34-FIX: pCounters.gifts — сам по себе Int? (модель Counters),
+            // а GiftsSection принимает Int → внутренний элвис, иначе
+            // «Argument type mismatch: actual type is 'Int?'» (строка 1369 лога).
+            val giftTotalCount: Int = if (pCounters != null) (pCounters.gifts ?: 0) else 0
             val giftsList = gifts
             if (!giftsList.isNullOrEmpty()) {
                 item {
