@@ -32,6 +32,10 @@ import re.pinok.data.model.Chat
 import re.pinok.data.model.ChatFolder
 import re.pinok.data.model.Comment
 import re.pinok.data.model.Message
+// #REACTION-WEB-API (волна 32): парсинг reactions объекта сообщения
+// (см. parseMessageReactions) — до волны 32 поле НЕ парсилось.
+import re.pinok.data.model.MessageReaction
+import re.pinok.data.model.RecentReaction
 import re.pinok.data.model.Post
 import re.pinok.data.model.CatalogPlaylist
 import re.pinok.data.model.CatalogViewType
@@ -1349,6 +1353,10 @@ class VKApiClient(
                         }
                     },
                     actionText = o.get("action_text")?.takeIf { !it.isJsonNull }?.asString,
+                    // #REACTION-WEB-API (волна 32): реакции сообщения — раньше
+                    // терялись (reactions=null) → тоггл реакций и ReactionBar не
+                    // имели серверных данных (user_reaction/count/recent).
+                    reactions = parseMessageReactions(o),
                 )
             }
             // MessageMods: undelete/unedit применяются к результату API-вызова.
@@ -1450,6 +1458,8 @@ class VKApiClient(
                         }
                     },
                     actionText = o.get("action_text")?.takeIf { !it.isJsonNull }?.asString,
+                    // #REACTION-WEB-API (волна 32): как в messagesGetHistory.
+                    reactions = parseMessageReactions(o),
                 )
             }
             val snap = prefs.data.first()
@@ -2010,6 +2020,46 @@ class VKApiClient(
         } else {
             AppLog.i("VKApiClient",
                 "markAsImportantConversation ok: peer=$peerId important=$important")
+        }
+        return ok
+    }
+
+    /**
+     * #IM-IMPORTANT (волна 32): «Отметить как важное» для ОТДЕЛЬНОГО сообщения.
+     *
+     * VK web parity (бандл снапшота Мессенджер_меню_сообщения):
+     *   messages.markAsImportant {peer_id, cmids: "<cmid1>,<cmid2>", important: 1|0}
+     * — cmids передаётся СТРОКОЙ через запятую; ответ содержит массив marked.
+     * НЕ путать с [messagesMarkAsImportantConversation] — тот ставит флажок
+     * ДИАЛОГУ (закреп в списке чатов, Fix #274).
+     *
+     * isImportant на сообщении в messages.getHistory не приходит — UI всегда
+     * вызывает с important=true; повторная отметка идемпотентна сервером.
+     *
+     * @param peerId    ID диалога (каналы/сообщества — отрицательный peer;
+     *                  вызывающий код не показывает пункт для peerId <= 0).
+     * @param cmid      conversation_message_id сообщения.
+     * @param important true = отметить (1), false = снять (0).
+     * @return true если сервер подтвердил.
+     */
+    suspend fun messagesMarkAsImportant(peerId: Long, cmid: Long, important: Boolean): Boolean {
+        if (isOffline()) return false
+        val json = call("messages.markAsImportant", mapOf(
+            "peer_id" to peerId.toString(),
+            "conversation_message_ids" to cmid.toString(),
+            "important" to if (important) "1" else "0",
+        ))
+        if (json == null) {
+            AppLog.w("VKApiClient", "markAsImportant failed (null) peer=$peerId cmid=$cmid important=$important")
+            return false
+        }
+        // Ответ web-гейтвея: {"response":{"marked":[<cmid>, ...]}} (или legacy
+        // {"response":1}) — считаем успехом наличие response.
+        val ok = json.has("response")
+        if (ok) {
+            AppLog.i("VKApiClient", "markAsImportant ok: peer=$peerId cmid=$cmid important=$important")
+        } else {
+            AppLog.w("VKApiClient", "markAsImportant failed: peer=$peerId cmid=$cmid important=$important")
         }
         return ok
     }
@@ -5571,9 +5621,15 @@ class VKApiClient(
     /**
      * Поставить/снять реакцию на сообщение. VK: messages.react.
      *
+     * #REACTION-WEB-API (волна 32): LEGACY — заменён парой
+     * [messagesSendReaction]/[messagesDeleteReaction] (web-parity,
+     * messages.sendReaction/messages.deleteReaction; параметры сверены по
+     * бандлу снапшота 55252). Других вызовов в app/ нет — fun оставлен
+     * по правилу «не удалять без надобности».
+     *
      * @param peerId     ID диалога.
-     * @param messageId  ID сообщения.
-     * @param reactionId ID реакции (1=👍, 2=❤️, 3=😂, 4=😭, 5=😡, 6=🎉, 7=🔥, 8=😮).
+     * @param messageId  ID сообщения (трактуется как cmid — см. Audit #40).
+     * @param reactionId ID реакции (web-карта: 1=❤️ 2=🔥 3=😂 4=👍 5=💩 6=❓ 7=😭).
      *                   Передать 0, чтобы снять свою реакцию.
      * @return true если успешно.
      */
@@ -5591,6 +5647,55 @@ class VKApiClient(
             "reaction_id" to reactionId.toString(),
         )
         val json = call("messages.react", args) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #REACTION-WEB-API (волна 32): поставить реакцию на сообщение.
+     * VK web parity: messages.sendReaction — {cmid, peer_id, reaction_id}
+     * (сверено по бандлу снапшота Мессенджер_меню_сообщения; group_id нужен
+     * только для сообществ-ботов — для личек/групп не передаётся).
+     *
+     * @param peerId     ID диалога.
+     * @param cmid       conversation_message_id сообщения.
+     * @param reactionId ID реакции (web-карта: 1=❤️ 2=🔥 3=😂 4=👍 5=💩 6=❓ 7=😭).
+     * @return true если успешно (web-гейтвейт отвечает 1).
+     */
+    suspend fun messagesSendReaction(
+        peerId: Long,
+        cmid: Long,
+        reactionId: Int,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mapOf(
+            "peer_id" to peerId.toString(),
+            "cmid" to cmid.toString(),
+            "reaction_id" to reactionId.toString(),
+        )
+        val json = call("messages.sendReaction", args)
+        if (json == null) return false
+        return json.has("response")
+    }
+
+    /**
+     * #REACTION-WEB-API (волна 32): снять свою реакцию с сообщения.
+     * VK web parity: messages.deleteReaction — {cmid, peer_id}.
+     *
+     * @param peerId ID диалога.
+     * @param cmid   conversation_message_id сообщения.
+     * @return true если успешно.
+     */
+    suspend fun messagesDeleteReaction(
+        peerId: Long,
+        cmid: Long,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mapOf(
+            "peer_id" to peerId.toString(),
+            "cmid" to cmid.toString(),
+        )
+        val json = call("messages.deleteReaction", args)
+        if (json == null) return false
         return json.has("response")
     }
 
@@ -5853,22 +5958,30 @@ class VKApiClient(
 
     /**
      * Отредактировать сообщение. VK: messages.edit.
-     * @param peerId    ID диалога.
-     * @param messageId ID сообщения.
-     * @param message   Новый текст.
-     * @param keepForwardMessages Сохранить пересылаемые сообщения.
+     *
+     * #IM-EDIT-CMID (волна 32): web-parity — редактирование по **cmid**
+     * (conversation_message_id): бандл снапшота передаёт
+     * `{cmid, peer_id, message, keep_forward_messages, keep_snippets}`.
+     * Раньше уходил `message_id` — на современных гейтвеях для групповых
+     * чатов это класс сбоев Fix #207. Для старых записей без cmid вызывающий
+     * код (ChatDetailScreen.editMessage) честно фолбэчит на message_id.
+     *
+     * @param peerId ID диалога.
+     * @param cmid   conversation_message_id сообщения (фолбэк — message_id).
+     * @param message Новый текст.
+     * @param keepForwardMessages Сохранить пересылаемые сообщения (web: keep_forward_messages).
      * @return true если успешно.
      */
     suspend fun messagesEdit(
         peerId: Long,
-        messageId: Long,
+        cmid: Long,
         message: String,
         keepForwardMessages: Boolean = true,
     ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
             "peer_id" to peerId.toString(),
-            "message_id" to messageId.toString(),
+            "cmid" to cmid.toString(),
             "message" to message,
         )
         if (keepForwardMessages) args["keep_forward_messages"] = "1"
@@ -9938,6 +10051,44 @@ class VKApiClient(
     //  Вспомогательные парсеры — вынесены из повторяющихся блоков выше.
     // ------------------------------------------------------------------------
 
+    /**
+     * #REACTION-WEB-API (волна 32): парсинг поля "reactions" объекта сообщения
+     * (messages.getHistory / messages.getById, VK API 5.221+):
+     *   {"count":N,"user_reaction":ID,"recent_reactions":[{"user_id":..,"reaction_id":..}]}
+     * До волны 32 поле не парсилось нигде → Message.reactions был всегда null:
+     * ReactionBar не показывал серверные реакции, тоггл (user_reaction) не видел
+     * свою реакцию. Отображение чужих реакций идёт через web-карту REACTION_EMOJIS
+     * (ChatDetailScreen, 1=❤️ 2=🔥 3=😂 4=👍 5=💩 6=❓ 7=😭).
+     */
+    private fun parseMessageReactions(o: JsonObject): MessageReaction? {
+        val r = o.getAsJsonObject("reactions")
+        if (r == null) return null
+        val countEl = r.get("count")
+        val count = if (countEl != null && !countEl.isJsonNull) countEl.asInt else 0
+        val userEl = r.get("user_reaction")
+        val userReaction = if (userEl != null && !userEl.isJsonNull) userEl.asInt else null
+        val recentArr = r.getAsJsonArray("recent_reactions")
+        var recent: List<RecentReaction> = emptyList()
+        if (recentArr != null) {
+            val list = ArrayList<RecentReaction>()
+            for (el in recentArr) {
+                if (!el.isJsonObject) continue
+                val ro = el.asJsonObject
+                val uidEl = ro.get("user_id")
+                val ridEl = ro.get("reaction_id")
+                val uid = if (uidEl != null && !uidEl.isJsonNull) uidEl.asLong else 0L
+                val rid = if (ridEl != null && !ridEl.isJsonNull) ridEl.asInt else 0
+                list.add(RecentReaction(userId = uid, reactionId = rid))
+            }
+            recent = list
+        }
+        return MessageReaction(
+            count = count,
+            userReaction = userReaction,
+            recentReactions = if (recent.isNotEmpty()) recent else null,
+        )
+    }
+
     /** #67: парсинг Message из JSON (для reply_message, fwd_messages). */
     private fun parseMessage(o: JsonObject): Message {
         return Message(
@@ -9961,6 +10112,8 @@ class VKApiClient(
             }?.takeIf { it.isNotEmpty() },
             action = o.get("action")?.takeIf { !it.isJsonNull }?.asString,
             actionText = o.get("action_text")?.takeIf { !it.isJsonNull }?.asString,
+            // #REACTION-WEB-API (волна 32): реакции в reply/fwd сообщениях.
+            reactions = parseMessageReactions(o),
         )
     }
 

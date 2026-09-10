@@ -232,15 +232,21 @@ import re.pinok.ui.screens.profile.WallPostCard
 import re.pinok.ui.navigation.PostHolder
 
 // VK reaction IDs → emoji.
+// #REACTION-WEB-MAP (волна 32): VK web словарь 909189 (снапшот
+// Мессенджер_меню_сообщения, lang0_2.js me_message_reaction_text_*):
+// 1=Сердце 2=Огонь 3=Смеюсь до слёз 4=Большой палец вверх 5=Неординарно(💩)
+// 6=Вопросы(❓) 7=Плачу. Старая карта (1=👍…) промахивалась мимо серверных id —
+// double-click «❤️» серверно ставил 🔥. Слоты 8+ НЕ заполняются: id→эмодзи за
+// пределами 1-7 достоверно неизвестен (словарь даёт только имена) — не выдумывать
+// (долг: полная сетка через messages.getReactionsAssets).
 private val REACTION_EMOJIS = listOf(
-    1 to "\uD83D\uDC4D",  // 👍
-    2 to "\u2764\uFE0F",   // ❤️
-    3 to "\uD83D\uDE02",  // 😂
-    4 to "\uD83D\uDE2D",  // 😭
-    5 to "\uD83D\uDE21",  // 😡
-    6 to "\uD83C\uDF89",  // 🎉
-    7 to "\uD83D\uDD25",  // 🔥
-    8 to "\uD83D\uDE2E",  // 😮
+    1 to "\u2764\uFE0F",   // ❤️ Сердце
+    2 to "\uD83D\uDD25",   // 🔥 Огонь
+    3 to "\uD83D\uDE02",   // 😂 Смеюсь до слёз
+    4 to "\uD83D\uDC4D",   // 👍 Большой палец вверх
+    5 to "\uD83D\uDCA9",   // 💩 Неординарно
+    6 to "\u2753",         // ❓ Вопросы
+    7 to "\uD83D\uDE2D",   // 😭 Плачу
 )
 
 // P0.1: typing indicator — VK resends typing events every ~4s while user keeps typing.
@@ -1400,15 +1406,71 @@ fun ChatDetailScreen(
     }
 
     // Реакция на сообщение.
+    // #REACTION-WEB-API (волна 32): web-методы messages.sendReaction /
+    // messages.deleteReaction (parity VK web, параметры сверены по бандлу
+    // снапшота: {cmid, peer_id, reaction_id} / {cmid, peer_id}) вместо legacy
+    // messages.react. Тап по реакции — toggle: если своя реакция совпадает
+    // (reactions.user_reaction == id) — снимаем, иначе ставим.
+    // Оптимистичный UI: локальный стейт сообщения обновляется сразу; при
+    // сбое/ошибке — сброс перезагрузкой истории. На успех НЕ перезагружаем
+    // (иначе лагающий getHistory мог бы «мигнуть» реакцию обратно).
     fun reactToMessage(messageId: Long, reactionId: Int) {
+        val msg = messages.firstOrNull { it.id == messageId }
+        if (msg == null) {
+            AppLog.w("ChatDetailScreen", "#IM-REACTION skipped: msg id=$messageId not in loaded history")
+            return
+        }
+        val msgCmid = msg.conversationMessageId
+        // cmid — правильный идентификатор для messages.* (семантика Audit #40 /
+        // Fix #207); для записей без cmid — честный фолбэк на message_id.
+        val ref = if (msgCmid != null && msgCmid > 0) msgCmid else messageId
+        if (msgCmid == null || msgCmid <= 0) {
+            AppLog.w("ChatDetailScreen", "#IM-REACTION cmid missing for msg id=$messageId, fallback to message_id")
+        }
+        val msgReactions = msg.reactions
+        val myReaction = if (msgReactions != null) msgReactions.userReaction else null
+        val isToggleOff = myReaction != null && myReaction != 0 && myReaction == reactionId
+        // Оптимистичное обновление (лайк-паттерн: тап → сразу в списке).
+        messages = messages.map { m ->
+            if (m.id != messageId) m else {
+                val old = m.reactions
+                val oldCount = if (old != null) old.count else 0
+                val oldUser = if (old != null) old.userReaction else null
+                val hadUser = oldUser != null && oldUser != 0
+                val newReaction = if (isToggleOff) {
+                    MessageReaction(
+                        count = if (oldCount > 0) oldCount - 1 else 0,
+                        userReaction = null,
+                    )
+                } else {
+                    MessageReaction(
+                        count = if (hadUser) oldCount else oldCount + 1,
+                        userReaction = reactionId,
+                    )
+                }
+                m.copy(reactions = newReaction)
+            }
+        }
         scope.launch {
             try {
-                val msg = messages.firstOrNull { it.id == messageId } ?: return@launch
-                val toggle = if (msg.reactions?.userReaction == reactionId) 0 else reactionId
-                val ok = app.apiClient.messagesReact(peerId, messageId, toggle)
-                if (ok) reloadMessages()
+                if (isToggleOff) {
+                    AppLog.i("ChatDetailScreen", "#IM-REACTION delete cmid=$ref")
+                    val ok = app.apiClient.messagesDeleteReaction(peerId, ref)
+                    if (!ok) {
+                        AppLog.w("ChatDetailScreen", "#IM-REACTION delete failed: peer=$peerId cmid=$ref — rollback")
+                        reloadMessages()
+                    }
+                } else {
+                    AppLog.i("ChatDetailScreen", "#IM-REACTION send id=$reactionId cmid=$ref")
+                    val ok = app.apiClient.messagesSendReaction(peerId, ref, reactionId)
+                    if (!ok) {
+                        AppLog.w("ChatDetailScreen", "#IM-REACTION send failed: peer=$peerId cmid=$ref id=$reactionId — rollback")
+                        reloadMessages()
+                    }
+                }
             } catch (e: Exception) {
-                AppLog.e("ChatDetailScreen", "react error", e)
+                AppLog.e("ChatDetailScreen", "#IM-REACTION error — rollback", e)
+                reloadMessages()
             }
         }
     }
@@ -1442,10 +1504,20 @@ fun ChatDetailScreen(
     }
 
     // Редактирование сообщения.
+    // #IM-EDIT-CMID (волна 32): web-parity — messages.edit по conversation_message_id
+    // (cmid, параметр сверен по бандлу снапшота: {cmid, peer_id, message,
+    // keep_forward_messages}); по message_id современный gateway может отказывать
+    // (класс Fix #207). Для старых записей без cmid — фолбэк на message_id.
     fun editMessage(messageId: Long, newText: String) {
         scope.launch {
             try {
-                val ok = app.apiClient.messagesEdit(peerId, messageId, newText)
+                val msg = messages.firstOrNull { it.id == messageId }
+                val msgCmid = if (msg != null) msg.conversationMessageId else null
+                val editRef = if (msgCmid != null && msgCmid > 0) msgCmid else messageId
+                if (msgCmid == null || msgCmid <= 0) {
+                    AppLog.w("ChatDetailScreen", "editMessage: cmid missing for msg id=$messageId, fallback to message_id")
+                }
+                val ok = app.apiClient.messagesEdit(peerId, editRef, newText)
                 if (ok) reloadMessages()
                 else AppLog.w("ChatDetailScreen", "edit failed for $messageId")
             } catch (e: Exception) {
@@ -1458,6 +1530,34 @@ fun ChatDetailScreen(
     fun cancelEdit() {
         editingMsgId = null
         inputText = ""
+    }
+
+    // #IM-IMPORTANT (волна 32): «Отметить как важное» — messages.markAsImportant
+    // (parity VK web, снапшот §1.1: peer_id + cmids + important=1). НЕ путать с
+    // messagesMarkAsImportantConversation — тот ставит флажок ДИАЛОГУ (Fix #274).
+    // isImportant на сообщении от сервера в getHistory не приходит — пункт меню
+    // всегда ставит important=1; повторная отметка идемпотентна сервером.
+    fun markMessageImportant(message: re.pinok.data.model.Message) {
+        val cmid = message.conversationMessageId
+        if (cmid == null || cmid <= 0) {
+            AppLog.w("ChatDetailScreen", "#IM-IMPORTANT skipped: cmid missing for msg id=${message.id}")
+            Toast.makeText(ctx, "Это сообщение нельзя отметить как важное", Toast.LENGTH_SHORT).show()
+            return
+        }
+        scope.launch {
+            try {
+                val ok = app.apiClient.messagesMarkAsImportant(peerId, cmid, important = true)
+                AppLog.i("ChatDetailScreen", "#IM-IMPORTANT peer=$peerId cmid=$cmid ok=$ok")
+                if (ok) {
+                    Toast.makeText(ctx, "Отмечено как важное", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(ctx, "Не удалось отметить как важное", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "#IM-IMPORTANT error", e)
+                Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // Пересылка сообщений.
@@ -3729,7 +3829,9 @@ fun ChatDetailScreen(
                                     profiles = chatProfiles,
                                     voicePlaybackController = voicePlaybackController,
                                     onLongPress = { contextMsgId = msg.id },
-                                    onDoubleClick = { reactToMessage(msg.id, 2) },
+                                    // #REACTION-WEB-MAP: double-click = ❤️ = id 1
+                                    // (web-карта; раньше id 2 был ❤️, фактически ставился 🔥).
+                                    onDoubleClick = { reactToMessage(msg.id, 1) },
                                     onReact = { rid -> reactToMessage(msg.id, rid) },
                                     onCopy = { contextMsgId = null },
                                     onEdit = {
@@ -3754,6 +3856,15 @@ fun ChatDetailScreen(
                                             showForwardDialog = true
                                         }
                                     },
+                                    // #IM-IMPORTANT (волна 32): «Отметить как важное» —
+                                    // messages.markAsImportant. Показ — только НЕ канал
+                                    // (peerId > 0: лички и групповые чаты; peer<0 —
+                                    // каналы/сообщества).
+                                    onMarkImportant = {
+                                        contextMsgId = null
+                                        markMessageImportant(msg)
+                                    },
+                                    canMarkImportant = peerId > 0,
                                     // #FAVE-MSG: «В избранное» — пересылка в self-chat
                                     // одним тапом (peer_id = myUserId), без ForwardDialog.
                                     onSaveToSelf = {
@@ -4487,6 +4598,10 @@ private fun MessageBubble(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onForward: () -> Unit,
+    // #IM-IMPORTANT (волна 32): «Отметить как важное» — messages.markAsImportant.
+    // Показ пункта решает ХОСТ (canMarkImportant: peerId > 0 — не канал).
+    onMarkImportant: () -> Unit = {},
+    canMarkImportant: Boolean = false,
     // Fix #120: единый voice-плеер на чат — только одно голосовое играет за раз.
     voicePlaybackController: VoicePlaybackController,
     // #59: ответ на сообщение
@@ -4656,11 +4771,14 @@ private fun MessageBubble(
             selectionMode = selectionMode,
             onToggleSelection = onToggleSelection,
             onLongPress = {
-                // Тот же long-press handler что у bubble Box ниже:
-                // прямой вход в selection если multi-select доступен и мы
-                // не в selection mode; иначе — context menu.
-                if (multiSelectAvailable && !selectionMode) onSelect()
-                else if (!selectionMode) onLongPress()
+                // Тот же long-press handler что у bubble Box ниже.
+                // #IM-MENU-LONGPRESS-FIX (волна 32): вне selection-режима
+                // long-press ВСЕГДА открывает контекстное меню — перехват
+                // multi-select удалён (pref msgMultiSelect управляет только
+                // пунктом «Выбрать» в меню, а не грабит long-press).
+                // В selection-режиме long-press ничего не делает (VK web:
+                // тап = toggle выделения).
+                if (!selectionMode) onLongPress()
             },
         )
         CompositionLocalProvider(LocalAttachmentSelection provides attachmentSelection) {
@@ -4680,8 +4798,9 @@ private fun MessageBubble(
                         // тап для double-click detect, если тап по bubble).
                     },
                     onLongClick = {
-                        if (multiSelectAvailable && !selectionMode) onSelect()
-                        else if (!selectionMode) onLongPress()
+                        // #IM-MENU-LONGPRESS-FIX: меню всегда вне selection-режима
+                        // (см. комментарий у attachmentSelection выше).
+                        if (!selectionMode) onLongPress()
                     },
                 ),
             horizontalAlignment = if (isOut) Alignment.End else Alignment.Start,
@@ -4774,13 +4893,13 @@ private fun MessageBubble(
                         }
                     },
                     onLongClick = {
-                        // Fix #244: прямой вход в selection по long-press
-                        // (вариант A) — если multi-select доступен и мы не в
-                        // selection mode, сразу enterSelection без промежуточного
-                        // DropdownMenu. Иначе (multi-select выключен или уже в
-                        // selection) — context menu как раньше.
-                        if (multiSelectAvailable && !selectionMode) onSelect()
-                        else if (!selectionMode) onLongPress()
+                        // #IM-MENU-LONGPRESS-FIX (волна 32): раньше здесь был перехват
+                        // `if (multiSelectAvailable && !selectionMode) onSelect()` —
+                        // при включённом pref msgMultiSelect меню становилось
+                        // недостижимым ВООБЩЕ (root-cause «пропало меню», волна 32).
+                        // Теперь вне selection-режима long-press всегда открывает
+                        // контекстное меню; вход в selection — пункт «Выбрать».
+                        if (!selectionMode) onLongPress()
                     },
                 )
                 .clip(msgShape)
@@ -5359,18 +5478,109 @@ private fun MessageBubble(
         )
 
         // Контекстное меню (long-press).
+        // #IM-MENU-ITEMS (волна 32): структура по снапшоту VK web
+        // (Мессенджер_меню_сообщения, §1.1 плана W32): пиалет реакций НАД
+        // списком пунктов → Ответить / Переслать / Отметить как важное /
+        // Копировать текст / Редактировать / Удалить / Выбрать.
+        // Legacy-пункты PinoK (#FAVE-MSG, закреп, «отмечено отвеченным»,
+        // восстановление) сохранены в хвосте меню; пункт «Реакция» заменён
+        // пиалетом (ReactionBar-тап по-прежнему открывает ReactionPicker).
         Box(modifier = Modifier.fillMaxWidth()) {
             DropdownMenu(
                 expanded = showContextMenu,
                 onDismissRequest = onDismissContextMenu,
             ) {
-                // #59: Ответить — первый пункт меню
+                // Пиалет реакций (VK web MessageReactionPickerExtended):
+                // 7 web-реакций (#REACTION-WEB-MAP), тап — toggle
+                // (#REACTION-WEB-API: своя → снять, иначе поставить).
+                // Тач-таргеты 34dp, стиль — MaterialTheme как у соседних пунктов.
+                val bubbleReactions = message.reactions
+                val myReactionId = if (bubbleReactions != null) bubbleReactions.userReaction else null
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    for ((rid, emoji) in REACTION_EMOJIS) {
+                        val isMine = myReactionId != null && myReactionId == rid
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isMine) MaterialTheme.colorScheme.primaryContainer
+                                    else Color.Transparent
+                                )
+                                .clickable {
+                                    onDismissContextMenu()
+                                    onReact(rid)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(text = emoji, fontSize = 20.sp)
+                        }
+                    }
+                }
+                // Снапшот: vkme_messages_action_reply.
                 DropdownMenuItem(
                     text = { Text("Ответить") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = null) },
                     onClick = onReply,
                 )
-                // P2.5: войти в режим выбора (только если флаг включён + не action-msg).
+                // Снапшот: vkme_messages_action_forward (подменю выбора чата —
+                // долг волны 32; здесь существующий ForwardDialog).
+                DropdownMenuItem(
+                    text = { Text("Переслать") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Forward, contentDescription = null) },
+                    onClick = onForward,
+                )
+                // Снапшот: vkme_messages_action_mark_important — новый API
+                // messagesMarkAsImportant (волна 32). Показ — только НЕ канал
+                // (canMarkImportant решает хост: peerId > 0). Иконки нет:
+                // правило волны — новых иконок не добавлять, пункт текстовый.
+                if (canMarkImportant && !message.isAction) {
+                    DropdownMenuItem(
+                        text = { Text("Отметить как важное") },
+                        onClick = {
+                            onDismissContextMenu()
+                            onMarkImportant()
+                        },
+                    )
+                }
+                // Снапшот: vkme_channel_post_action_copy_text — «Копировать текст»,
+                // только для сообщений с непустым текстом.
+                if (message.text.isNotBlank()) {
+                    DropdownMenuItem(
+                        text = { Text("Копировать текст") },
+                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("msg", message.text))
+                            onDismissContextMenu()
+                        },
+                    )
+                }
+                // Снапшот: vkme_messages_action_edit — только своё (isOut).
+                if (isOut) {
+                    DropdownMenuItem(
+                        text = { Text("Редактировать") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                        onClick = onEdit,
+                    )
+                }
+                // Снапшот: vkme_messages_action_delete — для любых сообщений
+                // (не только своих; существующий deleteMessage-флоу).
+                DropdownMenuItem(
+                    text = { Text("Удалить") },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                    onClick = onDelete,
+                )
+                // Снапшот: vkme_messages_action_select — вход в selection.
+                // #IM-MENU-LONGPRESS-FIX: единственная точка входа в selection —
+                // этот пункт (pref msgMultiSelect управляет ДОСТУПНОСТЬЮ selection,
+                // но long-press меню больше не грабит).
                 if (multiSelectAvailable && !selectionMode && !message.isAction) {
                     DropdownMenuItem(
                         text = { Text("Выбрать") },
@@ -5378,15 +5588,7 @@ private fun MessageBubble(
                         onClick = onSelect,
                     )
                 }
-                DropdownMenuItem(
-                    text = { Text("Копировать") },
-                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                    onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("msg", message.text))
-                        onDismissContextMenu()
-                    },
-                )
+                // ---- Legacy-пункты PinoK (вне снапшота — функциональность сохранена) ----
                 // #FAVE-MSG: «В избранное» — пересылает сообщение в self-chat
                 // (peer_id = myUserId). Один тап, без ForwardDialog.
                 DropdownMenuItem(
@@ -5395,33 +5597,6 @@ private fun MessageBubble(
                     onClick = {
                         onDismissContextMenu()
                         onSaveToSelf()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Переслать") },
-                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Forward, contentDescription = null) },
-                    onClick = onForward,
-                )
-                if (isOut) {
-                    DropdownMenuItem(
-                        text = { Text("Редактировать") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                        onClick = onEdit,
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Удалить") },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
-                        onClick = onDelete,
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text("Реакция") },
-                    leadingIcon = {
-                        Text("\u2764\uFE0F", fontSize = 18.sp) // ❤️
-                    },
-                    onClick = {
-                        onDismissContextMenu()
-                        onShowReactionPicker()
                     },
                 )
                 // P0.3: pin/unpin message (group chats only, onPin != null).
