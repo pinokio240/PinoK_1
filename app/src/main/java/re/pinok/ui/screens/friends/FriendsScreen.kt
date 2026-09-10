@@ -60,6 +60,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Friend
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
 import java.text.SimpleDateFormat
@@ -94,6 +95,9 @@ fun FriendsScreen(
     var loadingMore by remember { mutableStateOf(false) }
     var endReached by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    // Fix #389 #SCROLL-TOP-PARITY: отдельное состояние для вкладки «Заявки» —
+    // FAB «наверх» каждой вкладки крутит СВОЙ список.
+    val requestsListState = rememberLazyListState()
 
     // Загрузка списка друзей (первая страница).
     LaunchedEffect(Unit) {
@@ -278,7 +282,10 @@ fun FriendsScreen(
                     )
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+                // над списком заявок (у вкладки своё состояние скролла).
+                Box(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = requestsListState) {
                     items(requests, key = { it.id }) { request ->
                         RequestRow(
                             request = request,
@@ -316,6 +323,14 @@ fun FriendsScreen(
                         )
                     }
                 }
+
+                // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для заявок.
+                ScrollToTopFab(
+                    listState = requestsListState,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                )
+                }
             }
             return
         }
@@ -329,6 +344,8 @@ fun FriendsScreen(
         }
 
         // Fix #79: PullToRefreshBox — pull-to-refresh списка друзей.
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshFriends() },
@@ -366,6 +383,15 @@ fun FriendsScreen(
                     }
                 }
             }
+        }
+
+        // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» над списком
+        // друзей (пагинация friendsGet offset — loadMoreFriends).
+        ScrollToTopFab(
+            listState = listState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
         }
     }
 }

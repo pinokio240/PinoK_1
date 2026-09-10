@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -215,6 +217,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // вероятен err=8/15 → локальный source of truth (паттерн pin #276);
             // серверный вызов — best-effort.
             archivedConvsData  = p[Keys.ARCHIVED_CONVS_DATA]       ?: "", // NULL-ЯВНО
+            // Fix #392 #IM-LOCAL-PIN: локальный закреп диалога — JSON-массив peer_id
+            // в порядке закрепления (0-й элемент — верх списка), парсится НА УРОВНЕ
+            // Snapshot в List<Long> (битый/пустой JSON → пустой список, см.
+            // parseImPinnedDialogs). Заменяет legacy pinned_convs_data (Fix #274/#276)
+            // как source of truth UI — одноразовая миграция:
+            // migrateLegacyPinnedDialogsIfNeeded().
+            imPinnedDialogs    = parseImPinnedDialogs(p[Keys.IM_PINNED_DIALOGS] ?: ""),
             // P3.7: bubble-less дизайн — flat layout сообщений (без Card/bubble).
             // Аналог m.vk.ru: ConvoMessageWithoutBubble. Default false (opt-in, экспериментально).
             msgBubbleless      = p[Keys.MSG_BUBBLELESS]           ?: false,
@@ -452,6 +461,16 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             pushSafetyNetAlerts    = p[Keys.PUSH_SAFETY_NET_ALERTS]   ?: true,
             // §49.5.1: интервал polling SecurityAlerts (минуты, default 10).
             safetyNetPollIntervalMin = p[Keys.SAFETY_NET_POLL_INTERVAL] ?: 10,
+            // Fix #390 #NOTIFY-MODES (волна 29): режим уведомлений — какие всплывающие
+            // показывать. Константы companion: NOTIFY_MODE_MESSAGES_ONLY (0) /
+            // NOTIFY_MODE_ALL (1) / NOTIFY_MODE_COMMUNITIES_ONLY (2) / NOTIFY_MODE_SILENT (3).
+            // Default 1 (ALL) = прежнее поведение (показывать всё, со звуком).
+            notifyMode = p[Keys.NOTIFY_MODE] ?: NOTIFY_MODE_ALL,
+            // Fix #390 #NOTIFY-MODES: звук/вибрация УВЕДОМЛЕНИЙ ОТ СООБЩЕСТВ
+            // (и новостных parentOwnerId<0, и канальных peerId<0) в режимах,
+            // где они показываются (1/2). Default true — как у сообщений.
+            notifyCommunitiesSound = p[Keys.NOTIFY_COMMUNITIES_SOUND] ?: true,
+            notifyCommunitiesVibration = p[Keys.NOTIFY_COMMUNITIES_VIBRATION] ?: true,
             // #CALLS: queuev4 credential (ввод вручную из localStorage).
             callsQueueKey = p[Keys.CALLS_QUEUE_KEY] ?: "",
             callsQueueTs = p[Keys.CALLS_QUEUE_TS] ?: 0L,
@@ -561,6 +580,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setPinnedConvsData(v: String)            = put(Keys.PINNED_CONVS_DATA, v)
     /** Fix #356 #MSG-ARCHIVE: JSON-массив peer_id архивных диалогов. */
     suspend fun setArchivedConvsData(v: String)          = put(Keys.ARCHIVED_CONVS_DATA, v)
+    /** Fix #392 #IM-LOCAL-PIN: персист порядка закреплённых диалогов (List<Long> → JSON, атомарный put). */
+    suspend fun setImPinnedDialogs(peerIds: List<Long>)  = put(Keys.IM_PINNED_DIALOGS, imPinnedGson.toJson(peerIds))
 
     // ─── #CALLS-SNAP (2026-09-05): Этап А3 плана «звонки.перенос.план.md» ───
     // Конфигурация сайдбара раздела «Звонки» («Настройка пунктов меню»):
@@ -847,6 +868,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     // §49.5.1 #SAFETY-NET-ALERTS
     suspend fun setPushSafetyNetAlerts(v: Boolean)      = put(Keys.PUSH_SAFETY_NET_ALERTS, v)
     suspend fun setSafetyNetPollIntervalMin(v: Int)    = put(Keys.SAFETY_NET_POLL_INTERVAL, v)
+    // Fix #390 #NOTIFY-MODES: setters режима уведомлений и звука/вибрации сообществ.
+    suspend fun setNotifyMode(v: Int)                   = put(Keys.NOTIFY_MODE, v)
+    suspend fun setNotifyCommunitiesSound(v: Boolean)   = put(Keys.NOTIFY_COMMUNITIES_SOUND, v)
+    suspend fun setNotifyCommunitiesVibration(v: Boolean) = put(Keys.NOTIFY_COMMUNITIES_VIBRATION, v)
     // #CALLS: queuev4 credential для звонков (ввод вручную из localStorage).
     suspend fun setCallsQueueKey(v: String)            = put(Keys.CALLS_QUEUE_KEY, v)
     suspend fun setCallsQueueTs(v: Long)               = put(Keys.CALLS_QUEUE_TS, v)
@@ -876,6 +901,54 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     private suspend fun <T> put(key: androidx.datastore.preferences.core.Preferences.Key<T>, value: T) {
         ds.edit { it[key] = value }
+    }
+
+    // ─── Fix #392 #IM-LOCAL-PIN: локальный закреп диалогов ───
+    // Source of truth — ключ Keys.IM_PINNED_DIALOGS (JSON-массив peer_id в порядке
+    // закрепления, 0-й элемент — верх списка). Snapshot (imPinnedDialogs) несёт
+    // УЖЕ распарсенный List<Long>, поэтому UI-список реактивен:
+    // setImPinnedDialogs() → DataStore emit → recomposition — перестановка мгновенная.
+    // Формат/семантика унаследованы от legacy pinned_convs_data (Fix #274/#276);
+    // пустая строка / битый JSON = пустой список (без исключений наверх).
+    private val imPinnedGson = Gson()
+
+    /** Fix #392 #IM-LOCAL-PIN: безопасный парс JSON-массива peer_id ("[2000000062,152094335]" → List<Long>). */
+    private fun parseImPinnedDialogs(raw: String): List<Long> {
+        if (raw.isBlank()) return emptyList()
+        return try {
+            val type = object : TypeToken<List<Long>>() {}.type
+            val parsed: List<Long>? = imPinnedGson.fromJson(raw, type)
+            // NULL-ЯВНО: Gson может вернуть null (например raw == "null") — явная ветка.
+            if (parsed == null) emptyList() else parsed
+        } catch (e: Exception) {
+            AppLog.w("SovaPrefs", "#IM-LOCAL-PIN: failed to parse im_pinned_dialogs: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Fix #392 #IM-LOCAL-PIN: одноразовая миграция legacy pinned_convs_data
+     * (Fix #274/#276, волна 24) → im_pinned_dialogs. Вызывается MessagesScreen'ом
+     * при входе на список диалогов. Guard-ы:
+     *  - im_pinned_dialogs уже содержит непустую строку ("[…]", в т.ч. "[]" — юзер
+     *    уже пользовался новым ключом / сознательно открепил всё) → no-op, чтобы
+     *    миграция не «воскрешала» откреплённые диалоги;
+     *  - legacy пуст/битый → no-op.
+     */
+    suspend fun migrateLegacyPinnedDialogsIfNeeded() {
+        try {
+            val prefs0 = ds.data.first()
+            val currentRaw = prefs0[Keys.IM_PINNED_DIALOGS]
+            if (currentRaw != null && currentRaw.isNotBlank()) return
+            val legacyRaw = prefs0[Keys.PINNED_CONVS_DATA]
+            if (legacyRaw == null || legacyRaw.isBlank()) return
+            val legacy = parseImPinnedDialogs(legacyRaw)
+            if (legacy.isEmpty()) return
+            put(Keys.IM_PINNED_DIALOGS, imPinnedGson.toJson(legacy))
+            AppLog.i("SovaPrefs", "#IM-LOCAL-PIN: migrated ${legacy.size} pinned dialog(s) from pinned_convs_data")
+        } catch (e: Exception) {
+            AppLog.w("SovaPrefs", "#IM-LOCAL-PIN: legacy pinned migration skipped: ${e.message}")
+        }
     }
 
     /** Immutable snapshot of all settings. Collected once on UI start. */
@@ -965,6 +1038,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val pinnedConvsData: String,
         /** Fix #356 #MSG-ARCHIVE: JSON-массив peer_id архивных диалогов (source of truth). */
         val archivedConvsData: String,
+        /** Fix #392 #IM-LOCAL-PIN: peer_id локально закреплённых диалогов в ПОРЯДКЕ ЗАКРЕПЛЕНИЯ (0-й — верх списка; уже распарсен из JSON). Дефолт обязателен: FeedScreen:234 строит dummy-Snapshot named-параметрами (класс бага Fix #276/#356 — без дефолта компиляция падает). */
+        val imPinnedDialogs: List<Long> = emptyList(),
         /** P3.7: bubble-less дизайн — flat layout (без Card/bubble), default false. */
         val msgBubbleless: Boolean,
         /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий (default false). */
@@ -1179,6 +1254,18 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val pushSafetyNetAlerts: Boolean,
         /** §49.5.1: интервал polling SecurityAlerts (минуты, default 10). */
         val safetyNetPollIntervalMin: Int,
+        // Fix #390 #NOTIFY-MODES: режим уведомлений (значения — companion
+        // NOTIFY_MODE_*: 0=только Сообщения, 1=Сообщения+Сообщества, 2=только
+        // Сообщества, 3=Тихий — только Сообщения без звука/вибрации).
+        // Default = NOTIFY_MODE_ALL — прежнее поведение. Поля с дефолтами
+        // (прецедент callsDnsPinIp ниже): существующие вызовы конструктора
+        // Snapshot с именованными аргументами (например dummy-снапшот
+        // FeedScreen:234) остаются компилируемыми без правок.
+        val notifyMode: Int = NOTIFY_MODE_ALL,
+        /** Fix #390 #NOTIFY-MODES: звук уведомлений от сообществ (default true). */
+        val notifyCommunitiesSound: Boolean = true,
+        /** Fix #390 #NOTIFY-MODES: вибрация уведомлений от сообществ (default true). */
+        val notifyCommunitiesVibration: Boolean = true,
         // #CALLS: queuev4 credential для звонков (можно ввести вручную из localStorage).
         val callsQueueKey: String,
         val callsQueueTs: Long,
@@ -1282,6 +1369,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val PINNED_CONVS_DATA     = stringPreferencesKey("pinned_convs_data")
         // Fix #356 #MSG-ARCHIVE: локальное хранилище архивных диалогов (JSON array of peer_id).
         val ARCHIVED_CONVS_DATA   = stringPreferencesKey("archived_convs_data")
+        // Fix #392 #IM-LOCAL-PIN: локальный закреп диалогов (JSON array of peer_id в порядке
+        // закрепления; "" = ключ ещё не создавался, "[]" = список сознательно пуст).
+        val IM_PINNED_DIALOGS     = stringPreferencesKey("im_pinned_dialogs")
         // #CALLS-SNAP (2026-09-05): конфигурация сайдбара «Звонков» (Этап А3)
         val CALLS_SIDEBAR_CFG     = stringPreferencesKey("calls_sidebar_cfg")
         // #CALLS-Z (2026-09-05): Этап З2 — дефолты устройств/шумодава звонков
@@ -1417,6 +1507,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val PUSH_SAFETY_NET_ALERTS  = booleanPreferencesKey("push_safety_net_alerts")
         val SAFETY_NET_POLL_INTERVAL = intPreferencesKey("safety_net_poll_interval_min")
         val PUSH_FROM_USERS         = booleanPreferencesKey("push_from_users")
+        // Fix #390 #NOTIFY-MODES: режим уведомлений + звук/вибрация от сообществ.
+        val NOTIFY_MODE             = intPreferencesKey("notify_mode")
+        val NOTIFY_COMMUNITIES_SOUND = booleanPreferencesKey("notify_communities_sound")
+        val NOTIFY_COMMUNITIES_VIBRATION = booleanPreferencesKey("notify_communities_vibration")
         // #CALLS: queuev4 credential для звонков.
         val CALLS_QUEUE_KEY         = stringPreferencesKey("calls_queue_key")
         val CALLS_QUEUE_TS          = longPreferencesKey("calls_queue_ts")
@@ -1457,5 +1551,18 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // нижняя панель станет прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).
         const val BOTTOMBAR_DEFAULT_HIDDEN =
             """["feed","friends","groups","photos","search","bookmarks","documents","clips","services","notifications","logs","offline_manager","equalizer"]"""
+
+        // Fix #390 #NOTIFY-MODES: константы режима уведомлений.
+        // 0 — «Уведомления Сообщений»: всплывающие только от Сообщений (звук+вибрация
+        //     только от них); уведомления сообществ ЗАГЛУШЕНЫ и НЕ отображаются.
+        // 1 — «Уведомления Сообщений и Сообществ»: всплывающие от Сообщений + Сообществ
+        //     (default = прежнее поведение).
+        // 2 — «Уведомления Сообществ»: всплывающие только от Сообществ; остальные
+        //     заглушены и не отображаются.
+        // 3 — «Тихий режим»: всплывающие только от Сообщений, но без звука и вибрации.
+        const val NOTIFY_MODE_MESSAGES_ONLY = 0
+        const val NOTIFY_MODE_ALL = 1
+        const val NOTIFY_MODE_COMMUNITIES_ONLY = 2
+        const val NOTIFY_MODE_SILENT = 3
     }
 }

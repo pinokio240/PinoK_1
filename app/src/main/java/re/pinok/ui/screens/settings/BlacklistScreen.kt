@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -55,6 +56,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.BannedUser
 import re.pinok.data.model.BannedUsersList
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -170,6 +172,9 @@ fun BlacklistScreen(onBack: () -> Unit) {
     var filter by remember { mutableStateOf("") }
     var pendingUnban by remember { mutableStateOf<BannedUser?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    // Fix #389 #SCROLL-TOP-PARITY: состояние списка для FAB «наверх»
+    // (тот же экземпляр передаётся в LazyColumn.state ниже).
+    val listState = rememberLazyListState()
 
     /** Страница account.getBanned с offset. */
     suspend fun fetchPage(offset: Int): BannedUsersList? =
@@ -294,6 +299,9 @@ fun BlacklistScreen(onBack: () -> Unit) {
                 }
             }
             else -> {
+                // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+                // над списком заблокированных (account.getBanned offset-пагинация).
+                Box(modifier = Modifier.fillMaxSize()) {
                 PullToRefreshBox(
                     isRefreshing = refreshing,
                     onRefresh = {
@@ -313,6 +321,7 @@ fun BlacklistScreen(onBack: () -> Unit) {
                 ) {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
+                        state = listState,
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
                         // bl-filter (§1.6) — локальная фильтрация по имени.
@@ -376,6 +385,15 @@ fun BlacklistScreen(onBack: () -> Unit) {
                             }
                         }
                     }
+                }
+
+                // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх»
+                // над чёрным списком (account.getBanned offset-пагинация).
+                ScrollToTopFab(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                )
                 }
             }
         }

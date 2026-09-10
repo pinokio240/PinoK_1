@@ -9756,6 +9756,54 @@ class VKApiClient(
         }
     }
 
+    /**
+     * Fix #394 #IM-SEARCH: wall.search — поиск по записям на стене сообщества.
+     *
+     * Реальный VK API метод (wall.search): параметры owner_id, query, count,
+     * offset. Ответ — та же структура items[], что у wall.get (посты), поэтому
+     * парсинг идёт через существующий parsePostMini. Используется панелью
+     * «Поиск по постам» в канальном режиме ChatDetailScreen (peerId = -<group_id>),
+     * где контент канала — это посты сообщества (снапшот 29-a: blog-бэкенд веба
+     * эквивалентен стене сообщества).
+     */
+    suspend fun wallSearch(ownerId: Long, query: String, count: Int = 20, offset: Int = 0): List<Post> {
+        if (isOffline()) return emptyList()
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "query" to q,
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+        )
+        val json = call("wall.search", args)
+        if (json == null) {
+            AppLog.w("VKApiClient", "wall.search null (errCode=$lastApiErrorCode)")
+            return emptyList()
+        }
+        return try {
+            val resp = json.getAsJsonObject("response")
+            val items = if (resp != null) resp.getAsJsonArray("items") else null
+            if (items == null) {
+                emptyList()
+            } else {
+                // Дедупликация по (ownerId, id) — тот же паттерн, что в wallGet:
+                // VK иногда возвращает закреплённый пост и в выдаче, и в ленте.
+                val seenKeys = HashSet<Pair<Long, Long>>()
+                items.mapNotNull { el ->
+                    if (!el.isJsonObject) return@mapNotNull null
+                    val post = parsePostMini(el.asJsonObject)
+                    if (post.id <= 0L || post.ownerId == 0L) return@mapNotNull null
+                    if (!seenKeys.add(post.ownerId to post.id)) return@mapNotNull null
+                    post
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "wallSearch parse error", e)
+            emptyList()
+        }
+    }
+
     /** users.getFollowers — подписчики пользователя. */
     suspend fun usersGetFollowers(userId: Long? = null, count: Int = 50, offset: Int = 0): List<UserProfile> {
         if (isOffline()) return emptyList()

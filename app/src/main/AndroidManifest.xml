@@ -37,6 +37,17 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- Fix #391 #IN-APP-UPDATER (волна 29-i): in-app updater качает APK из
+         репозитория (version.json → apkUrl) и запускает системный установщик
+         (ACTION_VIEW application/vnd.android.package-archive). Без этого
+         permission система молча отклоняет установку пакетов, скачанных
+         НЕ из стора. Это normal-разрешение (выдаётся при установке APK),
+         диалога в рантайме не требует; на Android 8+ пользователь дополнительно
+         управляет через «Установка неизвестных приложений» (per-app тумблер) —
+         UpdaterManager.installApk() проверяет canRequestPackageInstalls() и
+         честно открывает ACTION_MANAGE_UNKNOWN_APP_SOURCES. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Media playback (foreground service) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

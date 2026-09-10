@@ -28,7 +28,19 @@ import java.util.concurrent.ConcurrentHashMap
 object MessageNotifier {
 
     private const val TAG = "MessageNotifier"
-    private const val CHANNEL_ID = "messages"
+
+    // Fix #390 #NOTIFY-MODES (волна 29): константы каналов стали public —
+    // вызывающий (SovaApp.startMessageNotifier) выбирает канал ПО режиму
+    // уведомлений и типу отправителя (юзер/сообщество), нотифаер prefs не знает.
+    const val CHANNEL_MESSAGES = "messages"
+    // Тихий канал сообщений (Fix #390 «Тихий режим»): heads-up ЕСТЬ (HIGH),
+    // но звук null и вибрация отключены.
+    const val CHANNEL_MESSAGES_SILENT = "messages_silent"
+    // Каналы сообществ (Fix #390): обычный / без вибрации / полностью тихий.
+    const val CHANNEL_COMMUNITIES = "communities"
+    const val CHANNEL_COMMUNITIES_NOVIB = "communities_novib"
+    const val CHANNEL_COMMUNITIES_SILENT = "communities_silent"
+
     private const val CHANNEL_NAME = "Сообщения"
     private const val NOTIFICATION_ID_BASE = 1000
 
@@ -62,12 +74,32 @@ object MessageNotifier {
     )
 
     /**
-     * Инициализация notification channel. Вызывается из [re.pinok.SovaApp.onCreate].
+     * Инициализация notification channels. Вызывается из [re.pinok.SovaApp.onCreate].
+     *
+     * Fix #390 #NOTIFY-MODES: РАНЬШЕ был один канал "messages" (HIGH + звук +
+     * вибрация). Теперь 5 каналов: базовый "messages", тихий "messages_silent"
+     * («Тихий режим» — heads-up есть, но без звука/вибрации) и три канала для
+     * сообществ ("communities" — как "messages", "communities_novib" — без
+     * вибрации, "communities_silent" — без звука и вибрации; отключение
+     * звука/вибрации сообществ — по требованию юзера). Выбор канала — на стороне
+     * вызывающего (SovaApp), здесь создаются ВСЕ — создание канала идемпотентно.
      */
     fun init(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Fix #390 #NOTIFY-MODES + NULL-ЯВНО: РАНЬШЕ было `val nm = ... as?
+            // NotificationManager` + `nm?.createNotificationChannel(...)`; при
+            // 5 каналах это 5 одинаковых ?. — по правилу NULL-ЯВНО заменено на
+            // явную проверку + смарт-каст (прецедент — VkNotificationsNotifier.init).
+            val nmService = context.getSystemService(Context.NOTIFICATION_SERVICE)
+            if (nmService == null) {
+                AppLog.w(TAG, "init: NotificationManager is null — channels skipped")
+                return
+            }
+            val nm = nmService as NotificationManager
+
+            // Базовый канал сообщений: sound + heads-up + вибрация + light.
             val channel = NotificationChannel(
-                CHANNEL_ID,
+                CHANNEL_MESSAGES,
                 CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_HIGH,  // sound + heads-up
             ).apply {
@@ -75,9 +107,60 @@ object MessageNotifier {
                 enableVibration(true)
                 enableLights(true)
             }
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.createNotificationChannel(channel)
-            AppLog.i(TAG, "Notification channel '$CHANNEL_ID' created")
+            nm.createNotificationChannel(channel)
+
+            // Fix #390 #NOTIFY-MODES: тихий канал сообщений — IMPORTANCE_HIGH
+            // сохраняет heads-up (всплывающий баннер), но звук/вибрация выключены.
+            val silentChannel = NotificationChannel(
+                CHANNEL_MESSAGES_SILENT,
+                "Сообщения (без звука)",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Всплывающие уведомления о сообщениях без звука и вибрации (Тихий режим)"
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(true)
+            }
+            nm.createNotificationChannel(silentChannel)
+
+            // Fix #390 #NOTIFY-MODES: каналы сообществ. Отдельные от "messages",
+            // чтобы юзер мог отключить ТОЛЬКО звук/вибрацию от сообществ, не трогая
+            // сообщения (параметры notifyCommunitiesSound/Vibration выбирают канал).
+            val communitiesChannel = NotificationChannel(
+                CHANNEL_COMMUNITIES,
+                "Сообщества",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Всплывающие уведомления от сообществ (звук + вибрация)"
+                enableVibration(true)
+                enableLights(true)
+            }
+            nm.createNotificationChannel(communitiesChannel)
+
+            val communitiesNovibChannel = NotificationChannel(
+                CHANNEL_COMMUNITIES_NOVIB,
+                "Сообщества (без вибрации)",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Всплывающие уведомления от сообществ со звуком, без вибрации"
+                enableVibration(false)
+                enableLights(true)
+            }
+            nm.createNotificationChannel(communitiesNovibChannel)
+
+            val communitiesSilentChannel = NotificationChannel(
+                CHANNEL_COMMUNITIES_SILENT,
+                "Сообщества (без звука)",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Всплывающие уведомления от сообществ без звука и вибрации"
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(true)
+            }
+            nm.createNotificationChannel(communitiesSilentChannel)
+
+            AppLog.i(TAG, "Notification channels created: $CHANNEL_MESSAGES, $CHANNEL_MESSAGES_SILENT, $CHANNEL_COMMUNITIES, $CHANNEL_COMMUNITIES_NOVIB, $CHANNEL_COMMUNITIES_SILENT")
         }
     }
 
@@ -89,6 +172,12 @@ object MessageNotifier {
      * @param title   имя отправителя / название чата
      * @param text    текст сообщения (или "Изображение", "Видео", etc.)
      * @param unreadCount сколько непрочитанных в этом диалоге
+     * @param channelId канал уведомления (Fix #390 #NOTIFY-MODES): вызывающий
+     *        (SovaApp.startMessageNotifier) выбирает по режиму уведомлений и
+     *        типу отправителя — CHANNEL_MESSAGES / CHANNEL_MESSAGES_SILENT /
+     *        CHANNEL_COMMUNITIES / CHANNEL_COMMUNITIES_NOVIB /
+     *        CHANNEL_COMMUNITIES_SILENT. Default CHANNEL_MESSAGES — прежнее
+     *        поведение для существующих вызовов.
      */
     fun showNotification(
         context: Context,
@@ -97,6 +186,7 @@ object MessageNotifier {
         text: String,
         unreadCount: Int = 1,
         muted: Boolean = false,
+        channelId: String = CHANNEL_MESSAGES,
     ) {
         try {
             val ctx = context.applicationContext
@@ -159,7 +249,7 @@ object MessageNotifier {
             // через setNumber — это правильный Android-way для messaging notifications.
             val displayText = text
 
-            val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
+            val notification = NotificationCompat.Builder(ctx, channelId)  // Fix #390 #NOTIFY-MODES: канал выбирает вызывающий
                 .setSmallIcon(R.drawable.ic_notification)  // нужен простой white-on-transparent icon
                 .setContentTitle(title)
                 .setContentText(displayText)

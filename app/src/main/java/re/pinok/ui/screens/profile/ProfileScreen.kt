@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -120,6 +121,7 @@ import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
+import re.pinok.ui.components.ScrollToTopFab
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
 // (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
 // Fix #376: link/poll/doc вложения — карточки ленты, сделаны internal
@@ -972,8 +974,12 @@ fun ProfileScreen(
     // чтобы ПОД ним всегда была видна закреплённая кнопка «Выйти из аккаунта» —
     // раньше она была ПОСЛЕДНИМ item этого LazyColumn и была видна только после
     // прокрутки всей стены (сотни постов) — юзер не находил её при входе в раздел.
+    // Fix #389 #SCROLL-TOP-PARITY: состояние главного списка (стена/закладки/статьи)
+    // — выведено наружу, тот же экземпляр используется FAB «наверх» ниже.
+    val mainListState = rememberLazyListState()
     Column(modifier = Modifier.fillMaxSize()) {
-    LazyColumn(modifier = Modifier.weight(1f).statusBarsPadding()) {
+    Box(modifier = Modifier.weight(1f)) {
+    LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding(), state = mainListState) {
         // П-1: тап по статусу → диалог правки (status.set).
         item {
             ProfileHeader(
@@ -1249,6 +1255,16 @@ fun ProfileScreen(
         // Fix #378: кнопка выхода ПЕРЕНЕСЕНА из последнего item в закреплённую
         // строку под LazyColumn (см. ниже) — видна сразу при входе в раздел,
         // на любой вкладке, без прокрутки стены.
+    }
+
+    // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» — оверлей над
+    // списком (Box-обёртка выше). Закреплённая строка «Выйти» остаётся ниже —
+    // FAB живёт в weight(1f)-зоне и её не перекрывает.
+    ScrollToTopFab(
+        listState = mainListState,
+        modifier = Modifier.align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = 16.dp),
+    )
     }
 
     // Fix #378 (#PROFILE-LOGOUT-PINNED): закреплённая кнопка «Выйти из аккаунта» —

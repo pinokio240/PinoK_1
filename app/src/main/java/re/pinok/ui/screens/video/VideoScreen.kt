@@ -71,6 +71,7 @@ import re.pinok.data.model.DownloadState
 import re.pinok.data.model.DownloadStatus
 import re.pinok.data.model.Video
 import re.pinok.media.VideoDownloadManager
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
 import java.text.SimpleDateFormat
@@ -104,6 +105,13 @@ fun VideoScreen(
     var loadingMore by remember { mutableStateOf(false) }
     var endReached by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    // Fix #389 #SCROLL-TOP-PARITY: отдельные состояния для списков вкладок
+    // «Альбомы»/«Каталоги» — у каждого lazy-списка своё состояние скролла,
+    // FAB «наверх» читает/крутит ТЕМ ЖЕ экземпляром, что в LazyColumn.state.
+    val albumsListState = rememberLazyListState()
+    val albumVideosListState = rememberLazyListState()
+    val sectionsListState = rememberLazyListState()
+    val discoverListState = rememberLazyListState()
 
     // Fix #258: состояние поиска — переносим в глобальный TopAppBar.
     var searchQuery by remember { mutableStateOf("") }
@@ -398,8 +406,11 @@ fun VideoScreen(
                             Text("Нет альбомов", color = vkTextSecondary, fontSize = 14.sp)
                         }
                     } else {
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
+                            state = albumsListState,
                             contentPadding = PaddingValues(bottom = 16.dp),
                         ) {
                             items(albums, key = { "${it.ownerId}_${it.id}" }) { album ->
@@ -432,6 +443,14 @@ fun VideoScreen(
                                 }
                             }
                         }
+
+        // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для списка альбомов.
+        ScrollToTopFab(
+            listState = albumsListState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        }
                     }
                 } else {
                     // Видео выбранного альбома.
@@ -454,8 +473,11 @@ fun VideoScreen(
                                 Text("Альбом пуст", color = vkTextSecondary, fontSize = 14.sp)
                             }
                         } else {
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
+                                state = albumVideosListState,
                                 contentPadding = PaddingValues(bottom = 16.dp),
                             ) {
                                 items(albumVideos, key = { "${it.ownerId}_${it.id}" }) { video ->
@@ -479,6 +501,14 @@ fun VideoScreen(
                                 }
                             }
                         }
+
+        // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для видео альбома.
+        ScrollToTopFab(
+            listState = albumVideosListState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        }
                     }
                 }
             }
@@ -498,8 +528,11 @@ fun VideoScreen(
                             )
                         }
                     } else {
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
+                            state = sectionsListState,
                             contentPadding = PaddingValues(bottom = 16.dp),
                         ) {
                             items(catalogSections, key = { it.id }) { section ->
@@ -521,6 +554,14 @@ fun VideoScreen(
                                 }
                             }
                         }
+
+        // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для списка разделов.
+        ScrollToTopFab(
+            listState = sectionsListState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        }
                     }
                 } else {
                     Column(Modifier.fillMaxSize()) {
@@ -542,8 +583,11 @@ fun VideoScreen(
                                 Text("Нет видео", color = vkTextSecondary, fontSize = 14.sp)
                             }
                         } else {
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
+                                state = discoverListState,
                                 contentPadding = PaddingValues(bottom = 16.dp),
                             ) {
                                 items(discoverVideos, key = { "${it.ownerId}_${it.id}" }) { video ->
@@ -566,11 +610,23 @@ fun VideoScreen(
                                     )
                                 }
                             }
-                        }
+
+        // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для discovery-видео раздела.
+        ScrollToTopFab(
+            listState = discoverListState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
+        } // closes else (обёртка Box добавила один уровень)
                     }
                 }
             }
             else -> {
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+        // над списком вкладки «Мои видео» (единственный пагинированный список
+        // экрана: loadMoreVideos по offset).
+        Box(modifier = Modifier.fillMaxSize()) {
         // ─── Лента видео ───
         // Fix #81: PullToRefreshBox — pull-to-refresh видео.
         PullToRefreshBox(
@@ -695,6 +751,14 @@ fun VideoScreen(
                 } // end else (searchQuery blank → обычный список)
             }
         }
+
+        // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для ленты «Мои видео».
+        ScrollToTopFab(
+            listState = listState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
             } // end else (selectedTab == 0)
         } // end when (selectedTab)
     }

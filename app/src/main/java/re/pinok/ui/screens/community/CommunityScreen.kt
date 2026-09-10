@@ -86,6 +86,7 @@ import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PostPhotoGrid
 // Fix #366: общий компонент карусели видео поста.
 import re.pinok.ui.components.PostVideoCarousel
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
@@ -492,6 +493,9 @@ fun CommunityScreen(
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
     // CommunityScreen в hasOwnTopBar списке SovaNavHost → глобальный TopAppBar
     // не рисуется, insets нужно применять самому. Аналогично ProfileScreen.
+    // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+    // (один общий listState на стену/видео/обсуждения — FAB общий для всех табов).
+    Box(modifier = Modifier.fillMaxSize()) {
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = { refreshWall() },
@@ -1128,6 +1132,15 @@ fun CommunityScreen(
         } // when (selectedTab)
     }
     } // PullToRefreshBox (Fix #85)
+
+    // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» — работает на
+    // всех табах сообщества (стена/видео/обсуждения — один общий LazyList).
+    ScrollToTopFab(
+        listState = listState,
+        modifier = Modifier.align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = 16.dp),
+    )
+    } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
 
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     val viewer = photoViewerState.value

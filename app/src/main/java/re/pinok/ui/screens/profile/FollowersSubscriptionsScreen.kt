@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -55,6 +56,7 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.Screen
 import re.pinok.util.AppLog
 
@@ -268,6 +270,9 @@ fun FollowersSubscriptionsScreen(
     var endReached by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("") }
+    // Fix #389 #SCROLL-TOP-PARITY: состояние списка для FAB «наверх»
+    // (тот же экземпляр передаётся в LazyColumn.state ниже).
+    val listState = rememberLazyListState()
 
     /** Страница по offset → (элементы, total; total=-1 если API его не отдаёт). */
     suspend fun fetchPage(offset: Int): Pair<List<FollowListEntry>, Int> {
@@ -403,6 +408,9 @@ fun FollowersSubscriptionsScreen(
                 }
             }
             else -> {
+                // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+                // над списком подписчиков/подписок (пагинация loadMore).
+                Box(modifier = Modifier.fillMaxSize()) {
                 PullToRefreshBox(
                     isRefreshing = refreshing,
                     onRefresh = {
@@ -430,6 +438,7 @@ fun FollowersSubscriptionsScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
+                        state = listState,
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
                         // Локальный фильтр по имени (bl-filter-паттерн BlacklistScreen).
@@ -498,6 +507,15 @@ fun FollowersSubscriptionsScreen(
                             }
                         }
                     }
+                }
+
+                // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх»
+                // (подписчики/подписки — один общий LazyList экрана).
+                ScrollToTopFab(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                )
                 }
             }
         }

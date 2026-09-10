@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,6 +52,7 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 
 // ═══════════════════════════════════════════════════════════
@@ -108,6 +110,9 @@ fun GroupMembersScreen(
     var endReached by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("") }
+    // Fix #389 #SCROLL-TOP-PARITY: состояние списка для FAB «наверх»
+    // (тот же экземпляр передаётся в LazyColumn.state ниже).
+    val listState = rememberLazyListState()
 
     /** Страница участников по offset (профили приходят сразу — VKA:4106). */
     suspend fun fetchPage(offset: Int): List<UserProfile> =
@@ -215,6 +220,9 @@ fun GroupMembersScreen(
                 }
             }
             else -> {
+                // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+                // над списком участников (пагинация groups.getMembers offset).
+                Box(modifier = Modifier.fillMaxSize()) {
                 PullToRefreshBox(
                     isRefreshing = refreshing,
                     onRefresh = {
@@ -237,6 +245,7 @@ fun GroupMembersScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
+                        state = listState,
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
                         // Локальный фильтр по имени (bl-filter-паттерн BlacklistScreen).
@@ -296,6 +305,15 @@ fun GroupMembersScreen(
                             }
                         }
                     }
+                }
+
+                // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх»
+                // над списком участников (groups.getMembers offset-пагинация).
+                ScrollToTopFab(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                )
                 }
             }
         }

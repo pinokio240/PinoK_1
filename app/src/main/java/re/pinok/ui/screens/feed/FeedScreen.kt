@@ -306,6 +306,11 @@ fun FeedScreen(
             // (JSON). FeedScreen не использует это поле, но Snapshot расширился —
             // передаём initial-значение (тот же класс бага, что Fix #276 выше).
             archivedConvsData = "",
+            // Fix #392 #IM-LOCAL-PIN: imPinnedDialogs — peer_id локально закреплённых
+            // диалогов (List<Long>, уже распарсен в SovaPrefs). FeedScreen не использует
+            // это поле, но Snapshot расширился — передаём initial-значение (тот же
+            // класс бага, что Fix #276/#356 выше: «No value passed for parameter»).
+            imPinnedDialogs = emptyList(),
             // P3.7: bubble-less дизайн (default false — opt-in, экспериментально).
             msgBubbleless = false,
             // Sprint 5 (P4.1–P4.4): новые поля Snapshot — должны передаваться
@@ -1404,6 +1409,15 @@ fun FeedScreen(
             onOpenHiddenSources = {
                 showRightPanel = false
                 onOpenHiddenSources()
+            },
+            // Fix #390 #NOTIFY-MODES: текущий режим — из реактивного снапшота prefs
+            // (feedPrefs.notifyMode), выбор режима в диалоге панели → SovaPrefs.
+            // Смена применяется без перезапуска: SovaApp.startMessageNotifier и
+            // VkNotificationsNotifier.showBatch читают АКТУАЛЬНЫЙ снапшот на каждое
+            // событие/батч.
+            notifyMode = feedPrefs.notifyMode,
+            onNotifyModeSelected = { mode ->
+                scope.launch { app.prefs.setNotifyMode(mode) }
             },
         )
     }

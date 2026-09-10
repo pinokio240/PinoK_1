@@ -22,28 +22,36 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Newspaper
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import re.pinok.data.local.SovaPrefs
 import re.pinok.util.AppLog
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -103,6 +111,46 @@ private val FEED_MENU_ENTRIES = listOf(
     FeedMenuEntry("feed_right_menu_wall_likes", "LIKES", "Реакции", Icons.Outlined.FavoriteBorder),
 )
 
+// Fix #390 #NOTIFY-MODES: опции диалога выбора режима уведомлений — названия
+// и пояснения 1:1 с формулировками юзера (Fix #390) и с секцией
+// «Режимы уведомлений» в SettingsScreen.NotificationsTab.
+private data class NotifyModeOption(
+    val mode: Int,
+    val title: String,
+    val description: String,
+)
+
+private val NOTIFY_MODE_OPTIONS = listOf(
+    NotifyModeOption(
+        SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY,
+        "Уведомления Сообщений",
+        "Всплывающие только от Сообщений — звук и вибрация только от них; " +
+            "уведомления сообществ скрыты",
+    ),
+    NotifyModeOption(
+        SovaPrefs.NOTIFY_MODE_ALL,
+        "Уведомления Сообщений и Сообществ",
+        "Всплывающие от Сообщений и от Сообществ",
+    ),
+    NotifyModeOption(
+        SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY,
+        "Уведомления Сообществ",
+        "Всплывающие только от Сообществ; уведомления сообщений скрыты",
+    ),
+    NotifyModeOption(
+        SovaPrefs.NOTIFY_MODE_SILENT,
+        "Тихий режим",
+        "Всплывающие только от Сообщений, но без звука и вибрации",
+    ),
+)
+
+/** Fix #390 #NOTIFY-MODES: короткое имя режима для подстроки закреплённой кнопки. */
+private fun notifyModeLabel(mode: Int): String {
+    val option = NOTIFY_MODE_OPTIONS.firstOrNull { it.mode == mode }
+    if (option != null) return option.title
+    return "Уведомления Сообщений и Сообществ"  // Fix #390: дефолт = NOTIFY_MODE_ALL
+}
+
 /**
  * #FEED-MENU-VKWEB: правое боковое меню ленты (оверлей поверх контента
  * FeedScreen: Scrim + панель справа). Всегда в композиции (visible-флаг) →
@@ -116,6 +164,12 @@ private val FEED_MENU_ENTRIES = listOf(
  *                         панель, выставляет feedFilterName и перезагружает ленту
  * @param onOpenHiddenSources «Редактировать» → «Скрытые источники»
  *                         (Screen.FeedHidden, newsfeed.getBanned + unban)
+ * @param notifyMode текущий режим уведомлений (SovaPrefs.Snapshot.notifyMode,
+ *                         значения SovaPrefs.NOTIFY_MODE_*) — Fix #390 #NOTIFY-MODES
+ * @param onNotifyModeSelected(mode) выбор режима в диалоге — FeedScreen пишет в
+ *                         SovaPrefs.setNotifyMode; панель сама рендерит AlertDialog
+ *                         по internal-state (диалог виден только пока открыта панель —
+ *                         приемлемо, т.к. кнопка живёт в панели)
  */
 @Composable
 fun FeedRightPanel(
@@ -124,7 +178,12 @@ fun FeedRightPanel(
     onDismiss: () -> Unit,
     onSectionSelected: (String) -> Unit,
     onOpenHiddenSources: () -> Unit,
+    notifyMode: Int = SovaPrefs.NOTIFY_MODE_ALL,
+    onNotifyModeSelected: (Int) -> Unit = {},
 ) {
+    // Fix #390 #NOTIFY-MODES: внутренний стейт диалога выбора режима.
+    var notifyDialogOpen by remember { mutableStateOf(false) }
+
     // Системный back закрывает панель, а не покидает экран (прецедент 19-A).
     BackHandler(enabled = visible) { onDismiss() }
 
@@ -185,6 +244,53 @@ fun FeedRightPanel(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                    }
+                    HorizontalDivider()
+
+                    // Fix #390 #NOTIFY-MODES: ЗАКРЕПЛЁННАЯ кнопка «Режим уведомлений»
+                    // вверху правой панели (по прямому требованию юзера: «закреплённая
+                    // кнопка на правой панели сверху»). Стоит НАД разделами ленты —
+                    // режим один на всё приложение, поэтому закреплена первой; тап
+                    // открывает диалог выбора из 4 режимов (см. AlertDialog ниже).
+                    // Подпись-подстрока — текущий режим (notifyModeLabel), чтобы юзер
+                    // видел активный режим ещё до открытия диалога.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .clickable {
+                                AppLog.i("FeedRightPanel", "notify modes: open dialog (current=$notifyMode)")
+                                notifyDialogOpen = true
+                            }
+                            .padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Outlined.NotificationsActive,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Режим уведомлений",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = notifyModeLabel(notifyMode),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Filled.ChevronRight,
+                            contentDescription = "Изменить режим уведомлений",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                     HorizontalDivider()
 
@@ -271,5 +377,57 @@ fun FeedRightPanel(
                 }
             }
         }
+    }
+
+    // Fix #390 #NOTIFY-MODES: диалог выбора режима уведомлений. 4 RadioButton-опции
+    // с пояснениями (те же названия/описания, что в Настройки → Уведомления →
+    // «Режимы уведомлений»). Выбор применяется НЕМЕДЛЕННО (FeedScreen пишет в
+    // SovaPrefs.setNotifyMode — снапшот реактивный, пуш-логика подхватит без
+    // перезапуска) и диалог закрывается — режим один шаговый, подтверждение не нужно.
+    if (notifyDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { notifyDialogOpen = false },
+            title = { Text("Режим уведомлений") },
+            text = {
+                Column {
+                    NOTIFY_MODE_OPTIONS.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    AppLog.i("FeedRightPanel", "notify mode select: ${option.mode} (${option.title})")
+                                    onNotifyModeSelected(option.mode)
+                                    notifyDialogOpen = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = notifyMode == option.mode,
+                                onClick = {
+                                    AppLog.i("FeedRightPanel", "notify mode select: ${option.mode} (${option.title})")
+                                    onNotifyModeSelected(option.mode)
+                                    notifyDialogOpen = false
+                                },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = option.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = option.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+        )
     }
 }

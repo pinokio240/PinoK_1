@@ -73,6 +73,7 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ShareSheet
 import re.pinok.util.AppLog
 
@@ -549,6 +550,9 @@ fun UserProfileScreen(
             )
         },
     ) { padding ->
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+        // над лентой стены чужого профиля (пагинация loadMoreWall).
+        Box(modifier = Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshWall() },
@@ -817,6 +821,14 @@ fun UserProfileScreen(
             }
         }
         } // PullToRefreshBox (Fix #86)
+
+        // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» над стеной.
+        ScrollToTopFab(
+            listState = listState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
 
         // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
         val viewer = photoViewerState.value

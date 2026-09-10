@@ -55,6 +55,7 @@ import re.pinok.data.model.Group
 import re.pinok.data.model.Post
 import re.pinok.data.model.SearchHint
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 
 private enum class SearchTab(val label: String) {
@@ -306,6 +307,9 @@ fun SearchScreen(
         }
 
         // Fix #87: PullToRefreshBox вокруг результатов.
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»;
+        // гейт — активная вкладка с пагинацией (HINTS не пагинируется).
+        Box(modifier = Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshSearch() },
@@ -355,6 +359,16 @@ fun SearchScreen(
             }
         }
         } // PullToRefreshBox (Fix #87)
+
+        // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» над результатами
+        // поиска (люди/сообщества/лента — общая loadMore-пагинация по offset).
+        ScrollToTopFab(
+            listState = listState,
+            visibleExtraGate = activeTab != SearchTab.HINTS,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+        }
     }
 }
 

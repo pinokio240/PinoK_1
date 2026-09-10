@@ -956,6 +956,11 @@ fun MusicScreen(
         // DropdownMenu рендерится как overlay — достаточно один Box с якорем.
         moreMenuTrack?.let { track ->
             Box(modifier = Modifier.fillMaxWidth()) {
+                // Fix #388 #AUDIO-TOGGLE-OWNING: владение треком = ownerId трека
+                // равен моему userId (userId()==0 — идентификатор не получен,
+                // тогда тумблер всегда «Добавить»).
+                val myUserId = app.exchangeAuthRepository.userId()
+                val trackIsOwn = myUserId != 0L && track.ownerId == myUserId
                 re.pinok.ui.components.AudioMoreMenu(
                     track = track,
                     expanded = moreMenuExpanded,
@@ -963,70 +968,72 @@ fun MusicScreen(
                         moreMenuExpanded = false
                         moreMenuTrack = null
                     },
-                    isOwn = track.ownerId == app.exchangeAuthRepository.userId(),
-                    onAdd = {
-                        scope.launch {
-                            // #AUDIO-ADD-WEB (2026-09-08): раньше результат
-                            // audio.add игнорировался — при ошибке VK (для
-                            // web-токенов audio.add обычно закрыт правами)
-                            // меню просто закрывалось и трек молча НЕ
-                            // добавлялся («не могу добавить трек в свою
-                            // музыку»). Теперь audioAddReliable: audio.add →
-                            // web-fallback al_audio.php?act=add (паттерн VK
-                            // web) + честные тосты с РЕАЛЬНОЙ ошибкой.
-                            val (ok, err) = app.apiClient.audioAddReliable(track)
-                            if (ok) {
-                                android.widget.Toast.makeText(
-                                    app.applicationContext,
-                                    "Добавлено в мою музыку",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                            } else {
-                                AppLog.w("MusicScreen", "#AUDIO-ADD-WEB add failed: $err")
-                                // NULL-ЯВНО: err — nullable Pair-компонент; для
-                                // тоста честный фолбэк на общий текст сети.
-                                val shownErr = if (err != null) err else "ошибка сети"
-                                android.widget.Toast.makeText(
-                                    app.applicationContext,
-                                    "Не удалось добавить: $shownErr",
-                                    android.widget.Toast.LENGTH_LONG,
-                                ).show()
-                            }
-                        }
-                    },
-                    onDelete = {
+                    // Fix #388 #AUDIO-TOGGLE-OWNING: см. trackIsOwn выше.
+                    isOwn = trackIsOwn,
+                    // Fix #388 #AUDIO-TOGGLE-OWNING: тумблер «В моей музыке» с
+                    // состоянием (паритет веб-VK MusicAudio_ToggleOwning):
+                    // не в моей музыке → audioAddReliable (audio.add → web-fallback
+                    // al_audio.php?act=add); в моей → audio.delete СРАЗУ, как в
+                    // вебе. Тосты с РЕАЛЬНОЙ ошибкой VK; при ошибке состояние
+                    // списка НЕ меняется (честность).
+                    isOwned = trackIsOwn,
+                    onToggleOwn = {
                         val t = track
                         scope.launch {
-                            // Fix #362 #AUDIO-MENU-REAL: раньше удаляли «в молоко»
-                            // — трек исчезал только с сервера, в списке оставался,
-                            // фидбека не было («пункты меню не работают»). Теперь:
-                            // API-результат → тост с реальной ошибкой + удаление
-                            // из локального списка и кэша экрана.
-                            var ok = false
-                            var errText: String? = null
-                            try {
-                                ok = app.apiClient.audioDelete(t.id, t.ownerId)
-                                if (!ok) errText = app.apiClient.lastApiError
-                            } catch (e: Exception) {
-                                AppLog.e("MusicScreen", "audioDelete error", e)
-                                errText = e.message
-                            }
-                            if (ok) {
-                                tracks = tracks.filter { it.ownerId != t.ownerId || it.id != t.id }
-                                totalCount = (totalCount - 1).coerceAtLeast(0)
-                                MusicTracksCache.update(tracks, totalCount)
-                                android.widget.Toast.makeText(
-                                    app.applicationContext,
-                                    "Удалено из моей музыки",
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
+                            if (trackIsOwn) {
+                                var ok = false
+                                var errText: String? = null
+                                try {
+                                    ok = app.apiClient.audioDelete(t.id, t.ownerId)
+                                    if (!ok) errText = app.apiClient.lastApiError
+                                } catch (e: Exception) {
+                                    AppLog.e("MusicScreen", "#AUDIO-TOGGLE-OWNING delete error", e)
+                                    errText = e.message
+                                }
+                                if (ok) {
+                                    tracks = tracks.filter { it.ownerId != t.ownerId || it.id != t.id }
+                                    totalCount = (totalCount - 1).coerceAtLeast(0)
+                                    MusicTracksCache.update(tracks, totalCount)
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Удалено из моей музыки",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    // NULL-ЯВНО: errText nullable — явный if вместо ?:.
+                                    val shown = if (errText != null) errText else "ошибка сети"
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Не удалось удалить: $shown",
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
                             } else {
-                                val shown = errText ?: "ошибка сети"
-                                android.widget.Toast.makeText(
-                                    app.applicationContext,
-                                    "Не удалось удалить: $shown",
-                                    android.widget.Toast.LENGTH_LONG,
-                                ).show()
+                                // #AUDIO-ADD-WEB (2026-09-08): раньше результат
+                                // audio.add игнорировался — при ошибке VK (для
+                                // web-токенов audio.add обычно закрыт правами)
+                                // меню просто закрывалось и трек молча НЕ
+                                // добавлялся. audioAddReliable: audio.add →
+                                // web-fallback al_audio.php?act=add (паттерн VK
+                                // web) + честные тосты с РЕАЛЬНОЙ ошибкой.
+                                val (ok, err) = app.apiClient.audioAddReliable(t)
+                                if (ok) {
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Добавлено в мою музыку",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    AppLog.w("MusicScreen", "#AUDIO-ADD-WEB add failed: $err")
+                                    // NULL-ЯВНО: err — nullable Pair-компонент; для
+                                    // тоста честный фолбэк на общий текст сети.
+                                    val shownErr = if (err != null) err else "ошибка сети"
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Не удалось добавить: $shownErr",
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
                             }
                         }
                     },

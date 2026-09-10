@@ -211,7 +211,13 @@ class MainActivity : ComponentActivity() {
             if (!lockerVerifiedThisSession && lockerSnap.lockerEnabled && lockerSnap.lockerPinHash.isNotBlank()) {
                 lockerVerifiedThisSession = true
                 AppLog.i("MainActivity", "Auth success — PIN enabled, session not verified yet → launching LockerActivity (Fix #385)")
-                re.pinok.locker.LockerActivity.launch(this@MainActivity)
+                // Fix #PIN-CORE #LOCKER-TO-CORE-UI: LockerActivity живёт в :core:ui и
+                // не знает о SovaPrefs — хэш/флаг передаются через Intent-extras.
+                re.pinok.locker.LockerActivity.launch(
+                    this@MainActivity,
+                    lockerSnap.lockerPinHash,
+                    lockerSnap.lockerBiometric,
+                )
             }
         } else if (lastLaunchWasSilent && result.resultCode != AuthActivity.RESULT_OFFLINE_MODE) {
             silentFailCount++
@@ -781,7 +787,13 @@ class MainActivity : ComponentActivity() {
                         if (snap.lockerEnabled && snap.lockerPinHash.isNotBlank()) {
                             AppLog.i("MainActivity", "Locker enabled, launching LockerActivity")
                             lockerVerifiedThisSession = true
-                            LockerActivity.launch(this@MainActivity)
+                            // Fix #PIN-CORE #LOCKER-TO-CORE-UI: хэш/флаг биометрии —
+                            // из актуального boot-snapshot'а prefs (Intent-extras).
+                            LockerActivity.launch(
+                                this@MainActivity,
+                                snap.lockerPinHash,
+                                snap.lockerBiometric,
+                            )
                         }
                     }
                 }
@@ -1596,7 +1608,12 @@ class MainActivity : ComponentActivity() {
                 if (cached.lockerEnabled && cached.lockerOnBackground && cached.lockerPinHash.isNotBlank() && !unlockGrace) {
                     AppLog.i("MainActivity", "Locker on background (cached snapshot, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
                     lockerVerifiedThisSession = true
-                    re.pinok.locker.LockerActivity.launch(this)
+                    // Fix #PIN-CORE #LOCKER-TO-CORE-UI: хэш/флаг — из cached-снапшота prefs.
+                    re.pinok.locker.LockerActivity.launch(
+                        this,
+                        cached.lockerPinHash,
+                        cached.lockerBiometric,
+                    )
                 } else {
                     AppLog.d("MainActivity", "onResume locker check (cached, ${System.currentTimeMillis() - t0}ms): no locker needed")
                 }
@@ -1610,7 +1627,13 @@ class MainActivity : ComponentActivity() {
                     if (snap.lockerEnabled && snap.lockerOnBackground && snap.lockerPinHash.isNotBlank() && !unlockGrace) {
                         AppLog.i("MainActivity", "Locker on background (cold-start fallback, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
                         lockerVerifiedThisSession = true
-                        re.pinok.locker.LockerActivity.launch(this@MainActivity)
+                        // Fix #PIN-CORE #LOCKER-TO-CORE-UI: хэш/флаг — из свежепрочитанного
+                        // runBlocking-снапшота prefs (Intent-extras).
+                        re.pinok.locker.LockerActivity.launch(
+                            this@MainActivity,
+                            snap.lockerPinHash,
+                            snap.lockerBiometric,
+                        )
                     }
                 }
             }

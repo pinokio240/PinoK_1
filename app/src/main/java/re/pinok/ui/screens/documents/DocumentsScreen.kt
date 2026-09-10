@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.DocFile
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -168,6 +169,8 @@ fun DocumentsScreen() {
     }
 
     // Fix #83: PullToRefreshBox — pull-to-refresh документов.
+    // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+    Box(modifier = Modifier.fillMaxSize()) {
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = { refreshDocs() },
@@ -205,6 +208,15 @@ fun DocumentsScreen() {
                 }
             }
         }
+    }
+
+    // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» над документами
+    // (пагинация docs.get offset — loadMoreDocs).
+    ScrollToTopFab(
+        listState = listState,
+        modifier = Modifier.align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = 16.dp),
+    )
     }
 }
 

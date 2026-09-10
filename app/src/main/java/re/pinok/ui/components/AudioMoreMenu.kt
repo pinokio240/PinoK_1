@@ -59,6 +59,12 @@ import re.pinok.util.toDurationString
  * - audio_set_next_audio
  * - audio_action_dislike
  *
+ * Fix #388 #AUDIO-TOGGLE-OWNING: состояние-зависимый тумблер «В моей музыке»
+ * (паритет веб-VK MusicAudio_ToggleOwning с data-testactive): onToggleOwn != null
+ * → первый пункт меню = «Добавить в мою музыку» / «Удалить из моей музыки» по
+ * isOwned, а легаси-пункты onAdd/onDelete скрываются (иначе дублировали бы то же
+ * действие). Дефолты null сохраняют прежнее поведение существующих вызовов.
+ *
  * Подписки/реклама исключены (требование пользователя).
  */
 @Composable
@@ -80,16 +86,45 @@ fun AudioMoreMenu(
     onOpenAlbum: () -> Unit = {},
     onSetNext: () -> Unit = {},
     onDislike: () -> Unit = {},
+    // Fix #388 #AUDIO-TOGGLE-OWNING: коллбек тумблера; null (дефолт) → пункт
+    // скрыт, работают легаси onAdd/onDelete (обратная совместимость вызовов).
+    onToggleOwn: (() -> Unit)? = null,
+    // Fix #388 #AUDIO-TOGGLE-OWNING: трек уже в моей музыке? null = неизвестно
+    // (тумблер тогда показывает «Добавить в мою музыку»).
+    isOwned: Boolean? = null,
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
     ) {
+        // NULL-ЯВНО: локальный захват nullable-коллбека вместо ?. — явный if.
+        val toggleOwn = onToggleOwn
+        if (toggleOwn != null) {
+            if (isOwned == true) {
+                DropdownMenuItem(
+                    text = { Text("Удалить из моей музыки") },
+                    onClick = { toggleOwn(); onDismiss() },
+                )
+            } else {
+                DropdownMenuItem(
+                    text = { Text("Добавить в мою музыку") },
+                    onClick = { toggleOwn(); onDismiss() },
+                )
+            }
+        }
         if (isOwn) {
             DropdownMenuItem(text = { Text("Редактировать трек") }, onClick = { onEdit(); onDismiss() })
-            DropdownMenuItem(text = { Text("Удалить аудиозапись") }, onClick = { onDelete(); onDismiss() })
+            // При включённом тумблере удаление даёт пункт «Удалить из моей
+            // музыки» — легаси «Удалить аудиозапись» скрываем (дубль действия).
+            if (toggleOwn == null) {
+                DropdownMenuItem(text = { Text("Удалить аудиозапись") }, onClick = { onDelete(); onDismiss() })
+            }
         } else {
-            DropdownMenuItem(text = { Text("Добавить в мою музыку") }, onClick = { onAdd(); onDismiss() })
+            // При включённом тумблере добавление даёт его пункт — легаси
+            // статичное «Добавить в мою музыку» скрываем (дубль действия).
+            if (toggleOwn == null) {
+                DropdownMenuItem(text = { Text("Добавить в мою музыку") }, onClick = { onAdd(); onDismiss() })
+            }
             DropdownMenuItem(text = { Text("Воспроизвести следующей") }, onClick = { onSetNext(); onDismiss() })
         }
         if (track.hasLyrics) {

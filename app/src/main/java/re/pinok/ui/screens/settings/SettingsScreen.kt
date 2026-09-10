@@ -31,9 +31,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -89,6 +91,10 @@ import re.pinok.data.model.SettingsParam
 import re.pinok.data.model.SettingsSection as BffSettingsSection
 import re.pinok.ui.theme.SovaColors
 import re.pinok.util.AppLog
+// Fix #391 #IN-APP-UPDATER (волна 29-i): модель/менеджер обновлений — вкладка «Обновления».
+import re.pinok.updater.UpdateInfo
+import re.pinok.updater.UpdaterManager
+import re.pinok.updater.UpdaterUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -122,6 +128,8 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Shield
+// Fix #391 #IN-APP-UPDATER: иконка вкладки «Обновления» (system update — тренд системных настроек).
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -138,6 +146,7 @@ import android.widget.Toast
 import android.os.Environment
 import android.provider.Settings
 import java.text.DecimalFormat
+import java.io.File
 // #CALLS-Z (2026-09-05, Этап З): серверные тумблеры/персональные настройки + дефолты устройств.
 import com.google.gson.JsonObject
 import kotlinx.coroutines.flow.first
@@ -193,6 +202,11 @@ private enum class SettingsTab(
     PRIVACY("Приватность", Icons.Outlined.Shield),
     SECURITY("Защита", Icons.Outlined.Lock),
     LOGGING("Логирование", Icons.Outlined.BugReport),
+    // Fix #391 #IN-APP-UPDATER (волна 29-i): вкладка «Обновления» — проверка
+    // version.json из репозитория, скачивание/установка APK, откат на предыдущие
+    // версии, ручное скачивание в браузере. ПЕРЕД AUTHOR (AUTHOR остаётся
+    // последней ядерной вкладкой — заказ волны 29).
+    UPDATE("Обновления", Icons.Outlined.SystemUpdate),
     AUTHOR("Автор", Icons.Filled.Person),
     // #ARCH-CONTAINERS (Этап 1.4): ядерная вкладка CALLS («Звонки») убрана из
     // enum — вкладка настроек звонков приходит из реестра (SettingsSection
@@ -432,6 +446,8 @@ fun SettingsScreen(
                     SettingsTab.PRIVACY -> PrivacyTab(s, app, scope, onOpenPrivacySettings)
                     SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices, onOpenVkIdAccount)
                     SettingsTab.LOGGING -> LoggingTab(s, app, scope)
+                    // Fix #391 #IN-APP-UPDATER: вкладка «Обновления» (перед AUTHOR).
+                    SettingsTab.UPDATE -> UpdateTab(s, app, scope)
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
                 }
                 is SettingsPage.Container -> {
@@ -4218,6 +4234,332 @@ private fun AccentPicker(selectedIndex: Int, onPick: (Int) -> Unit) {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  Fix #391 #IN-APP-UPDATER (волна 29-i): вкладка «Обновления».
+//  Проверка version.json из git-репозитория (raw.githubusercontent), список
+//  версий со статусами (Установлена / Доступно обновление / Предыдущая версия),
+//  скачивание APK с прогрессом, установка через системный установщик, откат
+//  на предыдущие версии (с честным предупреждением про удаление данных),
+//  ручное скачивание в браузере. Автопроверку в LaunchedEffect НЕ делаем —
+//  только по кнопке (никакого фонового трафика без ведома юзера).
+// ══════════════════════════════════════════════════════════════════════
+
+@Composable
+private fun UpdateTab(
+    s: SovaPrefs.Snapshot,
+    app: SovaApp,
+    scope: CoroutineScope,
+) {
+    val context = LocalContext.current
+    // Синглтон-менеджер: HorizontalPager утилизирует дальние страницы —
+    // локальный remember-стейт умер бы при свайпе вкладок, состояние
+    // проверки/загрузки обязано жить дольше композиции.
+    val updater = remember { UpdaterManager.ensureInit(context.applicationContext) }
+    val state by updater.state.collectAsState()
+    val manifest by updater.manifest.collectAsState()
+    // Откат требует подтверждения: Android не ставит более старую версию поверх
+    // новой без удаления приложения — предупреждаем честно (AlertDialog ниже).
+    var pendingRollback by remember { mutableStateOf<UpdateInfo?>(null) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item { SectionHeader("Текущая версия") }
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "PinoK " + BuildConfig.VERSION_NAME,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "versionCode: " + BuildConfig.VERSION_CODE,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Text(
+                        "Штамп сборки: " + BuildStamp.STAMP,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "Пакет: " + BuildConfig.APPLICATION_ID,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        item { SectionHeader("Проверка обновлений") }
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    when (val st = state) {
+                        is UpdaterUiState.Checking -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Запрашиваю манифест версий…",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        is UpdaterUiState.UpToDate -> Text(
+                            "Установлена последняя версия (" + st.currentName + ")",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        is UpdaterUiState.Available -> Text(
+                            "Доступно обновление: " + st.latest.versionName.orEmpty() +
+                                " (versionCode " + st.latest.versionCode + ")",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        is UpdaterUiState.Error -> Text(
+                            st.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        else -> Text(
+                            "Манифест ещё не запрашивался — нажмите «Проверить обновления».",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // Busy-гвард: Checking/Downloading блокируют кнопку — состояния
+                    // не перемешиваются (см. guard в UpdaterManager.checkForUpdate).
+                    val busy = (state is UpdaterUiState.Checking) || (state is UpdaterUiState.Downloading)
+                    Button(
+                        onClick = { updater.checkForUpdate() },
+                        enabled = !busy,
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        Text("Проверить обновления")
+                    }
+                    // «Повторить» = та же кнопка: при Error она снова активна.
+                }
+            }
+        }
+
+        item { SectionHeader("Версии из манифеста") }
+        val m = manifest
+        val versions: List<UpdateInfo> = if (m == null) emptyList() else m.versions
+        if (versions.isEmpty()) {
+            item {
+                Text(
+                    "Манифест ещё не загружен. Нажмите «Проверить обновления» — приложение прочитает version.json из ветки PinoK репозитория PinoK_1.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+        } else {
+            items(versions) { info ->
+                val currentCode: Long = BuildConfig.VERSION_CODE.toLong()
+                // Состояние загрузки конкретно этой версии (глобальный стейт —
+                // одна активная загрузка, UI подсвечивает только её строку).
+                val isDownloadingThis = when (val st = state) {
+                    is UpdaterUiState.Downloading -> st.info == info
+                    else -> false
+                }
+                val downloadProgress = when (val st = state) {
+                    is UpdaterUiState.Downloading -> st.progress
+                    else -> 0
+                }
+                val downloadedFile = when (val st = state) {
+                    is UpdaterUiState.Downloaded -> if (st.info == info) st.file else null
+                    else -> null
+                }
+                UpdateVersionRow(
+                    info = info,
+                    currentCode = currentCode,
+                    isDownloading = isDownloadingThis,
+                    downloadProgress = downloadProgress,
+                    downloadedFile = downloadedFile,
+                    onDownload = { updater.downloadApk(info) },
+                    onInstall = {
+                        val file = downloadedFile
+                        if (file != null) updater.installApk(file)
+                    },
+                    onRollback = { pendingRollback = info },
+                    onBrowserDownload = {
+                        val url = info.apkUrl.orEmpty()
+                        if (url.isEmpty()) {
+                            Toast.makeText(
+                                context,
+                                "APK для этой версии ещё не опубликован",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            try {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    },
+                                )
+                            } catch (t: Throwable) {
+                                Toast.makeText(
+                                    context,
+                                    "Нет приложения для открытия ссылки",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    // AlertDialog отката — вынесен ИЗ item{} LazyColumn (урок #PIN-DIALOG-OVERLAY:
+    // dispose по viewport молча закрывал диалоги, живущие внутри списка).
+    val rollbackInfo = pendingRollback
+    if (rollbackInfo != null) {
+        AlertDialog(
+            onDismissRequest = { pendingRollback = null },
+            title = { Text("Откатиться на " + rollbackInfo.versionName.orEmpty() + "?") },
+            text = {
+                Text(
+                    "Android не устанавливает более старую версию поверх новой — сначала приложение придётся удалить. " +
+                        "Данные приложения будут потеряны: сессию (вход в аккаунт) нужно будет пройти заново, " +
+                        "кэши и локальные настройки сотрутся. Продолжить?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRollback = null
+                    // rollbackInfo — локальный val (smart-cast на non-null внутри if выше).
+                    updater.downloadApk(rollbackInfo)
+                }) { Text("Продолжить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRollback = null }) { Text("Отмена") }
+            },
+        )
+    }
+}
+
+/**
+ * Строка одной версии манифеста: имя + versionCode + штамп/заметки + статус
+ * относительно текущей сборки + действия (скачать / установить / откатиться /
+ * скачать в браузере). Тупой компосабл: все состояния вычислены вызывающим.
+ */
+@Composable
+private fun UpdateVersionRow(
+    info: UpdateInfo,
+    currentCode: Long,
+    isDownloading: Boolean,
+    downloadProgress: Int,
+    downloadedFile: File?,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onRollback: () -> Unit,
+    onBrowserDownload: () -> Unit,
+) {
+    val codeLong = info.versionCode.toLong()
+    val status = when {
+        codeLong == currentCode -> "Установлена"
+        codeLong > currentCode -> "Доступно обновление"
+        else -> "Предыдущая версия"
+    }
+    // apkUrl пуст → скачивание невозможно — честно пишем об этом, кнопки disabled.
+    val apkUnpublished = info.apkUrl.orEmpty().isEmpty()
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                info.versionName.orEmpty() + "  (versionCode " + info.versionCode + ")",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = when (status) {
+                    "Установлена" -> MaterialTheme.colorScheme.primary
+                    "Доступно обновление" -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            val stamp = info.stamp.orEmpty()
+            if (stamp.isNotEmpty()) {
+                Text(
+                    "Штамп: " + stamp,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val notes = info.notes.orEmpty()
+            if (notes.isNotEmpty()) {
+                Text(
+                    notes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (apkUnpublished) {
+                Text(
+                    "APK для этой версии ещё не опубликован (apkUrl пуст в version.json).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            // Кнопки в ДВУХ рядах: один Row с 4 кнопками не влезает на 360dp-экраны.
+            Row(
+                modifier = Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (isDownloading) {
+                    // Прогресс прямо на кнопке — процент по content-length.
+                    OutlinedButton(onClick = {}, enabled = false) {
+                        Text(if (downloadProgress > 0) "Загрузка… " + downloadProgress + "%" else "Загрузка…")
+                    }
+                } else {
+                    OutlinedButton(onClick = onDownload, enabled = !apkUnpublished) {
+                        Text("Скачать APK")
+                    }
+                }
+                val file = downloadedFile
+                if (file != null) {
+                    Button(onClick = onInstall) { Text("Установить APK") }
+                }
+            }
+            Row(
+                modifier = Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Откат — только для версий МЛАДШЕ текущей (versionCode меньше текущего).
+                if (codeLong < currentCode) {
+                    OutlinedButton(onClick = onRollback) { Text("Откатиться") }
+                }
+                // Ручное скачивание по юзеру: браузер → APK → установка руками.
+                OutlinedButton(onClick = onBrowserDownload, enabled = !apkUnpublished) {
+                    Text("В браузере")
+                }
+            }
+            if (isDownloading) {
+                // Дублируем прогресс полосой — процент читается и на полосе,
+                // и в кнопке (паттерн MusicScreen downloadState.progress).
+                LinearProgressIndicator(
+                    progress = { downloadProgress / 100f },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun AboutScreen() {
     Column(
@@ -5467,6 +5809,119 @@ private fun NotificationsTab(
                 enabled = s.pushEnabled,
                 onToggle = { v -> scope.launch { app.prefs.setPushShowBigPicture(v) } },
             )
+        }
+
+        // ── Fix #390 #NOTIFY-MODES: режимы уведомлений ─────────────────────
+        // РАНЬШЕ: все уведомления показывались всегда (звук/вибрация общие).
+        // Теперь 4 режима: 0=только Сообщения, 1=Сообщения+Сообщества (default,
+        // прежнее поведение), 2=только Сообщества, 3=Тихий (Сообщения без звука/
+        // вибрации). Секция стоит ПЕРЕД «Отображение и звук»: режим определяет,
+        // к КАКИМ уведомлениям применяются тумблеры ниже. Тот же список опций —
+        // в закреплённой кнопке правой панели ленты (FeedRightPanel).
+        item { SectionHeader("Режимы уведомлений") }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Fix #390: локальный список опций (без file-level символов —
+                    // SettingsScreen правится параллельно). Triple(mode, title, description).
+                    val notifyModeOptions = listOf(
+                        Triple(
+                            SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY,
+                            "Уведомления Сообщений",
+                            "Всплывающие только от Сообщений — звук и вибрация только от них",
+                        ),
+                        Triple(
+                            SovaPrefs.NOTIFY_MODE_ALL,
+                            "Уведомления Сообщений и Сообществ",
+                            "Всплывающие от Сообщений и от Сообществ",
+                        ),
+                        Triple(
+                            SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY,
+                            "Уведомления Сообществ",
+                            "Всплывающие только от Сообществ",
+                        ),
+                        Triple(
+                            SovaPrefs.NOTIFY_MODE_SILENT,
+                            "Тихий режим",
+                            "Всплывающие только от Сообщений, но без звука и вибрации",
+                        ),
+                    )
+                    notifyModeOptions.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    // Fix #390 #NOTIFY-MODES: тап по строке = выбор режима
+                                    // (RadioButton onClick дублирует действие — доступны оба пути).
+                                    scope.launch { app.prefs.setNotifyMode(option.first) }
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = s.notifyMode == option.first,
+                                onClick = { scope.launch { app.prefs.setNotifyMode(option.first) } },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    option.second,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (s.pushEnabled) MaterialTheme.colorScheme.onSurface
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    option.third,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // Fix #390: пояснение активного режима (скрытие/тишина — как у юзера).
+                    val modeHint = when (s.notifyMode) {
+                        SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY ->
+                            "Остальные уведомления скрыты: всплывающие только от Сообщений."
+                        SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY ->
+                            "Остальные уведомления скрыты: всплывающие только от Сообществ."
+                        SovaPrefs.NOTIFY_MODE_SILENT ->
+                            "Уведомления сообществ скрыты, сообщения — беззвучно."
+                        else ->
+                            "Всплывающие от Сообщений и от Сообществ (как раньше)."
+                    }
+                    Text(
+                        modeHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        // Fix #390 #NOTIFY-MODES: звук/вибрация ОТ СООБЩЕСТ — видны только в режимах,
+        // где сообщества показываются (1 ALL и 2 COMMUNITIES_ONLY). В режимах 0/3
+        // сообщества скрыты целиком — настройки звука для них бессмысленны.
+        if (s.notifyMode == SovaPrefs.NOTIFY_MODE_ALL ||
+            s.notifyMode == SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY
+        ) {
+            item {
+                ToggleRow(
+                    title = "Звук от сообществ",
+                    subtitle = "Звук всплывающих уведомлений от сообществ (новостных и каналов)",
+                    checked = s.notifyCommunitiesSound,
+                    enabled = s.pushEnabled,
+                    onToggle = { v -> scope.launch { app.prefs.setNotifyCommunitiesSound(v) } },
+                )
+            }
+            item {
+                ToggleRow(
+                    title = "Вибрация от сообществ",
+                    subtitle = "Вибрация всплывающих уведомлений от сообществ",
+                    checked = s.notifyCommunitiesVibration,
+                    enabled = s.pushEnabled,
+                    onToggle = { v -> scope.launch { app.prefs.setNotifyCommunitiesVibration(v) } },
+                )
+            }
         }
 
         // ── §42.2 #PUSH-ENHANCED: отображение ──────────────────────────

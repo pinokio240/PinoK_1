@@ -52,4 +52,11 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     // Coroutines — про запас для компонентов с эффектами (явно, не транзитивно).
     implementation(libs.kotlinx.coroutines.android)
+
+    // Fix #PIN-CORE #LOCKER-TO-CORE-UI: LockerActivity переехал сюда из :app —
+    // зависимости его экрана объявлены ЯВНО (прецедент модуля: «явно, не транзитивно»).
+    implementation(libs.androidx.activity.compose)   // setContent / enableEdgeToEdge
+    implementation(libs.androidx.fragment.ktx)       // FragmentActivity — хост BiometricPrompt
+    implementation(libs.androidx.biometric)          // BiometricPrompt / BiometricManager
+    implementation(libs.androidx.core.ktx)           // ContextCompat.getMainExecutor (showBiometric)
 }

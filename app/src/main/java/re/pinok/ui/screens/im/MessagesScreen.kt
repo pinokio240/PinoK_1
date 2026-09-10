@@ -328,20 +328,22 @@ fun MessagesScreen(
     // самодостаточен).
     var archivedServerChats by remember { mutableStateOf<List<Chat>>(emptyList()) }
 
-    // Fix #274 + Fix #276: локальный override порядка закреплённых диалогов.
-    // VK API messages.markAsImportantConversation требует special-scope user
-    // token (выдаётся только по запросу в support) ИЛИ community token. Наш
-    // web-token (vk1.a.*) отвергается с err=8 "method available only for
-    // group messages". Поэтому:
-    //  - localPinnedOrder — source of truth для UI (какие чаты закреплены
-    //    и в каком порядке). Персистится в PinnedConversationsRepository
-    //    (SovaPrefs.pinnedConvsData, JSON array of peer_id).
-    //  - API-вызов делается best-effort в фоне: если когда-нибудь VK разрешит
-    //    нашему токену — сервер тоже подхватит; если нет (текущий случай) —
-    //    локальное состояние всё равно сохранится между сессиями.
-    //  - При сортировке: сначала идут pinned из localPinnedOrder (в их порядке),
-    //    потом остальные pinned (по VK major_id DESC), потом unpinned.
-    var localPinnedOrder by remember { mutableStateOf<List<Long>>(emptyList()) }
+    // Fix #392 #IM-LOCAL-PIN: локальный закреп диалога. Source of truth —
+    // SovaPrefs-ключ im_pinned_dialogs (JSON array of peer_id В ПОРЯДКЕ
+    // ЗАКРЕПЛЕНИЯ), читается РЕАКТИВНО через снапшот (s.imPinnedDialogs):
+    // закреп/откреп/drag пишут setImPinnedDialogs() → DataStore emit →
+    // recomposition — порядок обновляется мгновенно и без локального
+    // override-стейта. (Прежний механизм Fix #274/#276 — remember-список +
+    // PinnedConversationsRepository — заменён: один источник истины, порядок
+    // переживает перезапуск процесса и синхронен между всеми подписчиками.)
+    // VK API messages.markAsImportantConversation по-прежнему требует
+    // special-scope token (web-token → err=8), поэтому серверный sync —
+    // best-effort и source of truth не является. Одноразовая миграция legacy
+    // pinned_convs_data — migrateLegacyPinnedDialogsIfNeeded() в LaunchedEffect
+    // первичной загрузки ниже. Закреп — фича вкладки «Диалоги»: каналы
+    // (isChannel) не закрепляются (пункт меню скрыт, pinned-сортировка их
+    // игнорирует).
+    val localPinnedOrder: List<Long> = s.imPinnedDialogs
 
     // #CHANNEL-NET: каналы/«Запросы», дозагруженные ПОСЛЕ основного getConversations
     // (legacy getConversations отдаёт не все каналы — #MODERN-SYNC-CURSOR; «Запросы»
@@ -415,15 +417,14 @@ fun MessagesScreen(
     LaunchedEffect(Unit) {
         // FIX: используем корутину LaunchedEffect напрямую вместо scope.launch,
         // чтобы избежать ForgottenCoroutineScopeException при пересоздании Activity.
-        // Fix #276: сначала грузим локально закреплённые peer_id (source of truth).
-        // Это нужно ДО отображения чатов, чтобы сортировка сразу учла pinned.
+        // Fix #392 #IM-LOCAL-PIN: одноразовая миграция legacy pinned_convs_data
+        // (Fix #274/#276) → im_pinned_dialogs. Явная загрузка больше не нужна:
+        // снапшот (s.imPinnedDialogs) доставляет список реактивно — сортировка
+        // сразу учитывает закреплённые (и любые последующие изменения порядка).
         try {
-            localPinnedOrder = app.pinnedConvsRepository.load()
-            if (localPinnedOrder.isNotEmpty()) {
-                AppLog.d("MessagesScreen", "Loaded ${localPinnedOrder.size} locally pinned: $localPinnedOrder")
-            }
+            app.prefs.migrateLegacyPinnedDialogsIfNeeded()
         } catch (e: Exception) {
-            AppLog.w("MessagesScreen", "Failed to load local pinned: ${e.message}")
+            AppLog.w("MessagesScreen", "#IM-LOCAL-PIN: legacy pinned migration failed: ${e.message}")
         }
         // Fix #356 #MSG-ARCHIVE: грузим локальные архивные peer_id (source of
         // truth) — до отображения чатов, чтобы основной список сразу исключил их.
@@ -667,30 +668,56 @@ fun MessagesScreen(
                     chat.peer.title?.contains(q, ignoreCase = true) == true
                 }
             }
-            // Fix #274 + Fix #276: сортировка — закреплённые (pinned) вверху, обычные внизу.
-            //  - Pinned = peer.id в localPinnedOrder (локальное закрепление,
-            //    source of truth) ИЛИ sortId.majorId > 0 ИЛИ important == true
-            //    (серверное закрепление, если когда-нибудь VK разрешит API).
-            //  - Внутри pinned: сначала те, что в localPinnedOrder (в их порядке),
-            //    потом остальные pinned по VK majorId DESC.
-            //  - Внутри unpinned: по timestamp последнего сообщения DESC (как в VK).
-            val pinned = result.filter {
-                it.peer.id in localPinnedOrder || it.sortId?.isPinned() == true || it.important == true
+            // Fix #392 #IM-LOCAL-PIN: закреплённые наверху — ТОЛЬКО на вкладке 0
+            // («Диалоги» в legacy-режиме / «Все» в режиме папок). На вкладках
+            // «Каналы»/«Непрочитанные» и в папках порядок прежний (дата последнего
+            // сообщения DESC, стабильная сортировка): закреплённые там не всплывают.
+            //  - Pinned = peer.id в localPinnedOrder (локальный закреп, source of
+            //    truth — s.imPinnedDialogs) ИЛИ серверное закрепление
+            //    (sortId.majorId > 0 / important), НО только для не-каналов
+            //    (закреп — фича вкладки «Диалоги», каналы не закрепляются).
+            //  - Внутри pinned: В ПОРЯДКЕ ЗАКРЕПЛЕНИЯ (localPinnedOrder) — позиция
+            //    фиксирована порядком в prefs, новые сообщения её НЕ двигают;
+            //    остальные серверно-pinned (не в localPinnedOrder) — по majorId DESC.
+            //  - Дальше — все остальные в прежнем порядке (дата DESC).
+            val pinnedFirst = activeTab == 0
+            val isServerPinned: (Chat) -> Boolean = { c ->
+                val sid = c.sortId
+                (sid != null && sid.isPinned()) || c.important == true
             }
-            val unpinned = result.filterNot {
-                it.peer.id in localPinnedOrder || it.sortId?.isPinned() == true || it.important == true
-            }
-            val pinnedSorted = buildList {
-                // Сначала pinned из localPinnedOrder (в порядке, заданном пользователем).
-                localPinnedOrder.forEach { peerId ->
-                    pinned.firstOrNull { it.peer.id == peerId }?.let { add(it) }
+            if (pinnedFirst) {
+                val pinned = result.filter {
+                    !it.isChannel && (it.peer.id in localPinnedOrder || isServerPinned(it))
                 }
-                // Потом остальные pinned (не в localPinnedOrder) по majorId DESC.
-                val remaining = pinned.filterNot { it.peer.id in localPinnedOrder }
-                remaining.sortedByDescending { it.sortId?.majorId ?: 0L }.forEach { add(it) }
+                val unpinned = result.filterNot {
+                    !it.isChannel && (it.peer.id in localPinnedOrder || isServerPinned(it))
+                }
+                val pinnedSorted = buildList {
+                    // Закреплённые — В ПОРЯДКЕ ЗАКРЕПЛЕНИЯ (порядок из prefs).
+                    localPinnedOrder.forEach { peerId ->
+                        val match = pinned.firstOrNull { candidate -> candidate.peer.id == peerId }
+                        if (match != null) add(match)
+                    }
+                    // Серверно-pinned вне локального списка (если появятся) — majorId DESC.
+                    val remaining = pinned.filterNot { it.peer.id in localPinnedOrder }
+                    remaining.sortedByDescending { c ->
+                        val sid = c.sortId
+                        if (sid != null) sid.majorId else 0L
+                    }.forEach { add(it) }
+                }
+                val unpinnedSorted = unpinned.sortedByDescending { c ->
+                    val lm = c.lastMessage
+                    if (lm != null) lm.date else 0L
+                }
+                pinnedSorted + unpinnedSorted
+            } else {
+                // Fix #392 #IM-LOCAL-PIN: вне вкладки «Диалоги» — прежний порядок
+                // (дата DESC, stable), без pinned-пересортировки.
+                result.sortedByDescending { c ->
+                    val lm = c.lastMessage
+                    if (lm != null) lm.date else 0L
+                }
             }
-            val unpinnedSorted = unpinned.sortedByDescending { it.lastMessage?.date ?: 0L }
-            pinnedSorted + unpinnedSorted
         }
     }
 
@@ -1161,19 +1188,30 @@ fun MessagesScreen(
                         )
                     } else null
 
-                    // Fix #274 + Fix #276: helper для определения pinned-статуса чата.
-                    // peer.id в localPinnedOrder (локальное закрепление, source of truth)
-                    // ИЛИ серверное закрепление (sortId.majorId > 0 / important).
+                    // Fix #392 #IM-LOCAL-PIN: pinned-статус карточки — локальный закреп
+                    // (s.imPinnedDialogs) или серверное закрепление, НО только для
+                    // не-каналов (закреп — фича вкладки «Диалоги»: в «Каналах» нет
+                    // пункта меню и не рисуется pinned-визуал).
                     val isPinnedChat: (Chat) -> Boolean = { c ->
-                        c.peer.id in localPinnedOrder ||
-                            c.sortId?.isPinned() == true ||
-                            c.important == true
+                        if (c.isChannel) {
+                            false
+                        } else {
+                            val sid = c.sortId
+                            c.peer.id in localPinnedOrder ||
+                                (sid != null && sid.isPinned()) ||
+                                c.important == true
+                        }
                     }
-                    // Fix #274: для каждого чата ищем его индекс среди pinned.
-                    // Нужно для drag&drop swap (меняем местами в localPinnedOrder).
-                    val pinnedPeerIdsInOrder: List<Long> = filteredChats
-                        .filter { isPinnedChat(it) }
+                    // Fix #274 + Fix #392: порядок закреплённых для drag&drop — В ПОРЯДКЕ
+                    // ЗАКРЕПЛЕНИЯ (localPinnedOrder), ограниченный чатами, реально
+                    // присутствующими в текущем списке. (Прежний вариант брал порядок
+                    // из filteredChats — на вкладках без pinned-сортировки индексы
+                    // drag&drop не совпадали с порядком закрепления.)
+                    val visibleDialogIds = filteredChats
+                        .filter { candidate -> !candidate.isChannel }
                         .map { it.peer.id }
+                        .toHashSet()
+                    val pinnedPeerIdsInOrder: List<Long> = localPinnedOrder.filter { it in visibleDialogIds }
                     // #FAVE-SELF-CHAT: pinned строка «Избранное» (не из filteredChats).
                     if (favoritesChat != null) {
                         item(key = "favorites_$myUserId") {
@@ -1184,6 +1222,11 @@ fun MessagesScreen(
                                 // Fix #356: «Избранное» — виртуальный self-chat,
                                 // архивировать его нельзя → пункт меню скрыт.
                                 showArchiveAction = false,
+                                // Fix #392 #IM-LOCAL-PIN: виртуальный self-chat не участвует
+                                // в закрепе/заглушении/непрочитанном/удалении (обработчики
+                                // ниже — no-op) → долгий тап не открывает меню мёртвых
+                                // пунктов (no-stub UI); закрепить «Избранное» невозможно.
+                                showListActions = false,
                                 onClick = { onChatClick(favoritesChat) },
                                 onMarkAsRead = { _, _ -> },
                                 onToggleMute = { _, _ -> },
@@ -1200,7 +1243,14 @@ fun MessagesScreen(
                         val ctx = LocalContext.current
                         val isPinned = isPinnedChat(chat)
                         // Fix #274: ищем позицию этого чата среди pinned (для drag-swap).
-                        val pinnedIndex = if (isPinned) pinnedPeerIdsInOrder.indexOf(chat.peer.id) else -1
+                        // Fix #392 #IM-LOCAL-PIN: drag-handle только на вкладке 0 — там,
+                        // где действует pinned-сортировка; на прочих вкладках список
+                        // показан в порядке даты, и перестановка закрепа была бы невидима.
+                        val pinnedIndex = if (isPinned && activeTab == 0) {
+                            pinnedPeerIdsInOrder.indexOf(chat.peer.id)
+                        } else {
+                            -1
+                        }
                         // #TYPING-FIX: «печатает…» вместо сниппета при живом typing пира.
                         // ЛС (код 61) — «печатает…»; беседа (код 62, peer >= 2e9) —
                         // «Имя печатает…» (имя из typingNames, резолвится через users.get).
@@ -1329,19 +1379,22 @@ fun MessagesScreen(
                                         important = if (pin) true else null,
                                     ) else c
                                 }
-                                // Обновляем localPinnedOrder (source of truth для UI).
-                                if (pin) {
-                                    localPinnedOrder = (listOf(peerId) + localPinnedOrder.filter { it != peerId }).distinct()
+                                // Fix #392 #IM-LOCAL-PIN: персистим НОВЫЙ порядок закрепления
+                                // в SovaPrefs (source of truth — im_pinned_dialogs). UI
+                                // обновится реактивно через снапшот (DataStore emit →
+                                // s.imPinnedDialogs → recomposition): закреплённый диалог
+                                // встаёт на место мгновенно и дальше НЕ двигается при новых
+                                // сообщениях — позицию фиксирует порядок в prefs.
+                                val newOrder: List<Long> = if (pin) {
+                                    (listOf(peerId) + localPinnedOrder.filter { it != peerId }).distinct()
                                 } else {
-                                    localPinnedOrder = localPinnedOrder.filterNot { it == peerId }
+                                    localPinnedOrder.filterNot { it == peerId }
                                 }
-                                // Fix #276: персистим в локальное хранилище.
-                                val newOrder = localPinnedOrder
                                 scope.launch {
                                     try {
-                                        app.pinnedConvsRepository.setOrder(newOrder)
+                                        app.prefs.setImPinnedDialogs(newOrder)
                                     } catch (e: Exception) {
-                                        AppLog.w("MessagesScreen", "Failed to persist pin($peerId, $pin): ${e.message}")
+                                        AppLog.w("MessagesScreen", "#IM-LOCAL-PIN: failed to persist pin($peerId, $pin): ${e.message}")
                                     }
                                 }
                                 // Best-effort VK API sync (вернёт err=8 для web-token,
@@ -1425,20 +1478,23 @@ fun MessagesScreen(
                                 val removedChat = chat
                                 val wasPinned = peerId in pinnedPeerIdsInOrder
                                 chats = chats.filter { it.peer.id != peerId }
-                                if (wasPinned) {
-                                    val newOrder = pinnedPeerIdsInOrder.filter { it != peerId }
-                                    localPinnedOrder = newOrder
-                                }
+                                // Fix #392 #IM-LOCAL-PIN: pinned-порядок живёт в prefs и не
+                                // меняется оптимистично — из im_pinned_dialogs запись убирается
+                                // только при УСПЕШНОМ удалении (ветка ok ниже), при откате
+                                // персистить нечего.
                                 scope.launch {
                                     try {
                                         val ok = app.apiClient.messagesDeleteConversation(peerId)
                                         if (ok) {
-                                            // Убираем из локального pinned-хранилища если был закреплён.
+                                            // Fix #392 #IM-LOCAL-PIN: убираем из im_pinned_dialogs,
+                                            // если диалог был закреплён (source of truth — prefs).
                                             if (wasPinned) {
                                                 try {
-                                                    app.pinnedConvsRepository.unpin(peerId)
+                                                    app.prefs.setImPinnedDialogs(
+                                                        pinnedPeerIdsInOrder.filterNot { it == peerId },
+                                                    )
                                                 } catch (e: Exception) {
-                                                    AppLog.w("MessagesScreen", "pinned unpin after delete: ${e.message}")
+                                                    AppLog.w("MessagesScreen", "#IM-LOCAL-PIN: unpin after delete: ${e.message}")
                                                 }
                                             }
                                             Toast.makeText(ctx, "Диалог удалён", Toast.LENGTH_SHORT).show()
@@ -1446,7 +1502,6 @@ fun MessagesScreen(
                                         } else {
                                             // Откат: возвращаем чат в список.
                                             chats = chats.toMutableList().apply { add(removedChat) }
-                                            if (wasPinned) localPinnedOrder = pinnedPeerIdsInOrder
                                             Toast.makeText(ctx, "Не удалось удалить диалог", Toast.LENGTH_SHORT).show()
                                         }
                                     } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -1454,7 +1509,6 @@ fun MessagesScreen(
                                     } catch (e: Exception) {
                                         AppLog.e("MessagesScreen", "delete conversation error", e)
                                         chats = chats.toMutableList().apply { add(removedChat) }
-                                        if (wasPinned) localPinnedOrder = pinnedPeerIdsInOrder
                                         Toast.makeText(ctx, "Не удалось удалить диалог", Toast.LENGTH_SHORT).show()
                                     }
                                 }
@@ -1480,13 +1534,14 @@ fun MessagesScreen(
                                 val tmp = newOrder[fromIdx]
                                 newOrder[fromIdx] = newOrder[toIdx]
                                 newOrder[toIdx] = tmp
-                                localPinnedOrder = newOrder
-                                // Fix #276: персистим новый порядок в локальное хранилище.
+                                // Fix #392 #IM-LOCAL-PIN: новый порядок закрепления пишется
+                                // в SovaPrefs (source of truth) — снапшот реактивно
+                                // переставит карточки, порядок переживает перезапуск.
                                 scope.launch {
                                     try {
-                                        app.pinnedConvsRepository.setOrder(newOrder)
+                                        app.prefs.setImPinnedDialogs(newOrder)
                                     } catch (e: Exception) {
-                                        AppLog.w("MessagesScreen", "Failed to persist drag reorder: ${e.message}")
+                                        AppLog.w("MessagesScreen", "#IM-LOCAL-PIN: failed to persist drag reorder: ${e.message}")
                                     }
                                 }
                                 AppLog.d("MessagesScreen", "drag swap: $fromId ↔ $toId (idx $fromIdx ↔ $toIdx)")
@@ -1851,11 +1906,13 @@ private fun ChatCard(
                 expanded = showContextMenu,
                 onDismissRequest = { showContextMenu = false },
             ) {
-                // Fix #274: Закрепить/Открепить. Скрывается вне основного списка
-                // (архив/поиск — showListActions=false, см. KDoc параметра).
-                if (showListActions) {
+                // Fix #274 + Fix #392 #IM-LOCAL-PIN: Закрепить/Открепить диалог.
+                // Скрывается вне основного списка (архив/поиск — showListActions=false,
+                // см. KDoc параметра) и для каналов (закреп — фича вкладки «Диалоги»:
+                // isChannel → пункта нет, долгий тап не закрепляет).
+                if (showListActions && !chat.isChannel) {
                 DropdownMenuItem(
-                    text = { Text(if (isPinned) "Открепить" else "Закрепить") },
+                    text = { Text(if (isPinned) "Открепить диалог" else "Закрепить диалог") },
                     leadingIcon = {
                         Icon(
                             imageVector = if (isPinned) Icons.Outlined.PushPin else Icons.Filled.PushPin,

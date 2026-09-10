@@ -63,6 +63,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Bookmark
 import re.pinok.data.model.FaveTag
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -316,6 +317,8 @@ fun BookmarksScreen(
         }
 
         // Fix #83: PullToRefreshBox — pull-to-refresh закладок.
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshBookmarks() },
@@ -385,6 +388,15 @@ fun BookmarksScreen(
                     }
                 }
             }
+        }
+
+        // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» над закладками
+        // (пагинация fave.get offset — loadMoreBookmarks).
+        ScrollToTopFab(
+            listState = listState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
         }
     }
 }

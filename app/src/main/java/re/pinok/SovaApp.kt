@@ -1433,6 +1433,58 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         // Пропускаем исходящие сообщения (флаг 2 = outbox в VK LongPoll)
                         if (event.flags and 2 != 0) return@collect
 
+                        // Fix #390 #NOTIFY-MODES: режим уведомлений (Настройки →
+                        // Уведомления → «Режимы уведомлений», либо закреплённая
+                        // кнопка в правой панели ленты). Читаем АКТУАЛЬНЫЙ snapshot
+                        // на каждое событие (DataStore кэширует в памяти — чтение
+                        // дешёвое; смена режима применяется без перезапуска).
+                        val snap = prefs.data.first()
+                        val mode = snap.notifyMode
+
+                        // Fix #390 #NOTIFY-MODES: сообщество = fromId<0 (сообщение
+                        // отправлено от имени группы) или peerId<0 (канал/диалог
+                        // сообщества). 1-1 диалоги и юзер-чаты — peerId>=2e9 положительный.
+                        val fromIdVal = event.fromId
+                        val isCommunity = (fromIdVal != null && fromIdVal < 0) || event.peerId < 0
+
+                        // Fix #390 #NOTIFY-MODES: скрытие (НЕ показывать вовсе) —
+                        // режимы 0 (MESSAGES_ONLY) и 2 (COMMUNITIES_ONLY) глушат
+                        // «чужой» класс отправителей; 3 (SILENT) глушит сообщества.
+                        // Режим 1 (ALL) — прежнее поведение, ничего не скипается.
+                        val suppressLog = "Fix #390 #NOTIFY-MODES: suppressed (mode=$mode isCommunity=$isCommunity) peer=${event.peerId}"
+                        if (mode == SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY && isCommunity) {
+                            AppLog.d("SovaApp", suppressLog)
+                            return@collect
+                        }
+                        if (mode == SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY && !isCommunity) {
+                            AppLog.d("SovaApp", suppressLog)
+                            return@collect
+                        }
+                        if (mode == SovaPrefs.NOTIFY_MODE_SILENT && isCommunity) {
+                            AppLog.d("SovaApp", suppressLog)
+                            return@collect
+                        }
+
+                        // Fix #390 #NOTIFY-MODES: выбор канала по режиму + типу
+                        // отправителя + настройкам звука/вибрации сообществ.
+                        // Канал определяет heads-up/звук/вибрацию на уровне системы
+                        // (см. MessageNotifier.init); prefs внутрь нотифаера не тянем.
+                        val pushChannelId = when {
+                            // Тихий режим: сообщения всплывают, но беззвучно.
+                            mode == SovaPrefs.NOTIFY_MODE_SILENT &&
+                                !isCommunity -> re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES_SILENT
+                            // Сообщества (режимы 1 и 2): звук/вибрация по настройкам
+                            // notifyCommunitiesSound/Vibration (звук+вибрация / без
+                            // вибрации / полностью тихо).
+                            isCommunity && !snap.notifyCommunitiesSound ->
+                                re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES_SILENT
+                            isCommunity && !snap.notifyCommunitiesVibration ->
+                                re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES_NOVIB
+                            isCommunity -> re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES
+                            // Сообщения (режимы 0 и 1): прежний канал со звуком.
+                            else -> re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES
+                        }
+
                         // Fix #135 (2026-XX): РАНЬШЕ было:
                         //   val text = if (event.text.isBlank()) "Вложение" else event.text
                         // Это означало: для сообщения со стикером/фото/голосовым
@@ -1504,6 +1556,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             text = text,
                             unreadCount = unread,
                             muted = muted,
+                            // Fix #390 #NOTIFY-MODES: канал выбран по режиму
+                            // уведомлений + типу отправителя (см. выше).
+                            channelId = pushChannelId,
                         )
                     } catch (e: Exception) {
                         AppLog.w("SovaApp", "MessageNotifier event handling failed: ${e.message}")

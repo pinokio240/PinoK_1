@@ -9,6 +9,13 @@ import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+// #IM-SEARCH (Fix #394): scrim+slide паттерн правой панели (образец FeedRightPanel)
+// для «Поиск по постам» в канальном режиме.
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -20,6 +27,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +35,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -72,6 +81,9 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+// #IM-SEARCH (Fix #394): лупа в шапке диалога/канала (снапшот 29-a:
+// search_outline_24 «Поиск по каналу» / поиск по сообщениям).
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -93,7 +105,12 @@ import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+// #CHANNEL-WALL-MODE (Fix #393): карточки постов канала (баннер закрепа).
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+// #IM-SEARCH (Fix #394): разделители результатов панели «Поиск по постам».
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -114,6 +131,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
+// #CHANNEL-WALL-MODE (Fix #393): optimistic-карты лайков постов канала.
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -154,6 +173,8 @@ import re.pinok.SovaApp
 import re.pinok.data.model.Attachment
 import re.pinok.data.model.GiftItem
 import re.pinok.data.model.Message
+// #CHANNEL-WALL-MODE (Fix #393): посты канала = посты сообщества (wall.get).
+import re.pinok.data.model.Post
 import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.MessageReaction
 import re.pinok.data.model.Track
@@ -191,12 +212,20 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
 import re.pinok.ui.components.PhotoViewer
+// #CHANNEL-WALL-MODE (Fix #393): «Поделиться» поста канала — существующий
+// компонент (тот же, что в CommunityScreen/UserProfileScreen).
+import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.PendingPhotosBar
 import re.pinok.ui.components.PendingPhoto
 import re.pinok.ui.components.nextPendingPhotoId
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+// #CHANNEL-WALL-MODE (Fix #393): переиспользование пост-компонента стены профиля
+// (public, второй вызов UserProfileScreen:768) вместо копипасты + PostHolder для
+// имени сообщества в PostDetailScreen.
+import re.pinok.ui.screens.profile.WallPostCard
+import re.pinok.ui.navigation.PostHolder
 
 // VK reaction IDs → emoji.
 private val REACTION_EMOJIS = listOf(
@@ -744,6 +773,37 @@ fun ChatDetailScreen(
         .collectAsState(initial = true)
     // P3.4: определяется при загрузке chat info (messagesGetConversationsById).
     var isChannel by remember { mutableStateOf(false) }
+
+    // ═══ #CHANNEL-WALL-MODE (Fix #393) ═══════════════════════════════════
+    // Root-cause «каналы — диалоги не открываются, ошибки»: контент канала
+    // (peer = -<group_id>, can_write.allowed == false) живёт в wall.get
+    // (посты сообщества, снапшот 29-a: blog-бэкенд веба), а НЕ в
+    // messages.getHistory — VK для таких пиров возвращает ошибку/пусто,
+    // и экран показывал generic-ошибку. Теперь канал определяется ДО
+    // загрузки messages-истории (см. LaunchedEffect(peerId)) и рендерится
+    // wall-режим: посты WallPostCard + баннер закрепа + футер-уведомления.
+    var channelPosts by remember { mutableStateOf<List<Post>>(emptyList()) }
+    var channelPostsLoading by remember { mutableStateOf(false) }
+    var channelPostsError by remember { mutableStateOf<String?>(null) }
+    var channelPostsEnd by remember { mutableStateOf(false) }
+    var channelPostsLoadingMore by remember { mutableStateOf(false) }
+    val channelListState = rememberLazyListState()
+    // Подписчики в шапке канала (снапшот 29-a: «название + N подписчиков»).
+    // -1 = ещё не получены (subtitle не рисуем).
+    var channelSubscribers by remember { mutableStateOf(-1) }
+    // GroupInfo сообщества-канала — для PostHolder.lastGroups (имя сообщества
+    // в PostDetailScreen, паритет CommunityScreen).
+    var channelGroup by remember { mutableStateOf<re.pinok.api.VKApiClient.GroupInfo?>(null) }
+    // Optimistic-состояния лайков постов канала (паттерн ProfileScreen:
+    // key "ownerId_id" → (isLiked, count) + in-flight guard).
+    val channelLikeStates = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
+    val channelLikeInFlight = remember { mutableStateMapOf<String, Boolean>() }
+    // «Поделиться» постом канала → существующий ShareSheet.
+    var channelSharePost by remember { mutableStateOf<Post?>(null) }
+    // Панель «Поиск по постам» (Fix #394 #IM-SEARCH, scrim+slide как FeedRightPanel).
+    var showChannelSearch by remember { mutableStateOf(false) }
+    // ══════════════════════════════════════════════════════════════════════
+
     // P3.7: bubble-less дизайн — flat layout (без Card/bubble), как m.vk.ru.
     // Передаётся в MessageBubble для выбора стиля рендеринга.
     val bubblelessEnabled by app.prefs.data
@@ -1552,6 +1612,152 @@ fun ChatDetailScreen(
         }
     }
 
+    // ═══ #CHANNEL-WALL-MODE (Fix #393): функции канального режима ════════
+
+    /**
+     * Загрузка постов канала через wall.get (ownerId = peerId — посты
+     * сообщества и есть контент канала, снапшот 29-a). [preloaded] — уже
+     * полученная страница (probe-вызов wallGet при недоступном chat state),
+     * чтобы не дёргать API дважды.
+     *
+     * Честные состояния: loading / channelPostsError («Повторить») /
+     * пустой канал («В канале пока нет записей»).
+     */
+    fun loadChannelPosts(initial: Boolean, preloaded: List<Post>? = null) {
+        if (channelPostsLoading) return
+        scope.launch {
+            channelPostsLoading = true
+            channelPostsError = null
+            if (initial) {
+                channelPosts = emptyList()
+                channelPostsEnd = false
+            }
+            try {
+                if (preloaded != null) {
+                    channelPosts = preloaded
+                    if (preloaded.size < 30) channelPostsEnd = true
+                } else {
+                    val posts = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
+                    channelPosts = posts
+                    if (posts.size < 30) channelPostsEnd = true
+                    if (posts.isEmpty()) {
+                        // wallGet глотает детали ошибки в emptyList — честно
+                        // показываем «Повторить» только при реальной ошибке API;
+                        // без ошибки — канал просто пуст («нет записей»).
+                        val err = app.apiClient.lastApiError
+                        if (err != null) channelPostsError = "Не удалось загрузить канал: $err"
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "#CHANNEL-WALL-MODE wallGet failed", e)
+                channelPostsError = "Не удалось загрузить канал: ${e.message}"
+            } finally {
+                channelPostsLoading = false
+            }
+        }
+    }
+
+    /** Offset-догрузка постов канала — паттерн CommunityScreen.loadMoreWall. */
+    fun loadMoreChannelPosts() {
+        if (channelPostsLoading || channelPostsLoadingMore || channelPostsEnd) return
+        if (channelPosts.isEmpty()) return
+        scope.launch {
+            channelPostsLoadingMore = true
+            try {
+                val more = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = channelPosts.size)
+                val fresh = more.filter { p -> channelPosts.none { it.id == p.id } }
+                if (fresh.isEmpty()) {
+                    channelPostsEnd = true
+                } else {
+                    channelPosts = channelPosts + fresh
+                    if (fresh.size < 30) channelPostsEnd = true
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "#CHANNEL-WALL-MODE loadMore failed", e)
+            } finally {
+                channelPostsLoadingMore = false
+            }
+        }
+    }
+
+    /**
+     * Лайк поста канала — likes.add/likes.delete (type=post), optimistic-
+     * состояние поверх серверных post.likes (паттерн ProfileScreen
+     * toggleWallPostLike, NULL-ЯВНО без elvis).
+     */
+    fun toggleChannelPostLike(clicked: Post) {
+        val key = "${clicked.ownerId}_${clicked.id}"
+        if (channelLikeInFlight.containsKey(key)) return
+        val stored = channelLikeStates[key]
+        val current: Pair<Boolean, Int> = if (stored != null) stored else {
+            val likes = clicked.likes
+            val liked = if (likes != null && likes.userLikes == 1) true else false
+            val baseCount = if (likes != null) likes.count else 0
+            liked to baseCount
+        }
+        val newLiked = !current.first
+        val newCount = (current.second + (if (newLiked) 1 else -1)).coerceAtLeast(0)
+        channelLikeStates[key] = newLiked to newCount
+        channelLikeInFlight[key] = true
+        scope.launch {
+            val serverCount = try {
+                if (newLiked) {
+                    // Fix #393: reactionId/accessKey/trackCode не нужны (NULL-ЯВНО —
+                    // обязательные nullable-параметры передаются явно).
+                    app.apiClient.likesAdd("post", clicked.ownerId, clicked.id, null, null, null)
+                } else {
+                    app.apiClient.likesDelete("post", clicked.ownerId, clicked.id, null, null)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "#CHANNEL-WALL-MODE likes.add/delete failed", e)
+                -1
+            }
+            channelLikeInFlight.remove(key)
+            if (serverCount >= 0) {
+                // VK подтвердил — фиксируем точное значение счётчика.
+                channelLikeStates[key] = newLiked to serverCount
+            } else {
+                // Откат optimistic + честный тост с реальной ошибкой VK.
+                channelLikeStates[key] = current
+                val err = app.apiClient.lastApiError
+                Toast.makeText(
+                    ctx,
+                    if (err != null) err else "Не удалось оценить запись",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    /** Открыть пост канала в PostDetailScreen (через экран-параметр onPostClick). */
+    fun openChannelPost(post: Post) {
+        val g = channelGroup
+        if (g != null) {
+            // Имя сообщества в PostDetailScreen — паритет CommunityScreen
+            // (PostHolder.lastGroups; ключ = положительный group id).
+            PostHolder.lastGroups = mapOf(-peerId to g)
+        }
+        onPostClick(post)
+    }
+
+    /**
+     * Скролл ленты канала к посту (по id, если пост загружен; иначе — no-op).
+     * Баннер закрепа занимает item 0 (когда закреп есть) → сдвиг на 1.
+     */
+    fun scrollChannelToPost(post: Post) {
+        val idx = channelPosts.indexOfFirst { it.id == post.id }
+        if (idx < 0) return
+        val hasBanner = channelPosts.firstOrNull { it.isPinned == 1 } != null
+        val shift = if (hasBanner) 1 else 0
+        scope.launch { channelListState.animateScrollToItem(idx + shift) }
+    }
+
     // Отправка (или отправка редактированного).
     fun doSend() {
         val text = inputText.trim()
@@ -1895,6 +2101,78 @@ fun ChatDetailScreen(
             // ignore — keepAlive failure не блокирует загрузку чата,
             // ensureFreshToken в callInternal всё равно сработает.
         }
+        // ═══ #CHANNEL-WALL-MODE (Fix #393): определение канала ДО messages-истории ═══
+        // Root-cause «каналы — диалоги не открываются, ошибки»: контент канала
+        // (peer = -<group_id>, can_write.allowed == false) — это ПОСТЫ сообщества
+        // (wall.get; снапшот 29-a: web-канал = blog-бэкенд, НЕ messages.getHistory),
+        // а messages.getHistory для таких пиров возвращает ошибку/пусто → юзер видел
+        // generic-ошибку вместо канала (isChannel раньше определялся ПОСЛЕ истории).
+        // Для peerId < 0 сначала спрашиваем chat state; обычные диалоги сообществ
+        // (can_write разрешён) идут дальше по обычному пути — эта ветка их не трогает.
+        var chatInfoResolved = false
+        if (peerId < 0 && channelModeEnabled) {
+            try {
+                val chats = app.apiClient.messagesGetConversationsById(listOf(peerId))
+                val chat = chats.firstOrNull()
+                if (chat != null) {
+                    chatInfoResolved = true
+                    val push = chat.pushSettings
+                    muted = if (push != null) push.isMuted() else false
+                    isChannel = chat.isChannel
+                    val t = chat.peer.title
+                    if (t != null && t.isNotBlank() && t != "Диалог" && t != "DELETED" && t != currentTitle) {
+                        currentTitle = t
+                    }
+                    val ph = chat.peer.photo
+                    if (ph != null && ph.isNotBlank() && ph != currentPhoto) {
+                        currentPhoto = ph
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen", "#CHANNEL-WALL-MODE conversationsById failed: ${e.message}")
+            }
+            if (isChannel) {
+                // Шапка канала: «N подписчиков» (снапшот 29-a) + GroupInfo для
+                // PostHolder.lastGroups (имя сообщества в PostDetailScreen —
+                // паритет CommunityScreen).
+                try {
+                    val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
+                    if (g != null) {
+                        channelGroup = g
+                        if (g.name.isNotBlank() && g.name != currentTitle) currentTitle = g.name
+                        // NULL-ЯВНО: photo200 может отсутствовать — фолбэк на
+                        // photo100 (паттерн рендера аватарок всего проекта).
+                        val gPhoto = if (g.photo200 != null) g.photo200 else g.photo100
+                        if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
+                            currentPhoto = gPhoto
+                        }
+                        if (g.membersCount > 0) channelSubscribers = g.membersCount
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.w("ChatDetailScreen", "#CHANNEL-WALL-MODE groupsGetById failed: ${e.message}")
+                }
+                // wall-режим: messages-история для канала не запрашивается вовсе.
+                loadChannelPosts(initial = true)
+                loading = false
+                return@LaunchedEffect
+            }
+            if (!chatInfoResolved) {
+                // Chat state недоступен (сеть/edge) — по Fix #393 пробуем wallGet
+                // ПЕРВИЧНО: если стена читается — это канал; generic-ошибку history
+                // для негативного пира не показываем никогда.
+                val probe = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
+                if (probe.isNotEmpty() || app.apiClient.lastApiError == null) {
+                    isChannel = true
+                    loadChannelPosts(initial = true, preloaded = probe)
+                    loading = false
+                    return@LaunchedEffect
+                }
+            }
+        }
         try {
             // #74: используем messagesGetHistoryWithProfiles — возвращает профили для аватарок
             val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
@@ -1903,7 +2181,13 @@ fun ChatDetailScreen(
             if (result.messages.size < pageSize) endReached = true
             if (result.messages.isEmpty()) {
                 val err = app.apiClient.lastApiError
-                errorText = if (err != null) "Ошибка: $err" else "Нет сообщений"
+                if (peerId < 0 && channelModeEnabled && !chatInfoResolved) {
+                    // Fix #393: канал вернул пустую messages-историю — контент
+                    // в wall-режиме, generic-ошибку не показываем.
+                    loadChannelPosts(initial = true)
+                } else {
+                    errorText = if (err != null) "Ошибка: $err" else "Нет сообщений"
+                }
             }
             // FIX (P5.2): помечаем загруженные сообщения как прочитанные.
             // Safety-net: клик по чату в MessagesScreen уже вызывает markAsRead,
@@ -1936,7 +2220,15 @@ fun ChatDetailScreen(
             throw e
         } catch (e: Exception) {
             AppLog.e("ChatDetailScreen", "Failed to load history", e)
-            errorText = "Не удалось загрузить: ${e.message}"
+            if (peerId < 0 && channelModeEnabled && !chatInfoResolved) {
+                // Fix #393: messages-история канала упала — переключаемся на
+                // wall-режим (контент канала = посты сообщества) вместо
+                // generic-ошибки. Если wallGet тоже упадёт — честный
+                // channelPostsError с «Повторить» (честное состояние).
+                loadChannelPosts(initial = true)
+            } else {
+                errorText = "Не удалось загрузить: ${e.message}"
+            }
         } finally {
             loading = false
         }
@@ -2031,6 +2323,29 @@ fun ChatDetailScreen(
                 searching = false
             }
         }
+    }
+
+    // #IM-SEARCH (Fix #394): скролл к сообщению в истории по id. Возвращает
+    // false, если сообщение не входит в загруженный диапазон (вызывающая
+    // сторона показывает preview-диалог с догрузкой loadUntilFoundAndScroll).
+    // Индекс считается по chatListItems (сообщения + дата-сепараторы + unread
+    // divider), а не по messages — иначе скролл промахивался бы при включённых
+    // сепараторах.
+    fun scrollToLoadedMessage(msgId: Long): Boolean {
+        val rowIdx = buildChatListItems(
+            messages = messages,
+            groupingEnabled = groupingEnabled,
+            dateSeparatorsEnabled = dateSeparatorsEnabled,
+            unreadDividerEnabled = unreadDividerEnabled,
+        ).indexOfFirst { item ->
+            item is ChatListItem.MessageRow && item.message.id == msgId
+        }
+        if (rowIdx < 0) return false
+        scope.launch {
+            listState.animateScrollToItem(rowIdx)
+            highlightedMsgId = msgId
+        }
+        return true
     }
 
     LaunchedEffect(loading) {
@@ -2390,6 +2705,10 @@ fun ChatDetailScreen(
                             chatProfiles[uid]?.fullName?.takeIf { it.isNotBlank() }
                         }
                         val statusText = when {
+                            // #CHANNEL-WALL-MODE (Fix #393): в шапке канала — количество
+                            // подписчиков (снапшот 29-a: заголовок + «N подписчиков»);
+                            // typing/online для пиров-каналов не приходят.
+                            isChannel && channelSubscribers >= 0 -> subscribersLabel(channelSubscribers)
                             typingEnabled && typingIds.isNotEmpty() && isGroupChat && typingNames.isNotEmpty() -> {
                                 // Group chat: show up to 2 names, then "+N"
                                 when {
@@ -2430,6 +2749,15 @@ fun ChatDetailScreen(
                     }
                 },
                 actions = {
+                    // #IM-SEARCH (Fix #394): лупа в шапке диалога/канала (снапшот 29-a:
+                    // search_outline_24 «Поиск по каналу» / поиск по сообщениям).
+                    // Тап: канал → панель «Поиск по постам» (wall.search), диалог →
+                    // поиск по сообщениям (локально + messages.search).
+                    IconButton(onClick = {
+                        if (isChannel) showChannelSearch = true else showSearch = true
+                    }) {
+                        Icon(Icons.Filled.Search, contentDescription = "Поиск")
+                    }
                     // #CALLS: кнопка звонка в шапке диалога (data-testid="convo-call-menu-trigger").
                     // #ARCH-CONTAINERS (Этап 1.4): рисуем только при живом CallStarter
                     // (onCallClick != null) — без контейнера звонков кнопки нет.
@@ -2481,10 +2809,13 @@ fun ChatDetailScreen(
                                 }
                                 // #59: общие действия для всех диалогов
                                 DropdownMenuItem(
-                                    text = { Text("Поиск по сообщениям") },
+                                    // #IM-SEARCH (Fix #394): для канала — панель «Поиск
+                                    // по постам» (wall.search), для диалога — поиск по
+                                    // сообщениям.
+                                    text = { Text(if (isChannel) "Поиск по постам" else "Поиск по сообщениям") },
                                     onClick = {
                                         showChatMenu = false
-                                        showSearch = true
+                                        if (isChannel) showChannelSearch = true else showSearch = true
                                     },
                                 )
                                 DropdownMenuItem(
@@ -2930,7 +3261,182 @@ fun ChatDetailScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.surface),
         ) {
-            if (loading && messages.isEmpty()) {
+            if (isChannel) {
+                // ═══ #CHANNEL-WALL-MODE (Fix #393): контент канала ═══════════
+                // Посты сообщества (wall.get) карточками WallPostCard — ТОТ ЖЕ
+                // компонент, что на стене профиля (переиспользование, не копипаста):
+                // лайк (likes.add/delete), комментарий/тап → PostDetailScreen,
+                // «Поделиться» → ShareSheet. Композер скрыт (bottomBar →
+                // ChannelFooterBar с тумблером уведомлений).
+                Box(modifier = Modifier.fillMaxSize()) {
+                    val chErr = channelPostsError
+                    when {
+                        channelPostsLoading -> {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        chErr != null && channelPosts.isEmpty() -> {
+                            // Честная ошибка wall.get + «Повторить».
+                            Column(
+                                modifier = Modifier.fillMaxSize().padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text(
+                                    text = chErr,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                TextButton(onClick = { loadChannelPosts(initial = true) }) {
+                                    Text("Повторить")
+                                }
+                            }
+                        }
+                        channelPosts.isEmpty() -> {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "В канале пока нет записей",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        else -> {
+                            // Баннер «Закреплённый пост» над лентой (снапшот 29-a:
+                            // MultiplePins-баннер). Сам пост остаётся в ленте.
+                            val pinnedPost = channelPosts.firstOrNull { it.isPinned == 1 }
+                            LazyColumn(
+                                state = channelListState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                            ) {
+                                if (pinnedPost != null) {
+                                    item(key = "channel_pinned_banner") {
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                .clickable { scrollChannelToPost(pinnedPost) },
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            ),
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Icon(
+                                                    Icons.Outlined.PushPin,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Column {
+                                                    Text(
+                                                        text = "Закреплённый пост",
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        fontWeight = FontWeight.Medium,
+                                                    )
+                                                    if (pinnedPost.text.isNotBlank()) {
+                                                        Text(
+                                                            text = pinnedPost.text.take(80),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                items(channelPosts, key = { "post_${it.ownerId}_${it.id}" }) { post ->
+                                    val likeKey = "${post.ownerId}_${post.id}"
+                                    WallPostCard(
+                                        post = post,
+                                        authorName = currentTitle,
+                                        authorPhoto = currentPhoto,
+                                        onVideoClick = onVideoClick,
+                                        onPostClick = { openChannelPost(it) },
+                                        onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
+                                        onRepostClick = { channelSharePost = it },
+                                        onCommentClick = { openChannelPost(it) },
+                                        likesState = channelLikeStates,
+                                        likePending = channelLikeInFlight.containsKey(likeKey),
+                                        onLikeToggle = { toggleChannelPostLike(it) },
+                                    )
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().height(1.dp)
+                                            .padding(horizontal = 16.dp)
+                                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                    )
+                                }
+                                item(key = "channel_pagination_footer") {
+                                    when {
+                                        channelPostsLoadingMore -> {
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                            }
+                                        }
+                                        channelPostsEnd -> {
+                                            Text(
+                                                text = "Это все записи",
+                                                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            // Пагинация постов канала — догрузка при приближении к концу
+                            // (паттерн CommunityScreen.loadMoreWall / Fix #85).
+                            LaunchedEffect(channelListState, channelPosts.size) {
+                                snapshotFlow {
+                                    val info = channelListState.layoutInfo
+                                    // NULL-ЯВНО: последний видимый item — через
+                                    // явную проверку пустоты (без ?. и ?:).
+                                    val lastVisible = if (info.visibleItemsInfo.isEmpty()) 0
+                                    else info.visibleItemsInfo.last().index
+                                    val total = info.totalItemsCount
+                                    total > 0 && lastVisible >= total - 3
+                                }
+                                    .distinctUntilChanged()
+                                    .filter { it }
+                                    .collect { loadMoreChannelPosts() }
+                            }
+                        }
+                    }
+                }
+                // #IM-SEARCH (Fix #394): панель «Поиск по постам» — scrim+slide
+                // справа (образец FeedRightPanel), серверный поиск wall.search.
+                ChannelSearchPanel(
+                    visible = showChannelSearch,
+                    ownerId = peerId,
+                    channelTitle = currentTitle,
+                    channelPhoto = currentPhoto,
+                    onDismiss = { showChannelSearch = false },
+                    onPostOpen = { p ->
+                        showChannelSearch = false
+                        scrollChannelToPost(p)
+                    },
+                    onVideoClick = onVideoClick,
+                    onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
+                    onSharePost = { channelSharePost = it },
+                    onCommentClick = { openChannelPost(it) },
+                    likesState = channelLikeStates,
+                    likeInFlight = channelLikeInFlight,
+                    onLikeToggle = { toggleChannelPostLike(it) },
+                )
+            } else if (loading && messages.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -3343,8 +3849,33 @@ fun ChatDetailScreen(
     // (Column над панелью ввода) — раньше они рисовались как overlay сверху
     // и перекрывали сообщения. Теперь они снизу, над полем ввода.
 
-    // #60: Search bar
+    // #60 + #IM-SEARCH (Fix #394): поиск по сообщениям (лупа в шапке диалога).
+    // Результаты: (1) ЛОКАЛЬНАЯ фильтрация уже загруженной истории (живой фильтр
+    // по message.text); (2) при пустом локальном результате — серверный
+    // messages.search (API есть в VKApiClient, peer_id поддерживается) с
+    // дебаунсом 600мс. Тап по результату: сообщение в загруженной истории →
+    // скролл + подсветка; вне загруженного диапазона → существующий
+    // preview-диалог с догрузкой истории («Показать в чате», механизм Fix #206).
     if (showSearch) {
+        val q = searchQuery.trim()
+        // Локальная выдача по загруженной истории (newest-first, как в чате).
+        val localResults = if (q.isBlank()) {
+            emptyList()
+        } else {
+            messages.filter { it.text.contains(q, ignoreCase = true) }
+        }
+        // Дебаунс-автопоиск: локально пусто → серверный messages.search.
+        // Очистка searchResults на каждый ввод — старая выдача не должна
+        // показываться под новым запросом.
+        LaunchedEffect(searchQuery) {
+            if (q.isBlank()) {
+                searchResults = emptyList()
+                return@LaunchedEffect
+            }
+            searchResults = emptyList()
+            kotlinx.coroutines.delay(600)
+            if (localResults.isEmpty() && !searching) performSearch()
+        }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showSearch = false },
             title = { Text("Поиск по сообщениям") },
@@ -3354,7 +3885,7 @@ fun ChatDetailScreen(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Введите текст…") },
+                        placeholder = { Text("Поиск по сообщениям") },
                         singleLine = true,
                         trailingIcon = {
                             if (searching) {
@@ -3363,40 +3894,124 @@ fun ChatDetailScreen(
                         },
                     )
                     Spacer(Modifier.height(8.dp))
-                    if (searchResults.isNotEmpty()) {
-                        LazyColumn(
-                            modifier = Modifier.height(300.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            items(searchResults) { result ->
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                        .padding(8.dp),
-                                ) {
-                                    Text(
-                                        text = result.text.take(100),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault())
-                                            .format(java.util.Date(result.date * 1000)),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline,
-                                    )
+                    when {
+                        localResults.isNotEmpty() -> {
+                            Text(
+                                text = "В загруженных сообщениях (${localResults.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            LazyColumn(
+                                modifier = Modifier.height(300.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                items(localResults) { m ->
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                            .clickable {
+                                                // Тап НЕ заглушка: скролл к сообщению
+                                                // по cmid-индексу в списке чата.
+                                                showSearch = false
+                                                scrollToLoadedMessage(m.id)
+                                            }
+                                            .padding(8.dp),
+                                    ) {
+                                        Text(
+                                            text = m.text.take(100),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault())
+                                                .format(java.util.Date(m.date * 1000)),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                        )
+                                    }
                                 }
                             }
+                        }
+                        searchResults.isNotEmpty() -> {
+                            Text(
+                                text = "Найдено на сервере (${searchResults.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            LazyColumn(
+                                modifier = Modifier.height(300.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                items(searchResults) { result ->
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                            .clickable {
+                                                showSearch = false
+                                                val scrolled = scrollToLoadedMessage(result.messageId)
+                                                if (!scrolled) {
+                                                    // Сообщение вне загруженной истории —
+                                                    // preview-диалог с догрузкой («Показать
+                                                    // в чате», механизм Fix #206).
+                                                    replyPreviewMsg = Message(
+                                                        id = result.messageId,
+                                                        peerId = peerId,
+                                                        fromId = result.fromId,
+                                                        date = result.date,
+                                                        text = result.text,
+                                                    )
+                                                }
+                                            }
+                                            .padding(8.dp),
+                                    ) {
+                                        Text(
+                                            text = result.text.take(100),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault())
+                                                .format(java.util.Date(result.date * 1000)),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        searching -> {
+                            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                        }
+                        q.isNotBlank() -> {
+                            Text(
+                                text = "Ничего не найдено",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = "Введите текст для поиска",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { performSearch() }) {
-                    Text("Найти")
+                    Text("Найти на сервере")
                 }
             },
             dismissButton = {
@@ -6698,6 +7313,272 @@ private fun ChannelFooterBar(
                 }
             },
         )
+    }
+}
+
+/**
+ * Fix #393 #CHANNEL-WALL-MODE: «N подписчиков» в статусе шапки канала
+ * (снапшот 29-a: заголовок канала + число подписчиков). Русская плюрализация.
+ */
+private fun subscribersLabel(count: Int): String {
+    val mod10 = count % 10
+    val mod100 = count % 100
+    val word = when {
+        mod10 == 1 && mod100 != 11 -> "подписчик"
+        mod10 in 2..4 && (mod100 < 12 || mod100 > 14) -> "подписчика"
+        else -> "подписчиков"
+    }
+    return "$count $word"
+}
+
+/**
+ * Fix #394 #IM-SEARCH: правая панель «Поиск по постам» канального режима
+ * (снапшот 29-a: ChannelSearch__container, лупа «Поиск по каналу» в шапке,
+ * поле «Поиск по истории записей», результаты SearchPostResult). Оверлей
+ * scrim+slide — образец FeedRightPanel (#FEED-MENU-VKWEB).
+ *
+ * Серверный поиск: VKApiClient.wallSearch(ownerId, query) (реальный VK API
+ * wall.search; посты сообщества = контент канала, см. #CHANNEL-WALL-MODE).
+ * Результаты — полные WallPostCard (лайк/комментарий/поделиться работают
+ * как в ленте канала). Тап по карточке → onPostOpen (скролл к посту).
+ *
+ * Честные состояния: hint (пустой запрос) / загрузка / ошибка + «Повторить» /
+ * «Ничего не найдено». История запросов (аналог localStorage
+ * reforged-storage-db-v1-*-search-channel-posts-requests) — out of scope,
+ * честно не реализована (не заглушка — просто отсутствует).
+ *
+ * @param visible      открыта ли панель (state ChatDetailScreen.showChannelSearch)
+ * @param ownerId      peerId канала (=-group_id) → wall.search owner_id
+ * @param channelTitle имя канала (подзаголовок панели + authorName карточек)
+ * @param channelPhoto аватар канала (authorPhoto карточек)
+ * @param onDismiss    закрыть панель (Scrim / «×» / системный back)
+ * @param onPostOpen   тап по результату — вызывающая сторона закрывает панель
+ *                     и скроллит ленту к посту (scrollChannelToPost)
+ * @param likesState/likeInFlight/onLikeToggle — optimistic-лайки экрана канала
+ *                     (общие с лентой, чтобы состояние не расходилось)
+ */
+@Composable
+private fun ChannelSearchPanel(
+    visible: Boolean,
+    ownerId: Long,
+    channelTitle: String,
+    channelPhoto: String?,
+    onDismiss: () -> Unit,
+    onPostOpen: (Post) -> Unit,
+    onVideoClick: (Video) -> Unit,
+    onPhotoClick: (List<String>, Int) -> Unit,
+    onSharePost: (Post) -> Unit,
+    onCommentClick: (Post) -> Unit,
+    likesState: Map<String, Pair<Boolean, Int>>,
+    likeInFlight: Map<String, Boolean>,
+    onLikeToggle: (Post) -> Unit,
+) {
+    // Системный back закрывает панель (паттерн FeedRightPanel).
+    BackHandler(enabled = visible) { onDismiss() }
+
+    // Состояние поиска живёт внутри панели: переоткрытие сбрасывает выдачу
+    // (remember(visible) — новая сессия поиска на каждое открытие).
+    var searchQuery by remember(visible) { mutableStateOf("") }
+    var results by remember(visible) { mutableStateOf<List<Post>>(emptyList()) }
+    var searching by remember(visible) { mutableStateOf(false) }
+    var errorMsg by remember(visible) { mutableStateOf<String?>(null) }
+    // Счётчик запросов: на каждый новый ввод LaunchedEffect перезапускается;
+    // ответ «старой» попытки отбрасывается (race-guard без elvis).
+    var searchSeq by remember(visible) { mutableStateOf(0) }
+    val app = SovaApp.get()
+
+    // Дебаунс 600мс — как в диалоге поиска сообщений (#IM-SEARCH).
+    LaunchedEffect(searchQuery) {
+        val seq = ++searchSeq
+        val q = searchQuery.trim()
+        if (q.isEmpty()) {
+            results = emptyList()
+            errorMsg = null
+            searching = false
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(600)
+        if (seq != searchSeq) return@LaunchedEffect
+        searching = true
+        errorMsg = null
+        try {
+            val found = app.apiClient.wallSearch(ownerId = ownerId, query = q, count = 30)
+            if (seq == searchSeq) results = found
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.e("ChatDetailScreen", "#IM-SEARCH wall.search failed", e)
+            if (seq == searchSeq) {
+                val apiErr = app.apiClient.lastApiError
+                errorMsg = if (apiErr != null) "Ошибка поиска: $apiErr" else "Ошибка поиска: ${e.message}"
+            }
+        } finally {
+            if (seq == searchSeq) searching = false
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Scrim: тап вне панели закрывает (паттерн FeedRightPanel).
+        AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onDismiss() },
+            )
+        }
+        AnimatedVisibility(
+            visible = visible,
+            enter = slideInHorizontally { it },
+            exit = slideOutHorizontally { it },
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(360.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.navigationBars),
+                ) {
+                    // Заголовок панели: «Поиск по постам» + канал + «×»
+                    // (снапшот 29-a: h3 «Поиск по постам», крестик «Закрыть»).
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Поиск по постам",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            if (channelTitle.isNotBlank()) {
+                                Text(
+                                    text = channelTitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Filled.Close, contentDescription = "Закрыть поиск")
+                        }
+                    }
+                    // Поле поиска (снапшот 29-a: «Поиск по истории записей»).
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        placeholder = { Text("Поиск по истории записей") },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Outlined.Close, contentDescription = "Очистить")
+                                }
+                            } else {
+                                Icon(Icons.Filled.Search, contentDescription = null)
+                            }
+                        },
+                    )
+                    // ── Выдача ──
+                    when {
+                        searching -> {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        errorMsg != null -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                val err = errorMsg
+                                if (err != null) {
+                                    Text(
+                                        text = err,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                TextButton(onClick = { searchSeq++ }) {
+                                    Text("Повторить")
+                                }
+                            }
+                        }
+                        searchQuery.isNotBlank() && results.isEmpty() && !searching -> {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Ничего не найдено",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        results.isNotEmpty() -> {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(vertical = 8.dp),
+                            ) {
+                                items(results, key = { "search_${it.ownerId}_${it.id}" }) { post ->
+                                    WallPostCard(
+                                        post = post,
+                                        authorName = channelTitle,
+                                        authorPhoto = channelPhoto,
+                                        onVideoClick = onVideoClick,
+                                        onPostClick = onPostOpen,
+                                        onPhotoClick = onPhotoClick,
+                                        onRepostClick = onSharePost,
+                                        onCommentClick = onCommentClick,
+                                        likesState = likesState,
+                                        likePending = likeInFlight.containsKey("${post.ownerId}_${post.id}"),
+                                        onLikeToggle = onLikeToggle,
+                                    )
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        thickness = 1.dp,
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                    )
+                                }
+                            }
+                        }
+                        // Пустой запрос → hint (снапшот 29-a: панель открывается
+                        // с пустым полем и без выдачи).
+                        else -> {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Введите текст для поиска по записям канала",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

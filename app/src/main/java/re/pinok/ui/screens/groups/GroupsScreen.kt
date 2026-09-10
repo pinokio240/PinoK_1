@@ -57,6 +57,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Group
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
 
@@ -215,6 +216,8 @@ fun GroupsScreen(onGroupClick: (Long) -> Unit = {}) {
             return
         }
         // Fix #80: PullToRefreshBox — pull-to-refresh списка сообществ.
+        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
+        Box(modifier = Modifier.fillMaxSize()) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshGroups() },
@@ -252,6 +255,15 @@ fun GroupsScreen(onGroupClick: (Long) -> Unit = {}) {
                     }
                 }
             }
+        }
+
+        // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» над списком
+        // сообществ (пагинация groupsGet offset — loadMoreGroups).
+        ScrollToTopFab(
+            listState = listState,
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
         }
     }
 }

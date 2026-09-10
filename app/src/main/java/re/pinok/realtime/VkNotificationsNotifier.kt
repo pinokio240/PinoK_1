@@ -361,6 +361,30 @@ object VkNotificationsNotifier {
                 AppLog.d(TAG, "showBatch: fromUsers=false — skip owner=$owner type=${item.type}")
                 return@filter false
             }
+            // Fix #390 #NOTIFY-MODES: гейт новостных по режиму уведомлений.
+            // Сообщество = parentOwnerId < 0 (§42.3 источник). Режимы:
+            //   0 MESSAGES_ONLY и 3 SILENT — новостные от сообществ НЕ показывать
+            //     (0 и 3 показывают только «Сообщения»); новостные от ЮЗЕРОВ
+            //     (parentOwnerId > 0) показываются — юзер разделяет лишь
+            //     Сообщения/Сообщества, а лайки/комменты людей — «от людей».
+            //   2 COMMUNITIES_ONLY — новостные от юзеров НЕ показывать.
+            //   1 ALL — показывать всё (прежнее поведение).
+            // showSingle — единственный путь показа идёт через showBatch
+            // (private, вызывается только из showGroup ← showBatch), поэтому
+            // отдельный гейт там не нужен. Канал vk_security_alerts (SecurityAlertsPoller,
+            // подозрительные входы) через showBatch НЕ проходит — гейт его не касается.
+            val notifyMode = snap.notifyMode
+            val fromCommunity = owner < 0
+            if (fromCommunity &&
+                (notifyMode == SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY || notifyMode == SovaPrefs.NOTIFY_MODE_SILENT)
+            ) {
+                AppLog.d(TAG, "showBatch: notifyMode=$notifyMode — skip community owner=$owner type=${item.type}")
+                return@filter false
+            }
+            if (!fromCommunity && notifyMode == SovaPrefs.NOTIFY_MODE_COMMUNITIES_ONLY) {
+                AppLog.d(TAG, "showBatch: notifyMode=COMMUNITIES_ONLY — skip user owner=$owner type=${item.type}")
+                return@filter false
+            }
             // 3c. sn_* client-side filter (§42.3): применяем BFF-настройки локально.
             if (!SnNotifyFilter.passes(item, snStates)) {
                 return@filter false

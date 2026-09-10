@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.BoardComment
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
 
@@ -195,9 +196,15 @@ fun BoardTopicScreen(
                 }
             }
             else -> {
+                // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
+                // над лентой комментариев темы (пагинация board.getComments).
+                // innerPadding перенесён с LazyColumn на Box — FAB тоже внутри отступа.
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(innerPadding),
+                ) {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().padding(innerPadding),
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         start = 12.dp, end = 12.dp, top = 8.dp, bottom = 80.dp,
                     ),
@@ -227,6 +234,15 @@ fun BoardTopicScreen(
                             }
                         }
                     }
+                }
+
+                // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх»
+                // над комментариями темы (board.getComments offset-пагинация).
+                ScrollToTopFab(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                )
                 }
             }
         }

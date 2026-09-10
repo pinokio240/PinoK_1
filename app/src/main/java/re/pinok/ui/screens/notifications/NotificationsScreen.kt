@@ -131,6 +131,7 @@ import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.realtime.VkNotificationsNotifier
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
 import re.pinok.util.toRelativeTime
@@ -1014,6 +1015,15 @@ fun NotificationsScreen(
                     }
                 }
             }
+
+            // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» поверх
+            // списка (после PullToRefreshBox — оверлей в Box-обёртке экрана).
+            // На skeleton/empty-state не рисуется (выше ранние return@Box).
+            ScrollToTopFab(
+                listState = listState,
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 16.dp),
+            )
         }
 }
 

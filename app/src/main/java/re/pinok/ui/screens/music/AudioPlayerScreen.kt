@@ -25,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddCircleOutline
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.MoreVert
@@ -486,9 +488,9 @@ fun AudioPlayerScreen(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // ─── Второй ряд: download / shuffle / speed / queue / equalizer / repeat ──
+        // ─── Второй ряд: download / own / shuffle / speed / queue / equalizer / repeat ──
         // Fix #163: Download перенесён сюда из главного ряда (чтобы Play был
-        // по центру). 6 кнопок при SpaceEvenly, padding уменьшен до 12dp.
+        // по центру). 7 кнопок при SpaceEvenly, padding уменьшен до 12dp.
         val dl = downloads[track.id]
         Row(
             modifier = Modifier
@@ -539,6 +541,92 @@ fun AudioPlayerScreen(
                     }
                     dl.isCompleted -> Icon(Icons.Filled.DownloadDone, "Скачано", tint = vkAccent, modifier = Modifier.size(24.dp))
                     else -> Icon(Icons.Filled.Download, "Скачивание", tint = vkTextSecondary, modifier = Modifier.size(24.dp))
+                }
+            }
+            // Fix #388 #AUDIO-TOGGLE-OWNING: тумблер «В моей музыке» — паритет
+            // веб-VK (data-testid=MusicAudio_ToggleOwning: иконка add, при
+            // data-testactive=true — трек уже в моей музыке → удаление).
+            // Не в моей музыке → тап добавляет (audioAddReliable: audio.add,
+            // при отказе — web-fallback al_audio.php?act=add); уже в моей →
+            // тап СРАЗУ удаляет (audio.delete — как в вебе, без диалога).
+            // Состояние честное: при ошибке API кнопка НЕ переключается.
+            val myUserId = app.exchangeAuthRepository.userId()
+            // userId() возвращает 0, если идентификатор не получен — в этом
+            // случае владение неизвестно и кнопка работает как «Добавить».
+            val ownedByMe = myUserId != 0L && track.ownerId == myUserId
+            // Локальный оверлей владения: null = «как определилось по ownerId»,
+            // true/false — результат успешного добавления/удаления в этой
+            // сессии. remember по треку — при смене трека состояние сбрасывается.
+            var ownOverride by remember(track.id, track.ownerId) { mutableStateOf<Boolean?>(null) }
+            var ownToggling by remember(track.id, track.ownerId) { mutableStateOf(false) }
+            val ownOverrideNow = ownOverride
+            val ownedNow = if (ownOverrideNow != null) ownOverrideNow else ownedByMe
+            IconButton(onClick = {
+                if (ownToggling) return@IconButton
+                val t = track
+                val wasOwned = if (ownOverrideNow != null) ownOverrideNow else ownedByMe
+                scope.launch {
+                    ownToggling = true
+                    if (wasOwned) {
+                        var ok = false
+                        var errText: String? = null
+                        try {
+                            ok = app.apiClient.audioDelete(t.id, t.ownerId)
+                            if (!ok) errText = app.apiClient.lastApiError
+                        } catch (e: Exception) {
+                            AppLog.e("AudioPlayerScreen", "#AUDIO-TOGGLE-OWNING delete error", e)
+                            errText = e.message
+                        }
+                        if (ok) {
+                            ownOverride = false
+                            snackbarHostState.showSnackbar("Удалено из моей музыки")
+                        } else {
+                            // NULL-ЯВНО: errText nullable — явный if вместо ?:.
+                            val shown = if (errText != null) errText else "ошибка сети"
+                            snackbarHostState.showSnackbar("Не удалось удалить: $shown")
+                        }
+                    } else {
+                        var ok = false
+                        var errText: String? = null
+                        try {
+                            val (addOk, addErr) = app.apiClient.audioAddReliable(t)
+                            ok = addOk
+                            if (!addOk) errText = addErr
+                        } catch (e: Exception) {
+                            AppLog.e("AudioPlayerScreen", "#AUDIO-TOGGLE-OWNING add error", e)
+                            errText = e.message
+                        }
+                        if (ok) {
+                            ownOverride = true
+                            snackbarHostState.showSnackbar("Добавлено в мою музыку")
+                        } else {
+                            // NULL-ЯВНО: errText nullable — явный if вместо ?:.
+                            val shown = if (errText != null) errText else "ошибка сети"
+                            snackbarHostState.showSnackbar("Не удалось добавить: $shown")
+                        }
+                    }
+                    ownToggling = false
+                }
+            }) {
+                when {
+                    ownToggling -> CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = vkAccent,
+                        trackColor = Color.Transparent,
+                    )
+                    ownedNow -> Icon(
+                        Icons.Filled.CheckCircle,
+                        "В моей музыке — нажмите, чтобы удалить",
+                        tint = vkAccent,
+                        modifier = Modifier.size(24.dp),
+                    )
+                    else -> Icon(
+                        Icons.Filled.AddCircleOutline,
+                        "Добавить в мою музыку",
+                        tint = vkTextSecondary,
+                        modifier = Modifier.size(24.dp),
+                    )
                 }
             }
             // Shuffle
