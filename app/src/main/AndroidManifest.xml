@@ -353,6 +353,13 @@
             </intent-filter>
         </service>
 
+        <!-- W30-3 #VIDEO-BG-PLAYER: фоновое воспроизведение видео без картинки
+             (аудио + MediaSession, кнопки «±N сек» на lock-screen, шаг из настроек). -->
+        <service
+            android:name=".service.VideoPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
         <!--
           MusicDownloadService — foreground-сервис уведомлений для загрузки музыки.
           OkHttp-based загрузки (Media3 DownloadManager удалён в 1.8.0).

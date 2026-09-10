@@ -2846,6 +2846,50 @@ private fun VideoTab(
             ) { scope.launch { app.prefs.setVideoAutoplay(it) } }
         }
 
+        // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера.
+        // Кнопки «−N сек / +N сек» на lock-screen/в медиа-уведомлении
+        // (VideoPlaybackService) прокручивают видео на выбранный шаг.
+        item { SectionHeader("Фоновое воспроизведение") }
+        item {
+            val currentStep = s.videoSeekStepSec
+            Card {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        "Шаг прокрутки фонового плеера",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "Кнопки «±N сек» в уведомлении и на экране блокировки " +
+                            "прокручивают видео на выбранный интервал. " +
+                            "Звук видео продолжается при сворачивании приложения.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+                    )
+                    listOf(5, 10, 15).forEach { step ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp)
+                                .clickable { scope.launch { app.prefs.setVideoSeekStepSec(step) } },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = currentStep == step,
+                                onClick = { scope.launch { app.prefs.setVideoSeekStepSec(step) } },
+                            )
+                            Text(
+                                "$step секунд",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // #AUTO-CACHE-MOVE: «Авто Кеш Историй» перенесён сюда из вкладки Музыка.
         // Логично: истории это видео-контент. При включении StoryVideoDownloadService
         // авто-скачивает истории при просмотре для офлайн-доступа.

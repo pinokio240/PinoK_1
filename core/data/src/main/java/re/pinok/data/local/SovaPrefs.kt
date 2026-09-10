@@ -471,6 +471,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // где они показываются (1/2). Default true — как у сообщений.
             notifyCommunitiesSound = p[Keys.NOTIFY_COMMUNITIES_SOUND] ?: true,
             notifyCommunitiesVibration = p[Keys.NOTIFY_COMMUNITIES_VIBRATION] ?: true,
+            // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера
+            // (кнопки «±N сек» на lock-screen/в уведомлении). Секунды, default 10.
+            videoSeekStepSec = p[Keys.VIDEO_SEEK_STEP_SEC] ?: 10,
             // #CALLS: queuev4 credential (ввод вручную из localStorage).
             callsQueueKey = p[Keys.CALLS_QUEUE_KEY] ?: "",
             callsQueueTs = p[Keys.CALLS_QUEUE_TS] ?: 0L,
@@ -872,6 +875,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setNotifyMode(v: Int)                   = put(Keys.NOTIFY_MODE, v)
     suspend fun setNotifyCommunitiesSound(v: Boolean)   = put(Keys.NOTIFY_COMMUNITIES_SOUND, v)
     suspend fun setNotifyCommunitiesVibration(v: Boolean) = put(Keys.NOTIFY_COMMUNITIES_VIBRATION, v)
+
+    /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды). */
+    suspend fun setVideoSeekStepSec(v: Int) = put(Keys.VIDEO_SEEK_STEP_SEC, v)
     // #CALLS: queuev4 credential для звонков (ввод вручную из localStorage).
     suspend fun setCallsQueueKey(v: String)            = put(Keys.CALLS_QUEUE_KEY, v)
     suspend fun setCallsQueueTs(v: Long)               = put(Keys.CALLS_QUEUE_TS, v)
@@ -1266,6 +1272,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val notifyCommunitiesSound: Boolean = true,
         /** Fix #390 #NOTIFY-MODES: вибрация уведомлений от сообществ (default true). */
         val notifyCommunitiesVibration: Boolean = true,
+        /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера в секундах (default 10). */
+        val videoSeekStepSec: Int = 10,
         // #CALLS: queuev4 credential для звонков (можно ввести вручную из localStorage).
         val callsQueueKey: String,
         val callsQueueTs: Long,
@@ -1511,6 +1519,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NOTIFY_MODE             = intPreferencesKey("notify_mode")
         val NOTIFY_COMMUNITIES_SOUND = booleanPreferencesKey("notify_communities_sound")
         val NOTIFY_COMMUNITIES_VIBRATION = booleanPreferencesKey("notify_communities_vibration")
+        // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды).
+        val VIDEO_SEEK_STEP_SEC = intPreferencesKey("video_seek_step_sec")
         // #CALLS: queuev4 credential для звонков.
         val CALLS_QUEUE_KEY         = stringPreferencesKey("calls_queue_key")
         val CALLS_QUEUE_TS          = longPreferencesKey("calls_queue_ts")

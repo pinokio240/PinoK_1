@@ -22,6 +22,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+// W30-1 #VIDEO-ADD-SELF: иконки тумблера «Добавить себе» (оба — core-набор,
+// как Download/PlayArrow этого файла).
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
@@ -46,6 +50,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,6 +102,8 @@ fun VideoScreen(
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
+    // W30-1 #VIDEO-ADD-SELF: контекст для Toast результата добавления/удаления.
+    val ctx = LocalContext.current
     var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var apiErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -120,6 +128,11 @@ fun VideoScreen(
     var searchResults by remember { mutableStateOf<List<Video>>(emptyList()) }
     var searchLoading by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
+    // W30-1 #VIDEO-ADD-SELF: локальное состояние «добавлено у себя» для результатов
+    // поиска — ключ "${ownerId}_${id}" (конвенция дедуп-ключей этого экрана).
+    // remember-сессия: персист в SovaPrefs осознанно НЕ делаем (вне скоупа §2.1
+    // плана волны 30).
+    val searchAddedKeys = remember { mutableStateMapOf<String, Boolean>() }
 
     // #VIDEO-PORT: вкладки «Мои видео»(0) / «Альбомы»(1) / «Каталоги»(2).
     var selectedTab by remember { mutableStateOf(0) }
@@ -325,6 +338,85 @@ fun VideoScreen(
                     searchLoading = false
                 }
             }
+    }
+
+    // W30-1 #VIDEO-ADD-SELF: тумблер «Добавить себе» на карточках результатов поиска.
+    //  - Добавление: video.add (W30-API search_global=1 находит чужие видео по всей
+    //    VK; access_key обязателен для приватных — Video.accessKey из extended=1).
+    //  - Удаление: video.delete удаляет МОЮ копию (owner_id = мой id), а НЕ
+    //    исходник, поэтому сначала ищем копию в СВОИХ видео (video.get без
+    //    owner_id — возвращает текущего юзера, первая страница count=200 —
+    //    максимум VK) по совпадению title+duration, и только потом удаляем
+    //    ЕЁ id/owner_id. Мой userId отдельно не нужен: ownerId копии берём
+    //    из ответа (тот же источник, что #AUDIO-TOGGLE-OWNING использует
+    //    через ownerId == myUserId).
+    //  - Не найдена — честный Toast «Копия у себя не найдена» без падения,
+    //    иконка остаётся «добавлено» (состояние не менялось — откат в него).
+    //  - Оптимистичное переключение иконки; при ошибке API — откат + Toast
+    //    с РЕАЛЬНОЙ ошибкой VK (паттерн #AUDIO-TOGGLE-OWNING).
+    fun toggleSearchVideoAdded(video: Video) {
+        val key = "${video.ownerId}_${video.id}"
+        val wasAdded = searchAddedKeys.containsKey(key)
+        val nowAdded = !wasAdded
+        // Оптимистичное переключение; откат при ошибке — ниже.
+        if (nowAdded) {
+            searchAddedKeys[key] = true
+        } else {
+            searchAddedKeys.remove(key)
+        }
+        scope.launch {
+            try {
+                if (nowAdded) {
+                    val ok = app.apiClient.videoAdd(video.id, video.ownerId, video.accessKey)
+                    if (!ok) {
+                        searchAddedKeys.remove(key)
+                        val err = app.apiClient.lastApiError
+                        android.widget.Toast.makeText(
+                            ctx,
+                            if (err != null) "Не удалось добавить видео: $err" else "Не удалось добавить видео",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                } else {
+                    val mine = app.apiClient.videoGet(count = 200)
+                    val copy = mine.firstOrNull { it.title == video.title && it.duration == video.duration }
+                    if (copy != null) {
+                        val ok = app.apiClient.videoDelete(copy.id, copy.ownerId)
+                        if (ok) {
+                            android.widget.Toast.makeText(ctx, "Удалено из «Моих видео»", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            // Откат иконки в «добавлено» — копия осталась у нас.
+                            searchAddedKeys[key] = true
+                            val err = app.apiClient.lastApiError
+                            android.widget.Toast.makeText(
+                                ctx,
+                                if (err != null) "Не удалось удалить видео: $err" else "Не удалось удалить видео",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    } else {
+                        // Копия не найдена (не в первых 200 / уже удалена) —
+                        // удалять нечего, состояние остаётся «добавлено».
+                        searchAddedKeys[key] = true
+                        android.widget.Toast.makeText(ctx, "Копия у себя не найдена", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                // Откат оптимистичной иконки при сетевом сбое.
+                if (nowAdded) {
+                    searchAddedKeys.remove(key)
+                } else {
+                    searchAddedKeys[key] = true
+                }
+                AppLog.e("VideoScreen", "#VIDEO-ADD-SELF toggle error", e)
+                val msg = e.message
+                android.widget.Toast.makeText(
+                    ctx,
+                    if (msg != null) "Ошибка: $msg" else "Ошибка сети",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
     }
 
     // Fix #258: регистрируем search в глобальном TopAppBar.
@@ -677,9 +769,14 @@ fun VideoScreen(
                         items(searchResults, key = { "s_${it.ownerId}_${it.id}" }) { video ->
                             val key = VideoDownloadManager.videoKey(video.ownerId, video.id)
                             val ds = downloads[key]
+                            // W30-1 #VIDEO-ADD-SELF: тумблер «Добавить себе» — только
+                            // у результатов поиска (search_global=1); список «Мои
+                            // видео»/альбомы/каталоги карточку без коллбека рисуют.
                             VKVideoCard(
                                 video = video, downloadState = ds, cardColor = vkCard,
                                 textColor = vkTextPrimary, secondaryColor = vkTextSecondary, accentColor = vkAccent,
+                                isAdded = searchAddedKeys.containsKey("${video.ownerId}_${video.id}"),
+                                onToggleAdd = { toggleSearchVideoAdded(video) },
                                 onClick = { onVideoClick(video) },
                                 onDownloadClick = {
                                     if (ds != null && ds.status != DownloadStatus.FAILED) VideoDownloadManager.removeDownload(video.ownerId, video.id)
@@ -921,6 +1018,11 @@ private fun VKVideoCard(
     accentColor: Color,
     onClick: () -> Unit,
     onDownloadClick: () -> Unit,
+    // W30-1 #VIDEO-ADD-SELF: опциональный тумблер «Добавить себе». Дефолты —
+    // существующие вызовы (альбомы/каталоги/«Мои видео») НЕ меняются: кнопка
+    // рисуется ТОЛЬКО когда onToggleAdd != null (NULL-ЯВНО: явный if по коллбеку).
+    isAdded: Boolean = false,
+    onToggleAdd: (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     Box {
@@ -1078,6 +1180,21 @@ private fun VKVideoCard(
 
             // Кнопка скачивания
             VKVideoDownloadButton(state = downloadState, onClick = onDownloadClick, accentColor = accentColor, secondaryColor = secondaryColor)
+
+            // W30-1 #VIDEO-ADD-SELF: тумблер «Добавить себе» — паритет VK web
+            // (video_page_add_to_my_playlist): AddCircle → после добавления
+            // CheckCircle (зелёный 0xFF4CAF50 — тот же, что у бейджа «Офлайн»
+            // этого файла). NULL-ЯВНО: рендер только при явном коллбеке.
+            if (onToggleAdd != null) {
+                IconButton(onClick = onToggleAdd, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = if (isAdded) Icons.Filled.CheckCircle else Icons.Filled.AddCircle,
+                        contentDescription = if (isAdded) "Добавлено" else "Добавить себе",
+                        tint = if (isAdded) Color(0xFF4CAF50) else secondaryColor,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
 
             // Троеточие-меню
             IconButton(onClick = { showMenu = true }, modifier = Modifier.size(36.dp)) {

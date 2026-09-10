@@ -48,8 +48,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+// W30-2 #VIDEO-ADD-TO-MINE: «Добавить» (data-testid video_page_add_to_my_playlist)
+// — AddCircle до добавления, CheckCircle после (базовые иконки).
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Check
+// W30-2 #VIDEO-MORE-MENU: иконка «Убрать из закладки»/«В закладки» меню «Ещё».
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
+// W30-2 #VIDEO-MORE-MENU: иконки пунктов меню (удалить копию / жалоба).
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Warning
 // Fix #383 #COMMUNITY-VIDEO-PARITY: иконка копирования ссылки в шторке «Поделиться».
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
@@ -73,6 +82,17 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.BrightnessMedium
+// W30-2 #VIDEO-MORE-MENU: контурная закладка (пункт «Убрать из закладки»)
+// и «Ещё» (VK more_horizontal_24 — ближайшая Material-иконка MoreHoriz,
+// material-icons-extended есть в зависимостях :app).
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.MoreHoriz
+// W30-2 #VIDEO-REPORT: confirm-диалог «Пожаловаться» — уровень экрана
+// (урок #PIN-DIALOG-OVERLAY: оверлеи не внутри скролл-контейнеров).
+import androidx.compose.material3.AlertDialog
+// W30-2 #VIDEO-MORE-MENU: DropdownMenu меню «Ещё» (video_page_more_button).
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -148,6 +168,9 @@ import re.pinok.data.model.VideoQuality
 import re.pinok.data.model.UserProfile
 import re.pinok.media.PlayerConnection
 import re.pinok.media.VideoDownloadManager
+// W30-2 #VIDEO-BACKGROUND (контракт §2.4 плана W30): хуки контроллера фон-режима
+// (создаёт W30-3: MediaSessionService + MediaStyle-уведомление без видео).
+import re.pinok.service.VideoPlaybackBus
 import re.pinok.util.AppLog
 import re.pinok.util.HevcSupport
 import re.pinok.util.VkUserAgent
@@ -204,6 +227,38 @@ private fun isHtmlEmbedUrl(url: String): Boolean {
             lower.contains("rutube.ru/play/embed") || // Rutube embed
             lower.contains("dzen.ru/embed") ||       // Dzen embed
             lower.contains("/iframe")                // generic iframe marker
+}
+
+/**
+ * W30-STABILITY #QUALITY-PIN: пин ABR под выбранное пользователем качество.
+ *
+ * На адаптивных источниках (HLS «Авто», codec-fallback на HLS) ExoPlayer сам
+ * прыгает по вариантам битрейта/высоты — на длинных сессиях это «скачки
+ * качества». Ручной выбор конкретного качества (mp4_XXX) пинит трек-селекцию
+ * через setMaxVideoSize(∞, высота). Высота честно выводится из ключа VK:
+ * VideoQuality.ORDER кодирует высоту в суффиксе (mp4_720 → 720). Ключ без
+ * числового суффикса ("hls" = «Авто») или null — пин СНИМАЕТСЯ (дефолтные
+ * ограничения ∞×∞), т.к. «Авто» по определению адаптивный выбор.
+ *
+ * Не влияет на codec-fallback логику: пин фильтрует только rendition-ы
+ * адаптивного потока, прогрессивные mp4-источники (один вариант) играют как раньше.
+ */
+private fun applyQualityPin(player: ExoPlayer, qualityKey: String?) {
+    val builder = player.trackSelectionParameters.buildUpon()
+    if (qualityKey != null) {
+        val height = qualityKey.substringAfter("_").toIntOrNull()
+        if (height != null) {
+            // Выбрано конкретное качество — не даём ABR уходить от него.
+            builder.setMaxVideoSize(Int.MAX_VALUE, height)
+        } else {
+            // «Авто»/HLS — адаптивный поток, пин снят.
+            builder.setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
+        }
+    } else {
+        // Нет ключа (пустой список качеств) — пин снят.
+        builder.setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
+    }
+    player.trackSelectionParameters = builder.build()
 }
 
 private val PLAYBACK_RATES = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
@@ -292,6 +347,24 @@ fun VideoPlayerScreen(
     // Шторки действий — доступны и в портрете, и в fullscreen/landscape.
     var showCommentsSheet by remember { mutableStateOf(false) }
     var showShareSheet by remember { mutableStateOf(false) }
+
+    // ── W30-2 #VIDEO-ADD-TO-MINE / #VIDEO-MORE-MENU (паритет футера VK web) ──
+    // Мой userId — паттерн #AUDIO-TOGGLE-OWNING (AudioPlayerScreen :553):
+    // exchangeAuthRepository.userId(), 0 = идентификатор не получен.
+    val myUserId = app.exchangeAuthRepository.userId()
+    // Состояние «Добавить себе» (video_page_add_to_my_playlist). Начальное
+    // значение честное: видео, владелец которого — я сам, уже у меня.
+    var addedToMine by remember(resolvedVideo.id) {
+        mutableStateOf(myUserId != 0L && resolvedVideo.ownerId == myUserId)
+    }
+    // «Ещё» → «В закладки»: is_favorite из video.get (extended) — честный
+    // начальный стейт, VK возвращает признак закладки вместе с видео.
+    var inBookmarks by remember(resolvedVideo.id) {
+        mutableStateOf(resolvedVideo.isFavorite == 1)
+    }
+    // «Ещё» → «Пожаловаться»: confirm-диалог живёт на уровне экрана
+    // (урок #PIN-DIALOG-OVERLAY — оверлеи не внутри скролл-контейнеров).
+    var showReportConfirm by remember { mutableStateOf(false) }
 
     // P2 #VIDEO-SESSION-HOLD: видео — долгая сессия. Превентивно освежаем токен
     // при входе (как ChatDetailScreen) и поддерживаем rolling suppress-окно, чтобы
@@ -694,6 +767,19 @@ fun VideoPlayerScreen(
                     // #VIDEO-AUTOPLAY: по умолчанию true (автостарт при открытии).
                     // При false — плеер готов, но ждёт нажатия play.
                     playWhenReady = autoplayEnabled
+                    // W30-STABILITY: (пере)создание плеера — reapplied сохранённый
+                    // rate. remember(resolvedVideo, okMetadata) пересоздаёт ExoPlayer
+                    // после video.get-обновления/прихода OK-метаданных, и без этого
+                    // скорость сбрасывалась в 1.0 («скачки скорости»).
+                    setPlaybackSpeed(playbackRate)
+                    // W30-STABILITY #QUALITY-PIN: начальное качество выбрано по pref
+                    // пользователя — пиним ABR к его высоте (явный if по #NULL-ЯВНО).
+                    val initOption = qualityOptions.getOrNull(selectedQualityIndex)
+                    if (initOption != null) {
+                        applyQualityPin(this, initOption.key)
+                    } else {
+                        applyQualityPin(this, null)
+                    }
                     addListener(object : Player.Listener {
                         override fun onPlayerError(error: PlaybackException) {
                             AppLog.e(TAG, "ExoPlayer error: ${error.errorCodeName}", error)
@@ -725,6 +811,9 @@ fun VideoPlayerScreen(
                                 }?.value
                                 if (realHlsUrl != null) {
                                     val savedPosition = self.currentPosition
+                                    // W30-STABILITY: скорость читаем ДО перезагрузки
+                                    // источника (инстанс тот же, но reapplied явно).
+                                    val savedSpeed = self.playbackParameters.speed
                                     val mediaItem = MediaItem.Builder()
                                         .setUri(Uri.parse(realHlsUrl))
                                         .setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -732,6 +821,18 @@ fun VideoPlayerScreen(
                                     self.setMediaItem(mediaItem)
                                     self.prepare()
                                     self.seekTo(savedPosition)
+                                    // W30-STABILITY: скорость выживает fallback —
+                                    // «скачки скорости» при DECODING_FAILED недопустимы.
+                                    self.setPlaybackSpeed(savedSpeed)
+                                    // W30-STABILITY #QUALITY-PIN: пин пользователя
+                                    // сохраняем — HLS адаптируется в пределах выбранной
+                                    // высоты, а не по всему диапазону.
+                                    val pinnedKey = qualityOptions.getOrNull(selectedQualityIndex)
+                                    if (pinnedKey != null) {
+                                        applyQualityPin(self, pinnedKey.key)
+                                    } else {
+                                        applyQualityPin(self, null)
+                                    }
                                     retryCount++
                                     // Fix #337: синхронизируем выбор — теперь играет HLS.
                                     selectedHls = true
@@ -751,12 +852,17 @@ fun VideoPlayerScreen(
                                     if (fallbackEntry != null) {
                                         val fallbackUrl = fallbackEntry.value
                                         val savedPosition = self.currentPosition
+                                        // W30-STABILITY: скорость читаем ДО перезагрузки
+                                        // источника — reapplied после prepare (см. ниже).
+                                        val savedSpeed = self.playbackParameters.speed
                                         val mediaItem = MediaItem.Builder()
                                             .setUri(Uri.parse(fallbackUrl))
                                             .build()
                                         self.setMediaItem(mediaItem)
                                         self.prepare()
                                         self.seekTo(savedPosition)
+                                        // W30-STABILITY: reapplied после fallback на mp4.
+                                        self.setPlaybackSpeed(savedSpeed)
                                         retryCount++
                                         // Fix #337: синхронизируем индекс с играющим
                                         // fallback, чтобы меню показывало реальное качество.
@@ -807,6 +913,15 @@ fun VideoPlayerScreen(
     // Update position/state for custom controls + save/restore playback position (#39 C2)
     LaunchedEffect(exoPlayer) {
         if (exoPlayer == null) return@LaunchedEffect
+        // W30-2 #VIDEO-BACKGROUND (контракт §2.4): плеер создан и настроен —
+        // регистрируем его в VideoPlaybackBus (W30-3 строит MediaSession +
+        // lock-screen уведомление поверх этого инстанса). Заголовок — title
+        // видео или честный дефолт «Видео».
+        VideoPlaybackBus.onPlayerReady(
+            context,
+            exoPlayer,
+            if (resolvedVideo.title.isBlank()) "Видео" else resolvedVideo.title,
+        )
         while (true) {
             if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
                 currentPositionMs = exoPlayer.currentPosition.toFloat()
@@ -866,6 +981,13 @@ fun VideoPlayerScreen(
         player.setMediaItem(mediaItemBuilder.build())
         player.prepare()
 
+        // W30-STABILITY: перезагрузка источника — reapplied сохранённый rate,
+        // иначе скорость сбрасывается в 1.0 при каждой смене качества.
+        player.setPlaybackSpeed(playbackRate)
+        // W30-STABILITY #QUALITY-PIN: ручной выбор конкретного качества пинит
+        // ABR — между ручными сменами плеер не должен сам прыгать по вариантам.
+        applyQualityPin(player, option.key)
+
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) {
@@ -904,6 +1026,12 @@ fun VideoPlayerScreen(
         player.setMediaItem(mediaItem)
         player.prepare()
 
+        // W30-STABILITY: reapplied сохранённый rate и при смене на HLS.
+        player.setPlaybackSpeed(playbackRate)
+        // W30-STABILITY #QUALITY-PIN: «Авто» (HLS) — пользователь явно выбрал
+        // адаптивный поток, пин ABR снимается (дефолтные ограничения).
+        applyQualityPin(player, null)
+
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) {
@@ -935,6 +1063,10 @@ fun VideoPlayerScreen(
                     }
                 }
             }
+            // W30-2 #VIDEO-BACKGROUND (контракт §2.4): плеер релизится — сначала
+            // отцепляем MediaSession/сервис (stopSelf + release session),
+            // затем release самого инстанса.
+            VideoPlaybackBus.onPlayerReleased()
             exoPlayer?.release()
             if (exoPlayer != null) AppLog.i(TAG, "ExoPlayer освобождён")
         }
@@ -961,12 +1093,25 @@ fun VideoPlayerScreen(
 
     if (exoPlayer != null) {
         LifecycleStartEffect(exoPlayer) {
+            // W30-2 #VIDEO-BACKGROUND (контракт §2.4): возврат на экран — снимаем
+            // foreground-режим сервиса (НЕ убивая воспроизведение).
+            VideoPlaybackBus.onForegrounded()
             // #VIDEO-AUTOPLAY: только если включено в настройках. Иначе возврат
             // из фона не должен форсировать play — пользователь сам ставил на паузу.
             if (autoplayEnabled) {
                 exoPlayer.playWhenReady = true
             }
-            onStopOrDispose { exoPlayer.playWhenReady = false }
+            // W30-STABILITY: восстановление после STOP — reapplied сохранённый
+            // rate (на некоторых устройствах пересборка источника после onStop
+            // сбрасывала скорость в 1.0).
+            exoPlayer.setPlaybackSpeed(playbackRate)
+            // W30-2 #VIDEO-BACKGROUND: при уходе из активности НЕ ПАУЗИМ — звук
+            // продолжается, W30-3 запускает foreground-сервис с MediaStyle-
+            // уведомлением (lock-screen плеер). Раньше здесь было
+            // `playWhenReady = false` — приложение в фоне глушило видео.
+            // Вызов срабатывает и на dispose экрана: после этого onPlayerReleased()
+            // (DisposableEffect релиза) корректно остановит сервис.
+            onStopOrDispose { VideoPlaybackBus.onBackgrounded(context) }
         }
     }
 
@@ -1058,6 +1203,176 @@ fun VideoPlayerScreen(
                 videoLiked = !newLiked
                 videoLikeCount = (videoLikeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
             }
+        }
+    }
+
+    // ── W30-2: действия «Добавить» и меню «Ещё» (паритет data-testid VK web) ──
+    // Локальный helper Toast — единый стиль уведомлений новых действий.
+    fun toast(msg: String) {
+        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    // #VIDEO-ADD-TO-MINE: «Добавить себе» — video.add создаёт МОЮ копию видео
+    // (VK: video_id + owner_id исходника + access_key для приватных; сверь
+    // VKApiClient.videoAdd :4122 — сигнатура (videoId, ownerId, accessKey?)).
+    // Optimistic-иконка AddCircle→CheckCircle; при ошибке — откат + Toast.
+    // Обратное действие — ТОЛЬКО «Ещё» → «Удалить у себя» (removeMineCopy):
+    // video.delete удаляет копию с ЕЁ собственным video_id.
+    fun addToMine() {
+        val v = resolvedVideo
+        if (v.id <= 0L || v.ownerId == 0L) return
+        if (addedToMine) return // уже у себя; снятие — через меню «Ещё»
+        addedToMine = true
+        scope.launch {
+            val ok = app.apiClient.videoAdd(v.id, v.ownerId, v.accessKey)
+            if (ok) {
+                toast("Добавлено к себе")
+            } else {
+                addedToMine = false
+                toast("Не удалось добавить")
+            }
+        }
+    }
+
+    // #VIDEO-REMOVE-MINE: «Ещё» → «Удалить у себя». Честная реализация:
+    // 1. video.get БЕЗ owner_id — VK берёт owner из токена и возвращает МОЮ
+    //    библиотеку (тот же вызов, что VideoScreen :208 для «Мои видео»);
+    // 2. ищем копию по title (равенство или startsWith) и длительности ±2с,
+    //    предпочитая явную копию под моим id (паттерн #AUDIO-TOGGLE-OWNING);
+    // 3. videoDelete(copy.id, copy.ownerId) — у копии СВОИ id/ownerId.
+    // Для собственного видео (ownerId == мой id) матчем будет оно само —
+    // удалится честно, как «Удалить» в VK web.
+    fun removeMineCopy() {
+        val v = resolvedVideo
+        if (v.id <= 0L || v.ownerId == 0L) return
+        scope.launch {
+            val mine = try {
+                app.apiClient.videoGet(count = 200)
+            } catch (e: Exception) {
+                AppLog.w(TAG, "videoGet(mine) для поиска копии упал: ${e.message}")
+                null
+            }
+            if (mine == null) {
+                toast("Не удалось получить ваши видео")
+                return@launch
+            }
+            var exact: Video? = null
+            var anyMatch: Video? = null
+            for (c in mine) {
+                // Пустой title исходника не матчится через startsWith("") —
+                // иначе ложные срабатывания на «безымянных» видео.
+                val sameTitle = if (v.title.isBlank()) {
+                    c.title.isBlank()
+                } else {
+                    c.title == v.title || c.title.startsWith(v.title)
+                }
+                if (!sameTitle) continue
+                if (kotlin.math.abs(c.duration - v.duration) > 2) continue
+                if (myUserId != 0L && c.ownerId == myUserId) {
+                    exact = c
+                    break
+                }
+                if (anyMatch == null) anyMatch = c
+            }
+            // NULL-ЯВНО: явный выбор цели без elvis.
+            val exactFound = exact
+            val anyFound = anyMatch
+            val target: Video?
+            if (exactFound != null) {
+                target = exactFound
+            } else {
+                target = anyFound
+            }
+            if (target == null) {
+                toast("Копия у себя не найдена")
+                return@launch
+            }
+            val ok = app.apiClient.videoDelete(target.id, target.ownerId)
+            if (ok) {
+                addedToMine = false
+                toast("Удалено у себя")
+            } else {
+                toast("Не удалось удалить")
+            }
+        }
+    }
+
+    // #VIDEO-BOOKMARK: «Ещё» → «В закладки / Убрать из закладки».
+    // faveAdd("video", ownerId, itemId) / faveRemove("video", ownerId, itemId)
+    // — VKApiClient сам маппит в fave.addVideo/fave.removeVideo для web-токена
+    // (см. #FAVE-WEB-TOKEN :6062). Optimistic + откат + Toast.
+    fun toggleVideoBookmark() {
+        val v = resolvedVideo
+        if (v.id <= 0L || v.ownerId == 0L) return
+        val newFav = !inBookmarks
+        inBookmarks = newFav
+        scope.launch {
+            val ok = if (newFav) {
+                app.apiClient.faveAdd("video", v.ownerId, v.id)
+            } else {
+                app.apiClient.faveRemove("video", v.ownerId, v.id)
+            }
+            if (ok) {
+                if (newFav) toast("Добавлено в закладки") else toast("Удалено из закладок")
+            } else {
+                inBookmarks = !newFav
+                toast("Не удалось обновить закладки")
+            }
+        }
+    }
+
+    // #VIDEO-MORE-DOWNLOAD: «Ещё» → «Скачать» — тот же VideoDownloadManager
+    // .enqueueDownload, что в TopAppBar и VideoScreen (:497). Честные
+    // предупреждения: без прямой mp4-ссылки менеджер молча откажется —
+    // предупреждаем заранее; повторный тап не дублирует загрузку.
+    fun downloadFromMenu() {
+        val ds = downloadState
+        if (ds != null && ds.isCompleted) {
+            toast("Уже скачано — доступно офлайн")
+            return
+        }
+        if (ds != null && ds.isInProgress) {
+            toast("Загрузка уже идёт")
+            return
+        }
+        val files = resolvedVideo.files
+        val hasDirect = files != null && files.keys.any { it.startsWith("mp4_") }
+        if (!hasDirect) {
+            toast("Нет прямой ссылки — скачивание недоступно")
+            return
+        }
+        VideoDownloadManager.enqueueDownload(resolvedVideo)
+        toast("Загрузка началась")
+    }
+
+    // #VIDEO-REPORT: «Ещё» → «Пожаловаться» — video.report (W30-API),
+    // reason=5 — дефолт метода (единственное честно известное значение,
+    // список причин не показываем). Вызывается из confirm-диалога.
+    fun sendVideoReport() {
+        val v = resolvedVideo
+        if (v.id <= 0L || v.ownerId == 0L) return
+        scope.launch {
+            val ok = app.apiClient.videoReport(v.id, v.ownerId)
+            if (ok) toast("Жалоба отправлена") else toast("Не удалось отправить")
+        }
+    }
+
+    // #VIDEO-COPY-LINK: «Ещё» → «Копировать ссылку» — паттерн VideoShareSheet
+    // (ClipboardManager + Toast). Ссылка: страница видео из video.get (player),
+    // fallback — канонический формат https://vk.ru/video{ownerId}_{id}.
+    fun copyVideoLink() {
+        val rawPlayer = resolvedVideo.player
+        val link: String = if (rawPlayer != null && rawPlayer.isNotBlank()) {
+            rawPlayer
+        } else {
+            "https://vk.ru/video${resolvedVideo.ownerId}_${resolvedVideo.id}"
+        }
+        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+        if (cm != null) {
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("VK Video", link))
+            toast("Ссылка скопирована")
+        } else {
+            toast("Не удалось скопировать ссылку")
         }
     }
 
@@ -1771,9 +2086,18 @@ fun VideoPlayerScreen(
                                         video = resolvedVideo,
                                         isLiked = videoLiked,
                                         likeCount = videoLikeCount,
+                                        // W30-2: паритет «Добавить»/«Ещё» в immersive-стрипе.
+                                        addedToMine = addedToMine,
+                                        inBookmarks = inBookmarks,
                                         onToggleLike = { toggleVideoLike() },
                                         onOpenComments = { showCommentsSheet = true },
                                         onShare = { showShareSheet = true },
+                                        onAddToMine = { addToMine() },
+                                        onToggleBookmark = { toggleVideoBookmark() },
+                                        onDownload = { downloadFromMenu() },
+                                        onReport = { showReportConfirm = true },
+                                        onCopyLink = { copyVideoLink() },
+                                        onRemoveMine = { removeMineCopy() },
                                     )
                                 }
                             }
@@ -1865,9 +2189,19 @@ fun VideoPlayerScreen(
                     subTextColor = VK_TEXT_SECONDARY,
                     isLiked = videoLiked,
                     likeCount = videoLikeCount,
+                    // W30-2: паритет «Добавить»/«Ещё» (data-testid
+                    // video_page_add_to_my_playlist / video_page_more_button).
+                    addedToMine = addedToMine,
+                    inBookmarks = inBookmarks,
                     onToggleLike = { toggleVideoLike() },
                     onOpenComments = { showCommentsSheet = true },
                     onShare = { showShareSheet = true },
+                    onAddToMine = { addToMine() },
+                    onToggleBookmark = { toggleVideoBookmark() },
+                    onDownload = { downloadFromMenu() },
+                    onReport = { showReportConfirm = true },
+                    onCopyLink = { copyVideoLink() },
+                    onRemoveMine = { removeMineCopy() },
                 )
                 val desc = resolvedVideo.description
                 if (!desc.isNullOrBlank()) {
@@ -1926,6 +2260,31 @@ fun VideoPlayerScreen(
         VideoShareSheet(
             video = resolvedVideo,
             onDismiss = { showShareSheet = false },
+        )
+    }
+
+    // W30-2 #VIDEO-REPORT: confirm-диалог «Пожаловаться» — на уровне композабла
+    // экрана, не внутри скролл-контейнеров/меню (урок #PIN-DIALOG-OVERLAY).
+    // Причина НЕ выбирается (не знаем честно): video.report с reason=5 —
+    // дефолт метода («прочее»), см. VKApiClient :4148.
+    if (showReportConfirm) {
+        AlertDialog(
+            onDismissRequest = { showReportConfirm = false },
+            title = { Text("Пожаловаться") },
+            text = { Text("Отправить жалобу на видео?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showReportConfirm = false
+                    sendVideoReport()
+                }) {
+                    Text("Отправить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReportConfirm = false }) {
+                    Text("Отмена")
+                }
+            },
         )
     }
 }
@@ -2233,6 +2592,14 @@ private fun formatPlaybackRate(rate: Float): String {
  * Состояние лайка поднято на уровень VideoPlayerScreen — портретный row и
  * фуллскрин-стрип используют одно состояние и не расходятся. Тач-таргеты ≥44dp
  * (heightIn(min = 44.dp) на кликабельных группах).
+ *
+ * W30-2 (паритет футера страницы видео VK web): добавлены
+ *  - «Добавить» (data-testid video_page_add_to_my_playlist): video.add копию
+ *    себе; после успеха — CheckCircle, снятие только через меню «Ещё»;
+ *  - «Ещё» (data-testid video_page_more_button): DropdownMenu с закладками
+ *    (fave.add/removeVideo), скачиванием (VideoDownloadManager), жалобой
+ *    (video.report, confirm-диалог на уровне экрана), копированием ссылки и
+ *    «Удалить у себя» (videoDelete моей копии) — общий набор VideoMoreMenuItems.
  */
 @Composable
 private fun VideoActionsRow(
@@ -2240,10 +2607,22 @@ private fun VideoActionsRow(
     subTextColor: Color,
     isLiked: Boolean,
     likeCount: Int,
+    addedToMine: Boolean,
+    inBookmarks: Boolean,
     onToggleLike: () -> Unit,
     onOpenComments: () -> Unit,
     onShare: () -> Unit,
+    onAddToMine: () -> Unit,
+    onToggleBookmark: () -> Unit,
+    onDownload: () -> Unit,
+    onReport: () -> Unit,
+    onCopyLink: () -> Unit,
+    onRemoveMine: () -> Unit,
 ) {
+    // W30-2: локальный флаг раскрытия меню «Ещё» (DropdownMenu — popup,
+    // не диспоузится скроллом: урок #PIN-DIALOG-OVERLAY здесь не применим,
+    // но confirm-диалог жалобы всё равно живёт на уровне экрана).
+    var moreOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -2316,6 +2695,60 @@ private fun VideoActionsRow(
                 tint = subTextColor,
             )
         }
+        Spacer(modifier = Modifier.width(16.dp))
+        // W30-2 #VIDEO-ADD-TO-MINE: «Добавить» (data-testid
+        // video_page_add_to_my_playlist) — video.add копию себе; после успеха
+        // CheckCircle (+VK_GREEN), снятие — только через меню «Ещё» →
+        // «Удалить у себя». Явный if вместо elvis/!! по #NULL-ЯВНО.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .heightIn(min = 44.dp)
+                .then(if (addedToMine) Modifier else Modifier.clickable(onClick = onAddToMine))
+                .padding(vertical = 6.dp, horizontal = 4.dp),
+        ) {
+            Icon(
+                if (addedToMine) Icons.Filled.CheckCircle else Icons.Filled.AddCircle,
+                if (addedToMine) "Добавлено" else "Добавить себе",
+                modifier = Modifier.size(20.dp),
+                tint = if (addedToMine) VK_GREEN else subTextColor,
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        // W30-2 #VIDEO-MORE-MENU: «Ещё» (data-testid video_page_more_button) —
+        // DropdownMenu (popup, поверх скролл-контейнера) с общим набором
+        // VideoMoreMenuItems: закладки / скачать / пожаловаться / ссылка /
+        // удалить у себя.
+        Box {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .heightIn(min = 44.dp)
+                    .clickable { moreOpen = true }
+                    .padding(vertical = 6.dp, horizontal = 4.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.MoreHoriz,
+                    "Ещё",
+                    modifier = Modifier.size(20.dp),
+                    tint = subTextColor,
+                )
+            }
+            DropdownMenu(
+                expanded = moreOpen,
+                onDismissRequest = { moreOpen = false },
+            ) {
+                VideoMoreMenuItems(
+                    inBookmarks = inBookmarks,
+                    onToggleBookmark = onToggleBookmark,
+                    onDownload = onDownload,
+                    onReport = onReport,
+                    onCopyLink = onCopyLink,
+                    onRemoveMine = onRemoveMine,
+                    onDismiss = { moreOpen = false },
+                )
+            }
+        }
         Spacer(modifier = Modifier.weight(1f))
         // Просмотры — поле views из video.get (extended), только счётчик.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2340,16 +2773,31 @@ private fun VideoActionsRow(
  * Fix #383 #COMMUNITY-VIDEO-PARITY: вертикальный VK-стиль стрип действий справа
  * для immersive-режима плеера (fullscreen/landscape). Лайк — кликабельный,
  * комментарии и «Поделиться» открывают шторки, просмотры — счётчик без клика.
+ *
+ * W30-2: паритет футера VK web в immersive — «Добавить»
+ * (video_page_add_to_my_playlist) и «Ещё» (video_page_more_button) с тем же
+ * набором VideoMoreMenuItems, что и в портретном VideoActionsRow (единое
+ * состояние на уровне экрана — addedToMine/inBookmarks).
  */
 @Composable
 private fun ImmersiveVideoActionsColumn(
     video: Video,
     isLiked: Boolean,
     likeCount: Int,
+    addedToMine: Boolean,
+    inBookmarks: Boolean,
     onToggleLike: () -> Unit,
     onOpenComments: () -> Unit,
     onShare: () -> Unit,
+    onAddToMine: () -> Unit,
+    onToggleBookmark: () -> Unit,
+    onDownload: () -> Unit,
+    onReport: () -> Unit,
+    onCopyLink: () -> Unit,
+    onRemoveMine: () -> Unit,
 ) {
+    // W30-2: локальный флаг раскрытия меню «Ещё» стрипа.
+    var stripMoreOpen by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(18.dp))
@@ -2379,6 +2827,41 @@ private fun ImmersiveVideoActionsColumn(
             contentDescription = "Поделиться",
             onClick = onShare,
         )
+        // W30-2 #VIDEO-ADD-TO-MINE: «Добавить» — тот же стейт, что в портретном
+        // row. После успеха CheckCircle/VK_GREEN и БЕЗ клика (снятие — через
+        // «Ещё» → «Удалить у себя»); кликабельность честно отключается.
+        VideoStripAction(
+            icon = if (addedToMine) Icons.Filled.CheckCircle else Icons.Filled.AddCircle,
+            label = "",
+            tint = if (addedToMine) VK_GREEN else VK_WHITE,
+            contentDescription = if (addedToMine) "Добавлено" else "Добавить себе",
+            onClick = if (addedToMine) null else onAddToMine,
+        )
+        // W30-2 #VIDEO-MORE-MENU: «Ещё» открывает тот же набор, что и в
+        // портретном row (DropdownMenu — popup, якорится на Box стрипа).
+        Box {
+            VideoStripAction(
+                icon = Icons.Outlined.MoreHoriz,
+                label = "",
+                tint = VK_WHITE,
+                contentDescription = "Ещё",
+                onClick = { stripMoreOpen = true },
+            )
+            DropdownMenu(
+                expanded = stripMoreOpen,
+                onDismissRequest = { stripMoreOpen = false },
+            ) {
+                VideoMoreMenuItems(
+                    inBookmarks = inBookmarks,
+                    onToggleBookmark = onToggleBookmark,
+                    onDownload = onDownload,
+                    onReport = onReport,
+                    onCopyLink = onCopyLink,
+                    onRemoveMine = onRemoveMine,
+                    onDismiss = { stripMoreOpen = false },
+                )
+            }
+        }
         VideoStripAction(
             icon = Icons.Outlined.Visibility,
             label = video.views.toString(),
@@ -2428,6 +2911,76 @@ private fun VideoStripAction(
             )
         }
     }
+}
+
+/**
+ * W30-2 #VIDEO-MORE-MENU: содержимое меню «Ещё» (data-testid
+ * video_page_more_button) — общий набор для портретного VideoActionsRow и
+ * immersive-стрипа. Все действия — реальный API без заглушек:
+ *  - «В закладки / Убрать из закладки»: faveAdd/faveRemove type="video"
+ *    (VKApiClient маппит в fave.addVideo/fave.removeVideo — #FAVE-WEB-TOKEN);
+ *  - «Скачать»: VideoDownloadManager.enqueueDownload (паттерн VideoScreen :497);
+ *  - «Пожаловаться»: confirm-диалог на уровне экрана → video.report (W30-API);
+ *  - «Копировать ссылку»: ClipboardManager (паттерн VideoShareSheet);
+ *  - «Удалить у себя»: videoDelete моей копии (removeMineCopy).
+ * Каждый пункт закрывает меню перед действием (onDismiss), чтобы шторки/диалоги
+ * не открывались из-под открытого popup.
+ */
+@Composable
+private fun VideoMoreMenuItems(
+    inBookmarks: Boolean,
+    onToggleBookmark: () -> Unit,
+    onDownload: () -> Unit,
+    onReport: () -> Unit,
+    onCopyLink: () -> Unit,
+    onRemoveMine: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(if (inBookmarks) "Убрать из закладки" else "В закладки") },
+        leadingIcon = {
+            Icon(
+                if (inBookmarks) Icons.Outlined.BookmarkBorder else Icons.Filled.Bookmark,
+                contentDescription = null,
+            )
+        },
+        onClick = {
+            onDismiss()
+            onToggleBookmark()
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Скачать") },
+        leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+        onClick = {
+            onDismiss()
+            onDownload()
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Пожаловаться") },
+        leadingIcon = { Icon(Icons.Filled.Warning, contentDescription = null) },
+        onClick = {
+            onDismiss()
+            onReport()
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Копировать ссылку") },
+        leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+        onClick = {
+            onDismiss()
+            onCopyLink()
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Удалить у себя") },
+        leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+        onClick = {
+            onDismiss()
+            onRemoveMine()
+        },
+    )
 }
 
 /**

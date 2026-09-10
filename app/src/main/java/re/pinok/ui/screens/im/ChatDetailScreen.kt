@@ -91,6 +91,9 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
+// W30-1 #IM-UNREAD-MENU: иконка «непрочитанным/прочитанным» — та же, что в
+// long-press меню списка диалогов (MessagesScreen:37, Fix #274) — паритет UX.
+import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -761,6 +764,12 @@ fun ChatDetailScreen(
         .map { it.msgMute }
         .collectAsState(initial = true)
     var muted by remember { mutableStateOf(false) }
+    // W30-1 #IM-UNREAD-MENU: локальная метка «непрочитанный» для меню шапки чата
+    // (паритет VK web — в меню чата есть «Отметить непрочитанным»). chat-стейта с
+    // unreadCount в этом экране нет (chat — локальная val внутри LaunchedEffect),
+    // поэтому стартовое значение заполняется из серверного unread_count при
+    // загрузке chat info (messagesGetConversationsById, см. ниже).
+    var hasUnreadMark by remember { mutableStateOf(false) }
     // P3.1: ChatInfo screen — отдельный экран информации о чате.
     val chatInfoEnabled by app.prefs.data
         .map { it.msgChatInfo }
@@ -1582,6 +1591,59 @@ fun ChatDetailScreen(
         }
     }
 
+    // W30-1 #IM-UNREAD-MENU: «Отметить непрочитанным/прочитанным» из меню шапки
+    // чата — семантика 1:1 со списком диалогов (MessagesScreen.onToggleUnread,
+    // Fix #274 + #MARK-READ-REVERT):
+    //  - unread=true → messages.markAsUnreadConversation ставит «метку
+    //    непрочитанного» (жирный шрифт в списке, БЕЗ числового бейджа);
+    //  - unread=false → markAsUnreadConversation снимает ТОЛЬКО метку, серверный
+    //    unread_count реально чистит messages.markAsRead(start_message_id) с
+    //    force=true (явное действие юзера — игнорирует DNR-режим).
+    // Оптимистичного апдейта списка здесь нет (диалоги обновит refresh списка при
+    // возврате), поэтому — API-подтверждение, Toast и локальный флаг.
+    fun toggleUnreadMark() {
+        val newState = !hasUnreadMark
+        scope.launch {
+            try {
+                val ok = app.apiClient.messagesMarkAsUnreadConversation(peerId, newState)
+                if (ok) {
+                    hasUnreadMark = newState
+                    if (!newState) {
+                        // #MARK-READ-REVERT: чистим серверный счётчик по последнему
+                        // загруженному сообщению. maxOf по id (а не lastOrNull) —
+                        // история приходит newest-first, порядок не гарантирован.
+                        if (messages.isNotEmpty()) {
+                            val newestId = messages.maxOf { it.id }
+                            val readOk = app.apiClient.messagesMarkAsRead(peerId, newestId, force = true)
+                            AppLog.i("ChatDetailScreen",
+                                "markAsRead (force) after unread-toggle: peer=$peerId upTo=$newestId ok=$readOk")
+                        }
+                    }
+                    Toast.makeText(
+                        ctx,
+                        if (newState) "Отмечено непрочитанным" else "Отмечено прочитанным",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    AppLog.i("ChatDetailScreen", "unread mark toggled: peer=$peerId unread=$newState")
+                } else {
+                    AppLog.w("ChatDetailScreen", "unread mark toggle failed (api returned false) peer=$peerId")
+                    Toast.makeText(
+                        ctx,
+                        if (newState) "Не удалось отметить непрочитанным" else "Не удалось отметить прочитанным",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                // Fix #151: rememberCoroutineScope отменяется при уходе с экрана —
+                // нормальный lifecycle, пробрасываем (не маскируем под ошибку).
+                throw ce
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "unread mark toggle error", e)
+                Toast.makeText(ctx, "Не удалось изменить отметку", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // P3.4: покинуть канал (отписка от сообщества + очистка диалога).
     // Для канала peerId < 0 → groupId = -peerId.
     // groups.leave отписывает от сообщества, messages.deleteConversation убирает диалог из списка.
@@ -2258,6 +2320,10 @@ fun ChatDetailScreen(
             // Fix #122: используем единый isMuted() helper (учитывает no_sound,
             // disabled_forever, disabled_until).
             muted = chat?.pushSettings?.isMuted() == true
+            // W30-1 #IM-UNREAD-MENU: стартовое состояние метки — серверный
+            // unread_count того же ответа. chat — локальная val, явная if-проверка
+            // (NULL-ЯВНО: без ?. чейнинг в новом коде).
+            hasUnreadMark = chat != null && chat.unreadCount > 0
             // P3.4: канал = группа (peerId < 0) где can_write.allowed == false.
             // Только если feature-flag включён — иначе обычный режим (composer виден).
             isChannel = channelModeEnabled && chat?.isChannel == true
@@ -2849,6 +2915,23 @@ fun ChatDetailScreen(
                                         },
                                     )
                                 }
+                                // W30-1 #IM-UNREAD-MENU: «Отметить непрочитанным/
+                                // прочитанным» — после mute, паритет VK web (в меню
+                                // чата веба пункт есть, у нас отсутствовал). Тот же
+                                // API-флоу, что в long-press меню списка диалогов.
+                                DropdownMenuItem(
+                                    text = { Text(if (hasUnreadMark) "Отметить прочитанным" else "Отметить непрочитанным") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.MarkChatUnread,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                    onClick = {
+                                        showChatMenu = false
+                                        toggleUnreadMark()
+                                    },
+                                )
                                 // P0.3: stub «Закрепить сообщение» удалён — теперь pin
                                 // доступен через long-press на конкретном сообщении
                                 // (context menu → «Закрепить» / «Открепить»).
