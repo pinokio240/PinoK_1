@@ -116,6 +116,11 @@ fun CommunityScreen(
     // #OPVK-EXTRACT (Task 3-c): тап по счётчику подписчиков в шапке →
     // GroupMembersScreen (список участников, groups.getMembers).
     onMembersClick: (groupId: Long) -> Unit = {},
+    // W35-b (волна 35): блок «Управление» — маршрутизация в админ-экраны
+    // (CommunityAdminBlock рендерится при admin_level >= 1 — сверка §5.1).
+    onAdminSettingsClick: (groupId: Long) -> Unit = {},
+    onAdminStatsClick: (groupId: Long) -> Unit = {},
+    onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -736,6 +741,17 @@ fun CommunityScreen(
                     }
                 }
             }
+        }
+        // W35-b (волна 35): карточка «Управление» — админ-блок над вкладками
+        // (референс: правое меню 11 пунктов, сверка «Группа_админ» §4.1;
+        // внутренний гейт isManager внутри блока — у обычного участника невидим).
+        item {
+            CommunityAdminBlock(
+                groupInfo = groupInfo,
+                onSettingsClick = onAdminSettingsClick,
+                onStatsClick = onAdminStatsClick,
+                onPeopleClick = onAdminPeopleClick,
+            )
         }
         item {
             // #30j (community tabs): ScrollableTabRow с 5 вкладками.

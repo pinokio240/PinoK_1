@@ -256,7 +256,25 @@ class VKApiClient(
         val description: String? = null,
         val status: String? = null,
         val type: String? = null,
-    )
+        // W35-b: сайт сообщества (для AdminSettingsScreen — groups.edit website).
+        val site: String? = null,
+        // W35-a: админ-блок (сверка «Группа_админ» §3.1 — веб сам запрашивает эти
+        // поля в groups.getById; ответ эталона: is_admin:1, admin_level:3,
+        // is_advertiser:1, can_post:1, can_message:1).
+        val isAdminSrv: Int = 0,    // is_admin — текущий пользователь руководитель
+        val adminLevel: Int = 0,    // admin_level 0..3 (1 модератор/2 редактор/3 администратор)
+        val isAdvertiser: Int = 0,  // is_advertiser
+        val canPost: Int = 0,       // can_post — право постить на стене сообщества
+        val canMessage: Int = 0,    // can_message — сообщения сообщества доступны
+        val canSuggest: Int = 0,    // can_suggest — право предлагать записи
+        val memberStatus: Int = 0,  // member_status 0..6 (0 не участник … 6 приглашён)
+    ) {
+        // W35-a: порог показа блока «Управление» — admin_level >= 1 || is_admin==1
+        // (сверка §5.1: модератор уже имеет часть админ-пунктов).
+        val isManager: Boolean get() = adminLevel >= 1 || isAdminSrv == 1
+        // W35-a: право постить от имени сообщества (редактор/администратор).
+        val isAuthor: Boolean get() = adminLevel >= 2
+    }
 
     // IMP-FEED-1 (#FEED-FRIENDS-FEED): sourceIds — аддитивный параметр
     // newsfeed.get (source_ids) для раздела «Друзья» = лента постов друзей
@@ -6066,6 +6084,12 @@ class VKApiClient(
         ownerId: Long? = null,
         friendsOnly: Boolean = false,
         publishDate: Long? = null,
+        // W35-a: публикация от имени сообщества (from_group=1) + «подпись автора»
+        // (signed=1) — карта веб-флагов official/signed+check_sign из сверки
+        // «Группа_админ» §3.4/§5 (P0.2). От имени сообщества может постить
+        // только admin_level >= 2 (редактор/администратор) — гейт на вызывающей стороне.
+        fromGroup: Boolean = false,
+        signed: Boolean = false,
     ): Long {
         if (isOffline()) return -1L
         val args = mutableMapOf(
@@ -6075,6 +6099,9 @@ class VKApiClient(
         if (friendsOnly) args["friends_only"] = "1"
         // SOVA_2_lenta: отложенный постинг — wall.post с publish_date (unix timestamp)
         if (publishDate != null && publishDate > 0) args["publish_date"] = publishDate.toString()
+        // W35-a: от имени сообщества / подпись автора.
+        if (fromGroup) args["from_group"] = "1"
+        if (signed) args["signed"] = "1"
         val json = call("wall.post", args) ?: return -1L
         // #SHARE-18B: VK API документирует ответ {"response":{"post_id":N}},
         // но gateway отдаёт и legacy {"response":{"items":[{"id":N}]}} —
@@ -8612,7 +8639,10 @@ class VKApiClient(
      */
     suspend fun groupsGetById(
         groupIds: List<Long>,
-        fields: String = "photo_100,photo_200,description,members_count,verified,activity,status,screen_name,is_member,type",
+        // W35-a: + админ-блок (is_admin/admin_level/is_advertiser/can_message/
+        // can_suggest/can_post/member_status) — сверка «Группа_админ» §3.1/§5.1.
+        // Доп. поля безопасны для остальных вызовов — парсеры читают только известные.
+        fields: String = "photo_100,photo_200,description,members_count,verified,activity,status,screen_name,site,is_member,type,is_admin,admin_level,is_advertiser,can_message,can_suggest,can_post,member_status",
     ): List<GroupInfo> {
         if (isOffline() || groupIds.isEmpty()) return emptyList()
         // #30i (groups fix): всегда используем group_ids (plural) — это работает
@@ -8667,6 +8697,16 @@ class VKApiClient(
                     description = o.get("description")?.takeIf { !it.isJsonNull }?.asString,
                     status = o.get("status")?.takeIf { !it.isJsonNull }?.asString,
                     type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
+                    // W35-b: сайт (AdminSettingsScreen).
+                    site = o.get("site")?.takeIf { !it.isJsonNull }?.asString,
+                    // W35-a: парсинг админ-блока (NULL-ЯВНО: takeIf !isJsonNull + дефолт 0).
+                    isAdminSrv = o.get("is_admin")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    adminLevel = o.get("admin_level")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    isAdvertiser = o.get("is_advertiser")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    canPost = o.get("can_post")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    canMessage = o.get("can_message")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    canSuggest = o.get("can_suggest")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    memberStatus = o.get("member_status")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                 )
             }
         } catch (e: Exception) {
@@ -16318,6 +16358,324 @@ class VKApiClient(
         )) ?: return false
         return json.has("response")
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // W35-b (волна 35): администрирование сообществ — единый groups.edit,
+    // руководители (editManager / getMembers filter=managers), статистика
+    // (stats.get / stats.getPostReach), баны и заявки.
+    // Источник: docs/админ.сообществ.снапшоты.сверка.md §3/§5 + официальные
+    // доки VK API (wire-эталона для stats/банов нет — сверка §2 P1.6/P1.7:
+    // «реализовывать по докам»).
+    // КОНВЕНЦИЯ: во всех методах ниже [groupId] — ПОЛОЖИТЕЛЬНЫЙ id сообщества
+    // (как в groupsGetMembers); на провод уходит положительный group_id
+    // (сверка с groupsEditNotifications: wire = положительный group_id).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** W35-b: одна точка статистики stats.get (один период). */
+    data class StatsPoint(
+        val period: String,
+        // visitors
+        val views: Int = 0,
+        val visitors: Int = 0,
+        // reach
+        val reach: Int = 0,
+        val reachSubscribers: Int = 0,
+        // activity
+        val likes: Int = 0,
+        val replies: Int = 0,
+        val subscribes: Int = 0,
+        val unsubscribes: Int = 0,
+    )
+
+    /** W35-b: охват одного поста (stats.getPostReach). */
+    data class PostReach(
+        val postId: Long,
+        val reach: Int = 0,
+        val reachSubscribers: Int = 0,
+        val likes: Int = 0,
+        val linkClicks: Int = 0,
+        val toGroup: Int = 0,
+    )
+
+    /** W35-b: руководитель сообщества (groups.getMembers filter=managers). */
+    data class GroupManager(
+        val userId: Long,
+        val name: String,
+        val photo100: String?,
+        /** moderator / editor / administrator; null/creator = хозяин. */
+        val role: String?,
+        val isOwner: Boolean,
+    )
+
+    /** W35-b: запись чёрного списка (groups.getBanned). */
+    data class BannedUser(
+        val userId: Long,
+        val name: String,
+        val photo100: String?,
+        /** Unix-время окончания бана; 0 = навсегда. */
+        val endDate: Long,
+        /** 0..4 по докам groups.banUser. */
+        val reason: Int = 0,
+        val comment: String?,
+    )
+
+    /** W35-b: безопасное чтение Int из вложенного JsonObject (stats.get). */
+    private fun statInt(obj: com.google.gson.JsonElement?, key: String): Int =
+        obj?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get(key)?.takeIf { !it.isJsonNull }?.asInt ?: 0
+
+    /**
+     * W35-b: groups.edit — ЕДИНЫЙ метод записи настроек сообщества (сверка
+     * «Группа_админ» §2 P1.5: веб-SPA пишет настройки ТОЛЬКО им — createGroupsEditFx;
+     * groups.getSettings/setSettings вебом НЕ вызываются, из плана убраны).
+     * @param groupId ПОЛОЖИТЕЛЬНЫЙ id сообщества.
+     * @param params параметры секций (title/description/screen_name/website/…),
+     *               значения уже строковые.
+     */
+    suspend fun groupsEdit(groupId: Long, params: Map<String, String>): Boolean {
+        if (isOffline() || params.isEmpty()) return false
+        val args = mutableMapOf("group_id" to groupId.toString())
+        args.putAll(params)
+        val json = call("groups.edit", args) ?: return false
+        return json.has("response")
+    }
+
+    /** W35-b: groups.getMembers(filter=managers) — руководители сообщества. */
+    suspend fun groupsGetManagers(groupId: Long): List<GroupManager> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getMembers", mapOf(
+            "group_id" to groupId.toString(),
+            "filter" to "managers",
+            "fields" to "photo_100,first_name,last_name",
+            "count" to "200",
+        )) ?: return emptyList()
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList()
+            val items = resp.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val uid = o.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: o.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: return@mapNotNull null
+                val role = o.get("role")?.takeIf { !it.isJsonNull }?.asString
+                GroupManager(
+                    userId = uid,
+                    name = listOfNotNull(
+                        o.get("first_name")?.takeIf { !it.isJsonNull }?.asString,
+                        o.get("last_name")?.takeIf { !it.isJsonNull }?.asString,
+                    ).joinToString(" ").ifBlank { "id$uid" },
+                    photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
+                    role = role,
+                    isOwner = role == null || role == "creator",
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetManagers parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * W35-b: groups.editManager — назначение/смена/снятие роли руководителя.
+     * @param role moderator/editor/administrator; null = снять полномочия (remove=1).
+     * Менять роли может только хозяин/администратор (гейт на вызывающей стороне).
+     */
+    suspend fun groupsEditManager(groupId: Long, userId: Long, role: String?): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "user_id" to userId.toString(),
+        )
+        if (role == null) args["remove"] = "1" else args["role"] = role
+        val json = call("groups.editManager", args) ?: return false
+        return json.has("response")
+    }
+
+    /** W35-b: stats.get — статистика сообщества за [days] дней. */
+    suspend fun statsGet(groupId: Long, days: Int = 30): List<StatsPoint> {
+        if (isOffline()) return emptyList()
+        val json = call("stats.get", mapOf(
+            "group_id" to groupId.toString(),
+            "interval" to "day",
+            "interval_count" to days.toString(),
+            "filters" to "visitors,reach,activity",
+        )) ?: return emptyList()
+        return try {
+            // Официальный формат: {"response":[{period, visitors{}, reach{}, activity{}}]}.
+            val resp = json.get("response") ?: return emptyList()
+            val arr: com.google.gson.JsonArray? = when {
+                resp.isJsonArray -> resp.asJsonArray
+                resp.isJsonObject -> resp.asJsonObject?.getAsJsonArray("items")
+                else -> null
+            }
+            if (arr == null) return emptyList()
+            arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                StatsPoint(
+                    period = o.get("period")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    views = statInt(o.get("visitors"), "views"),
+                    visitors = statInt(o.get("visitors"), "visitors"),
+                    reach = statInt(o.get("reach"), "reach"),
+                    reachSubscribers = statInt(o.get("reach"), "reach_subscribers"),
+                    likes = statInt(o.get("activity"), "likes"),
+                    replies = statInt(o.get("activity"), "replies"),
+                    subscribes = statInt(o.get("activity"), "subscribes"),
+                    unsubscribes = statInt(o.get("activity"), "unsubscribes"),
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsGet parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * W35-b: stats.getPostReach — охват постов сообщества.
+     * @param ownerId owner-style (-groupId, отрицательный).
+     * @param postIds до 100 id постов.
+     */
+    suspend fun statsGetPostReach(ownerId: Long, postIds: List<Long>): List<PostReach> {
+        if (isOffline() || postIds.isEmpty()) return emptyList()
+        val json = call("stats.getPostReach", mapOf(
+            "owner_id" to ownerId.toString(),
+            "post_ids" to postIds.joinToString(",") { it.toString() },
+        )) ?: return emptyList()
+        return try {
+            val resp = json.get("response") ?: return emptyList()
+            val arr: com.google.gson.JsonArray? = when {
+                resp.isJsonArray -> resp.asJsonArray
+                resp.isJsonObject -> resp.asJsonObject?.getAsJsonArray("items")
+                else -> null
+            }
+            if (arr == null) return emptyList()
+            arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                PostReach(
+                    postId = o.get("post_id")?.takeIf { !it.isJsonNull }?.asLong
+                        ?: return@mapNotNull null,
+                    reach = o.get("reach")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    reachSubscribers = o.get("reach_subscribers")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    likes = o.get("likes")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    linkClicks = o.get("link_clicks")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    toGroup = o.get("to_group")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsGetPostReach parse error", e)
+            emptyList()
+        }
+    }
+
+    /** W35-b: groups.getBanned — чёрный список сообщества. */
+    suspend fun groupsGetBanned(groupId: Long, count: Int = 50, offset: Int = 0): List<BannedUser> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getBanned", mapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "fields" to "photo_100,first_name,last_name",
+        )) ?: return emptyList()
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList()
+            val items = resp.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val uid = o.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: o.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: return@mapNotNull null
+                // ban-метаданные: обычно плоско в item, у некоторых версий — ban_info/banned_info.
+                val banInfo = o.get("ban_info")?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?: o.get("banned_info")?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?: o
+                BannedUser(
+                    userId = uid,
+                    name = listOfNotNull(
+                        o.get("first_name")?.takeIf { !it.isJsonNull }?.asString,
+                        o.get("last_name")?.takeIf { !it.isJsonNull }?.asString,
+                    ).joinToString(" ").ifBlank { "id$uid" },
+                    photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
+                    endDate = banInfo.get("end_date")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                    reason = banInfo.get("reason")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    comment = banInfo.get("comment")?.takeIf { !it.isJsonNull }?.asString,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetBanned parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * W35-b: groups.banUser — бан пользователя в сообществе.
+     * @param groupId ПОЛОЖИТЕЛЬНЫЙ id; @param userId owner-style положительный id юзера.
+     * @param endDate 0 = навсегда; @param reason 0..4 (0 = «не указано»).
+     */
+    suspend fun groupsBanUser(
+        groupId: Long,
+        userId: Long,
+        reason: Int = 0,
+        endDate: Long = 0L,
+        comment: String? = null,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "owner_id" to userId.toString(),
+            "reason" to reason.toString(),
+            "end_date" to endDate.toString(),
+        )
+        if (!comment.isNullOrBlank()) args["comment"] = comment
+        val json = call("groups.banUser", args) ?: return false
+        return json.has("response")
+    }
+
+    /** W35-b: groups.unbanUser — разбан пользователя. */
+    suspend fun groupsUnbanUser(groupId: Long, userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.unbanUser", mapOf(
+            "group_id" to groupId.toString(),
+            "owner_id" to userId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /** W35-b: groups.getRequests — заявки на вступление. */
+    suspend fun groupsGetRequests(groupId: Long, count: Int = 50, offset: Int = 0): List<UserProfile> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getRequests", mapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "fields" to "photo_100,photo_200,online,last_seen,status,verified",
+        )) ?: return emptyList()
+        return try {
+            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                parseUserProfileMini(el.asJsonObject)
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetRequests parse error", e)
+            emptyList()
+        }
+    }
+
+    /** W35-b: groups.approveRequest — одобрить заявку на вступление. */
+    suspend fun groupsApproveRequest(groupId: Long, userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.approveRequest", mapOf(
+            "group_id" to groupId.toString(),
+            "user_id" to userId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    // ── конец W35-b: администрирование сообществ ────────────────────────
+
 
     /**
      * fave.addPage — добавить clip-автора (user или group) в закладки.

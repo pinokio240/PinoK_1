@@ -101,6 +101,10 @@ import re.pinok.ui.screens.community.BoardTopicScreen
 import re.pinok.ui.screens.community.CommunityScreen
 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества».
 import re.pinok.ui.screens.community.GroupMembersScreen
+// W35-b (волна 35): экраны администрирования сообщества (блок «Управление»).
+import re.pinok.ui.screens.community.AdminPeopleScreen
+import re.pinok.ui.screens.community.AdminSettingsScreen
+import re.pinok.ui.screens.community.AdminStatsScreen
 import re.pinok.ui.screens.documents.DocumentsScreen
 // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты).
 import re.pinok.ui.screens.feed.FeedHiddenSourcesScreen
@@ -917,6 +921,12 @@ listOf(
         // #OPVK-EXTRACT (Task 3-c): у GroupMembersScreen («Участники») свой
         // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и FollowList.
         Screen.GroupMembers.route,
+        // W35-b (волна 35): админ-экраны сообщества («Управление») — собственные
+        // Scaffold+TopAppBar, та же схема hasOwnTopBar (иначе двойной AppBar —
+        // класс бага Fix #272/#NOTIF-SETTINGS-DUAL-BAR).
+        Screen.AdminSettings.route,
+        Screen.AdminStats.route,
+        Screen.AdminPeople.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -2265,6 +2275,16 @@ composable(Screen.CallsHistory.route) {
                         onMembersClick = { targetGroupId ->
                             nav.navigate(Screen.GroupMembers.buildRoute(targetGroupId))
                         },
+                        // W35-b (волна 35): блок «Управление» → админ-экраны.
+                        onAdminSettingsClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminSettings.buildRoute(adminGroupId))
+                        },
+                        onAdminStatsClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminStats.buildRoute(adminGroupId))
+                        },
+                        onAdminPeopleClick = { adminGroupId, tab ->
+                            nav.navigate(Screen.AdminPeople.buildRoute(adminGroupId, tab))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2282,6 +2302,54 @@ composable(Screen.CallsHistory.route) {
                         // Тап по участнику → чужой профиль (паттерн FollowList-композибла).
                         onMemberClick = { memberId ->
                             nav.navigate(Screen.UserProfile.buildRoute(memberId))
+                        },
+                    )
+                }
+                // W35-b (волна 35): «Настройки сообщества» — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminSettings.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminSettings.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val adminGroupId = entry.arguments?.getLong(Screen.AdminSettings.ARG_GROUP_ID) ?: 0L
+                    AdminSettingsScreen(
+                        groupId = adminGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W35-b (волна 35): «Статистика» сообщества — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminStats.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminStats.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val statsGroupId = entry.arguments?.getLong(Screen.AdminStats.ARG_GROUP_ID) ?: 0L
+                    AdminStatsScreen(
+                        groupId = statsGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W35-b (волна 35): «Люди» (Руководители/Заявки/ЧС) — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminPeople.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminPeople.ARG_GROUP_ID) { type = NavType.LongType },
+                        navArgument(Screen.AdminPeople.ARG_TAB) {
+                            type = NavType.StringType
+                            defaultValue = "managers"
+                        },
+                    ),
+                ) { entry ->
+                    val peopleGroupId = entry.arguments?.getLong(Screen.AdminPeople.ARG_GROUP_ID) ?: 0L
+                    val peopleTab = entry.arguments?.getString(Screen.AdminPeople.ARG_TAB) ?: "managers"
+                    AdminPeopleScreen(
+                        groupId = peopleGroupId,
+                        initialTab = peopleTab,
+                        onBack = { nav.popBackStack() },
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
                     )
                 }

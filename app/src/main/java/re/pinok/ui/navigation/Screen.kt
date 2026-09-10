@@ -157,6 +157,37 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun buildRoute(groupId: Long): String = "group_members/$groupId"
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // W35-b (волна 35): экраны администрирования сообщества (блок «Управление»
+    // в CommunityScreen; вход при admin_level >= 1 — сверка «Группа_админ» §5.1).
+    // Суб-экраны без пункта в навбаре — паттерн GroupMembers: маршрут в
+    // hasOwnTopBar (SovaNavHost), собственный Scaffold+TopAppBar.
+    // ══════════════════════════════════════════════════════════════════
+
+    /** W35-b: «Настройки сообщества» — чтение groups.getById, запись единым groups.edit (сверка §2 P1.5). */
+    object AdminSettings : Screen("admin_settings/{groupId}", "Настройки сообщества", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_settings/$groupId"
+    }
+
+    /** W35-b: «Статистика» — stats.get (30 дней) + stats.getPostReach последних постов. */
+    object AdminStats : Screen("admin_stats/{groupId}", "Статистика", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_stats/$groupId"
+    }
+
+    /**
+     * W35-b: «Люди» — вкладки Руководители (getMembers filter=managers + editManager) /
+     * Заявки (getRequests + approveRequest) / Чёрный список (getBanned + unbanUser).
+     * @param tab managers | requests | banned.
+     */
+    object AdminPeople : Screen("admin_people/{groupId}?tab={tab}", "Люди", null) {
+        const val ARG_GROUP_ID = "groupId"
+        const val ARG_TAB = "tab"
+        fun buildRoute(groupId: Long, tab: String = "managers"): String =
+            "admin_people/$groupId?tab=${android.net.Uri.encode(tab)}"
+    }
+
     /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query

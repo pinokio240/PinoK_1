@@ -1105,10 +1105,19 @@ data class Group(
     // где я админ» (groups.get?filter=admin_editor возвращает только те,
     // где admin_level >= 2).
     @SerializedName("admin_level")     val adminLevel: Int = 0,
+    // W35-a (волна 35): полный админ-блок из сверки «Группа_админ» §3.1 —
+    // приходит в groups.getById при запросе соответствующих fields.
+    @SerializedName("is_admin")        val isAdminSrv: Int = 0,
+    @SerializedName("is_advertiser")   val isAdvertiser: Int = 0,
+    @SerializedName("can_message")     val canMessage: Int = 0,
+    @SerializedName("can_suggest")     val canSuggest: Int = 0,
+    @SerializedName("member_status")   val memberStatus: Int = 0,
 ) {
     val isMemberBool: Boolean get() = isMember == 1
     // Fix #144: true если пользователь имеет права editor/admin (can_post в чужую стену).
     val isAdmin: Boolean get() = adminLevel >= 2
+    // W35-a: порог показа блока «Управление» — admin_level >= 1 || is_admin == 1.
+    val isManager: Boolean get() = adminLevel >= 1 || isAdminSrv == 1
     val typeLabel: String get() = when (type) {
         "page" -> "Публичная страница"
         "event" -> "Мероприятие"
