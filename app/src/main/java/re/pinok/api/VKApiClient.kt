@@ -4141,6 +4141,21 @@ class VKApiClient(
     }
 
     /**
+     * W30-API #VIDEO-REPORT: video.report — пожаловаться на видео.
+     * VK: video.report { owner_id, video_id, reason }. reason по документации VK;
+     * UI волны 30 использует 5 («прочее») — единственное честно известное значение.
+     */
+    suspend fun videoReport(videoId: Long, ownerId: Long, reason: Int = 5): Boolean {
+        if (isOffline()) return false
+        val json = call("video.report", mapOf(
+            "owner_id" to ownerId.toString(),
+            "video_id" to videoId.toString(),
+            "reason" to reason.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /**
      * video.getComments — комментарии к видео.
      *
      * Fix #383 #COMMUNITY-VIDEO-PARITY: раньше возвращался только List<Comment> —
@@ -8133,6 +8148,10 @@ class VKApiClient(
             "q" to query,
             "count" to count.toString(),
             "extended" to "1",
+            // W30-API #VIDEO-SEARCH-GLOBAL (ТЗ юзера «поиск не глобальный»): без
+            // search_global=1 VK ищет в у́зком скоупе (свои/окружение) — по всей
+            // базе не ищет. 1 = глобальный поиск по всем видео VK.
+            "search_global" to "1",
         )
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("video.search", args) ?: return emptyList()
