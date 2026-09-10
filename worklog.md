@@ -8826,3 +8826,26 @@ Stage Summary:
 - Волна 34 закрыта: ProfileScreen снова собирается (6 ошибок устранены root-cause, не костылями).
 - На волны 36+: C0 композер сообщества (переключатель автора поверх from_group/signed), C1-C8, реестр R1-R4.
 - Сборка :app:compileDebugKotlin проверяется локально пользователем (в песочнице Android SDK нет) — при ошибках прислать лог.
+
+---
+Task ID: 36
+Agent: main (Z.ai Code)
+Task: (1) устранить предупреждения компилятора VideoPlaybackService (deprecation media3) + разобрать logcat-лог; (2) реализовать постинг на стену сообщества от имени сообщества (C0 из волны 35); (3) краш фонового видео из второго лога
+
+Work Log:
+- Logcat #1 (Pasted Content_1789072648171.txt): ForgottenCoroutineScopeException в GroupsScreen (LaunchedEffect(Unit){scope.launch} — анти-паттерн), ретраи sun9-*.userapi.com (штатный NetRetry, не баг), NoClassDefFoundError FeatureFlagsImplExport (системный шум).
+- Gradle-предупреждения: VideoPlaybackService.kt:132/135 — CommandButton.Builder() и setIconResId(int) deprecated с media3 1.5.0. Замена подтверждена по авторитетному исходнику androidx/media (CommandButton.java с GitHub): Builder(@Icon int), setCustomIconResId — только для ICON_UNDEFINED.
+- Logcat #2 (Pasted Content_1789072996227.txt): 2×FATAL ForegroundServiceDidNotStartInTimeException. Секвенция декодирована: 12.465 onBackgrounded→startForegroundService (bus:62) → 12.505 service onCreate session ready → 12.589 onPlayerReleased→stopService (гонка dispose) → 12.903 onDestroy БЕЗ startForeground → 12.911 FATAL. Root-cause: media3 продвигает в foreground только на isPlaying-переходе; при релизнутом плеере этого не будет никогда. Второй слой: VideoPlayerScreen onStopOrDispose стартовал сервис и при dispose (back-навигация), где плеер тут же релизится.
+- #VIDEO-FG-TIME фикс (2 слоя): (1) VideoPlaybackService.onCreate → promoteToForegroundImmediately() первым действием: тихая MIN-заглушка (канал IMPORTANCE_MIN "pinok_video_fg_placeholder", ServiceCompat.startForeground type=MEDIA_PLAYBACK, NOTIF_ID 41102; media3 DEFAULT_NOTIFICATION_ID=1001 проверен по исходнику 1.8.0 — повторный startForeground заменяет заглушку, один fg-слот); все пути stopSelf легальны. (2) VideoPlayerScreen: LifecycleStartEffect+onStopOrDispose → LifecycleEventObserver (ON_START/ON_STOP), dispose сервис не стартует; удалён неиспользуемый import LifecycleStartEffect.
+- #MEDIA3-DEPRECATION: buildSeekButton → CommandButton.Builder(ICON_SKIP_BACK/FORWARD_5/10/15) по seekStepSec {5,10,15} (defensive else ICON_SKIP_BACK/FORWARD); DisplayNname сохранён.
+- #FORGOTTEN-SCOPE: GroupsScreen — нагрузка LaunchedEffect(Unit) прямо в корутине эффекта (без scope.launch), rethrow CancellationException ×3 (load/refresh/loadMore).
+- #COMMUNITY-COMPOSER (C0): VKApiClient — wallPostWithAttachments += fromGroup/signed (симметрично wallPost W35), photosSaveWallPhoto += groupId (положительный на проводе, сверка groupsEditNotifications); CreatePostDialog — групповой режим: targetGroupId/canPostAsGroup/onSubmitGroup/onSubmitGroupWithAttachments, FilterChip-переключатель автора (дефолт «сообщество» для руководителя — сверка §3.5 defaultPostSettings.official), «Подпись автора» только при official, friends_only скрыт, фото через photosGetWallUploadServer(groupId)+photosSaveWallPhoto(groupId); CommunityScreen — строка «Написать запись…» над «Записи» (гейт can_post==1, референс group_publish_block), CreatePostDialog + onSubmitGroup* → wallPost(ownerId=-gid, fromGroup, signed) + refreshWall (#SHARE-18B).
+- Валидация: check-nested-comments ALL CLEAN (178), check-secrets OK (74), brace-delta CURRENT == HEAD (мои хунки сбалансированы; +7/+1 — pre-existing артефакт парсера на triple-quoted), NULL-ЯВНО 0 !!.
+- Коммит 9d4c88cb (stamp wave36-2026.09.10) → push. Документация: план волны 35 §8 C0-пометка + новый §9 о волне 36.
+
+Stage Summary:
+- Краш фонового видео устранён root-cause (системное обязательство startForeground гасится немедленно; звонок onBackgrounded больше не происходит при выходе с экрана) — класс FATAL не просто замаскирован, а снят на обоих слоях.
+- Предупреждения компилятора media3 устранены по официальному API (не suppression).
+- Композер сообщества C0 реализован: постинг от своего имени И от имени сообщества (+подпись автора), с фото и вложениями VK, с мгновенным обновлением стены.
+- Изменённые файлы: VideoPlaybackService.kt, VideoPlayerScreen.kt, GroupsScreen.kt, VKApiClient.kt, CreatePostDialog.kt, CommunityScreen.kt (+docs/план.волна-35.админ-сообщества.2026-09-10.md).
+- На волну 37: C1-C8 (Сообщения сообщества, Разделы, Бан из меню участника и др.), реестр R1-R4, ВЛ-35 §9 ограничения.
