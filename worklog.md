@@ -8255,3 +8255,59 @@ Stage Summary:
 - PIN устанавливается детерминированно: цифровой пад без системной клавиатуры не оставляет классу IME/focus-багов ни одного пути; явный Toast-фидбек + честные подписи; диалог переживает скролл
 - Загрузки переживают фон: персистентная очередь восстанавливается после смерти процесса, WakeLock/WifiLock держат CPU/Wi-Fi в Doze, foreground-сервис + строка отключения оптимизации батареи закрывают OEM-киллеры; строки «Оптимизация батареи» дают юзеру системный рычаг
 - HISTORY.md дополнен волной 27 (Симптом/Root-cause/Фиксы/Проверка юзером); коммит + push в origin/PinoK (следующий коммит)
+---
+Task ID: 2-a
+Agent: subagent (general-purpose, Fix #383)
+Task: Fix #383 — видео-секция сообществ: кнопки «Поделиться»/«Лайк», комментарии, просмотры при просмотре видео (#COMMUNITY-VIDEO-PARITY)
+
+Work Log:
+- Разведка пути: CommunityScreen (вкладка «Видео», videoGet(ownerId=-groupId, extended=1), тап → onVideoClick) → SovaNavHost.composable(Community) onVideoClick → VideoHolder.open(video) → overlay VideoPlatformRouter → VideoPlayerScreen. Путь УЖЕ единый с лентой/VideoScreen/профилем/закладками — отдельного «упрощённого» плеера у видео сообществ НЕТ. Root-cause разрыва паритета — в самом VideoPlayerScreen:
+  (1) весь блок title+views+VideoActionBar рендерился только `if (!useFillMax)` (не immersive) — в fullscreen/landscape у видео НЕ БЫЛО вообще ни лайка, ни просмотров, ни чего-либо ещё;
+  (2) в самом action-row были только Лайк + Просмотры — «Поделиться» и «Комментарии» отсутствовали как класс (ни API, ни UI);
+  (3) блок описания не скроллился — при длинном description действия вытеснялись за нижний край;
+  (4) VKA videoGet/videoGetById не парсили comments/can_comment — счётчик комментариев терялся; videoGetComments возвращал List<Comment> БЕЗ авторов (profiles/groups extended-ответа выбрасывались).
+- VKApiClient.kt: videoGetComments → CommentsResult (список + карта авторов: юзеры из profiles[] через parseUserProfileMini, сообщества из groups[] мапятся в UserProfile с отрицательным id/именем в firstName — единая карта для UI); в videoGet и videoGetById добавлен парс comments (обе формы VK: int-счётчик и объект {count, can_post}) через новый private parseVideoCommentsMeta + can_comment через safeIntNullable.
+- VideoPlayerScreen.kt: (1) состояние лайка поднято на уровень экрана (videoLiked/videoLikeCount, remember(resolvedVideo)) + local fun toggleVideoLike — likesAdd/likesDelete type=video с access_key, оптимистичный апдейт + честный откат при ошибке API; (2) VideoActionBar → VideoActionsRow: Лайк + Коммент (иконка + commentsCount) + Поделиться + Просмотры (views), тач-таргеты heightIn(min=44dp); (3) portrait-блок — weight(1f)+verticalScroll (описание больше не выталкивает действия); (4) НОВЫЙ immersive-стрип (VK-стиль, справа, виден с контролами controlsVisible && hasStarted): лайк/комменты/поделиться/просмотры — чинит fullscreen/landscape-ветку, где действий не было вовсе; для внешних видео без ownerId/id стрип скрыт; (5) VideoCommentsSheet — video.getComments(extended)+video.createComment, честные состояния: loading / ошибка+«Повторить» / пусто / список с авторами (VideoCommentItem: юзер или сообщество), поле ввода скрыто с пояснением при can_comment==0, toast при ошибке отправки; (6) VideoShareSheet — «в чат» sendVideoToChat (video-attachment с access_key), «На стену» wallPostWithAttachments (video-attachment — тот же механизм, что у клипов), «Ссылка» — реальный URL (player из video.get, fallback vk.com/video{ownerId}_{id}) в буфер.
+- Стиль: Material3/паттерны ClipCommentsSheet-ClipShareSheet, русские строки, WHY-комменты с тегом Fix #383 #COMMUNITY-VIDEO-PARITY. Null-политика: в добавленных строках 0 хитов ?: / !! / ?.let / ?. (явные if-проверки, захват val).
+- Валидация: scripts/check-nested-comments.py — ALL CLEAN (181 файл); скобки: VideoPlayerScreen.kt {}()[] = 0/0/0; VKApiClient.kt — дифф-дельта добавленные/удалённые = 0/0/0 (файловый сканер VKApiClient даёт одинаковый «-1/-1» на HEAD и в рабочей копии — ложное срабатывание эвристики на ${'$'} внутри строковых шаблонов, СУЩЕСТВОВАЛО ДО правок); rg '?:'/'!!'/'?.let'/'?.' по добавленным строкам диффа — 0 хитов; git diff перечитан.
+
+Stage Summary:
+- Fix #383 закрыт: путь видео сообществ приведён к полному action-row в ЕДИНОМ плеере (без копипасты) — «Поделиться», «Лайк» (likes.add/delete type=video, реальные ownerId/videoId+access_key), комментарии (video.getComments/video.createComment, авторы-юзеры и сообщества, честные error/empty/disabled-состояния), просмотры (views из video.get extended) — работают и в портрете, и в fullscreen/landscape. Заодно паритет получили видео из ленты/глобального VideoScreen/профиля/закладок (тот же overlay-плеер).
+- Изменённые файлы: app/src/main/java/re/pinok/api/VKApiClient.kt; app/src/main/java/re/pinok/ui/screens/videoplayer/VideoPlayerScreen.kt. MainActivity/AuthActivity/.gitignore не тронуты; gradle/сборка не запускались.
+- Для проверки пользователем: Сообщество → Видео → любой ролик: под плеером — лайк/комменты/поделиться/просмотры; фуллскрин — стрип справа появляется вместе с контролами; «Поделиться» → чат/стена/ссылка; комментарии: список + отправка; при ошибке API — честный текст + «Повторить».
+
+---
+Task ID: 2-b
+Agent: main agent (opus)
+Task: Fix #384 (чёрный фон SILENT-авторизации → стелс + toast о сети с типом) + Fix #385 (PIN не блокирует приложение после silent re-login) + ответ «пин код в ядре приложения?»
+
+Work Log:
+- Диагностика по логкату upload/Pasted Content_1788964718521.txt (сессия 13:09): (а) PIN/Locker в логе НЕТ вовсе — сессия была чисто про auth-flow; (б) хронология: launchAuth(network-restored-no-token) [SILENT] 13:09:29 → AuthActivity transparent theme (Fix #339) → cookie-set сохранён 13:09:30 → затем ПРОВАЛ 104 секунды (13:09:35→13:11:19) с чёрным экраном «Сессия найдена, получаем токен…» → результат FULL/OK 13:11:20. Свернуть/развернуть триггерит onResume-цепочку Fix #377, поэтому «проходит сплеш и всё работает».
+- Root-cause #384: Theme.PinoK.Silent делает ОКНО прозрачным, но M3 Surface в setContent красит весь экран colorScheme.surface (тёмная тема ≈ чёрный), WebView + оверлей статуса рисуются поверх (silentMode НЕ влиял на layout VkAuthWebViewScreenV2 — только на timeout/status).
+- Fix #384 #AUTH-SILENT-STEALTH (AuthActivity.kt): root Box AuthScreen получил .alpha(if (silentMode && phase == WEBVIEW) 0f else 1f) — дерево ЖИВОЕ (WebView грузит m.vk.ru, cookies/JS/polling работают), но невидимо; провал silent (timeout 30с / Error) → phase=LANDING → alpha=1 → виден экран ручного входа; TWO_FA виден; успех → finish().
+- Fix #384 #AUTH-NETWORK-TOAST (MainActivity.launchAuth): при SILENT-запуске Toast «Подключение к VK… (Wi-Fi/мобильная сеть/Ethernet)» / «Нет сети — подключение к VK отложено» через NetworkObserver.connectionType(); FULL-запуски не тостятся; try/catch на lateinit networkObserver.
+- Root-cause #385: boot-эффект MainActivity — cold start с протухшим web_token (~15 мин, Fix #339) шёл по ветке auth; после успешного silent re-login эффект перезапускался (currentAuthVersion++) и ранний return (bootLocal=true && hasValidToken()=true) ПРОПУСКАЛ ветку локера (:496) → приложение открывалось БЕЗ PIN при включённом lockerEnabled.
+- Fix #385 #LOCKER-AFTER-AUTH (MainActivity): новый флаг lockerVerifiedThisSession (instance, смерть процесса сбрасывает = новая сессия) — ставится true во всех трёх местах запуска LockerActivity (boot / onResume cached / onResume fallback), проверяется в authLauncher RESULT_OK: если PIN включён и сессия не проходила разблокировку → LockerActivity сразу после auth; lastPrefsSnapshot null → runBlocking-fallback (прецедент Fix #169). RESULT_OFFLINE_MODE (guest) и CANCELED — без локера.
+- Ответ на вопрос юзера: PIN НЕ в ядре — app-слой (re.pinok.locker.LockerActivity + хуки MainActivity boot :449-537 / onResume :1261-1288), хранение — SovaPrefs (lockerEnabled/lockerPinHash SHA-256/lockerOnBackground/lockerBiometric), SettingsScreen «Защита». Core-модули PIN не касаются.
+- Валидация: check-nested-comments ALL CLEAN (181); скобки MainActivity 0/0/0, AuthActivity +1 `{` = АРТЕФАКТ эвристики (тот же на HEAD — строковые литералы), дифф баланс не меняет; NULL-ЯВНО по добавленным строкам: 0 хитов !! / ?: / ?.let.
+
+Stage Summary:
+- Скрыт чёрный фон SILENT-авторизации (alpha-стелс WEBVIEW-фазы) + добавлен toast о подключении с типом сети — ровно по запросу юзера.
+- Закрыта дыра «PIN не блокирует приложение после тихой реавторизации» (главный повседневный сценарий: web_token протухает каждые ~15 мин).
+- Изменённые файлы: app/src/main/java/re/pinok/auth/AuthActivity.kt; app/src/main/java/re/pinok/ui/MainActivity.kt.
+- Исторический долг зафиксирован: HISTORY.md не имеет записей волн 26/26-1/26-2/27 — закрыто записью 2026-09-09 (волна 28) с примечанием.
+
+---
+Task ID: 2-b (addendum: recovery)
+Agent: main agent (opus)
+Task: восстановление волны 28 после обнаружения устаревшего рабочего дерева песочницы
+
+Work Log:
+- При push обнаружен non-fast-forward: песочница была на 93514bef (до волн 25-2/25-3/26/26-1/26-2/27), origin — на 67bfd71a; все правки волны 28 (мои + субагента 2-a) делались по устаревшим файлам.
+- Спасение: backup-ветка backup-wave28-stale (461bde3c) + извлечение диффов 93514bef→461bde3c по 6 файлам → git reset --hard origin/PinoK → 3-way git apply -3.
+- Конфликты: MainActivity 1 (обе стороны вставили декларации после isBackgrounded — сохранены ОБЕ: Fix #377-поля волны 26-2 + lockerVerifiedThisSession); VKApiClient 1 (волна 27 добавила videoGet(videos) Fix #364 на место вставки parseVideoCommentsMeta — сохранены ОБЕ функции + добавлен парсинг comments в новую перегрузку); VideoPlayerScreen 3 (волна 27 УЖЕ имела Fix #350 scroll+expand — в конфликтах взята волновая сторона, добавки субагента сохранены); worklog/HISTORY — сняты маркеры, обе стороны сохранены по порядку (HISTORY CRLF — осторожно с sed).
+- КРИТИЧНАЯ ловуля: 3-way merge оставил сломанный вызов VideoActionBar(...) при переименованной VideoActionsRow (unresolved reference) — заменён на полный вызов VideoActionsRow с состоянием лайка/шитами; проверены все cross-файлы символы (Video.Comments/commentsCount/isLiked/likesCount — есть в волновой модели; likesAdd/likesDelete/sendVideoToChat/wallPostWithAttachments — есть в VKA; safeInt/safeIntNullable — companion, доступен).
+- Валидация после мержа: nested ALL CLEAN (173); арифметика структуры по всем 4 файлам: work == origin + (backup − stale) — ТОЧНОЕ совпадение (Main 0/0/0, Auth +1 артефакт = HEAD, VPlayer/VKApi — строковые артефакты сходятся); NULL-ЯВНО по добавленным строкам диффа: 0 хитов.
+
+Stage Summary:
+- Волна 28 пересобрана НАД волной 27 без потери чьих-либо правок; история чистая (один коммит поверх 67bfd71a). Урок: перед правками всегда git status + сверка HEAD с origin/PinoK (песочница может отставать от origin после чужих сессий).

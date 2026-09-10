@@ -4140,21 +4140,71 @@ class VKApiClient(
         return json.has("response")
     }
 
-    /** video.getComments — комментарии к видео. */
-    suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int = 20): List<re.pinok.data.model.Comment> {
-        if (isOffline()) return emptyList()
+    /**
+     * video.getComments — комментарии к видео.
+     *
+     * Fix #383 #COMMUNITY-VIDEO-PARITY: раньше возвращался только List<Comment> —
+     * профили/группы авторов из extended-ответа выбрасывались, и UI плеера не мог
+     * показать имена авторов комментариев. Теперь возвращаем CommentsResult (как
+     * у wall.getComments): список + карта авторов. Юзеры ключуются id, сообщества
+     * из groups[] — ОТРИЦАТЕЛЬНЫМ id (UserProfile с именем сообщества), чтобы UI
+     * работал с одной картой авторов независимо от типа автора.
+     */
+    suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int = 20): CommentsResult {
+        if (isOffline()) return CommentsResult(emptyList(), emptyMap())
+        // Явная проверка вместо elvis — #NULL-EXPLICIT для нового кода фикса.
         val json = call("video.getComments", mapOf(
             "owner_id" to ownerId.toString(),
             "video_id" to videoId.toString(),
             "count" to count.toString(),
             "extended" to "1",
-        )) ?: return emptyList()
+            "fields" to "photo_100,online,verified",
+        ))
+        if (json == null) return CommentsResult(emptyList(), emptyMap())
         return try {
-            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
-            items.mapNotNull { parseComment(it.asJsonObject) }
+            val resp = json.getAsJsonObject("response")
+            if (resp == null) return CommentsResult(emptyList(), emptyMap())
+            val items = resp.getAsJsonArray("items")
+            if (items == null) return CommentsResult(emptyList(), emptyMap())
+            // Карта авторов: юзеры из profiles[] + сообщества из groups[].
+            val authors = mutableMapOf<Long, UserProfile>()
+            val profilesArr = resp.getAsJsonArray("profiles")
+            if (profilesArr != null) {
+                for (el in profilesArr) {
+                    if (!el.isJsonObject) continue
+                    val o = el.asJsonObject
+                    // safeLong не бросает на null/bool — 0L = битая запись, пропускаем.
+                    val uid = safeLong(o.get("id"))
+                    if (uid == 0L) continue
+                    authors[uid] = parseUserProfileMini(o)
+                }
+            }
+            // Fix #383 #COMMUNITY-VIDEO-PARITY: комментарии сообществ (from_id < 0).
+            // Мапим группу в UserProfile с отрицательным id: имя сообщества в
+            // firstName — UI показывает автора той же строкой, что и для юзеров.
+            val groupsArr = resp.getAsJsonArray("groups")
+            if (groupsArr != null) {
+                for (el in groupsArr) {
+                    if (!el.isJsonObject) continue
+                    val o = el.asJsonObject
+                    val gid = safeLong(o.get("id"))
+                    if (gid == 0L) continue
+                    val gName = safeString(o.get("name"))
+                    val displayName = if (gName != null) gName else "Сообщество"
+                    authors[-gid] = UserProfile(
+                        id = -gid,
+                        firstName = displayName,
+                        lastName = "",
+                    )
+                }
+            }
+            val comments = items.mapNotNull { el ->
+                if (!el.isJsonObject) null else parseComment(el.asJsonObject)
+            }
+            CommentsResult(comments, authors)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "videoGetComments parse error", e)
-            emptyList()
+            CommentsResult(emptyList(), emptyMap())
         }
     }
 
@@ -7874,6 +7924,11 @@ class VKApiClient(
                 accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
                 image = thumbs,
                 likes = parseLikes(o.getAsJsonObject("likes")),
+                // Fix #383 #COMMUNITY-VIDEO-PARITY: счётчик комментариев + can_comment
+                // из video.get — раньше терялись, и плеер не мог показать «N комментариев»
+                // ни для видео сообществ, ни для видео из ленты.
+                comments = parseVideoCommentsMeta(o),
+                canComment = safeIntNullable(o.get("can_comment")),
             )
             // OK-IMPL-1 (Stage 1): определяем типизированную платформу видео
             // (VK/OK/YOUTUBE/EXTERNAL_IFRAME/UNKNOWN) и externalId для OK/YouTube.
@@ -7933,6 +7988,10 @@ class VKApiClient(
                     image = thumbs,
                     // Sprint 2, P1-2 (#89): парсим likes для video.get ответа.
                     likes = parseLikes(o.getAsJsonObject("likes")),
+                    // Fix #383 #COMMUNITY-VIDEO-PARITY: comments/can_comment — как в
+                    // videoGetById (см. комментарий там).
+                    comments = parseVideoCommentsMeta(o),
+                    canComment = safeIntNullable(o.get("can_comment")),
                 )
                 // OK-IMPL-1 (Stage 1): определяем платформу + externalId (OK/YouTube).
                 v.withDetectedPlatform()
@@ -8009,6 +8068,9 @@ class VKApiClient(
                     accessKey = if (accessKeyEl != null && !accessKeyEl.isJsonNull) accessKeyEl.asString else null,
                     image = parseVideoThumbs(o),
                     likes = parseLikes(o.getAsJsonObject("likes")),
+                    // Fix #383 #COMMUNITY-VIDEO-PARITY: счётчик комментариев и в
+                    // перегрузке по списку id (Реакции) — паритет со всеми путями.
+                    comments = parseVideoCommentsMeta(o),
                     // is_clips/width/height/type — для isClip-геттера (роутинг
                     // клипов в плеере §37.12): video.get их отдаёт.
                     height = if (heightEl != null && !heightEl.isJsonNull) heightEl.asInt else 0,
@@ -8023,6 +8085,29 @@ class VKApiClient(
             AppLog.e("VKApiClient", "videoGet(videos) parse error", e)
             emptyList()
         }
+    }
+
+    /**
+     * Fix #383 #COMMUNITY-VIDEO-PARITY: поле comments из video.get.
+     *
+     * Формат зависит от источника: классический video.get отдаёт int (число
+     * комментариев), web/clips-ответы — объект {count, can_post}. Разбираем
+     * обе формы через safe-хелперы (не бросают на примитиве/объекте/null).
+     * null = поле отсутствует — UI считает, что счётчик неизвестен.
+     */
+    private fun parseVideoCommentsMeta(o: JsonObject): Video.Comments? {
+        val el = o.get("comments")
+        if (el == null || el.isJsonNull) return null
+        if (el.isJsonObject) {
+            val c = el.asJsonObject
+            return Video.Comments(
+                count = safeInt(c.get("count")),
+                canPost = safeInt(c.get("can_post")),
+            )
+        }
+        val n = safeIntNullable(el)
+        if (n == null) return null
+        return Video.Comments(count = n, canPost = 0)
     }
 
     // ========================================================================

@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.height
@@ -41,20 +42,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudOff
+// Fix #383 #COMMUNITY-VIDEO-PARITY: иконка копирования ссылки в шторке «Поделиться».
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+// Fix #383 #COMMUNITY-VIDEO-PARITY: иконки действий (комментарии/поделиться).
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Lock
@@ -65,16 +74,22 @@ import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.BrightnessMedium
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -97,6 +112,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,15 +132,18 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.ExoPlayer
 import android.net.Uri
 import androidx.media3.ui.PlayerView
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.OkVideoRepository
+import re.pinok.data.model.Comment
 import re.pinok.data.model.DownloadStatus
 import re.pinok.data.model.Video
 import re.pinok.data.model.VideoPlatform
 import re.pinok.data.model.VideoQuality
+import re.pinok.data.model.UserProfile
 import re.pinok.media.PlayerConnection
 import re.pinok.media.VideoDownloadManager
 import re.pinok.util.AppLog
@@ -259,6 +278,18 @@ fun VideoPlayerScreen(
     // P2 #VIDEO-SESSION-HOLD: true когда video.get вернул null при НЕвалидном
     // токене (error 5/1117) — показываем inline «Перезайти» вместо мёртвого экрана.
     var sessionExpired by remember { mutableStateOf(false) }
+
+    // ── Fix #383 #COMMUNITY-VIDEO-PARITY ──
+    // Состояние лайка поднято на уровень экрана: ОДИН источник правды для
+    // портретного action-row и фуллскрин-стрип (раньше состояние жило внутри
+    // VideoActionBar — при появлении второго места действий пришлось бы
+    // дублировать). Ключ — resolvedVideo: после videoGetById-обновления
+    // состояние честно синхронизируется со свежими likes из API.
+    var videoLiked by remember(resolvedVideo) { mutableStateOf(resolvedVideo.isLiked) }
+    var videoLikeCount by remember(resolvedVideo) { mutableStateOf(resolvedVideo.likesCount) }
+    // Шторки действий — доступны и в портрете, и в fullscreen/landscape.
+    var showCommentsSheet by remember { mutableStateOf(false) }
+    var showShareSheet by remember { mutableStateOf(false) }
 
     // P2 #VIDEO-SESSION-HOLD: видео — долгая сессия. Превентивно освежаем токен
     // при входе (как ChatDetailScreen) и поддерживаем rolling suppress-окно, чтобы
@@ -1002,6 +1033,32 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Fix #383 #COMMUNITY-VIDEO-PARITY: лайк видео через likes.add/likes.delete
+    // (type=video, реальные ownerId/videoId из video.get). Оптимистичный апдейт
+    // UI + честный откат, если API вернул ошибку (новое количество < 0).
+    // access_key пробрасываем — приватные видео без него дают ошибку likes.add.
+    fun toggleVideoLike() {
+        val v = resolvedVideo
+        if (v.id <= 0L || v.ownerId == 0L) return
+        val newLiked = !videoLiked
+        videoLiked = newLiked
+        videoLikeCount = (videoLikeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
+        scope.launch {
+            val newCount = if (newLiked) {
+                app.apiClient.likesAdd("video", v.ownerId, v.id, accessKey = v.accessKey)
+            } else {
+                app.apiClient.likesDelete("video", v.ownerId, v.id, accessKey = v.accessKey)
+            }
+            if (newCount >= 0) {
+                videoLikeCount = newCount
+            } else {
+                // Ошибка API — откат оптимистичного состояния (честное UI).
+                videoLiked = !newLiked
+                videoLikeCount = (videoLikeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
+            }
+        }
+    }
+
     // #VIDEO-INSETS: единая точка управления системными панелями. Раньше логика
     // hide/show была размазана по toggleFullscreen + DisposableEffect и не учитывала
     // landscape (видео уходило под status/navigation bar при автоповороте телефона).
@@ -1690,6 +1747,34 @@ fun VideoPlayerScreen(
                                     },
                                 )
                             }
+
+                            // ── Fix #383 #COMMUNITY-VIDEO-PARITY: фуллскрин-стрип действий ──
+                            // В immersive (fullscreen/landscape) портретный блок под
+                            // плеером скрыт (useFillMax) — именно из-за этого при просмотре
+                            // видео сообществ «пропадали» ВСЕ действия: лайк, комментарии,
+                            // поделиться, просмотры. Теперь вертикальный VK-стиль стрип
+                            // справа виден вместе с контролами (controlsVisible && hasStarted),
+                            // тач-таргеты ≥44dp. Для внешних видео без ownerId/id
+                            // (YouTube/iframe) VK-действия неприменимы — стрип не показываем.
+                            if (resolvedVideo.id > 0L && resolvedVideo.ownerId != 0L) {
+                                VKOverlayVisibility(
+                                    visible = controlsVisible && hasStarted,
+                                    enter = fadeIn(tween(250)),
+                                    exit = fadeOut(tween(250)),
+                                    modifier = Modifier
+                                        .align(Alignment.CenterEnd)
+                                        .padding(end = 4.dp),
+                                ) {
+                                    ImmersiveVideoActionsColumn(
+                                        video = resolvedVideo,
+                                        isLiked = videoLiked,
+                                        likeCount = videoLikeCount,
+                                        onToggleLike = { toggleVideoLike() },
+                                        onOpenComments = { showCommentsSheet = true },
+                                        onShare = { showShareSheet = true },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1770,7 +1855,18 @@ fun VideoPlayerScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 // 20-A: строка действий ПЕРЕД описанием (порядок VK; была под ним
                 // и уезжала за экран вместе с развёрнутым текстом — см. KDoc п.6).
-                VideoActionBar(video = resolvedVideo, subTextColor = VK_TEXT_SECONDARY)
+                // Fix #383 #COMMUNITY-VIDEO-PARITY: VideoActionBar → VideoActionsRow
+                // (лайк + комментарии + поделиться + просмотры; состояние и API —
+                // toggleVideoLike/videoLiked/videoLikeCount, шторки Comments/Share).
+                VideoActionsRow(
+                    video = resolvedVideo,
+                    subTextColor = VK_TEXT_SECONDARY,
+                    isLiked = videoLiked,
+                    likeCount = videoLikeCount,
+                    onToggleLike = { toggleVideoLike() },
+                    onOpenComments = { showCommentsSheet = true },
+                    onShare = { showShareSheet = true },
+                )
                 val desc = resolvedVideo.description
                 if (!desc.isNullOrBlank()) {
                     // ── Описание: свёрнуто до 4 строк, тап-toggle + кнопка-текст ──
@@ -1811,6 +1907,24 @@ fun VideoPlayerScreen(
             }
             }
         }
+    }
+
+    // ── Fix #383 #COMMUNITY-VIDEO-PARITY: шторки действий плеера ──
+    // ModalBottomSheet рендерится в собственном окне — расположение в композиции
+    // не влияет на вид; держим рядом с плеером для единого состояния. Сами шторки
+    // работают на реальном API (video.getComments/video.createComment,
+    // messages.send/wall.post с video-attachment) — см. реализации ниже.
+    if (showCommentsSheet) {
+        VideoCommentsSheet(
+            video = resolvedVideo,
+            onDismiss = { showCommentsSheet = false },
+        )
+    }
+    if (showShareSheet) {
+        VideoShareSheet(
+            video = resolvedVideo,
+            onDismiss = { showShareSheet = false },
+        )
     }
 }
 
@@ -2111,40 +2225,33 @@ private fun formatPlaybackRate(rate: Float): String {
 
 /**
  * Sprint 2, P1-2 (#89): Action bar для видео — лайк (кликабельный) + просмотры.
+ *
+ * Fix #383 #COMMUNITY-VIDEO-PARITY: добавлены «Комментарии» (шторка со списком
+ * из video.getComments) и «Поделиться» (шторка: чат / своя стена / ссылка).
+ * Состояние лайка поднято на уровень VideoPlayerScreen — портретный row и
+ * фуллскрин-стрип используют одно состояние и не расходятся. Тач-таргеты ≥44dp
+ * (heightIn(min = 44.dp) на кликабельных группах).
  */
 @Composable
-private fun VideoActionBar(video: Video, subTextColor: Color) {
-    val app = SovaApp.get()
-    val scope = rememberCoroutineScope()
-    var isLiked by remember(video.id) { mutableStateOf(video.isLiked) }
-    var likeCount by remember(video.id) { mutableStateOf(video.likesCount) }
-
+private fun VideoActionsRow(
+    video: Video,
+    subTextColor: Color,
+    isLiked: Boolean,
+    likeCount: Int,
+    onToggleLike: () -> Unit,
+    onOpenComments: () -> Unit,
+    onShare: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Лайк — реальный API likes.add/likes.delete (type=video), см. toggleVideoLike.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .clickable {
-                    if (video.id <= 0 || video.ownerId == 0L) return@clickable
-                    val newLiked = !isLiked
-                    isLiked = newLiked
-                    likeCount = (likeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
-                    scope.launch {
-                        val newCount = if (newLiked) {
-                            app.apiClient.likesAdd("video", video.ownerId, video.id)
-                        } else {
-                            app.apiClient.likesDelete("video", video.ownerId, video.id)
-                        }
-                        if (newCount >= 0) {
-                            likeCount = newCount
-                        } else {
-                            isLiked = !newLiked
-                            likeCount = (likeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
-                        }
-                    }
-                }
+                .heightIn(min = 44.dp)
+                .clickable(onClick = onToggleLike)
                 .padding(vertical = 6.dp, horizontal = 4.dp),
         ) {
             Icon(
@@ -2163,7 +2270,52 @@ private fun VideoActionBar(video: Video, subTextColor: Color) {
                 )
             }
         }
-        Spacer(modifier = Modifier.width(24.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        // Комментарии — video.getComments/video.createComment (Fix #383). Счётчик
+        // из video.get (extended): если VK не вернул счётчик — показываем иконку
+        // без числа (честно: список всё равно откроется и покажет реальное).
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .heightIn(min = 44.dp)
+                .clickable(onClick = onOpenComments)
+                .padding(vertical = 6.dp, horizontal = 4.dp),
+        ) {
+            Icon(
+                Icons.Outlined.ChatBubbleOutline,
+                "Комментарии",
+                modifier = Modifier.size(20.dp),
+                tint = subTextColor,
+            )
+            if (video.commentsCount > 0) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = video.commentsCount.toString(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = subTextColor,
+                    fontSize = 14.sp,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        // Поделиться — шторка: отправить в чат (video-attachment) / на свою стену /
+        // скопировать ссылку (Fix #383).
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .heightIn(min = 44.dp)
+                .clickable(onClick = onShare)
+                .padding(vertical = 6.dp, horizontal = 4.dp),
+        ) {
+            Icon(
+                Icons.Filled.Share,
+                "Поделиться",
+                modifier = Modifier.size(20.dp),
+                tint = subTextColor,
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        // Просмотры — поле views из video.get (extended), только счётчик.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 Icons.Outlined.Visibility,
@@ -2179,6 +2331,665 @@ private fun VideoActionBar(video: Video, subTextColor: Color) {
                 fontSize = 14.sp,
             )
         }
+    }
+}
+
+/**
+ * Fix #383 #COMMUNITY-VIDEO-PARITY: вертикальный VK-стиль стрип действий справа
+ * для immersive-режима плеера (fullscreen/landscape). Лайк — кликабельный,
+ * комментарии и «Поделиться» открывают шторки, просмотры — счётчик без клика.
+ */
+@Composable
+private fun ImmersiveVideoActionsColumn(
+    video: Video,
+    isLiked: Boolean,
+    likeCount: Int,
+    onToggleLike: () -> Unit,
+    onOpenComments: () -> Unit,
+    onShare: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0x66000000))
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        VideoStripAction(
+            icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
+            label = if (likeCount > 0) likeCount.toString() else "",
+            tint = if (isLiked) Color(0xFFE53935) else VK_WHITE,
+            contentDescription = "Лайк",
+            onClick = onToggleLike,
+        )
+        // Счётчик комментариев — из video.get; 0/отсутствие = иконка без числа.
+        VideoStripAction(
+            icon = Icons.Outlined.ChatBubbleOutline,
+            label = if (video.commentsCount > 0) video.commentsCount.toString() else "",
+            tint = VK_WHITE,
+            contentDescription = "Комментарии",
+            onClick = onOpenComments,
+        )
+        VideoStripAction(
+            icon = Icons.Filled.Share,
+            label = "",
+            tint = VK_WHITE,
+            contentDescription = "Поделиться",
+            onClick = onShare,
+        )
+        VideoStripAction(
+            icon = Icons.Outlined.Visibility,
+            label = video.views.toString(),
+            tint = VK_WHITE,
+            contentDescription = "Просмотры",
+            onClick = null,
+        )
+    }
+}
+
+/**
+ * Fix #383 #COMMUNITY-VIDEO-PARITY: одна кнопка фуллскрин-стрипа — 44dp тач-таргет
+ * + подпись-счётчик под иконкой. onClick == null → только счётчик (просмотры),
+ * кликабельность не имитируем.
+ */
+@Composable
+private fun VideoStripAction(
+    icon: ImageVector,
+    label: String,
+    tint: Color,
+    contentDescription: String,
+    onClick: (() -> Unit)?,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Явная проверка вместо elvis: кликабельность — отдельный modifier.
+        val clickMod = if (onClick != null) {
+            Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onClick)
+        } else {
+            Modifier
+        }
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .then(clickMod),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription, tint = tint, modifier = Modifier.size(22.dp))
+        }
+        if (label.isNotEmpty()) {
+            Text(
+                text = label,
+                color = VK_WHITE.copy(alpha = 0.85f),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(bottom = 2.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Fix #383 #COMMUNITY-VIDEO-PARITY: шторка комментариев видео.
+ *
+ * Реальный API, без заглушек:
+ *  - video.getComments (extended=1) — список + авторы (юзеры из profiles[],
+ *    сообщества из groups[]);
+ *  - video.createComment — отправка нового комментария;
+ *  - ошибка API → честный текст ошибки + кнопка «Повторить» (никаких крашей);
+ *  - can_comment == 0 (автор отключил комментарии) → поле ввода скрыто с
+ *    пояснением; список при этом всё равно показывается.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoCommentsSheet(
+    video: Video,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val app = SovaApp.get()
+    val scope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    var comments by remember { mutableStateOf<List<Comment>>(emptyList()) }
+    var authors by remember { mutableStateOf<Map<Long, UserProfile>>(emptyMap()) }
+    var loading by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var sending by remember { mutableStateOf(false) }
+    var newComment by remember { mutableStateOf("") }
+
+    // can_comment: 0 = комментарии отключены; null = API не отдал поле — ввод
+    // НЕ блокируем (VK вернёт ошибку на createComment, покажем её честно).
+    val commentsDisabled = video.canComment == 0
+
+    fun loadComments() {
+        scope.launch {
+            loading = true
+            errorMsg = null
+            try {
+                val r = app.apiClient.videoGetComments(video.ownerId, video.id, count = 50)
+                comments = r.comments
+                authors = r.profiles
+            } catch (e: Exception) {
+                AppLog.e(TAG, "videoGetComments error for ${video.ownerId}_${video.id}", e)
+                errorMsg = "Не удалось загрузить комментарии: ${e.message}"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    LaunchedEffect(video.ownerId, video.id) { loadComments() }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Заголовок шторки (паттерн ClipCommentsSheet).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Forum,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Комментарии · ${video.commentsCount}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Закрыть") }
+            }
+            HorizontalDivider()
+            // Честные состояния: загрузка / ошибка / пусто / список.
+            val err = errorMsg
+            when {
+                loading -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    }
+                }
+                err != null -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = err,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            TextButton(onClick = { loadComments() }) { Text("Повторить") }
+                        }
+                    }
+                }
+                comments.isEmpty() -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "Пока нет комментариев. Будьте первым!",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(360.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        items(comments, key = { c -> c.id }) { comment ->
+                            VideoCommentItem(comment = comment, authors = authors)
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider()
+            // Поле ввода — если автор не отключил комментарии.
+            if (commentsDisabled) {
+                Text(
+                    text = "Автор отключил комментарии к этому видео.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = newComment,
+                        onValueChange = { newComment = it },
+                        placeholder = { Text("Ваш комментарий…", fontSize = 14.sp) },
+                        modifier = Modifier.weight(1f),
+                        enabled = !sending,
+                        maxLines = 3,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(
+                        onClick = {
+                            val text = newComment.trim()
+                            if (text.isBlank() || sending) return@IconButton
+                            scope.launch {
+                                sending = true
+                                try {
+                                    // Реальный video.createComment (ownerId может быть
+                                    // отрицательным — видео сообщества).
+                                    val cid = app.apiClient.videoCreateComment(
+                                        ownerId = video.ownerId,
+                                        videoId = video.id,
+                                        message = text,
+                                    )
+                                    if (cid > 0) {
+                                        newComment = ""
+                                        loadComments() // перезагружаем список с сервера
+                                        android.widget.Toast.makeText(
+                                            context, "Комментарий добавлен", android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context, "Не удалось добавить комментарий", android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    AppLog.e(TAG, "videoCreateComment error", e)
+                                    android.widget.Toast.makeText(
+                                        context, "Ошибка: ${e.message}", android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } finally {
+                                    sending = false
+                                }
+                            }
+                        },
+                        enabled = newComment.isNotBlank() && !sending,
+                    ) {
+                        if (sending) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(
+                                text = "Отпр.",
+                                color = if (newComment.isNotBlank() && !sending) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Fix #383 #COMMUNITY-VIDEO-PARITY: элемент списка комментариев видео —
+ * автор (юзер или сообщество из единой карты authors), время, текст.
+ */
+@Composable
+private fun VideoCommentItem(
+    comment: Comment,
+    authors: Map<Long, UserProfile>,
+) {
+    val author = authors[comment.fromId]
+    val name = when {
+        comment.fromId > 0L -> {
+            if (author != null) author.fullName.trim() else "id${comment.fromId}"
+        }
+        comment.fromId < 0L -> {
+            if (author != null && author.firstName.isNotBlank()) author.firstName else "Сообщество"
+        }
+        else -> "Гость"
+    }
+    val timeText = if (comment.date > 0) {
+        try {
+            java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault())
+                .format(java.util.Date(comment.date * 1000L))
+        } catch (_: Exception) {
+            null
+        }
+    } else {
+        null
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            val photo = if (author != null) author.photo100 else null
+            if (photo != null) {
+                AsyncImage(
+                    model = photo,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(
+                    text = name.take(1).uppercase(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (timeText != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = timeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = comment.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+/**
+ * Fix #383 #COMMUNITY-VIDEO-PARITY: шторка «Поделиться» для видео.
+ *
+ * Реальные механизмы (переиспользованы существующие API-хелперы):
+ *  - «В чат» — messages.send с attachment "video{ownerId}_{id}[_accessKey]"
+ *    (sendVideoToChat);
+ *  - «На свою стену» — wall.post с video-attachment (wallPostWithAttachments),
+ *    тот же путь, что и для клипов;
+ *  - «Ссылка» — реальный URL: player из video.get (страница видео VK), fallback
+ *    на канонический vk.com/video{ownerId}_{id}; копируется в буфер обмена.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoShareSheet(
+    video: Video,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val app = SovaApp.get()
+    val scope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    var chats by remember { mutableStateOf<List<re.pinok.data.model.Chat>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    // video-attachment для messages.send / wall.post — с access_key для
+    // приватных видео (тот же формат, что и для клипов в SovaNavHost).
+    val videoAttachment = buildString {
+        append("video").append(video.ownerId).append("_").append(video.id)
+        val ak = video.accessKey
+        if (!ak.isNullOrBlank()) {
+            append("_").append(ak)
+        }
+    }
+    // Реальная ссылка на видео: player-URL из video.get — страница видео VK
+    // (всегда есть у VK-видео); для прочих — канонический формат ссылки.
+    val videoLink = if (!video.player.isNullOrBlank()) {
+        video.player
+    } else {
+        "https://vk.com/video${video.ownerId}_${video.id}"
+    }
+
+    LaunchedEffect(video.ownerId, video.id) {
+        loading = true
+        try {
+            chats = app.apiClient.messagesGetConversations(count = 20)
+        } catch (e: Exception) {
+            AppLog.e(TAG, "messagesGetConversations error", e)
+        } finally {
+            loading = false
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(modifier = Modifier.padding(bottom = 24.dp)) {
+            Text(
+                text = "Поделиться видео",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+            )
+            HorizontalDivider()
+            // Быстрые действия.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                VideoQuickShareButton(
+                    icon = Icons.Filled.Share,
+                    label = "На стену",
+                    modifier = Modifier.weight(1f),
+                ) {
+                    scope.launch {
+                        try {
+                            // wall.post с video-attachment — как у клипов (#37.12 #322).
+                            val postId = app.apiClient.wallPostWithAttachments(
+                                attachments = videoAttachment,
+                                message = "",
+                            )
+                            android.widget.Toast.makeText(
+                                context,
+                                if (postId > 0) "Опубликовано на стене" else "Не удалось опубликовать",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        } catch (e: Exception) {
+                            AppLog.e(TAG, "wallPostWithAttachments error", e)
+                            android.widget.Toast.makeText(
+                                context, "Ошибка: ${e.message}", android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                        onDismiss()
+                    }
+                }
+                VideoQuickShareButton(
+                    icon = Icons.Filled.ContentCopy,
+                    label = "Ссылка",
+                    modifier = Modifier.weight(1f),
+                ) {
+                    // Реальная ссылка на видео — в буфер обмена.
+                    val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("VK Video", videoLink))
+                        android.widget.Toast.makeText(
+                            context, "Ссылка скопирована", android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    } else {
+                        android.widget.Toast.makeText(
+                            context, "Не удалось скопировать ссылку", android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    onDismiss()
+                }
+            }
+            HorizontalDivider()
+            Text(
+                text = "Отправить в чат",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            if (loading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                }
+            } else if (chats.isEmpty()) {
+                Text(
+                    text = "Нет чатов",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    items(chats, key = { c -> c.peer.id }) { chat ->
+                        val title = if (!chat.peer.title.isNullOrBlank()) {
+                            chat.peer.title
+                        } else {
+                            "id${chat.peer.id}"
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 56.dp)
+                                .clickable {
+                                    scope.launch {
+                                        try {
+                                            // Реальная отправка video-attachment в диалог.
+                                            val mid = app.apiClient.sendVideoToChat(chat.peer.id, video)
+                                            if (mid > 0) {
+                                                android.widget.Toast.makeText(
+                                                    context, "Отправлено в «$title»", android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            } else {
+                                                android.widget.Toast.makeText(
+                                                    context, "Не удалось отправить", android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            AppLog.e(TAG, "sendVideoToChat error", e)
+                                            android.widget.Toast.makeText(
+                                                context, "Ошибка: ${e.message}", android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        onDismiss()
+                                    }
+                                }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                val peerPhoto = chat.peer.photo
+                                if (peerPhoto != null) {
+                                    AsyncImage(
+                                        model = peerPhoto,
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                } else {
+                                    Text(
+                                        text = title.take(1).uppercase(),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Fix #383 #COMMUNITY-VIDEO-PARITY: кнопка быстрого действия шторки «Поделиться». */
+@Composable
+private fun VideoQuickShareButton(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 

@@ -190,6 +190,29 @@ class MainActivity : ComponentActivity() {
                 appCtx.forceFullReloginOnNextLaunch = false
                 AppLog.i("MainActivity", "forceFullReloginOnNextLaunch reset after successful login (Fix #176-auth-loop)")
             }
+            // Fix #385 #LOCKER-AFTER-AUTH: дыра в PIN-блокировке — cold start с
+            // протухшим web_token (истекает каждые ~15 мин, Fix #339) шёл в
+            // boot-эффекте по ветке auth (не по ветке локера), а после успешного
+            // silent re-login boot-эффект перезапускался и ранний return
+            // (bootLocal=true && hasValidToken()=true) ПРОПУСКАЛ запуск
+            // LockerActivity → приложение открывалось БЕЗ PIN несмотря на
+            // snap.lockerEnabled=true. Теперь: после ЛЮБОГО успешного auth
+            // результата, если сессия ещё не проходила разблокировку в этой
+            // сессии (lockerVerifiedThisSession=false), а PIN включён — запускаем
+            // локер СРАЗУ (юзер увидит PIN-пад вместо интерфейса). lastPrefsSnapshot
+            // null (теоретически — auth завершился до первого recomposition) —
+            // fallback на runBlocking-чтение, как в onResume fallback (Fix #169):
+            // раз за сессию, main-thread 30-200мс допустимы.
+            var lockerSnap = lastPrefsSnapshot
+            if (lockerSnap == null) {
+                lockerSnap = kotlinx.coroutines.runBlocking { appCtx.prefs.data.first() }
+                lastPrefsSnapshot = lockerSnap
+            }
+            if (!lockerVerifiedThisSession && lockerSnap.lockerEnabled && lockerSnap.lockerPinHash.isNotBlank()) {
+                lockerVerifiedThisSession = true
+                AppLog.i("MainActivity", "Auth success — PIN enabled, session not verified yet → launching LockerActivity (Fix #385)")
+                re.pinok.locker.LockerActivity.launch(this@MainActivity)
+            }
         } else if (lastLaunchWasSilent && result.resultCode != AuthActivity.RESULT_OFFLINE_MODE) {
             silentFailCount++
             AppLog.w("MainActivity", "SILENT auth failed (${result.resultCode}) — " +
@@ -369,6 +392,33 @@ class MainActivity : ComponentActivity() {
         lastLaunchWasSilent = intent.getBooleanExtra(AuthActivity.EXTRA_SILENT_MODE, false)
         AppLog.i("MainActivity", "launchAuth($reason) — launching AuthActivity" +
             (if (lastLaunchWasSilent) " [SILENT]" else " [FULL]"))
+        if (lastLaunchWasSilent) {
+            // Fix #384 #AUTH-NETWORK-TOAST: запрос юзера — «скрыть чёрный фон
+            // авторизации и просто показать всплывающее сообщение о подключении
+            // к сети и указать тип сети». SILENT-запуск теперь невидим
+            // (#AUTH-SILENT-STEALTH в AuthActivity), поэтому юзеру нужен сигнал
+            // ЧТО происходит: единственная точка запуска silent-auth — эта
+            // функция — показывает Toast с типом сети (NetworkObserver.connectionType,
+            // уже использовался в настройках). FULL-запуски (ручной вход) НЕ
+            // тостятся — юзер и так видит экран авторизации.
+            try {
+                val netType = SovaApp.get(this).networkObserver.connectionType()
+                val typeLabel = when (netType) {
+                    "Wi-Fi" -> "Wi-Fi"
+                    "Mobile" -> "мобильная сеть"
+                    "Ethernet" -> "Ethernet"
+                    "none" -> "сеть недоступна"
+                    else -> "тип сети неизвестен"
+                }
+                val msg = if (netType == "none") "Нет сети — подключение к VK отложено"
+                    else "Подключение к VK… ($typeLabel)"
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                // lateinit networkObserver ещё не готов (теоретически невозможно —
+                // SovaApp.onCreate инициализирует его до любой Activity) — не роняем auth.
+                AppLog.d("MainActivity", "AUTH-NETWORK-TOAST: networkObserver not ready: ${e.message}")
+            }
+        }
         authLauncher.launch(intent)
     }
 
@@ -562,6 +612,21 @@ class MainActivity : ComponentActivity() {
     private var silentRetryScheduled = false
 
     /**
+     * Fix #385 #LOCKER-AFTER-AUTH: проходил ли пользователь разблокировку PIN
+     * в ЭТОЙ сессии (instance state — смерть процесса сбрасывает, что корректно:
+     * новый процесс = новая сессия = локер обязателен).
+     *
+     * Ставится true в местах запуска LockerActivity (boot / onResume cached /
+     * onResume fallback) и проверяется в authLauncher RESULT_OK — чтобы после
+     * silent re-login при cold start с протухшим токеном локер показался ровно
+     * один раз, а повторные auth (tokenInvalidationTick в фоне) не заваливали
+     * юзера PIN-падом посреди сессии, где он уже прошёл разблокировку.
+     * Дополняет Fix #380 #LOCKER-BOOT-SKIP (волна 26-2): тот чинил guard boot-эффекта,
+     * этот гарантирует локер при ЛЮБОМ успешном auth-результате (authLauncher).
+     */
+    private var lockerVerifiedThisSession = false
+
+    /**
      * Fix #169: кэш последнего SovaPrefs Snapshot, обновляемый из Compose-подписки
      * (collectAsState в setContent). Используется в onResume() для мгновенной
      * проверки lockerOnBackground без блокирующего runBlocking { prefs.data.first() }
@@ -715,6 +780,7 @@ class MainActivity : ComponentActivity() {
                         lockerBootCheckDone = true
                         if (snap.lockerEnabled && snap.lockerPinHash.isNotBlank()) {
                             AppLog.i("MainActivity", "Locker enabled, launching LockerActivity")
+                            lockerVerifiedThisSession = true
                             LockerActivity.launch(this@MainActivity)
                         }
                     }
@@ -1529,6 +1595,7 @@ class MainActivity : ComponentActivity() {
             if (cached != null) {
                 if (cached.lockerEnabled && cached.lockerOnBackground && cached.lockerPinHash.isNotBlank() && !unlockGrace) {
                     AppLog.i("MainActivity", "Locker on background (cached snapshot, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
+                    lockerVerifiedThisSession = true
                     re.pinok.locker.LockerActivity.launch(this)
                 } else {
                     AppLog.d("MainActivity", "onResume locker check (cached, ${System.currentTimeMillis() - t0}ms): no locker needed")
@@ -1542,6 +1609,7 @@ class MainActivity : ComponentActivity() {
                     lastPrefsSnapshot = snap
                     if (snap.lockerEnabled && snap.lockerOnBackground && snap.lockerPinHash.isNotBlank() && !unlockGrace) {
                         AppLog.i("MainActivity", "Locker on background (cold-start fallback, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
+                        lockerVerifiedThisSession = true
                         re.pinok.locker.LockerActivity.launch(this@MainActivity)
                     }
                 }

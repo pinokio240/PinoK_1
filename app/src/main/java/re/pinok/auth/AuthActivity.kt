@@ -70,6 +70,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -654,7 +655,21 @@ private fun AuthScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().imePadding()) {
+    // Fix #384 #AUTH-SILENT-STEALTH: в SILENT-режиме во время автоматической
+    // WEBVIEW-фазы весь контент (Surface + WebView + статус-оверлей «Сессия
+    // найдена, получаем токен…») рисуется с alpha=0 — юзер видит предыдущий
+    // кадр MainActivity/сплеш, а не чёрный экран.
+    // Root-cause чёрного фона: прозрачная тема Fix #339 (Theme.PinoK.Silent)
+    // делала ОКНО прозрачным, но M3 Surface внутри setContent красил весь
+    // экран colorScheme.surface (тёмная тема ≈ чёрный), а WebView + оверлей
+    // статуса рисовались поверх — юзер часами смотрел на чёрный экран с
+    // «Сессия найдена…» (логкат 13:09:35→13:11:19, 104 секунды тишины).
+    // Alpha=0 держит дерево ЖИВЫМ (WebView грузит m.vk.ru, cookies/JS работают,
+    // polling remixsid идёт), но полностью невидимым.
+    // Провал silent (timeout 30с / AuthState.Error) → phase=LANDING → alpha=1
+    // → юзер видит экран ручного входа. TWO_FA тоже виден. Успех → finish().
+    val silentStealth = silentMode && phase == AuthPhase.WEBVIEW
+    Box(modifier = Modifier.fillMaxSize().imePadding().alpha(if (silentStealth) 0f else 1f)) {
         when (phase) {
             // Fix #199: systemBarsPadding — иначе контент LandingScreen (и
             // шестерёнка в TopEnd) «ныряет» под status bar при edge-to-edge,
