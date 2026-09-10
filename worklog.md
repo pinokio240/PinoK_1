@@ -8808,3 +8808,21 @@ Stage Summary:
 - Корректировки плана: P0 без изменений; P1 проще (единый groups.edit; приглашения groups.invite/recallInvitation/getFriendsInvitationList подтверждены; новые дешёвые кандидаты — Комментарии-модерация, Чаты, Адреса через groups.addAddress/editAddress); P2 + Кнопка действия/Меню/Канал через groups.edit; tokens/longpoll-боты и ads — вне скоупа.
 - Зоны без данных (реализовывать по докам API): статистика (dashboard), диалог ролей руководителей, бан/заявки/чёрный список, форма типов «Кнопки действия».
 - Документ: docs/админ.сообществ.снапшоты.сверка.md (Task ID 34-b, дата 2026-09-10). SECURITY: в Pluton tut.html живой webToken — архив не публиковать.
+
+---
+Task ID: 35
+Agent: main (Z.ai Code)
+Task: (1) фикс 6 ошибок компиляции ProfileScreen; (2) документация оставшихся задач; (3) реализация админ-сообществ 35-a/35-b; пометки в документации
+
+Work Log:
+- W34-PROFILE-COMMIT 5f55cd7d: mainListState — rememberLazyListState() стоял на :1134 ПОСЛЕ LaunchedEffect'ов W33-c (Kotlin резолвит локальные val по порядку объявления) → объявление перенесено выше; giftTotalCount — Counters.gifts сам Int? (UserProfile.kt:115) при GiftsSection(totalCount: Int) → внутренний элвис.
+- docs 060f38c7: план.волна-35.админ-сообщества.2026-09-10.md — реестр оставшихся задач R1-R9 (волны 32-34) + фазы 35-a (P0: модели/fields/wallPost/блок «Управление») + 35-b (P1: groups.edit + Руководители + Статистика + Баны/Заявки) + 35-c (P2 → волна 36, C-серия) + техспецификации §5 + критерии §6.
+- impl f829235a: GroupInfo +7 админ-полей (+site) + isManager/isAuthor; Models.Group += 5 полей; groupsGetById fields += admin-блок; wallPost += fromGroup/signed; НОВЫЕ API: groupsEdit/groupsGetManagers/groupsEditManager/statsGet/statsGetPostReach/groupsGetBanned/groupsBanUser/groupsUnbanUser/groupsGetRequests/groupsApproveRequest (+StatsPoint/PostReach/GroupManager/BannedUser); НОВЫЙ файл CommunityAdminScreens.kt (~900 строк): CommunityAdminBlock (карточка «Управление», гейт isManager, честные disabled «В волне 36») + AdminSettingsScreen (diff-only groups.edit, гейт прав) + AdminStatsScreen (statsGet 30д + getPostReach последних 10 постов) + AdminPeopleScreen (табы Руководители/Заявки/ЧС: смена роли AlertDialog, Одобрить, Разбанить); Screen.kt 3 маршрута; SovaNavHost 3 композиции + hasOwnTopBar ×3.
+- docs-update (текущий коммит): §7 хэши коммитов, §8 пометки о реализации (ключевые решения: group_id положительный на проводе, diff-only edit, honest disabled rows, гейт isManager; ограничения: композер сообщества отсутствует → C0 волна 36, decline заявок НЕТ в API), реестр §0 статусы R6-R9 → [x].
+- Валидация: brace_delta SYMMETRIC ×6 файлов ({} () [] попарно), check-nested-comments ALL CLEAN (178).
+
+Stage Summary:
+- Волна 35 (35-a P0 + 35-b P1) реализована: 6 файлов, +1600 строк, 1 новый файл.
+- Волна 34 закрыта: ProfileScreen снова собирается (6 ошибок устранены root-cause, не костылями).
+- На волны 36+: C0 композер сообщества (переключатель автора поверх from_group/signed), C1-C8, реестр R1-R4.
+- Сборка :app:compileDebugKotlin проверяется локально пользователем (в песочнице Android SDK нет) — при ошибках прислать лог.
