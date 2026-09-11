@@ -1300,10 +1300,21 @@ class VKApiClient(
         }
     }
 
-    /** #74: результат messagesGetHistory — сообщения + профили отправителей. */
+    /**
+     * #74: результат messagesGetHistory — сообщения + профили отправителей.
+     *
+     * #IM-EMPTY-HONEST (волна 36, 2026-09-11): [failure] разделяет «диалог
+     * действительно пуст» от «запрос не выполнен». null = успех (messages
+     * может быть пуст — сервер честно ответил пустой историей). Не-null =
+     * человекочитаемая причина сбоя (офлайн-гейт, нет токена, капча отменена,
+     * битый ответ, парсинг) — UI показывает её как ошибку вместо лживого
+     * «Нет сообщений» (жалоба пользователя: «открывал диалог — пишет "нет
+     * сообщений", но они есть»).
+     */
     data class HistoryResult(
         val messages: List<Message>,
         val profiles: Map<Long, UserProfile>,
+        val failure: String? = null,
     )
 
     suspend fun messagesGetHistory(
@@ -1393,7 +1404,22 @@ class VKApiClient(
         count: Int = 30,
         offset: Int = 0,
     ): HistoryResult {
-        if (isOffline()) return HistoryResult(emptyList(), emptyMap())
+        if (isOffline()) {
+            // #IM-EMPTY-HONEST: раньше тихий HistoryResult(empty) → UI показывал
+            // «Нет сообщений» хотя сообщения есть. Причина офлайна различается:
+            // форс-преф (ручной «Офлайн-режим» ИЛИ авто-офлайн после #38-серии
+            // сетевых сбоев; у callInternal есть 30с-probe самолечение, этот
+            // ранний гейт его обходит) vs реальная потеря сети.
+            val snapOff = prefs.data.first()
+            val reason = if (networkMods.isOfflineForced(snapOff)) {
+                "включён офлайн-режим (приватность или авто-офлайн после сетевых " +
+                    "сбоев — выключи в Настройках или подожди ~30с самолечения)"
+            } else {
+                "нет сети (NetworkObserver)"
+            }
+            AppLog.w("VKApiClient", "messages.getHistory: offline gate — $reason (peerId=$peerId)")
+            return HistoryResult(emptyList(), emptyMap(), failure = "Нет сети: $reason")
+        }
         val args = mutableMapOf(
             "peer_id" to peerId.toString(),
             "count" to count.toString(),
@@ -1402,10 +1428,30 @@ class VKApiClient(
             "fields" to "photo_100,photo_200,online,first_name,last_name,name",
         )
         if (offset > 0) args["offset"] = offset.toString()
-        val json = call("messages.getHistory", args) ?: return HistoryResult(emptyList(), emptyMap())
+        // #IM-EMPTY-HONEST: null у call() = запрос не выполнен (VK API error,
+        // нет токена, капча отменена, privacy-дроп) — раньше это тоже молча
+        // превращалось в «Нет сообщений».
+        val json = call("messages.getHistory", args)
+        if (json == null) {
+            val vkErr = lastApiError
+            val reason = vkErr?.let { "VK API: $it" }
+                ?: "запрос не выполнен (нет/мёртвый токен, капча отменена или вызов подавлен privacy-модом)"
+            AppLog.w("VKApiClient", "messages.getHistory: call()=null — $reason (peerId=$peerId)")
+            return HistoryResult(emptyList(), emptyMap(), failure = reason)
+        }
         return try {
-            val resp = json.getAsJsonObject("response") ?: return HistoryResult(emptyList(), emptyMap())
-            val items = resp.getAsJsonArray("items") ?: return HistoryResult(emptyList(), emptyMap())
+            // #IM-EMPTY-HONEST: ответ получен, но без response/items — честная
+            // причина вместо «Нет сообщений».
+            val resp = json.getAsJsonObject("response")
+                ?: return HistoryResult(
+                    emptyList(), emptyMap(),
+                    failure = "Некорректный ответ VK: нет response (peerId=$peerId)",
+                )
+            val items = resp.getAsJsonArray("items")
+                ?: return HistoryResult(
+                    emptyList(), emptyMap(),
+                    failure = "Некорректный ответ VK: нет items (peerId=$peerId)",
+                )
             // #74: парсим profiles[] и groups[] для аватарок
             val profiles = mutableMapOf<Long, UserProfile>()
             resp.getAsJsonArray("profiles")?.forEach { el ->
@@ -1434,50 +1480,72 @@ class VKApiClient(
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
                 )
             }
+            // #IM-EMPTY-HONEST: парсинг ИЗОЛИРОВАН по сообщениям — одно кривое
+            // (экзотический тип поля, патологический ответ VK) больше не убивает
+            // ВЕСЬ чат. Раньше catch вокруг всего mapNotNull: одно исключение →
+            // пустая история → «Нет сообщений» при существующих сообщениях.
+            // Битый айтем пропускается с крошкой; если не распарсился НИ ОДИН
+            // (items были!) — честный failure «Ошибка разбора», не пустота.
+            var skippedItems = 0
             val raw = items.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
+                if (!el.isJsonObject) { skippedItems++; return@mapNotNull null }
                 val o = el.asJsonObject
-                Message(
-                    id = o.get("id")?.asLong ?: 0L,
-                    peerId = o.get("peer_id")?.asLong ?: peerId,
-                    fromId = o.get("from_id")?.asLong ?: 0L,
-                    date = o.get("date")?.asLong ?: 0L,
-                    text = o.get("text")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                    out = o.get("out")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    readState = o.get("read_state")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    deleted = o.get("deleted")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    edited = o.get("edited")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    originalText = o.get("original_text")?.takeIf { !it.isJsonNull }?.asString,
-                    // Fix #203: conversation_message_id обязателен для reply (Fix #202).
-                    conversationMessageId = o.get("conversation_message_id")
-                        ?.takeIf { !it.isJsonNull }?.asLong,
-                    attachments = parseAttachments(o),
-                    replyMessage = o.getAsJsonObject("reply_message")?.let { parseMessage(it) },
-                    fwdMessages = o.getAsJsonArray("fwd_messages")?.mapNotNull { fm ->
-                        if (!fm.isJsonObject) null else parseMessage(fm.asJsonObject)
-                    }?.takeIf { it.isNotEmpty() }.also { fwdList ->
-                        // Fix #295 (round 2): диагностический лог.
-                        if (fwdList != null) {
-                            AppLog.d("VKApiClient", "messagesGetHistoryWithProfiles: msg id=${o.get("id")} has ${fwdList.size} fwd_messages" +
-                                fwdList.joinToString("") { " [id=${it.id} from=${it.fromId} text=${it.text.take(30).replace("\n"," ")} atts=${it.attachments?.size ?: 0}]" })
-                        }
-                    },
-                    // Fix #146: action может быть строкой ("chat_create") или
-                    // объектом ({"type":"chat_pin_message",...}). Старый код звал
-                    // .asString на объекте → UnsupportedOperationException → весь
-                    // history-парсинг падал в catch → пустая история чата в UI.
-                    action = o.get("action")?.let { el ->
-                        when {
-                            el.isJsonNull -> null
-                            el.isJsonPrimitive -> el.asString
-                            el.isJsonObject -> el.asJsonObject
-                                .get("type")?.takeIf { !it.isJsonNull }?.asString
-                            else -> null
-                        }
-                    },
-                    actionText = o.get("action_text")?.takeIf { !it.isJsonNull }?.asString,
-                    // #REACTION-WEB-API (волна 32): как в messagesGetHistory.
-                    reactions = parseMessageReactions(o),
+                try {
+                    Message(
+                        id = o.get("id")?.asLong ?: 0L,
+                        peerId = o.get("peer_id")?.asLong ?: peerId,
+                        fromId = o.get("from_id")?.asLong ?: 0L,
+                        date = o.get("date")?.asLong ?: 0L,
+                        text = o.get("text")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                        out = o.get("out")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                        readState = o.get("read_state")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                        deleted = o.get("deleted")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                        edited = o.get("edited")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                        originalText = o.get("original_text")?.takeIf { !it.isJsonNull }?.asString,
+                        // Fix #203: conversation_message_id обязателен для reply (Fix #202).
+                        conversationMessageId = o.get("conversation_message_id")
+                            ?.takeIf { !it.isJsonNull }?.asLong,
+                        attachments = parseAttachments(o),
+                        replyMessage = o.getAsJsonObject("reply_message")?.let { parseMessage(it) },
+                        fwdMessages = o.getAsJsonArray("fwd_messages")?.mapNotNull { fm ->
+                            if (!fm.isJsonObject) null else parseMessage(fm.asJsonObject)
+                        }?.takeIf { it.isNotEmpty() }.also { fwdList ->
+                            // Fix #295 (round 2): диагностический лог.
+                            if (fwdList != null) {
+                                AppLog.d("VKApiClient", "messagesGetHistoryWithProfiles: msg id=${o.get("id")} has ${fwdList.size} fwd_messages" +
+                                    fwdList.joinToString("") { " [id=${it.id} from=${it.fromId} text=${it.text.take(30).replace("\n"," ")} atts=${it.attachments?.size ?: 0}]" })
+                            }
+                        },
+                        // Fix #146: action может быть строкой ("chat_create") или
+                        // объектом ({"type":"chat_pin_message",...}). Старый код звал
+                        // .asString на объекте → UnsupportedOperationException → весь
+                        // history-парсинг падал в catch → пустая история чата в UI.
+                        action = o.get("action")?.let { el ->
+                            when {
+                                el.isJsonNull -> null
+                                el.isJsonPrimitive -> el.asString
+                                el.isJsonObject -> el.asJsonObject
+                                    .get("type")?.takeIf { !it.isJsonNull }?.asString
+                                else -> null
+                            }
+                        },
+                        actionText = o.get("action_text")?.takeIf { !it.isJsonNull }?.asString,
+                        // #REACTION-WEB-API (волна 32): как в messagesGetHistory.
+                        reactions = parseMessageReactions(o),
+                    )
+                } catch (pe: Exception) {
+                    skippedItems++
+                    AppLog.w("VKApiClient",
+                        "messages.getHistory: msg id=${o.get("id")} parse failed — skipped: ${pe.message}")
+                    null
+                }
+            }
+            if (raw.isEmpty() && items.size() > 0) {
+                AppLog.w("VKApiClient",
+                    "messages.getHistory: все ${items.size()} items не распарсились — failure (peerId=$peerId)")
+                return HistoryResult(
+                    emptyList(), emptyMap(),
+                    failure = "Ошибка разбора ${items.size()} сообщений (пропущено $skippedItems) — детали: Настройки → Логи, категория «Сеть и API»",
                 )
             }
             val snap = prefs.data.first()
@@ -1485,7 +1553,8 @@ class VKApiClient(
             HistoryResult(modified, profiles)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesGetHistoryWithProfiles error", e)
-            HistoryResult(emptyList(), emptyMap())
+            // #IM-EMPTY-HONEST: не маскируем сбой под «Нет сообщений».
+            HistoryResult(emptyList(), emptyMap(), failure = "Ошибка обработки ответа: ${e.message}")
         }
     }
 

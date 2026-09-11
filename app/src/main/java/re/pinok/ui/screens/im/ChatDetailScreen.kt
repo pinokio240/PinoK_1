@@ -553,6 +553,12 @@ fun ChatDetailScreen(
     var chatProfiles by remember { mutableStateOf<Map<Long, UserProfile>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    // #IM-EMPTY-HONEST (волна 36): счётчик повторов первичной загрузки истории.
+    // Кнопка «Повторить» в пустом состоянии (ошибка + нет сообщений) инкрементит
+    // его → LaunchedEffect(peerId, historyReload) перезапускает загрузку целиком
+    // (раньше ошибку первичной загрузки можно было вылечить только выходом из
+    // чата и повторным входом).
+    var historyReload by remember { mutableStateOf(0) }
     var inputText by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -2246,7 +2252,9 @@ fun ChatDetailScreen(
     }
 
     // Первичная загрузка истории.
-    LaunchedEffect(peerId) {
+    // #IM-EMPTY-HONEST: historyReload в ключах — «Повторить» в пустом состоянии
+    // перезапускает всю загрузку без выхода из чата.
+    LaunchedEffect(peerId, historyReload) {
         // FIX: используем корутину LaunchedEffect напрямую вместо scope.launch,
         // чтобы избежать ForgottenCoroutineScopeException при пересоздании Activity.
         loading = true
@@ -2375,7 +2383,13 @@ fun ChatDetailScreen(
             chatProfiles = result.profiles
             if (result.messages.size < pageSize) endReached = true
             if (result.messages.isEmpty()) {
-                val err = app.apiClient.lastApiError
+                // #IM-EMPTY-HONEST (волна 36): failure от VKApiClient имеет
+                // приоритет — «Нет сообщений» теперь ТОЛЬКО когда сервер
+                // реально ответил успехом с пустой историей. Раньше офлайн-гейт/
+                // нет токена/битый ответ/парсинг молча превращались в лживое
+                // «Нет сообщений» (жалоба: «открывал диалог — "нет сообщений",
+                // но они есть»).
+                val err = result.failure ?: app.apiClient.lastApiError
                 if (peerId < 0 && channelModeEnabled && (!chatInfoResolved || !chatCanWriteKnown)) {
                     // Fix #393 + #IM-CHANNEL-OPEN: канал вернул пустую messages-историю
                     // (или can_write неизвестен) — контент в wall-режиме, generic-ошибку
@@ -2384,7 +2398,11 @@ fun ChatDetailScreen(
                         "#IM-CHANNEL-OPEN history empty → wall-mode: peerId=$peerId resolved=$chatInfoResolved canWriteKnown=$chatCanWriteKnown")
                     loadChannelPosts(initial = true)
                 } else {
-                    errorText = if (err != null) "Ошибка: $err" else "Нет сообщений"
+                    errorText = when {
+                        result.failure != null -> "Ошибка: ${result.failure}"
+                        err != null -> "Ошибка: $err"
+                        else -> "Нет сообщений"
+                    }
                 }
             }
             // FIX (P5.2): помечаем загруженные сообщения как прочитанные.
@@ -3694,12 +3712,21 @@ fun ChatDetailScreen(
             } else {
                 val err = errorText
                 if (err != null && messages.isEmpty()) {
+                    // #IM-EMPTY-HONEST: честный текст причины + «Повторить» —
+                    // перезапуск первичной загрузки без выхода из чата. Раньше
+                    // «Нет сообщений»/ошибка висели мёртвым текстом.
                     Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = err,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = err,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            TextButton(onClick = { historyReload++ }, enabled = !loading) {
+                                Text("Повторить")
+                            }
+                        }
                     }
                 } else {
                 // P0.3: pinned message bar (только для group chats + если включён флаг).
