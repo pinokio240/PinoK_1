@@ -6,10 +6,13 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.CommandButton
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -57,14 +60,25 @@ class VideoPlaybackService : MediaSessionService() {
         private val seekForwardCommand = SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY)
 
         // FIX #VIDEO-FG-TIME: канал/id служебной заглушки foreground (см.
-        // promoteToForegroundImmediately). ID произвольный, отличен от media3
-        // DEFAULT_NOTIFICATION_ID=1001 (DefaultMediaNotificationProvider 1.8.0) —
-        // повторный startForeground media3 в любом случае заменяет заглушку:
-        // у сервиса ОДИН foreground-слот, последняя нотификация вытесняет прежнюю.
+        // promoteToForegroundImmediately).
+        // #LOCKSCREEN-FIX (2026-09-11): ID УНИКАЛЬНЫЙ и общий для заглушки и
+        // media3-нотификации видео — провайдер (см. onCreate,
+        // setMediaNotificationProvider) строит MediaStyle-уведомление с ЭТИМ же
+        // ID → startForeground заменяет заглушку 1:1 (startForeground/notify с
+        // тем же ID обновляют нотификацию на месте, без дублей в шторке).
+        // Отличать от 1001 (DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID,
+        // media3 1.8.0) ОБЯЗАТЕЛЬНО: у аудио PlayerService провайдер дефолтный
+        // (=1001) — оба сервиса живут в одном процессе, одинаковый ID означал
+        // бы перезапись нотификаций друг друга при одновременном аудио+видео.
         private const val CHANNEL_ID_PLACEHOLDER = "pinok_video_fg_placeholder"
         private const val NOTIF_ID_PLACEHOLDER = 41102
     }
 
+    // @OptIn: весь notification-provider API media3 — @UnstableApi (см. комментарий
+    // у setMediaNotificationProvider ниже). Первый @OptIn в проекте — осознанно:
+    // альтернатива (ручное MediaStyle-уведомление) требует легаси androidx.media
+    // и собственных PendingIntent'ов — риск выше.
+    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
         // FIX #VIDEO-FG-TIME (краш 2026-09-10 23:39:12.911 и 23:41:49.235, HOTWAV
@@ -141,8 +155,10 @@ class VideoPlaybackService : MediaSessionService() {
         // Сервис опционален для UX — отказ build() НЕ должен ронять приложение:
         // честно логируем причину и гасим сервис (плеер НЕ релизим — им владеет
         // видео-экран, сервис держит только ссылку).
-        try {
-            mediaSession = builder.build()
+        // NULL-ЯВНО: build() либо отдаёт сессию, либо кидает — локальная non-null
+        // val, поле остаётся nullable (onDestroy/гонки), без !!.
+        val builtSession: MediaSession = try {
+            builder.build()
         } catch (e: IllegalStateException) {
             AppLog.e("VideoPlaybackService", "onCreate: MediaSession build failed: ${e.message} — stopSelf", e)
             stopSelf()
@@ -152,7 +168,44 @@ class VideoPlaybackService : MediaSessionService() {
             stopSelf()
             return
         }
-        AppLog.i("VideoPlaybackService", "onCreate: session ready (title=${VideoPlaybackBus.mediaTitle}, step=$seekStepSec)")
+        mediaSession = builtSession
+        // #LOCKSCREEN-FIX: явный провайдер с уникальным NOTIF_ID_PLACEHOLDER —
+        // MediaStyle-нотификация видео постится с тем же ID, что и заглушка
+        // (замена 1:1 без дублей в шторке) и НЕ конфликтует с аудио
+        // PlayerService (его провайдер дефолтный — ID 1001; оба сервиса в одном
+        // процессе, одинаковый ID = перезапись нотификаций друг друга).
+        // Провайдер — тот же DefaultMediaNotificationProvider, что media3
+        // использует по умолчанию (MediaStyle, канал, действия, bitmap-ар
+        // — всё его поведение); отличается ТОЛЬКО ID. Весь provider-API
+        // @UnstableApi (DefaultMediaNotificationProvider, MediaNotification.Provider,
+        // setMediaNotificationProvider) — потому @OptIn на onCreate.
+        setMediaNotificationProvider(
+            DefaultMediaNotificationProvider.Builder(applicationContext)
+                .setNotificationId(NOTIF_ID_PLACEHOLDER)
+                .build(),
+        )
+        // #LOCKSCREEN-FIX (жалоба 2026-09-11 «lock-screen плеер как у аудио — не работает»):
+        // РЕГИСТРАЦИЯ сессии в сервисе. MediaSessionService узнаёт о сессии только
+        // двумя путями: onGetSession() (вызывается при BIND MediaController'а или
+        // MEDIA_BUTTON-интенте в onStartCommand) либо явный addSession(). Аудио
+        // PlayerService работает именно через bind: PlayerConnection подключается
+        // MediaController по SessionToken → onBind → onGetSession → addSession →
+        // MediaNotificationManager создаёт внутренний notification-controller и
+        // САМ постит MediaStyle-уведомление (lock-screen плеер). Видео же
+        // стартует startForegroundService с «голым» интентом (VideoPlaybackBus,
+        // без action и без bind) → onStartCommand не проходит ни одну ветку
+        // (isMediaAction=isCustomAction=false) → сессия НИКОГДА не попадала в
+        // сервис → media3 никогда не строил медиа-нотификацию: в шторке висела
+        // только тихая MIN-заглушка #VIDEO-FG-TIME, на lock-screen плеера не
+        // было вовсе. addSession() регистрирует сессию напрямую: внутренний
+        // controller подключается, onConnected(shouldShowNotification=true при
+        // непустом timeline) → onUpdateNotificationInternal → media3 сам
+        // продвигается в foreground своей MediaStyle-нотификацией (play/pause +
+        // кнопки ±N сек из custom layout) — она же заменяет заглушку 1:1
+        // (общий ID 1001). Идемпотентно: повторный addSession той же сессии
+        // игнорируется (guard old==null в исходнике media3).
+        addSession(builtSession)
+        AppLog.i("VideoPlaybackService", "onCreate: session ready + added to service (title=${VideoPlaybackBus.mediaTitle}, step=$seekStepSec)")
     }
 
     /**
