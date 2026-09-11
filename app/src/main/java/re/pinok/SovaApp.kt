@@ -1045,6 +1045,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // срабатывал только на холодном старте, фича выглядела мёртвой.
             val lockerBgMigrated = prefs.migrateLockerOnBackgroundOn()
             if (lockerBgMigrated) AppLog.i("SovaApp", "Locker bg migration: locker_on_background false→true (PIN was set before #LOCKER-UX auto-enable)")
+            // #LOCKER-UX-3 (волна 36): одноразовый сброс зависимых пунктов
+            // локера — биометрия off всегда (тумблер удалён из UI по запросу
+            // пользователя), onBackground off при незаданном PIN (каскадная
+            // семантика «выключение PIN гасит зависимые пункты»; чистит
+            // сломанное состояние onBackground=true + пустой хэш).
+            val lockerDepMigrated = prefs.migrateLockerDependentsOff()
+            if (lockerDepMigrated) AppLog.i("SovaApp", "Locker dependents migration: biometric→false, onBackground→false without PIN (#LOCKER-UX-3)")
         }
         val initialSnap = runBlocking { prefs.data.first() }
         prefsSnapshot = initialSnap   // Fix #336: seed synchronous cache

@@ -3251,17 +3251,21 @@ private fun PrivacyTab(
 /**
  * #LOCKER-UX-2 (волна 36): какой пункт вкладки «Защита» запросил открытие
  * PinSetupDialog. Определяет, какой флаг включается после успешной установки
- * PIN: PIN_TOGGLE/BACKGROUND → lockerOnBackground=true (семантика Fix #380
- * сохранена), BIOMETRIC → lockerBiometric=true (lockerOnBackground остаётся
- * как задал пользователь).
+ * PIN: оба повода → lockerOnBackground=true (семантика Fix #380 сохранена:
+ * PIN задаётся, чтобы приложение блокировалось).
  *
- * Причина существования: «Биометрия» и «Блокировка при возврате из фона»
- * включались и без установленного PIN — pref писался, но resume-чек
- * MainActivity требует lockerPinHash.isNotBlank() → блокировка молча
- * не срабатывала (жалоба пользователя: «тумблер включён, PIN-пад при
- * возврате из фона не появляется»).
+ * #LOCKER-UX-3: значение BIOMETRIC удалено вместе с тумблером «Биометрия
+ * (требует PIN)» (запрос пользователя 2026-09-11).
+ *
+ * Причина существования: «Блокировка при возврате из фона» включалась и без
+ * установленного PIN — pref писался, но resume-чек MainActivity требует
+ * lockerPinHash.isNotBlank() → блокировка молча не срабатывала (жалоба
+ * пользователя: «тумблер включён, PIN-пад при возврате из фона не
+ * появляется»). #LOCKER-UX-3: выключение PIN теперь каскадом гасит
+ * lockerOnBackground (и lockerBiometric), так что зависимый пункт без PIN —
+ * состояние-transitional, существующее только до установки PIN.
  */
-private enum class PinSetupReason { PIN_TOGGLE, BACKGROUND, BIOMETRIC }
+private enum class PinSetupReason { PIN_TOGGLE, BACKGROUND }
 
 @Composable
 private fun SecurityTab(
@@ -3425,7 +3429,15 @@ private fun SecurityTab(
                     // защищать нечего) — прямое выключение.
                     val storedHash = s.lockerPinHash
                     if (storedHash.isBlank()) {
-                        scope.launch { app.prefs.setLockerEnabled(false) }
+                        // #LOCKER-UX-3: каскад выключения — PIN гасит зависимые
+                        // пункты («Блокировка при возврате из фона», биометрия):
+                        // без PIN они мёртвые (resume-чек требует pinHash) либо
+                        // недоступны (тумблер биометрии удалён из UI).
+                        scope.launch {
+                            app.prefs.setLockerEnabled(false)
+                            app.prefs.setLockerOnBackground(false)
+                            app.prefs.setLockerBiometric(false)
+                        }
                     } else {
                         showPinVerifyDisable = true
                     }
@@ -3473,38 +3485,21 @@ private fun SecurityTab(
                 }
             }
         }
-        item {
-            // #LOCKER-UX-2: честный статус «включено, но PIN не задан» прямо
-            // в подписи — раньше такое состояние было молчаливым no-op
-            // (resume-чек MainActivity требует pinHash.isNotBlank()).
-            val bioSubtitle = if (s.lockerBiometric && s.lockerPinHash.isBlank()) {
-                "Включено, но PIN-код не задан — биометрия не сработает. " +
-                    "Выключите и снова включите тумблер, чтобы задать PIN-код."
-            } else {
-                "Отпечаток на экране блокировки вместо ввода PIN. Работает, если устройство поддерживает биометрию."
-            }
-            ToggleRow(
-                title = "Биометрия (требует PIN)",
-                subtitle = bioSubtitle,
-                checked = s.lockerBiometric,
-            ) { enable ->
-                if (enable && s.lockerPinHash.isBlank()) {
-                    // #LOCKER-UX-2: включение без PIN — не пишем pref (он всё
-                    // равно был бы мёртв), а ведём через задание PIN. После
-                    // установки включится биометрия (см. onPinSet ниже).
-                    pinSetupReason = PinSetupReason.BIOMETRIC
-                    showPinSetup = true
-                } else {
-                    scope.launch { app.prefs.setLockerBiometric(enable) }
-                }
-            }
-        }
+        // #LOCKER-UX-3 (волна 36): тумблер «Биометрия (требует PIN)» УДАЛЕН по
+        // запросу пользователя (2026-09-11: «"Биометрия (требует PIN)" - удалить»).
+        // Инфраструктура биометрии в LockerActivity сохранена (lockerBiometric +
+        // EXTRA_BIOMETRIC + BiometricPrompt), но pref принудительно false
+        // одноразовой миграцией migrateLockerDependentsOff (SovaPrefs) — кнопка
+        // «Войти по отпечатку» на PIN-паде больше не появляется. Возвращение
+        // тумблера = revert этого айтема + миграции.
         item {
             // #LOCKER-UX-2: жалоба пользователя «тумблер включён, PIN-пад при
             // возврате из фона не появляется» — ровно это состояние: тумблер
             // включён, PIN не задан. Подпись теперь объясняет, а включение
             // без PIN ведёт через задание PIN вместо тихой записи мёртвого
-            // pref'а.
+            // pref'а. #LOCKER-UX-3: при выключении PIN тумблер гасится
+            // каскадом (обе ветки: прямая в PIN-тумблере выше и
+            // #PIN-DISABLE-VERIFY-диалог ниже).
             val bgSubtitle = if (s.lockerOnBackground && s.lockerPinHash.isBlank()) {
                 "Включено, но PIN-код не задан — блокировка не сработает. " +
                     "Выключите и снова включите тумблер, чтобы задать PIN-код."
@@ -3548,17 +3543,11 @@ private fun SecurityTab(
                     // из фона» (дефолт false после #DEFAULTS-OFF делал фичу
                     // «мёртвой» на глазах: включённый PIN ничего не делал при
                     // сворачивании, и юзер справедливо считал его нерабочим).
-                    // Отключить можно отдельным тумблером ниже.
-                    // #LOCKER-UX-2: включается ТО пункт, который запросил
-                    // задание PIN. PIN_TOGGLE/BACKGROUND → onBackground=true
-                    // (Fix #380 сохранён); BIOMETRIC → биометрия, onBackground
-                    // остаётся как задал пользователь (не навязываем лишнее).
-                    when (pinSetupReason) {
-                        PinSetupReason.PIN_TOGGLE, PinSetupReason.BACKGROUND ->
-                            app.prefs.setLockerOnBackground(true)
-                        PinSetupReason.BIOMETRIC ->
-                            app.prefs.setLockerBiometric(true)
-                    }
+                    // Отключить можно отдельным тумблером ниже; выключение
+                    // самого PIN гасит пункт каскадом (#LOCKER-UX-3).
+                    // #LOCKER-UX-3: ветка BIOMETRIC удалена вместе с тумблером
+                    // биометрии — оба оставшихся повода ведут к onBackground=true.
+                    app.prefs.setLockerOnBackground(true)
                     // #PIN (волна 31-f): крошка включения блокировки —
                     // успешная установка (при overwrite старый хэш заменён).
                     AppLog.i("Settings", "#PIN enabled: hash set " +
@@ -3602,9 +3591,16 @@ private fun SecurityTab(
                 showPinVerifyDisable = false
                 scope.launch {
                     app.prefs.setLockerEnabled(false)
+                    // #LOCKER-UX-3: каскад выключения — PIN гасит зависимые
+                    // пункты («Блокировка при возврате из фона», биометрия):
+                    // без PIN они мёртвые (resume-чек требует pinHash) либо
+                    // недоступны (тумблер биометрии удалён из UI).
+                    app.prefs.setLockerOnBackground(false)
+                    app.prefs.setLockerBiometric(false)
                     // #PIN (волна 31-f): крошка выключения — выполняется только
                     // после верного текущего PIN (PinVerifyDialog onVerified).
-                    AppLog.i("Settings", "#PIN disabled: current PIN verified, locker=false")
+                    AppLog.i("Settings", "#PIN disabled: current PIN verified, " +
+                        "locker=false, onBackground=false, biometric=false")
                     Toast.makeText(context, "PIN-код выключен", Toast.LENGTH_SHORT).show()
                 }
             },

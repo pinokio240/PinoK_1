@@ -886,6 +886,50 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         return shouldEnable
     }
 
+    /**
+     * #LOCKER-UX-3 (волна 36, 2026-09-11): одноразовый сброс зависимых от PIN
+     * пунктов локера после удаления тумблера «Биометрия (требует PIN)» и
+     * введения каскада «выключение PIN гасит зависимые пункты».
+     *
+     * Запрос пользователя: «При отключении пин кода, "Блокировка при возврате
+     * из фона" тоже должна отключиться. "Биометрия (требует PIN)" - удалить».
+     *
+     * Что делает ОДИН раз:
+     *  1) lockerBiometric → false ВСЕГДА: единственным писателем был удалённый
+     *     тумблер; оставшийся true оставлял бы «зомби»-кнопку «Войти по
+     *     отпечатку» на PIN-паде (LockerActivity EXTRA_BIOMETRIC), которую
+     *     больше нечем выключить из UI. Инфраструктура биометрии в
+     *     LockerActivity сохранена — revert миграции + тумблера возвращает фичу.
+     *  2) lockerOnBackground → false, если PIN НЕ установлен (hash blank):
+     *     чистит сломанное состояние юзера «onBackground=true + пустой хэш»
+     *     (честное предупреждение #LOCKER-UX-2 в UI больше не нужно — состояние
+     *     отныне недостижимо: включение без PIN ведёт через PinSetupDialog,
+     *     выключение PIN гасит пункт каскадом в SettingsScreen).
+     *
+     * Пользователи С установленным PIN: onBackground НЕ трогаем (осознанный
+     * выбор, миграция #LOCKER-BG-MIGRATION могла его только что включить).
+     *
+     * Вызывается из SovaApp.onCreate (рядом с migrateLockerOnBackgroundOn).
+     */
+    suspend fun migrateLockerDependentsOff(): Boolean {
+        val snap = ds.data.first()
+        val cur = snap[Keys.LOCKER_DEP_MIGRATED] ?: 0
+        if (cur >= 1) return false
+        val bioWasOn = snap[Keys.LOCKER_BIOMETRIC] == true
+        val pinNotSet = snap[Keys.LOCKER_PIN_HASH].isNullOrBlank()
+        val bgWasOnWithoutPin = pinNotSet && snap[Keys.LOCKER_ON_BACKGROUND] == true
+        ds.edit { p ->
+            if (bioWasOn) p[Keys.LOCKER_BIOMETRIC] = false
+            if (bgWasOnWithoutPin) p[Keys.LOCKER_ON_BACKGROUND] = false
+            p[Keys.LOCKER_DEP_MIGRATED] = 1
+        }
+        if (bioWasOn || bgWasOnWithoutPin) {
+            AppLog.i("SovaPrefs", "#LOCKER-UX-3: dependents off migration applied " +
+                "(biometric=$bioWasOn→false, onBackgroundWithoutPin=$bgWasOnWithoutPin→false)")
+        }
+        return bioWasOn || bgWasOnWithoutPin
+    }
+
     // Fix #100: Stories settings
     suspend fun setAutoCacheStories(v: Boolean)          = put(Keys.AUTO_CACHE_STORIES, v)
     suspend fun setStoryCacheLimitMb(v: Int)             = put(Keys.STORY_CACHE_LIMIT_MB, v)
@@ -1580,6 +1624,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // #LOCKER-BG-MIGRATION (волна 36): одноразовый флаг миграции тумблера
         // «Блокировка при возврате из фона» для устройств с PIN до #LOCKER-UX.
         val LOCKER_BG_MIGRATED  = intPreferencesKey("locker_bg_migrated")
+        // #LOCKER-UX-3: одноразовый сброс зависимых пунктов локера
+        // (migrateLockerDependentsOff: биометрия off всегда, onBackground off
+        // без PIN).
+        val LOCKER_DEP_MIGRATED = intPreferencesKey("locker_dep_migrated")
         // Navigation
         val LAST_ROUTE           = stringPreferencesKey("last_route")
         // #NAV-GROUP-VIDEO-RESTORE (Fix #344): контекст сообщества.
