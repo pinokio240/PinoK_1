@@ -8884,3 +8884,19 @@ Work Log:
 
 Stage Summary:
 - Молчаливый no-op зависимых тумблеров устранён: включение «Блокировки при возврате из фона»/«Биометрии» без PIN теперь ведёт через задание PIN (один диалог — и блокировка реально работает). Пользователю: git pull, пересобрать, выключить/включить тумблер «Блокировка при возврате из фона» → задать PIN → свернуть/развернуть — PIN-пад появится. Если нет — прислать logcat (диагностика a5abd16d покажет точную причину пропуска).
+
+---
+Task ID: 36-e
+Agent: Z.ai Code (Sergey)
+Task: пользователь прислал лог (Pasted Content_1789149959866.txt): «предупреждение про незаданный PIN не появилось», «свернуть → развернуть — PIN-пад не появляется» — разбор по факту
+
+Work Log:
+- Лог-факты: boot-чек сработал («Locker enabled, launching LockerActivity», MainActivity.kt:788 — билд свежий, PIN УСТАНОВЛЕН, lockerEnabled=true → подпись-предупреждение #LOCKER-UX-2 честно не показывалась — она только для пустого хэша); НО на всех 5 возвратах из фона (20:57:39, 20:57:56, 20:59:51, 21:00:34 + пост-unlock 20:57:11) — MainActivity onCreate при ЖИВОМ процессе (pid 11724): система убивает фоновую активити (Don't keep activities / агрессивная оболочка), все возвраты идут через пересоздание.
+- Root-cause #LOCKER-BG-RECREATE: флаг isBackgrounded был полем ЭКЗЕМПЛЯРА → новый экземпляр стартовал с false → resume-чек «Блокировки при возврате из фона» молчал (нет ни запуска, ни диагностического лога — совпадает с логом), а boot-чек скипался по static lockerBootCheckDone + восстановленному bootLocal → ни один из двух путей локера не срабатывал. Побочно: Fix #377 refreshNow/evictAll, maybeProactiveTokenRefresh, checkTokenValidity, #BG-AUTH-LOOP тоже молчали на таких возвратах.
+- Фикс: флаг перенесён в companion object (static, @Volatile, private) — wasStopped; onStop() armит ТОЛЬКО при !isChangingConfigurations (стоп под пересоздание на поворот/тему/язык — не уход в фон, иначе PIN-пад на каждом повороте); onResume-потребители (Fix #377 сеть/пул, proactive refresh, checkTokenValidity, #BG-AUTH-LOOP, silent-retry, locker-блок) переключены на static (replace_all isBackgrounded→wasStopped, декларация экземпляра удалена); runBlocking-фолбэк (cached==null — теперь ОСНОВНОЙ путь при возврате через пересоздание, т.к. lastPrefsSnapshot — поле экземпляра) получил диагностику пропуска a5abd16d-формата + честный комментарий вместо «Редкий случай».
+- Сценарии перепроверены статически: холодный старт (boot-локер), возврат через recreate (resume-локер — НОВОЕ покрытие), grace-петля после unlock (consume), kill MainActivity ЗА LockerActivity (armed → grace-скип), config-change в форграунде (guard — не armим), process death (static сброшен → boot-путь), PiP/сплит (паритет со старым поведением).
+- Инцидент: git-состояние песочницы вновь откатывалось к 93514bef — восстановлено reset --hard origin/PinoK (cd15be26) до правок; MultiEdit-атомарность снова не соблюдалась в 36-d (см. там).
+- Валидация: check-nested-comments ALL CLEAN (178), check-secrets OK (74), hunk-скобки: net-delta 0 по {} () [] (added 14/8+42/43+1/1, removed 7/1+17/18+0/0), !! в добавленных строках 0.
+
+Stage Summary:
+- #LOCKER-BG-RECREATE: «Блокировка при возврате из фона» теперь срабатывает и когда система убила активити в фоне (главный сценарий пользователя: каждое возвращение = onCreate). Побочно оживлены Fix #377/#112/#BG-AUTH-LOOP на recreate-возвратах. Пользователю: git pull (01ac5813+этот коммит), пересобрать, свернуть → подождать >5с → развернуть → PIN-пад; лог-крошки: «Locker on background (fallback…): launching» или причина пропуска.

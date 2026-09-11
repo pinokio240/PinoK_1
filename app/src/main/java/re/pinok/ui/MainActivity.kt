@@ -142,6 +142,36 @@ class MainActivity : ComponentActivity() {
          */
         @Volatile
         private var lockerBootCheckDone: Boolean = false
+
+        /**
+         * #LOCKER-BG-RECREATE (волна 36): process-level флаг «видимая активити
+         * уходила в onStop и её onResume ещё не отработал». Специально static
+         * (companion), а НЕ поле экземпляра — переживает УНИЧТОЖЕНИЕ MainActivity
+         * системой в фоне: Don't keep activities / агрессивные оболочки убивают
+         * фоновую активити через ~15-30с, процесс при этом ЖИВ (statics целы).
+         * Лог 2026-09-11: onStop 20:57:18 → onCreate 20:57:39 (pid тот же),
+         * ВСЕ возвраты из фона — через onCreate.
+         *
+         * Семафор arm/consume:
+         *  - onStop() → wasStopped = true, ТОЛЬКО если !isChangingConfigurations
+         *    (стоп под пересоздание активити на поворот/тему/язык — не уход в
+         *    фон; без guard'а локер срабатывал бы на каждом повороте экрана);
+         *  - onResume() → locker-блок консьюмит (wasStopped=false) и решает:
+         *    условия локера + grace → запуск LockerActivity, иначе —
+         *    диагностический лог причины пропуска (a5abd16d).
+         *
+         * Остальные resume-потребители (Fix #377 refreshNow/evictAll,
+         * maybeProactiveTokenRefresh, checkTokenValidity, #BG-AUTH-LOOP-FIX,
+         * silent-retry #SILENT-RETRY-AFTER-DOZE) читают флаг БЕЗ сброса —
+         * теперь они тоже срабатывают на возврате через пересоздание
+         * (раньше молчали: instance-флаг нового экземпляра был false).
+         *
+         * Process death (убит весь процесс): static сброшен → флаг false, НО
+         * boot-путь сам запускает локер (lockerBootCheckDone=false в новом
+         * процессе) — покрытие полное.
+         */
+        @Volatile
+        private var wasStopped: Boolean = false
     }
 
     /**
@@ -433,7 +463,7 @@ class MainActivity : ComponentActivity() {
      * при возврате из фона, ДО того как первый API-вызов упрётся в err 5/1117
      * и запустит реактивный контур (H2 из разведки 26-1-d).
      *
-     * Условия (вызывается из onResume при isBackgrounded):
+     * Условия (вызывается из onResume при wasStopped):
      *  - до истечения web-токена < 5 минут (TTL web_token 15мин-24ч — после
      *    сна он часто уже на исходе), ИЛИ
      *  - токен помечен invalidated (VK уже отверг его err 5/1117).
@@ -523,7 +553,7 @@ class MainActivity : ComponentActivity() {
             }
             withContext(Dispatchers.Main) {
                 silentRetryScheduled = false
-                if (isBackgrounded) {
+                if (wasStopped) {
                     AppLog.d("MainActivity", "SILENT retry: app backgrounded again — #BG-AUTH-LOOP-FIX handles on next resume")
                     return@withContext
                 }
@@ -582,16 +612,17 @@ class MainActivity : ComponentActivity() {
     private var pendingDeepLink by mutableStateOf<re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction?>(null)
 
     /**
-     * #29 (закрытие хвостов): флаг lockerOnBackground — был ли активити свёрнут.
-     *
-     * Логика:
-     *  - onStop() → isBackgrounded = true (активити ушло в фон)
-     *  - onResume() → если isBackgrounded && snap.lockerOnBackground && snap.lockerEnabled
-     *    → запускаем LockerActivity (требование PIN при возврате из фона)
-     *
-     * Без этого флага LockerActivity показывался только при холодном старте приложения.
+     * #29 (закрытие хвостов) / #LOCKER-BG-RECREATE (волна 36): флаг «активити
+     * уходило в onStop и resume ещё не отработал» — см. companion-поле
+     * [wasStopped]. Раньше это было поле ЭКЗЕМПЛЯРА (isBackgrounded) и умирало
+     * вместе с активити: на устройстве пользователя (Don't keep activities /
+     * агрессивная оболочка) КАЖДЫЙ возврат из фона шёл через пересоздание
+     * MainActivity (лог 2026-09-11: onCreate на всех 5 возвратах, процесс
+     * жив) → новый экземпляр стартовал с false → resume-чек «Блокировки при
+     * возврате из фона» молчал (ни запуска локера, ни диагностического лога),
+     * а boot-чек скипался по static lockerBootCheckDone + восстановленному
+     * bootLocal → PIN-пад не появлялся вовсе.
      */
-    private var isBackgrounded = false
 
     /**
      * Fix #377 #DOZE-STALE-POOL: timestamp последнего resume из фона.
@@ -1507,7 +1538,7 @@ class MainActivity : ComponentActivity() {
         // значение (колбэки ConnectivityManager не приходили) — весь дальнейший
         // resume-контур (checkTokenValidity / #BG-AUTH-LOOP-FIX / silent retry)
         // должен видеть реальное состояние сети, а не значение до сна.
-        if (isBackgrounded) {
+        if (wasStopped) {
             app.networkObserver.refreshNow()
             // Fix #377 #DOZE-STALE-POOL: keep-alive TCP-соединения за Doze мертвы
             // (сервер закрыл их) — первый API-вызов на stale-соединении виснет
@@ -1534,7 +1565,7 @@ class MainActivity : ComponentActivity() {
         // лёгким HTTP-путём (Path 1.5/5), если он на исходе или уже помечен
         // invalidated — ДО checkTokenValidity/launchAuth, чтобы по возможности
         // обойтись вообще без AuthActivity (см. KDoc метода — анализ гонок).
-        if (isBackgrounded && !isOfflineMode) {
+        if (wasStopped && !isOfflineMode) {
             maybeProactiveTokenRefresh(app)
         }
 
@@ -1544,7 +1575,7 @@ class MainActivity : ComponentActivity() {
         // для silent re-login через remixsid). Без этого мы ждём пока LongPoll
         // сделает следующий API запрос и VK вернёт error 5 — а это до 45с
         // если LongPoll был в doRequest.
-        if (isBackgrounded && !isOfflineMode) {
+        if (wasStopped && !isOfflineMode) {
             app.checkTokenValidity()
         }
 
@@ -1562,7 +1593,7 @@ class MainActivity : ComponentActivity() {
         // m.vk.ru, tryReadWebToken прочитает localStorage → auth завершится.
         //
         // Throttle (20с) уже есть в launchAuth (Fix #230) — не будет zацикливаться.
-        if (isBackgrounded && !isOfflineMode && !authActivityShowing) {
+        if (wasStopped && !isOfflineMode && !authActivityShowing) {
             if (!app.tokenStorage.hasValidToken()) {
                 val hasRemixsid = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
                 AppLog.i("MainActivity", "onResume (#BG-AUTH-LOOP-FIX): token invalid after background — launching AuthActivity (${if (hasRemixsid) "SILENT" else "FULL"})")
@@ -1576,7 +1607,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // #29 (закрытие хвостов): lockerOnBackground — если активити вернулось
-        // из фона (isBackgrounded=true) и включена блокировка при уходе в фон
+        // из фона (wasStopped=true) и включена блокировка при уходе в фон
         // (lockerOnBackground=true) И включен PIN (lockerEnabled=true),
         // показываем LockerActivity. Без этого — LockerActivity показывался
         // только при холодном старте приложения.
@@ -1589,11 +1620,11 @@ class MainActivity : ComponentActivity() {
         // для locker prefs (меняются только через настройки) практически всегда
         // актуален. Если null (холодный старт, ещё не было recomposition) —
         // fallback на runBlocking, но это раз в сессию, не на каждом resume.
-        if (isBackgrounded) {
-            isBackgrounded = false
+        if (wasStopped) {
+            wasStopped = false
             val t0 = System.currentTimeMillis()
             // Fix #380 #LOCKER-RELOCK-LOOP: LockerActivity (непрозрачная
-            // Theme.PinoK) кладёт MainActivity в onStop → isBackgrounded=true.
+            // Theme.PinoK) кладёт MainActivity в onStop → wasStopped=true.
             // После успешного ввода PIN (finish) onResume видел «возврат из
             // фона» и при включённой «Блокировке при возврате из фона» запускал
             // LockerActivity ЗАНОВО — бесконечный цикл «ввёл верный PIN — снова
@@ -1631,14 +1662,19 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } else {
-                // Холодный старт: snapshot ещё не пришёл из DataStore. Редкий случай.
-                // runBlocking здесь приемлем — это НЕ путь «разблокировки экрана»
-                // (на разблокировке snapshot уже есть с предыдущей сессии).
+                // #LOCKER-BG-RECREATE: пустой кэш — не только холодный старт.
+                // Так же выглядит возврат из фона через ПЕРЕСОЗДАННУЮ активити:
+                // lastPrefsSnapshot — поле экземпляра, новый экземпляр его не
+                // наследует. На устройствах с Don't keep activities /
+                // агрессивной оболочкой это ОСНОВНОЙ путь resume-чека (лог
+                // 2026-09-11: ВСЕ возвраты — через onCreate). runBlocking
+                // приемлем: один раз на экземпляр — после чтения кэш
+                // заполнится, дальнейшие resume идут по быстрому cached-пути.
                 kotlinx.coroutines.runBlocking {
                     val snap = app.prefs.data.first()
                     lastPrefsSnapshot = snap
                     if (snap.lockerEnabled && snap.lockerOnBackground && snap.lockerPinHash.isNotBlank() && !unlockGrace) {
-                        AppLog.i("MainActivity", "Locker on background (cold-start fallback, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
+                        AppLog.i("MainActivity", "Locker on background (fallback: no cached snapshot — recreation/cold start, ${System.currentTimeMillis() - t0}ms): launching LockerActivity")
                         lockerVerifiedThisSession = true
                         // Fix #PIN-CORE #LOCKER-TO-CORE-UI: хэш/флаг — из свежепрочитанного
                         // runBlocking-снапшота prefs (Intent-extras).
@@ -1647,6 +1683,20 @@ class MainActivity : ComponentActivity() {
                             snap.lockerPinHash,
                             snap.lockerBiometric,
                         )
+                    } else {
+                        // Диагностика a5abd16d и здесь: без неё возврат через
+                        // пересоздание при невыполненном условии молчал бы —
+                        // а это был ровно симптом жалобы пользователя.
+                        if (unlockGrace) {
+                            AppLog.i("MainActivity", "Locker on background skipped (fallback): unlock grace active (just unlocked)")
+                        } else {
+                            AppLog.i(
+                                "MainActivity",
+                                "Locker on background not needed (fallback): enabled=${snap.lockerEnabled}, " +
+                                    "onBackground=${snap.lockerOnBackground}, " +
+                                    "pinHashBlank=${snap.lockerPinHash.isBlank()}",
+                            )
+                        }
                     }
                 }
             }
@@ -1694,8 +1744,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Фиксируем что активити ушло в фон — onResume проверит этот флаг.
-        isBackgrounded = true
+        // #LOCKER-BG-RECREATE: armим process-level флаг — onResume (в том
+        // числе ПЕРЕСОЗДАННОГО экземпляра после убийства активити системой
+        // в фоне) выполнит resume-чек локера. isChangingConfigurations=true
+        // → это стоп под пересоздание (поворот/тема/язык), а НЕ уход в фон —
+        // не armим, чтобы PIN-пад не выскакивал на каждом повороте экрана.
+        // Старый комментарий («Фиксируем что активити ушло в фон») в силе:
+        // флаг теперь static — семантика та же, живучесть другая.
+        if (!isChangingConfigurations) {
+            wasStopped = true
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
