@@ -8900,3 +8900,25 @@ Work Log:
 
 Stage Summary:
 - #LOCKER-BG-RECREATE: «Блокировка при возврате из фона» теперь срабатывает и когда система убила активити в фоне (главный сценарий пользователя: каждое возвращение = onCreate). Побочно оживлены Fix #377/#112/#BG-AUTH-LOOP на recreate-возвратах. Пользователю: git pull (01ac5813+этот коммит), пересобрать, свернуть → подождать >5с → развернуть → PIN-пад; лог-крошки: «Locker on background (fallback…): launching» или причина пропуска.
+
+---
+Task ID: 36-e
+Agent: Z.ai Code (main)
+Task: #LOCKER-UX-3 — по запросу пользователя (2026-09-11, скрин + текст): «При отключении пин кода, "Блокировка при возврате из фона" тоже должна отключиться. "Биометрия (требует PIN)" - удалить».
+
+Work Log:
+- Проверил git-состояние: HEAD=215a9794 (#LOCKER-BG-RECREATE), origin синхронен, рабочее дерево чистое — отката песочницы нет.
+- Присланный лог (Pasted Content_1789151297461.txt, 2002 строк) — старт процесса re.pinok.debug на экране чата; строк Locker/Settings/#PIN НЕ содержит, диагностической ценности для прошлой проблемы нет (снят до входа в Настройки/локер-сценария).
+- SettingsScreen.kt: обе ветки выключения PIN-тумблера (прямая storedHash.isBlank() и PinVerifyDialog onVerified #PIN-DISABLE-VERIFY) теперь каскадом пишут setLockerOnBackground(false)+setLockerBiometric(false); AppLog-крошка расширена.
+- SettingsScreen.kt: айтем «Биометрия (требует PIN)» удалён; enum PinSetupReason потерял BIOMETRIC; when(pinSetupReason) в onPinSet вырожден в прямой setLockerOnBackground(true) (Fix #380 семантика сохранена); KDoc обновлены, версия стампа #LOCKER-UX-3.
+- SovaPrefs.kt: миграция migrateLockerDependentsOff (флаг Keys.LOCKER_DEP_MIGRATED="locker_dep_migrated"): lockerBiometric→false ВСЕГДА (единственный писатель — удалённый тумблер; иначе зомби-кнопка «Войти по отпечатку» в LockerActivity, которую нечем выключить), lockerOnBackground→false при pinHash blank (чистит сломанное состояние юзера onBackground=true+пустой хэш; с PIN не трогаем). AppLog-крошка внутри.
+- SovaApp.kt: вызов migrateLockerDependentsOff() в onCreate рядом с migrateLockerOnBackgroundOn() + крошка.
+- Инфраструктура биометрии НЕ тронута: LockerActivity (EXTRA_BIOMETRIC/BiometricPrompt), SovaPrefs-сеттер/ключ/Snapshot-поле, MainActivity-передача — revert-путь = вернуть айтем + миграцию.
+- Правки применялись ПО ОДНОЙ (Edit, не MultiEdit — урок 36-d). Инцидентов с атомарностью нет.
+- Валидация: check-nested-comments ALL CLEAN (178), check-secrets OK (74), hunk-скобки net-delta 0 по {} () [] с вычисткой комментариев/строк (сырой счёт по добавленным строкам давал (-2) из-за скобок в тексте комментариев — учтено), !! в adds 0.
+- Коммит 47ba3d5f запушен (215a9794..47ba3d5f → origin/PinoK), stamp wave36-2026.09.11-c.
+
+Stage Summary:
+- Семантика вкладки «Защита» теперь: PIN — мастер-выключатель; «Блокировка при возврате из фона» — зависимый пункт, гаснущий при выключении PIN; биометрии в UI больше нет (и в DataStore принудительно off после первого запуска новой сборки).
+- Пользователю: git pull (47ba3d5f), пересобрать APK, установить. После первого старта миграция сама погасит «Блокировку при возврате из фона», если PIN не задан (предупреждение исчезнет), и уберёт биометрию, если была включена.
+- Сценарий проверки: Настройки → Защита: строки «Биометрия» нет; включить PIN (задать код) → onBackground включится авто; выключить PIN (ввод текущего) → тумблер «Блокировка при возврате из фона» сам уйдёт в off.
