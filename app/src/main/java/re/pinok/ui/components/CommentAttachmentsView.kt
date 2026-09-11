@@ -16,7 +16,6 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -44,7 +43,12 @@ import re.pinok.data.model.Video
  * Поддерживаемые типы (как VK web в комментариях):
  *  - photo  — компактная сетка (1 → крупно 200dp, 2 → 2 колонки, 3+ → 3 колонки);
  *  - video  — превью 16:9 с кнопкой play, названием и длительностью;
- *  - audio  — строка трека (название/артист/длительность);
+ *  - audio  — ВОСПРОИЗВОДИМЫЙ список треков комментария (#AUDIO-COMMENTS, волна 37):
+ *    аудио собираются в блок AudioAttachmentList (тап = play/pause, список треков
+ *    комментария = очередь; трек без URL резолвится через audioGetById + al_audio).
+ *    Раньше здесь была статичная строка CommentAudioRow без click-обработчика —
+ *    тап ничего не делал (жалоба пользователя 2026-09-11: «Аудио треки в
+ *    комментариях не воспроизводятся»);
  *  - doc    — чип документа (название.ext, размер); голосовое (audio_msg) → voice-чип;
  *  - audio_message — voice-чип (длительность);
  *  - link   — карточка ссылки (заголовок/хост/описание);
@@ -87,6 +91,21 @@ fun CommentAttachmentsView(
             CommentPhotosGrid(urls = photoUrls, onClick = { idx -> onPhotoClick(photoUrls, idx) })
         }
 
+        // #AUDIO-COMMENTS (волна 37): аудио-вложения комментария собираются в список
+        // и рендерятся единым блоком AudioAttachmentList (тап = play/pause, треки
+        // комментария = очередь, резолв URL внутри). Раньше аудио рендерилось
+        // статичной CommentAudioRow без click-обработчика — тап ничего не делал
+        // (жалоба 2026-09-11: «Аудио треки в комментариях не воспроизводятся»).
+        val audioTracks = mutableListOf<Track>()
+        for (att in attachments) {
+            // NULL-ЯВНО: Gson-цепочка (attachment.audio опционален по схеме VK).
+            val audio = att.audio
+            if (att.type == "audio" && audio != null) audioTracks.add(audio)
+        }
+        if (audioTracks.isNotEmpty()) {
+            AudioAttachmentList(tracks = audioTracks)
+        }
+
         // Остальные вложения по порядку следования в комментарии.
         for (att in attachments) {
             when (att.type) {
@@ -98,11 +117,7 @@ fun CommentAttachmentsView(
                         CommentVideoThumb(video = video, onClick = { onVideoClick(video) })
                     }
                 }
-                "audio" -> {
-                    // NULL-ЯВНО: Gson-цепочка.
-                    val track = att.audio
-                    if (track != null) CommentAudioRow(track = track)
-                }
+                "audio" -> { /* уже в блоке AudioAttachmentList выше (#AUDIO-COMMENTS) */ }
                 "doc" -> {
                     // NULL-ЯВНО: Gson-цепочка; isVoiceMessage не смарт-кастит audioMsg
                     // (это getter другого класса) — явная проверка.
@@ -238,43 +253,10 @@ private fun CommentVideoThumb(video: Video, onClick: () -> Unit) {
     }
 }
 
-/** Строка аудио из комментария (без плеера — как VK web: заголовок/артист/время). */
-@Composable
-private fun CommentAudioRow(track: Track) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Outlined.MusicNote,
-            contentDescription = "Аудио",
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-        )
-        Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-            Text(
-                text = track.title,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-            )
-            Text(
-                text = track.artist,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
-        Text(
-            text = formatCommentDuration(track.duration),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
+// CommentAudioRow УДАЛЕН (#AUDIO-COMMENTS, волна 37): был статичной строкой без
+// click-обработчика («без плеера — как VK web»), тап ничего не делал. Аудио
+// комментария теперь рендерится воспроизводимым блоком AudioAttachmentList
+// (см. сбор audioTracks в CommentAttachmentsView выше).
 
 /** Чип документа из комментария: «название.ext · размер». */
 @Composable
