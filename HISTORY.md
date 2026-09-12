@@ -12634,3 +12634,20 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 3. Счётчики: Фото/Видео/Аудио открывают свои разделы (профиль сверху), Подарки проматывают стену к открыткам, Друзья/Подписчики — свои экраны.
 4. Табы: Музыка — список всех треков + «Показать ещё»; Видео — сетка 2×N + дозагрузка; Фото — сетка 3×N + дозагрузка (тап — полноэкранный просмотр).
 5. Для тестировщика: пересобрать APK — непрочитанное (метка в списке диалогов), ✓✓ при прочтении собеседником, фото сообщения на весь экран — уже в этой сборке; «непрочитанное у собеседника» невозможно по API VK.
+
+---
+
+## 📹 Волна 38, часть 2 (2026-09-12) — #VIDEO-BG-KEEP: фоновое видео умирает через ~200 мс после ухода в фон
+
+**Запрос:** «Не работает так как ты это говоришь, для начало сделай что бы видео просто воспроизводилось в фоне» (ответ тестера на #LOCKSCREEN-FIX волны 36) + logcat 804 строки.
+
+**Root-cause по logcat (20:04:43):** `onBackgrounded` → `VideoPlaybackService onCreate «session ready»` (сервис честно поднялся) → **через 160 мс dispose композиции → onPlayerReleased → ExoPlayer Release** → `VideoPlaybackService onDestroy`. Затем `MainActivity onCreate` в тот же процесс. Система (HOTWAV Cyber 15, «Не сохранять действия»/агрессивная ROM-политика) уничтожает активити сразу после onStop → вся nav-композиция (VideoPlayerScreen + FeedScreen) dispose → `DisposableEffect(exoPlayer)` релизил плеер **безусловно** → сервис-оболочка оставался без плеера. Владелец плеера был — КОМПОЗИЦИЯ, а не процесс.
+
+**Фикс (5e9d958c, 3 файла):**
+- **VideoPlaybackBus** — процессный владелец жизненного цикла: `videoKey` (идентификатор видео), `screenAttached`, `livePlayerFor(key)` — переиспользование живого плеера после recreate активити (бесшовный возврат: позиция/скорость сохранены, картинка через `PlayerView.update`), `markScreenAttached()` синхронно из DisposableEffect, `onScreenDetachedInBackground()` — dispose при 0 активити НЕ релизит плеер (звук продолжается, сервис держит MediaSession/уведомление), `releaseOrphanedPlayer()`, `onPlayerReady(+videoKey)` — подмена инстанса (открыто другое видео при живом осиротевшем: stopService + release предыдущего).
+- **VideoPlayerScreen** — dispose ветвится по `app.isAnyActivityForeground()`: foreground (back/смена экрана) = прежний полный teardown; фон = `onScreenDetachedInBackground`. `remember(resolvedVideo)` сначала ищет живой плеер того же видео. Resume музыки при dispose в фоне заблокирован (иначе музыка поверх видео).
+- **VideoPlaybackService** — `Player.Listener STATE_ENDED → stopSelf` (видео доиграло в фоне — уведомление не висит до смерти процесса), `onDestroy → releaseOrphanedPlayer` (guard по screenAttached).
+
+**Проверка пользователем:** git pull (HEAD ≥ 5e9d958c) → пересборка. Видео → Home/свернуть: звук продолжается, в шторке медиа-уведомление (play/pause, ±N сек); вернуть приложение: картинка на месте, воспроизведение не прерывалось; «Назад» при открытом приложении: остановка как раньше. Если звук глохнет — logcat строки «#VIDEO-BG-KEEP: dispose в фоне — ExoPlayer продолжает играть» / «onScreenDetachedInBackground: player keeps playing».
+
+**Валидация:** nested ALL CLEAN, secrets OK, Kotlin-лексер скобок (стек режимов: строки/raw-строки/${шаблоны}/комментарии) — база HEAD и правки SYMMETRIC; NULL-ЯВНО: 0 !! / ?. в новых строках.
