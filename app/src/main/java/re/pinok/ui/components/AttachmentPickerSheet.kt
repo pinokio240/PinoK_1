@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,7 +48,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -211,6 +216,10 @@ private fun tabIcon(tab: AttachmentPickerTab) = when (tab) {
 
 // ============================================================================
 //  Tab: Музыка — список треков из audio.get библиотеки пользователя.
+//  #AUDIO-PAGING-ALL (волна 38): была одна страница на 50 треков — при
+//  библиотеке больше 50 до конца списка было не доскроллить. Теперь
+//  серверная пагинация по offset (audioGetWithCount) с автодогрузкой
+//  по скроллу до конца; стоп по неполной странице (VK total не доверяем).
 // ============================================================================
 
 @Composable
@@ -218,17 +227,58 @@ private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var serverOffset by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMore() {
+        if (loadingMore || loading || !hasMore) return
+        scope.launch {
+            loadingMore = true
+            try {
+                val (_, page) = app.apiClient.audioGetWithCount(count = 50, offset = serverOffset)
+                serverOffset += page.size
+                val fresh = page
+                    .filter { it.id > 0L && it.ownerId != 0L }
+                    .filter { nv -> tracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                tracks = (tracks + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                hasMore = page.size >= 50
+            } catch (e: Exception) {
+                AppLog.e("AudioPicker", "load more failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         loading = true
         try {
-            tracks = app.apiClient.audioGet(count = 50)
+            val (_, page) = app.apiClient.audioGetWithCount(count = 50, offset = 0)
+            tracks = page.filter { it.id > 0L && it.ownerId != 0L }
+                .distinctBy { "${it.ownerId}_${it.id}" }
+            serverOffset = page.size
+            hasMore = page.size >= 50
         } catch (e: Exception) {
             AppLog.e("AudioPicker", "load failed", e)
             error = e.message
         } finally {
             loading = false
         }
+    }
+
+    // Автодогрузка при скролле к концу списка.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 5) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMore() }
     }
 
     when {
@@ -241,9 +291,19 @@ private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
         tracks.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text("Библиотека пуста", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+        else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
                 AudioTrackRow(track = track, onClick = { onPick(track) })
+            }
+            if (hasMore) {
+                item(key = "audio_picker_more") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
             }
         }
     }

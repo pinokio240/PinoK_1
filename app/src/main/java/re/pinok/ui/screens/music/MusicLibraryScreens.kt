@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,6 +41,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -108,17 +111,47 @@ fun MusicPlaylistsScreen(
     var playlists by remember { mutableStateOf<List<AudioPlaylist>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    // #AUDIO-PAGING-ALL (волна 38): была одна страница на 50 плейлистов —
+    // при библиотеке больше 50 до конца списка было не доскроллить.
+    var serverOffset by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMore() {
+        if (loadingMore || loading || !hasMore) return
+        scope.launch {
+            loadingMore = true
+            try {
+                val (_, page) = app.apiClient.audioGetPlaylists(count = 50, offset = serverOffset)
+                serverOffset += page.size
+                val fresh = page.filter { nv -> playlists.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                playlists = (playlists + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                // Полная страница → догружаем дальше (total не доверяем).
+                hasMore = page.size >= 50
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("MusicPlaylistsScreen", "load more failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         loading = true
         errorText = null
         try {
-            val (total, list) = app.apiClient.audioGetPlaylists(count = 50)
+            val (total, list) = app.apiClient.audioGetPlaylists(count = 50, offset = 0)
             playlists = list
+            serverOffset = list.size
+            hasMore = list.size >= 50
             if (list.isEmpty()) {
                 errorText = "Нет плейлистов"
             }
-            AppLog.i("MusicPlaylistsScreen", "Loaded ${list.size} playlists (total=$total)")
+            AppLog.i("MusicPlaylistsScreen", "Loaded ${list.size} playlists (total=$total hasMore=$hasMore)")
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -127,6 +160,18 @@ fun MusicPlaylistsScreen(
         } finally {
             loading = false
         }
+    }
+
+    // #AUDIO-PAGING-ALL: автодогрузка при доскролле до конца.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 4) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMore() }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(VK_BLACK)) {
@@ -138,7 +183,7 @@ fun MusicPlaylistsScreen(
             errorText != null && playlists.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(errorText ?: "", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
             }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 items(playlists, key = { "${it.ownerId}_${it.id}" }) { pl ->
                     PlaylistRow(
                         title = pl.title,
@@ -146,6 +191,14 @@ fun MusicPlaylistsScreen(
                         subtitle = if (pl.count > 0) "${pl.count} треков" else null,
                         onClick = { onOpenPlaylist(pl.ownerId, pl.id, pl.accessKey) },
                     )
+                }
+                // #AUDIO-PAGING-ALL: футер догрузки.
+                if (hasMore) {
+                    item(key = "playlists_more") {
+                        Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VK_ACCENT)
+                        }
+                    }
                 }
             }
         }
@@ -315,13 +368,44 @@ fun MusicAlbumsScreen(
     var albums by remember { mutableStateOf<List<AudioPlaylist>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
+    // #AUDIO-PAGING-ALL (волна 38): страничный поиск альбомов — догрузка по
+    // скроллу до конца выдачи (раньше — одна страница на 30 результатов).
+    var albumsNextFrom by remember { mutableStateOf<String?>(null) }
+    var albumsLoadingMore by remember { mutableStateOf(false) }
+    val albumsListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMoreAlbums() {
+        if (albumsLoadingMore || loading) return
+        val cursor = albumsNextFrom ?: return
+        val q = query
+        if (q.isBlank()) return
+        scope.launch {
+            albumsLoadingMore = true
+            try {
+                val (nf, page) = app.apiClient.audioSearchAlbumsPage(query = q, count = 30, startFrom = cursor)
+                albumsNextFrom = nf
+                albums = (albums + page).distinctBy { "${it.ownerId}_${it.id}" }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("MusicAlbumsScreen", "load more failed: ${e.message}")
+            } finally {
+                albumsLoadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(query) {
-        if (query.isBlank()) { albums = emptyList(); searched = false; return@LaunchedEffect }
+        if (query.isBlank()) {
+            albums = emptyList(); searched = false; albumsNextFrom = null; return@LaunchedEffect
+        }
         kotlinx.coroutines.delay(400)
         loading = true
         try {
-            albums = app.apiClient.audioSearchAlbums(query = query, count = 30)
+            val (nf, page) = app.apiClient.audioSearchAlbumsPage(query = query, count = 30)
+            albums = page
+            albumsNextFrom = nf
             searched = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -330,6 +414,18 @@ fun MusicAlbumsScreen(
         } finally {
             loading = false
         }
+    }
+
+    // #AUDIO-PAGING-ALL: автодогрузка результатов поиска альбомов.
+    LaunchedEffect(albumsListState) {
+        snapshotFlow {
+            val info = albumsListState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 4) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMoreAlbums() }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(VK_BLACK)) {
@@ -362,10 +458,10 @@ fun MusicAlbumsScreen(
             searched && albums.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Ничего не найдено", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
             }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize(), state = albumsListState) {
                 // Fix #MUSIC-CRASH-5: ключ с индексом — дубли ключей в LazyColumn
                 // недопустимы (IllegalArgumentException → краш). Данные уже
-                // дедуплицированы в audioSearchAlbums, индекс — страховка.
+                // дедуплицированы в audioSearchAlbumsPage, индекс — страховка.
                 itemsIndexed(albums, key = { i, al -> "album_${i}_${al.ownerId}_${al.id}" }) { _, al ->
                     PlaylistRow(
                         title = al.title,
@@ -373,6 +469,14 @@ fun MusicAlbumsScreen(
                         subtitle = if (al.count > 0) "${al.count} треков" else null,
                         onClick = { onOpenAlbum(al.ownerId, al.id, al.accessKey) },
                     )
+                }
+                // #AUDIO-PAGING-ALL: футер догрузки альбомов.
+                if (albumsLoadingMore) {
+                    item(key = "albums_more") {
+                        Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VK_ACCENT)
+                        }
+                    }
                 }
             }
         }
@@ -394,13 +498,45 @@ fun MusicArtistsScreen(
     var artists by remember { mutableStateOf<List<AudioArtist>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
+    // #AUDIO-PAGING-ALL (волна 38): страничный поиск артистов — догрузка по
+    // скроллу до конца выдачи (раньше — одна страница на 30 результатов).
+    var artistsNextFrom by remember { mutableStateOf<String?>(null) }
+    var artistsLoadingMore by remember { mutableStateOf(false) }
+    val artistsListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMoreArtists() {
+        if (artistsLoadingMore || loading) return
+        val cursor = artistsNextFrom ?: return
+        val q = query
+        if (q.isBlank()) return
+        scope.launch {
+            artistsLoadingMore = true
+            try {
+                val (nf, page) = app.apiClient.audioSearchArtistsPage(query = q, count = 30, startFrom = cursor)
+                artistsNextFrom = nf
+                // Артисты из links[] приходят с id=0 — дедуп по имени/domain (Fix #281).
+                artists = (artists + page).distinctBy { a -> a.domain?.takeIf { it.isNotBlank() } ?: a.name.lowercase() }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("MusicArtistsScreen", "load more failed: ${e.message}")
+            } finally {
+                artistsLoadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(query) {
-        if (query.isBlank()) { artists = emptyList(); searched = false; return@LaunchedEffect }
+        if (query.isBlank()) {
+            artists = emptyList(); searched = false; artistsNextFrom = null; return@LaunchedEffect
+        }
         kotlinx.coroutines.delay(400)
         loading = true
         try {
-            artists = app.apiClient.audioSearchArtists(query = query, count = 30)
+            val (nf, page) = app.apiClient.audioSearchArtistsPage(query = query, count = 30)
+            artists = page
+            artistsNextFrom = nf
             searched = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -409,6 +545,18 @@ fun MusicArtistsScreen(
         } finally {
             loading = false
         }
+    }
+
+    // #AUDIO-PAGING-ALL: автодогрузка результатов поиска артистов.
+    LaunchedEffect(artistsListState) {
+        snapshotFlow {
+            val info = artistsListState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 4) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMoreArtists() }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(VK_BLACK)) {
@@ -441,7 +589,7 @@ fun MusicArtistsScreen(
             searched && artists.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Ничего не найдено", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
             }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize(), state = artistsListState) {
                 // Fix #MUSIC-CRASH-2 (UI-сторона): ключ = domain ?: id → при ≥2
                 // артистах без domain все ключи «0» → IllegalArgumentException → краш
                 // («при поиске закрывается приложение»). Индекс гарантирует уникальность.
@@ -473,6 +621,14 @@ fun MusicArtistsScreen(
                         }
                     }
                 }
+                // #AUDIO-PAGING-ALL: футер догрузки артистов.
+                if (artistsLoadingMore) {
+                    item(key = "artists_more") {
+                        Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VK_ACCENT)
+                        }
+                    }
+                }
             }
         }
     }
@@ -493,16 +649,48 @@ fun ArtistDetailScreen(
     var artist by remember { mutableStateOf<AudioArtist?>(null) }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    // #AUDIO-PAGING-ALL (волна 38): страничная догрузка треков артиста по
+    // курсору next_from (раньше — одна страница на 100 треков, дальше — конец).
+    var artistNextFrom by remember { mutableStateOf<String?>(null) }
+    var loadingMore by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMore() {
+        if (loadingMore || loading) return
+        val cursor = artistNextFrom ?: return
+        scope.launch {
+            loadingMore = true
+            try {
+                val (nf, page) = app.apiClient.audioGetAudiosByArtist(
+                    slug = slug, name = name, count = 100, startFrom = cursor)
+                artistNextFrom = nf
+                val fresh = page
+                    .filter { it.id > 0L && !it.url.isNullOrBlank() }
+                    .filter { nv -> tracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                tracks = (tracks + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("ArtistDetailScreen", "load more failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(slug, name) {
         loading = true
+        artistNextFrom = null
         try {
             // #MUSIC-PORT-FIX: artistId — slug артиста, name — имя для поиска.
             // Треки ищем через catalog.getAudioSearch (по имени), фильтруем по main_artists.
-            tracks = app.apiClient.audioGetAudiosByArtist(slug = slug, name = name, count = 100)
-                .filter { it.id > 0L && !it.url.isNullOrBlank() }
+            // #AUDIO-PAGING-ALL: теперь метод возвращает курсор догрузки.
+            val (nf, list) = app.apiClient.audioGetAudiosByArtist(slug = slug, name = name, count = 100)
+            artistNextFrom = nf
+            tracks = list.filter { it.id > 0L && !it.url.isNullOrBlank() }
             artist = AudioArtist(id = 0L, name = name.ifBlank { slug.trimStart('_').replace('_', ' ').ifBlank { "Артист" } })
-            AppLog.i("ArtistDetailScreen", "Loaded ${tracks.size} tracks for artist $slug")
+            AppLog.i("ArtistDetailScreen", "Loaded ${tracks.size} tracks for artist $slug (nextFrom=${if (nf.isNullOrBlank()) "нет" else "есть"})")
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -510,6 +698,18 @@ fun ArtistDetailScreen(
         } finally {
             loading = false
         }
+    }
+
+    // #AUDIO-PAGING-ALL: автодогрузка при доскролле до конца.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 3) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMore() }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(VK_BLACK)) {
@@ -523,9 +723,17 @@ fun ArtistDetailScreen(
                 Text("Треки не найдены", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 item {
                     AudioAttachmentList(tracks = tracks)
+                }
+                // #AUDIO-PAGING-ALL: футер догрузки треков артиста.
+                if (loadingMore) {
+                    item(key = "artist_tracks_more") {
+                        Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = VK_ACCENT)
+                        }
+                    }
                 }
             }
         }
@@ -596,7 +804,11 @@ fun CatalogSectionScreen(
         loading = true
         errorText = null
         try {
-            val blocks = app.apiClient.catalogGetSectionById(sectionId)
+            // #AUDIO-PAGING-ALL (волна 38): был catalogGetSectionById — только
+            // ПЕРВАЯ страница секции («Показать все» обрезался). Теперь метод
+            // догружает ВСЕ страницы секции по курсору start_from (кап 10 страниц
+            // — страховка от вечного цикла).
+            val blocks = app.apiClient.catalogGetSectionAllBlocks(sectionId)
             val allTracks = mutableListOf<Track>()
             val allPlaylists = mutableListOf<CatalogPlaylist>()
             blocks.forEach { b ->

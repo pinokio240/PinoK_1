@@ -64,6 +64,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -74,6 +75,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -153,6 +156,12 @@ fun AudioPlayerScreen(
     var showPlaylistDialog by remember { mutableStateOf(false) }
     var playlists by remember { mutableStateOf<List<AudioPlaylist>>(emptyList()) }
     var playlistsLoading by remember { mutableStateOf(false) }
+    // #AUDIO-PAGING-ALL (волна 38): догрузка плейлистов в диалоге
+    // (было 50 — при большем числе плейлистов до конца не добраться).
+    var playlistsOffset by remember { mutableStateOf(0) }
+    var playlistsHasMore by remember { mutableStateOf(false) }
+    var playlistsLoadingMore by remember { mutableStateOf(false) }
+    val playlistsListState = rememberLazyListState()
     var addingToPlaylist by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -1114,14 +1123,43 @@ fun AudioPlayerScreen(
         LaunchedEffect(showPlaylistDialog) {
             playlistsLoading = true
             try {
-                val (_, result) = app.apiClient.audioGetPlaylists(count = 50)
+                val (_, result) = app.apiClient.audioGetPlaylists(count = 50, offset = 0)
                 playlists = result
+                playlistsOffset = result.size
+                playlistsHasMore = result.size >= 50
             } catch (e: Exception) {
                 AppLog.e("AudioPlayerScreen", "load playlists failed", e)
                 playlists = emptyList()
             } finally {
                 playlistsLoading = false
             }
+        }
+        // #AUDIO-PAGING-ALL: догрузка следующей страницы плейлистов.
+        fun loadMorePlaylists() {
+            if (playlistsLoadingMore || !playlistsHasMore) return
+            scope.launch {
+                playlistsLoadingMore = true
+                try {
+                    val (_, page) = app.apiClient.audioGetPlaylists(count = 50, offset = playlistsOffset)
+                    playlistsOffset += page.size
+                    playlists = (playlists + page).distinctBy { "${it.ownerId}_${it.id}" }
+                    playlistsHasMore = page.size >= 50
+                } catch (e: Exception) {
+                    AppLog.e("AudioPlayerScreen", "load more playlists failed", e)
+                } finally {
+                    playlistsLoadingMore = false
+                }
+            }
+        }
+        LaunchedEffect(playlistsListState) {
+            snapshotFlow {
+                val info = playlistsListState.layoutInfo
+                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+                val total = info.totalItemsCount
+                if (total > 0 && lastVisible >= total - 3) total else -1
+            }
+                .distinctUntilChanged()
+                .collect { if (it > 0) loadMorePlaylists() }
         }
         AlertDialog(
             onDismissRequest = { showPlaylistDialog = false },
@@ -1170,6 +1208,7 @@ fun AudioPlayerScreen(
                     }
                 } else {
                     LazyColumn(
+                        state = playlistsListState,
                         modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                     ) {
                         items(playlists) { playlist ->
@@ -1254,6 +1293,21 @@ fun AudioPlayerScreen(
                                     }
                                 }
                                 if (addingToPlaylist) {
+                                    CircularProgressIndicator(
+                                        color = vkAccent,
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                }
+                            }
+                        }
+                        // #AUDIO-PAGING-ALL: футер догрузки плейлистов диалога.
+                        if (playlistsLoadingMore) {
+                            item(key = "pl_dlg_more") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
                                     CircularProgressIndicator(
                                         color = vkAccent,
                                         modifier = Modifier.size(20.dp),

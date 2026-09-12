@@ -1615,11 +1615,19 @@ data class PlaylistDetails(
     val ownerPhoto: String? = null,
 )
 
-/** Результат audio.searchArtists (расширенный поиск с табами). */
+/**
+ * Результат audio.searchArtists (расширенный поиск с табами).
+ *
+ * #AUDIO-PAGING-ALL (волна 38): nextFrom — серверный курсор catalog.getAudioSearch
+ * (response.next_from) для догрузки следующей партии результатов поиска.
+ * null = курсора нет (fallback-путь audio.search без каталога / конец выдачи) —
+ * UI в этом случае честно останавливает догрузку.
+ */
 data class AudioSearchResult(
     val tracks: List<Track> = emptyList(),
     val artists: List<AudioArtist> = emptyList(),
     val playlists: List<AudioPlaylist> = emptyList(),
+    val nextFrom: String? = null,
 )
 
 /** Dislike статус трека (audio.addDislike/removeDislike). */

@@ -75,6 +75,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -474,7 +477,12 @@ fun ProfileScreen(
                     musicTotal = total
                     musicServerOffset = page.size
                     musicTracks = page.filter { it.id > 0L && !it.url.isNullOrBlank() }
-                    musicHasMore = musicServerOffset < total
+                    // #AUDIO-PAGING-ALL (волна 38): было musicServerOffset < total —
+                    // VK занижает count у аудио (прецедент AudioLibraryPager: total
+                    // НЕ годится как стоп-условие) → «Показать ещё» пропадал раньше
+                    // времени, до конца списка было не доскроллить. Теперь честный
+                    // паттерн полной страницы: полная RAW-страница → догружаем дальше.
+                    musicHasMore = page.size >= PROFILE_MUSIC_PAGE
                     musicLoaded = true
                     AppLog.i("ProfileScreen", "Music tab loaded: ${musicTracks.size} tracks (total=$total)")
                 } catch (e: Exception) {
@@ -1027,7 +1035,9 @@ fun ProfileScreen(
                 musicTotal = total
                 musicServerOffset += page.size
                 musicTracks = musicTracks + page.filter { it.id > 0L && !it.url.isNullOrBlank() }
-                musicHasMore = musicServerOffset < total && page.isNotEmpty()
+                // #AUDIO-PAGING-ALL: full-page-паттерн вместо стопа по заниженному
+                // VK total (см. комментарий в инициализации вкладки выше).
+                musicHasMore = page.size >= PROFILE_MUSIC_PAGE
                 AppLog.i("ProfileScreen",
                     "Music loadMore: +${page.size} (offset=$musicServerOffset total=$total)")
             } catch (e: Exception) {
@@ -1134,6 +1144,23 @@ fun ProfileScreen(
         }
         while (mainListState.layoutInfo.totalItemsCount < 6) delay(50)
         mainListState.animateScrollToItem(mainListState.layoutInfo.totalItemsCount - 1)
+    }
+
+    // #AUDIO-PAGING-ALL (волна 38): автодогрузка музыки профиля — доскроллили
+    // до конца списка → грузим следующую страницу без нажатия «Показать ещё»
+    // (кнопка остаётся как ручной fallback). Поток эмитит total при активном
+    // триггере: после аппенда total растёт → условие перепроверяется.
+    LaunchedEffect(mainListState, selectedContentTab) {
+        if (selectedContentTab != PROFILE_TAB_MUSIC) return@LaunchedEffect
+        snapshotFlow {
+            val info = mainListState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 4) total else -1
+        }
+            .distinctUntilChanged()
+            .filter { it > 0 }
+            .collect { loadMoreMusicPage() }
     }
 
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.

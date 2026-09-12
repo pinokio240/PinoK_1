@@ -175,6 +175,11 @@ fun MusicScreen(
     var searchQuery by remember { mutableStateOf("") }
     var searchResult by remember { mutableStateOf<AudioSearchResult?>(null) }
     var searchLoading by remember { mutableStateOf(false) }
+    // #AUDIO-PAGING-ALL (волна 38): бесконечная догрузка результатов поиска.
+    // Курсор следующей страницы (response.next_from) хранится в searchResult.nextFrom;
+    // null/пусто = конец выдачи (или fallback-путь без курсора) — догрузка честно останавливается.
+    var searchLoadingMore by remember { mutableStateOf(false) }
+    val searchListState = rememberLazyListState()
     // Fix #269: поиск «опущен» во вкладку «Моя музыка» — поле всегда видно
     // вверху вкладки (inline OutlinedTextField в Column). Иконку поиска
     // из TopAppBar убрали — она была незаметна и пользователь жаловался
@@ -224,6 +229,56 @@ fun MusicScreen(
                     searchResult = AudioSearchResult()
                 } finally {
                     searchLoading = false
+                }
+            }
+    }
+
+    // ─── #AUDIO-PAGING-ALL: автодогрузка результатов поиска ──────────────
+    // Доскроллили до конца списка треков → догружаем следующую страницу
+    // catalog.getAudioSearch по курсору. Поток эмитит total при активном
+    // триггере (-1 в покое): после аппенда total растёт → условие
+    // перепроверяется без лишнего скролла. Гварды: in-flight страница,
+    // отсутствие курсора, смена запроса во время запроса.
+    LaunchedEffect(searchListState) {
+        snapshotFlow {
+            val info = searchListState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 6) total else -1
+        }
+            .distinctUntilChanged()
+            .filter { it > 0 }
+            .collect {
+                if (searchLoading || searchLoadingMore) return@collect
+                val current = searchResult ?: return@collect
+                val cursor = current.nextFrom
+                if (cursor.isNullOrBlank()) return@collect
+                val queryNow = searchQuery
+                if (queryNow.isBlank()) return@collect
+                searchLoadingMore = true
+                try {
+                    val more = withContext(Dispatchers.IO) {
+                        app.apiClient.audioSearchWithSections(queryNow, count = 50, startFrom = cursor)
+                    }
+                    searchResult = AudioSearchResult(
+                        tracks = (current.tracks + more.tracks)
+                            .distinctBy { t -> "${t.ownerId}_${t.id}" },
+                        artists = (current.artists + more.artists)
+                            .distinctBy { a ->
+                                if (a.id > 0L) "id_${a.id}" else "name_${a.name.lowercase()}"
+                            },
+                        playlists = (current.playlists + more.playlists)
+                            .distinctBy { p -> "${p.ownerId}_${p.id}" },
+                        nextFrom = more.nextFrom,
+                    )
+                    AppLog.i("MusicScreen",
+                        "#AUDIO-PAGING-ALL search: +${more.tracks.size} треков (всего ${searchResult?.tracks?.size}, курсор ${if (more.nextFrom.isNullOrBlank()) "конец" else "есть"})")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.w("MusicScreen", "#AUDIO-PAGING-ALL search load-more failed: ${e.message}")
+                } finally {
+                    searchLoadingMore = false
                 }
             }
     }
@@ -313,7 +368,10 @@ fun MusicScreen(
                 value = searchQuery,
                 onValueChange = {
                     searchQuery = it
-                    if (it.isEmpty()) searchResult = null
+                    if (it.isEmpty()) {
+                        searchResult = null
+                        searchLoadingMore = false
+                    }
                 },
                 placeholder = {
                     Text(
@@ -401,6 +459,7 @@ fun MusicScreen(
                 }
             } else {
                 LazyColumn(
+                    state = searchListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = if (playerState.currentTrack != null) 100.dp else 16.dp),
                 ) {
@@ -543,6 +602,21 @@ fun MusicScreen(
                     }
                     if (searchLoading) {
                         item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = vkAccent,
+                                )
+                            }
+                        }
+                    }
+                    // #AUDIO-PAGING-ALL: футер догрузки результатов поиска.
+                    if (searchLoadingMore) {
+                        item(key = "search_more_footer") {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(20.dp),
                                 contentAlignment = Alignment.Center,
@@ -1442,14 +1516,40 @@ private fun MyMusicMenuList(
     var showDownloaded by remember { mutableStateOf(false) }
     var playlists by remember { mutableStateOf<List<AudioPlaylist>>(emptyList()) }
     var playlistsLoading by remember { mutableStateOf(false) }
+    // #AUDIO-PAGING-ALL (волна 38): догрузка плейлистов в диалоге
+    // (было 30 — при большем числе плейлистов до конца не добраться).
+    var playlistsOffset by remember { mutableStateOf(0) }
+    var playlistsHasMore by remember { mutableStateOf(false) }
+    var playlistsLoadingMore by remember { mutableStateOf(false) }
+    val playlistsListState = rememberLazyListState()
+
+    // #AUDIO-PAGING-ALL: догрузка следующей страницы плейлистов.
+    fun loadMoreMenuPlaylists() {
+        if (playlistsLoadingMore || !playlistsHasMore) return
+        scope.launch {
+            playlistsLoadingMore = true
+            try {
+                val (_, page) = app.apiClient.audioGetPlaylists(count = 50, offset = playlistsOffset)
+                playlistsOffset += page.size
+                playlists = (playlists + page).distinctBy { "${it.ownerId}_${it.id}" }
+                playlistsHasMore = page.size >= 50
+            } catch (e: Exception) {
+                AppLog.e("MyMusicMenuList", "Failed to load more playlists", e)
+            } finally {
+                playlistsLoadingMore = false
+            }
+        }
+    }
 
     // Загрузка плейлистов при открытии диалога
     LaunchedEffect(showPlaylists) {
         if (showPlaylists) {
             playlistsLoading = true
             try {
-                val (_, result) = app.apiClient.audioGetPlaylists(count = 30)
+                val (_, result) = app.apiClient.audioGetPlaylists(count = 50, offset = 0)
                 playlists = result
+                playlistsOffset = result.size
+                playlistsHasMore = result.size >= 50
             } catch (e: Exception) {
                 AppLog.e("MyMusicMenuList", "Failed to load playlists", e)
                 playlists = emptyList()
@@ -1457,6 +1557,19 @@ private fun MyMusicMenuList(
                 playlistsLoading = false
             }
         }
+    }
+
+    // #AUDIO-PAGING-ALL: автодогрузка при доскролле до конца списка диалога.
+    LaunchedEffect(showPlaylists, playlistsListState) {
+        if (!showPlaylists) return@LaunchedEffect
+        snapshotFlow {
+            val info = playlistsListState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 3) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMoreMenuPlaylists() }
     }
 
     // Диалог плейлистов
@@ -1494,6 +1607,7 @@ private fun MyMusicMenuList(
                     }
                 } else {
                     LazyColumn(
+                        state = playlistsListState,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 400.dp),
@@ -1663,6 +1777,21 @@ private fun MyMusicMenuList(
                                         contentDescription = "Скачать плейлист",
                                         tint = Color(0xFF3D8BFF),
                                         modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                            }
+                        }
+                        // #AUDIO-PAGING-ALL: футер догрузки плейлистов меню.
+                        if (playlistsLoadingMore) {
+                            item(key = "pl_menu_more") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = Color(0xFF3D8BFF),
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
                                     )
                                 }
                             }

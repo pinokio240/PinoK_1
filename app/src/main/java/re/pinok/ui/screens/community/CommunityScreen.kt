@@ -180,11 +180,18 @@ fun CommunityScreen(
     var videosEndReached by remember { mutableStateOf(false) }
 
     // Шаг 3 (#32c): state для вкладки «Музыка».
-    // Без пагинации (50 за раз — стандартный лимит audioGet; как в фото).
+    // #AUDIO-PAGING-ALL (волна 38): была капнута на 50 (одна страница audioGet) —
+    // до конца списка у сообществ с музыкой >50 треков было не доскроллить.
+    // Теперь — серверная пагинация по offset (audioGetWithCount), автодогрузка
+    // по скроллу до конца, стоп по неполной странице (VK total НЕ доверяем —
+    // занижает, прецедент AudioLibraryPager).
     var tracks by remember { mutableStateOf<List<re.pinok.data.model.Track>>(emptyList()) }
     var tracksLoading by remember { mutableStateOf(false) }
     var tracksError by remember { mutableStateOf<String?>(null) }
     var tracksLoaded by remember { mutableStateOf(false) }
+    var tracksServerOffset by remember { mutableStateOf(0) }
+    var tracksHasMore by remember { mutableStateOf(false) }
+    var tracksLoadingMore by remember { mutableStateOf(false) }
 
     // #GROUP-CLIPS: state для вкладки «Клипы» (shortVideo.getOwnerVideos).
     // Без пагинации (30 за раз достаточно для первого приближения).
@@ -397,15 +404,23 @@ fun CommunityScreen(
     }
 
     // Шаг 3 (#32c): загрузка музыки сообщества при переходе на вкладку 4.
+    // #AUDIO-PAGING-ALL: первая страница (100 треков) — дальше догрузка по скроллу.
     LaunchedEffect(selectedTab, groupId) {
         if (selectedTab != 4 || tracksLoaded || tracksLoading) return@LaunchedEffect
         scope.launch {
             tracksLoading = true
             tracksError = null
             try {
-                tracks = app.apiClient.audioGet(count = 50, offset = 0, ownerId = -groupId)
+                val (total, page) = app.apiClient.audioGetWithCount(
+                    count = 100, offset = 0, ownerId = -groupId)
+                tracks = page.filter { it.id > 0L && it.ownerId != 0L }
+                    .distinctBy { "${it.ownerId}_${it.id}" }
+                tracksServerOffset = page.size
+                // Полная страница → есть ещё данные; частичная → конец списка
+                // (total не используем как стоп — VK занижает count).
+                tracksHasMore = page.size >= 100
                 tracksLoaded = true
-                AppLog.i("CommunityScreen", "Loaded ${tracks.size} tracks for group $groupId")
+                AppLog.i("CommunityScreen", "Loaded ${tracks.size}/${page.size} tracks for group $groupId (total=$total hasMore=$tracksHasMore)")
             } catch (e: Exception) {
                 AppLog.e("CommunityScreen", "audioGet failed", e)
                 tracksError = "Ошибка: ${e.message}"
@@ -413,6 +428,42 @@ fun CommunityScreen(
                 tracksLoading = false
             }
         }
+    }
+
+    // #AUDIO-PAGING-ALL: догрузка следующей страницы музыки сообщества.
+    fun loadMoreCommunityTracks() {
+        if (tracksLoadingMore || tracksLoading || !tracksHasMore) return
+        scope.launch {
+            tracksLoadingMore = true
+            try {
+                val (_, page) = app.apiClient.audioGetWithCount(
+                    count = 100, offset = tracksServerOffset, ownerId = -groupId)
+                tracksServerOffset += page.size
+                val fresh = page.filter { it.id > 0L && it.ownerId != 0L }
+                    .filter { nv -> tracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                tracks = (tracks + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                tracksHasMore = page.size >= 100
+                AppLog.i("CommunityScreen", "Community music loadMore: +${fresh.size} (offset=$tracksServerOffset)")
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "community music loadMore failed", e)
+            } finally {
+                tracksLoadingMore = false
+            }
+        }
+    }
+
+    // #AUDIO-PAGING-ALL: триггер автодогрузки музыки (вкладка 4).
+    LaunchedEffect(listState, selectedTab) {
+        if (selectedTab != 4) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 3) total else -1
+        }
+            .distinctUntilChanged()
+            .filter { it > 0 }
+            .collect { loadMoreCommunityTracks() }
     }
 
     // Шаг 4 (#32d): загрузка тем обсуждений при переходе на вкладку 5.
@@ -1120,6 +1171,17 @@ fun CommunityScreen(
                             // AudioAttachmentList — общий компонент (FeedScreen/ProfileScreen).
                             // play/pause через PlayerConnection.playTrackList(tracks, startIndex).
                             re.pinok.ui.components.AudioAttachmentList(tracks = tracks)
+                        }
+                    }
+                }
+                // #AUDIO-PAGING-ALL: футер догрузки музыки сообщества.
+                if (tracksHasMore) {
+                    item(key = "community_music_more") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
                         }
                     }
                 }
