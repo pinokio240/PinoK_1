@@ -484,6 +484,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера
             // (кнопки «±N сек» на lock-screen/в уведомлении). Секунды, default 10.
             videoSeekStepSec = p[Keys.VIDEO_SEEK_STEP_SEC] ?: 10,
+            // #VIDEO-BG-TOGGLE (волна 39): включение/отключение фонового
+            // воспроизведения видео. Default true — прежнее поведение (видео
+            // продолжает играть при сворачивании). При false ON_STOP ставит
+            // видео на паузу и foreground-сервис не поднимается.
+            videoBackgroundPlay = p[Keys.VIDEO_BG_PLAY] ?: true,
             // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
             // Серверный offset последней успешной страницы (0 = не начинали/новая
             // библиотека) — после перезапуска процесса пейджер продолжает с него
@@ -1021,6 +1026,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды). */
     suspend fun setVideoSeekStepSec(v: Int) = put(Keys.VIDEO_SEEK_STEP_SEC, v)
+
+    /** #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео вкл/выкл. */
+    suspend fun setVideoBackgroundPlay(v: Boolean) = put(Keys.VIDEO_BG_PLAY, v)
     // Волна 31 #AUDIO-BG-PAGER: персист чекпоинта фоновой пагинации «Моя музыка»
     // (пишет AudioLibraryPager после каждой успешной страницы).
     suspend fun setMyMusicPagedOffset(v: Int)         = put(Keys.MY_MUSIC_PAGED_OFFSET, v)
@@ -1421,6 +1429,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val notifyCommunitiesVibration: Boolean = true,
         /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера в секундах (default 10). */
         val videoSeekStepSec: Int = 10,
+        /** #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео (default true). */
+        val videoBackgroundPlay: Boolean = true,
         // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
         // Поля с дефолтом (прецедент callsDnsPinIp ниже) — существующие
         // именованные конструкторы Snapshot в чужих файлах собираются без правок.
@@ -1695,6 +1705,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NOTIFY_COMMUNITIES_VIBRATION = booleanPreferencesKey("notify_communities_vibration")
         // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды).
         val VIDEO_SEEK_STEP_SEC = intPreferencesKey("video_seek_step_sec")
+        // #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео вкл/выкл.
+        val VIDEO_BG_PLAY = booleanPreferencesKey("video_bg_play")
         // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
         val MY_MUSIC_PAGED_OFFSET = intPreferencesKey("my_music_paged_offset")
         val MY_MUSIC_TOTAL = intPreferencesKey("my_music_total")

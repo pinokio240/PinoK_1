@@ -4346,7 +4346,7 @@ fun ChatDetailScreen(
             initialTab = attachmentPickerTab,
             showPhotoTab = true,
             showDocsTab = true,
-            onPickPhotoAttachment = { att ->
+            onPickPhotoAttachment = { att, _ ->  // _ = thumb (#COMPOSER-ATTACH-PREVIEW): превью тут не нужно, только attachment-строка
                 scope.launch {
                     uploading = true
                     try {

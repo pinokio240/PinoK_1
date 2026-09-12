@@ -136,6 +136,11 @@ fun CommunityScreen(
     val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
     var groupInfo by remember { mutableStateOf<VKApiClient.GroupInfo?>(null) }
     var posts by remember { mutableStateOf<List<Post>>(emptyList()) }
+    // #POST-SIGNER (волна 39): имена профилей из wall.get extended=1 —
+    // подпись автора под постом сообщества (запрос пользователя: имя автора
+    // под постом не писалось в приложении, а на веб-странице ВК писалось).
+    // Копится между страницами пагинации (wallGetExtended.profileNames).
+    var signerNames by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
     // Fix #85: pull-to-refresh + infinite scroll стены группы.
@@ -219,11 +224,14 @@ fun CommunityScreen(
                     errorText = app.apiClient.lastApiError ?: "Сообщество не найдено (id=$groupId)"
                 } else {
                     // wall.get с owner_id = -groupId (VK convention: группы — отрицательные).
-                    val wall = app.apiClient.wallGet(ownerId = -groupId, count = 30)
-                    posts = wall
+                    // #POST-SIGNER: extended=1 — вместе с постами приходят профили
+                    // (имена авторов подписи).
+                    val wallPage = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30)
+                    posts = wallPage.posts
                         .filter { it.id > 0 && it.ownerId != 0L }
                         .distinctBy { "${it.ownerId}_${it.id}" }
-                    endReached = wall.size < 30
+                    signerNames = wallPage.profileNames
+                    endReached = wallPage.posts.size < 30
                     AppLog.i("CommunityScreen", "Loaded group ${groupInfo?.name} + ${posts.size} posts")
                 }
             } catch (e: Exception) {
@@ -268,12 +276,14 @@ fun CommunityScreen(
         scope.launch {
             isRefreshing = true
             try {
-                val wall = app.apiClient.wallGet(ownerId = -groupId, count = 30)
-                posts = wall
+                // #POST-SIGNER: extended=1 (имена авторов подписи).
+                val wallPage = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30)
+                posts = wallPage.posts
                     .filter { it.id > 0 && it.ownerId != 0L }
                     .distinctBy { "${it.ownerId}_${it.id}" }
-                endReached = wall.size < 30
-                AppLog.i("CommunityScreen", "refreshed wall: ${wall.size} posts")
+                signerNames = wallPage.profileNames
+                endReached = wallPage.posts.size < 30
+                AppLog.i("CommunityScreen", "refreshed wall: ${wallPage.posts.size} posts")
             } catch (e: Exception) {
                 AppLog.e("CommunityScreen", "refreshWall failed", e)
             } finally {
@@ -288,7 +298,11 @@ fun CommunityScreen(
         scope.launch {
             loadingMore = true
             try {
-                val wall = app.apiClient.wallGet(ownerId = -groupId, count = 30, offset = posts.size)
+                // #POST-SIGNER: extended=1; имена профилей копим между страницами.
+                val wallPage = app.apiClient.wallGetExtended(
+                    ownerId = -groupId, count = 30, offset = posts.size)
+                val wall = wallPage.posts
+                signerNames = signerNames + wallPage.profileNames
                 val newPosts = wall
                     .filter { it.id > 0 && it.ownerId != 0L }
                     .filter { np -> posts.none { it.ownerId == np.ownerId && it.id == np.id } }
@@ -531,11 +545,12 @@ fun CommunityScreen(
                             if (groupInfo == null) {
                                 errorText = app.apiClient.lastApiError ?: "Сообщество не найдено (id=$groupId)"
                             } else {
-                                val wall = app.apiClient.wallGet(ownerId = -groupId, count = 30)
-                                posts = wall
+                                val wallPage = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30)
+                                posts = wallPage.posts
                                     .filter { it.id > 0 && it.ownerId != 0L }
                                     .distinctBy { "${it.ownerId}_${it.id}" }
-                                endReached = wall.size < 30
+                                signerNames = wallPage.profileNames
+                                endReached = wallPage.posts.size < 30
                             }
                         } catch (e: Exception) {
                             AppLog.e("CommunityScreen", "Retry failed", e)
@@ -887,6 +902,8 @@ fun CommunityScreen(
                 post = post,
                 authorName = g.name,
                 authorPhoto = g.photo200 ?: g.photo100,
+                // #POST-SIGNER (волна 39): имя автора подписи из wall.get extended=1.
+                signerName = post.signerId?.let { sid -> signerNames[sid] },
                 onVideoClick = onVideoClick,
                 // Fix #365: пробрасываем группы в PostHolder для имени сообщества
                 // в PostDetailScreen (тот же паттерн, что в FeedScreen) — работает
@@ -1357,6 +1374,9 @@ private fun CommunityPostCard(
     post: Post,
     authorName: String,
     authorPhoto: String?,
+    // #POST-SIGNER (волна 39): имя автора подписи (wall.get extended=1 →
+    // signer_id → profileNames). null — пост без подписи/имя не пришло.
+    signerName: String? = null,
     onVideoClick: (Video) -> Unit,
     onPostClick: (Post) -> Unit,
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
@@ -1427,6 +1447,18 @@ private fun CommunityPostCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
+                    // #POST-SIGNER: подпись автора — имя под записью, как в VK web
+                    // (тот же паттерн, что в FeedPostCard ленты).
+                    val signer = signerName
+                    if (signer != null) {
+                        Text(
+                            text = signer,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
             if (post.text.isNotBlank()) {

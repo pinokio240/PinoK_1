@@ -2859,6 +2859,26 @@ private fun VideoTab(
         // Кнопки «−N сек / +N сек» на lock-screen/в медиа-уведомлении
         // (VideoPlaybackService) прокручивают видео на выбранный шаг.
         item { SectionHeader("Фоновое воспроизведение") }
+        // #VIDEO-BG-TOGGLE (волна 39): включение/отключение фонового
+        // воспроизведения видео (запрос пользователя 2026-09-12 — раздел
+        // «Фоновое воспроизведение» без главного тумблера выглядел незаконченным).
+        item {
+            ToggleRow(
+                title = "Фоновое воспроизведение видео",
+                subtitle = "По умолчанию ВКЛ. При сворачивании приложения видео " +
+                    "продолжает играть со звуком, управление — в медиа-уведомлении " +
+                    "и на экране блокировки. При выключении видео ставится на паузу " +
+                    "при уходе из приложения.",
+                checked = s.videoBackgroundPlay,
+            ) { enabled ->
+                scope.launch { app.prefs.setVideoBackgroundPlay(enabled) }
+                // Немедленное применение при выключении: если видео сейчас играет
+                // в фоне — гасим сервис и ставим плеер на паузу (#VIDEO-BG-TOGGLE).
+                if (!enabled) {
+                    re.pinok.service.VideoPlaybackBus.disableBackgroundNow()
+                }
+            }
+        }
         item {
             val currentStep = s.videoSeekStepSec
             Card {

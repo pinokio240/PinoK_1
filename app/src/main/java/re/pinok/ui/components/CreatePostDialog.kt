@@ -69,6 +69,20 @@ private data class PendingPostFile(
     val displayName: String,
 )
 
+/**
+ * #COMPOSER-ATTACH-PREVIEW (волна 39): вложение из библиотеки VK с превью.
+ * Жалоба пользователя: «раздел прикрепляться должен быть как менюшка
+ * «прикрепить файлы» + превью файлов» — раньше все VK-вложения рисовались
+ * одной иконкой скрепки без картинки. thumb — URL превью (фото из VK —
+ * sizes из photos.getAll; музыка — albumThumb; видео — самый широкий кадр
+ * image[]), null = иконка-фолбэк (документы).
+ */
+private data class VkAttachPreview(
+    val att: String,
+    val label: String,
+    val thumb: String? = null,
+)
+
 /** Генератор уникальных id для [PendingPostFile]. */
 private val postFileIdCounter = java.util.concurrent.atomic.AtomicLong(0)
 private fun nextPendingPostFileId(): Long = postFileIdCounter.incrementAndGet()
@@ -179,8 +193,8 @@ fun CreatePostDialog(
     var pendingPhotos by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingFiles by remember { mutableStateOf<List<PendingPostFile>>(emptyList()) }
     var pendingVideoUri by remember { mutableStateOf<Uri?>(null) }
-    // Библиотека VK: пары (attachment-строка, подпись для превью).
-    var vkAttachments by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // Библиотека VK: вложения с превью (#COMPOSER-ATTACH-PREVIEW).
+    var vkAttachments by remember { mutableStateOf<List<VkAttachPreview>>(emptyList()) }
     var pollAttachment by remember { mutableStateOf<String?>(null) }
     var pollLabel by remember { mutableStateOf<String?>(null) }
     var videoLinkAttachment by remember { mutableStateOf<String?>(null) }
@@ -325,7 +339,7 @@ fun CreatePostDialog(
         // Видео по ссылке (тикет уже получен в диалоге ссылки) / опрос / библиотека VK.
         videoLinkAttachment?.let { attachments += it }
         pollAttachment?.let { attachments += it }
-        vkAttachments.forEach { attachments += it.first }
+        vkAttachments.forEach { attachments += it.att }
         if (attachments.isEmpty()) {
             toastLocal("Не удалось загрузить вложения")
             return
@@ -503,11 +517,26 @@ fun CreatePostDialog(
                         },
                     )
                 }
-                vkAttachments.forEach { (att, label) ->
+                vkAttachments.forEach { va ->
                     AttachmentLabelRow(
-                        icon = { Icon(Icons.Outlined.AttachFile, contentDescription = null) },
-                        label = label,
-                        onRemove = { vkAttachments = vkAttachments.filterNot { it.first == att } },
+                        // #COMPOSER-ATTACH-PREVIEW: превью вместо слепой скрепки.
+                        icon = {
+                            val thumb = va.thumb
+                            if (thumb != null) {
+                                AsyncImage(
+                                    model = thumb,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(6.dp)),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            } else {
+                                Icon(Icons.Outlined.AttachFile, contentDescription = null)
+                            }
+                        },
+                        label = va.label,
+                        onRemove = { vkAttachments = vkAttachments.filterNot { it.att == va.att } },
                     )
                 }
                 // Строка «Прикрепить» + единое меню (UnifiedAttachMenu).
@@ -529,7 +558,7 @@ fun CreatePostDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Прикрепить",
+                            text = "Прикрепить файлы",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -734,22 +763,26 @@ fun CreatePostDialog(
             showPhotoTab = true,
             showDocsTab = true,
             onPickAudio = { track ->
-                vkAttachments = vkAttachments + Pair(
+                vkAttachments = vkAttachments + VkAttachPreview(
                     buildVkAttachment("audio", track.ownerId, track.id, track.accessKey),
                     "Музыка: ${track.title}",
+                    track.albumThumb,
                 )
             },
             onPickVideo = { video ->
-                vkAttachments = vkAttachments + Pair(
+                // #COMPOSER-ATTACH-PREVIEW: самый широкий кадр обложки — превью.
+                val poster = video.image?.maxByOrNull { it.width }?.url
+                vkAttachments = vkAttachments + VkAttachPreview(
                     buildVkAttachment("video", video.ownerId, video.id, video.accessKey),
                     "Видео: ${video.title.ifBlank { "видео" }}",
+                    poster,
                 )
             },
-            onPickPhotoAttachment = { att ->
-                vkAttachments = vkAttachments + Pair(att, "Фото из VK")
+            onPickPhotoAttachment = { att, thumb ->
+                vkAttachments = vkAttachments + VkAttachPreview(att, "Фото из VK", thumb)
             },
             onPickDocAttachment = { att, title ->
-                vkAttachments = vkAttachments + Pair(att, "Документ: $title")
+                vkAttachments = vkAttachments + VkAttachPreview(att, "Документ: $title")
             },
         )
     }

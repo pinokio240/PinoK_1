@@ -264,6 +264,16 @@ fun ProfileScreen(
     var wallFilter by remember { mutableStateOf(WALL_FILTER_ALL) }
     // Индикатор перезагрузки ленты (смена фильтра).
     var wallLoading by remember { mutableStateOf(false) }
+    // #PROFILE-WALL-PAGING (волна 39): пагинация ленты профиля (жалоба
+    // пользователя: «пагинация страницы профиля бесконечная — не доходит
+    // до самого начала»). Раньше грузились только первые 20 записей
+    // (wallGet count=20) без догрузки — до старых записей было не доскроллить.
+    // serverOffset — по RAW-странице (урок волны 31 #AUDIO-PAGING);
+    // hasMore — full-page-паттерн (VK response.count у wall.get
+    // фильтрованному «all» не доверяем — прецедент заниженного total).
+    var wallServerOffset by remember { mutableStateOf(0) }
+    var wallLoadingMore by remember { mutableStateOf(false) }
+    var wallHasMore by remember { mutableStateOf(false) }
     // «Архив» доступен, если users.getWallTabs вернул archived с count>0.
     var hasArchiveWallTab by remember { mutableStateOf(false) }
     // Подарки (gifts.get — сырые JsonObject, парсинг в GiftsSection).
@@ -404,6 +414,9 @@ fun ProfileScreen(
                     posts = wall
                         .filter { it.id > 0 && it.ownerId != 0L }
                         .distinctBy { "${it.ownerId}_${it.id}" }
+                    // #PROFILE-WALL-PAGING: курсор следующей страницы + full-page-стоп.
+                    wallServerOffset = wall.size
+                    wallHasMore = wall.size >= 20
                     AppLog.i("ProfileScreen", "Loaded profile + ${wall.size} wall posts")
                 } else {
                     errorText = app.apiClient.lastApiError ?: "Не удалось загрузить профиль"
@@ -428,6 +441,9 @@ fun ProfileScreen(
                 posts = wall
                     .filter { it.id > 0 && it.ownerId != 0L }
                     .distinctBy { "${it.ownerId}_${it.id}" }
+                // #PROFILE-WALL-PAGING: перезагрузка сбрасывает курсор пагинации.
+                wallServerOffset = wall.size
+                wallHasMore = wall.size >= 20
                 AppLog.i("ProfileScreen", "Reloaded wall after new post: ${wall.size} posts")
             } catch (e: Exception) {
                 AppLog.e("ProfileScreen", "Reload wall failed", e)
@@ -452,6 +468,9 @@ fun ProfileScreen(
                 posts = wall
                     .filter { it.id > 0 && it.ownerId != 0L }
                     .distinctBy { "${it.ownerId}_${it.id}" }
+                // #PROFILE-WALL-PAGING: смена фильтра — новый список, курсор с нуля.
+                wallServerOffset = wall.size
+                wallHasMore = wall.size >= 20
                 AppLog.i("ProfileScreen", "Wall filter=$wallFilter loaded: ${wall.size} posts")
             } catch (e: Exception) {
                 AppLog.e("ProfileScreen", "Wall filter load failed", e)
@@ -1112,6 +1131,38 @@ fun ProfileScreen(
         }
     }
 
+    // #PROFILE-WALL-PAGING (волна 39): догрузка ленты профиля. Паттерн
+    // loadMoreMusicPage: server-offset по RAW-странице, стоп по неполной
+    // странице, дедуп на границе окон (закреплённый пост повторяется на
+    // первой странице каждого окна — класс Fix #53).
+    fun loadMoreWallPage() {
+        if (wallLoadingMore || wallLoading || !wallHasMore) return
+        // NULL-ЯВНО: явная проверка вместо элвиса.
+        val prof = profile
+        if (prof == null) return
+        scope.launch {
+            wallLoadingMore = true
+            try {
+                val page = app.apiClient.wallGetWithFilter(
+                    ownerId = prof.id, filter = wallFilter, count = 20, offset = wallServerOffset)
+                wallServerOffset += page.size
+                wallHasMore = page.size >= 20
+                val existingKeys = posts.map { "${it.ownerId}_${it.id}" }.toHashSet()
+                val fresh = page
+                    .filter { it.id > 0 && it.ownerId != 0L }
+                    .distinctBy { "${it.ownerId}_${it.id}" }
+                    .filter { "${it.ownerId}_${it.id}" !in existingKeys }
+                posts = posts + fresh
+                AppLog.i("ProfileScreen",
+                    "Wall loadMore: +${fresh.size} (raw=${page.size}, offset=$wallServerOffset, hasMore=$wallHasMore)")
+            } catch (e: Exception) {
+                AppLog.w("ProfileScreen", "Wall loadMore failed: ${e.message}")
+            } finally {
+                wallLoadingMore = false
+            }
+        }
+    }
+
     // Fix #389 #SCROLL-TOP-PARITY: состояние главного списка (стена/закладки/статьи)
     // — выведено наружу, тот же экземпляр используется FAB «наверх» ниже.
     // W34-FIX (2026-09-10): объявление перенесено ВЫШЕ LaunchedEffect'ов скролла
@@ -1130,10 +1181,12 @@ fun ProfileScreen(
         while (mainListState.layoutInfo.totalItemsCount < 6) delay(50)
         mainListState.animateScrollToItem(5)
     }
-    // Подарки живут на вкладке Стена ПОСЛЕ ленты (последний item) — скролл
-    // к последнему item после смены вкладки. Подарки грузятся параллельным
-    // добором при открытии профиля — ждём их (таймаут 5с от вечного цикла
-    // при сбое gifts.get; тогда просто скролл к концу ленты).
+    // Подарки живут на вкладке Стена ПЕРЕД лентой (#PROFILE-WALL-PAGING,
+    // волна 39 — по жалобе «почему подарки снизу»). Скролл: сначала к item
+    // после фиксированной шапки (создать пост/фильтр/подарки попадают во
+    // viewport), затем точная подгонка по ключу "profile_gifts". Подарки
+    // грузятся параллельным добором при открытии профиля — ждём их (таймаут
+    // 5с от вечного цикла при сбое gifts.get; тогда просто скролл к ленте).
     var giftsScrollTick by remember { mutableStateOf(0) }
     LaunchedEffect(giftsScrollTick) {
         if (giftsScrollTick == 0) return@LaunchedEffect
@@ -1143,7 +1196,20 @@ fun ProfileScreen(
             waitedMs += 100
         }
         while (mainListState.layoutInfo.totalItemsCount < 6) delay(50)
-        mainListState.animateScrollToItem(mainListState.layoutInfo.totalItemsCount - 1)
+        // 7 item'ов над подарками: хедер, «Редактировать», счётчики, «Подписки»,
+        // чипы вкладок, «Создать пост», фильтры стены (без секции «Возможно,
+        // вы знакомы» — она опциональна и по умолчанию выключена).
+        // coerce — у коротких профилей item'ов может быть меньше 8.
+        val headerTarget = 7.coerceAtMost(mainListState.layoutInfo.totalItemsCount - 1)
+        mainListState.animateScrollToItem(headerTarget)
+        val giftsIndex = mainListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == "profile_gifts" }?.index
+        // NULL-ЯВНО: явная проверка вместо элвиса (index может быть null —
+        // item ещё не в layout при догрузке подарков; первичный скролл уже
+        // привёл пользователя в зону подарков).
+        if (giftsIndex != null) {
+            mainListState.animateScrollToItem(giftsIndex)
+        }
     }
 
     // #AUDIO-PAGING-ALL (волна 38): автодогрузка музыки профиля — доскроллили
@@ -1161,6 +1227,23 @@ fun ProfileScreen(
             .distinctUntilChanged()
             .filter { it > 0 }
             .collect { loadMoreMusicPage() }
+    }
+
+    // #PROFILE-WALL-PAGING (волна 39): автодогрузка ленты профиля — доскроллили
+    // до конца записей → следующая страница без нажатия «Показать ещё» (кнопка
+    // остаётся fallback). Поток эмитит total при активном триггере: после
+    // аппенда total растёт → условие перепроверяется само.
+    LaunchedEffect(mainListState, selectedContentTab) {
+        if (selectedContentTab != PROFILE_TAB_WALL) return@LaunchedEffect
+        snapshotFlow {
+            val info = mainListState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 4) total else -1
+        }
+            .distinctUntilChanged()
+            .filter { it > 0 }
+            .collect { loadMoreWallPage() }
     }
 
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
@@ -1317,6 +1400,29 @@ fun ProfileScreen(
                     )
                 }
             }
+            // #PROFILE-WALL-PAGING (волна 39): подарки ПЕРЕД лентой (запрос
+            // пользователя «почему подарки снизу» — раздел виден сразу, без
+            // прокрутки всей стены, как в VK web). Ключ "profile_gifts" — для
+            // точного скролла по счётчику «Подарки» (giftsScrollTick ниже).
+            // П-1: подарки профиля (gifts.get) — ряд открыток.
+            // NULL-ЯВНО: явная проверка вместо элвиса (строка перенесена W33-c).
+            val pCounters = p.counters
+            // W34-FIX: pCounters.gifts — сам по себе Int? (модель Counters),
+            // а GiftsSection принимает Int → внутренний элвис, иначе
+            // «Argument type mismatch: actual type is 'Int?'» (строка 1369 лога).
+            val giftTotalCount: Int = if (pCounters != null) (pCounters.gifts ?: 0) else 0
+            val giftsList = gifts
+            if (!giftsList.isNullOrEmpty()) {
+                item(key = "profile_gifts") {
+                    GiftsSection(
+                        gifts = giftsList,
+                        totalCount = giftTotalCount,
+                        hasMore = giftsHasMore,
+                        loadingMore = giftsLoadingMore,
+                        onShowMore = { loadMoreGiftsPage() },
+                    )
+                }
+            }
             if (wallLoading) {
                 item { TabProgressRow() }
             }
@@ -1396,23 +1502,12 @@ fun ProfileScreen(
                     }
                 }
             }
-            // П-1: подарки профиля (gifts.get) — ряд открыток под лентой.
-            // NULL-ЯВНО: явная проверка вместо элвиса (строка перенесена W33-c).
-            val pCounters = p.counters
-            // W34-FIX: pCounters.gifts — сам по себе Int? (модель Counters),
-            // а GiftsSection принимает Int → внутренний элвис, иначе
-            // «Argument type mismatch: actual type is 'Int?'» (строка 1369 лога).
-            val giftTotalCount: Int = if (pCounters != null) (pCounters.gifts ?: 0) else 0
-            val giftsList = gifts
-            if (!giftsList.isNullOrEmpty()) {
-                item {
-                    GiftsSection(
-                        gifts = giftsList,
-                        totalCount = giftTotalCount,
-                        hasMore = giftsHasMore,
-                        loadingMore = giftsLoadingMore,
-                        onShowMore = { loadMoreGiftsPage() },
-                    )
+            // #PROFILE-WALL-PAGING (волна 39): футер догрузки ленты — кнопка
+            // остаётся ручным fallback автодогрузки по скроллу (паттерн вкладки
+            // «Музыка», W33-c).
+            if (wallHasMore) {
+                item(key = "wall_more") {
+                    TabShowMoreRow(loading = wallLoadingMore, onClick = { loadMoreWallPage() })
                 }
             }
         } else if (selectedContentTab == PROFILE_TAB_MUSIC) {

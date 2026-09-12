@@ -142,6 +142,31 @@ object VideoPlaybackBus {
         }
     }
 
+    /**
+     * #VIDEO-BG-TOGGLE (волна 39): немедленное применение выключенного тумблера
+     * «Фоновое воспроизведение» (Настройки → Видео). Вызывается из SettingsScreen
+     * при переводе тумблера в OFF, пока видео играет в фоне: гасим сервис
+     * (уведомление/lock-screen плеер исчезают) и ставим плеер на паузу —
+     * семантика «фоновое воспроизведение отключено». Плеер НЕ релизим: при
+     * возврате в приложение экран переиспользует инстанс через [livePlayerFor].
+     */
+    fun disableBackgroundNow() {
+        val ctx = appContext
+        if (serviceRunning && ctx != null) {
+            ctx.stopService(Intent(ctx, VideoPlaybackService::class.java))
+        }
+        serviceRunning = false
+        val player = playerRef
+        if (player != null) {
+            try {
+                player.pause()
+                AppLog.i("VideoPlaybackBus", "#VIDEO-BG-TOGGLE: background playback disabled — player paused, service stopped")
+            } catch (e: Exception) {
+                AppLog.w("VideoPlaybackBus", "disableBackgroundNow: pause failed: ${e.message}")
+            }
+        }
+    }
+
     fun onForegrounded() {
         val ctx = appContext
         if (serviceRunning && ctx != null) {

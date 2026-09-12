@@ -592,6 +592,13 @@ fun VideoPlayerScreen(
     val autoplayEnabled = remember(resolvedVideo) {
         app.prefsSnapshot?.videoAutoplay ?: true
     }
+    // #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео — синхронно
+    // из prefsSnapshot (паттерн autoplayEnabled выше). Default true = прежнее
+    // поведение. При false: ON_STOP ставит видео на паузу (сервис не поднимаем),
+    // dispose при убитой активити = полный teardown, музыка возобновляется.
+    val backgroundPlayEnabled = remember(resolvedVideo) {
+        app.prefsSnapshot?.videoBackgroundPlay ?: true
+    }
 
     // Fix #334/#336: начальный индекс = лучшее доступное качество ≤ preferred.
     // Ключ ТОЛЬКО resolvedVideo — ручной выбор пользователя не сбрасывается при
@@ -1100,9 +1107,17 @@ fun VideoPlayerScreen(
                     exoPlayer.release()
                     AppLog.i(TAG, "ExoPlayer освобождён")
                 }
-            } else {
+            } else if (backgroundPlayEnabled) {
                 VideoPlaybackBus.onScreenDetachedInBackground()
                 AppLog.i(TAG, "#VIDEO-BG-KEEP: dispose в фоне — ExoPlayer продолжает играть")
+            } else {
+                // #VIDEO-BG-TOGGLE: фоновое воспроизведение выключено настройкой —
+                // полный teardown и в фоне (плеер не переживает убитую активити).
+                VideoPlaybackBus.onPlayerReleased()
+                if (exoPlayer != null) {
+                    exoPlayer.release()
+                    AppLog.i(TAG, "#VIDEO-BG-TOGGLE: dispose в фоне — плеер освобождён (фоновое воспроизведение выключено)")
+                }
             }
         }
     }
@@ -1121,10 +1136,15 @@ fun VideoPlayerScreen(
                 } else if (app.isAnyActivityForeground()) {
                     PlayerConnection.resumeIfWasPlaying()
                     AppLog.i(TAG, "Аудиоплеер возобновлён")
-                } else {
+                } else if (backgroundPlayEnabled) {
                     // #VIDEO-BG-KEEP: dispose в фоне — видео продолжает играть,
                     // музыку НЕ возобновляем (иначе два звука одновременно).
                     AppLog.i(TAG, "#VIDEO-BG-KEEP: аудио остаётся на паузе — видео играет в фоне")
+                } else {
+                    // #VIDEO-BG-TOGGLE: фоновое видео выключено настройкой — видео
+                    // не играет, музыку возобновляем как при обычном выходе.
+                    PlayerConnection.resumeIfWasPlaying()
+                    AppLog.i(TAG, "#VIDEO-BG-TOGGLE: аудио возобновлено — фоновое видео выключено")
                 }
             }
         }
@@ -1165,7 +1185,15 @@ fun VideoPlayerScreen(
                         // W30-2 #VIDEO-BACKGROUND: при уходе из активности НЕ ПАУЗИМ
                         // — звук продолжается, W30-3 запускает foreground-сервис с
                         // MediaStyle-уведомлением (lock-screen плеер).
-                        VideoPlaybackBus.onBackgrounded(context)
+                        // #VIDEO-BG-TOGGLE (волна 39): при выключенном тумблере
+                        // «Фоновое воспроизведение» (Настройки → Видео) видео
+                        // ставится на паузу и сервис НЕ поднимается.
+                        if (backgroundPlayEnabled) {
+                            VideoPlaybackBus.onBackgrounded(context)
+                        } else {
+                            exoPlayer.pause()
+                            AppLog.i(TAG, "#VIDEO-BG-TOGGLE: ON_STOP — видео на паузе (фоновое воспроизведение выключено)")
+                        }
                     }
                     else -> {}
                 }

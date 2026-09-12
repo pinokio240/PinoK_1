@@ -309,16 +309,28 @@ fun MusicScreen(
     LaunchedEffect(listState, selectedTab) {
         if (selectedTab != 0) return@LaunchedEffect
 
+        // #AUDIO-PAGING-KICK (волна 39): без distinctUntilChanged — поток эмитит
+        // при КАЖДОМ изменении layout (догрузка страницы растит totalItemsCount),
+        // и пока пользователь стоит на дне списка, kick() повторяется и пейджер
+        // идёт без паузы 1500мс между страницами. Прежний distinctUntilChanged
+        // пропускал повторные эмиссии «true» → kick срабатывал ОДИН раз за
+        // приход на дно, дальше страницы грузились по 1.5с — на библиотеке
+        // 3000+ треков выглядело как «не могу долистать до конца». Троттлинг
+        // 250мс держит частоту вызовов дешёвой.
+        var lastKickMs = 0L
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             val total = layoutInfo.totalItemsCount
             lastVisible >= total - 5 && total > 0
         }
-            .distinctUntilChanged()
             .filter { it }
             .collect {
-                pager.kick()
+                val now = System.currentTimeMillis()
+                if (now - lastKickMs >= 250) {
+                    lastKickMs = now
+                    pager.kick()
+                }
             }
     }
 

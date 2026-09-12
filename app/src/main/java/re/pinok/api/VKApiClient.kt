@@ -14352,6 +14352,73 @@ class VKApiClient(
     }
 
     /**
+     * #POST-SIGNER (волна 39): результат wall.get extended=1 — посты + имена
+     * профилей (для подписи автора, signer_id).
+     */
+    data class WallGetExtendedResult(
+        val posts: List<Post>,
+        /** id профиля → «Имя Фамилия» (только users из ответа). */
+        val profileNames: Map<Long, String>,
+    )
+
+    /**
+     * #POST-SIGNER (волна 39): wall.get extended=1 — посты + profiles для имён
+     * авторов подписи. Жалоба пользователя: «имя автора под постом не
+     * написалось в приложении, а на веб-странице ВК написалось» — посты
+     * сообществ с подписью автора (wall.post signed=1, W36 #COMMUNITY-COMPOSER)
+     * веб показывает с именем автора, приложение молчало: wallGet и
+     * wallGetWithFilter ходят с extended=0 и имён профилей не имеют.
+     * Пагинация — как у [wallGetWithFilter] (offset + count), дедуп внутри
+     * страницы; profileNames вызывающая сторона копит между страницами.
+     */
+    suspend fun wallGetExtended(
+        ownerId: Long,
+        filter: String = "all",
+        count: Int = 20,
+        offset: Int = 0,
+    ): WallGetExtendedResult {
+        if (isOffline()) return WallGetExtendedResult(emptyList(), emptyMap())
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "filter" to filter,
+            "extended" to "1",
+            "fields" to "photo_100",
+        )
+        val json = call("wall.get", args)
+            ?: return WallGetExtendedResult(emptyList(), emptyMap())
+        return try {
+            val resp = json.getAsJsonObject("response")
+                ?: return WallGetExtendedResult(emptyList(), emptyMap())
+            val profileNames = HashMap<Long, String>()
+            resp.getAsJsonArray("profiles")?.forEach { el ->
+                if (!el.isJsonObject) return@forEach
+                val o = el.asJsonObject
+                val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+                val first = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val last = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val name = (first + " " + last).trim()
+                if (id > 0L && name.isNotEmpty()) profileNames[id] = name
+            }
+            val items = resp.getAsJsonArray("items")
+                ?: return WallGetExtendedResult(emptyList(), profileNames)
+            val seenKeys = HashSet<Pair<Long, Long>>()
+            val posts = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val post = parsePostMini(el.asJsonObject)
+                if (post.id <= 0L || post.ownerId == 0L) return@mapNotNull null
+                if (!seenKeys.add(post.ownerId to post.id)) return@mapNotNull null
+                post
+            }
+            WallGetExtendedResult(posts, profileNames)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "wallGetExtended parse error", e)
+            WallGetExtendedResult(emptyList(), emptyMap())
+        }
+    }
+
+    /**
      * VK: users.get с полным набором полей (70+ полей из исследования).
      * Расширенная версия usersGet для ProfileScreen.
      * Audit #40: переименована из usersGetFull в usersGetFullExtended,

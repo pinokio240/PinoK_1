@@ -130,7 +130,7 @@ fun AttachmentPickerSheet(
     onPickAudio: (Track) -> Unit = {},
     onPickVideo: (Video) -> Unit = {},
     onPickGift: (GiftItem) -> Unit = {},
-    onPickPhotoAttachment: (String) -> Unit = {},
+    onPickPhotoAttachment: (attachment: String, thumb: String?) -> Unit = { _, _ -> },
     onPickDocAttachment: (attachment: String, title: String) -> Unit = { _, _ -> },
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -189,7 +189,7 @@ fun AttachmentPickerSheet(
                 AttachmentPickerTab.Music -> AudioPickerTab(app = app, onPick = { onPickAudio(it); onDismiss() })
                 AttachmentPickerTab.Video -> VideoPickerTab(app = app, onPick = { onPickVideo(it); onDismiss() })
                 AttachmentPickerTab.Gifts -> GiftPickerTab(app = app, onPick = { onPickGift(it); onDismiss() })
-                AttachmentPickerTab.Photos -> PhotoPickerTab(app = app, onPick = { onPickPhotoAttachment(it); onDismiss() })
+                AttachmentPickerTab.Photos -> PhotoPickerTab(app = app, onPick = { att, thumb -> onPickPhotoAttachment(att, thumb); onDismiss() })
                 AttachmentPickerTab.Docs -> DocsPickerTab(app = app, onPick = { att, title -> onPickDocAttachment(att, title); onDismiss() })
             }
         }
@@ -547,7 +547,7 @@ private data class VkPhotoRef(
 )
 
 @Composable
-private fun PhotoPickerTab(app: SovaApp, onPick: (String) -> Unit) {
+private fun PhotoPickerTab(app: SovaApp, onPick: (String, String?) -> Unit) {
     var photos by remember { mutableStateOf<List<VkPhotoRef>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -588,7 +588,12 @@ private fun PhotoPickerTab(app: SovaApp, onPick: (String) -> Unit) {
             items(photos, key = { "${it.ownerId}_${it.id}" }) { ref ->
                 VkPhotoCell(ref = ref, onClick = {
                     // attachment-строка через единый хелпер (#ATTACH-UNIFY, §3.2).
-                    onPick(buildVkAttachment("photo", ref.ownerId, ref.id, ref.accessKey))
+                    // #COMPOSER-ATTACH-PREVIEW (волна 39): +превью-URL — композер
+                    // рисует миниатюру выбранного фото вместо слепой скрепки.
+                    onPick(
+                        buildVkAttachment("photo", ref.ownerId, ref.id, ref.accessKey),
+                        ref.previewUrl,
+                    )
                 })
             }
         }

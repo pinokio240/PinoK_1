@@ -1370,7 +1370,7 @@ fun PostDetailScreen(
                 attachedFileName = "Видео: ${video.title.ifBlank { "видео" }}"
                 showAttachmentPicker = false
             },
-            onPickPhotoAttachment = { att ->
+            onPickPhotoAttachment = { att, _ ->  // _ = thumb (#COMPOSER-ATTACH-PREVIEW): превью тут не нужно, только attachment-строка
                 attachmentString = att
                 attachedFileName = "Фото из VK"
                 showAttachmentPicker = false
