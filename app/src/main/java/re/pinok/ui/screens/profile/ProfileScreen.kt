@@ -563,6 +563,13 @@ fun ProfileScreen(
                     bookmarksHasMore = page.size >= BOOKMARKS_PAGE_SIZE
                     bookmarksLoaded = true
                     AppLog.i("ProfileScreen", "Bookmarks tab loaded: ${page.size} items")
+                    // #BOOKMARKS-FIX (2026-09-12): faveGet возвращает emptyList и при
+                    // ошибке API (не бросает) — раньше вкладка молча показывала «пусто».
+                    // Теперь честная русская причина (как в BookmarksScreen панели).
+                    if (page.isEmpty()) {
+                        val human = app.apiClient.lastApiErrorHuman()
+                        if (human != null) bookmarksError = "Закладки не загрузились: $human"
+                    }
                 } catch (e: Exception) {
                     AppLog.e("ProfileScreen", "Bookmarks tab load failed", e)
                     bookmarksError = "Ошибка: ${e.message}"

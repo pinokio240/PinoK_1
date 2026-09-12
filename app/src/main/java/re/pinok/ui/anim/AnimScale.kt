@@ -29,6 +29,17 @@ import androidx.compose.runtime.staticCompositionLocalOf
 val LocalAnimScale = staticCompositionLocalOf { 1f }
 
 /**
+ * #ANIM-FASTER-10 (2026-09-12): базовый множитель скорости анимаций интерфейса.
+ * Жалоба пользователя: «само приложение медленное, что-то тупит» →
+ * «ускорить анимацию на 10%». 0.9f = все длительности ×0.9 (на 10% быстрее),
+ * spring-stiffness ×1/0.9 (быстрее settle). Применяется в ЕДИНСТВЕННОЙ точке —
+ * провайдере LocalAnimScale в SovaNavHost — чтобы накрыть и хелперы
+ * (scaledTween/scaledSpring/tweenScaled), и прямые чтения LocalAnimScale.current.
+ * Пользовательский преф «Скорость анимации» умножается поверх базы.
+ */
+const val ANIM_BASE_SPEED = 0.9f
+
+/**
  * Fix #228: масштаб стикер-фото в чате (0..40, % увеличения от оригинала).
  * 0 — исходный размер, 40 — +40% к оригиналу. Берётся из
  * [re.pinok.data.local.SovaPrefs.Snapshot.stickerPhotoScale].

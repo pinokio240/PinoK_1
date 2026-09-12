@@ -892,19 +892,24 @@ fun MusicScreen(
                             }
                         }
                     },
-                    // #FAVE-AUDIO (2026-08-03): "В закладки" — fave.add(type="audio").
+                    // #FAVE-AUDIO (2026-08-03): был fave.add(type="audio") — НЕ существует:
+                    // у fave.* нет аудио-раздела, запрос падал в fave.addPost с id трека
+                    // (VK-ошибка, «закладки не работают»). #BOOKMARKS-FIX (2026-09-12):
+                    // закладка трека в VK = «Моя музыка» → audioAddReliable (audio.add
+                    // + web-fallback al_audio act=add), причина сбоя честно в Toast.
                     onBookmark = {
                         val t = track
                         scope.launch {
-                            var ok = false
-                            try {
-                                ok = app.apiClient.faveAdd("audio", t.ownerId, t.id)
+                            val (ok, err) = try {
+                                app.apiClient.audioAddReliable(t)
                             } catch (e: Exception) {
-                                AppLog.e("MusicScreen", "faveAdd audio error", e)
+                                AppLog.e("MusicScreen", "audioAddReliable error", e)
+                                false to (e.message ?: "сетевая ошибка")
                             }
                             // Toast-фидбек пользователю (зелёный = добавлено).
                             try {
-                                val msg = if (ok) "Добавлено в закладки" else "Не удалось добавить в закладки"
+                                val msg = if (ok) "Добавлено в «Мою музыку»"
+                                else "Не удалось добавить${if (err.isNullOrBlank()) "" else ": $err"}"
                                 android.widget.Toast.makeText(app.applicationContext, msg, android.widget.Toast.LENGTH_SHORT).show()
                             } catch (_: Exception) {}
                         }

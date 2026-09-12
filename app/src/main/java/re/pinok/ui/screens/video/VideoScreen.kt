@@ -884,7 +884,7 @@ private fun VideoMoreMenu(
                 onDismiss()
                 scope.launch {
                     try {
-                        val ok = app.apiClient.faveAdd("video", video.ownerId, video.id)
+                        val ok = app.apiClient.faveAdd("video", video.ownerId, video.id, video.accessKey) // #BOOKMARKS-FIX: access_key для чужих видео
                         val msg = if (ok) "Добавлено в избранное" else "Не удалось добавить"
                         android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {

@@ -225,16 +225,21 @@ fun AudioPlayerScreen(
                             showTopMenu = false
                             val t = track
                             if (t == null) return@DropdownMenuItem
-                            // #FAVE-AUDIO (2026-08-03): fave.add(type="audio").
+                            // #FAVE-AUDIO (2026-08-03): был fave.add(type="audio") — НЕ
+                            // существует: у fave.* нет аудио-раздела, запрос падал в
+                            // fave.addPost с id трека (VK-ошибка, «закладки не работают»).
+                            // #BOOKMARKS-FIX (2026-09-12): закладка трека в VK = «Моя
+                            // музыка» → audioAddReliable (audio.add + web-fallback).
                             scope.launch {
-                                var ok = false
-                                try {
-                                    ok = app.apiClient.faveAdd("audio", t.ownerId, t.id)
+                                val (ok, err) = try {
+                                    app.apiClient.audioAddReliable(t)
                                 } catch (e: Exception) {
-                                    AppLog.e("AudioPlayerScreen", "faveAdd audio error", e)
+                                    AppLog.e("AudioPlayerScreen", "audioAddReliable error", e)
+                                    false to (e.message ?: "сетевая ошибка")
                                 }
                                 snackbarHostState.showSnackbar(
-                                    if (ok) "Добавлено в закладки" else "Не удалось добавить в закладки"
+                                    if (ok) "Добавлено в «Мою музыку»"
+                                    else "Не удалось добавить${if (err.isNullOrBlank()) "" else ": $err"}"
                                 )
                             }
                         },

@@ -1329,9 +1329,11 @@ fun VideoPlayerScreen(
         inBookmarks = newFav
         scope.launch {
             val ok = if (newFav) {
-                app.apiClient.faveAdd("video", v.ownerId, v.id)
+                // #BOOKMARKS-FIX: access_key для чужих видео (лента/поиск) —
+                // без него VK отвечает ошибкой доступа, «закладки не работают».
+                app.apiClient.faveAdd("video", v.ownerId, v.id, v.accessKey)
             } else {
-                app.apiClient.faveRemove("video", v.ownerId, v.id)
+                app.apiClient.faveRemove("video", v.ownerId, v.id, v.accessKey)
             }
             if (ok) {
                 if (newFav) toast("Добавлено в закладки") else toast("Удалено из закладок")

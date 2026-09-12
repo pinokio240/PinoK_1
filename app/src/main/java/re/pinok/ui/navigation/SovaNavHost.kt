@@ -591,8 +591,16 @@ fun SovaNavHost(
     // 0f → анимации выключены (snap/мгновенно), 1f — норма. Берётся из prefs
     // (interfaceAnimSpeed 0..100 → /100f). Предоставляется через LocalAnimScale
     // всем экранам внутри NavHost + используется в transition-ламбдах NavHost.
+    // #ANIM-FASTER-10 (2026-09-12): базовый множитель 0.9 — все анимации интерфейса
+    // на 10% быстрее независимо от префа (жалоба: «само приложение медленное, что-то
+    // тупит» → «ускорить анимацию на 10%»). Множитель ЗДЕСЬ, а не в AnimScale-хелперах:
+    // это единственная точка предоставления LocalAnimScale — накрывает и
+    // scaledTween/scaledSpring/tweenScaled, и прямые чтения LocalAnimScale.current
+    // (ChatDetailScreen). Преф «Скорость анимации» умножается поверх базы: 100 → 0.9,
+    // 0 (выкл) → 0 остаётся мгновенным.
     val prefsSnap by app.prefs.data.collectAsState(initial = null)
-    val animScale = (prefsSnap?.interfaceAnimSpeed ?: 100).coerceIn(0, 100) / 100f
+    val animScale = ((prefsSnap?.interfaceAnimSpeed ?: 100).coerceIn(0, 100) / 100f) *
+        re.pinok.ui.anim.ANIM_BASE_SPEED
 
     // Основные экраны (dock + drawer) — только их сохраняем как lastRoute.
     // Детальные экраны (VideoPlayer, PostDetail, ChatDetail и т.д.) НЕ сохраняем —

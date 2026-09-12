@@ -6280,12 +6280,15 @@ class VKApiClient(
      * - type=link → link_id
      * Раньше отправляли owner_id+id — VK не распознавал, операция всегда падала.
      */
-    suspend fun faveAdd(type: String = "post", ownerId: Long, itemId: Long): Boolean {
+    suspend fun faveAdd(type: String = "post", ownerId: Long, itemId: Long, accessKey: String? = null): Boolean {
         if (isOffline()) return false
         // #FAVE-WEB-TOKEN: у web-токена (vk1.a.*) `fave.add` возвращает error 3
         // "Unknown method passed" — VK разнёс закладки по отдельным методам:
         // fave.addPost / fave.addVideo / fave.addLink / fave.addPage. Старый
         // универсальный fave.add с параметром type у web-токена не работает.
+        // #BOOKMARKS-FIX (2026-09-12): тип "audio" сюда передавать НЕЛЬЗЯ — упал бы
+        // в ветку addPost с id аудио (у fave.* НЕТ аудио-раздела; у треков «закладка»
+        // = «Моя музыка», путь audioAddReliable — см. MusicScreen/AudioPlayerScreen).
         val args = mutableMapOf<String, String>()
         val method = when (type) {
             "user", "group", "page" -> {
@@ -6296,6 +6299,11 @@ class VKApiClient(
             "video" -> {
                 args["owner_id"] = ownerId.toString()
                 args["id"] = itemId.toString()
+                // #BOOKMARKS-FIX: без access_key у чужих видео (лента/поиск/закладки
+                // друзей) VK отвечает ошибкой доступа — ключ приходит с видео-объектом.
+                // NULL-ЯВНО: access_key опционален по схеме VK.
+                val key = accessKey
+                if (!key.isNullOrBlank()) args["access_key"] = key
                 "fave.addVideo"
             }
             "link" -> {
@@ -6313,7 +6321,7 @@ class VKApiClient(
     }
 
     /** Удалить из закладок. См. faveAdd — web-токен требует fave.remove* методы. */
-    suspend fun faveRemove(type: String = "post", ownerId: Long, itemId: Long): Boolean {
+    suspend fun faveRemove(type: String = "post", ownerId: Long, itemId: Long, accessKey: String? = null): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf<String, String>()
         val method = when (type) {
@@ -6325,6 +6333,10 @@ class VKApiClient(
             "video" -> {
                 args["owner_id"] = ownerId.toString()
                 args["id"] = itemId.toString()
+                // #BOOKMARKS-FIX: симметрично faveAdd — ключ на случай требований VK.
+                // NULL-ЯВНО: access_key опционален по схеме VK.
+                val key = accessKey
+                if (!key.isNullOrBlank()) args["access_key"] = key
                 "fave.removeVideo"
             }
             "link" -> {
@@ -6396,6 +6408,30 @@ class VKApiClient(
         }
         val splitJson = call(splitMethod, splitArgs) ?: return false // NULL-ЯВНО (Gson-вызов, ошибка → false)
         return splitJson.has("response")
+    }
+
+    /**
+     * #BOOKMARKS-FIX (2026-09-12): человекочитаемая причина последней VK-ошибки —
+     * для UI вместо сырого английского error_msg («Access denied…», «Flood control»),
+     * который пользователь не понимает («пишет какую-то ошибку на англ»).
+     * null — последняя ошибка отсутствует (после успешного вызова / офлайна).
+     * Сырое значение остаётся в lastApiError и AppLog-крошках для диагностики.
+     */
+    fun lastApiErrorHuman(): String? {
+        val raw = lastApiError
+        if (raw.isNullOrBlank()) return null
+        val code = lastApiErrorCode
+        val human = when (code) {
+            1 -> "ошибка на сервере VK — повторите позже"
+            5, 8 -> "сессия истекла — войдите в аккаунт заново"
+            6 -> "слишком много запросов — подождите пару секунд"
+            9 -> "слишком много однотипных действий — подождите немного"
+            10 -> "внутренняя ошибка сервера VK — повторите позже"
+            15 -> "VK не дал доступ к методу — у токена недостаточно прав (Access denied)"
+            100 -> "неверный параметр запроса к VK"
+            else -> raw
+        }
+        return "$human (код VK $code)"
     }
 
     /** Отправить пост в диалог как пересылку (wall attachment). */
@@ -8967,7 +9003,13 @@ class VKApiClient(
             "extended" to "1",
         )
         tagId?.let { args["tag_id"] = it.toString() }
-        val json = call("fave.get", args) ?: return emptyList()
+        // #BOOKMARKS-FIX: крошка провала fave.get (раньше — молчаливый emptyList,
+        // экран показывал «Нет закладок»/сырую английскую ошибку без следов в логе).
+        val json = call("fave.get", args)
+        if (json == null) {
+            AppLog.w("VKApiClient", "fave.get failed: code=$lastApiErrorCode err=$lastApiError")
+            return emptyList()
+        }
         return try {
             val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
             items.mapNotNull { el ->

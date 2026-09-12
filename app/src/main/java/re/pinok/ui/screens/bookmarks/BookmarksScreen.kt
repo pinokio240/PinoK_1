@@ -121,7 +121,11 @@ fun BookmarksScreen(
                 if (list.size < pageSize) endReached = true
                 AppLog.i("BookmarksScreen", "Loaded ${list.size} bookmarks (tag=$selectedTagId)")
                 if (list.isEmpty()) {
-                    errorText = app.apiClient.lastApiError ?: "Нет закладок"
+                    // #BOOKMARKS-FIX (2026-09-12): вместо сырой английской VK-ошибки
+                    // («Access denied…» — «пишет какую-то ошибку на англ») — понятная
+                    // русская причина с кодом; сырое значение остаётся в AppLog.
+                    val human = app.apiClient.lastApiErrorHuman()
+                    errorText = if (human != null) "Закладки не загрузились: $human" else "Нет закладок"
                 }
             } catch (e: Exception) {
                 AppLog.e("BookmarksScreen", "Failed to load bookmarks", e)
