@@ -616,6 +616,22 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** Fix #392 #IM-LOCAL-PIN: персист порядка закреплённых диалогов (List<Long> → JSON, атомарный put). */
     suspend fun setImPinnedDialogs(peerIds: List<Long>)  = put(Keys.IM_PINNED_DIALOGS, imPinnedGson.toJson(peerIds))
 
+    // ─── Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков ───
+    // Отдельный ключ ВНЕ Snapshot (паттерн #CALLS-SNAP ниже: не расширять большой
+    // data-класс Snapshot — FeedScreen строит dummy-копию конструктором, урок
+    // Fix #276/#356). Читается отдельным флоу, пишется сеттером;
+    // source of truth — TrackBookmarksRepository (JSON-массив Track).
+
+    /** Волна 40 #BOOKMARKS-TRACKS: JSON-массив локально заложенных треков ("" = ключа ещё нет). */
+    val trackBookmarksData: Flow<String> = ds.data.map { p ->
+        // NULL-ЯВНО: отсутствие ключа — тривиальный фолбэк на дефолт
+        val raw = p[Keys.TRACK_BOOKMARKS_DATA]
+        if (raw == null) "" else raw
+    }
+
+    /** Волна 40 #BOOKMARKS-TRACKS: сохранить локальные закладки треков (атомарный put). */
+    suspend fun setTrackBookmarksData(v: String) = put(Keys.TRACK_BOOKMARKS_DATA, v)
+
     // ─── #CALLS-SNAP (2026-09-05): Этап А3 плана «звонки.перенос.план.md» ───
     // Конфигурация сайдбара раздела «Звонки» («Настройка пунктов меню»):
     // CSV "TAB:1,TAB:0" в порядке отображения (TAB — имя CallsTab из
@@ -1555,6 +1571,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Fix #392 #IM-LOCAL-PIN: локальный закреп диалогов (JSON array of peer_id в порядке
         // закрепления; "" = ключ ещё не создавался, "[]" = список сознательно пуст).
         val IM_PINNED_DIALOGS     = stringPreferencesKey("im_pinned_dialogs")
+        // Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков (JSON array of Track).
+        val TRACK_BOOKMARKS_DATA  = stringPreferencesKey("track_bookmarks_data")
         // #CALLS-SNAP (2026-09-05): конфигурация сайдбара «Звонков» (Этап А3)
         val CALLS_SIDEBAR_CFG     = stringPreferencesKey("calls_sidebar_cfg")
         // #CALLS-Z (2026-09-05): Этап З2 — дефолты устройств/шумодава звонков

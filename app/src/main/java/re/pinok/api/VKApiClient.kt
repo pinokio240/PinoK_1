@@ -6461,6 +6461,18 @@ class VKApiClient(
                 args["link_id"] = itemId.toString()
                 "fave.removeLink"
             }
+            // Волна 40 #BOOKMARKS-REMOVE-ALL: статьи/товары удаляются своими
+            // split-методами (раньше падали в removePost с id статьи — VK-ошибка).
+            "article" -> {
+                args["owner_id"] = ownerId.toString()
+                args["article_id"] = itemId.toString()
+                "fave.removeArticle"
+            }
+            "product" -> {
+                args["owner_id"] = ownerId.toString()
+                args["product_id"] = itemId.toString()
+                "fave.removeProduct"
+            }
             else -> {
                 args["owner_id"] = ownerId.toString()
                 args["id"] = itemId.toString()
@@ -6469,6 +6481,92 @@ class VKApiClient(
         }
         val json = call(method, args) ?: return false
         return json.has("response") && json.getAsJsonPrimitive("response").isNumber
+    }
+
+    /**
+     * Волна 40 #BOOKMARKS-REMOVE-ALL: универсальное удаление серверной закладки
+     * по модели из fave.get (BookmarksScreen + ProfileScreen BookmarksTabSection).
+     *
+     * Инкапсулирует маппинг type → идентификаторы (жалоба тестера 2026-09-12:
+     * «Нет возможности удалить из закладок» — long-press был скрытым, а видео
+     * без access_key, ссылки и статьи/товары вообще не удалялись):
+     *  - video → fave.removeVideo с access_key (чужие видео без ключа дают отказ);
+     *  - link → fave.removeLink по link_id (парсится с волны 40, Bookmark.linkId);
+     *  - article/product → fave.removeArticle/removeProduct по owner+id;
+     *  - page → fave.removePage по распознанному user/group;
+     *  - остальное — прежние ветки faveRemove.
+     *
+     * @return (true, null) — удалено; (false, причина) — человекочитаемая причина
+     *         для тоста (lastApiErrorHuman / «не удалось определить объект»).
+     * Треки тут НЕ участвуют: они локальные (TrackBookmarksRepository).
+     */
+    suspend fun bookmarkRemove(bm: Bookmark): Pair<Boolean, String?> {
+        val type = bm.type
+        val ok = try {
+            when (type) {
+                "post" -> {
+                    val post = bm.post
+                    if (post != null) faveRemove(type = "post", ownerId = post.ownerId, itemId = post.id) else false
+                }
+                "user", "profile" -> {
+                    val user = bm.user
+                    if (user != null) faveRemove(type = "user", ownerId = user.id, itemId = user.id) else false
+                }
+                "group" -> {
+                    val group = bm.group
+                    if (group != null) faveRemove(type = "group", ownerId = -(group.id), itemId = group.id) else false
+                }
+                "photo" -> {
+                    val photo = bm.photo
+                    if (photo != null) faveRemove(type = "photo", ownerId = photo.ownerId, itemId = photo.id) else false
+                }
+                "video" -> {
+                    // #BOOKMARKS-FIX: access_key обязателен для чужих видео.
+                    val video = bm.video
+                    if (video != null) {
+                        val key = video.accessKey
+                        faveRemove(type = "video", ownerId = video.ownerId, itemId = video.id, accessKey = key)
+                    } else {
+                        false
+                    }
+                }
+                "link" -> {
+                    val linkId = bm.linkId
+                    if (linkId != null && linkId > 0L) faveRemove(type = "link", ownerId = 0L, itemId = linkId) else false
+                }
+                "article", "product" -> {
+                    val objId = bm.objectId
+                    val objOwner = bm.objectOwnerId
+                    if (objId != null && objId > 0L && objOwner != null) {
+                        faveRemove(type = type, ownerId = objOwner, itemId = objId)
+                    } else {
+                        false
+                    }
+                }
+                "page" -> {
+                    val pageUser = bm.user
+                    val pageGroup = bm.group
+                    when {
+                        pageUser != null -> faveRemove(type = "user", ownerId = pageUser.id, itemId = pageUser.id)
+                        pageGroup != null -> faveRemove(type = "group", ownerId = -(pageGroup.id), itemId = pageGroup.id)
+                        else -> false
+                    }
+                }
+                else -> false
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "bookmarkRemove($type) failed: ${e.message}")
+            false
+        }
+        if (!ok) {
+            // Диагностика: код/текст VK в logcat (категория по умолчанию).
+            AppLog.w("VKApiClient", "bookmarkRemove($type) rejected: code=$lastApiErrorCode err=$lastApiError")
+        }
+        return if (ok) {
+            true to null
+        } else {
+            false to (lastApiErrorHuman() ?: "VK отклонил удаление")
+        }
     }
 
     /**
@@ -9147,6 +9245,11 @@ class VKApiClient(
                 var photo: PhotoItem? = null
                 var video: Video? = null
                 var link: Attachment.Link? = null
+                // Волна 40 #BOOKMARKS-REMOVE-ALL: идентификаторы для удаления.
+                var linkId: Long? = null
+                var objectId: Long? = null
+                var objectOwnerId: Long? = null
+                var objectTitle: String? = null
                 val entity = o.getAsJsonObject(type) ?: o
                 when (type) {
                     "user", "profile" -> user = parseUserProfileMini(entity)
@@ -9156,14 +9259,45 @@ class VKApiClient(
                     "video" -> video = parseVideoMini(entity)
                     "link" -> {
                         link = Attachment.Link(
-                            url = entity.get("url")?.asString ?: "",
+                            // NULL-ЯВНО: JsonNull.asString кидал бы исключение →
+                            // ВЕСЬ fave.get падал в emptyList (молчаливая «пустота»);
+                            // оборачиваем каждый примитив в takeIf.
+                            url = entity.get("url")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString ?: "",
                             title = entity.get("title")?.takeIf { !it.isJsonNull }?.asString,
                             description = entity.get("description")?.takeIf { !it.isJsonNull }?.asString,
                         )
+                        // Волна 40 #BOOKMARKS-REMOVE-ALL: link_id нужен для
+                        // fave.removeLink — раньше не парсился → удаление ссылок
+                        // было заглушкой «пока не поддерживается».
+                        linkId = entity.get("id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                    }
+                    // Волна 40 #BOOKMARKS-REMOVE-ALL: статья/товар — минимум полей
+                    // (id/owner_id/title), чтобы строка имела заголовок и УДАЛЯЛАСЬ
+                    // (fave.removeArticle/fave.removeProduct).
+                    "article", "product" -> {
+                        objectId = entity.get("id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                        objectOwnerId = entity.get("owner_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                        objectTitle = entity.get("title")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString
+                    }
+                    "page" -> {
+                        // Волна 40: страницы (клипы-авторы через fave.addPage) — VK
+                        // отдаёт сущность под ключом page; эвристика user_id/group_id
+                        // → профиль/сообщество, чтобы работало открытие и удаление
+                        // (fave.removePage требует user_id или group_id).
+                        val pageUserId = entity.get("user_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                        val pageGroupId = entity.get("group_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                        when {
+                            pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(entity)
+                            pageGroupId != null && pageGroupId > 0L -> group = parseGroupMini(entity)
+                            // Не распознано — строка с типом «page»: заголовок честно
+                            // подставится типом, удаление вернёт понятную причину.
+                            else -> Unit
+                        }
                     }
                 }
                 Bookmark(type = type, seen = seen ?: false, addedDate = addedDate,
-                    user = user, group = group, post = post, photo = photo, video = video, link = link)
+                    user = user, group = group, post = post, photo = photo, video = video, link = link,
+                    linkId = linkId, objectId = objectId, objectOwnerId = objectOwnerId, objectTitle = objectTitle)
             }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "faveGet parse error", e)

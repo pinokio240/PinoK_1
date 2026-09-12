@@ -92,6 +92,9 @@ fun AudioMoreMenu(
     // Fix #388 #AUDIO-TOGGLE-OWNING: трек уже в моей музыке? null = неизвестно
     // (тумблер тогда показывает «Добавить в мою музыку»).
     isOwned: Boolean? = null,
+    // Волна 40 #BOOKMARKS-TRACKS: трек уже в ЛОКАЛЬНЫХ закладках?
+    // true → пункт меню «Удалить из закладок» (toggle-семантика).
+    isBookmarked: Boolean? = null,
 ) {
     DropdownMenu(
         expanded = expanded,
@@ -135,8 +138,15 @@ fun AudioMoreMenu(
             DropdownMenuItem(text = { Text("Открыть альбом") }, onClick = { onOpenAlbum(); onDismiss() })
         }
         DropdownMenuItem(text = { Text("Не нравится") }, onClick = { onDislike(); onDismiss() })
-        // #FAVE-AUDIO: добавить в закладки (fave.add type="audio").
-        DropdownMenuItem(text = { Text("В закладки") }, onClick = { onBookmark(); onDismiss() })
+        // #FAVE-AUDIO (2026-08-03): у fave.* НЕТ аудио-раздела — серверная
+        // закладка трека невозможна. Волна 40 #BOOKMARKS-TRACKS: «В закладки»
+        // = ЛОКАЛЬНАЯ закладка (TrackBookmarksRepository → SovaPrefs), видна в
+        // BookmarksScreen раздел «Треки», играет и удаляется там. Toggle:
+        // заложенный трек показывает «Удалить из закладок».
+        DropdownMenuItem(
+            text = { Text(if (isBookmarked == true) "Удалить из закладок" else "В закладки") },
+            onClick = { onBookmark(); onDismiss() },
+        )
         DropdownMenuItem(text = { Text("Поделиться") }, onClick = { onShare(); onDismiss() })
         DropdownMenuItem(text = { Text("Скопировать ссылку") }, onClick = { onCopyLink(); onDismiss() })
         if (isOwn) {

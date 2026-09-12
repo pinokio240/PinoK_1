@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -799,8 +800,11 @@ fun CatalogSectionScreen(
     var playlists by remember { mutableStateOf<List<CatalogPlaylist>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    // Волна 40 #SECTIONS-HONEST: повтор загрузки + честные причины пустоты
+    // (офлайн/ошибка VK/нерендерящиеся блоки) вместо молчаливой пустоты.
+    var reloadTick by remember { mutableStateOf(0) }
 
-    LaunchedEffect(sectionId) {
+    LaunchedEffect(sectionId, reloadTick) {
         loading = true
         errorText = null
         try {
@@ -818,11 +822,20 @@ fun CatalogSectionScreen(
             tracks = allTracks
             playlists = allPlaylists
             AppLog.i("CatalogSectionScreen", "Loaded ${allTracks.size} tracks, ${allPlaylists.size} playlists")
+            // #SECTIONS-HONEST (волна 40): секция, где после парсинга не осталось
+            // ни треков, ни плейлистов (артисты/жанры/радио-блоки пока не
+            // рендерятся, офлайн, ошибка API) — честная причина вместо пустоты.
+            if (allTracks.isEmpty() && allPlaylists.isEmpty()) {
+                errorText = if (app.apiClient.isOffline()) "Нет сети — раздел доступен онлайн"
+                else (app.apiClient.lastApiErrorHuman() ?: "Раздел пуст или содержит элементы, которые пока не отображаются")
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             AppLog.e("CatalogSectionScreen", "load failed: ${e.message}")
-            errorText = "Ошибка: ${e.message}"
+            // #SECTIONS-HONEST: причина различается (офлайн vs ошибка).
+            errorText = if (app.apiClient.isOffline()) "Нет сети — раздел доступен онлайн"
+            else "Ошибка: ${e.message}"
         } finally {
             loading = false
         }
@@ -836,7 +849,19 @@ fun CatalogSectionScreen(
             }
             errorText != null && tracks.isEmpty() && playlists.isEmpty() ->
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(errorText ?: "", color = VK_TEXT_SECONDARY, fontSize = 14.sp)
+                    // Волна 40 #SECTIONS-HONEST: причина + «Повторить» (раньше —
+                    // только текст без действия).
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            errorText ?: "",
+                            color = VK_TEXT_SECONDARY,
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = { reloadTick++ }) { Text("Повторить") }
+                    }
                 }
             else -> LazyColumn(
                 Modifier.fillMaxSize(),

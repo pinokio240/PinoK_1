@@ -1184,6 +1184,14 @@ data class Bookmark(
     val photo: PhotoItem? = null,
     val video: Video? = null,
     val link: Attachment.Link? = null,
+    // Волна 40 #BOOKMARKS-REMOVE-ALL: идентификаторы для fave.remove* по тем
+    // типам, у которых НЕТ полноценной сущности (link → link_id для
+    // fave.removeLink; article/product → owner+id для fave.removeArticle/
+    // removeProduct). Раньше не парсились → удаление этих типов было заглушкой.
+    val linkId: Long? = null,
+    val objectId: Long? = null,
+    val objectOwnerId: Long? = null,
+    val objectTitle: String? = null,
 ) {
     val title: String get() = when (type) {
         "user" -> user?.fullName ?: ""
@@ -1192,6 +1200,9 @@ data class Bookmark(
         "photo" -> photo?.text?.take(60) ?: "Фото"
         "video" -> video?.title ?: ""
         "link" -> link?.title ?: ""
+        // Волна 40: статьи/товары — заголовок из entity (objectTitle),
+        // раньше строка показывала сырой тип.
+        "article", "product" -> objectTitle ?: ""
         else -> type
     }
     val thumbUrl: String? get() = when (type) {

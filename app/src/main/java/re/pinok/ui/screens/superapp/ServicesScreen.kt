@@ -36,30 +36,41 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import re.pinok.ui.navigation.Screen
 
 private data class Service(
     val title: String,
     val icon: ImageVector,
     val status: ServiceStatus = ServiceStatus.COMING_SOON,
+    // Волна 40 #SECTIONS-WIRE: готовый раздел, куда ведёт плитка (null = заглушка).
+    val screen: Screen? = null,
 )
 
 private enum class ServiceStatus { READY, COMING_SOON, BLOCKED }
 
+/**
+ * Волна 40 #SECTIONS-WIRE (жалоба пользователя: «одни разделы работают
+ * другие нет»): плитки-дубли существующих рабочих разделов больше НЕ тостят
+ * «раздел в разработке», а открывают свои экраны (Сообщества, Друзья,
+ * Закладки, Документы, Фотографии, Видеозаписи). Остаются честные заглушки
+ * только там, где раздела реально нет (Платежи/Игры/VK Apps/Стикеры —
+ * недоступны неофициальному клиенту по определению).
+ */
 private val services = listOf(
-    Service("Сообщества",   Icons.Default.Group),
-    Service("Друзья",       Icons.Default.People),
-    Service("Закладки",     Icons.Default.Bookmark),
-    Service("Документы",    Icons.Default.Description),
-    Service("Фотографии",   Icons.Default.PhotoLibrary),
-    Service("Видеозаписи",  Icons.Default.VideoLibrary),
-    Service("Платежи",      Icons.Default.Payment, status = ServiceStatus.BLOCKED),
+    Service("Сообщества",   Icons.Default.Group,        ServiceStatus.READY, Screen.Groups),
+    Service("Друзья",       Icons.Default.People,       ServiceStatus.READY, Screen.Friends),
+    Service("Закладки",     Icons.Default.Bookmark,     ServiceStatus.READY, Screen.Bookmarks),
+    Service("Документы",    Icons.Default.Description,  ServiceStatus.READY, Screen.Documents),
+    Service("Фотографии",   Icons.Default.PhotoLibrary, ServiceStatus.READY, Screen.Photos),
+    Service("Видеозаписи",  Icons.Default.VideoLibrary, ServiceStatus.READY, Screen.Video),
+    Service("Платежи",      Icons.Default.Payment,      status = ServiceStatus.BLOCKED),
     Service("Игры",         Icons.Default.SportsEsports, status = ServiceStatus.BLOCKED),
-    Service("VK Apps",      Icons.Default.Apps, status = ServiceStatus.BLOCKED),
-    Service("Стикеры",      Icons.Default.Favorite, status = ServiceStatus.BLOCKED),
+    Service("VK Apps",      Icons.Default.Apps,         status = ServiceStatus.BLOCKED),
+    Service("Стикеры",      Icons.Default.Favorite,     status = ServiceStatus.BLOCKED),
 )
 
 @Composable
-fun ServicesScreen() {
+fun ServicesScreen(onOpenSection: ((Screen) -> Unit)? = null) {
     val context = LocalContext.current
     LazyVerticalGrid(
         columns = GridCells.Fixed(3),
@@ -67,14 +78,20 @@ fun ServicesScreen() {
         verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        items(services) { svc ->
+        items(services, key = { it.title }) { svc ->
             ServiceCard(svc) {
-                val msg = when (svc.status) {
-                    ServiceStatus.COMING_SOON -> "«${svc.title}» — раздел в разработке"
-                    ServiceStatus.BLOCKED -> "«${svc.title}» — недоступно в неофициальном клиенте"
-                    ServiceStatus.READY -> "Открываю «${svc.title}»…"
+                val target = svc.screen
+                if (target != null) {
+                    // Волна 40 #SECTIONS-WIRE: живая навигация в готовый раздел.
+                    onOpenSection?.invoke(target)
+                } else {
+                    val msg = when (svc.status) {
+                        ServiceStatus.COMING_SOON -> "«${svc.title}» — раздел в разработке"
+                        ServiceStatus.BLOCKED -> "«${svc.title}» — недоступно в неофициальном клиенте"
+                        ServiceStatus.READY -> "Открываю «${svc.title}»…"
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
         }
     }

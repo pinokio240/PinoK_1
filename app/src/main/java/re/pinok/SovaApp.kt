@@ -274,6 +274,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         private set
 
     /**
+     * Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков (JSON-массив Track
+     * в SovaPrefs.trackBookmarksData). У fave.* нет аудио-раздела (#FAVE-AUDIO),
+     * поэтому «Закладки → Треки» — клиентское хранилище (source of truth для UI).
+     */
+    lateinit var trackBookmarksRepository: re.pinok.data.local.TrackBookmarksRepository
+        private set
+
+    /**
      * Sprint 1, P0-1: Real-time LongPoll-цикл для сообщений.
      *
      * Запускается из [re.pinok.ui.MainActivity] при `tokenStorage.hasValidToken()`,
@@ -1256,6 +1264,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         pinnedConvsRepository = re.pinok.data.local.PinnedConversationsRepository(prefs)
         // Fix #356 #MSG-ARCHIVE: ArchivedConversationsRepository — локальный архив диалогов.
         archivedConvsRepository = re.pinok.data.local.ArchivedConversationsRepository(prefs)
+        // Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков (JSON в SovaPrefs).
+        trackBookmarksRepository = re.pinok.data.local.TrackBookmarksRepository(prefs)
 
         // #CALLS: Queuev4Client — сигналинг звонков через queuev4.vk.ru.
         queuev4Client = Queuev4Client(httpClient = httpClient, apiClient = apiClient)

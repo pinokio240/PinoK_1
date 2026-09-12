@@ -223,10 +223,45 @@ fun DocumentsScreen() {
 @Composable
 private fun DocRow(doc: DocFile) {
     val context = LocalContext.current
+
+    // Волна 40 #DOCS-DOWNLOAD (жалоба «одни разделы работают другие нет»):
+    // документы скачиваются через системный DownloadManager (файл — в
+    // «Загрузки/VK/…», уведомление о завершении). Раньше и тап, и кнопка
+    // «Скачать» были заглушками (Toast «в разработке»/TODO).
+    fun downloadDoc() {
+        val url = doc.url
+        if (url.isBlank()) {
+            Toast.makeText(context, "Ссылка на файл недоступна — обновите список", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            // Санитизация имени файла (path-сепараторы/запрещённые символы).
+            val safeTitle = doc.title.ifBlank { "vk_doc_${doc.id}" }
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            val fileName = "$safeTitle.${doc.ext}"
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                .setTitle(fileName)
+                .setDescription("Документы VK")
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "VK/$fileName")
+            val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
+            if (dm == null) {
+                Toast.makeText(context, "Загрузка недоступна на этом устройстве", Toast.LENGTH_SHORT).show()
+                return
+            }
+            dm.enqueue(request)
+            Toast.makeText(context, "Загрузка началась: $fileName", Toast.LENGTH_SHORT).show()
+            AppLog.i("DocumentsScreen", "Download enqueued: $fileName (${doc.sizeLabel})")
+        } catch (e: Exception) {
+            AppLog.e("DocumentsScreen", "Download failed", e)
+            Toast.makeText(context, "Не удалось скачать: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth().clickable {
-            // audit Medium #5: Toast-фидбек вместо пустого TODO.
-            Toast.makeText(context, "Документ «${doc.title}.${doc.ext}» — в разработке", Toast.LENGTH_SHORT).show()
+            // Волна 40 #DOCS-DOWNLOAD: тап = скачать (как и кнопка «Скачать»).
+            downloadDoc()
         }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -268,8 +303,9 @@ private fun DocRow(doc: DocFile) {
             }
         }
         IconButton(onClick = {
-            // TODO: Trigger download via TrackDownloadManager / browser intent
-            AppLog.i("DocumentsScreen", "Download requested: ${doc.title}.${doc.ext}")
+            // Волна 40 #DOCS-DOWNLOAD: прежний TODO заменён реальной загрузкой
+            // через системный DownloadManager (downloadDoc выше).
+            downloadDoc()
         }) {
             Icon(Icons.Outlined.Download, contentDescription = "Скачать")
         }

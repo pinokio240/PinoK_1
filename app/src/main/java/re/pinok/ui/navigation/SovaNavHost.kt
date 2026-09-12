@@ -2021,7 +2021,14 @@ composable(Screen.CallsHistory.route) {
                         },
                     )
                 }
-                composable(Screen.Services.route)      { ServicesScreen() }
+                // Волна 40 #SECTIONS-WIRE: плитки «Сервисов» открывают готовые
+                // разделы (Сообщества/Друзья/Закладки/Документы/Фото/Видео) —
+                // раньше ВСЕ плитки были заглушками с тостом.
+                composable(Screen.Services.route)      {
+                    ServicesScreen(onOpenSection = { screen ->
+                        nav.navigate(screen.route)
+                    })
+                }
                 composable(Screen.Notifications.route) { NotificationsScreen(
                         onPostClick = { ownerId, postId ->
                             PostHolder.last = re.pinok.data.model.Post(

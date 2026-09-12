@@ -166,6 +166,13 @@ fun AudioPlayerScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     // ─── Fix #258: Create-new-playlist dialog ─────────────────────
+    // Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков — реактивный стейт
+    // для toggle-метки меню плеера («В закладки»/«Удалить из закладок»).
+    val bookmarkTracks by app.trackBookmarksRepository.tracks.collectAsState()
+    val currentTrackForBookmark = track
+    val trackBookmarkedNow = currentTrackForBookmark != null &&
+        bookmarkTracks.any { it.id == currentTrackForBookmark.id && it.ownerId == currentTrackForBookmark.ownerId }
+
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistTitle by remember { mutableStateOf("") }
 
@@ -229,26 +236,30 @@ fun AudioPlayerScreen(
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("В закладки", color = vkTextPrimary) },
+                        text = { Text(if (trackBookmarkedNow) "Удалить из закладок" else "В закладки", color = vkTextPrimary) },
                         onClick = {
                             showTopMenu = false
                             val t = track
                             if (t == null) return@DropdownMenuItem
-                            // #FAVE-AUDIO (2026-08-03): был fave.add(type="audio") — НЕ
-                            // существует: у fave.* нет аудио-раздела, запрос падал в
-                            // fave.addPost с id трека (VK-ошибка, «закладки не работают»).
-                            // #BOOKMARKS-FIX (2026-09-12): закладка трека в VK = «Моя
-                            // музыка» → audioAddReliable (audio.add + web-fallback).
+                            // #FAVE-AUDIO (2026-08-03): fave.add(type="audio") НЕ существует
+                            // — у fave.* нет аудио-раздела. #BOOKMARKS-FIX (2026-09-12)
+                            // сводил закладку к «Моей музыке»; тестер ожидает раздельные
+                            // сущности. Волна 40 #BOOKMARKS-TRACKS: «В закладки» =
+                            // ЛОКАЛЬНАЯ закладка (TrackBookmarksRepository → SovaPrefs),
+                            // видна в BookmarksScreen раздел «Треки». Toggle-семантика.
                             scope.launch {
-                                val (ok, err) = try {
-                                    app.apiClient.audioAddReliable(t)
+                                val now = try {
+                                    app.trackBookmarksRepository.toggle(t)
                                 } catch (e: Exception) {
-                                    AppLog.e("AudioPlayerScreen", "audioAddReliable error", e)
-                                    false to (e.message ?: "сетевая ошибка")
+                                    AppLog.e("AudioPlayerScreen", "track bookmark toggle error", e)
+                                    null
                                 }
                                 snackbarHostState.showSnackbar(
-                                    if (ok) "Добавлено в «Мою музыку»"
-                                    else "Не удалось добавить${if (err.isNullOrBlank()) "" else ": $err"}"
+                                    when (now) {
+                                        true -> "Добавлено в закладки"
+                                        false -> "Удалено из закладок"
+                                        null -> "Не удалось обновить закладку"
+                                    }
                                 )
                             }
                         },

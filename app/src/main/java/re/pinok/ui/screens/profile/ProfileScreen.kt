@@ -1663,6 +1663,21 @@ fun ProfileScreen(
                     loadingMore = bookmarksLoadingMore,
                     onLoadMore = { loadMoreBookmarksPage() },
                     onOpen = { openBookmark(it) },
+                    // Волна 40 #BOOKMARKS-REMOVE-ALL: удаление через bookmarkRemove
+                    // (жалоба тестера: «Нет возможности удалить из закладок»).
+                    onRemove = { bm ->
+                        scope.launch {
+                            val (ok, err) = app.apiClient.bookmarkRemove(bm)
+                            if (ok) {
+                                bookmarks = bookmarks.filterNot { it == bm }
+                                Toast.makeText(context, "Удалено из закладок", Toast.LENGTH_SHORT).show()
+                            } else {
+                                // NULL-ЯВНО: err nullable — явный if вместо ?:.
+                                val shown = if (err != null) ": $err" else ""
+                                Toast.makeText(context, "Не удалось удалить из закладок$shown", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -3586,11 +3601,13 @@ private fun ProfileArticleRow(item: ProfileArticleInfo, onOpen: (String) -> Unit
  *  - photo → существующий PhotoViewer (самый большой sizes);
  *  - link → системный браузер (openUrlExternal — веб-контент);
  *  - user → чужой профиль (Screen.UserProfile через onUserClick).
- * Остальные типы (group, article, product, …) рисуются БЕЗ тапа: VKApiClient
- * не парсит для них сущность (модель Bookmark статью/товар не несёт), а
- * расширение VKApiClient/моделей вне скоупа задачи — честное отклонение
- * (см. worklog П-6b). Подгрузка — «Загрузить ещё» (hasMore = последняя
- * страница полная).
+ * Остальные типы (article, product, …) с волны 40 #BOOKMARKS-REMOVE-ALL:
+ * Bookmark несёт минимум полей (objectId/objectOwnerId/objectTitle — заголовок
+ * строки корректен), а ДОЛГОЕ НАЖАТИЕ по строке УДАЛЯЕТ закладку через
+ * VKApiClient.bookmarkRemove (все типы: видео с access_key, ссылки по link_id,
+ * статьи/товары через fave.removeArticle/removeProduct — жалоба тестера
+ * 2026-09-12 «Нет возможности удалить из закладок»). Подгрузка —
+ * «Загрузить ещё» (hasMore = последняя страница полная).
  */
 @Composable
 private fun BookmarksTabSection(
@@ -3602,7 +3619,11 @@ private fun BookmarksTabSection(
     loadingMore: Boolean,
     onLoadMore: () -> Unit,
     onOpen: (Bookmark) -> Unit,
+    // Волна 40 #BOOKMARKS-REMOVE-ALL: удаление закладки (long-press → диалог).
+    onRemove: (Bookmark) -> Unit = {},
 ) {
+    // Волна 40: цель удаления (подтверждение — AlertDialog ниже).
+    var removeTarget by remember { mutableStateOf<Bookmark?>(null) }
     when {
         loading -> TabProgressRow()
         error != null -> TabErrorRow(message = error, onRetry = onRetry)
@@ -3615,6 +3636,7 @@ private fun BookmarksTabSection(
                 ProfileBookmarkRow(
                     bookmark = bookmark,
                     onClick = { onOpen(bookmark) },
+                    onLongClick = { removeTarget = bookmark },
                 )
             }
             if (hasMore) {
@@ -3628,15 +3650,51 @@ private fun BookmarksTabSection(
             }
         }
     }
+    // Волна 40 #BOOKMARKS-REMOVE-ALL: подтверждение удаления (паттерн BookmarksScreen).
+    removeTarget?.let { bm ->
+        AlertDialog(
+            onDismissRequest = { removeTarget = null },
+            title = { Text("Удалить из закладок?") },
+            text = {
+                Text(
+                    text = bm.title.ifBlank { bm.type },
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    removeTarget = null
+                    onRemove(bm)
+                }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { removeTarget = null }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
 }
 
-/** Строка закладки: миниатюра (если есть) + название + метка типа. */
+/** Строка закладки: миниатюра (если есть) + название + метка типа.
+ *  Волна 40 #BOOKMARKS-REMOVE-ALL: long-press = «Удалить из закладок».
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ProfileBookmarkRow(bookmark: Bookmark, onClick: () -> Unit) {
+private fun ProfileBookmarkRow(bookmark: Bookmark, onClick: () -> Unit, onLongClick: () -> Unit = {}) {
     val openable = bookmarkIsOpenable(bookmark)
     Card(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .then(if (openable) Modifier.clickable { onClick() } else Modifier),
+            .combinedClickable(
+                // Тап работает только по открытым типам (как раньше);
+                // long-press всегда доступен — удаление.
+                onClick = { if (openable) onClick() },
+                onLongClick = onLongClick,
+            ),
         elevation = CardDefaults.cardElevation(0.dp),
     ) {
         Row(

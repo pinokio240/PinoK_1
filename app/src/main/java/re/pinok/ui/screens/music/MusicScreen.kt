@@ -163,6 +163,9 @@ fun MusicScreen(
     var moreMenuTrack by remember { mutableStateOf<Track?>(null) }
     var moreMenuExpanded by remember { mutableStateOf(false) }
     var lyricsSheetTrackId by remember { mutableStateOf<Long?>(null) }
+    // Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков — реактивный стейт
+    // для toggle-метки меню («В закладки»/«Удалить из закладок»).
+    val bookmarkTracks by app.trackBookmarksRepository.tracks.collectAsState()
     // Fix #362 #AUDIO-MENU-REAL: диалог правки трека («Редактировать трек» —
     // audio.edit, только свои треки). track — что правим.
     var editTrackDialog by remember { mutableStateOf<Track?>(null) }
@@ -855,6 +858,8 @@ fun MusicScreen(
                 // тогда тумблер всегда «Добавить»).
                 val myUserId = app.exchangeAuthRepository.userId()
                 val trackIsOwn = myUserId != 0L && track.ownerId == myUserId
+                // Волна 40 #BOOKMARKS-TRACKS: трек уже в локальных закладках?
+                val trackBookmarked = bookmarkTracks.any { it.id == track.id && it.ownerId == track.ownerId }
                 re.pinok.ui.components.AudioMoreMenu(
                     track = track,
                     expanded = moreMenuExpanded,
@@ -871,6 +876,8 @@ fun MusicScreen(
                     // вебе. Тосты с РЕАЛЬНОЙ ошибкой VK; при ошибке состояние
                     // списка НЕ меняется (честность).
                     isOwned = trackIsOwn,
+                    // Волна 40 #BOOKMARKS-TRACKS: toggle-метка пункта меню.
+                    isBookmarked = trackBookmarked,
                     onToggleOwn = {
                         val t = track
                         scope.launch {
@@ -978,24 +985,31 @@ fun MusicScreen(
                             }
                         }
                     },
-                    // #FAVE-AUDIO (2026-08-03): был fave.add(type="audio") — НЕ существует:
-                    // у fave.* нет аудио-раздела, запрос падал в fave.addPost с id трека
-                    // (VK-ошибка, «закладки не работают»). #BOOKMARKS-FIX (2026-09-12):
-                    // закладка трека в VK = «Моя музыка» → audioAddReliable (audio.add
-                    // + web-fallback al_audio act=add), причина сбоя честно в Toast.
+                    // #FAVE-AUDIO (2026-08-03): fave.add(type="audio") НЕ существует —
+                    // у fave.* нет аудио-раздела. #BOOKMARKS-FIX (2026-09-12) сводил
+                    // «закладку трека» к «Моей музыке» — но тестер (обратная связь
+                    // 2026-09-12) ожидает РАЗДЕЛЬНЫЕ сущности: треки в Закладках.
+                    // Волна 40 #BOOKMARKS-TRACKS: «В закладки» = ЛОКАЛЬНАЯ закладка
+                    // (TrackBookmarksRepository → SovaPrefs), видна в BookmarksScreen
+                    // раздел «Треки» (воспроизведение + удаление). Toggle-семантика:
+                    // повторный тап по «Удалить из закладок» убирает. «Моя музыка»
+                    // осталась отдельным первым пунктом меню (onToggleOwn выше).
                     onBookmark = {
                         val t = track
                         scope.launch {
-                            val (ok, err) = try {
-                                app.apiClient.audioAddReliable(t)
+                            val nowBookmarked = try {
+                                app.trackBookmarksRepository.toggle(t)
                             } catch (e: Exception) {
-                                AppLog.e("MusicScreen", "audioAddReliable error", e)
-                                false to (e.message ?: "сетевая ошибка")
+                                AppLog.e("MusicScreen", "track bookmark toggle error", e)
+                                null
                             }
-                            // Toast-фидбек пользователю (зелёный = добавлено).
+                            // Честный фидбек: успех/снятие/сбой — три разных текста.
                             try {
-                                val msg = if (ok) "Добавлено в «Мою музыку»"
-                                else "Не удалось добавить${if (err.isNullOrBlank()) "" else ": $err"}"
+                                val msg = when (nowBookmarked) {
+                                    true -> "Добавлено в закладки"
+                                    false -> "Удалено из закладок"
+                                    null -> "Не удалось обновить закладку — попробуйте ещё раз"
+                                }
                                 android.widget.Toast.makeText(app.applicationContext, msg, android.widget.Toast.LENGTH_SHORT).show()
                             } catch (_: Exception) {}
                         }
@@ -2032,19 +2046,34 @@ private fun MusicHomeTab(
     val scope = rememberCoroutineScope()
     var catalogBlocks by remember { mutableStateOf<List<re.pinok.data.model.CatalogBlock>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(true) }
+    // Волна 40 #SECTIONS-HONEST: молчаливый провал каталога выглядел как
+    // «Каталог пуст» (жалоба «одни разделы работают другие нет») — теперь
+    // честная причина (офлайн/ошибка VK) + «Повторить».
+    var catalogError by remember { mutableStateOf<String?>(null) }
+    var catalogReloadTick by remember { mutableStateOf(0) }
 
     // Загрузка каталога
-    LaunchedEffect(Unit) {
+    LaunchedEffect(catalogReloadTick) {
         catalogLoading = true
+        catalogError = null
         try {
             val blocks = app.apiClient.catalogGetAudio(section = "general", count = 10)
             catalogBlocks = blocks
             AppLog.i("MusicHomeTab", "Loaded ${blocks.size} catalog blocks")
+            // #SECTIONS-HONEST: catalogGetAudio отдаёт emptyList и при офлайне,
+            // и при ошибке API/парсинга — различаем причину честным текстом.
+            if (blocks.isEmpty()) {
+                catalogError = if (app.apiClient.isOffline()) "Нет сети — раздел доступен онлайн"
+                else (app.apiClient.lastApiErrorHuman() ?: "Каталог временно недоступен — попробуйте позже")
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Fix #252: корректная отмена (пользователь ушёл со экрана)
             throw e
         } catch (e: Exception) {
             AppLog.e("MusicHomeTab", "catalog.getAudio error", e)
+            // #SECTIONS-HONEST: причина видна в UI (было — только AppLog).
+            catalogError = if (app.apiClient.isOffline()) "Нет сети — раздел доступен онлайн"
+            else "Ошибка: ${e.message}"
         } finally {
             catalogLoading = false
         }
@@ -2062,6 +2091,28 @@ private fun MusicHomeTab(
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator(color = accentColor) }
+            }
+        } else if (catalogError != null && catalogBlocks.isEmpty()) {
+            // Волна 40 #SECTIONS-HONEST: честная причина сбоя + «Повторить»
+            // (раньше ветка ловила ошибку только в AppLog → «Каталог пуст»).
+            item {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.MusicNote, null, tint = secondaryColor, modifier = Modifier.size(48.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            catalogError ?: "",
+                            color = textColor,
+                            fontSize = 15.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = { catalogReloadTick++ }) { Text("Повторить") }
+                    }
+                }
             }
         } else if (catalogBlocks.isEmpty() && tracks.isEmpty()) {
             item {
@@ -2276,18 +2327,31 @@ private fun DiscoverTab(
     val app = SovaApp.get()
     var catalogBlocks by remember { mutableStateOf<List<re.pinok.data.model.CatalogBlock>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(true) }
+    // Волна 40 #SECTIONS-HONEST: провал «Обзора»/«Обновлений» выглядел как
+    // «Нет рекомендаций» без причины — теперь честный текст + «Повторить».
+    var catalogError by remember { mutableStateOf<String?>(null) }
+    var discoverReloadTick by remember { mutableStateOf(0) }
 
-    LaunchedEffect(section) {
+    LaunchedEffect(section, discoverReloadTick) {
         catalogLoading = true
+        catalogError = null
         try {
             val blocks = app.apiClient.catalogGetAudio(section = section, count = 10)
             catalogBlocks = blocks
             AppLog.i("DiscoverTab", "Loaded ${blocks.size} blocks (section=$section)")
+            // #SECTIONS-HONEST: различаем офлайн и ошибку API/парсинга.
+            if (blocks.isEmpty()) {
+                catalogError = if (app.apiClient.isOffline()) "Нет сети — раздел доступен онлайн"
+                else (app.apiClient.lastApiErrorHuman() ?: "Раздел временно недоступен — попробуйте позже")
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Fix #252: корректная отмена (пользователь ушёл со экрана)
             throw e
         } catch (e: Exception) {
             AppLog.e("DiscoverTab", "catalog.getAudio($section) error", e)
+            // #SECTIONS-HONEST: причина видна в UI (было — только AppLog).
+            catalogError = if (app.apiClient.isOffline()) "Нет сети — раздел доступен онлайн"
+            else "Ошибка: ${e.message}"
         } finally {
             catalogLoading = false
         }
@@ -2305,6 +2369,27 @@ private fun DiscoverTab(
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator(color = accentColor) }
+            }
+        } else if (catalogError != null && catalogBlocks.isEmpty()) {
+            // Волна 40 #SECTIONS-HONEST: честная причина сбоя + «Повторить».
+            item {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.MusicNote, null, tint = secondaryColor, modifier = Modifier.size(48.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            catalogError ?: "",
+                            color = textColor,
+                            fontSize = 15.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = { discoverReloadTick++ }) { Text("Повторить") }
+                    }
+                }
             }
         } else if (catalogBlocks.isEmpty()) {
             item {
