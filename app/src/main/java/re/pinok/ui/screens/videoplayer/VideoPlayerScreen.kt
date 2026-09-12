@@ -714,6 +714,22 @@ fun VideoPlayerScreen(
         // #PIP-PAUSE-ON-NEW-VIDEO: открываем новое видео — приостанавливаем
         // активный PiP-плеер, чтобы не шли два потока одновременно.
         re.pinok.ui.videoplayer.VideoPipActivity.pauseActivePip()
+        // #VIDEO-BG-KEEP (2026-09-12): после пересоздания активити в фоне
+        // («Не сохранять действия»/агрессивный ROM) шина может держать ЖИВОЙ
+        // плеер с этим же видео — переиспользуем его (воспроизведение не
+        // прерывается, картинка вернётся через PlayerView.update), вместо
+        // создания второго инстанса поверх играющего.
+        val metaForBgKey = okMetadata
+        val bgReuseKey = if (metaForBgKey != null) {
+            "ok_${metaForBgKey.movieId}"
+        } else {
+            re.pinok.media.PlaybackPositionStore.videoKey(resolvedVideo.ownerId, resolvedVideo.id)
+        }
+        val bgLivePlayer = VideoPlaybackBus.livePlayerFor(bgReuseKey)
+        if (bgLivePlayer != null) {
+            AppLog.i(TAG, "#VIDEO-BG-KEEP: reusing live background player (key=$bgReuseKey)")
+            return@remember bgLivePlayer
+        }
         val url = if (isLocalPlayback) {
             "file://${localFile.absolutePath}"
         } else {
@@ -921,6 +937,7 @@ fun VideoPlayerScreen(
             context,
             exoPlayer,
             if (resolvedVideo.title.isBlank()) "Видео" else resolvedVideo.title,
+            videoPosKey,
         )
         while (true) {
             if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
@@ -1046,6 +1063,9 @@ fun VideoPlayerScreen(
     }
 
     DisposableEffect(exoPlayer) {
+        // #VIDEO-BG-KEEP: экран (пере)присоединён к шине — синхронно, до любых
+        // жизненных событий активити (защита releaseOrphanedPlayer от гонок).
+        VideoPlaybackBus.markScreenAttached()
         onDispose {
             // #39 C2: save final video position before release.
             exoPlayer?.let { player ->
@@ -1063,12 +1083,27 @@ fun VideoPlayerScreen(
                     }
                 }
             }
-            // W30-2 #VIDEO-BACKGROUND (контракт §2.4): плеер релизится — сначала
-            // отцепляем MediaSession/сервис (stopSelf + release session),
-            // затем release самого инстанса.
-            VideoPlaybackBus.onPlayerReleased()
-            exoPlayer?.release()
-            if (exoPlayer != null) AppLog.i(TAG, "ExoPlayer освобождён")
+            // W30-2 #VIDEO-BACKGROUND (контракт §2.4) + #VIDEO-BG-KEEP (2026-09-12):
+            // релиз плеера — ТОЛЬКО когда приложение живо (back-навигация/смена
+            // экрана). Если активити в этот момент 0 (система убила MainActivity
+            // в фоне — «Не сохранять действия»/агрессивный ROM, logcat 20:04:43:
+            // onBackgrounded → через 160 мс dispose → ExoPlayer Release → сервис
+            // умер), плеер ЖИВЁТ: звук продолжается, сервис держит MediaSession
+            // и уведомление; при возврате remember переиспользует инстанс.
+            if (app.isAnyActivityForeground()) {
+                // W30-2 #VIDEO-BACKGROUND (контракт §2.4): плеер релизится —
+                // сначала отцепляем MediaSession/сервис (stopSelf + release session),
+                // затем release самого инстанса.
+                VideoPlaybackBus.onPlayerReleased()
+                // NULL-ЯВНО: явная проверка вместо ?. (строка переносилась в ветку).
+                if (exoPlayer != null) {
+                    exoPlayer.release()
+                    AppLog.i(TAG, "ExoPlayer освобождён")
+                }
+            } else {
+                VideoPlaybackBus.onScreenDetachedInBackground()
+                AppLog.i(TAG, "#VIDEO-BG-KEEP: dispose в фоне — ExoPlayer продолжает играть")
+            }
         }
     }
 
@@ -1083,9 +1118,13 @@ fun VideoPlayerScreen(
                 if (re.pinok.ui.videoplayer.VideoPipActivity.isActive) {
                     re.pinok.ui.videoplayer.VideoPipActivity.resumeAudioOnClose = true
                     AppLog.i(TAG, "Аудио остаётся на паузе — активен PiP, возобновим после закрытия PiP")
-                } else {
+                } else if (app.isAnyActivityForeground()) {
                     PlayerConnection.resumeIfWasPlaying()
                     AppLog.i(TAG, "Аудиоплеер возобновлён")
+                } else {
+                    // #VIDEO-BG-KEEP: dispose в фоне — видео продолжает играть,
+                    // музыку НЕ возобновляем (иначе два звука одновременно).
+                    AppLog.i(TAG, "#VIDEO-BG-KEEP: аудио остаётся на паузе — видео играет в фоне")
                 }
             }
         }

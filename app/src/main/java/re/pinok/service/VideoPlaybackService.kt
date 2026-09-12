@@ -9,6 +9,7 @@ import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.CommandButton
@@ -206,6 +207,20 @@ class VideoPlaybackService : MediaSessionService() {
         // игнорируется (guard old==null в исходнике media3).
         addSession(builtSession)
         AppLog.i("VideoPlaybackService", "onCreate: session ready + added to service (title=${VideoPlaybackBus.mediaTitle}, step=$seekStepSec)")
+
+        // #VIDEO-BG-KEEP (2026-09-12): видео доиграло, пока приложение в фоне —
+        // прекращаем сервис; осиротевший плеер релизится в onDestroy
+        // (releaseOrphanedPlayer, guard по screenAttached — если экран уже
+        // (пере)присоединился, плеер живёт дальше). Без этого после ENDED
+        // уведомление/сессия висели до смерти процесса.
+        player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) {
+                    AppLog.i("VideoPlaybackService", "STATE_ENDED — stopSelf (orphan release в onDestroy)")
+                    stopSelf()
+                }
+            }
+        })
     }
 
     /**
@@ -358,6 +373,13 @@ class VideoPlaybackService : MediaSessionService() {
         }
         mediaSession = null
         serviceScope.cancel()
+        // #VIDEO-BG-KEEP: если экран не присоединён, плеер осиротел (доиграл в
+        // фоне / свайп задачи) — релизим здесь, иначе инстанс протечёт до смерти
+        // процесса. При присоединённом экране guard вернёт false — плеер живёт.
+        val orphanReleased = VideoPlaybackBus.releaseOrphanedPlayer()
+        if (orphanReleased) {
+            AppLog.i("VideoPlaybackService", "onDestroy: orphaned player released")
+        }
         VideoPlaybackBus.notifyServiceStopped()
         super.onDestroy()
     }
