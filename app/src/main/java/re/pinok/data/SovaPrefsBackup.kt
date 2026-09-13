@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.google.gson.Gson
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import java.io.File
 import re.pinok.auth.exchange.ExchangeTokenStorage
@@ -255,11 +256,22 @@ object SovaPrefsBackup {
      * Волна 45-в #RESTORE-SAFETY: повтор имени внутри секции — last-wins
      * (заменённая запись честно попадает в skipped); без дедупа две записи
      * с одним именем писались бы обе, а счётчик «Применено» врал.
+     *
+     * Волна 45-г: JSON читается как JsonElement с сужением as? JsonObject —
+     * «null»-документ и корректный JSON не-объекта честно дают отказ «Файл
+     * не содержит JSON-объекта». Раньше эта ветка была МЁРТВОЙ: fromJson —
+     * Java API с platform-типом результата (JsonObject!), Kotlin вставлял
+     * неявный checkNotNull при присваивании в non-null val → NPE в обход
+     * catch + warning «Condition is always 'false'» на guard'е (266:13).
      */
     fun parse(text: String): ImportPlan {
         if (text.isBlank()) return ImportPlan(false, "Файл пустой")
-        val root: JsonObject = try {
-            Gson().fromJson(text, JsonObject::class.java)
+        val root: JsonObject? = try {
+            // JsonElement::class — точное совпадение типа → встроенный
+            // JSON_ELEMENT-адаптер Gson (nullSafe, стабилен во всех версиях);
+            // «[1]»/«123» — валидный JSON, но не объект → as? даёт null →
+            // тот же отказ, что и для документа-литерала «null».
+            Gson().fromJson(text, JsonElement::class.java) as? JsonObject
         } catch (t: Throwable) {
             return ImportPlan(false, "Это не JSON-файл: " + t.javaClass.simpleName)
         }
