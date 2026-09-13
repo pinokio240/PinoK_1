@@ -100,7 +100,6 @@ import re.pinok.data.model.SettingsSection as BffSettingsSection
 import re.pinok.ui.theme.SovaColors
 import re.pinok.util.AppLog
 // Fix #391 #IN-APP-UPDATER (волна 29-i): модель/менеджер обновлений — вкладка «Обновления».
-import re.pinok.updater.UpdateDeepLink
 import re.pinok.updater.UpdateInfo
 import re.pinok.updater.UpdaterManager
 import re.pinok.updater.UpdaterUiState
@@ -424,15 +423,10 @@ fun SettingsScreen(
             containerSections.forEach { add(SettingsPage.Container(it)) }
         }
     }
-    // Волна 43 #UPDATER-BANNER: баннер «доступна новая версия» просит открыть
-    // вкладку «Обновления» — одноразовый флаг читается (consume) здесь и задаёт
-    // начальную страницу пейджера настроек; иначе — первая вкладка как раньше.
-    val initialPageIndex = if (UpdateDeepLink.consumeOpenRequest()) {
-        pages.indexOfFirst { it is SettingsPage.Core && it.tab == SettingsTab.UPDATE }.coerceAtLeast(0)
-    } else {
-        0
-    }
-    val pagerState = rememberPagerState(initialPage = initialPageIndex, pageCount = { pages.size })
+    // #UPDATER-BANNER-DISMISS: тап-переход «баннер → вкладка Обновлений»
+    // (UpdateDeepLink) убран — тап по баннеру теперь просто скрывает его;
+    // пейджер всегда стартует с первой вкладки.
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { pages.size })
 
     Column(modifier = Modifier.fillMaxSize()) {
         PrimaryScrollableTabRow(

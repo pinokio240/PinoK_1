@@ -156,7 +156,6 @@ import re.pinok.ui.components.NetworkSwitchPopup
 import re.pinok.ui.components.OfflineBanner
 import re.pinok.ui.components.GlobalMiniPlayer
 import re.pinok.ui.components.UpdateBanner
-import re.pinok.updater.UpdateDeepLink
 import re.pinok.util.AppLog
 
 // ── Fix #337: редактор панелей — JSON-парсинг порядка/скрытых пунктов ──
@@ -2639,14 +2638,11 @@ composable(Screen.CallsHistory.route) {
         // Волна 43 #UPDATER-BANNER: баннер «доступна новая версия» НАД
         // офлайн-баннером (Column в одном Box — баннеры не спорят за позицию).
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            UpdateBanner(
-                onOpenUpdateTab = {
-                    // Одноразовый флаг: настройки откроются сразу на вкладке
-                    // «Обновления» (consume в SettingsScreen при composition).
-                    UpdateDeepLink.requestOpenUpdateTab()
-                    nav.navigate(Screen.Settings.route)
-                },
-            )
+            // #UPDATER-BANNER-DISMISS: тап по сообщению теперь просто скрывает
+            // баннер (см. KDoc UpdateBanner) — тап-переход во вкладку
+            // «Обновления» убран вместе с UpdateDeepLink; вкладка доступна
+            // через Настройки → «Обновления».
+            UpdateBanner()
             OfflineBanner(
                 onOpenOfflineManager = { nav.navigate(Screen.OfflineManager.route) },
             )

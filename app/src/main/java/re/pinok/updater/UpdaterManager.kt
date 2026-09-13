@@ -1111,24 +1111,6 @@ sealed class UpdaterUiState {
     data class Error(val message: String) : UpdaterUiState()
 }
 
-/**
- * Волна 43 #UPDATER-BANNER: UI-флаг «открыть вкладку Обновлений» (баннер →
- * настройки). Не compose-state — процессный флаг, который SettingsScreen
- * потребляет один раз при composition (consumeOpenRequest) для выбора
- * начальной вкладки. Отдельный объект, чтобы не трогать граф навигации.
- */
-object UpdateDeepLink {
-    @Volatile
-    private var openUpdateTab: Boolean = false
-
-    fun requestOpenUpdateTab() {
-        openUpdateTab = true
-    }
-
-    /** Прочитать и СБРОСИТЬ запрос (одноразовый). */
-    fun consumeOpenRequest(): Boolean {
-        val value = openUpdateTab
-        openUpdateTab = false
-        return value
-    }
-}
+// #UPDATER-BANNER-DISMISS: объект UpdateDeepLink (тап-переход «баннер →
+// вкладка Обновлений», волна 43) удалён — тап по баннеру теперь просто
+// скрывает его (см. UpdateBanner.kt), дорожка к обновлениям — Настройки.

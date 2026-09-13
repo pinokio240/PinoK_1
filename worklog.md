@@ -9438,3 +9438,23 @@ Stage Summary:
 - Релиз-менеджер получил единственную недостающую часть потока доверия волны 46 — приватный ключ; конвейер подписи теперь воспроизводим на его машине (README: selftest → pubkey-сверка → sign → verify).
 - Ключ НЕ ротировался: всё уже подписанное (version.json.sig a9781321) и зашитое в APK (UpdaterSigning.kt) остаётся валидным.
 - Гигиена секретов: ключ в репо по-прежнему отсутствует; zip-доставка исключена из git через /public/ в .gitignore; копии в песочнице (/home/z/pinok-signing/, public/*.zip) можно удалить по просьбе пользователя после подтверждения скачивания.
+
+---
+Task ID: 53
+Agent: Z.ai Code (main)
+Task: #UPDATER-BANNER-DISMISS (прямой запрос пользователя: «сообщение о пропуске мешает скачать APK — тап по сообщению = просто спрятать, пропуск релиза — только по кнопке "Пропустить"»).
+
+Work Log:
+- Разведка: UpdateBanner.kt (волна 43) — тап по ВСЕМУ баннеру → onOpenUpdateTab (UpdateDeepLink.requestOpenUpdateTab + navigate(Settings)), TextButton «Пропустить» → UpdaterManager.skipVersion (prefs update_skipped_code); убрать сообщение без пропуска релиза было невозможно; UpdateBanner компоузится в SovaNavHost ВСЕГДА (Column с OfflineBanner, вне dest) → remember переживёт навигацию. UpdateDeepLink: setter только из баннера, consume — SettingsScreen :430 (initialPageIndex).
+- UpdateBanner.kt: сигнатура UpdateBanner() без параметров; +var dismissedCode by remember { mutableStateOf(0) } ДО ранних выходов (правило NULL-ЯВНО файла соблюдено: все state-чтения до return); новый guard «versionCode == dismissedCode → return»; Row.clickable → dismissedCode = versionCode (тап = скрыть на сессию: НЕ пишется в prefs, process death возвращает баннер — сознательное отличие от «Пропуска»); KDoc переписан (развязка тап/кнопка + почему in-memory). Кнопка «Пропустить» не тронута (TextButton гасит свои касания, до Row не доезжают).
+- SovaNavHost.kt: вызов → UpdateBanner() + комментарий #UPDATER-BANNER-DISMISS; удалён import UpdateDeepLink.
+- SettingsScreen.kt: initialPageIndex/if(consumeOpenRequest) → rememberPagerState(initialPage = 0) + комментарий; удалён import UpdateDeepLink (SettingsTab.UPDATE остался в enum, используется таб-роу).
+- UpdaterManager.kt: объект UpdateDeepLink удалён целиком (мёртвый после снятия единственного setter — урок 45-г о мёртвых ветках), на его месте комментарий-пояснение.
+- Доки: docs/UPDATER.md §1 — поведение баннера дополнено (тап = спрятать до перезапуска, НЕ «пропуск»); docs/UPDATER-PLAN.md §2 M5 — пометка «ПЕРЕСМОТРЕНО #UPDATER-BANNER-DISMISS» при сохранении исходного текста.
+- Верификация: /home/z/kbrackets.py ×4 kt — SYMMETRIC/OK; scripts/check-nested-comments.py ×4 — ALL CLEAN; scripts/check-secrets.py — OK (76 files); свип `!!` ×2 файла — 1 вхождение, KDoc-текст правила UpdaterManager :108 (не код); сверка ссылок: UpdateBanner( — def + 1 вызов (SovaNavHost :2645), dismissedCode — decl+guard+set (3), initialPageIndex — 0 остатков, UpdateDeepLink — 4 упоминания ВСЕ в комментариях-пояснениях, кодовых ссылок 0; unused-импортов нет (getValue/setValue/mutableStateOf/remember задействованы).
+- git diff --stat: 4 kt + 2 md, +43/−49; чужих правок нет.
+
+Stage Summary:
+- Поведение баннера: тап по сообщению → исчезает до перезапуска приложения (сессия); «Пропустить» → персистентный skipVersion как было; после перезапуска баннер возвращается, если релиз не пропущен — семантика «скрыть» ≠ «пропустить» честно разведена.
+- Мёртвый plumbing UpdateDeepLink удалён полностью (3 файла) — вкладка «Обновления» доступна через Настройки, никакого скрытого поведения не осталось.
+- Обратная совместимость: skipped_code в prefs не менялся; вкладка настроек (текст, кнопка «Пропустить эту версию», тост) не тронута.

@@ -20,7 +20,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,11 +44,23 @@ import re.pinok.updater.UpdaterUiState
  *
  * ПОКАЗЫВАЕТСЯ только когда:
  *  - состояние UpdaterManager'а = Available (после проверки манифеста);
- *  - эту версию НЕ «пропустили» (SovaPrefs.update_skipped_code — кнопка
- *    «Пропустить» здесь же).
+ *  - эту версию НЕ «пропустили» (SovaPrefs.update_skipped_code);
+ *  - эту версию НЕ скрыли тапом в текущей сессии (см. ниже).
  *
- * Тап по баннеру → [onOpenUpdateTab] (навигация + одноразовый флаг
- * UpdateDeepLink, чтобы настройки открылись сразу на вкладке «Обновлений»).
+ * #UPDATER-BANNER-DISMISS (запрос пользователя 2026-09-13: сообщение
+ * мешало скачивать APK — тап по нему уводил в настройки, а убрать его
+ * было нельзя без «Пропуска» релиза). Два действия развязаны:
+ *  - ТАП ПО СООБЩЕНИЮ → баннер просто исчезает. In-memory dismissal на
+ *    versionCode: remember живёт, пока баннер в композиции (SovaNavHost
+ *    держит его всегда — навигация не сбрасывает), process death
+ *    возвращает баннер. В prefs ничего не пишется — это НЕ решение
+ *    о релизе, в отличие от кнопки.
+ *  - КНОПКА «Пропустить» → UpdaterManager.skipVersion — настоящий
+ *    пропуск релиза (персистентно, до выхода следующей версии).
+ * Дорожка к обновлениям — Настройки → «Обновления» (прямой тап-переход
+ * из баннера убран вместе с UpdateDeepLink — он и был источником
+ * случайных уходов в настройки).
+ *
  * Автопроверки баннер НЕ запускает — он только отображает результат
  * (ручная кнопка / проверка при запуске / проверка при входе во вкладку).
  *
@@ -53,13 +68,13 @@ import re.pinok.updater.UpdaterUiState
  * неполных данных баннер просто не рисуется.
  */
 @Composable
-fun UpdateBanner(
-    onOpenUpdateTab: () -> Unit,
-) {
+fun UpdateBanner() {
     val app = SovaApp.get()
     val state by UpdaterManager.state.collectAsState()
     val snapFlow = app.prefs.data.collectAsState(initial = app.prefsSnapshot)
     val scope = rememberCoroutineScope()
+    // versionCode, скрытый тапом в текущей сессии (0 = ничего не скрыто).
+    var dismissedCode by remember { mutableStateOf(0) }
 
     val st = state
     val availableInfo: UpdateInfo? = when (st) {
@@ -71,13 +86,17 @@ fun UpdateBanner(
     if (s == null) return
     // «Пропустить эту версию»: баннер её больше не показывает (вкладка покажет).
     if (availableInfo.versionCode == s.updateSkippedCode) return
+    // Скрыто тапом в этой сессии: не рисуем (см. KDoc — это не «пропуск»).
+    if (availableInfo.versionCode == dismissedCode) return
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable { onOpenUpdateTab() }
+            // Тап по сообщению = просто скрыть (кнопка ниже перехватывает
+            // свои касания сама — до Row они не доезжают).
+            .clickable { dismissedCode = availableInfo.versionCode }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
