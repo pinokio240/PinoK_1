@@ -9129,3 +9129,23 @@ Stage Summary:
 - Волна A апдейтера внедрена ЦЕЛИКОМ: смена гит-ссылки с токеном и валидацией, автопроверка при входе во вкладку (всегда) и при запуске (по тумблеру, default ВЫКЛ), ETag-условный GET, баннер с «Пропустить эту версию», честные пометки «источник старее»/«штамп отличается».
 - Пользователю: git pull, пересобрать; для реального обновления нужен ПЕРВЫЙ релиз (versionCode 2, подписанный APK в Releases, запись в version.json — сейчас apkUrl пуст, баннеру нечего показывать).
 - Коммиты: fix(feedback) волна 43 + docs — этим коммитом; stamp wave43-2026.09.13.
+
+---
+Task ID: 44
+Agent: Z.ai Code (main)
+Task: Тестер собрал волну 43 локально (E:/ANDROID_APP/PinoK_1) — ошибка компиляции: SettingsScreen.kt:5125:40 Unresolved reference 'Warning'. Вопрос: «Как опубликовать релиз?».
+
+Work Log:
+- Локализация по строке 5125: жёлтый баннер недоверия кастомного источника (волна 43 #UPDATER-SOURCE) использует Icons.Outlined.Warning, а в блоке импортов SettingsScreen.kt присутствовал только androidx.compose.material.icons.outlined.WarningAmber (строка 142) — импорт Warning потерян при добавлении кода волны 43.
+- Фикс: import androidx.compose.material.icons.outlined.Warning добавлен по алфавиту перед WarningAmber с маркером волны 43 #UPDATER-SOURCE (+2 строки).
+- Репо-свип «иконка-использование vs импорт» по ВСЕМ Kotlin-файлам app/src/main/java: других отсутствующих импортов иконок НЕТ; первичные ложные срабатывания по AutoMirrored (ArrowBack/Logout/MenuOpen/Backspace/Chat/KeyboardArrowRight) проверены вручную — импорты валидны (пакет lowercase automirrored.filled/outlined), регэксп свипа учёл регистр.
+- Сверка остального кода волны 43 на резолв: UpdaterManager.state (StateFlow, :123), skipVersion(:368), UpdateInfo(:661), UpdaterUiState.Available(latest, manifest)(:696) — UpdateBanner.kt консистентен; SovaPrefs.Snapshot.updateSkippedCode определён (core/data SovaPrefs.kt:507/1486) — использований без определения нет; SovaPrefs живёт в модуле core/data (не app), путь git-stat обрезан «...».
+- Верификаторы: check-nested-comments ALL CLEAN; check-secrets OK (76 файлов); баланс скобок/строк — SYMMETRIC шаблонно-корректным лексером (стек режимов code/line/block/str/raw/tmpl, ${}-шаблоны внутри строк и raw) — первый экспресс-лексер дал ложный NEWLINE IN STRING на 5822 (многострочный ${java.text.SimpleDateFormat(...)} внутри строки — валидный Kotlin).
+- Коммит fix(updater) 06671560, push, двойная верификация: rev-parse HEAD == ls-remote refs/heads/PinoK == 06671560.
+- Отдельно дана пользователю пошаговая инструкция публикации первого релиза (в чат; docs/UPDATER.md §1 уже содержит чек-лист).
+
+Stage Summary:
+- Причина ошибки: пропущенный импорт Icons.Outlined.Warning — единственная compile-ошибка волны 43, воспроизводимая локально у тестера; исправлена и запушена (06671560). Тестеру: git pull, пересобрать.
+- Сопутствующих неразрешённых ссылок в волне 43 не найдено (свип иконок по всему репо + сверка API UpdaterManager/SovaPrefs с местами использования).
+- Инструкция релиза выдана: versionCode 2 (или max-опубликованных+1), подписанный тем же keystore APK в GitHub Releases-ассеты, прямая ссылка на ассет в version.json ветки PinoK, кэш CDN ~5 мин, keystore в 2 места.
+- Коммиты: fix(updater) волна 43-б + docs(worklog) — этим коммитом; stamp wave43-2026.09.13-b.
