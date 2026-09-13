@@ -1114,18 +1114,50 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     }
 
     /**
-     * Волна 45 #SETTINGS-EXPORT: восстановление сырых ключей из экспорта —
-     * ОДНА транзакция ds.edit (атомарно: либо все записи, либо ни одной).
-     * Ключи, которых не было в этой установке, создаются на лету (DataStore
-     * хранит произвольные Preferences); неизвестные типы невозможны — тип
-     * задаёт Key-объект, построенный парсером SovaPrefsBackup.
-     * Возвращает число фактически записанных ключей.
+     * Волна 45-в #RESTORE-SAFETY: честный результат восстановления сырых
+     * ключей — сколько записано и сколько отклонено guard'ом конфликта типов
+     * (для тоста без лжи: молчаливый пропуск выглядел бы как «Применено N»
+     * при фактической потере части файла).
      */
-    suspend fun restoreRaw(entries: List<Pair<androidx.datastore.preferences.core.Preferences.Key<*>, Any>>): Int {
-        if (entries.isEmpty()) return 0
+    data class RawRestore(val written: Int, val skipped: Int)
+
+    /**
+     * Волна 45 #SETTINGS-EXPORT, восстановление сырых ключей из экспорта —
+     * ОДНА транзакция ds.edit (атомарно: либо все записи, либо ни одной;
+     * исключение в transform/IO не оставляет частичной записи — DataStore
+     * подменяет файл атомарно). Ключи, которых не было в этой установке,
+     * создаются на лету (DataStore хранит произвольные Preferences); тип
+     * задаёт Key-объект, построенный парсером SovaPrefsBackup.
+     *
+     * Волна 45-в #RESTORE-SAFETY — guard конфликта типов: Preferences.Key
+     * сравнивается ТОЛЬКО по имени (equals/hashCode = name; тип — дженерик-
+     * параметр без рантайм-роли), поэтому запись значения чужого типа под
+     * имя живого ключа порождала бы ClassCastException при КАЖДОМ чтении
+     * этой настройки — краш-луп без возможности вернуться во вкладку
+     * импорта (и к страховочной копии). Теперь конфликтный ключ ПРОПУСКАЕТСЯ
+     * со счётчиком (living value сохраняется), а не затирает тип. Повторы
+     * одного имени внутри entries запрещены контрактом — parse дедуплицирует
+     * (last-wins), а current-снимок делается ДО цикла и более поздние записи
+     * цикла не видит.
+     *
+     * Счётчики обнуляются в начале transform: DataStore вправе перезапустить
+     * transform при конкурентной модификации — без сброса они задваивались.
+     */
+    suspend fun restoreRaw(entries: List<Pair<androidx.datastore.preferences.core.Preferences.Key<*>, Any>>): RawRestore {
+        if (entries.isEmpty()) return RawRestore(0, 0)
         var written = 0
+        var skipped = 0
         ds.edit { p ->
+            written = 0
+            skipped = 0
+            val current = p.asMap()
             for ((key, value) in entries) {
+                // Guard: имя уже живёт в хранилище с ДРУГИМ типом значения.
+                val existing = current.entries.firstOrNull { it.key.name == key.name }?.value
+                if (existing != null && !sameValueType(existing, value)) {
+                    skipped++
+                    continue
+                }
                 // Key<T> типизирован парсером по полю "type" — каст безопасен.
                 @Suppress("UNCHECKED_CAST")
                 val typed = key as androidx.datastore.preferences.core.Preferences.Key<Any>
@@ -1133,7 +1165,25 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
                 written++
             }
         }
-        return written
+        return RawRestore(written, skipped)
+    }
+
+    /**
+     * Волна 45-в #RESTORE-SAFETY: сравнение типов значений по семантическим
+     * веткам, а не по ::class — рантайм-классы Set'ов (LinkedHashSet у
+     * восстановленного, иной у живого) законно различаются, семантика
+     * stringSet — одна. Ветки зеркалят полный набор типов DataStore.
+     */
+    private fun sameValueType(a: Any, b: Any): Boolean = when (a) {
+        is String -> b is String
+        is Boolean -> b is Boolean
+        is Int -> b is Int
+        is Long -> b is Long
+        is Float -> b is Float
+        is Double -> b is Double
+        is Set<*> -> b is Set<*>
+        is ByteArray -> b is ByteArray
+        else -> a::class == b::class
     }
 
     private suspend fun <T> put(key: androidx.datastore.preferences.core.Preferences.Key<T>, value: T) {

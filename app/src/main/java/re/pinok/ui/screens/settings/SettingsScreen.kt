@@ -4873,15 +4873,29 @@ private fun UpdateTab(
 
 /**
  * Волна 45 #SETTINGS-EXPORT (волна 45-б: покрытие всего «контейнерного»
- * хранилища): вкладка «Данные» — перенос настроек между установками/
- * устройствами. Экспортируется НЕ только DataStore SovaPrefs, а ВСЯ карта
- * хранилищ контейнера (см. SovaPrefsBackup): DataStore (интерфейс, музыка,
- * звонки, уведомления, updater, локальные закладки треков/папок) + legacy
- * SharedPreferences «equalizer» (медиа-контейнер) + сессия входа из
+ * хранилища; механизм восстановления перепроверен в волне 45-в #RESTORE-SAFETY
+ * по запросу «не хочу ничего терять»): вкладка «Данные» — перенос настроек
+ * между установками/устройствами. Экспортируется НЕ только DataStore SovaPrefs,
+ * а ВСЯ карта хранилищ контейнера (см. SovaPrefsBackup): DataStore (интерфейс,
+ * музыка, звонки, уведомления, updater, локальные закладки треков/папок) +
+ * legacy SharedPreferences «equalizer» (медиа-контейнер) + сессия входа из
  * EncryptedSharedPreferences (через ExchangeTokenStorage — прецедент
  * account.json). Сценарий-спутник отката версии (#UPDATER-ROLLBACK):
  * Android стирает ВСЁ хранилище контейнера при удалении пакета, SAF-экспорт
  * в пользовательскую папку — единственный выживающий носитель.
+ *
+ * Волна 45-в #RESTORE-SAFETY — что изменилось в восстановлении:
+ *  - ПЕРЕД любым импортом автоматически создаётся страховочная копия текущего
+ *    состояния (filesDir/sova_prefs_safety.json); неудача копии = импорт
+ *    отменяется ДО единой записи. Копия видна отдельной карточкой и
+ *    восстанавливается одной кнопкой (SAF не нужен); восстановление ИЗ копии
+ *    не перезаписывает её саму (иначе хороший снимок затирается испорченным
+ *    текущим состоянием).
+ *  - Весь IO (экспорт/чтение/применение) — на Dispatchers.IO; ошибки ловятся
+ *    (try/catch/finally): busy больше не залипает, процесс не роняется.
+ *  - Результат применения честный по секциям (AppliedResult): конфликты
+ *    типов ключей, отказавшие SP-файлы и несостоявшаяся сессия видны в тосте.
+ *  - После импорта UI рекомендует перезапуск: часть кода держит значения в памяти.
  *
  * Честные границы (написаны в UI): медиа-кэш и офлайн-загрузки НЕ переносятся
  * (отдельные файлы); служебные кэши (security_alerts_cache, app_meta) не
@@ -4892,69 +4906,95 @@ private fun UpdateTab(
  * урок #PIN-DIALOG-OVERLAY).
  *
  * SAF-контракты CreateDocument/OpenDocument — первое применение в проекте
- * (ланчеры живут в композиции, IO — в scope на Dispatchers по умолчанию
- * contentResolver'а); имя экспорт-файла с датой — паттерн LogScreen.
+ * (ланчеры живут в композиции; тяжёлая работа — в withContext(Dispatchers.IO),
+ * тосты — на Main); имя экспорт-файла с датой — паттерн LogScreen.
  */
+
+/** Волна 45-в #RESTORE-SAFETY: план на подтверждении + признак «источник — страховочная копия». */
+private data class PendingImportUi(val plan: SovaPrefsBackup.ImportPlan, val fromSafety: Boolean)
+
 @Composable
 private fun DataTab(app: SovaApp, scope: CoroutineScope) {
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
-    var pendingImport by remember { mutableStateOf<SovaPrefsBackup.ImportPlan?>(null) }
+    var pendingImport by remember { mutableStateOf<PendingImportUi?>(null) }
+    // Страховочная копия (план состояния «до последнего импорта») — читается
+    // один раз при входе во вкладку и обновляется после каждого применения.
+    var safety by remember { mutableStateOf<SovaPrefsBackup.ImportPlan?>(null) }
+    LaunchedEffect(Unit) {
+        safety = withContext(Dispatchers.IO) { SovaPrefsBackup.readSafetyCopy(context) }
+    }
 
     // SAF CreateDocument: место выбирает юзер (обычно «Загрузки»); MIME json.
+    // Волна 45-в: сборка дампа и запись — на IO; ошибки ловятся целиком
+    // (busy в finally — кнопки не залипают, процесс не роняется).
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument(SovaPrefsBackup.MIME_JSON),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             busy = true
-            val exported = SovaPrefsBackup.export(
-                context,
-                app.prefs,
-                app.exchangeStorage,
-                BuildConfig.VERSION_NAME + " (versionCode " + BuildConfig.VERSION_CODE + ")",
-            )
-            val written = try {
-                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
-                    out.write(exported.json.toByteArray(Charsets.UTF_8))
-                    out.flush()
-                    true
-                } ?: false
+            val message: String = try {
+                val exported = withContext(Dispatchers.IO) {
+                    SovaPrefsBackup.export(
+                        context,
+                        app.prefs,
+                        app.exchangeStorage,
+                        BuildConfig.VERSION_NAME + " (versionCode " + BuildConfig.VERSION_CODE + ")",
+                    )
+                }
+                val written = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                            out.write(exported.json.toByteArray(Charsets.UTF_8))
+                            out.flush()
+                            true
+                        } ?: false
+                    } catch (t: Throwable) {
+                        false
+                    }
+                }
+                if (written) "Экспортировано записей: " + exported.totalCount
+                else "Не удалось записать файл"
             } catch (t: Throwable) {
-                false
+                "Экспорт не удался: " + t.javaClass.simpleName
+            } finally {
+                busy = false
             }
-            busy = false
-            Toast.makeText(
-                context,
-                if (written) "Экспортировано записей: " + exported.totalCount else "Не удалось записать файл",
-                Toast.LENGTH_SHORT,
-            ).show()
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
 
     // SAF OpenDocument: читаем текст → parse → диалог подтверждения (внизу).
+    // Волна 45-в: чтение+разбор — на IO.
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             busy = true
-            val text: String? = try {
-                context.contentResolver.openInputStream(uri)
-                    ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            val plan: SovaPrefsBackup.ImportPlan? = try {
+                withContext(Dispatchers.IO) {
+                    val text: String? = try {
+                        context.contentResolver.openInputStream(uri)
+                            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                    } catch (t: Throwable) {
+                        null
+                    }
+                    text?.let { SovaPrefsBackup.parse(it) }
+                }
             } catch (t: Throwable) {
                 null
+            } finally {
+                busy = false
             }
-            busy = false
-            if (text == null) {
-                Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            val plan = SovaPrefsBackup.parse(text)
-            if (!plan.ok) {
-                Toast.makeText(context, plan.error, Toast.LENGTH_LONG).show()
-            } else {
-                pendingImport = plan
+            when {
+                plan == null ->
+                    Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                !plan.ok ->
+                    Toast.makeText(context, plan.error, Toast.LENGTH_LONG).show()
+                else ->
+                    pendingImport = PendingImportUi(plan, fromSafety = false)
             }
         }
     }
@@ -5038,6 +5078,39 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
             }
         }
         item {
+            // Волна 45-в #RESTORE-SAFETY: карточка страховочной копии. Копии нет
+            // (импортов ещё не было или файл битый) — карточка не показывается.
+            safety?.let { copyPlan ->
+                Card {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Страховочная копия перед импортом",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "Состояние на " + java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.US)
+                                .format(java.util.Date(copyPlan.exportedAt)) +
+                                ", записей: " + copyPlan.total +
+                                (if (copyPlan.appVersion.isNotEmpty()) ", версия: " + copyPlan.appVersion else "") +
+                                ". Если результат последнего импорта не устроил — верните это состояние одной кнопкой.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        OutlinedButton(
+                            onClick = { pendingImport = PendingImportUi(copyPlan, fromSafety = true) },
+                            enabled = !busy,
+                            modifier = Modifier.padding(top = 12.dp),
+                        ) {
+                            Text("Восстановить из копии")
+                        }
+                    }
+                }
+            }
+        }
+        item {
             // Связка с откатом (#UPDATER-ROLLBACK): порядок действий подсказкой.
             Text(
                 "Совет: перед откатом версии или переустановкой приложения сначала " +
@@ -5051,15 +5124,31 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
 
     // AlertDialog подтверждения импорта — вне LazyColumn (#PIN-DIALOG-OVERLAY):
     // dispose по viewport молча закрывал диалоги, живущие внутри списка.
-    val plan = pendingImport
-    if (plan != null) {
+    val pending = pendingImport
+    if (pending != null) {
+        val plan = pending.plan
         AlertDialog(
             onDismissRequest = { pendingImport = null },
-            title = { Text("Применить экспорт?") },
+            title = { Text(if (pending.fromSafety) "Восстановить страховочную копию?" else "Применить экспорт?") },
             text = {
                 Text(
-                    "Будет перезаписано ключей: " + plan.total +
-                        ". Текущие значения этих ключей будут потеряны. Продолжить?",
+                    if (pending.fromSafety) {
+                        "Возврат к состоянию на " +
+                            java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.US)
+                                .format(java.util.Date(plan.exportedAt)) +
+                            " (" + plan.total + " записей). Текущие настройки будут перезаписаны " +
+                            "значениями из копии; сама копия сохранится. Продолжить?"
+                    } else {
+                        "Будет перезаписано записей: " + plan.total +
+                            " (настроек: " + plan.entries.size + ", эквалайзер: " + plan.sp.size +
+                            ", сессия: " + plan.session.size + "). " +
+                            "ПЕРЕД применением текущее состояние будет автоматически сохранено " +
+                            "в страховочную копию — её можно будет восстановить на этой вкладке." +
+                            (if (plan.skipped > 0) {
+                                " Некорректных или дублирующихся записей в файле: " + plan.skipped +
+                                    " — будут пропущены."
+                            } else "")
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -5068,13 +5157,33 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                     pendingImport = null
                     scope.launch {
                         busy = true
-                        val applied = SovaPrefsBackup.apply(context, app.prefs, app.exchangeStorage, plan)
-                        busy = false
-                        Toast.makeText(
-                            context,
-                            "Применено записей: " + applied,
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        var applied: SovaPrefsBackup.AppliedResult? = null
+                        var failure = ""
+                        try {
+                            applied = withContext(Dispatchers.IO) {
+                                SovaPrefsBackup.apply(
+                                    context,
+                                    app.prefs,
+                                    app.exchangeStorage,
+                                    plan,
+                                    appVersion = BuildConfig.VERSION_NAME +
+                                        " (versionCode " + BuildConfig.VERSION_CODE + ")",
+                                    // Восстановление ИЗ копии не перезаписывает копию:
+                                    // иначе хороший снимок затёрся бы текущим состоянием.
+                                    saveSafetyCopy = !pending.fromSafety,
+                                )
+                            }
+                        } catch (t: Throwable) {
+                            failure = t.javaClass.simpleName
+                        } finally {
+                            busy = false
+                            // Карточка страховки обновляется: после импорта там —
+                            // состояние, бывшее ДО него.
+                            safety = withContext(Dispatchers.IO) {
+                                SovaPrefsBackup.readSafetyCopy(context)
+                            }
+                        }
+                        Toast.makeText(context, buildImportToast(applied, failure), Toast.LENGTH_LONG).show()
                     }
                 }) { Text("Применить") }
             },
@@ -5082,6 +5191,38 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                 TextButton(onClick = { pendingImport = null }) { Text("Отмена") }
             },
         )
+    }
+}
+
+/**
+ * Волна 45-в #RESTORE-SAFETY: честный текст результата импорта — по секциям,
+ * с предупреждениями вместо молчаливых потерь. failure != null — внешний
+ * сбой вне AppliedResult (залипание busy и краш процесса исключены
+ * finally-логикой вызова).
+ */
+private fun buildImportToast(applied: SovaPrefsBackup.AppliedResult?, failure: String): String {
+    if (failure.isNotEmpty()) {
+        return "Импорт прерван: " + failure +
+            ". Если страховочная копия успела создаться, она доступна во вкладке «Данные»."
+    }
+    val r = applied ?: return "Импорт не выполнен"
+    if (!r.ok) return "Импорт отменён, ничего не записано. Причина: " + r.error
+    return buildString {
+        append("Импорт применён: настроек " + r.dataStore)
+        if (r.dataStoreSkipped > 0) {
+            append(" (пропущено " + r.dataStoreSkipped + " — конфликт типов с текущими ключами)")
+        }
+        append(", эквалайзер " + r.sp)
+        if (r.spFailed.isNotEmpty()) {
+            append("; НЕ записаны хранилища: " + r.spFailed.joinToString(", "))
+        }
+        if (r.sessionExpected > 0) {
+            append(", сессия " + r.session + " из " + r.sessionExpected)
+            if (r.session == 0) {
+                append(". СЕССИЯ НЕ ВОССТАНОВЛЕНА (в файле нет access_token или запись не удалась)")
+            }
+        }
+        append(". Рекомендуется перезапустить приложение.")
     }
 }
 

@@ -889,29 +889,64 @@ class ExchangeTokenStorage(
      *  - флаг KEY_ACCESS_TOKEN_INVALIDATED перезаписывается значением из файла
      *    (он часть снапшота) — семантика совпадает с restoreFromFileBackup.
      *
-     * Возвращает число записанных ключей (0 = сессия не восстановлена).
+     * Возвращает число ФАКТИЧЕСКИ записанных ключей (0 = нет access_token или
+     * запись не удалась) — волна 45-в #RESTORE-SAFETY: commit() проверяется,
+     * счётчик учитывает только типы вне набора String/Long/Int/Boolean/
+     * StringSet как НЕ записанные, а dumpToFile (account.json) — best-effort
+     * после успешного commit (сам prefs уже записан, падение дампа не отменяет
+     * сессию и не должно обнулять отчёт о ней).
      */
     fun applyExportedSession(values: Map<String, Any>): Int {
         if ((values[KEY_ACCESS_TOKEN] as? String).isNullOrBlank()) return 0
-        try {
+        // Волна 45-в #RESTORE-SAFETY: commit() проверяется — false (отказ ФС/
+        // провайдера) при молчаливом «успехе» означал потерянную сессию после
+        // перезапуска; счётчик — только фактически записанные типы.
+        var written = 0
+        val committed = try {
             prefs.edit().apply {
                 for ((k, v) in values) {
                     when (v) {
-                        is String -> putString(k, v)
-                        is Long -> putLong(k, v)
-                        is Int -> putInt(k, v)
-                        is Boolean -> putBoolean(k, v)
-                        // Прочих типов в сессионных prefs нет (все KEY_* —
-                        // String/Long/Int/Boolean), но импорт не роняем.
+                        is String -> {
+                            putString(k, v)
+                            written++
+                        }
+                        is Long -> {
+                            putLong(k, v)
+                            written++
+                        }
+                        is Int -> {
+                            putInt(k, v)
+                            written++
+                        }
+                        is Boolean -> {
+                            putBoolean(k, v)
+                            written++
+                        }
+                        // Защита на будущее: сегодня все KEY_* — String/Long/
+                        // Int/Boolean (свит 47-a), но Set<String> не теряем молча.
+                        is Set<*> -> {
+                            @Suppress("UNCHECKED_CAST")
+                            putStringSet(k, v as Set<String>)
+                            written++
+                        }
+                        // Прочих типов в сессионных prefs нет; кривое значение
+                        // из правленого файла молча НЕ считается записанным.
                     }
                 }
             }.commit()
+        } catch (e: Exception) {
+            AppLog.w("ExchangeTokenStorage", "applyExportedSession commit failed: ${e.message}")
+            false
+        }
+        if (!committed) return 0
+        // account.json — best-effort: сам prefs уже записан, падение дампа
+        // не отменяет восстановленную сессию.
+        try {
             dumpToFile()
         } catch (e: Exception) {
-            AppLog.w("ExchangeTokenStorage", "applyExportedSession failed: ${e.message}")
-            return 0
+            AppLog.w("ExchangeTokenStorage", "applyExportedSession dumpToFile failed: ${e.message}")
         }
-        return values.size
+        return written
     }
 
     // =====================================================================
