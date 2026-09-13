@@ -13,8 +13,11 @@ android {
         applicationId = "re.pinok"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "2.0.0"
+        // #RELEASE-V211-TEST (13.09): bump 1→2 — манифест V2.1.1-test публикует
+        // versionCode 2; следующая сборка тестера сойдётся с манифестом
+        // (latest==current → UpToDate, без «вечного обновления»).
+        versionCode = 2
+        versionName = "2.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

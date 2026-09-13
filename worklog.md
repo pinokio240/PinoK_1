@@ -9494,3 +9494,39 @@ Stage Summary:
 - Ценность для всего проекта (запрос юзера): референс audio_v21-персистентности («плеер выживает перезапуск»), чек-лист настроек видеоплеера VK (vk_player_*), модель тем чатов, TTL-кэш-паттерн; механика similar_news feed_id для рекомендаций.
 - Гэп-лист каналов: канальный диалог без отличий (футер уведомлений/подписчики/без композера), рекомендации, поиск по каналу, thumbhash — кандидаты §6 (P1/P2).
 - /upload/ закрыт в git — все будущие снапшоты юзера автоматически вне репозитория.
+---
+Task ID: 56-a
+Agent: subagent (Explore)
+Task: аудит канальной функциональности PinoK (запрос юзера: «нормально работали каналы»)
+
+Work Log:
+- Только чтение, код не менялся. Прочитан хвост worklog (Task 55) + каналы.снапшоты.разбор.md; обследованы MessagesScreen.kt, ChatDetailScreen.kt, ChatInfoScreen.kt, Models.kt (core/data), VKApiClient.kt, SovaNavHost.kt, MainActivity.kt, SovaApp.kt, realtime/* (LongPollClient, MessageNotifier, UnreadMessagesCounter, ChannelWebSocketClient, SnNotifyFilter), SovaPrefs.kt, FoldersRepository.kt.
+- Карта флоу: список (getConversations + merge каналов messagesGetAllChannels/getItems) → вкладка «Каналы» (legacy tab 1, isChannel-фильтр) → ChatDetailScreen (wall-режим: определение канала ДО getHistory, posts = wall.get) → ChannelFooterBar вместо композера → отправка через wall-функции (лайк/поиск/шаринг), leave = groups.leave + messages.deleteConversation.
+- Проверены: can_write-парсинг (3 места), folder 7 KDoc (VKApiClient:1944 — messages.getChatFolders, мёртвый код), навигация (единый маршрут ChatDetail), пуш-конвейер (LP code 4 → MessageNotifier → CHANNEL_COMMUNITIES), LP re-fetch списка, UnreadMessagesCounter.
+- Grep-проверки «мёртвых» методов: messagesGetChatFolders, messagesAllowFromGroup/messagesDenyFromGroup, ChannelWebSocketClient — не вызываются нигде.
+
+Stage Summary:
+- §1 карта: MessagesScreen.kt:363-414 (merge каналов), :651-663 (tab 1 = isChannel), :835-840 (channelUnreadSum), :952-961 (бейдж); ChatDetailScreen.kt:2295-2354 (канал ДО getHistory → wall-режим), :2362-2377 (probe wallGet), :3157-3164 (ChannelFooterBar), :7593-7670 (footer), :7676-7685 (подписчики); Models.kt:720 (isChannel = peer.id<0 && canWrite.allowed==false); VKApiClient.kt:682-742 (parseChannelItem), :7702-7718 (getAllChannels), :1944 (folder 7).
+- Дефекты (топ): (1) бейдж канала не сбрасывается при открытии из пуша/deep-link — wall-mode выходит из LaunchedEffect до markAsRead (ChatDetailScreen:2354/:2374); (2) каналы из mergedExtras не обновляются LP re-fetch'ем (MessagesScreen:553-562 — голый getConversations, mergedExtras только сохраняются) → бейдж/позиция stale до pull-to-refresh; (3) в режиме папок (msgFolders) вкладки «Каналы» нет вовсе (MessagesScreen:637-650), серверная папка 7 не поддерживается (messagesGetChatFolders — dead code); (4) пуш от каналов игнорирует канальные notification_settings (SovaApp:1597-1610 берёт pushSettings из getConversationsById, у каналов источник — user_data.notification_settings из getItems) → пуши на каждый пост, хотя в VK web каналы молчат по умолчанию; (5) при выключенном channel-mode / can_write=null композер показан, messages.send в peer<0 даёт err 901 → голое «Не удалось отправить сообщение» (ChatDetailScreen:2236, doSend:1935 без can_write-гейта); (6) карточка канала в списке ничем не отличается (ChatCard, нет иконки); (7) в probe/empty-history ветках wall-режима не грузится groupsGetById → нет подписчиков в шапке (есть только в isChannel-ветке:2333-2345); (8) меню шапки канала содержит «Очистить историю»/«Отметить непрочитанным»/ChatInfo без канальной ветки.
+- Модель: есть can_write{allowed,reason}, isChannel computed, unread, sort_id, pushSettings; НЕТ chat_settings.is_channel (админ канала can_write.allowed=true → классифицируется как обычный диалог — осознанный компромисс parseChannelItem:735), members_count в Chat (берётся отдельным groups.getById), is_write_blocked.
+- План минимальной починки: (a) can_write-гейт композера + дружелюбная ошибка err 901 (ChatDetailScreen:3157/:1935/:2236); (b) подписчики в шапке — перенести groupsGetById-load в общий путь wall-режима (:2362/:2399), переиспользовать subscribersLabel:7676; (c) для админов работает уже сейчас (composer виден), не ломать parseChannelItem; (d) «Включить уведомления» канала — готовые безопасные обёртки messagesAllowFromGroup/messagesDenyFromGroup (VKApiClient:16354/:16362) в toggleMute:1661 веткой peerId<0.
+- НЕ трогать: parseChannelItem canWrite(adminLevel>0), guard LP `if (isChannel) return@collect` (ChatDetailScreen:2755), #COUNTER-CHANNELS (UnreadMessagesCounter), ChannelWebSocketClient (заглушка), probe-логику :2362 (риск ложного wall-режима для сообществ с wall без can_write).
+---
+Task ID: 55-c
+Agent: Z.ai Code (main)
+Task: публикация релиза V2.1.1-test в version.json + затереть предыдущий (запрос юзера; «каналы» — приоритет следующей волны, Task 56)
+
+Work Log:
+- Скачал APK V2.1.1-test (PinoK_13092225.apk, 138 218 143 Б) с GitHub Releases; SHA-256 = 68995C4F5CB0246099562A32F21AFDC7B6A7E30512D04A60B9FE9FEE60C07D96.
+- Форензика APK (AXML-парсер + dex-строки, без aapt): package re.pinok.debug, versionCode 1, versionName 2.0.0-debug, BuildStamp calls-2026.09.06-5 — тестер собрал debug БЕЗ bump'а версии (gradle в репо тоже 1/2.0.0).
+- Старый релиз v2.1.0-test УЖЕ удалён с GitHub (страница releases: только V2.1.1-test; ассет PinoK_13091915.apk → HTTP 404) — «затереть» свелось к замене записи в манифесте.
+- version.json переписан: ЕДИНСТВЕННАЯ запись {versionCode 2, versionName 2.1.1, stamp calls-2026.09.06-5, apkUrl …/V2.1.1-test/PinoK_13092225.apk, sha256 6899…D96}. Логика кода 2: у установленных тестеров versionCode 1 → манифест-код строго больше → Available; reinstall того же versionCode разрешён Android, даунгрейд запрещён.
+- app/build.gradle.kts: bump versionCode 1→2, versionName 2.0.0→2.1.1 (#RELEASE-V211-TEST) — следующая сборка тестера сойдётся с манифестом (latest==current, stamp совпадает → UpToDate, конец «вечного обновления»).
+- docs/UPDATER.md §1: добавлен нюанс тестовых debug-сборок (манифест-код строго БОЛЬШЕ установленного; reinstall того же кода разрешён; назойливое предложение гасится «Пропустить эту версию») + исключение тестовых релизов в шаге 5 (массив может содержать только актуальную запись).
+- Подпись по чек-листу §1 шаг 6: sign_manifest.py selftest PASS → sign → verify приватным И публичным ключами — ВЕРНА; pubkey == RELEASE_PUBLIC_KEY_B64 (XvaSZqNn…, отпечаток 22520fde…78) — цепочка доверия цела.
+- Верификация: check-secrets OK (78 md/txt), check-nested-comments ALL CLEAN. Урок: verify --pub принимает base64-СТРОКУ ключа, не путь к файлу.
+
+Stage Summary:
+- Манифест raw.githubusercontent.com/pinokio240/PinoK_1/PinoK/version.json отдаёт V2.1.1-test (raw-кэш ~5 мин после пуша).
+- Ожидаемое поведение у тестеров: «Доступно 2.1.1» → установка (reinstall code 1 поверх 1) → предложение сохранится, пока не выйдет сборка с versionCode 2 (bump уже в репо); гасится «Пропустить эту версию».
+- Следующий манифест-релиз: строго versionCode 3.

@@ -1,20 +1,12 @@
 {
   "versions": [
     {
-      "versionCode": 1,
-      "versionName": "2.0.0",
-      "stamp": "wave29",
-      "apkUrl": "",
-      "sha256": "",
-      "notes": "Первичный манифест обновлений"
-    },
-    {
       "versionCode": 2,
-      "versionName": "2.1.0",
-      "stamp": "wave45-test",
-      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/v2.1.0-test/PinoK_13091915.apk",
-      "sha256": "455AD3C6FD20A0B750CB7B119EB7C663E8099D329AF80F4058959373E91140DD",
-      "notes": "Тестовая сборка для проверки механики обновления (debug, 2026-09-13 19:14)"
+      "versionName": "2.1.1",
+      "stamp": "calls-2026.09.06-5",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/V2.1.1-test/PinoK_13092225.apk",
+      "sha256": "68995C4F5CB0246099562A32F21AFDC7B6A7E30512D04A60B9FE9FEE60C07D96",
+      "notes": "Тестовая сборка V2.1.1-test (debug, 13.09 22:25): волна 46 — ed25519-подпись манифеста + SHA-проверка отката; тап по баннеру обновления просто скрывает его (#UPDATER-BANNER-DISMISS). Предыдущая тестовая запись (v2.1.0-test) затерта по решению релиз-менеджера."
     }
   ]
 }
