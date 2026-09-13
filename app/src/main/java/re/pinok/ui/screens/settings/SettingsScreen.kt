@@ -4904,6 +4904,14 @@ private fun UpdateTab(
  * зашифрованного файла (окно открывается НЕЗАВИСИМО от тумблера — по
  * заголовку конверта format = 2). Неверный код = честная ошибка в диалоге.
  *
+ * Волна 50 #SESSION-PASSWORD-MATRIX (P0 внешнего ревью): пароль аккаунта
+ * (last_password — неотзываемый секрет, в отличие от отзываемых токенов)
+ * попадает в файл ТОЛЬКО внутри шифроконверта; plaintext-экспорт честно
+ * помечается «без пароля аккаунта» (токены остаются). Чекбокс «Экспортировать
+ * без сессии» убирает секцию целиком — красное предупреждение прячет себя,
+ * когда сессии в файле не будет. Импорт по штампу sessionPasswordIncluded
+ * предупреждает о файле без пароля.
+ *
  * Честные границы (написаны в UI): медиа-кэш и офлайн-загрузки НЕ переносятся
  * (отдельные файлы); служебные кэши (security_alerts_cache, app_meta) не
  * экспортируются — пересоздаются сами; в файле лежат куки/токены сессии —
@@ -4938,6 +4946,10 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
     // импорте зашифрованного файла на любой установке.
     val snap by app.prefs.data.collectAsState(initial = null)
     val exportEncrypt = snap?.settingsExportEncrypt ?: false
+    // Волна 50 #SESSION-PASSWORD-MATRIX: «Экспортировать без сессии» —
+    // локальное намерение на этот экспорт (НЕ настройка): безопасный дефолт —
+    // сессия включена, сброс при повторном входе во вкладку.
+    var exportNoSession by remember { mutableStateOf(false) }
     var showExportCodeDialog by remember { mutableStateOf(false) }
     var exportCode by remember { mutableStateOf("") }
     var exportCode2 by remember { mutableStateOf("") }
@@ -4969,11 +4981,17 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
             busy = true
             val message: String = try {
                 val exported = withContext(Dispatchers.IO) {
+                    // Волна 50 #SESSION-PASSWORD-MATRIX: includeSessionPassword
+                    // = encryptCode != null — last_password живёт только внутри
+                    // шифроконверта; plaintext-экспорт получает файл без пароля
+                    // (токены остаются — они отзываемые).
                     SovaPrefsBackup.export(
                         context,
                         app.prefs,
                         app.exchangeStorage,
                         BuildConfig.VERSION_NAME + " (versionCode " + BuildConfig.VERSION_CODE + ")",
+                        includeSession = !exportNoSession,
+                        includeSessionPassword = encryptCode != null,
                     )
                 }
                 val written = withContext(Dispatchers.IO) {
@@ -4994,8 +5012,13 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                     }
                 }
                 if (written) {
-                    "Экспортировано записей: " + exported.totalCount +
-                        (if (encryptCode != null) " (файл зашифрован кодом)" else "")
+                    // Честный тост: зашифрован / без сессии / plaintext без пароля.
+                    val note = when {
+                        encryptCode != null -> " (файл зашифрован кодом)"
+                        exportNoSession -> " (без сессии)"
+                        else -> " (без пароля аккаунта)"
+                    }
+                    "Экспортировано записей: " + exported.totalCount + note
                 } else {
                     "Не удалось записать файл"
                 }
@@ -5078,13 +5101,17 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
                     )
-                    Text(
-                        "Файл содержит данные входа в аккаунт — храните его только у себя " +
-                            "и не передавайте никому.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    // Волна 50 #SESSION-PASSWORD-MATRIX: предупреждение честно
+                    // исчезает, когда сессии в файле не будет (чекбокс «без сессии»).
+                    if (!exportNoSession) {
+                        Text(
+                            "Файл содержит данные входа в аккаунт — храните его только у себя " +
+                                "и не передавайте никому.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                     // Волна 45-д #SETTINGS-CRYPTO: тумблер шифрования экспорта.
                     // Влияет ТОЛЬКО на экспорт: импорт всегда умеет оба формата —
                     // зашифрованный файл сам открывает окно ввода кода.
@@ -5102,7 +5129,8 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                             Text(
                                 "Файл шифруется кодом (AES-256-GCM): без кода содержимое " +
                                     "не прочитать. Код нигде не хранится — вводится при каждом " +
-                                    "экспорте; потеря кода = потеря файла.",
+                                    "экспорте; потеря кода = потеря файла. Без шифрования пароль " +
+                                    "аккаунта в файл не включается (токены включаются).",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -5110,6 +5138,32 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                         Switch(
                             checked = exportEncrypt,
                             onCheckedChange = { v -> scope.launch { app.prefs.setSettingsExportEncrypt(v) } },
+                        )
+                    }
+                    // Волна 50 #SESSION-PASSWORD-MATRIX: полный отказ от секретов
+                    // в файле — чекбокс «без сессии» (токены + пароль не едут).
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                "Экспортировать без сессии",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                "Токены и пароль не попадут в файл: настройки, эквалайзер и " +
+                                    "закладки перенесутся, но вход в аккаунт после восстановления " +
+                                    "придётся выполнить заново.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = exportNoSession,
+                            onCheckedChange = { exportNoSession = it },
                         )
                     }
                     Button(
@@ -5239,6 +5293,12 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                             (if (plan.skipped > 0) {
                                 " Некорректных или дублирующихся записей в файле: " + plan.skipped +
                                     " — будут пропущены."
+                            } else "") +
+                            // Волна 50 #SESSION-PASSWORD-MATRIX: честное
+                            // предупреждение о файле без пароля (plaintext-экспорт).
+                            (if (plan.session.isNotEmpty() && !plan.sessionPasswordIncluded) {
+                                " Пароля аккаунта в файле нет: сессия восстановится, но после её " +
+                                    "слёта потребуется повторный вход."
                             } else "")
                     },
                     style = MaterialTheme.typography.bodyMedium,

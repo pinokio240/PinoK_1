@@ -48,7 +48,10 @@ import re.pinok.data.local.SovaPrefs
  *     переустановки не восстановить. Прецедент plaintext-файла с токенами —
  *     account.json (File backup, VTosters pattern #3); в экспорт-файле секреты
  *     защищаются только выбором места пользователем — UI предупреждает ДО
- *     экспорта (красная строка во вкладке «Данные»).
+ *     экспорта (красная строка во вкладке «Данные»). ВОЛНА 50
+ *     #SESSION-PASSWORD-MATRIX: ИСКЛЮЧЕНИЕ — last_password (неотзываемый
+ *     секрет, в отличие от отзываемых токенов) попадает в файл ТОЛЬКО внутри
+ *     шифроконверта format=2; plaintext-экспорт строится без него.
  *
  * ЧТО НЕ ВХОДИТ (честно, пересоздаётся само или непереносимо by design):
  *  - SharedPreferences «security_alerts_cache» (кэш поллера алертов);
@@ -60,9 +63,13 @@ import re.pinok.data.local.SovaPrefs
  * принимает и старый файл с одним DataStore-массивом):
  *   {"format":1,"app":"PinoK","appVersion":"2.0.1 (versionCode 2)",
  *    "exportedAt":1234567890,"skippedUnsupported":0,
+ *    "sessionPasswordIncluded":true,
  *    "keys":[{"name":..,"type":"string|boolean|int|long|stringSet","value":..}],
  *    "sp":[{"file":"equalizer","keys":[{"name":..,"type":"...|float","value":..}]}],
  *    "session":[{"name":..,"type":"...","value":..}]}
+ *   Волна 50 #SESSION-PASSWORD-MATRIX: "sessionPasswordIncluded":false —
+ *   last_password в файл НЕ включался (plaintext-экспорт); у файлов волн
+ *   45–45-д поле отсутствует → парсер трактует как true (старое поведение).
  *
  * ⚠ ВОЛНА 45-б, ПРИЧИНА ФИКСА СБОРКИ: в datastore 1.1.x у библиотеки СВОЙ
  * infix `to` (Preferences.Key.to(value) → Preferences.Pair) — выражение
@@ -113,6 +120,17 @@ import re.pinok.data.local.SovaPrefs
  * format=2 не принимает (честный отказ «Файл зашифрован» вместо мусорных
  * ошибок «нет массива keys»). Страховочная копия НЕ шифруется сознательно:
  * она не покидает приватный контейнер.
+ *
+ * ВОЛНА 50 #SESSION-PASSWORD-MATRIX (P0 внешнего ревью): пароль аккаунта —
+ * НЕОТЗЫВАЕМЫЙ секрет (утёк → перманентный доступ к аккаунту), в отличие
+ * от токенов (утёк → отзыв). Поэтому last_password попадает в файл ТОЛЬКО
+ * внутри шифроконверта: plaintext-экспорт строится с
+ * includeSessionPassword=false и честно штампуется
+ * "sessionPasswordIncluded":false — «второй account.json» невозможен
+ * по построению. includeSession=false (чекбокс «Экспортировать без
+ * сессии») убирает секцию целиком. Страховочная копия (apply) ВСЕГДА
+ * полная, с паролем: не покидает приватный контейнер (UID-изоляция,
+ * прецедент account.json) и нужна как точка возврата на живой установке.
  */
 object SovaPrefsBackup {
 
@@ -162,6 +180,8 @@ object SovaPrefsBackup {
         val skipped: Int = 0,
         val exportedAt: Long = 0,
         val appVersion: String = "",
+        /** Волна 50 #SESSION-PASSWORD-MATRIX: false — last_password в файл не включался. */
+        val sessionPasswordIncluded: Boolean = true,
     )
 
     /**
@@ -189,16 +209,30 @@ object SovaPrefsBackup {
     )
 
     /**
-     * Полный дамп хранилищ настроек в JSON (см. формат в KDoc класса).
+     * Дамп хранилищ настроек в JSON (см. формат в KDoc класса).
      * DataStore — rawSnapshot (полный сырой снимок); equalizer — чтение
      * SharedPreferences; сессия — расшифрованный снапшот EncryptedSharedPreferences
      * (в процессе мы владеем ключом Keystore, расшифрование валидно).
+     *
+     * Волна 50 #SESSION-PASSWORD-MATRIX:
+     *  @param includeSession false → секция session остаётся ПУСТОЙ (схема
+     *         файла стабильна, sessionCount=0) — чекбокс «Экспортировать без
+     *         сессии»;
+     *  @param includeSessionPassword false → из секции session вырезается
+     *         last_password (ExchangeTokenStorage.KEY_LAST_PASSWORD) — пароль
+     *         аккаунта живёт только в шифроконверте format=2, plaintext-файл
+     *         его не содержит. Токены остаются: их утечка лечится отзывом,
+     *         утечка пароля — нет.
+     * Страховочная копия (apply) зовёт export() с дефолтами = полная,
+     * с паролем (в filesDir, UID-изоляция — прецедент account.json).
      */
     suspend fun export(
         context: Context,
         prefs: SovaPrefs,
         exchangeStorage: ExchangeTokenStorage,
         appVersion: String,
+        includeSession: Boolean = true,
+        includeSessionPassword: Boolean = true,
     ): Exported {
         // 1) DataStore — полный сырой дамп всех ключей (Snapshot НЕ используется:
         //    он подмножество, часть ключей живёт вне него).
@@ -236,13 +270,19 @@ object SovaPrefsBackup {
 
         // 3) Сессия — расшифрованный снапшот EncryptedSharedPreferences
         //    (токены/куки входа). Пустой, если в аккаунт не входили.
+        //    Волна 50 #SESSION-PASSWORD-MATRIX: includeSession=false — секция
+        //    не заполняется вовсе; includeSessionPassword=false — last_password
+        //    (неотзываемый секрет) вырезается, в plaintext-файле его нет.
         val sessionArray = JsonArray()
         var sessionCount = 0
-        for ((k, v) in exchangeStorage.exportSessionSnapshot()) {
-            val entry = encodeEntry(k, v)
-            if (entry == null) continue
-            sessionArray.add(entry)
-            sessionCount++
+        if (includeSession) {
+            for ((k, v) in exchangeStorage.exportSessionSnapshot()) {
+                if (!includeSessionPassword && k == ExchangeTokenStorage.KEY_LAST_PASSWORD) continue
+                val entry = encodeEntry(k, v)
+                if (entry == null) continue
+                sessionArray.add(entry)
+                sessionCount++
+            }
         }
 
         val root = JsonObject()
@@ -251,6 +291,10 @@ object SovaPrefsBackup {
         root.addProperty("appVersion", appVersion)
         root.addProperty("exportedAt", System.currentTimeMillis())
         root.addProperty("skippedUnsupported", skipped)
+        // Волна 50 #SESSION-PASSWORD-MATRIX: штамп честности файла — импорт
+        // по нему предупреждает «пароля в файле нет». false только у
+        // plaintext-экспортов; у файлов 45–45-д поля нет → парсер читает true.
+        root.addProperty("sessionPasswordIncluded", includeSession && includeSessionPassword)
         root.add("keys", keysArray)
         root.add("sp", spArray)
         root.add("session", sessionArray)
@@ -301,6 +345,10 @@ object SovaPrefsBackup {
         if (keysEl == null || !keysEl.isJsonArray) return ImportPlan(false, "В файле нет массива keys")
         val exportedAt = root.get("exportedAt")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L
         val fileAppVersion = root.get("appVersion")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        // Волна 50 #SESSION-PASSWORD-MATRIX: у файлов 45–45-д поля нет → true
+        // (старое поведение: пароль в сессии был всегда).
+        val sessionPasswordIncluded = root.get("sessionPasswordIncluded")
+            ?.takeIf { it.isJsonPrimitive }?.asBoolean ?: true
         var skipped = 0
 
         // Дедуп по имени (last-wins): LinkedHashMap сохраняет порядок файла.
@@ -388,7 +436,10 @@ object SovaPrefsBackup {
         if (total == 0) {
             return ImportPlan(false, "Не нашёл ни одного корректного ключа — файл повреждён или из другой программы")
         }
-        return ImportPlan(true, "", entries, sp, session, total, skipped, exportedAt, fileAppVersion)
+        return ImportPlan(
+            true, "", entries, sp, session, total, skipped, exportedAt, fileAppVersion,
+            sessionPasswordIncluded,
+        )
     }
 
     /**
@@ -423,6 +474,9 @@ object SovaPrefsBackup {
         var safetyPath: String? = null
         if (saveSafetyCopy) {
             safetyPath = try {
+                // Дефолты includeSession/includeSessionPassword → копия ВСЕГДА
+                // полная, с паролем: не покидает приватный контейнер
+                // (#SESSION-PASSWORD-MATRIX).
                 val snapshot = export(context, prefs, exchangeStorage, appVersion.ifEmpty { "PinoK (авто)" })
                 val file = File(context.filesDir, SAFETY_FILE_NAME)
                 file.writeText(snapshot.json, Charsets.UTF_8)

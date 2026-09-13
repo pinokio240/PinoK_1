@@ -958,7 +958,11 @@ class ExchangeTokenStorage(
         return System.currentTimeMillis() + expiresIn * 1000L
     }
 
-    private companion object {
+    // Companion ОТКРЫТ (был private) — волна 50 #SESSION-PASSWORD-MATRIX:
+    // SovaPrefsBackup.export() сверяет ключ сессии с KEY_LAST_PASSWORD,
+    // чтобы вырезать пароль из plaintext-экспорта (пароль живёт только
+    // внутри шифроконверта). Один источник истины — без дубля литерала.
+    companion object {
         // Core auth
         const val KEY_ACCESS_TOKEN        = "access_token"
         // §50 #TOKEN-LIFECYCLE-FIX: флаг "токент инвалидируется в runtime, но
