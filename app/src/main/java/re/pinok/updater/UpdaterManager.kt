@@ -1,9 +1,13 @@
 package re.pinok.updater
 
+import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
@@ -11,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -23,6 +28,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
@@ -69,6 +75,33 @@ import java.util.concurrent.TimeUnit
  * (INSTALL_FAILED_VERSION_DOWNGRADE) без удаления приложения — UI предупреждает
  * об этом честно (AlertDialog в UpdateTab), данные приложения (сессия, кэши)
  * при удалении теряются. Это ограничение ОС, updater обойти его не может.
+ *
+ * ВОЛНА 46 #UPDATER-SIGNING (P0 внешнего ревью): манифест доверяется ТОЛЬКО
+ * с валидной ed25519-подписью релиз-менеджера (публичный ключ зашит в APK —
+ * UpdaterSigning; приватный — вне репозитория; инструмент —
+ * tools/updater-sign/sign_manifest.py). Порядок: GET version.json (БАЙТЫ) →
+ * GET version.json.sig → verify(sig, bytes) → и только потом Gson-парсинг.
+ * Fail-closed: нет .sig / битый .sig / подпись не совпала / ключ не встроен =
+ * SignatureRejected → манифест НЕ доходит до UI и установки (штатный путь и
+ * откат получают ноль доверенных данных). Подпись — над точными байтами
+ * ответа: никакой канонизации, нечему разъезжаться. Кэш манифеста в prefs
+ * пишется ПОСЛЕ проверки подписи, 304 Not Modified означает «тело не
+ * менялось» — цепочка доверия не разрывается при перезапуске процесса.
+ *
+ * ВОЛНА 46 #UPDATER-EMPTY-CONFIG (согласовано с ревьюером): пустой
+ * version.json (blank / {} / null / []) — НЕ ошибка и НЕ SignatureRejected:
+ * устанавливать нечего, подделывать нечего. Молча UpToDate с пометкой
+ * «конфиг не заполнен» (раньше каждая автопроверка давала бесполезный Error).
+ *
+ * ВОЛНА 46 #UPDATER-ROLLBACK-SHA: путь отката (публичные Загрузки) больше не
+ * слепой. DownloadManager качает мимо приложения, поэтому SHA-256 сверяется
+ * ПОСЛЕ STATUS_SUCCESSFUL: файл читается через openDownloadedFile() (свой
+ * download — права на хранилище не нужны), хэш сравнивается с манифестом;
+ * несовпадение = файл УДАЛЁН из Загрузок (dm.remove). sha256 не задан для
+ * версии — честное предупреждение в диалоге отката + лог. Предел честности:
+ * проверка живёт в managerScope (пока процесс жив) — если юзер убил процесс
+ * до конца скачивания, пост-проверка не случится (диалог отката это
+ * оговаривает).
  *
  * NULL-ЯВНО: поля data-классов nullable (Gson через Unsafe-allocation кладёт null
  * в non-null поля при отсутствии ключа в JSON) — потребители обязаны orEmpty()/if.
@@ -139,7 +172,11 @@ object UpdaterManager {
     @Volatile
     private var cacheRestoreStarted = false
 
-    /** Волна 45 #UPDATER-ROLLBACK: подъём манифеста из JSON-кэша prefs (если в памяти ещё пусто). */
+    /** Волна 45 #UPDATER-ROLLBACK: подъём манифеста из JSON-кэша prefs (если в памяти ещё пусто).
+     *  Волна 46 #UPDATER-SIGNING: кэш пишется ТОЛЬКО после валидной подписи
+     *  (см. runCheck/persistManifestCache), поэтому восстановленный из кэша
+     *  манифест наследует уже проведённую проверку — доверие не переоценивается
+     *  по «пустому месту», но и не обходит его. */
     private fun restoreManifestFromCache() {
         if (cacheRestoreStarted) return
         if (_manifest.value != null) { cacheRestoreStarted = true; return }
@@ -302,6 +339,26 @@ object UpdaterManager {
                         AppLog.i(TAG, "autoCheck: не разобрал манифест (" + autoFailsInRow + " подряд) — тихо")
                     }
                 }
+                is UpdateCheckResult.SignatureRejected -> {
+                    // Волна 46 #UPDATER-SIGNING: fail-closed. Кэш манифеста НЕ
+                    // трогаем и состояние Available/Downloaded НЕ даём — доверия
+                    // к источнику нет. autoFailsInRow растёт (это тоже сбой
+                    // источника → бэкофф автопроверок).
+                    autoFailsInRow++
+                    if (manual) {
+                        _state.value = UpdaterUiState.Error(
+                            "Манифест ОТКЛОНЁН: " + result.reason +
+                                ". Установка из этого источника заблокирована (fail-closed).",
+                        )
+                    } else {
+                        _state.value = UpdaterUiState.Idle
+                        AppLog.w(
+                            TAG,
+                            "autoCheck: подпись манифеста не прошла (" + result.reason +
+                                ") — тихо, fails=" + autoFailsInRow,
+                        )
+                    }
+                }
             }
         }
     }
@@ -309,6 +366,8 @@ object UpdaterManager {
     /**
      * Сравнение манифеста с установленной сборкой (общее для 200 и 304):
      * max(versionCode) без зависимости от порядка записей.
+     *  - манифест без записей versions → UpToDate с пометкой «конфиг не
+     *    заполнен» (волна 46 #UPDATER-EMPTY-CONFIG — не ошибка);
      *  - новее → Available (баннер/вкладка);
      *  - та же версия, штамп сборки в манифесте отличается → UpToDate с пометкой
      *    (пересборка того же versionCode — не ошибка);
@@ -317,9 +376,22 @@ object UpdaterManager {
      */
     private fun decideLatest(manifest: UpdateManifest) {
         val versions = manifest.versions
+        if (versions.isEmpty()) {
+            // Волна 46 #UPDATER-EMPTY-CONFIG (согласовано с ревьюером): пустой
+            // манифест — не ошибка (раньше был Error «Манифест не содержит ни
+            // одной версии» на КАЖДУЮ автопроверку). Это «конфиг не заполнен»:
+            // молча UpToDate, баннер молчит, бэкофф не растёт (Success-путь).
+            _state.value = UpdaterUiState.UpToDate(
+                BuildConfig.VERSION_NAME,
+                "Конфиг обновлений на источнике не заполнен (version.json пуст или без записей versions) — обновлений нет, это не сбой.",
+            )
+            return
+        }
         val latest = versions.maxByOrNull { it.versionCode }
         if (latest == null) {
-            _state.value = UpdaterUiState.Error("Манифест не содержит ни одной версии")
+            // Недостижимо (maxByOrNull на непустом списке не даёт null), но
+            // честный ранний выход вместо NPE — правило NULL-ЯВНО.
+            _state.value = UpdaterUiState.UpToDate(BuildConfig.VERSION_NAME)
             return
         }
         val currentCode: Long = BuildConfig.VERSION_CODE.toLong()
@@ -466,7 +538,7 @@ object UpdaterManager {
                     val versions = r.manifest.versions
                     val latest = versions.maxByOrNull { it.versionCode }
                     if (latest == null) {
-                        onResult("Манифест загружен, но не содержит ни одной версии")
+                        onResult("OK по сети, но конфиг не заполнен: манифест загружен, записей versions нет")
                     } else {
                         onResult(
                             "OK: версий " + versions.size + ", новейшая " +
@@ -485,6 +557,8 @@ object UpdaterManager {
                         onResult("Сервер ответил HTTP " + r.code)
                     }
                 }
+                is UpdateCheckResult.SignatureRejected ->
+                    onResult("Манифест получен, но ПОДПИСЬ ОТКЛОНЕНА (" + r.reason + ") — источнику доверять нельзя, установка блокируется")
                 is UpdateCheckResult.ParseError ->
                     onResult("Это не манифест версий: " + r.message)
             }
@@ -651,11 +725,17 @@ object UpdaterManager {
      * приложения, а откат начинается именно с удаления — APK пропадал бы
      * в самый нужный момент. Публичные Загрузки переживают uninstall.
      *
+     * Волна 46 #UPDATER-ROLLBACK-SHA: после успешной постановки в очередь
+     * запускается watchRollbackDownload() — по STATUS_SUCCESSFUL файл
+     * открывается через openDownloadedFile(), его SHA-256 сверяется с
+     * манифестом; несовпадение = файл удаляется из Загрузок. Признанный
+     * ревьюером недостаток «откат качает без проверки» устранён.
+     *
      * Честные ограничения (в KDoc и в UI-диалоге отката):
      *  - прогресс/результат качает система (уведомление DownloadManager'а);
-     *  - sha256 из манифеста здесь проверить НЕЛЬЗЯ (файл идёт мимо нас) —
-     *    для отката это осознанный компромисс: URL берётся из того же
-     *    манифеста, что и штатные обновления (https, GitHub Releases);
+     *  - если sha256 в манифесте НЕ задан — сверять нечем (UI предупреждает);
+     *  - пост-проверка живёт в managerScope: процесс убит до конца скачивания
+     *    → проверка не случится (осознанный предел, описан в KDoc ватчера);
      *  - после удаления приложения установку запускает сам юзер из Загрузок.
      *
      * Возвращает false, если контекст не готов, URL пуст или DownloadManager
@@ -686,13 +766,16 @@ object UpdaterManager {
                     android.os.Environment.DIRECTORY_DOWNLOADS,
                     "PinoK/" + safeName,
                 )
-            val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
+            val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
             if (dm == null) {
                 AppLog.w(TAG, "public download: DownloadManager недоступен")
                 false
             } else {
-                dm.enqueue(request)
+                val downloadId = dm.enqueue(request)
                 AppLog.i(TAG, "public download enqueued: Downloads/PinoK/" + safeName)
+                // Волна 46 #UPDATER-ROLLBACK-SHA: пост-проверка SHA-256 после
+                // скачивания (несовпадение = файл удалён из Загрузок).
+                watchRollbackDownload(downloadId, info)
                 true
             }
         } catch (t: Throwable) {
@@ -705,10 +788,16 @@ object UpdaterManager {
     // ── internals ─────────────────────────────────────────────────────────
 
     /**
-     * GET манифеста → sealed-результат (сеть/HTTP/парсинг разделены для честных сообщений).
-     * Волна 43: параметризован (URL/токен/ETag — #UPDATER-SOURCE/#UPDATER-ETAG);
-     * токен уходит ТОЛЬКО по https Bearer-заголовком; непустой etag даёт условный
-     * GET (If-None-Match → 304 = NotModified без тела).
+     * GET манифеста → sealed-результат (сеть/HTTP/подпись/парсинг разделены для
+     * честных сообщений). Волна 43: параметризован (URL/токен/ETag —
+     * #UPDATER-SOURCE/#UPDATER-ETAG); токен уходит ТОЛЬКО по https Bearer-заголовком;
+     * непустой etag даёт условный GET (If-None-Match → 304 = NotModified без тела).
+     *
+     * Волна 46 #UPDATER-SIGNING: тело читается БАЙТАМИ; непустой манифест
+     * принимается только после ed25519-проверки detached-подписи
+     * (version.json.sig — соседний файл того же источника) публичным ключом
+     * из UpdaterSigning. Пустой конфиг (#UPDATER-EMPTY-CONFIG) пропускается
+     * БЕЗ подписи — доверять нечему, но и подделывать нечего.
      */
     private fun fetchManifest(url: String, token: String, etag: String): UpdateCheckResult {
         val builder = Request.Builder().url(url)
@@ -726,8 +815,41 @@ object UpdaterManager {
                 }
                 val body = response.body
                 if (body == null) return UpdateCheckResult.ParseError("пустой ответ сервера")
-                val text = body.string()
-                val parsed = gson.fromJson(text, UpdateManifest::class.java)
+                // Волна 46: БАЙТЫ ответа — единая основа и для подписи, и для парсинга.
+                val manifestBytes = body.bytes()
+                val text = String(manifestBytes, Charsets.UTF_8)
+                // #UPDATER-EMPTY-CONFIG: blank / {} / null / [] — конфиг не заполнен.
+                // Не SignatureRejected: устанавливать нечего — угрозы нет. Молча
+                // Success с пустым списком, decideLatest даст UpToDate с пометкой.
+                val probe = text.trim()
+                if (probe.isEmpty() || probe == "{}" || probe == "null" || probe == "[]") {
+                    val emptyEtag = response.header("ETag")
+                    return UpdateCheckResult.Success(UpdateManifest(versions = emptyList()), emptyEtag.orEmpty())
+                }
+                // #UPDATER-SIGNING: fail-closed — без валидной подписи манифест
+                // не существует для приложения (UI и установка его не видят).
+                val sig = fetchSignatureB64(signatureUrlFor(url), token)
+                val sigFail = sig.failReason
+                if (sigFail != null) {
+                    return UpdateCheckResult.SignatureRejected(sigFail)
+                }
+                val sigB64 = sig.signatureB64
+                if (sigB64 == null) {
+                    return UpdateCheckResult.SignatureRejected("файл подписи пуст")
+                }
+                if (!UpdaterSigning.verify(manifestBytes, sigB64)) {
+                    return UpdateCheckResult.SignatureRejected(
+                        if (UpdaterSigning.isConfigured()) {
+                            "подпись не совпала с манифестом (version.json менялся без переподписи, либо источник не подписан вашим ключом)"
+                        } else {
+                            "публичный ключ подписи не встроен в эту сборку"
+                        },
+                    )
+                }
+                // Парсинг — ТОЛЬКО после доверия. Урок волны 45-г: явная
+                // nullable-типизация (platform-тип Gson + неявный
+                // checkNotNull = мёртвый guard на «null»-документе).
+                val parsed: UpdateManifest? = gson.fromJson(text, UpdateManifest::class.java)
                 if (parsed == null) {
                     UpdateCheckResult.ParseError("JSON не распознан как манифест версий")
                 } else {
@@ -742,6 +864,61 @@ object UpdaterManager {
             // Gson (JsonSyntaxException) и прочие ошибки разбора.
             UpdateCheckResult.ParseError(e.message.orEmpty())
         }
+    }
+
+    /** Волна 46 #UPDATER-SIGNING: результат GET файла подписи. failReason != null → отказ. */
+    private class SignatureFetch(val signatureB64: String?, val failReason: String?)
+
+    /**
+     * Волна 46 #UPDATER-SIGNING: GET файла подписи (base64-текст) соседнего с
+     * манифестом source'а. Токен (если задан) уходит и сюда: приватный
+     * репозиторий хостит ОБА файла. Отказ в .sig = отказ в манифесте (fail-closed).
+     */
+    private fun fetchSignatureB64(sigUrl: String, token: String): SignatureFetch {
+        val builder = Request.Builder().url(sigUrl)
+        if (token.isNotEmpty()) builder.header("Authorization", "Bearer " + token)
+        val request = builder.build()
+        return try {
+            httpClient.newCall(request).execute().use { response ->
+                if (response.code == 404) {
+                    SignatureFetch(null, "файл подписи " + shortSigName(sigUrl) + " не найден (HTTP 404) — манифест не подписан")
+                } else if (!response.isSuccessful) {
+                    SignatureFetch(null, "файл подписи недоступен (HTTP " + response.code + ")")
+                } else {
+                    val sigBody = response.body
+                    if (sigBody == null) {
+                        SignatureFetch(null, "файл подписи пуст (нет тела ответа)")
+                    } else {
+                        val sigText = sigBody.string().trim()
+                        if (sigText.isEmpty()) {
+                            SignatureFetch(null, "файл подписи пуст")
+                        } else {
+                            SignatureFetch(sigText, null)
+                        }
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            SignatureFetch(null, "файл подписи не скачался (сеть): " + e.javaClass.simpleName)
+        } catch (e: Exception) {
+            SignatureFetch(null, "файл подписи не скачался: " + e.javaClass.simpleName)
+        }
+    }
+
+    /** Волна 46: version.json?query → version.json.sig?query; version.json → version.json.sig. */
+    private fun signatureUrlFor(manifestUrl: String): String {
+        val q = manifestUrl.indexOf('?')
+        if (q < 0) return manifestUrl + ".sig"
+        return manifestUrl.substring(0, q) + ".sig" + manifestUrl.substring(q)
+    }
+
+    /** Волна 46: последний сегмент пути файла подписи — для коротких сообщений об отказе. */
+    private fun shortSigName(sigUrl: String): String {
+        val q = sigUrl.indexOf('?')
+        val noQuery = if (q >= 0) sigUrl.substring(0, q) else sigUrl
+        val slash = noQuery.lastIndexOf('/')
+        if (slash >= 0) return noQuery.substring(slash + 1)
+        return noQuery
     }
 
     /** Целевой файл APK: updates/PinoK_<versionName>_<versionCode>.apk. */
@@ -760,16 +937,24 @@ object UpdaterManager {
 
     /** SHA-256 файла → hex (lowercase). Используется и для кэш-валидации, и для проверки скачанного. */
     private fun sha256Hex(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
         FileInputStream(file).use { input ->
-            val buffer = ByteArray(8192)
-            while (true) {
-                val read = input.read(buffer)
-                if (read == -1) break
-                digest.update(buffer, 0, read)
-            }
+            return sha256Hex(input)
         }
-        val hash = digest.digest()
+    }
+
+    /** Волна 46 #UPDATER-ROLLBACK-SHA: SHA-256 потока → hex (lowercase). */
+    private fun sha256Hex(input: InputStream): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            digest.update(buffer, 0, read)
+        }
+        return toHex(digest.digest())
+    }
+
+    private fun toHex(hash: ByteArray): String {
         val sb = StringBuilder(hash.size * 2)
         for (b in hash) {
             val v = b.toInt() and 0xFF
@@ -777,6 +962,106 @@ object UpdaterManager {
             sb.append(Character.forDigit(v and 0x0F, 16))
         }
         return sb.toString()
+    }
+
+    /**
+     * Волна 46 #UPDATER-ROLLBACK-SHA: пост-проверка скачивания отката.
+     *
+     * DownloadManager качает МИМО приложения (это смысл публичных Загрузок —
+     * файл переживает uninstall), поэтому сверить хэш можно только после
+     * факта: поллим статус (3 с, до 90 минут — большой APK на медленной
+     * сети), по STATUS_SUCCESSFUL читаем файл через openDownloadedFile()
+     * (СВОЙ download — права на хранилище не нужны на любом API), считаем
+     * SHA-256 и сверяем с манифестом:
+     *  - совпало → лог + тост (файл в Загрузках целостен);
+     *  - НЕ совпало → dm.remove() — файл УДАЛЁН из Загрузок вместе с записью,
+     *    установить подделку нельзя; лог + честный тост;
+     *  - sha256 в манифесте не задан → проверять нечего: лог (UI предупреждает
+     *    об этом заранее — в диалоге отката).
+     *
+     * Предел честности: ватчер живёт в managerScope (пока процесс жив). Если
+     * юзер убил процесс до конца скачивания, пост-проверка не случится —
+     * файл останется в Загрузках непроверенным (диалог отката это оговаривает).
+     */
+    private fun watchRollbackDownload(downloadId: Long, info: UpdateInfo) {
+        val expected = info.sha256.orEmpty().replace(" ", "").lowercase()
+        if (expected.isEmpty()) {
+            AppLog.w(
+                TAG,
+                "rollback watch: sha256 не задан в манифесте для versionCode " +
+                    info.versionCode + " — целостность проверить нечем",
+            )
+            return
+        }
+        managerScope.launch {
+            val ctx = appContext
+            if (ctx == null) return@launch
+            val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+            if (dm == null) return@launch
+            val query = DownloadManager.Query().setFilterById(downloadId)
+            val deadline = System.currentTimeMillis() + 90L * 60L * 1000L
+            while (System.currentTimeMillis() < deadline) {
+                delay(3000)
+                var status = 0
+                val cursor = dm.query(query)
+                if (cursor != null) {
+                    cursor.use { c ->
+                        if (c.moveToFirst()) {
+                            val idx = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                            if (idx >= 0) status = c.getInt(idx)
+                        }
+                    }
+                }
+                if (status == DownloadManager.STATUS_FAILED) {
+                    AppLog.w(TAG, "rollback watch: скачивание не удалось (downloadId=" + downloadId + ")")
+                    return@launch
+                }
+                if (status != DownloadManager.STATUS_SUCCESSFUL) continue
+                // Скачивание завершено — сверяем SHA-256.
+                val actual: String? = try {
+                    dm.openDownloadedFile(downloadId).use { pfd ->
+                        FileInputStream(pfd.fileDescriptor).use { input ->
+                            sha256Hex(input)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    AppLog.w(TAG, "rollback watch: не смог открыть скачанный файл: " + t.javaClass.simpleName)
+                    null
+                }
+                if (actual == null) return@launch
+                if (actual == expected) {
+                    AppLog.i(TAG, "rollback watch: SHA-256 OK (" + actual.take(12) + "…) — файл в Загрузках целостен")
+                    showToastMain("Откат: SHA-256 APK проверен — файл в «Загрузки/PinoK/» целостен")
+                } else {
+                    AppLog.w(
+                        TAG,
+                        "rollback watch: SHA-256 НЕ совпал (ожидалось " + expected.take(12) +
+                            "…, получено " + actual.take(12) + "…) — файл удалён из Загрузок",
+                    )
+                    try {
+                        dm.remove(downloadId)
+                    } catch (t: Throwable) {
+                        AppLog.w(TAG, "rollback watch: не смог удалить скомпрометированный файл: " + t.javaClass.simpleName)
+                    }
+                    showToastMain("ОТКЛОНЕНО: SHA-256 APK не совпал — файл удалён из «Загрузки/PinoK/»")
+                }
+                return@launch
+            }
+            AppLog.w(TAG, "rollback watch: таймаут ожидания скачивания (90 мин) — пост-проверка не выполнена")
+        }
+    }
+
+    /** Волна 46: тост из некомпозного кода (managerScope) — постим на main looper, сбой глотаем в лог. */
+    private fun showToastMain(message: String) {
+        val ctx = appContext
+        if (ctx == null) return
+        Handler(Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(ctx, message, Toast.LENGTH_LONG).show()
+            } catch (t: Throwable) {
+                AppLog.w(TAG, "toast failed: " + t.javaClass.simpleName)
+            }
+        }
     }
 }
 
@@ -796,7 +1081,8 @@ data class UpdateManifest(
 )
 
 /** Результат fetchManifest — разделён, чтобы UI показывал ПРИЧИНУ, а не общий failure.
- *  Волна 43: + NotModified (304 условного GET), Success несёт ETag ответа для персиста. */
+ *  Волна 43: + NotModified (304 условного GET), Success несёт ETag ответа для персиста.
+ *  Волна 46: + SignatureRejected (#UPDATER-SIGNING — манифест есть, доверия нет). */
 sealed class UpdateCheckResult {
     data class Success(val manifest: UpdateManifest, val etag: String = "") : UpdateCheckResult()
     /** 304 Not Modified — манифест не менялся с последней проверки (ETag совпал). */
@@ -804,6 +1090,9 @@ sealed class UpdateCheckResult {
     object Offline : UpdateCheckResult()
     data class HttpError(val code: Int) : UpdateCheckResult()
     data class ParseError(val message: String) : UpdateCheckResult()
+    /** Волна 46 #UPDATER-SIGNING: подпись манифеста не прошла проверку (нет .sig,
+     *  битый .sig, не совпала, ключ не встроен). Fail-closed: установка заблокирована. */
+    data class SignatureRejected(val reason: String) : UpdateCheckResult()
 }
 
 /**

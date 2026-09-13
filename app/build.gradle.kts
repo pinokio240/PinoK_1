@@ -143,6 +143,10 @@ dependencies {
     // Security / EncryptedSharedPreferences
     implementation(libs.androidx.security.crypto)
 
+    // Волна 46 #UPDATER-SIGNING: BouncyCastle (легковесный API, без провайдера) —
+    // ed25519-верификация подписи манифеста обновлений (UpdaterSigning.kt).
+    implementation(libs.bcprov)
+
     // Biometric
     implementation(libs.androidx.biometric)
 

@@ -4763,7 +4763,8 @@ private fun UpdateTab(
         if (versions.isEmpty()) {
             item {
                 Text(
-                    "Манифест ещё не загружен. Нажмите «Проверить обновления» — приложение прочитает version.json из ветки PinoK репозитория PinoK_1.",
+                    "Манифест ещё не загружен или пуст. Нажмите «Проверить обновления» — приложение прочитает version.json " +
+                        "из источника и проверит его ed25519-подпись (волна 46: неподписанный/поддельный манифест отклоняется).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -4836,6 +4837,9 @@ private fun UpdateTab(
     // расписывает порядок действий (экспорт → скачивание → удаление → установка).
     val rollbackInfo = pendingRollback
     if (rollbackInfo != null) {
+        // Волна 46 #UPDATER-ROLLBACK-SHA: честная строка о пост-проверке SHA-256
+        // (и о том, что для версии без хэша проверять нечем — до скачивания).
+        val rollbackShaKnown = rollbackInfo.sha256.orEmpty().trim().isNotEmpty()
         AlertDialog(
             onDismissRequest = { pendingRollback = null },
             title = { Text("Откатиться на " + rollbackInfo.versionName.orEmpty() + "?") },
@@ -4843,8 +4847,13 @@ private fun UpdateTab(
                 Text(
                     "Android не устанавливает более старую версию поверх новой, поэтому порядок такой:\n" +
                         "1. Экспортируйте настройки (вкладка «Данные») — после удаления приложения они пропадут вместе с ним.\n" +
-                        "2. Скачайте APK в «Загрузки» — файл переживёт удаление.\n" +
+                        "2. Скачайте APK в «Загрузки» — файл переживёт удаление. После скачивания приложение сверит " +
+                        "SHA-256 файла с манифестом; при несовпадении файл будет удалён.\n" +
                         "3. Удалите приложение и откройте скачанный APK из Загрузок.\n\n" +
+                        (if (!rollbackShaKnown) {
+                            "Внимание: для этой версии в манифесте не задан SHA-256 — автоматически проверить " +
+                                "целостность файла нечем; проверяйте источник вручную.\n\n"
+                        } else "") +
                         "Данные входа, настройки и локальные закладки сотрутся — восстановите их из экспорта после установки.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
