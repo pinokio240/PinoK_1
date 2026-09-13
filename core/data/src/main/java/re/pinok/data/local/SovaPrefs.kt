@@ -528,6 +528,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // prefsSnapshot на каждое новое соединение — применяется без
             // перезапуска). Оператор-дефолт — file-стиль соседей по маппингу.
             callsDnsPinIp = p[Keys.CALLS_DNS_PIN_IP] ?: "",
+            // Волна 45-д #SETTINGS-CRYPTO: шифровать ли файл экспорта настроек
+            // (код спрашивается в диалоге при экспорте, НЕ хранится нигде).
+            // Импорт всегда умеет оба формата: зашифрованный файл по заголовку
+            // формата 2 сам откроет диалог ввода кода, тумблер роли не играет.
+            settingsExportEncrypt = p[Keys.SETTINGS_EXPORT_ENCRYPT] ?: false,
         )
     }
 
@@ -1074,6 +1079,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** Волна 45 #UPDATER-ROLLBACK: кэш сырого JSON манифеста (пишет UpdaterManager
      *  после успешной проверки; сбрасывается при смене источника). */
     suspend fun setUpdateLastManifestJson(v: String)  = put(Keys.UPDATE_LAST_MANIFEST_JSON, v)
+    /** Волна 45-д #SETTINGS-CRYPTO: тумблер шифрования файла экспорта настроек
+     *  (SettingsScreen → Данные; код шифрования хранению не подлежит). */
+    suspend fun setSettingsExportEncrypt(v: Boolean) = put(Keys.SETTINGS_EXPORT_ENCRYPT, v)
     // #CALLS: queuev4 credential для звонков (ввод вручную из localStorage).
     suspend fun setCallsQueueKey(v: String)            = put(Keys.CALLS_QUEUE_KEY, v)
     suspend fun setCallsQueueTs(v: Long)               = put(Keys.CALLS_QUEUE_TS, v)
@@ -1626,6 +1634,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * в чужих файлах (FeedScreen) собираются без правок.
          */
         val logSectionsOff: String = "",
+        /**
+         * Волна 45-д #SETTINGS-CRYPTO: шифровать файл экспорта настроек.
+         * Дефолт false задан явно — прецедент logSectionsOff выше: именованные
+         * конструкторы Snapshot в чужих файлах собираются без правок.
+         * Код шифрования в настройках НЕ хранится (вводится в диалоге экспорта
+         * и заново при импорте на другой установке — см. SovaPrefsCrypto).
+         */
+        val settingsExportEncrypt: Boolean = false,
     )
 
     private object Keys {
@@ -1876,6 +1892,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
         // (пустая строка = авто — встроенный 155.212.204.12).
         val CALLS_DNS_PIN_IP        = stringPreferencesKey("calls_dns_pin_ip")
+        // Волна 45-д #SETTINGS-CRYPTO: тумблер шифрования файла экспорта
+        // (сам код шифрования НЕ хранится в контейнере — только тумблер).
+        val SETTINGS_EXPORT_ENCRYPT = booleanPreferencesKey("settings_export_encrypt")
     }
 
     // Fix #189: defaults для Auth Domains Config.

@@ -86,6 +86,7 @@ import re.pinok.SovaApp
 import re.pinok.contracts.ContainerRegistry
 import re.pinok.contracts.SettingsSection
 import re.pinok.data.SovaPrefsBackup
+import re.pinok.data.SovaPrefsCrypto
 import re.pinok.data.local.SovaPrefs
 import re.pinok.data.local.AudioFormat
 import re.pinok.data.local.AudioQuality
@@ -4897,6 +4898,12 @@ private fun UpdateTab(
  *    типов ключей, отказавшие SP-файлы и несостоявшаяся сессия видны в тосте.
  *  - После импорта UI рекомендует перезапуск: часть кода держит значения в памяти.
  *
+ * Волна 45-д #SETTINGS-CRYPTO: экспорт может шифроваться кодом (тумблер
+ * «Шифровать файл настроек»; AES-256-GCM + PBKDF2, SovaPrefsCrypto). Код
+ * нигде не хранится: диалог при каждом экспорте, повторный ввод при импорте
+ * зашифрованного файла (окно открывается НЕЗАВИСИМО от тумблера — по
+ * заголовку конверта format = 2). Неверный код = честная ошибка в диалоге.
+ *
  * Честные границы (написаны в UI): медиа-кэш и офлайн-загрузки НЕ переносятся
  * (отдельные файлы); служебные кэши (security_alerts_cache, app_meta) не
  * экспортируются — пересоздаются сами; в файле лежат куки/токены сессии —
@@ -4925,12 +4932,38 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
         safety = withContext(Dispatchers.IO) { SovaPrefsBackup.readSafetyCopy(context) }
     }
 
+    // Волна 45-д #SETTINGS-CRYPTO: состояние шифрования экспорта + диалоги кода.
+    // Код шифрования НИГДЕ не хранится (ни в контейнере, ни в файле настроек):
+    // вводится в диалоге при каждом экспорте (тумблер включён) и заново при
+    // импорте зашифрованного файла на любой установке.
+    val snap by app.prefs.data.collectAsState(initial = null)
+    val exportEncrypt = snap?.settingsExportEncrypt ?: false
+    var showExportCodeDialog by remember { mutableStateOf(false) }
+    var exportCode by remember { mutableStateOf("") }
+    var exportCode2 by remember { mutableStateOf("") }
+    var exportCodeVisible by remember { mutableStateOf(false) }
+    var exportCodeError by remember { mutableStateOf<String?>(null) }
+    // Код, подтверждённый в диалоге и ожидающий результата SAF-ланчера
+    // (null = обычный plaintext-экспорт). Считывается и обнуляется немедленно
+    // в onResult — отложенный код не «протекает» в следующий экспорт.
+    var exportCodePending by remember { mutableStateOf<String?>(null) }
+    // Текст зашифрованного файла, ждущий ввода кода расшифровки (импорт).
+    var pendingEncryptedText by remember { mutableStateOf<String?>(null) }
+    var decryptCode by remember { mutableStateOf("") }
+    var decryptVisible by remember { mutableStateOf(false) }
+    var decryptError by remember { mutableStateOf<String?>(null) }
+
     // SAF CreateDocument: место выбирает юзер (обычно «Загрузки»); MIME json.
     // Волна 45-в: сборка дампа и запись — на IO; ошибки ловятся целиком
     // (busy в finally — кнопки не залипают, процесс не роняется).
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument(SovaPrefsBackup.MIME_JSON),
     ) { uri ->
+        // Волна 45-д #SETTINGS-CRYPTO: код берётся из состояния диалога
+        // (null = тумблер выключен, обычный plaintext-экспорт). Немедленное
+        // обнуление после чтения — код живёт в состоянии минимальное время.
+        val encryptCode = exportCodePending
+        exportCodePending = null
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             busy = true
@@ -4945,8 +4978,14 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                 }
                 val written = withContext(Dispatchers.IO) {
                     try {
+                        // Шифрование на IO: PBKDF2 (до 200k итераций) ≈ 1 сек.
+                        val payload = if (encryptCode != null) {
+                            SovaPrefsCrypto.encrypt(exported.json, encryptCode.toCharArray())
+                        } else {
+                            exported.json
+                        }
                         context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
-                            out.write(exported.json.toByteArray(Charsets.UTF_8))
+                            out.write(payload.toByteArray(Charsets.UTF_8))
                             out.flush()
                             true
                         } ?: false
@@ -4954,8 +4993,12 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                         false
                     }
                 }
-                if (written) "Экспортировано записей: " + exported.totalCount
-                else "Не удалось записать файл"
+                if (written) {
+                    "Экспортировано записей: " + exported.totalCount +
+                        (if (encryptCode != null) " (файл зашифрован кодом)" else "")
+                } else {
+                    "Не удалось записать файл"
+                }
             } catch (t: Throwable) {
                 "Экспорт не удался: " + t.javaClass.simpleName
             } finally {
@@ -4973,15 +5016,26 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             busy = true
+            // Волна 45-д #SETTINGS-CRYPTO: зашифрованный конверт (format = 2)
+            // НЕ парсится здесь — открывается окно ввода кода расшифровки,
+            // НЕЗАВИСИМО от тумблера (файл мог прийти с другой установки).
+            var encryptedText: String? = null
             val plan: SovaPrefsBackup.ImportPlan? = try {
                 withContext(Dispatchers.IO) {
-                    val text: String? = try {
+                    val read: String? = try {
                         context.contentResolver.openInputStream(uri)
                             ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
                     } catch (t: Throwable) {
                         null
                     }
-                    text?.let { SovaPrefsBackup.parse(it) }
+                    when {
+                        read == null -> null
+                        SovaPrefsCrypto.isEncrypted(read) -> {
+                            encryptedText = read
+                            null
+                        }
+                        else -> SovaPrefsBackup.parse(read)
+                    }
                 }
             } catch (t: Throwable) {
                 null
@@ -4989,6 +5043,7 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                 busy = false
             }
             when {
+                encryptedText != null -> pendingEncryptedText = encryptedText
                 plan == null ->
                     Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
                 !plan.ok ->
@@ -5030,11 +5085,48 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = 4.dp),
                     )
+                    // Волна 45-д #SETTINGS-CRYPTO: тумблер шифрования экспорта.
+                    // Влияет ТОЛЬКО на экспорт: импорт всегда умеет оба формата —
+                    // зашифрованный файл сам открывает окно ввода кода.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                "Шифровать файл настроек",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                "Файл шифруется кодом (AES-256-GCM): без кода содержимое " +
+                                    "не прочитать. Код нигде не хранится — вводится при каждом " +
+                                    "экспорте; потеря кода = потеря файла.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = exportEncrypt,
+                            onCheckedChange = { v -> scope.launch { app.prefs.setSettingsExportEncrypt(v) } },
+                        )
+                    }
                     Button(
                         onClick = {
-                            val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
-                                .format(java.util.Date())
-                            exportLauncher.launch("pinok_settings_" + stamp + ".json")
+                            if (exportEncrypt) {
+                                // Шифрование включено: сначала код (диалог), потом SAF.
+                                exportCode = ""
+                                exportCode2 = ""
+                                exportCodeError = null
+                                showExportCodeDialog = true
+                            } else {
+                                // Прямой экспорт: гасим остаточный код от прошлых диалогов.
+                                exportCodePending = null
+                                val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                                    .format(java.util.Date())
+                                exportLauncher.launch("pinok_settings_" + stamp + ".json")
+                            }
                         },
                         enabled = !busy,
                         modifier = Modifier.padding(top = 12.dp),
@@ -5189,6 +5281,177 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
             },
             dismissButton = {
                 TextButton(onClick = { pendingImport = null }) { Text("Отмена") }
+            },
+        )
+    }
+
+    // Волна 45-д #SETTINGS-CRYPTO: диалог кода ЭКСПОРТА (тумблер включён).
+    // Код запрашивается ДО открытия SAF — отмена диалога не оставляет
+    // пустого документа. Диалог вне LazyColumn (#PIN-DIALOG-OVERLAY).
+    if (showExportCodeDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportCodeDialog = false },
+            title = { Text("Код шифрования файла") },
+            text = {
+                Column {
+                    Text(
+                        "Файл экспорта будет зашифрован этим кодом (AES-256-GCM). " +
+                            "Код нигде не хранится: запомните его — без кода файл " +
+                            "не восстановить нигде и никак.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = exportCode,
+                        onValueChange = {
+                            exportCode = it
+                            exportCodeError = null
+                        },
+                        label = { Text("Код (минимум 4 символа)") },
+                        singleLine = true,
+                        visualTransformation = if (exportCodeVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { exportCodeVisible = !exportCodeVisible }) {
+                                Text(if (exportCodeVisible) "Скрыть" else "Показать")
+                            }
+                        },
+                        isError = exportCodeError != null,
+                        supportingText = {
+                            exportCodeError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = exportCode2,
+                        onValueChange = {
+                            exportCode2 = it
+                            exportCodeError = null
+                        },
+                        label = { Text("Повторите код") },
+                        singleLine = true,
+                        visualTransformation = if (exportCodeVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
+                        isError = exportCodeError != null,
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        val c = exportCode.trim()
+                        when {
+                            c.length < 4 -> exportCodeError = "Минимум 4 символа"
+                            c != exportCode2.trim() -> exportCodeError = "Коды не совпадают"
+                            else -> {
+                                showExportCodeDialog = false
+                                exportCodePending = c
+                                val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                                    .format(java.util.Date())
+                                exportLauncher.launch("pinok_settings_" + stamp + ".json")
+                            }
+                        }
+                    },
+                ) { Text("Зашифровать и экспортировать") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportCodeDialog = false }) { Text("Отмена") }
+            },
+        )
+    }
+
+    // Волна 45-д #SETTINGS-CRYPTO: окно ввода кода РАСШИФРОВКИ при импорте
+    // зашифрованного файла. Открывается НЕЗАВИСИМО от тумблера (файл мог
+    // прийти с другой установки). Неверный код = GCM-тег не сходится —
+    // диалог остаётся открытым с честной ошибкой (retry без перечитывания).
+    val encryptedPending = pendingEncryptedText
+    if (encryptedPending != null) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingEncryptedText = null
+                decryptCode = ""
+                decryptError = null
+            },
+            title = { Text("Файл зашифрован") },
+            text = {
+                Column {
+                    Text(
+                        "Введите код, которым файл был зашифрован при экспорте.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = decryptCode,
+                        onValueChange = {
+                            decryptCode = it
+                            decryptError = null
+                        },
+                        label = { Text("Код расшифровки") },
+                        singleLine = true,
+                        visualTransformation = if (decryptVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { decryptVisible = !decryptVisible }) {
+                                Text(if (decryptVisible) "Скрыть" else "Показать")
+                            }
+                        },
+                        isError = decryptError != null,
+                        supportingText = {
+                            decryptError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy && decryptCode.isNotEmpty(),
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            var failMsg = ""
+                            val plan: SovaPrefsBackup.ImportPlan? = withContext(Dispatchers.IO) {
+                                try {
+                                    val plain = SovaPrefsCrypto.decrypt(
+                                        encryptedPending,
+                                        decryptCode.toCharArray(),
+                                    )
+                                    SovaPrefsBackup.parse(plain)
+                                } catch (t: Throwable) {
+                                    failMsg = t.message ?: ("Ошибка расшифровки: " + t.javaClass.simpleName)
+                                    null
+                                }
+                            }
+                            busy = false
+                            when {
+                                // Неверный код/битый файл: диалог остаётся открытым,
+                                // ошибка видна в поле (retry без повторного выбора файла).
+                                plan == null -> decryptError = failMsg.ifEmpty { "Ошибка расшифровки" }
+                                !plan.ok -> {
+                                    pendingEncryptedText = null
+                                    decryptCode = ""
+                                    decryptError = null
+                                    Toast.makeText(context, plan.error, Toast.LENGTH_LONG).show()
+                                }
+                                else -> {
+                                    pendingEncryptedText = null
+                                    decryptCode = ""
+                                    decryptError = null
+                                    pendingImport = PendingImportUi(plan, fromSafety = false)
+                                }
+                            }
+                        }
+                    },
+                ) { Text("Расшифровать") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingEncryptedText = null
+                        decryptCode = ""
+                        decryptError = null
+                    },
+                ) { Text("Отмена") }
             },
         )
     }
