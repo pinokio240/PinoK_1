@@ -4872,18 +4872,24 @@ private fun UpdateTab(
 }
 
 /**
- * Волна 45 #SETTINGS-EXPORT: вкладка «Данные» — перенос хранилища настроек
- * между установками/устройствами (полный экспорт DataStore SovaPrefs в
- * JSON-файл через SAF и обратное восстановление). Сценарий-спутник отката
- * версии (#UPDATER-ROLLBACK): Android стирает данные приложения при
- * удалении, экспорт — единственный способ вернуть настройки, локальные
- * закладки треков и сессию после переустановки.
+ * Волна 45 #SETTINGS-EXPORT (волна 45-б: покрытие всего «контейнерного»
+ * хранилища): вкладка «Данные» — перенос настроек между установками/
+ * устройствами. Экспортируется НЕ только DataStore SovaPrefs, а ВСЯ карта
+ * хранилищ контейнера (см. SovaPrefsBackup): DataStore (интерфейс, музыка,
+ * звонки, уведомления, updater, локальные закладки треков/папок) + legacy
+ * SharedPreferences «equalizer» (медиа-контейнер) + сессия входа из
+ * EncryptedSharedPreferences (через ExchangeTokenStorage — прецедент
+ * account.json). Сценарий-спутник отката версии (#UPDATER-ROLLBACK):
+ * Android стирает ВСЁ хранилище контейнера при удалении пакета, SAF-экспорт
+ * в пользовательскую папку — единственный выживающий носитель.
  *
  * Честные границы (написаны в UI): медиа-кэш и офлайн-загрузки НЕ переносятся
- * (отдельные файлы); в файле лежат куки/токены сессии — предупреждаем ДО
- * экспорта. Импорт — атомарный (одна транзакция DataStore): либо все ключи,
- * либо ни один; перед применением — AlertDialog с числом перезаписываемых
- * ключей (диалог вне LazyColumn — урок #PIN-DIALOG-OVERLAY).
+ * (отдельные файлы); служебные кэши (security_alerts_cache, app_meta) не
+ * экспортируются — пересоздаются сами; в файле лежат куки/токены сессии —
+ * предупреждаем ДО экспорта. Импорт: DataStore — атомарно (одна транзакция
+ * restoreRaw), equalizer/сессия — пакетно по файлам; перед применением —
+ * AlertDialog с числом перезаписываемых записей (диалог вне LazyColumn —
+ * урок #PIN-DIALOG-OVERLAY).
  *
  * SAF-контракты CreateDocument/OpenDocument — первое применение в проекте
  * (ланчеры живут в композиции, IO — в scope на Dispatchers по умолчанию
@@ -4903,7 +4909,9 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
         scope.launch {
             busy = true
             val exported = SovaPrefsBackup.export(
+                context,
                 app.prefs,
+                app.exchangeStorage,
                 BuildConfig.VERSION_NAME + " (versionCode " + BuildConfig.VERSION_CODE + ")",
             )
             val written = try {
@@ -4918,7 +4926,7 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
             busy = false
             Toast.makeText(
                 context,
-                if (written) "Экспортировано ключей: " + exported.keyCount else "Не удалось записать файл",
+                if (written) "Экспортировано записей: " + exported.totalCount else "Не удалось записать файл",
                 Toast.LENGTH_SHORT,
             ).show()
         }
@@ -4966,10 +4974,11 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        "В файл попадает ВСЁ хранилище настроек: интерфейс, музыка, звонки, " +
-                            "уведомления, логирование, локальные закладки треков и данные входа " +
-                            "(куки/токены сессии). Медиа-кэш и офлайн-загрузки НЕ переносятся — " +
-                            "они хранятся отдельными файлами.",
+                        "В файл попадает всё хранилище настроек: DataStore (интерфейс, музыка, " +
+                            "звонки, уведомления, логирование, обновления, локальные закладки " +
+                            "треков и папок), настройки эквалайзера и данные входа — токены/куки " +
+                            "сессии. НЕ переносятся: медиа-кэш, офлайн-загрузки (отдельные файлы) " +
+                            "и служебные кэши (пересоздаются сами).",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -5007,8 +5016,9 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                     )
                     Text(
                         "Значения из файла ПЕРЕЗАПИШУТ текущие настройки одним пакетом " +
-                            "(атомарно: либо всё, либо ничего). Полезно после переустановки " +
-                            "приложения или при переносе на новое устройство.",
+                            "(DataStore — атомарно: либо всё, либо ничего; эквалайзер и сессия — " +
+                            "пакетно по файлам). Полезно после переустановки приложения " +
+                            "или при переносе на новое устройство.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -5058,7 +5068,7 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                     pendingImport = null
                     scope.launch {
                         busy = true
-                        val applied = SovaPrefsBackup.apply(app.prefs, plan.entries)
+                        val applied = SovaPrefsBackup.apply(context, app.prefs, app.exchangeStorage, plan)
                         busy = false
                         Toast.makeText(
                             context,

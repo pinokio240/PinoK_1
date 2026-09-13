@@ -841,6 +841,80 @@ class ExchangeTokenStorage(
     fun hasFileBackup(): Boolean = fileBackup?.exists() == true
 
     // =====================================================================
+    // Settings export (#SETTINGS-EXPORT, волна 45-б)
+    // =====================================================================
+
+    /**
+     * Волна 45-б #SETTINGS-EXPORT: расшифрованный снапшот ВСЕХ ключей
+     * EncryptedSharedPreferences для экспорта настроек (SovaPrefsBackup в :app
+     * упаковывает его в секцию "session" JSON-файла).
+     *
+     * Почему generic, а не курированный список полей (как dumpToFile): в prefs
+     * живёт ~30 ключей (access/exchange/webview/silent-токены, remixsid,
+     * vk_* куки #SESSION-COOKIES, trusted_hash, lp-креды...) и их набор растёт
+     * — курированный список в двух местах (dump + export) гарантированно
+     * разъедется. Generic-снимок .all переносит и будущие ключи автоматически.
+     *
+     * Расшифрование валидно: выполняется в процессе, владеющем Keystore-ключом
+     * (тот же уровень доступа, что у dumpToFile/account.json — прецедент
+     * plaintext-файла с токенами уже есть). Секретность файла — зона
+     * ответственности пользователя: UI предупреждает ДО экспорта.
+     *
+     * device_id включён СОГЛАСОВАННО с dumpToFile (putOpt KEY_DEVICE_ID, :607)
+     * и restoreFromFileBackup — переиспользование UUID после переустановки
+     * повторяет поведение файлового бэкапа (VTosters pattern #3).
+     */
+    fun exportSessionSnapshot(): Map<String, Any> {
+        val out = HashMap<String, Any>()
+        for ((k, v) in prefs.all) {
+            if (v != null) out[k] = v
+        }
+        return out
+    }
+
+    /**
+     * Волна 45-б #SETTINGS-EXPORT: восстановление сессии из экспорт-файла.
+     *
+     * Семантика:
+     *  - БЕЗ access_token сессия не восстанавливается (честный 0 — импорт
+     *    обрывков сессии порождает необъяснимые «вылетело из аккаунта»);
+     *  - запись .commit() (синхронно) — критический путь, как у saveAuthResult/
+     *    updateAccessToken (audit Critical #1): kill процесса после импорта
+     *    не должен терять восстановленную сессию;
+     *  - после записи dumpToFile() — account.json актуализируется и дальше
+     *    живёт по своим правилам;
+     *  - срок годности access_token НЕ проверяем: просроченный восстанавливается
+     *    штатно — silent refresh по exchange_token (§50), ровно как это делают
+     *    Path 2-5 после restoreFromFileBackup;
+     *  - флаг KEY_ACCESS_TOKEN_INVALIDATED перезаписывается значением из файла
+     *    (он часть снапшота) — семантика совпадает с restoreFromFileBackup.
+     *
+     * Возвращает число записанных ключей (0 = сессия не восстановлена).
+     */
+    fun applyExportedSession(values: Map<String, Any>): Int {
+        if ((values[KEY_ACCESS_TOKEN] as? String).isNullOrBlank()) return 0
+        try {
+            prefs.edit().apply {
+                for ((k, v) in values) {
+                    when (v) {
+                        is String -> putString(k, v)
+                        is Long -> putLong(k, v)
+                        is Int -> putInt(k, v)
+                        is Boolean -> putBoolean(k, v)
+                        // Прочих типов в сессионных prefs нет (все KEY_* —
+                        // String/Long/Int/Boolean), но импорт не роняем.
+                    }
+                }
+            }.commit()
+            dumpToFile()
+        } catch (e: Exception) {
+            AppLog.w("ExchangeTokenStorage", "applyExportedSession failed: ${e.message}")
+            return 0
+        }
+        return values.size
+    }
+
+    // =====================================================================
     // Internal
     // =====================================================================
 
