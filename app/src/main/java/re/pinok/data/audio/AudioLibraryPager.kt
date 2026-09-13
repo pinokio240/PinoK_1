@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
+import re.pinok.api.VKApiClient
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
 import re.pinok.util.AppLog
@@ -34,9 +35,13 @@ import re.pinok.util.AppLog
  *    СТРАНИЦАМ (серверный курсор), а не по размеру отфильтрованного списка —
  *    исключён класс стагнации «dedupe съел страницу → offset не сдвинулся →
  *    та же страница по кругу» (root-cause стопа ~1600, #AUDIO-PAGING-UNLIMITED).
- *  - Без искусственного капа страниц: идём, пока сервер отдаёт полную страницу
- *    (полная страница → есть ещё данные; частичная/пустая → конец). VK total
- *    используется для UI, но НЕ как стоп-условие (защита от заниженного count).
+ *  - Без искусственного капа страниц: #AUDIO-PAGING-HOLE (волна 41) — идём,
+ *    пока сервер отдаёт ХОТЯ БЫ ОДНУ запись (НЕпустая страница, даже короткая
+ *    ≠ конец: VK режет листинг на «битой» записи — прецедент стопа 149/3239);
+ *    окно, начинающееся с дыры, перепрыгивается offset+1 (кап 25 подряд);
+ *    сбои вызова (total=-1) — бэкофф-ретрай, а не конец; «пагинация не
+ *    поддерживается» (UNSUPPORTED, веб-токен) — честный конец. VK total
+ *    используется для UI и хоп-логики, НЕ как стоп-условие (заниженный count).
  *  - Fix #173 сохранён: пауза 1500мс между страницами, стоп при offline с
  *    авто-возобновлением по возврату сети (networkObserver.isOnlineFlow),
  *    одна in-flight страница (строгая последовательность цикла).
@@ -96,6 +101,25 @@ class AudioLibraryPager private constructor() {
         private const val LONG_FAIL_PAUSE_MS = 60_000L
         /** Защита от патологического «та же страница по кругу». */
         private const val MAX_DUP_PAGES_IN_ROW = 20
+
+        /**
+         * #AUDIO-PAGING-HOLE (волна 41): VK может обрезать листинг на «битой»
+         * записи (рестрикт/лицензия) — в середине библиотеки приходит КОРОТКАЯ
+         * непустая страница, а окно НАЧИНАЮЩЕЕСЯ с битой записи пустое.
+         * Лечится прыжком offset через дыру. Кап подряд — чтобы не зациклиться
+         * на разосинхронизированном listing'е.
+         */
+        private const val MAX_HOLE_HOPS_IN_ROW = 25
+        private const val HOLE_HOP_PAUSE_MS = 400L
+
+        /**
+         * Парковка вместо смерти цикла: после «конца списка»/дуп-гварда пейджер
+         * НЕ умирает — периодически перепроверяет хвост (появились новые треки,
+         * самолечение сбоя). Интервал растёт ×2 от базы до капа (анти-шторм:
+         * на честном конце это 1 дешёвый вызов в 10с…5мин, а не спам).
+         */
+        private const val PARK_RECHECK_BASE_MS = 10_000L
+        private const val PARK_RECHECK_MAX_MS = 300_000L
 
         @Volatile
         private var instance: AudioLibraryPager? = null
@@ -261,6 +285,8 @@ class AudioLibraryPager private constructor() {
 
         var consecutiveFails = 0
         var dupPagesInRow = 0
+        var holeHopsInRow = 0
+        var parkedRecheckMs = PARK_RECHECK_BASE_MS
         _state.update { s ->
             s.copy(initialLoading = s.tracks.isEmpty(), error = null)
         }
@@ -312,6 +338,35 @@ class AudioLibraryPager private constructor() {
                     continue
                 }
 
+                // #AUDIO-PAGING-HOLE (волна 41): пустая страница — это ТРИ разных
+                // ситуации, раньше все три выглядели как «конец списка»:
+                //  (1) total = UNSUPPORTED — токен вообще не умеет offset-пагинацию
+                //      (getCatalog-fallback) → честный конец, парковка;
+                //  (2) total = -1 — ситуативный сбой вызова (гейт/токен/капча/API) →
+                //      бэкофф-повтор как у исключений;
+                //  (3) total >= 0 — честный ответ: либо конец, либо дыра в листинге
+                //      (прыжок offset через битую запись — root-cause стопа 149/3239).
+                if (pageGot == 0 && total == VKApiClient.AUDIO_PAGING_UNSUPPORTED) {
+                    _state.update { s -> s.copy(fetchingPage = false, hasMore = false, initialLoading = false) }
+                    AppLog.i(TAG, "#AUDIO-PAGING done-unsupported: токен не поддерживает offset-пагинацию audio.get — list=${_state.value.tracks.size} (паркую; перепроверка через ${parkedRecheckMs}мс)")
+                    delay(parkedRecheckMs)
+                    parkedRecheckMs = (parkedRecheckMs * 2).coerceAtMost(PARK_RECHECK_MAX_MS)
+                    continue
+                }
+                if (pageGot == 0 && total < 0) {
+                    consecutiveFails++
+                    val waitMs = if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) LONG_FAIL_PAUSE_MS else FAIL_BACKOFF_MS * consecutiveFails
+                    AppLog.w(TAG, "#AUDIO-PAGING page: offset=$offsetForThisPage пусто+маркер сбоя (total=-1) fails=$consecutiveFails — retry через ${waitMs}мс (не конец списка)")
+                    _state.update { s ->
+                        s.copy(
+                            fetchingPage = false,
+                            error = if (s.tracks.isEmpty()) "Ошибка загрузки — повторяю попытки…" else s.error,
+                        )
+                    }
+                    waitCancellable(waitMs)
+                    continue
+                }
+
                 // Фильтр (тот же, что был в MusicScreen) + dedupe по ownerId_id.
                 val existingKeys = HashSet<String>()
                 for (t in _state.value.tracks) existingKeys.add(trackKey(t))
@@ -326,46 +381,73 @@ class AudioLibraryPager private constructor() {
                     fresh.add(t)
                 }
 
-                // hasMore: полная страница → сервер отдаёт данные → идём дальше.
-                // Частичная/пустая страница → конец библиотеки. total — только
-                // для UI (VK может занижать count — не доверяем как стоп-условию).
-                val fullPage = pageGot >= PAGE_SIZE
-                val hasMore = fullPage
+                // #AUDIO-PAGING-HOLE (волна 41): hasMore по RAW-странице —
+                // НЕпустая страница (в т.ч. КОРОТКАЯ) → есть данные → идём дальше.
+                // Раньше «короткая страница = конец» и пейджер вставал на 149/3239.
+                // total — только для UI и хоп-логики (VK может занижать count).
+                val hasMore = pageGot > 0
                 val knownTotal = if (total > 0) total else _state.value.total
-                serverOffset = offsetForThisPage + PAGE_SIZE
+                // Сдвиг на RAW размер страницы (не на PAGE_SIZE!): после короткой
+                // страницы следующее окно начинается ровно там, где сервер
+                // остановился — раньше +PAGE_SIZE прыгал через позицию-дыру.
+                serverOffset = offsetForThisPage + pageGot
                 pagingStarted = true
                 val pagesLoadedNow = _state.value.pagesLoaded + 1
-                _state.update { s ->
-                    s.copy(
-                        tracks = s.tracks + fresh,
-                        total = knownTotal,
-                        hasMore = hasMore,
-                        fetchingPage = false,
-                        initialLoading = false,
-                        error = null,
-                        serverOffset = serverOffset,
-                        pagesLoaded = pagesLoadedNow,
-                    )
+                if (hasMore) {
+                    _state.update { s ->
+                        s.copy(
+                            tracks = s.tracks + fresh,
+                            total = knownTotal,
+                            hasMore = true,
+                            fetchingPage = false,
+                            initialLoading = false,
+                            error = null,
+                            serverOffset = serverOffset,
+                            pagesLoaded = pagesLoadedNow,
+                        )
+                    }
+                    AppLog.i(TAG, "#AUDIO-PAGING page: offset=$offsetForThisPage got=$pageGot fresh=${fresh.size} list=${_state.value.tracks.size} total=$knownTotal took=${tookMs}ms pages=$pagesLoadedNow checkpoint=$checkpointOffset")
+                    consecutiveFails = 0
+                    holeHopsInRow = 0
+                    parkedRecheckMs = PARK_RECHECK_BASE_MS
+                    dupPagesInRow = if (fresh.isEmpty()) dupPagesInRow + 1 else 0
+                    persistCheckpoint(serverOffset, knownTotal)
+                    if (fresh.isNotEmpty()) {
+                        // #AUDIO-QUEUE-PLAYLIST: живая очередь из «Моей музыки» —
+                        // append без сброса воспроизведения.
+                        PlayerConnection.onMyMusicPageLoaded(_state.value.tracks)
+                    }
+                    if (dupPagesInRow >= MAX_DUP_PAGES_IN_ROW) {
+                        AppLog.w(TAG, "#AUDIO-PAGING park: $dupPagesInRow страниц подряд без новых треков (offset=$serverOffset) — паркую (перепроверка через ${parkedRecheckMs}мс)")
+                        _state.update { s -> s.copy(hasMore = false) }
+                        delay(parkedRecheckMs)
+                        parkedRecheckMs = (parkedRecheckMs * 2).coerceAtMost(PARK_RECHECK_MAX_MS)
+                        continue
+                    }
+                    waitCancellable(PAUSE_BETWEEN_PAGES_MS)
+                } else {
+                    // Пустая страница при честном total (>= 0): дыра в листинге
+                    // (offset < total) → прыжок +1; иначе конец библиотеки.
+                    if (holeHopsInRow < MAX_HOLE_HOPS_IN_ROW && knownTotal > 0 && serverOffset < knownTotal) {
+                        holeHopsInRow++
+                        AppLog.i(TAG, "#AUDIO-PAGING hole: пустая страница при offset=$serverOffset total=$knownTotal — прыжок +1 (hop=$holeHopsInRow/$MAX_HOLE_HOPS_IN_ROW)")
+                        serverOffset += 1
+                        _state.update { s ->
+                            s.copy(fetchingPage = false, total = knownTotal, serverOffset = serverOffset)
+                        }
+                        waitCancellable(HOLE_HOP_PAUSE_MS)
+                        continue
+                    }
+                    // Волна 41: вместо смерти цикла — парковка. Интервал перепроверки
+                    // растёт ×2 (анти-шторм на честном конце). Список не сбрасывается.
+                    _state.update { s ->
+                        s.copy(fetchingPage = false, hasMore = false, total = knownTotal)
+                    }
+                    AppLog.i(TAG, "#AUDIO-PAGING done: list=${_state.value.tracks.size} из total=$knownTotal, страниц=$pagesLoadedNow, чекпоинт=$serverOffset (resume был offset=$checkpointOffset, resumeTotal=$checkpointTotal) — паркую; перепроверка хвоста через ${parkedRecheckMs}мс")
+                    delay(parkedRecheckMs)
+                    parkedRecheckMs = (parkedRecheckMs * 2).coerceAtMost(PARK_RECHECK_MAX_MS)
+                    continue
                 }
-                AppLog.i(TAG, "#AUDIO-PAGING page: offset=$offsetForThisPage got=$pageGot fresh=${fresh.size} list=${_state.value.tracks.size} total=$knownTotal hasMore=$hasMore took=${tookMs}ms pages=$pagesLoadedNow checkpoint=$checkpointOffset")
-                consecutiveFails = 0
-                dupPagesInRow = if (fresh.isEmpty()) dupPagesInRow + 1 else 0
-                persistCheckpoint(serverOffset, knownTotal)
-                if (fresh.isNotEmpty()) {
-                    // #AUDIO-QUEUE-PLAYLIST: живая очередь из «Моей музыки» —
-                    // append без сброса воспроизведения.
-                    PlayerConnection.onMyMusicPageLoaded(_state.value.tracks)
-                }
-                if (!hasMore) {
-                    AppLog.i(TAG, "#AUDIO-PAGING done: list=${_state.value.tracks.size} из total=$knownTotal, страниц=$pagesLoadedNow, чекпоинт=$serverOffset (resume был offset=$checkpointOffset, resumeTotal=$checkpointTotal)")
-                    break
-                }
-                if (dupPagesInRow >= MAX_DUP_PAGES_IN_ROW) {
-                    AppLog.w(TAG, "#AUDIO-PAGING stop: $dupPagesInRow страниц подряд без новых треков (offset=$serverOffset) — библиотека уже в списке либо total рассинхронизирован")
-                    _state.update { s -> s.copy(hasMore = false) }
-                    break
-                }
-                waitCancellable(PAUSE_BETWEEN_PAGES_MS)
             } catch (e: CancellationException) {
                 // Прецедент Fix #151/#281: отмену (смерть процесса/скоупа)
                 // пробрасываем — не глотаем.

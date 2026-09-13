@@ -493,17 +493,30 @@ fun ProfileScreen(
                     // serverOffset = RAW-страница (до фильтра playability).
                     val (total, page) =
                         app.apiClient.audioGetWithCount(PROFILE_MUSIC_PAGE, 0, ownerId)
-                    musicTotal = total
-                    musicServerOffset = page.size
-                    musicTracks = page.filter { it.id > 0L && !it.url.isNullOrBlank() }
-                    // #AUDIO-PAGING-ALL (волна 38): было musicServerOffset < total —
-                    // VK занижает count у аудио (прецедент AudioLibraryPager: total
-                    // НЕ годится как стоп-условие) → «Показать ещё» пропадал раньше
-                    // времени, до конца списка было не доскроллить. Теперь честный
-                    // паттерн полной страницы: полная RAW-страница → догружаем дальше.
-                    musicHasMore = page.size >= PROFILE_MUSIC_PAGE
-                    musicLoaded = true
-                    AppLog.i("ProfileScreen", "Music tab loaded: ${musicTracks.size} tracks (total=$total)")
+                    // #AUDIO-PAGING-HOLE (волна 41): total=-1 = сбой вызова (гейт/
+                    // токен/капча/API) — это НЕ «пустая музыка»: честная ошибка
+                    // с «Повторить» вместо молчаливого пустого состояния.
+                    if (total < 0 && page.isEmpty()) {
+                        musicError = if (app.networkObserver.isOffline()) {
+                            "Нет сети. Подключитесь к интернету и повторите."
+                        } else {
+                            "Не удалось загрузить музыку: ${app.apiClient.lastApiErrorHuman() ?: "неизвестная причина"}"
+                        }
+                        AppLog.w("ProfileScreen", "Music tab: silent fail (total=-1, offline=${app.networkObserver.isOffline()})")
+                    } else {
+                        // total=-1 при непустой странице (catalog-fallback) — счётчик не трогаем.
+                        if (total > 0) musicTotal = total
+                        musicServerOffset = page.size
+                        musicTracks = page.filter { it.id > 0L && !it.url.isNullOrBlank() }
+                        // #AUDIO-PAGING-HOLE (волна 41): НЕпустая страница (даже
+                        // КОРОТКАЯ) ≠ конец списка — VK режет листинг на «битой»
+                        // записи (прецедент стопа 149/3239: страница offset=100
+                        // вернула 49 raw → «полная страница»=false → стоп).
+                        // Конец = пустая страница (в loadMore — после прыжков через дыры).
+                        musicHasMore = page.isNotEmpty()
+                        musicLoaded = true
+                        AppLog.i("ProfileScreen", "Music tab loaded: ${musicTracks.size} tracks (total=$total)")
+                    }
                 } catch (e: Exception) {
                     AppLog.e("ProfileScreen", "Music tab load failed", e)
                     musicError = "Ошибка: ${e.message}"
@@ -1040,7 +1053,8 @@ fun ProfileScreen(
     // W33-c: дозагрузка страниц вкладок (Музыка/Видео/Фото/Подарки).
     // offset — серверный (по RAW-страницам, см. стейт-блок выше); hasMore
     // у video/photo/gifts — по заполненности RAW-страницы (паттерн закладок),
-    // у music — по response.total (audioGetWithCount).
+    // у music (#AUDIO-PAGING-HOLE, волна 41) — по непустой RAW-странице
+    // (короткая страница ≠ конец: VK режет листинг на «битой» записи).
     fun loadMoreMusicPage() {
         if (musicLoadingMore || musicLoading || !musicHasMore) return
         // NULL-ЯВНО: явная проверка вместо элвиса (правило новых строк).
@@ -1051,14 +1065,34 @@ fun ProfileScreen(
             try {
                 val (total, page) = app.apiClient.audioGetWithCount(
                     PROFILE_MUSIC_PAGE, musicServerOffset, prof.id)
-                musicTotal = total
+                // #AUDIO-PAGING-HOLE: total=-1 (сбой) — счётчик не затираем.
+                if (total > 0) musicTotal = total
                 musicServerOffset += page.size
-                musicTracks = musicTracks + page.filter { it.id > 0L && !it.url.isNullOrBlank() }
-                // #AUDIO-PAGING-ALL: full-page-паттерн вместо стопа по заниженному
-                // VK total (см. комментарий в инициализации вкладки выше).
-                musicHasMore = page.size >= PROFILE_MUSIC_PAGE
+                val fresh = page.filter { it.id > 0L && !it.url.isNullOrBlank() }
+                    .filter { nv -> musicTracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                musicTracks = musicTracks + fresh
+                // #AUDIO-PAGING-HOLE (волна 41): НЕпустая страница (даже короткая)
+                // ≠ конец списка (прецедент стопа 149/3239). Сбоя (total=-1) —
+                // hasMore сохраняется: следующий скролл/кнопка повторят попытку.
+                musicHasMore = page.isNotEmpty() || total < 0
                 AppLog.i("ProfileScreen",
-                    "Music loadMore: +${page.size} (offset=$musicServerOffset total=$total)")
+                    "Music loadMore: +${fresh.size} (offset=$musicServerOffset total=$total)")
+                // Дыры в листинге: пустая страница при offset < total — прыжки +1
+                // через «битую» запись (до 5 попыток inline, без разгона пейджера).
+                var hops = 0
+                while (!musicHasMore && hops < 5 && musicTotal > 0 && musicServerOffset < musicTotal) {
+                    hops++
+                    val hopOffset = musicServerOffset + 1
+                    val (hopTotal, hopPage) = app.apiClient.audioGetWithCount(
+                        PROFILE_MUSIC_PAGE, hopOffset, prof.id)
+                    if (hopTotal > 0) musicTotal = hopTotal
+                    musicServerOffset = hopOffset + hopPage.size
+                    val hopFresh = hopPage.filter { it.id > 0L && !it.url.isNullOrBlank() }
+                        .filter { nv -> musicTracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                    if (hopPage.isNotEmpty()) musicTracks = musicTracks + hopFresh
+                    musicHasMore = hopPage.isNotEmpty() || hopTotal < 0
+                    AppLog.i("ProfileScreen", "Music hole-hop $hops: offset=$hopOffset got=${hopPage.size} (total=$musicTotal)")
+                }
             } catch (e: Exception) {
                 AppLog.w("ProfileScreen", "Music loadMore failed: ${e.message}")
             } finally {

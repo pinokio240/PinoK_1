@@ -180,6 +180,18 @@ object NetworkInterceptors {
             val BACKOFF_MS_AUDIO = longArrayOf(500L, 1000L, 2000L, 4000L)
 
             /**
+             * #MEDIA-RETRY-COOLDOWN (волна 41): после исчерпания ретраев хост
+             * уходит в кулдаун — новые запросы к нему идут БЕЗ ретраев, пока
+             * не пройдёт TTL. Прецедент logcat 2026-09-13: при DNS-сбое VK
+             * медиа-CDN (userapi.com/vkuserphoto.ru/okcdn.ru) 82 хоста × ретраи
+             * × переподвески UI Coil = 1580 строк ретраев и лишние секунды
+             * блокировки потоков. Кулдаун НЕ отменяет сам запрос — только
+             * бессмысленные повторы в пределах окна.
+             */
+            const val HOST_COOLDOWN_MS = 60_000L
+            const val HOST_COOLDOWN_MAX_ENTRIES = 256
+
+            /**
              * VK audio/video CDN домены. Для них используем расширенный retry.
              * psv4.vkuseraudio.net — основные audio-сегменты HLS.
              * psv4.vkvideo.net — video-сегменты.
@@ -190,6 +202,9 @@ object NetworkInterceptors {
                 host.endsWith("vkvideo.net") ||
                 host.endsWith("userapi.com")
         }
+
+        /** host → epoch-ms до которого ретраи для хоста подавлены (куладаун). */
+        private val hostCooldownUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
         override fun intercept(chain: Interceptor.Chain): Response {
             val request = chain.request()
@@ -202,6 +217,18 @@ object NetworkInterceptors {
             val maxRetries = if (isAudio) MAX_RETRIES_AUDIO else MAX_RETRIES_DEFAULT
             val backoffSchedule = if (isAudio) BACKOFF_MS_AUDIO else BACKOFF_MS_DEFAULT
 
+            // #MEDIA-RETRY-COOLDOWN: недавно исчерпанный хост — один проход без ретраев.
+            val now = System.currentTimeMillis()
+            val cooldownUntil = hostCooldownUntil[host]
+            val inCooldown = cooldownUntil != null && now < cooldownUntil
+            if (inCooldown) {
+                // Сам запрос выполняем (сеть могла восстановиться) — только без ретраев.
+                val response = chain.proceed(request)
+                // Успех → кулдаун снят (очистим запись).
+                if (response.isSuccessful) hostCooldownUntil.remove(host)
+                return response
+            }
+
             // Fix #181: флаг — делали ли evictAll в этом вызове intercept.
             // evictAll() дорогой (закрывает ВСЕ keep-alive соединения в pool'е),
             // поэтому делаем его только один раз за запрос — при первой IOException.
@@ -210,7 +237,10 @@ object NetworkInterceptors {
             var lastError: IOException? = null
             repeat(maxRetries + 1) { attempt ->
                 try {
-                    return chain.proceed(request)
+                    return chain.proceed(request).also { response ->
+                        // #MEDIA-RETRY-COOLDOWN: успех — хост здоров, кулдаун снят.
+                        if (response.isSuccessful) hostCooldownUntil.remove(host)
+                    }
                 } catch (e: IOException) {
                     lastError = e
                     // Fix #181: если сеть недавно переключилась и это первая ошибка —
@@ -241,6 +271,17 @@ object NetworkInterceptors {
                     }
                     if (attempt >= maxRetries) {
                         AppLog.w(TAG, "All $maxRetries retries exhausted for $host${request.url.encodedPath}: ${e.javaClass.simpleName}")
+                        // #MEDIA-RETRY-COOLDOWN: хост в кулдаун — новые запросы
+                        // идут без ретраей HOST_COOLDOWN_MS (анти-шторм при
+                        // DNS/сетевом сбое CDN; прецедент logcat 2026-09-13).
+                        val deadline = System.currentTimeMillis() + HOST_COOLDOWN_MS
+                        hostCooldownUntil[host] = deadline
+                        if (hostCooldownUntil.size > HOST_COOLDOWN_MAX_ENTRIES) {
+                            // Грубая чистка просроченных записей (штормовых хостов
+                            // обычно < десятков; кап — защита от аномалии).
+                            val t = System.currentTimeMillis()
+                            hostCooldownUntil.entries.removeIf { it.value <= t }
+                        }
                         throw e
                     }
                     val backoff = backoffSchedule[attempt]

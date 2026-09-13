@@ -129,8 +129,9 @@ fun MusicPlaylistsScreen(
                 serverOffset += page.size
                 val fresh = page.filter { nv -> playlists.none { it.ownerId == nv.ownerId && it.id == nv.id } }
                 playlists = (playlists + fresh).distinctBy { "${it.ownerId}_${it.id}" }
-                // Полная страница → догружаем дальше (total не доверяем).
-                hasMore = page.size >= 50
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка
+                // (VK может отдать короткую страницу в середине листинга).
+                hasMore = page.isNotEmpty()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -148,9 +149,16 @@ fun MusicPlaylistsScreen(
             val (total, list) = app.apiClient.audioGetPlaylists(count = 50, offset = 0)
             playlists = list
             serverOffset = list.size
-            hasMore = list.size >= 50
+            // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка;
+            // сбой (total=-1) — сохраняем hasMore для повтора.
+            hasMore = list.isNotEmpty() || total < 0
             if (list.isEmpty()) {
-                errorText = "Нет плейлистов"
+                // #AUDIO-PAGING-HOLE: сбой вызова ≠ «нет плейлистов» — честная причина.
+                errorText = if (total < 0) {
+                    "Не удалось загрузить плейлисты: ${app.apiClient.lastApiErrorHuman() ?: "неизвестная причина"}"
+                } else {
+                    "Нет плейлистов"
+                }
             }
             AppLog.i("MusicPlaylistsScreen", "Loaded ${list.size} playlists (total=$total hasMore=$hasMore)")
         } catch (e: kotlinx.coroutines.CancellationException) {

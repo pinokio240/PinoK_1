@@ -1137,7 +1137,8 @@ fun AudioPlayerScreen(
                 val (_, result) = app.apiClient.audioGetPlaylists(count = 50, offset = 0)
                 playlists = result
                 playlistsOffset = result.size
-                playlistsHasMore = result.size >= 50
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка.
+                playlistsHasMore = result.isNotEmpty()
             } catch (e: Exception) {
                 AppLog.e("AudioPlayerScreen", "load playlists failed", e)
                 playlists = emptyList()
@@ -1154,7 +1155,8 @@ fun AudioPlayerScreen(
                     val (_, page) = app.apiClient.audioGetPlaylists(count = 50, offset = playlistsOffset)
                     playlistsOffset += page.size
                     playlists = (playlists + page).distinctBy { "${it.ownerId}_${it.id}" }
-                    playlistsHasMore = page.size >= 50
+                    // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка.
+                    playlistsHasMore = page.isNotEmpty()
                 } catch (e: Exception) {
                     AppLog.e("AudioPlayerScreen", "load more playlists failed", e)
                 } finally {

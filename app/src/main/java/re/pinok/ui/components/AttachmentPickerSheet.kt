@@ -238,13 +238,15 @@ private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
         scope.launch {
             loadingMore = true
             try {
-                val (_, page) = app.apiClient.audioGetWithCount(count = 50, offset = serverOffset)
+                val (total, page) = app.apiClient.audioGetWithCount(count = 50, offset = serverOffset)
                 serverOffset += page.size
                 val fresh = page
                     .filter { it.id > 0L && it.ownerId != 0L }
                     .filter { nv -> tracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
                 tracks = (tracks + fresh).distinctBy { "${it.ownerId}_${it.id}" }
-                hasMore = page.size >= 50
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец;
+                // сбой (total=-1) — сохраняем hasMore для повтора по скроллу.
+                hasMore = page.isNotEmpty() || total < 0
             } catch (e: Exception) {
                 AppLog.e("AudioPicker", "load more failed: ${e.message}")
             } finally {
@@ -256,11 +258,12 @@ private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
     LaunchedEffect(Unit) {
         loading = true
         try {
-            val (_, page) = app.apiClient.audioGetWithCount(count = 50, offset = 0)
+            val (total, page) = app.apiClient.audioGetWithCount(count = 50, offset = 0)
             tracks = page.filter { it.id > 0L && it.ownerId != 0L }
                 .distinctBy { "${it.ownerId}_${it.id}" }
             serverOffset = page.size
-            hasMore = page.size >= 50
+            // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка.
+            hasMore = page.isNotEmpty() || total < 0
         } catch (e: Exception) {
             AppLog.e("AudioPicker", "load failed", e)
             error = e.message

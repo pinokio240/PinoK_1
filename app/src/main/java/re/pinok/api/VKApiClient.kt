@@ -2509,7 +2509,10 @@ class VKApiClient(
      * (fallback на audio.getCatalog — нет поля count).
      */
     suspend fun audioGetWithCount(count: Int = 50, offset: Int = 0, ownerId: Long? = null): Pair<Int, List<Track>> {
-        if (isOffline()) return Pair(0, emptyList())
+        // #AUDIO-PAGING-HOLE (волна 41): офлайн/гейт — маркер сбоя -1, а НЕ 0.
+        // Pair(0, …) неотличим от честного «сервер сказал: конец списка» и
+        // останавливал пейджеры навсегда (класс бага «пагинация умерла молча»).
+        if (isOffline()) return Pair(-1, emptyList())
         val snap = prefs.data.first()
         val args = mutableMapOf("count" to count.coerceIn(1, 100).toString())
         if (offset > 0) args["offset"] = offset.toString()
@@ -2532,18 +2535,22 @@ class VKApiClient(
                 lastApiError = errorObj.get("error_msg")?.takeIf { !it.isJsonNull }?.asString
             }
         }
-        // Для сообществ fallback на getCatalog не имеет смысла — возвращаем пусто.
+        // Для сообществ fallback на getCatalog не имеет смысла — маркер сбоя -1
+        // (#AUDIO-PAGING-HOLE: вызывающий сохраняет hasMore и повторит попытку
+        // при следующем скролле, вместо молчаливого «конец списка»).
         if (ownerId != null) {
-            return Pair(0, emptyList())
+            return Pair(-1, emptyList())
         }
         // Fix #56: fallback на audio.getCatalog — этот метод работает с веб-токенами
         // (vk1.a.*) без sig. Возвращает catalog блоков с плейлистами и треками.
         // Используется самим VK веб-клиентом для страницы "Музыка → Главная".
-        // Fix #62: getCatalog не поддерживает offset — для offset>0 возвращаем
-        // пустой список (веб-токены получают всю ленту первым вызовом).
+        // Fix #62 / волна 41: getCatalog не поддерживает offset — для offset>0
+        // возвращаем AUDIO_PAGING_UNSUPPORTED (не -1!): пейджер отличает
+        // «пагинация невозможна в принципе» (честный конец) от ситуативного
+        // сбоя (ретрай), чтобы не гонять вечный ретрай-цикл вхолостую.
         if (offset > 0) {
-            AppLog.d("VKApiClient", "audio.getCatalog: offset=$offset > 0, пагинация не поддерживается, возвращаем []")
-            return Pair(-1, emptyList())
+            AppLog.d("VKApiClient", "audio.getCatalog: offset=$offset > 0, пагинация не поддерживается, возвращаем UNSUPPORTED")
+            return Pair(AUDIO_PAGING_UNSUPPORTED, emptyList())
         }
         val fallbackTracks = audioGetCatalogFallback(count)
         // getCatalog не даёт count — возвращаем -1 как маркер «неизвестно».
@@ -2563,31 +2570,43 @@ class VKApiClient(
      */
     private fun parseAudioResponseWithCount(json: JsonObject): Pair<Int, List<Track>> {
         return try {
-            val resp = json.getAsJsonObject("response") ?: return Pair(0, emptyList())
+            // #AUDIO-PAGING-HOLE (волна 41): ответ без response/items — это СБОЙ
+            // разбора, а не честная пустота → маркер -1 (раньше 0 выглядел как
+            // «конец списка» и убивал пейджеры). Честная пустота = response есть,
+            // count>=0, items пуст (или все элементы битые — тогда items сохранён).
+            val resp = json.getAsJsonObject("response") ?: return Pair(-1, emptyList())
             val totalCount = resp.get("count")?.takeIf { !it.isJsonNull }?.asInt ?: 0
             val items = resp.getAsJsonArray("items") ?: return Pair(totalCount, emptyList())
+            // Устойчивый разбор: БИТЫЙ ЭЛЕМЕНТ пропускаем, а не убиваем всю
+            // страницу (раньше одно исключение в mapNotNull глушило страницу
+            // целиком → пейджер видел пустоту → ложный «конец списка»).
             val tracks = items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
-                Track(
-                    id = o.get("id")?.asLong ?: 0L,
-                    ownerId = o.get("owner_id")?.asLong ?: 0L,
-                    artist = o.get("artist")?.asString ?: "",
-                    title = o.get("title")?.asString ?: "",
-                    duration = o.get("duration")?.asInt ?: 0,
-                    url = extractAudioUrl(o),  // #AUDIO-UNMASK
-                    albumId = o.get("album_id")?.takeIf { !it.isJsonNull }?.asLong,
-                    albumThumb = extractAlbumThumb(o),
-                    accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
-                    lyricsId = o.get("lyrics_id")?.takeIf { !it.isJsonNull }?.asLong,
-                    subtitle = o.get("subtitle")?.takeIf { !it.isJsonNull }?.asString,
-                    genreId = o.get("genre_id")?.takeIf { !it.isJsonNull }?.asInt,
-                )
+                try {
+                    Track(
+                        id = o.get("id")?.asLong ?: 0L,
+                        ownerId = o.get("owner_id")?.asLong ?: 0L,
+                        artist = o.get("artist")?.asString ?: "",
+                        title = o.get("title")?.asString ?: "",
+                        duration = o.get("duration")?.asInt ?: 0,
+                        url = extractAudioUrl(o),  // #AUDIO-UNMASK
+                        albumId = o.get("album_id")?.takeIf { !it.isJsonNull }?.asLong,
+                        albumThumb = extractAlbumThumb(o),
+                        accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
+                        lyricsId = o.get("lyrics_id")?.takeIf { !it.isJsonNull }?.asLong,
+                        subtitle = o.get("subtitle")?.takeIf { !it.isJsonNull }?.asString,
+                        genreId = o.get("genre_id")?.takeIf { !it.isJsonNull }?.asInt,
+                    )
+                } catch (itemEx: Exception) {
+                    AppLog.w("VKApiClient", "audio.parse: битый элемент пропущен (${itemEx.javaClass.simpleName}: ${itemEx.message?.take(120)})")
+                    null
+                }
             }
             Pair(totalCount, tracks)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "audio parse error", e)
-            Pair(0, emptyList())
+            Pair(-1, emptyList())
         }
     }
 
@@ -3157,8 +3176,12 @@ class VKApiClient(
             }
             cur += page.size
             pages++
+            // #AUDIO-PAGING-HOLE (волна 41): убран стоп «page.size < pageSize» —
+            // VK может отдать КОРОТКУЮ непустую страницу в СЕРЕДИНЕ листинга
+            // (обрезка на битой записи; прецедент стопа 149/3239 в «Моей музыке»),
+            // и это НЕ конец плейлиста. Конец = пустая страница (выше) либо
+            // all.size >= total, либо страховка MAX_PLAYLIST_PAGES.
             if (total > 0 && all.size >= total) break
-            if (page.size < pageSize) break
         }
         return total to all
     }
@@ -12051,6 +12074,15 @@ class VKApiClient(
         private const val MAX_REQUESTS_PER_SECOND = 3
         private const val RATE_WINDOW_MS = 1000L
 
+        /**
+         * #AUDIO-PAGING-HOLE (волна 41): маркер «пагинация offset этим токеном
+         * не поддерживается» (audio.get упал → getCatalog-fallback без offset).
+         * Отличать от -1 (ситуативный сбой вызова — ретрай) и от >=0 (честный
+         * ответ сервера, включая честный конец списка). Int.MIN_VALUE не может
+         * быть валидным count.
+         */
+        const val AUDIO_PAGING_UNSUPPORTED = Int.MIN_VALUE
+
         // #MUSIC-PLAYLIST-FULL (Fix #283): страховка цикла догрузки плейлиста
         // (страницы ≤100) — 60 страниц = максимум 6000 треков на плейлист.
         private const val MAX_PLAYLIST_PAGES = 60
@@ -15114,6 +15146,35 @@ class VKApiClient(
                     ?: o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
                 putThumb("market", oid, mid, url)
             }
+            // #NOTIF-POST-THUMBS (волна 41): для post-уведомлений attachment.items
+            // содержит entry типа "post" (item=ID ПОСТА, не фото — logcat
+            // 2026-09-13: thumb NULL … owner=-235808131 item=43905), а photos[]
+            // пуст — lookup по photo:owner_postId НЕ МАТЧИТСЯ никогда.
+            // VK кладёт сами посты в response.posts — достаём из каждого первое
+            // фото-вложение и регистрируем ДВА ключа: "post:owner_postId" (для
+            // attachment-lookup через post:-fallback) и "photo:photoOwner_photoId"
+            // (для attachment-entries с настоящими id фото).
+            resp.getAsJsonArray("posts")?.forEach { el ->
+                if (!el.isJsonObject) return@forEach
+                val o = el.asJsonObject
+                val oid = o.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+                val pid = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+                val atts = o.getAsJsonArray("attachments") ?: return@forEach
+                for (att in atts) {
+                    if (!att.isJsonObject) continue
+                    val ph = att.asJsonObject.getAsJsonObject("photo") ?: continue
+                    val url = ph.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ph.get("photo_604")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ph.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ph.get("photo_807")?.takeIf { !it.isJsonNull }?.asString
+                    if (url.isNullOrBlank()) continue
+                    putThumb("post", oid, pid, url)
+                    val phOwner = ph.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
+                    val phId = ph.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                    if (phId != null) putThumb("photo", phOwner, phId, url)
+                    break // первая фото-миниатюра поста
+                }
+            }
             if (mediaThumbs.isNotEmpty()) {
                 AppLog.i("VKApiClient", "getRedesign: mediaThumbs=${mediaThumbs.size} (photos=${resp.getAsJsonArray("photos")?.size() ?: 0}, videos=${resp.getAsJsonArray("videos")?.size() ?: 0}, clips=${resp.getAsJsonArray("clips")?.size() ?: 0}, market=${resp.getAsJsonArray("market_items")?.size() ?: 0})")
             } else {
@@ -15736,6 +15797,9 @@ class VKApiClient(
                     // потом — поле url (для некоторых типов это прямой URL превью).
                     // Если ВСЕ источники пусты — thumbUrl=null, UI покажет fallback-иконку.
                     val thumb = mediaThumbs["$mappedType:${attOwnerId}_$attItemId"]
+                        // #NOTIF-POST-THUMBS (волна 41): attachment типа post мапится
+                        // в photo, item=ID ПОСТА — пробуем ключ поста из response.posts.
+                        ?: mediaThumbs["post:${attOwnerId}_$attItemId"]
                         ?: a.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_800")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_320")?.takeIf { !it.isJsonNull }?.asString
@@ -15802,6 +15866,9 @@ class VKApiClient(
         // Для post — thumb может быть в photos по owner_id+post_id (VK отдаёт фото поста).
         if (firstPhotoThumb == null && parentOwnerId != 0L && parentItemId != 0L) {
             firstPhotoThumb = mediaThumbs["photo:${parentOwnerId}_$parentItemId"]
+                // #NOTIF-POST-THUMBS: parent post-уведомления — сам ПОСТ (id поста,
+                // не фото) — сначала ключ из response.posts, потом фото/видео.
+                ?: mediaThumbs["post:${parentOwnerId}_$parentItemId"]
                 ?: mediaThumbs["video:${parentOwnerId}_$parentItemId"]
                 ?: mediaThumbs["clip:${parentOwnerId}_$parentItemId"]
         }

@@ -430,9 +430,10 @@ fun CommunityScreen(
                 tracks = page.filter { it.id > 0L && it.ownerId != 0L }
                     .distinctBy { "${it.ownerId}_${it.id}" }
                 tracksServerOffset = page.size
-                // Полная страница → есть ещё данные; частичная → конец списка
-                // (total не используем как стоп — VK занижает count).
-                tracksHasMore = page.size >= 100
+                // #AUDIO-PAGING-HOLE (волна 41): НЕпустая страница (даже короткая)
+                // ≠ конец списка — VK режет листинг на «битой» записи (прецедент
+                // стопа 149/3239). Сбой (total=-1) — hasMore сохраняется для повтора.
+                tracksHasMore = page.isNotEmpty() || total < 0
                 tracksLoaded = true
                 AppLog.i("CommunityScreen", "Loaded ${tracks.size}/${page.size} tracks for group $groupId (total=$total hasMore=$tracksHasMore)")
             } catch (e: Exception) {
@@ -450,14 +451,16 @@ fun CommunityScreen(
         scope.launch {
             tracksLoadingMore = true
             try {
-                val (_, page) = app.apiClient.audioGetWithCount(
+                val (total, page) = app.apiClient.audioGetWithCount(
                     count = 100, offset = tracksServerOffset, ownerId = -groupId)
                 tracksServerOffset += page.size
                 val fresh = page.filter { it.id > 0L && it.ownerId != 0L }
                     .filter { nv -> tracks.none { it.ownerId == nv.ownerId && it.id == nv.id } }
                 tracks = (tracks + fresh).distinctBy { "${it.ownerId}_${it.id}" }
-                tracksHasMore = page.size >= 100
-                AppLog.i("CommunityScreen", "Community music loadMore: +${fresh.size} (offset=$tracksServerOffset)")
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец;
+                // сбой (total=-1) — сохраняем hasMore для повтора по скроллу.
+                tracksHasMore = page.isNotEmpty() || total < 0
+                AppLog.i("CommunityScreen", "Community music loadMore: +${fresh.size} (offset=$tracksServerOffset total=$total)")
             } catch (e: Exception) {
                 AppLog.e("CommunityScreen", "community music loadMore failed", e)
             } finally {

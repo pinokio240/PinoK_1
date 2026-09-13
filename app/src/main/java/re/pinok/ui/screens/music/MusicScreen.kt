@@ -1558,7 +1558,9 @@ private fun MyMusicMenuList(
                 val (_, page) = app.apiClient.audioGetPlaylists(count = 50, offset = playlistsOffset)
                 playlistsOffset += page.size
                 playlists = (playlists + page).distinctBy { "${it.ownerId}_${it.id}" }
-                playlistsHasMore = page.size >= 50
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка
+                // (VK может отдать короткую страницу в середине листинга).
+                playlistsHasMore = page.isNotEmpty()
             } catch (e: Exception) {
                 AppLog.e("MyMusicMenuList", "Failed to load more playlists", e)
             } finally {
@@ -1575,7 +1577,8 @@ private fun MyMusicMenuList(
                 val (_, result) = app.apiClient.audioGetPlaylists(count = 50, offset = 0)
                 playlists = result
                 playlistsOffset = result.size
-                playlistsHasMore = result.size >= 50
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец списка.
+                playlistsHasMore = result.isNotEmpty()
             } catch (e: Exception) {
                 AppLog.e("MyMusicMenuList", "Failed to load playlists", e)
                 playlists = emptyList()
