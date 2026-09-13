@@ -496,6 +496,16 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // прецедент videoSeekStepSec выше.
             myMusicPagedOffset = p[Keys.MY_MUSIC_PAGED_OFFSET] ?: 0,
             myMusicTotal = p[Keys.MY_MUSIC_TOTAL] ?: 0,
+            // Волна 43 #UPDATER-SOURCE (docs/UPDATER-PLAN.md волна A): сменный
+            // источник обновлений. Пустой URL = встроенный дефолт (константа
+            // UpdaterManager.DEFAULT_MANIFEST_URL) — так старые установки
+            // остаются на штатном источнике без миграций.
+            updateManifestUrl = p[Keys.UPDATE_MANIFEST_URL] ?: "",
+            updateToken = p[Keys.UPDATE_TOKEN] ?: "",
+            updateAutostartCheck = p[Keys.UPDATE_AUTOSTART_CHECK] ?: false,
+            updateLastCheckMs = p[Keys.UPDATE_LAST_CHECK_MS] ?: 0L,
+            updateSkippedCode = p[Keys.UPDATE_SKIPPED_CODE] ?: 0,
+            updateEtag = p[Keys.UPDATE_ETAG] ?: "",
             // #CALLS: queuev4 credential (ввод вручную из localStorage).
             callsQueueKey = p[Keys.CALLS_QUEUE_KEY] ?: "",
             callsQueueTs = p[Keys.CALLS_QUEUE_TS] ?: 0L,
@@ -1049,6 +1059,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     // (пишет AudioLibraryPager после каждой успешной страницы).
     suspend fun setMyMusicPagedOffset(v: Int)         = put(Keys.MY_MUSIC_PAGED_OFFSET, v)
     suspend fun setMyMusicTotal(v: Int)               = put(Keys.MY_MUSIC_TOTAL, v)
+    // Волна 43 #UPDATER-SOURCE: сменный источник обновлений + автопроверка
+    // (пишет UpdaterManager/UpdateTab; пустой URL = встроенный дефолт).
+    suspend fun setUpdateManifestUrl(v: String)       = put(Keys.UPDATE_MANIFEST_URL, v)
+    /** Локальный секрет (маскируется в UI); уходит ТОЛЬКО по https Bearer-заголовком. */
+    suspend fun setUpdateToken(v: String)             = put(Keys.UPDATE_TOKEN, v)
+    suspend fun setUpdateAutostartCheck(v: Boolean)   = put(Keys.UPDATE_AUTOSTART_CHECK, v)
+    suspend fun setUpdateLastCheckMs(v: Long)         = put(Keys.UPDATE_LAST_CHECK_MS, v)
+    suspend fun setUpdateSkippedCode(v: Int)          = put(Keys.UPDATE_SKIPPED_CODE, v)
+    suspend fun setUpdateEtag(v: String)              = put(Keys.UPDATE_ETAG, v)
     // #CALLS: queuev4 credential для звонков (ввод вручную из localStorage).
     suspend fun setCallsQueueKey(v: String)            = put(Keys.CALLS_QUEUE_KEY, v)
     suspend fun setCallsQueueTs(v: Long)               = put(Keys.CALLS_QUEUE_TS, v)
@@ -1454,6 +1473,19 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val myMusicPagedOffset: Int = 0,
         /** VK total, сохранённый вместе с чекпоинтом (0 = неизвестен). */
         val myMusicTotal: Int = 0,
+        // Волна 43 #UPDATER-SOURCE: сменный источник обновлений (docs/UPDATER-PLAN.md §4).
+        /** Кастомный URL манифеста (пусто = встроенный дефолт updater'а). */
+        val updateManifestUrl: String = "",
+        /** Bearer-токен приватного репозитория (пусто = без заголовка). Локальный секрет. */
+        val updateToken: String = "",
+        /** #UPDATER-AUTOCHECK: проверка обновлений при запуске приложения (default false — ноль фонового трафика без ведома юзера). */
+        val updateAutostartCheck: Boolean = false,
+        /** Время последней успешной проверки (троттлинг автопроверок; 0 = никогда). */
+        val updateLastCheckMs: Long = 0L,
+        /** «Пропустить эту версию» — versionCode, скрытый из баннера (0 = нет). */
+        val updateSkippedCode: Int = 0,
+        /** ETag последнего ответа для условного GET (If-None-Match → 304 без тела). */
+        val updateEtag: String = "",
         // #CALLS: queuev4 credential для звонков (можно ввести вручную из localStorage).
         val callsQueueKey: String,
         val callsQueueTs: Long,
@@ -1728,6 +1760,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Волна 31 #AUDIO-BG-PAGER: чекпоинт фоновой пагинации «Моя музыка».
         val MY_MUSIC_PAGED_OFFSET = intPreferencesKey("my_music_paged_offset")
         val MY_MUSIC_TOTAL = intPreferencesKey("my_music_total")
+        // Волна 43 #UPDATER-SOURCE: сменный источник обновлений + автопроверка.
+        val UPDATE_MANIFEST_URL   = stringPreferencesKey("update_manifest_url")
+        val UPDATE_TOKEN          = stringPreferencesKey("update_token")
+        val UPDATE_AUTOSTART_CHECK = booleanPreferencesKey("update_autostart_check")
+        val UPDATE_LAST_CHECK_MS  = longPreferencesKey("update_last_check_ms")
+        val UPDATE_SKIPPED_CODE   = intPreferencesKey("update_skipped_code")
+        val UPDATE_ETAG           = stringPreferencesKey("update_etag")
         // #CALLS: queuev4 credential для звонков.
         val CALLS_QUEUE_KEY         = stringPreferencesKey("calls_queue_key")
         val CALLS_QUEUE_TS          = longPreferencesKey("calls_queue_ts")

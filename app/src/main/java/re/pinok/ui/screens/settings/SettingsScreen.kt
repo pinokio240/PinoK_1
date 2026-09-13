@@ -67,6 +67,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -96,6 +98,7 @@ import re.pinok.data.model.SettingsSection as BffSettingsSection
 import re.pinok.ui.theme.SovaColors
 import re.pinok.util.AppLog
 // Fix #391 #IN-APP-UPDATER (волна 29-i): модель/менеджер обновлений — вкладка «Обновления».
+import re.pinok.updater.UpdateDeepLink
 import re.pinok.updater.UpdateInfo
 import re.pinok.updater.UpdaterManager
 import re.pinok.updater.UpdaterUiState
@@ -412,7 +415,15 @@ fun SettingsScreen(
             containerSections.forEach { add(SettingsPage.Container(it)) }
         }
     }
-    val pagerState = rememberPagerState(pageCount = { pages.size })
+    // Волна 43 #UPDATER-BANNER: баннер «доступна новая версия» просит открыть
+    // вкладку «Обновления» — одноразовый флаг читается (consume) здесь и задаёт
+    // начальную страницу пейджера настроек; иначе — первая вкладка как раньше.
+    val initialPageIndex = if (UpdateDeepLink.consumeOpenRequest()) {
+        pages.indexOfFirst { it is SettingsPage.Core && it.tab == SettingsTab.UPDATE }.coerceAtLeast(0)
+    } else {
+        0
+    }
+    val pagerState = rememberPagerState(initialPage = initialPageIndex, pageCount = { pages.size })
 
     Column(modifier = Modifier.fillMaxSize()) {
         PrimaryScrollableTabRow(
@@ -4541,8 +4552,11 @@ private fun AccentPicker(selectedIndex: Int, onPick: (Int) -> Unit) {
 //  версий со статусами (Установлена / Доступно обновление / Предыдущая версия),
 //  скачивание APK с прогрессом, установка через системный установщик, откат
 //  на предыдущие версии (с честным предупреждением про удаление данных),
-//  ручное скачивание в браузере. Автопроверку в LaunchedEffect НЕ делаем —
-//  только по кнопке (никакого фонового трафика без ведома юзера).
+//  ручное скачивание в браузере.
+//  Волна 43 (docs/UPDATER-PLAN.md, волна A): авто-проверка при первом входе
+//  во вкладку за сессию (M2 — юзер сам пришёл, намерение очевидно), опциональная
+//  проверка при запуске (M3 — тумблер, default ВЫКЛ), смена источника манифеста
+//  (#UPDATER-SOURCE), «Пропустить эту версию». Ручная кнопка остаётся always-on.
 // ══════════════════════════════════════════════════════════════════════
 
 @Composable
@@ -4561,6 +4575,11 @@ private fun UpdateTab(
     // Откат требует подтверждения: Android не ставит более старую версию поверх
     // новой без удаления приложения — предупреждаем честно (AlertDialog ниже).
     var pendingRollback by remember { mutableStateOf<UpdateInfo?>(null) }
+
+    // Волна 43 #UPDATER-AUTOCHECK (M2): первое открытие вкладки за сессию —
+    // тихая авто-проверка (внутри: раз за процесс + гейт «< 15 мин назад» +
+    // ETag-условный GET). Ручная кнопка ниже остаётся всегда доступной.
+    LaunchedEffect(Unit) { updater.maybeCheckOnTabOpen() }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -4610,18 +4629,50 @@ private fun UpdateTab(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
-                        is UpdaterUiState.UpToDate -> Text(
-                            "Установлена последняя версия (" + st.currentName + ")",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        is UpdaterUiState.Available -> Text(
-                            "Доступно обновление: " + st.latest.versionName.orEmpty() +
-                                " (versionCode " + st.latest.versionCode + ")",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        is UpdaterUiState.UpToDate -> Column {
+                            Text(
+                                "Установлена последняя версия (" + st.currentName + ")",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            // Волна 43: честная пометка (штамп манифеста отличается /
+                            // источник старее установленной сборки — кастомный URL отстаёт).
+                            val note = st.note
+                            if (note != null) {
+                                Text(
+                                    note,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
+                        }
+                        is UpdaterUiState.Available -> Column {
+                            Text(
+                                "Доступно обновление: " + st.latest.versionName.orEmpty() +
+                                    " (versionCode " + st.latest.versionCode + ")",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            // Волна 43: «Пропустить эту версию» — баннер перестанет
+                            // показывать этот релиз (до выхода следующего).
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        updater.skipVersion(st.latest.versionCode)
+                                        Toast.makeText(
+                                            context,
+                                            "Версия " + st.latest.versionName.orEmpty() + " скрыта из баннера — вернуть можно здесь же",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                },
+                                modifier = Modifier.padding(top = 4.dp),
+                            ) {
+                                Text("Пропустить эту версию")
+                            }
+                        }
                         is UpdaterUiState.Error -> Text(
                             st.message,
                             style = MaterialTheme.typography.bodyMedium,
@@ -4644,8 +4695,44 @@ private fun UpdateTab(
                         Text("Проверить обновления")
                     }
                     // «Повторить» = та же кнопка: при Error она снова активна.
+                    // Волна 43: время последней проверки — юзер видит, когда манифест
+                    // дёргали в последний раз (троттлинг автопроверок от него считает).
+                    if (s.updateLastCheckMs > 0L) {
+                        Text(
+                            "Последняя проверка: " + android.text.format.DateUtils
+                                .getRelativeTimeSpanString(s.updateLastCheckMs).toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    // Волна 43: «пропущенная» версия — вернуть в баннер.
+                    val skippedCodeNow = s.updateSkippedCode
+                    if (skippedCodeNow > 0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Версия versionCode " + skippedCodeNow + " скрыта из баннера.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { scope.launch { updater.clearSkippedVersion() } }) {
+                                Text("Вернуть в баннер")
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        item { SectionHeader("Источник обновлений") }
+        item {
+            // Волна 43 #UPDATER-SOURCE: сменный URL манифеста + токен приватного
+            // репозитория + тумблер «Проверять при запуске» (docs/UPDATER-PLAN.md §4).
+            UpdateSourceCard(s = s, app = app, scope = scope)
         }
 
         item { SectionHeader("Версии из манифеста") }
@@ -4855,6 +4942,222 @@ private fun UpdateVersionRow(
                 LinearProgressIndicator(
                     progress = { downloadProgress / 100f },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Волна 43 #UPDATER-SOURCE (docs/UPDATER-PLAN.md §4): карточка смены источника
+ * обновлений — URL манифеста (пустое/дефолтное поле = встроенный источник,
+ * без миграций), опциональный Bearer-токен приватного репозитория (маскируется,
+ * уходит только по https), кнопка «Проверить ссылку» (пробная загрузка БЕЗ
+ * смены состояния updater'а), «Сбросить», жёлтый баннер недоверия при активном
+ * кастомном источнике и тумблер «Проверять при запуске» (#UPDATER-AUTOCHECK M3).
+ * Сохранение сбрасывает ETag — он привязан к конкретному источнику.
+ */
+@Composable
+private fun UpdateSourceCard(
+    s: SovaPrefs.Snapshot,
+    app: SovaApp,
+    scope: CoroutineScope,
+) {
+    val context = LocalContext.current
+    val defaultUrl = UpdaterManager.DEFAULT_MANIFEST_URL
+    // Черновики полей: remember(key) — после «Сохранить» поля пересинхронизируются
+    // со снапшотом (когда DataStore переэмитирует Snapshot).
+    var urlDraft by remember(s.updateManifestUrl) {
+        mutableStateOf(if (s.updateManifestUrl.isEmpty()) defaultUrl else s.updateManifestUrl)
+    }
+    var tokenDraft by remember(s.updateToken) { mutableStateOf(s.updateToken) }
+    var tokenVisible by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
+
+    val savedUrl = s.updateManifestUrl.trim()
+    val customActive = savedUrl.isNotEmpty()
+    val urlTrimmed = urlDraft.trim()
+    val urlInvalid = urlTrimmed.isNotEmpty() && !urlTrimmed.startsWith("https://")
+    val dirty = (urlTrimmed != (if (customActive) savedUrl else defaultUrl)) ||
+        (tokenDraft != s.updateToken)
+    val customHost: String = if (customActive) {
+        val h = android.net.Uri.parse(savedUrl).host
+        if (h == null) savedUrl else h
+    } else {
+        ""
+    }
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "URL манифеста версий",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "Стандартный источник: raw.githubusercontent.com/pinokio240/PinoK_1 (ветка PinoK). " +
+                    "Сюда можно вписать манифест своего форка — приложение будет проверять и качать сборки оттуда.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            OutlinedTextField(
+                value = urlDraft,
+                onValueChange = { urlDraft = it },
+                singleLine = true,
+                isError = urlInvalid,
+                label = { Text("https://…/version.json") },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+            if (urlInvalid) {
+                Text(
+                    "Ссылка должна начинаться с https:// — незащищённые источники запрещены в приложении глобально.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Text(
+                "Токен приватного репозитория (необязательно)",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            OutlinedTextField(
+                value = tokenDraft,
+                onValueChange = { tokenDraft = it },
+                singleLine = true,
+                visualTransformation = if (tokenVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                trailingIcon = {
+                    TextButton(onClick = { tokenVisible = !tokenVisible }) {
+                        Text(if (tokenVisible) "Скрыть" else "Показать")
+                    }
+                },
+                label = { Text("ghp_… / github_pat_…") },
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+            Text(
+                "Нужен только если репозиторий приватный. Хранится локально в настройках приложения и уходит лишь заголовком Authorization: Bearer по https.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(
+                modifier = Modifier.padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            // Пустое/дефолтное поле = вернуться на встроенный источник.
+                            val trimmed = urlDraft.trim()
+                            app.prefs.setUpdateManifestUrl(if (trimmed == defaultUrl) "" else trimmed)
+                            app.prefs.setUpdateToken(tokenDraft.trim())
+                            app.prefs.setUpdateEtag("") // ETag привязан к источнику — сбрасываем
+                            Toast.makeText(context, "Источник обновлений сохранён", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = dirty && !urlInvalid,
+                ) {
+                    Text("Сохранить")
+                }
+                OutlinedButton(
+                    onClick = {
+                        testing = true
+                        testResult = null
+                        // Пробная загрузка: состояние updater'а НЕ трогает,
+                        // вердикт приходит строкой в callback (честный текст).
+                        UpdaterManager.ensureInit(context.applicationContext)
+                            .testManifestUrl(urlDraft, tokenDraft) { verdict ->
+                                testResult = verdict
+                                testing = false
+                            }
+                    },
+                    enabled = !testing && !urlInvalid,
+                ) {
+                    Text(if (testing) "Проверяю…" else "Проверить ссылку")
+                }
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            app.prefs.setUpdateManifestUrl("")
+                            app.prefs.setUpdateToken("")
+                            app.prefs.setUpdateEtag("")
+                            Toast.makeText(context, "Возвращён стандартный источник", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = customActive || s.updateToken.isNotEmpty(),
+                ) {
+                    Text("Сбросить")
+                }
+            }
+            val verdict = testResult
+            if (verdict != null) {
+                Text(
+                    verdict,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (verdict.startsWith("OK")) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            if (customActive) {
+                // Жёлтый баннер недоверия (план §4): кастомный источник = чужое доверие.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.tertiaryContainer)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Источник обновлений изменён: " + customHost +
+                            ". Сборки с этого источника не контролируются автором приложения; " +
+                            "пока проверяется только sha256 из манифеста, сверка подписи APK появится позже.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+            }
+            // #UPDATER-AUTOCHECK M3: тумблер «Проверять при запуске».
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Проверять при запуске",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "Тихая проверка манифеста через ~12 с после старта приложения, не чаще раза в 6 часов. " +
+                            "При офлайне пропускается. По умолчанию выключено — ноль фонового трафика без вашего ведома.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = s.updateAutostartCheck,
+                    onCheckedChange = { v -> scope.launch { app.prefs.setUpdateAutostartCheck(v) } },
                 )
             }
         }

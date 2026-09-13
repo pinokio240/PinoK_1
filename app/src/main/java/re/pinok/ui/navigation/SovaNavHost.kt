@@ -155,6 +155,8 @@ import re.pinok.ui.components.CaptchaDialog
 import re.pinok.ui.components.NetworkSwitchPopup
 import re.pinok.ui.components.OfflineBanner
 import re.pinok.ui.components.GlobalMiniPlayer
+import re.pinok.ui.components.UpdateBanner
+import re.pinok.updater.UpdateDeepLink
 import re.pinok.util.AppLog
 
 // ── Fix #337: редактор панелей — JSON-парсинг порядка/скрытых пунктов ──
@@ -2634,9 +2636,21 @@ composable(Screen.CallsHistory.route) {
             .padding(bottom = 80.dp)  // поверх NavigationBar; если mini player виден — баннер чуть выше
             .padding(horizontal = 12.dp),
     ) {
-        OfflineBanner(
-            onOpenOfflineManager = { nav.navigate(Screen.OfflineManager.route) },
-        )
+        // Волна 43 #UPDATER-BANNER: баннер «доступна новая версия» НАД
+        // офлайн-баннером (Column в одном Box — баннеры не спорят за позицию).
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            UpdateBanner(
+                onOpenUpdateTab = {
+                    // Одноразовый флаг: настройки откроются сразу на вкладке
+                    // «Обновления» (consume в SettingsScreen при composition).
+                    UpdateDeepLink.requestOpenUpdateTab()
+                    nav.navigate(Screen.Settings.route)
+                },
+            )
+            OfflineBanner(
+                onOpenOfflineManager = { nav.navigate(Screen.OfflineManager.route) },
+            )
+        }
     }
     if (showLogoutDialog) {
         // Fix #369: диалог-предупреждение перед ПОЛНЫМ logout. Confirm —

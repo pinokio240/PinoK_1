@@ -1378,7 +1378,17 @@ private fun MusicMyTracksTab(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (totalCount > 0) "${tracks.size} / $totalCount" else "${tracks.size}",
+                    // #AUDIO-COUNTER-HONEST (волна 43): VK total — НЕ истина, а
+                    // приблизительная оценка (VK считает в count дубли собственного
+                    // листинга — лог 2026-09-13: raw-обход 3239, уникальных 3079,
+                    // 160 дублей; бывает и занижен — волна 38). Пока идёт обход —
+                    // показываем с «~»; после полного обхода (hasMore=false) точным
+                    // числом уникальных треков: оно и есть истина.
+                    text = when {
+                        hasMore && totalCount > 0 -> "${tracks.size} / ~$totalCount"
+                        hasMore -> "${tracks.size}…"
+                        else -> "${tracks.size}"
+                    },
                     color = secondaryColor,
                     fontSize = 14.sp,
                 )

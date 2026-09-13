@@ -74,7 +74,11 @@ class AudioLibraryPager private constructor() {
     /** UI-состояние пейджера. MusicScreen подписывается на [state]. */
     data class PagerState(
         val tracks: List<Track> = emptyList(),
-        /** VK response.count; -1 = неизвестен (web-fallback без count). */
+        /** VK response.count; -1 = неизвестен (web-fallback без count).
+         *  #AUDIO-COUNTER-HONEST (волна 43): НЕ истина, а ПРИБЛИЗИТЕЛЬНАЯ оценка —
+         *  VK считает в count дубли собственного листинга (лог 2026-09-13: raw-обход
+         *  3239 записей, уникальных 3079, 160 дублей; count бывает и ЗАНИЖЕН —
+         *  см. волну 38). Истина = размер списка после полного обхода (hasMore=false). */
         val total: Int = -1,
         /** Первая страница ещё не загружена (круговой индикатор списка). */
         val initialLoading: Boolean = false,
@@ -287,6 +291,11 @@ class AudioLibraryPager private constructor() {
         var dupPagesInRow = 0
         var holeHopsInRow = 0
         var parkedRecheckMs = PARK_RECHECK_BASE_MS
+        // #AUDIO-COUNTER-HONEST (волна 43): перепроверка хвоста из парковки —
+        // тихая: не поднимает fetchingPage, чтобы футер «Загрузка…» в UI
+        // не мигал каждые 10с…5мин (наблюдение логкат-сессии 2026-09-13:
+        // 7 «done… паркую» сообщений подряд без новых строк page:).
+        var parked = false
         _state.update { s ->
             s.copy(initialLoading = s.tracks.isEmpty(), error = null)
         }
@@ -308,7 +317,9 @@ class AudioLibraryPager private constructor() {
                 _state.update { s -> s.copy(error = null) }
             }
 
-            _state.update { s -> s.copy(fetchingPage = true, error = null) }
+            if (!parked) {
+                _state.update { s -> s.copy(fetchingPage = true, error = null) }
+            }
             val pageStartedMs = System.currentTimeMillis()
             val offsetForThisPage = serverOffset
             try {
@@ -348,6 +359,7 @@ class AudioLibraryPager private constructor() {
                 //      (прыжок offset через битую запись — root-cause стопа 149/3239).
                 if (pageGot == 0 && total == VKApiClient.AUDIO_PAGING_UNSUPPORTED) {
                     _state.update { s -> s.copy(fetchingPage = false, hasMore = false, initialLoading = false) }
+                    parked = true
                     AppLog.i(TAG, "#AUDIO-PAGING done-unsupported: токен не поддерживает offset-пагинацию audio.get — list=${_state.value.tracks.size} (паркую; перепроверка через ${parkedRecheckMs}мс)")
                     delay(parkedRecheckMs)
                     parkedRecheckMs = (parkedRecheckMs * 2).coerceAtMost(PARK_RECHECK_MAX_MS)
@@ -410,6 +422,7 @@ class AudioLibraryPager private constructor() {
                     consecutiveFails = 0
                     holeHopsInRow = 0
                     parkedRecheckMs = PARK_RECHECK_BASE_MS
+                    parked = false
                     dupPagesInRow = if (fresh.isEmpty()) dupPagesInRow + 1 else 0
                     persistCheckpoint(serverOffset, knownTotal)
                     if (fresh.isNotEmpty()) {
@@ -420,6 +433,7 @@ class AudioLibraryPager private constructor() {
                     if (dupPagesInRow >= MAX_DUP_PAGES_IN_ROW) {
                         AppLog.w(TAG, "#AUDIO-PAGING park: $dupPagesInRow страниц подряд без новых треков (offset=$serverOffset) — паркую (перепроверка через ${parkedRecheckMs}мс)")
                         _state.update { s -> s.copy(hasMore = false) }
+                        parked = true
                         delay(parkedRecheckMs)
                         parkedRecheckMs = (parkedRecheckMs * 2).coerceAtMost(PARK_RECHECK_MAX_MS)
                         continue
@@ -430,6 +444,7 @@ class AudioLibraryPager private constructor() {
                     // (offset < total) → прыжок +1; иначе конец библиотеки.
                     if (holeHopsInRow < MAX_HOLE_HOPS_IN_ROW && knownTotal > 0 && serverOffset < knownTotal) {
                         holeHopsInRow++
+                        parked = false
                         AppLog.i(TAG, "#AUDIO-PAGING hole: пустая страница при offset=$serverOffset total=$knownTotal — прыжок +1 (hop=$holeHopsInRow/$MAX_HOLE_HOPS_IN_ROW)")
                         serverOffset += 1
                         _state.update { s ->
@@ -443,6 +458,7 @@ class AudioLibraryPager private constructor() {
                     _state.update { s ->
                         s.copy(fetchingPage = false, hasMore = false, total = knownTotal)
                     }
+                    parked = true
                     AppLog.i(TAG, "#AUDIO-PAGING done: list=${_state.value.tracks.size} из total=$knownTotal, страниц=$pagesLoadedNow, чекпоинт=$serverOffset (resume был offset=$checkpointOffset, resumeTotal=$checkpointTotal) — паркую; перепроверка хвоста через ${parkedRecheckMs}мс")
                     delay(parkedRecheckMs)
                     parkedRecheckMs = (parkedRecheckMs * 2).coerceAtMost(PARK_RECHECK_MAX_MS)

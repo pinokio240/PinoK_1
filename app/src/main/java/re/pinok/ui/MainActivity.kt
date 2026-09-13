@@ -49,6 +49,7 @@ import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
 import re.pinok.auth.AuthActivity
 import re.pinok.BuildConfig
+import re.pinok.updater.UpdaterManager
 import re.pinok.locker.LockerActivity
 import re.pinok.ui.components.DraggableLogFab
 import re.pinok.ui.components.LogDialogState
@@ -694,6 +695,18 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
         handleOpenChatIntent(intent)
         handleDeepLinkIntent(intent)
+
+        // Волна 43 #UPDATER-AUTOCHECK (M3): тихая проверка обновлений при запуске.
+        // Тумблер Настройки→Обновления→«Проверять при запуске» (default ВЫКЛ —
+        // ноль фонового трафика без ведома юзера); внутри: троттлинг 6ч, бэкофф
+        // при сбоях, офлайн-гейт. Задержка 12 с — не конкурировать со стартом UI.
+        val appForUpdateCheck = SovaApp.getOrNull()
+        if (appForUpdateCheck != null) {
+            appForUpdateCheck.appScope.launch {
+                kotlinx.coroutines.delay(12_000L)
+                UpdaterManager.ensureInit(applicationContext).maybeAutoCheckOnStart()
+            }
+        }
 
         setContent {
             val app = SovaApp.get(this)

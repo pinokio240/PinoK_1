@@ -15,6 +15,9 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import re.pinok.BuildConfig
+import re.pinok.BuildStamp
+import re.pinok.SovaApp
+import re.pinok.data.local.SovaPrefs
 import re.pinok.util.AppLog
 import java.io.File
 import java.io.FileInputStream
@@ -49,6 +52,18 @@ import java.util.concurrent.TimeUnit
  *     неизвестных источников не разрешена (API 26+) → честно открываем
  *     ACTION_MANAGE_UNKNOWN_APP_SOURCES, НЕ крашимся.
  *
+ * ВОЛНА 43 (docs/UPDATER-PLAN.md, волна A):
+ *  - #UPDATER-SOURCE: источник манифеста ПЕРЕОПРЕДЕЛЯЕТСЯ в настройках
+ *    (SovaPrefs.update_manifest_url, пусто = DEFAULT_MANIFEST_URL) + опциональный
+ *    Bearer-токен приватного репозитория (уходит ТОЛЬКО по https).
+ *  - #UPDATER-ETAG: условный GET (If-None-Match → 304 = ноль тела и парсинга).
+ *  - #UPDATER-AUTOCHECK: автопроверка при запуске (тумблер, default ВЫКЛ —
+ *    философия «ноль фонового трафика без ведома юзера» сохранена) и при первом
+ *    входе во вкладку «Обновления» за сессию; троттлинг 6ч + бэкофф при сбоях;
+ *    ручная кнопка всегда форсирует.
+ *  - «Пропустить эту версию» (баннер её скрывает) + testManifestUrl для кнопки
+ *    «Проверить ссылку» (состояние updater'а не трогает).
+ *
  * ОТКАТ (даунгрейд): версии с versionCode < текущей скачиваются и ставятся той
  * же цепочкой. Android НЕ ставит более старую версию поверх новой
  * (INSTALL_FAILED_VERSION_DOWNGRADE) без удаления приложения — UI предупреждает
@@ -63,9 +78,14 @@ object UpdaterManager {
 
     private const val TAG = "UpdaterManager"
 
-    /** Манифест версий: raw-файл в корне ветки PinoK репозитория PinoK_1. */
-    private const val MANIFEST_URL =
+    /** Дефолтный манифест версий: raw-файл в корне ветки PinoK репозитория PinoK_1.
+     *  #UPDATER-SOURCE (волна 43): переопределяется настройкой update_manifest_url —
+     *  см. currentManifestUrl() (пустая настройка = этот дефолт, без миграций). */
+    const val DEFAULT_MANIFEST_URL =
         "https://raw.githubusercontent.com/pinokio240/PinoK_1/PinoK/version.json"
+
+    /** #UPDATER-AUTOCHECK: автопроверка (запуск приложения) не чаще раза в 6 часов. */
+    private const val AUTO_MIN_INTERVAL_MS = 6L * 60L * 60L * 1000L
 
     /** Подкаталог external-files (совпадает с FileProvider external-files-path). */
     private const val UPDATES_DIR = "updates"
@@ -83,6 +103,14 @@ object UpdaterManager {
 
     @Volatile
     private var appContext: Context? = null
+
+    /** #UPDATER-AUTOCHECK: счётчик неудач автопроверок подряд (бэкофф, in-memory). */
+    @Volatile
+    private var autoFailsInRow = 0
+
+    /** #UPDATER-AUTOCHECK M2: авто-проверка при входе во вкладку — раз за процесс. */
+    @Volatile
+    private var tabAutoCheckDone = false
 
     private val _manifest = MutableStateFlow<UpdateManifest?>(null)
 
@@ -103,50 +131,298 @@ object UpdaterManager {
         return this
     }
 
-    /** Проверка обновления: манифест → max(versionCode) vs BuildConfig.VERSION_CODE. */
+    /** Ручная проверка (кнопка во вкладке): всегда форсирует сетевой запрос. */
     fun checkForUpdate() {
+        runCheck(manual = true)
+    }
+
+    /**
+     * #UPDATER-AUTOCHECK M2 (волна 43): первое открытие вкладки «Обновления»
+     * за сессию процесса — тихая авто-проверка (юзер сам пришёл — намерение
+     * очевидно). Троттлинга по prefs НЕ требует: раз за процесс + условный
+     * GET (ETag) = дёшево. Ручная кнопка при этом остаётся всегда доступной.
+     */
+    fun maybeCheckOnTabOpen() {
+        if (tabAutoCheckDone) return
+        tabAutoCheckDone = true
+        val snap = prefsSnapshotOrNull()
+        if (snap != null && snap.updateLastCheckMs > 0L) {
+            val sinceMs = System.currentTimeMillis() - snap.updateLastCheckMs
+            // Свежая проверка (< 15 мин) — не дёргаем raw повторно: манифест
+            // меняется только git push'ем, чаще проверять бессмысленно.
+            if (sinceMs < 15L * 60L * 1000L) {
+                AppLog.i(TAG, "tabOpen: проверка была " + (sinceMs / 60000L) + " мин назад — пропускаю")
+                return
+            }
+        }
+        runCheck(manual = false)
+    }
+
+    /**
+     * #UPDATER-AUTOCHECK M3 (волна 43): автопроверка при запуске приложения.
+     * Вызывается из MainActivity через ~12 с после старта. Три гейта:
+     * тумблер (default ВЫКЛ), троттлинг 6ч по prefs + бэкофф при сбоях,
+     * офлайн/занятость — тихий выход. Ни тостов, ни уведомлений при сбое:
+     * результат увидит только баннер (Available) или вкладка.
+     */
+    fun maybeAutoCheckOnStart() {
+        val app = SovaApp.getOrNull()
+        if (app == null) {
+            AppLog.i(TAG, "autoCheck: SovaApp ещё не создан — skip")
+            return
+        }
+        val snap = prefsSnapshotOrNull()
+        if (snap == null) {
+            AppLog.i(TAG, "autoCheck: снапшот prefs ещё не готов — skip")
+            return
+        }
+        if (!snap.updateAutostartCheck) {
+            AppLog.i(TAG, "autoCheck: выключен в настройках — skip")
+            return
+        }
+        val backoffMult = autoFailsInRow.toLong().coerceAtMost(4L)
+        val sinceMs = System.currentTimeMillis() - snap.updateLastCheckMs
+        if (snap.updateLastCheckMs > 0L && sinceMs < AUTO_MIN_INTERVAL_MS * backoffMult) {
+            AppLog.i(TAG, "autoCheck: недавно проверялись (" + (sinceMs / 60000L) + " мин назад, fails=" + autoFailsInRow + ") — skip")
+            return
+        }
+        if (app.networkObserver.isOffline()) {
+            AppLog.i(TAG, "autoCheck: офлайн — skip (проверю при следующем запуске)")
+            return
+        }
+        AppLog.i(TAG, "autoCheck: запускаю тихую проверку (fails=" + autoFailsInRow + ")")
+        runCheck(manual = false)
+    }
+
+    /**
+     * Общий ход проверки. manual=true — кнопка (ошибки показываются как есть);
+     * manual=false — тихая (ошибки тоже честно пишутся в состояние — их увидит
+     * только открывший вкладку, НО авто-счётчик неудач растёт → бэкофф).
+     */
+    private fun runCheck(manual: Boolean) {
         val current = _state.value
         // Guard: не вмешиваемся в активную проверку/загрузку — состояние нельзя
         // перезаписывать Checking'ом, иначе прогресс скачивания молча исчезнет.
         if (current is UpdaterUiState.Checking) return
         if (current is UpdaterUiState.Downloading) return
+        // ETag-условный GET имеет смысл только когда манифест уже в памяти:
+        // после перезапуска процесса 304 без тела оставил бы вкладку пустой.
+        val etag = if (_manifest.value == null) "" else savedEtag()
         managerScope.launch {
             _state.value = UpdaterUiState.Checking
-            when (val result = fetchManifest()) {
+            when (val result = fetchManifest(currentManifestUrl(), currentToken(), etag)) {
                 is UpdateCheckResult.Success -> {
                     _manifest.value = result.manifest
-                    val versions = result.manifest.versions
-                    val latest = versions.maxByOrNull { it.versionCode }
-                    if (latest == null) {
-                        _state.value = UpdaterUiState.Error("Манифест не содержит ни одной версии")
+                    persistCheckState(result.etag)
+                    autoFailsInRow = 0
+                    decideLatest(result.manifest)
+                }
+                is UpdateCheckResult.NotModified -> {
+                    // 304: сервер подтвердил «не менялся» — ноль тела/парсинга.
+                    persistCheckState(savedEtag())
+                    autoFailsInRow = 0
+                    val cached = _manifest.value
+                    if (cached == null) {
+                        _state.value = UpdaterUiState.Idle
                     } else {
-                        val currentCode: Long = BuildConfig.VERSION_CODE.toLong()
-                        if (latest.versionCode.toLong() > currentCode) {
-                            _state.value = UpdaterUiState.Available(latest, result.manifest)
-                        } else {
-                            _state.value = UpdaterUiState.UpToDate(BuildConfig.VERSION_NAME)
-                        }
+                        decideLatest(cached)
                     }
                 }
-                is UpdateCheckResult.Offline -> _state.value = UpdaterUiState.Error(
-                    "Сеть недоступна — проверьте подключение и повторите",
-                )
+                is UpdateCheckResult.Offline -> {
+                    if (manual) {
+                        _state.value = UpdaterUiState.Error(
+                            "Сеть недоступна — проверьте подключение и повторите",
+                        )
+                    } else {
+                        autoFailsInRow++
+                        _state.value = UpdaterUiState.Idle
+                        AppLog.i(TAG, "autoCheck: офлайн (" + autoFailsInRow + " подряд) — тихо, состояние сброшено")
+                    }
+                }
                 is UpdateCheckResult.HttpError -> {
+                    autoFailsInRow++
                     // Честная диагностика 404: raw.githubusercontent отдаёт 404,
                     // когда репозиторий приватный или version.json ещё не запушен.
-                    if (result.code == 404) {
+                    if (manual) {
+                        if (result.code == 404) {
+                            _state.value = UpdaterUiState.Error(
+                                "Манифест недоступен: репозиторий приватный или version.json отсутствует",
+                            )
+                        } else {
+                            _state.value = UpdaterUiState.Error(
+                                "Сервер ответил HTTP " + result.code + " — повторите позже",
+                            )
+                        }
+                    } else {
+                        _state.value = UpdaterUiState.Idle
+                        AppLog.i(TAG, "autoCheck: HTTP " + result.code + " (" + autoFailsInRow + " подряд) — тихо")
+                    }
+                }
+                is UpdateCheckResult.ParseError -> {
+                    autoFailsInRow++
+                    if (manual) {
                         _state.value = UpdaterUiState.Error(
-                            "Манифест недоступен: репозиторий приватный или version.json отсутствует",
+                            "Ошибка разбора version.json: " + result.message,
                         )
                     } else {
-                        _state.value = UpdaterUiState.Error(
-                            "Сервер ответил HTTP " + result.code + " — повторите позже",
+                        _state.value = UpdaterUiState.Idle
+                        AppLog.i(TAG, "autoCheck: не разобрал манифест (" + autoFailsInRow + " подряд) — тихо")
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Сравнение манифеста с установленной сборкой (общее для 200 и 304):
+     * max(versionCode) без зависимости от порядка записей.
+     *  - новее → Available (баннер/вкладка);
+     *  - та же версия, штамп сборки в манифесте отличается → UpToDate с пометкой
+     *    (пересборка того же versionCode — не ошибка);
+     *  - на источнике нет сборок новее установленной → UpToDate с честной пометкой
+     *    (кастомный источник/форк отстаёт — это НЕ сбой).
+     */
+    private fun decideLatest(manifest: UpdateManifest) {
+        val versions = manifest.versions
+        val latest = versions.maxByOrNull { it.versionCode }
+        if (latest == null) {
+            _state.value = UpdaterUiState.Error("Манифест не содержит ни одной версии")
+            return
+        }
+        val currentCode: Long = BuildConfig.VERSION_CODE.toLong()
+        if (latest.versionCode.toLong() > currentCode) {
+            _state.value = UpdaterUiState.Available(latest, manifest)
+            return
+        }
+        if (latest.versionCode.toLong() == currentCode) {
+            val manifestStamp = latest.stamp.orEmpty().trim()
+            val buildStamp = BuildStamp.STAMP
+            if (manifestStamp.isNotEmpty() && buildStamp.isNotEmpty() && manifestStamp != buildStamp) {
+                _state.value = UpdaterUiState.UpToDate(
+                    BuildConfig.VERSION_NAME,
+                    "Версия та же, но штамп сборки в манифесте отличается (манифест: " +
+                        manifestStamp + ", сборка: " + buildStamp + ") — вероятно, пересборка того же versionCode.",
+                )
+                return
+            }
+            _state.value = UpdaterUiState.UpToDate(BuildConfig.VERSION_NAME)
+            return
+        }
+        // Источник старее установленного (кастомный URL/форк с отставшим манифестом).
+        _state.value = UpdaterUiState.UpToDate(
+            BuildConfig.VERSION_NAME,
+            "На источнике нет сборок новее установленной: новейшая запись versionCode " +
+                latest.versionCode + " < текущего " + BuildConfig.VERSION_CODE +
+                ". Если это кастомный источник — манифест отстаёт от вашей сборки.",
+        )
+    }
+
+    // ── #UPDATER-SOURCE: конфигурация из настроек ────────────────────────
+
+    /** Снапшот prefs (может быть null до первого composition — Fix #336 кэш). */
+    private fun prefsSnapshotOrNull(): SovaPrefs.Snapshot? {
+        val app = SovaApp.getOrNull()
+        if (app == null) return null
+        val snap = app.prefsSnapshot
+        if (snap == null) return null
+        return snap
+    }
+
+    /** Активный URL манифеста: настройка, а пусто/не готово — встроенный дефолт. */
+    fun currentManifestUrl(): String {
+        val snap = prefsSnapshotOrNull()
+        if (snap == null) return DEFAULT_MANIFEST_URL
+        val custom = snap.updateManifestUrl.trim()
+        if (custom.isEmpty()) return DEFAULT_MANIFEST_URL
+        return custom
+    }
+
+    /** Активен ли НЕдефолтный источник (для баннера-предупреждения во вкладке). */
+    fun isCustomSource(): Boolean {
+        return currentManifestUrl() != DEFAULT_MANIFEST_URL
+    }
+
+    private fun currentToken(): String {
+        val snap = prefsSnapshotOrNull()
+        if (snap == null) return ""
+        return snap.updateToken.trim()
+    }
+
+    private fun savedEtag(): String {
+        val snap = prefsSnapshotOrNull()
+        if (snap == null) return ""
+        return snap.updateEtag
+    }
+
+    /** Персист успешной проверки: время (троттлинг) + ETag условного GET. */
+    private suspend fun persistCheckState(etag: String) {
+        val app = SovaApp.getOrNull()
+        if (app == null) return
+        app.prefs.setUpdateLastCheckMs(System.currentTimeMillis())
+        if (etag.isNotEmpty()) app.prefs.setUpdateEtag(etag)
+    }
+
+    // ── «Пропустить эту версию» + пробная загрузка ссылки ────────────────
+
+    /** «Пропустить эту версию»: баннер её больше не покажет (вкладка — покажет). */
+    suspend fun skipVersion(code: Int) {
+        val app = SovaApp.getOrNull()
+        if (app == null) return
+        app.prefs.setUpdateSkippedCode(code)
+        AppLog.i(TAG, "skipVersion: " + code)
+    }
+
+    /** Отмена «пропустить» (кнопка во вкладке). */
+    suspend fun clearSkippedVersion() {
+        val app = SovaApp.getOrNull()
+        if (app == null) return
+        app.prefs.setUpdateSkippedCode(0)
+    }
+
+    /** versionCode, скрытый из баннера (0 = ничего не пропущено). */
+    fun skippedCode(): Int {
+        val snap = prefsSnapshotOrNull()
+        if (snap == null) return 0
+        return snap.updateSkippedCode
+    }
+
+    /**
+     * Пробная загрузка ссылки для кнопки «Проверить ссылку» в настройках
+     * источника: состояние updater'а НЕ трогает, вердикт — строкой в callback.
+     */
+    fun testManifestUrl(url: String, token: String, onResult: (String) -> Unit) {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("https://")) {
+            onResult("Ссылка должна начинаться с https:// — незащищённые источники приложение не открывает (cleartext запрещён глобально)")
+            return
+        }
+        managerScope.launch {
+            when (val r = fetchManifest(trimmed, token.trim(), "")) {
+                is UpdateCheckResult.Success -> {
+                    val versions = r.manifest.versions
+                    val latest = versions.maxByOrNull { it.versionCode }
+                    if (latest == null) {
+                        onResult("Манифест загружен, но не содержит ни одной версии")
+                    } else {
+                        onResult(
+                            "OK: версий " + versions.size + ", новейшая " +
+                                latest.versionName.orEmpty() + " (versionCode " + latest.versionCode + ")",
                         )
                     }
                 }
-                is UpdateCheckResult.ParseError -> _state.value = UpdaterUiState.Error(
-                    "Ошибка разбора version.json: " + result.message,
-                )
+                is UpdateCheckResult.NotModified ->
+                    onResult("OK: источник отвечает «не менялся с прошлой проверки»")
+                is UpdateCheckResult.Offline ->
+                    onResult("Сеть недоступна — проверьте подключение")
+                is UpdateCheckResult.HttpError -> {
+                    if (r.code == 404) {
+                        onResult("HTTP 404: файл не найден — приватный репозиторий (нужен токен) или опечатка в ссылке")
+                    } else {
+                        onResult("Сервер ответил HTTP " + r.code)
+                    }
+                }
+                is UpdateCheckResult.ParseError ->
+                    onResult("Это не манифест версий: " + r.message)
             }
         }
     }
@@ -305,11 +581,23 @@ object UpdaterManager {
 
     // ── internals ─────────────────────────────────────────────────────────
 
-    /** GET манифеста → sealed-результат (сеть/HTTP/парсинг разделены для честных сообщений). */
-    private fun fetchManifest(): UpdateCheckResult {
-        val request = Request.Builder().url(MANIFEST_URL).build()
+    /**
+     * GET манифеста → sealed-результат (сеть/HTTP/парсинг разделены для честных сообщений).
+     * Волна 43: параметризован (URL/токен/ETag — #UPDATER-SOURCE/#UPDATER-ETAG);
+     * токен уходит ТОЛЬКО по https Bearer-заголовком; непустой etag даёт условный
+     * GET (If-None-Match → 304 = NotModified без тела).
+     */
+    private fun fetchManifest(url: String, token: String, etag: String): UpdateCheckResult {
+        val builder = Request.Builder().url(url)
+        if (etag.isNotEmpty()) builder.header("If-None-Match", etag)
+        if (token.isNotEmpty()) builder.header("Authorization", "Bearer " + token)
+        val request = builder.build()
         return try {
             httpClient.newCall(request).execute().use { response ->
+                // 304 Not Modified: тело НЕТ — это успех, а не ошибка.
+                if (response.code == 304) {
+                    return UpdateCheckResult.NotModified
+                }
                 if (!response.isSuccessful) {
                     return UpdateCheckResult.HttpError(response.code)
                 }
@@ -320,7 +608,8 @@ object UpdaterManager {
                 if (parsed == null) {
                     UpdateCheckResult.ParseError("JSON не распознан как манифест версий")
                 } else {
-                    UpdateCheckResult.Success(parsed)
+                    val responseEtag = response.header("ETag")
+                    UpdateCheckResult.Success(parsed, responseEtag.orEmpty())
                 }
             }
         } catch (e: IOException) {
@@ -383,9 +672,12 @@ data class UpdateManifest(
     val versions: List<UpdateInfo> = emptyList(),
 )
 
-/** Результат fetchManifest — разделён, чтобы UI показывал ПРИЧИНУ, а не общий failure. */
+/** Результат fetchManifest — разделён, чтобы UI показывал ПРИЧИНУ, а не общий failure.
+ *  Волна 43: + NotModified (304 условного GET), Success несёт ETag ответа для персиста. */
 sealed class UpdateCheckResult {
-    data class Success(val manifest: UpdateManifest) : UpdateCheckResult()
+    data class Success(val manifest: UpdateManifest, val etag: String = "") : UpdateCheckResult()
+    /** 304 Not Modified — манифест не менялся с последней проверки (ETag совпал). */
+    object NotModified : UpdateCheckResult()
     object Offline : UpdateCheckResult()
     data class HttpError(val code: Int) : UpdateCheckResult()
     data class ParseError(val message: String) : UpdateCheckResult()
@@ -398,9 +690,33 @@ sealed class UpdateCheckResult {
 sealed class UpdaterUiState {
     object Idle : UpdaterUiState()
     object Checking : UpdaterUiState()
-    data class UpToDate(val currentName: String) : UpdaterUiState()
+    /** Волна 43: [note] — честная пометка (штамп манифеста отличается / источник
+     *  старее установленного — кастомный URL отстаёт); null = обычное «актуальна». */
+    data class UpToDate(val currentName: String, val note: String? = null) : UpdaterUiState()
     data class Available(val latest: UpdateInfo, val manifest: UpdateManifest) : UpdaterUiState()
     data class Downloading(val info: UpdateInfo, val progress: Int) : UpdaterUiState()
     data class Downloaded(val info: UpdateInfo, val file: File) : UpdaterUiState()
     data class Error(val message: String) : UpdaterUiState()
+}
+
+/**
+ * Волна 43 #UPDATER-BANNER: UI-флаг «открыть вкладку Обновлений» (баннер →
+ * настройки). Не compose-state — процессный флаг, который SettingsScreen
+ * потребляет один раз при composition (consumeOpenRequest) для выбора
+ * начальной вкладки. Отдельный объект, чтобы не трогать граф навигации.
+ */
+object UpdateDeepLink {
+    @Volatile
+    private var openUpdateTab: Boolean = false
+
+    fun requestOpenUpdateTab() {
+        openUpdateTab = true
+    }
+
+    /** Прочитать и СБРОСИТЬ запрос (одноразовый). */
+    fun consumeOpenRequest(): Boolean {
+        val value = openUpdateTab
+        openUpdateTab = false
+        return value
+    }
 }
