@@ -9473,3 +9473,24 @@ Work Log:
 Stage Summary:
 - У коллеги теперь есть один обязательный входной документ вместо устной традиции: правила, пайплайн, формат, чек-лист и прецеденты — всё со ссылками на эталонные доки проекта.
 - Правило закрывает повторяющиеся риски: утечка живых токенов из сырцов, мусор от неправильной кодировки, непроверенные утверждения, пропущенная дельта, мёртвые P0 в планах.
+
+---
+Task ID: 55
+Agent: Z.ai Code (main)
+Task: разбор снапшота «Каналы» (upload/Каналы.zip, запрос юзера: «изучи, в текстовом файле может быть нужное для всего проекта»). Первый разбор, выполненный строго по новому стандарту СНАПШОТЫ.ПРАВИЛА.md.
+
+Work Log:
+- Приёмка по §3 стандарта: zip 24.3 МБ / 582 записи; состав — 1 страница vk.ru/im (диалог канала, UTF-8), 353 js/88 css, q_frame ×2 (md5 4b5fc517… — идентичны между собой И q_frame снапшота профиля), undefined.html 993 КБ (cp1251), локал стордж_куки.txt 197 КБ. Распаковано в upload/snapКаналы/.
+- Секреты по §2.3: в дампе живой vk1.a.-токен и remixsid — значения нигде не воспроизводились (python-маски: имена ключей/куков сохранены, тела скрыты); /upload/ добавлен в .gitignore (был только untracked — один git add -A до аварии).
+- локал стордж_куки.txt (запрос юзера): 28 cookies (remix*-семья, значения скрыты) + 105 ключей localStorage. Группы: reforged-storage-db-v1-<uid>-* ×19 (мессенджер: channels-drafts с полным состоянием композера канала {text, attaches, sendOptions, donutDelay…}, search-channel-posts-requests, fc-heads/panel-wide, hidden-pinned-messages, last-delete-message-for-all-option, message-reactions-assets {lego_links svg/json}, theme-styles×3 (модель тем чатов: стиль/появление/фон, lagoon accentColor), videomessage-shapes (SVG-маски кружков, version 15), stickers-keywords-meta TTL); audio_v21_* ×7 (персистентность плеера: плейлист {type:temp, ownerId, albumId:-24, accessHash, nextOffset} + трек-массив + progress + vol, скоуп на uid); vk_player_* ×8 + stalls_manager_* (настройки видео и ABR-метрики); vknLP/vknLPD (LP-состояние в LS); multiacc_last_id; vkcalls-баннер-флаг.
+- Главный HTML (python-окна, 321 инлайн-скрипт): 47 testid — me_folder_tab_folders__7__all (папка 7 = «Каналы», сходится с VKApiClient.kt:1944), vkme_channel_{main,posts_scroll/history/list,post×10,post_highlight,unread_separator,history_loader_upper,footer_enable_notifications}, vkme_message_reaction_chip_{1..31} (10 уникальных; имена из aria: Большой палец вверх/Сердце/Смеюсь до слёз/Огонь/Ругаюсь/Окей/Плачу/Грущу/Неординарно/Хлопушка/В шоке), TopAudioPlayer* (глобальный мини-плеер в шапке), channels_list_recommended, unsubscribe; «Поиск по каналу» (aria); PhotoItem__blur с base64 thumbhash-плейсхолдером. Анатомия 10 постов описана БЕЗ цитирования контента (новостной канал): типы вложений (фото ×1–3, видео 0:13, клип @screen_name, YT-источник текстом), счётчики 1,3K, «1 комментарий», wall-цитаты.
+- apiPrefetchCache: 4 записи — wall.getById (copy_history_depth:1), likes.getList/isLiked, newsfeed.getCustom с feed_id="discover_media_similar_news/similar_news/<owner>_<post>" — механика рекомендаций «похожих публикаций».
+- undefined.html опознан: страница профиля/поиска («Александрий Македонский»), мини-плеер играет ТОТ ЖЕ трек, что в audio_v21_track — кросс-подтверждение глобальности плеера.
+- Сверка с PinoK (rg): ✅ вкладка «Каналы»+isChannel+бейдж (MessagesScreen :654/:816/:960), ✅ реакции IM (ChatDetailScreen + VKApiClient:10506), ✅ GlobalMiniPlayer; ❌ «Включить уведомления»-футер канального диалога, ❌ рекомендации similar_news (0 вхождений), ❌ поиск по каналу, ❌ thumbhash (0 — ссылка на бэклог картинок постов), ❌ черновики композера, ❌ кэш ассетов реакций.
+- Верификация: check-secrets.py OK (77 файлов, exit 0), check-nested-comments ALL CLEAN; ловля от Task 54 учтена — globs в док не писались с первого раза. Опечатка «профільных» найдена и исправлена.
+
+Stage Summary:
+- каналы.снапшоты.разбор.md (≈100 строк) — по формату §4 стандарта; контент новостей не цитировался (только анатомия).
+- Ценность для всего проекта (запрос юзера): референс audio_v21-персистентности («плеер выживает перезапуск»), чек-лист настроек видеоплеера VK (vk_player_*), модель тем чатов, TTL-кэш-паттерн; механика similar_news feed_id для рекомендаций.
+- Гэп-лист каналов: канальный диалог без отличий (футер уведомлений/подписчики/без композера), рекомендации, поиск по каналу, thumbhash — кандидаты §6 (P1/P2).
+- /upload/ закрыт в git — все будущие снапшоты юзера автоматически вне репозитория.
