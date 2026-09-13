@@ -9261,3 +9261,21 @@ Stage Summary:
 - Ключевые решения: отказ-вместо-риска (нет страховки → нет импорта); guard skip вместо затирания типа; восстановление из копии не перезаписывает копию; честные счётчики end-to-end (parse → RawRestore → AppliedResult → тост).
 - Тестеру: git pull, пересобрать; сценарий проверки: (1) экспорт → импорт на живой установке → в «Данных» появляется карточка страховки → «Восстановить из копии» возвращает состояние; (2) импорт файла с продублированными/битыми ключами → в диалоге виден счётчик пропущенных; (3) импорт файла без access_token → тост честно пишет «сессия 0 из N».
 - Коммиты: fix(feedback) волна 45-в (код, 4 файла) + docs (UPDATER.md §5/5.1 + worklog) — этим коммитом; stamp wave45-2026.09.13-c.
+
+---
+Task ID: 48
+Agent: Z.ai Code (main)
+Task: Пользователь: «Устрани предупреждение > Task :app:compileDebugKotlin w: file:///E:/ANDROID_APP/PinoK_1/app/src/main/java/re/pinok/data/SovaPrefsBackup.kt:266:13 Condition is always 'false'» — волна 45-г: root-cause + фикс parse().
+
+Work Log:
+- Root-cause по чтению файла (633 стр., зона parse :250-284): root объявлялся non-null `val root: JsonObject` и наполнялся из `Gson().fromJson(text, JsonObject::class.java)` — Java API с platform-типом результата (JsonObject!); Kotlin при присваивании platform-типа в non-null val вставляет неявный Intrinsics.checkNotNullExpressionValue → после присваивания root статически ненулевой → guard `root == null` (266:13) статически мёртв → warning «Condition is always 'false'».
+- Ловина глубже warning'а (честная ошибка, не косметика): Gson.fromJson документированно возвращает null на документе-литерале «null»; try обёртывает только сам вызов, поэтому null ловился бы НЕ catch, а неявным checkNotNull на присваивании → NPE в обход дружелюбного отказа — guard «Файл не содержит JSON-объекта» был недостижим именно в сценарии, ради которого писался. JSON-не-объект («[1]», «123») в старом коде зависел от версии Gson (JsonSyntaxException либо непредсказуемая ветка маскарадинга типа; в проекте Gson 2.13.1, libs.versions.toml:17).
+- Фикс (parse :269-278 + import JsonElement): (1) парсим `Gson().fromJson(text, JsonElement::class.java)` — точное совпадение типа → встроенный JSON_ELEMENT-адаптер Gson (nullSafe, детерминирован в ЛЮБОЙ версии, включая 2.13.1); (2) явное сужение `as? JsonObject` — валидный JSON не-объекта даёт null → тот же честный отказ, что и «null»-документ; (3) root объявлен JsonObject? → guard достижим, дальше smart cast по локальному val, все root.get(...) без изменений; catch/сообщения/формат-гейт format != FORMAT_VERSION не тронуты.
+- KDoc parse() дополнен волной 45-г (почему ветка была мёртвой, что изменилось); инлайн-комментарий у fromJson (почему JsonElement, а не JsonObject::class). Импорт JsonElement в алфавитном порядке между JsonArray и JsonObject.
+- Верификация: скобочный лексер (стек code/line/block-вложенный/string/raw/char/template, ${}-закрытие по возврату скобок на уровень входа; /home/z/kbrackets.py) — SYMMETRIC/OK; check-nested-comments — ALL CLEAN; check-secrets — OK (76 файлов); `!!` по файлу — 0 вхождений; git diff — только SovaPrefsBackup.kt (import + KDoc parse + 6 строк тела), вне заявленной зоны правок нет.
+
+Stage Summary:
+- Warning 266:13 устранён ЧЕСТНО (не подавлением через SuppressWarnings, не удалением guard'а): «Файл не содержит JSON-объекта» теперь реально работает на «null»-документе и на JSON-не-объекте — механизм #RESTORE-SAFETY стал прочнее, лог сборки чище.
+- Наружная совместимость: валидный бэкап-объект парсится как раньше; изменился только набор честных отказов («null» раньше = NPE в обход catch, теперь отказ; не-объект раньше = исключение/маскарадинг, теперь точный отказ). Формат файла, FORMAT_VERSION, секции keys/sp/session не менялись — экспорты волн 45/45-б/45-в совместимы.
+- Тестеру: git pull, пересобрать — warning должен исчезнуть; быстрые проверки: (1) файл с текстом «null» и файл с «[1]» → «Файл не содержит JSON-объекта»; (2) обычный экспорт→импорт без изменений поведения.
+- Коммиты: fix(feedback) волна 45-г (SovaPrefsBackup.kt) + docs (worklog); stamp wave45-2026.09.13-d.
