@@ -125,10 +125,42 @@ object UpdaterManager {
     /**
      * Ленивая инициализация контекстом (UpdateTab вызывает при композиции;
      * повторные вызовы безобидны — перезаписывают тот же applicationContext).
+     * Волна 45 #UPDATER-ROLLBACK: после первого init асинхронно восстанавливаем
+     * манифест из кэша prefs (список «Версии из манифеста» доступен сразу
+     * после перезапуска процесса, без сети — до первой проверки).
      */
     fun ensureInit(context: Context): UpdaterManager {
         appContext = context.applicationContext
+        restoreManifestFromCache()
         return this
+    }
+
+    /** Одноразовый триггер восстановления из кэша (повторные ensureInit не перезапускают). */
+    @Volatile
+    private var cacheRestoreStarted = false
+
+    /** Волна 45 #UPDATER-ROLLBACK: подъём манифеста из JSON-кэша prefs (если в памяти ещё пусто). */
+    private fun restoreManifestFromCache() {
+        if (cacheRestoreStarted) return
+        if (_manifest.value != null) { cacheRestoreStarted = true; return }
+        cacheRestoreStarted = true
+        managerScope.launch {
+            val app = SovaApp.getOrNull()
+            if (app == null) return@launch
+            val raw = app.prefsSnapshot?.updateLastManifestJson.orEmpty()
+            if (raw.isBlank()) return@launch
+            if (_manifest.value != null) return@launch // проверка успела раньше кэша
+            val parsed: UpdateManifest? = try {
+                gson.fromJson(raw, UpdateManifest::class.java)
+            } catch (t: Throwable) {
+                AppLog.w(TAG, "кэш манифеста не разобран: " + t.javaClass.simpleName)
+                null
+            }
+            if (parsed != null && _manifest.value == null) {
+                _manifest.value = parsed
+                AppLog.i(TAG, "кэш манифеста восстановлен из prefs: " + parsed.versions.size + " версий")
+            }
+        }
     }
 
     /** Ручная проверка (кнопка во вкладке): всегда форсирует сетевой запрос. */
@@ -214,6 +246,7 @@ object UpdaterManager {
                 is UpdateCheckResult.Success -> {
                     _manifest.value = result.manifest
                     persistCheckState(result.etag)
+                    persistManifestCache(result.manifest)
                     autoFailsInRow = 0
                     decideLatest(result.manifest)
                 }
@@ -360,6 +393,37 @@ object UpdaterManager {
         if (app == null) return
         app.prefs.setUpdateLastCheckMs(System.currentTimeMillis())
         if (etag.isNotEmpty()) app.prefs.setUpdateEtag(etag)
+    }
+
+    /** Волна 45 #UPDATER-ROLLBACK: кэш сырого JSON манифеста — список версий
+     *  переживает перезапуск процесса (UpdateTab читает _manifest, поднятый
+     *  restoreManifestFromCache()). Сериализация уже разобранной модели Gson'ом
+     *  (поля и имена совпадают с version.json; null-поля Gson по умолчанию
+     *  опускает — при повторном разборе это снова null, без потерь). */
+    private suspend fun persistManifestCache(manifest: UpdateManifest) {
+        val app = SovaApp.getOrNull()
+        if (app == null) return
+        try {
+            app.prefs.setUpdateLastManifestJson(gson.toJson(manifest))
+        } catch (t: Throwable) {
+            // Кэш — оптимизация, а не источник истины: сбой не ломает проверку.
+            AppLog.w(TAG, "не сохранил кэш манифеста: " + t.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * Волна 45 #UPDATER-ROLLBACK: источник обновлений сменили (UpdateTab
+     * «Сохранить»/«Сбросить») — манифест старого источника больше не авторитетен:
+     * список версий и статусы сбрасываются, кэш в prefs чистит вызывающий
+     * (setUpdateLastManifestJson("")). Активные проверка/загрузка НЕ трогаются —
+     * они уже стартовали и завершатся в текущем состоянии.
+     */
+    fun onSourceChanged() {
+        val current = _state.value
+        if (current is UpdaterUiState.Checking) return
+        if (current is UpdaterUiState.Downloading) return
+        _manifest.value = null
+        if (current !is UpdaterUiState.Downloaded) _state.value = UpdaterUiState.Idle
     }
 
     // ── «Пропустить эту версию» + пробная загрузка ссылки ────────────────
@@ -576,6 +640,65 @@ object UpdaterManager {
                 "Системный установщик не найден: " + t.message.orEmpty(),
             )
             AppLog.w(TAG, "installApk: no installer: " + t.message.orEmpty(), t)
+        }
+    }
+
+    /**
+     * Волна 45 #UPDATER-ROLLBACK: скачивание APK в ПУБЛИЧНЫЕ Загрузки
+     * (Download/PinoK/…) через системный DownloadManager — ключевой инструмент
+     * отката. Почему не downloadApk(): тот кладёт файл в app-specific
+     * getExternalFilesDir/updates/, который Android СТИРАЕТ при удалении
+     * приложения, а откат начинается именно с удаления — APK пропадал бы
+     * в самый нужный момент. Публичные Загрузки переживают uninstall.
+     *
+     * Честные ограничения (в KDoc и в UI-диалоге отката):
+     *  - прогресс/результат качает система (уведомление DownloadManager'а);
+     *  - sha256 из манифеста здесь проверить НЕЛЬЗЯ (файл идёт мимо нас) —
+     *    для отката это осознанный компромисс: URL берётся из того же
+     *    манифеста, что и штатные обновления (https, GitHub Releases);
+     *  - после удаления приложения установку запускает сам юзер из Загрузок.
+     *
+     * Возвращает false, если контекст не готов, URL пуст или DownloadManager
+     * недоступен — вызывающий показывает честный тост, state НЕ трогается
+     * (машина состояний остаётся про штатный путь «обновление», не про откат).
+     */
+    fun downloadApkToPublicDownloads(info: UpdateInfo): Boolean {
+        val ctx = appContext
+        if (ctx == null) return false
+        val url = info.apkUrl.orEmpty().trim()
+        if (url.isEmpty()) return false
+        return try {
+            // Санитизация имени (паттерн #DOCS-DOWNLOAD): без path-сепараторов
+            // и запрещённых символов — иначе DownloadManager отклонит запрос.
+            val safeName = "PinoK_" +
+                info.versionName.orEmpty().ifEmpty { "unknown" }
+                    .replace(Regex("[\\\\/:*?\"<>|]"), "_") +
+                "_" + info.versionCode + ".apk"
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                .setTitle(safeName)
+                .setDescription("APK PinoK для установки/отката")
+                .setMimeType("application/vnd.android.package-archive")
+                .setNotificationVisibility(
+                    android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED,
+                )
+                .setAllowedOverMetered(true)
+                .setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                    "PinoK/" + safeName,
+                )
+            val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
+            if (dm == null) {
+                AppLog.w(TAG, "public download: DownloadManager недоступен")
+                false
+            } else {
+                dm.enqueue(request)
+                AppLog.i(TAG, "public download enqueued: Downloads/PinoK/" + safeName)
+                true
+            }
+        } catch (t: Throwable) {
+            // Cleartext-URL, нет сети/хранилища, кривой Uri — честный отказ, не крэш.
+            AppLog.w(TAG, "public download failed: " + t.javaClass.simpleName, t)
+            false
         }
     }
 

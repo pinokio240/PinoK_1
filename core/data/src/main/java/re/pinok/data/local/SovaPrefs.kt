@@ -506,6 +506,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             updateLastCheckMs = p[Keys.UPDATE_LAST_CHECK_MS] ?: 0L,
             updateSkippedCode = p[Keys.UPDATE_SKIPPED_CODE] ?: 0,
             updateEtag = p[Keys.UPDATE_ETAG] ?: "",
+            // Волна 45 #UPDATER-ROLLBACK: кэш сырого JSON манифеста (список версий
+            // доступен сразу после перезапуска процесса, без сети).
+            updateLastManifestJson = p[Keys.UPDATE_LAST_MANIFEST_JSON] ?: "",
             // #CALLS: queuev4 credential (ввод вручную из localStorage).
             callsQueueKey = p[Keys.CALLS_QUEUE_KEY] ?: "",
             callsQueueTs = p[Keys.CALLS_QUEUE_TS] ?: 0L,
@@ -1068,6 +1071,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setUpdateLastCheckMs(v: Long)         = put(Keys.UPDATE_LAST_CHECK_MS, v)
     suspend fun setUpdateSkippedCode(v: Int)          = put(Keys.UPDATE_SKIPPED_CODE, v)
     suspend fun setUpdateEtag(v: String)              = put(Keys.UPDATE_ETAG, v)
+    /** Волна 45 #UPDATER-ROLLBACK: кэш сырого JSON манифеста (пишет UpdaterManager
+     *  после успешной проверки; сбрасывается при смене источника). */
+    suspend fun setUpdateLastManifestJson(v: String)  = put(Keys.UPDATE_LAST_MANIFEST_JSON, v)
     // #CALLS: queuev4 credential для звонков (ввод вручную из localStorage).
     suspend fun setCallsQueueKey(v: String)            = put(Keys.CALLS_QUEUE_KEY, v)
     suspend fun setCallsQueueTs(v: Long)               = put(Keys.CALLS_QUEUE_TS, v)
@@ -1094,6 +1100,41 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsDnsPinIp(v: String)            = put(Keys.CALLS_DNS_PIN_IP, v.trim())
     /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
     suspend fun setEmailNotifyFreq(v: Int)              = put(Keys.EMAIL_NOTIFY_FREQ, v)
+
+    /**
+     * Волна 45 #SETTINGS-EXPORT: сырой снимок ВСЕХ ключей DataStore — полный дамп
+     * для экспорта настроек (SovaPrefsBackup в :app сериализует в JSON).
+     * Тип каждого значения определяется Key-объектом (boolean/int/long/string/
+     * stringSet), поэтому новые ключи подхватываются без правок этого метода:
+     * Snapshot — подмножество ключей (часть живёт вне него), а экспорт обязан
+     * быть ПОЛНЫМ, иначе восстановление на новом устройстве потеряет сессию.
+     */
+    suspend fun rawSnapshot(): Map<androidx.datastore.preferences.core.Preferences.Key<*>, Any> {
+        return ds.data.first().asMap()
+    }
+
+    /**
+     * Волна 45 #SETTINGS-EXPORT: восстановление сырых ключей из экспорта —
+     * ОДНА транзакция ds.edit (атомарно: либо все записи, либо ни одной).
+     * Ключи, которых не было в этой установке, создаются на лету (DataStore
+     * хранит произвольные Preferences); неизвестные типы невозможны — тип
+     * задаёт Key-объект, построенный парсером SovaPrefsBackup.
+     * Возвращает число фактически записанных ключей.
+     */
+    suspend fun restoreRaw(entries: List<Pair<androidx.datastore.preferences.core.Preferences.Key<*>, Any>>): Int {
+        if (entries.isEmpty()) return 0
+        var written = 0
+        ds.edit { p ->
+            for ((key, value) in entries) {
+                // Key<T> типизирован парсером по полю "type" — каст безопасен.
+                @Suppress("UNCHECKED_CAST")
+                val typed = key as androidx.datastore.preferences.core.Preferences.Key<Any>
+                p[typed] = value
+                written++
+            }
+        }
+        return written
+    }
 
     private suspend fun <T> put(key: androidx.datastore.preferences.core.Preferences.Key<T>, value: T) {
         ds.edit { it[key] = value }
@@ -1486,6 +1527,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val updateSkippedCode: Int = 0,
         /** ETag последнего ответа для условного GET (If-None-Match → 304 без тела). */
         val updateEtag: String = "",
+        /** Волна 45 #UPDATER-ROLLBACK: сырой JSON последнего успешно загруженного манифеста
+         *  (список «Версии из манифеста» переживает перезапуск процесса; пусто = не было проверки). */
+        val updateLastManifestJson: String = "",
         // #CALLS: queuev4 credential для звонков (можно ввести вручную из localStorage).
         val callsQueueKey: String,
         val callsQueueTs: Long,
@@ -1767,6 +1811,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val UPDATE_LAST_CHECK_MS  = longPreferencesKey("update_last_check_ms")
         val UPDATE_SKIPPED_CODE   = intPreferencesKey("update_skipped_code")
         val UPDATE_ETAG           = stringPreferencesKey("update_etag")
+        // Волна 45 #UPDATER-ROLLBACK: кэш сырого JSON манифеста (переживает процесс).
+        val UPDATE_LAST_MANIFEST_JSON = stringPreferencesKey("update_last_manifest_json")
         // #CALLS: queuev4 credential для звонков.
         val CALLS_QUEUE_KEY         = stringPreferencesKey("calls_queue_key")
         val CALLS_QUEUE_TS          = longPreferencesKey("calls_queue_ts")

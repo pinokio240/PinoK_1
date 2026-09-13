@@ -85,6 +85,7 @@ import re.pinok.BuildStamp
 import re.pinok.SovaApp
 import re.pinok.contracts.ContainerRegistry
 import re.pinok.contracts.SettingsSection
+import re.pinok.data.SovaPrefsBackup
 import re.pinok.data.local.SovaPrefs
 import re.pinok.data.local.AudioFormat
 import re.pinok.data.local.AudioQuality
@@ -211,6 +212,11 @@ private enum class SettingsTab(
     PRIVACY("Приватность", Icons.Outlined.Shield),
     SECURITY("Защита", Icons.Outlined.Lock),
     LOGGING("Логирование", Icons.Outlined.BugReport),
+    // Волна 45 #SETTINGS-EXPORT: вкладка «Данные» — экспорт/импорт ВСЕХ настроек
+    // (DataStore SovaPrefs → JSON через SAF). Сценарий-спутник отката версии:
+    // Android стирает данные приложения при удалении, экспорт — единственный
+    // способ вернуть настройки/закладки/сессию после переустановки.
+    DATA("Данные", Icons.Outlined.DownloadForOffline),
     // Fix #391 #IN-APP-UPDATER (волна 29-i): вкладка «Обновления» — проверка
     // version.json из репозитория, скачивание/установка APK, откат на предыдущие
     // версии, ручное скачивание в браузере. ПЕРЕД AUTHOR (AUTHOR остаётся
@@ -463,6 +469,8 @@ fun SettingsScreen(
                     SettingsTab.PRIVACY -> PrivacyTab(s, app, scope, onOpenPrivacySettings)
                     SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices, onOpenVkIdAccount)
                     SettingsTab.LOGGING -> LoggingTab(s, app, scope)
+                    // Волна 45 #SETTINGS-EXPORT: вкладка «Данные» (экспорт/импорт настроек).
+                    SettingsTab.DATA -> DataTab(app, scope)
                     // Fix #391 #IN-APP-UPDATER: вкладка «Обновления» (перед AUTHOR).
                     SettingsTab.UPDATE -> UpdateTab(s, app, scope)
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
@@ -4738,6 +4746,17 @@ private fun UpdateTab(
         }
 
         item { SectionHeader("Версии из манифеста") }
+        item {
+            // Волна 45 #UPDATER-ROLLBACK: список теперь переживает перезапуск
+            // (кэш манифеста в prefs), а «Откатиться» качает в публичные Загрузки.
+            Text(
+                "Список восстанавливается после перезапуска приложения из кэша последней проверки. " +
+                    "«Откатиться» скачивает APK в «Загрузки» — файл переживёт удаление приложения.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
         val m = manifest
         val versions: List<UpdateInfo> = if (m == null) emptyList() else m.versions
         if (versions.isEmpty()) {
@@ -4809,6 +4828,11 @@ private fun UpdateTab(
 
     // AlertDialog отката — вынесен ИЗ item{} LazyColumn (урок #PIN-DIALOG-OVERLAY:
     // dispose по viewport молча закрывал диалоги, живущие внутри списка).
+    // Волна 45 #UPDATER-ROLLBACK: прежний флоу («Продолжить» → downloadApk()) был
+    // сломан по сути: файл уходил в app-specific updates/, который Android
+    // стирает при удалении приложения — а откат НАЧИНАЕТСЯ с удаления. Новый
+    // флоу качает в публичные Загрузки через DownloadManager и честно
+    // расписывает порядок действий (экспорт → скачивание → удаление → установка).
     val rollbackInfo = pendingRollback
     if (rollbackInfo != null) {
         AlertDialog(
@@ -4816,9 +4840,11 @@ private fun UpdateTab(
             title = { Text("Откатиться на " + rollbackInfo.versionName.orEmpty() + "?") },
             text = {
                 Text(
-                    "Android не устанавливает более старую версию поверх новой — сначала приложение придётся удалить. " +
-                        "Данные приложения будут потеряны: сессию (вход в аккаунт) нужно будет пройти заново, " +
-                        "кэши и локальные настройки сотрутся. Продолжить?",
+                    "Android не устанавливает более старую версию поверх новой, поэтому порядок такой:\n" +
+                        "1. Экспортируйте настройки (вкладка «Данные») — после удаления приложения они пропадут вместе с ним.\n" +
+                        "2. Скачайте APK в «Загрузки» — файл переживёт удаление.\n" +
+                        "3. Удалите приложение и откройте скачанный APK из Загрузок.\n\n" +
+                        "Данные входа, настройки и локальные закладки сотрутся — восстановите их из экспорта после установки.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -4826,11 +4852,224 @@ private fun UpdateTab(
                 TextButton(onClick = {
                     pendingRollback = null
                     // rollbackInfo — локальный val (smart-cast на non-null внутри if выше).
-                    updater.downloadApk(rollbackInfo)
-                }) { Text("Продолжить") }
+                    val queued = updater.downloadApkToPublicDownloads(rollbackInfo)
+                    Toast.makeText(
+                        context,
+                        if (queued) {
+                            "Загрузка началась — файл появится в «Загрузки/PinoK/»"
+                        } else {
+                            "Не удалось начать загрузку — проверьте сеть или ссылку на APK"
+                        },
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }) { Text("Скачать в Загрузки") }
             },
             dismissButton = {
                 TextButton(onClick = { pendingRollback = null }) { Text("Отмена") }
+            },
+        )
+    }
+}
+
+/**
+ * Волна 45 #SETTINGS-EXPORT: вкладка «Данные» — перенос хранилища настроек
+ * между установками/устройствами (полный экспорт DataStore SovaPrefs в
+ * JSON-файл через SAF и обратное восстановление). Сценарий-спутник отката
+ * версии (#UPDATER-ROLLBACK): Android стирает данные приложения при
+ * удалении, экспорт — единственный способ вернуть настройки, локальные
+ * закладки треков и сессию после переустановки.
+ *
+ * Честные границы (написаны в UI): медиа-кэш и офлайн-загрузки НЕ переносятся
+ * (отдельные файлы); в файле лежат куки/токены сессии — предупреждаем ДО
+ * экспорта. Импорт — атомарный (одна транзакция DataStore): либо все ключи,
+ * либо ни один; перед применением — AlertDialog с числом перезаписываемых
+ * ключей (диалог вне LazyColumn — урок #PIN-DIALOG-OVERLAY).
+ *
+ * SAF-контракты CreateDocument/OpenDocument — первое применение в проекте
+ * (ланчеры живут в композиции, IO — в scope на Dispatchers по умолчанию
+ * contentResolver'а); имя экспорт-файла с датой — паттерн LogScreen.
+ */
+@Composable
+private fun DataTab(app: SovaApp, scope: CoroutineScope) {
+    val context = LocalContext.current
+    var busy by remember { mutableStateOf(false) }
+    var pendingImport by remember { mutableStateOf<SovaPrefsBackup.ImportPlan?>(null) }
+
+    // SAF CreateDocument: место выбирает юзер (обычно «Загрузки»); MIME json.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(SovaPrefsBackup.MIME_JSON),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            busy = true
+            val exported = SovaPrefsBackup.export(
+                app.prefs,
+                BuildConfig.VERSION_NAME + " (versionCode " + BuildConfig.VERSION_CODE + ")",
+            )
+            val written = try {
+                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                    out.write(exported.json.toByteArray(Charsets.UTF_8))
+                    out.flush()
+                    true
+                } ?: false
+            } catch (t: Throwable) {
+                false
+            }
+            busy = false
+            Toast.makeText(
+                context,
+                if (written) "Экспортировано ключей: " + exported.keyCount else "Не удалось записать файл",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    // SAF OpenDocument: читаем текст → parse → диалог подтверждения (внизу).
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            busy = true
+            val text: String? = try {
+                context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            } catch (t: Throwable) {
+                null
+            }
+            busy = false
+            if (text == null) {
+                Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val plan = SovaPrefsBackup.parse(text)
+            if (!plan.ok) {
+                Toast.makeText(context, plan.error, Toast.LENGTH_LONG).show()
+            } else {
+                pendingImport = plan
+            }
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item { SectionHeader("Экспорт настроек") }
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Сохранить все настройки в файл",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "В файл попадает ВСЁ хранилище настроек: интерфейс, музыка, звонки, " +
+                            "уведомления, логирование, локальные закладки треков и данные входа " +
+                            "(куки/токены сессии). Медиа-кэш и офлайн-загрузки НЕ переносятся — " +
+                            "они хранятся отдельными файлами.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Text(
+                        "Файл содержит данные входа в аккаунт — храните его только у себя " +
+                            "и не передавайте никому.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Button(
+                        onClick = {
+                            val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                                .format(java.util.Date())
+                            exportLauncher.launch("pinok_settings_" + stamp + ".json")
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        Text("Экспортировать в файл")
+                    }
+                }
+            }
+        }
+        item { SectionHeader("Импорт настроек") }
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Восстановить из файла",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "Значения из файла ПЕРЕЗАПИШУТ текущие настройки одним пакетом " +
+                            "(атомарно: либо всё, либо ничего). Полезно после переустановки " +
+                            "приложения или при переносе на новое устройство.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            importLauncher.launch(
+                                arrayOf("application/json", "text/plain", "application/octet-stream"),
+                            )
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        Text("Выбрать файл экспорта")
+                    }
+                }
+            }
+        }
+        item {
+            // Связка с откатом (#UPDATER-ROLLBACK): порядок действий подсказкой.
+            Text(
+                "Совет: перед откатом версии или переустановкой приложения сначала " +
+                    "экспортируйте настройки здесь, а после установки восстановите их.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
+    }
+
+    // AlertDialog подтверждения импорта — вне LazyColumn (#PIN-DIALOG-OVERLAY):
+    // dispose по viewport молча закрывал диалоги, живущие внутри списка.
+    val plan = pendingImport
+    if (plan != null) {
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text("Применить экспорт?") },
+            text = {
+                Text(
+                    "Будет перезаписано ключей: " + plan.total +
+                        ". Текущие значения этих ключей будут потеряны. Продолжить?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingImport = null
+                    scope.launch {
+                        busy = true
+                        val applied = SovaPrefsBackup.apply(app.prefs, plan.entries)
+                        busy = false
+                        Toast.makeText(
+                            context,
+                            "Применено записей: " + applied,
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }) { Text("Применить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImport = null }) { Text("Отмена") }
             },
         )
     }
@@ -5062,6 +5301,11 @@ private fun UpdateSourceCard(
                             app.prefs.setUpdateManifestUrl(if (trimmed == defaultUrl) "" else trimmed)
                             app.prefs.setUpdateToken(tokenDraft.trim())
                             app.prefs.setUpdateEtag("") // ETag привязан к источнику — сбрасываем
+                            // Волна 45 #UPDATER-ROLLBACK: манифест старого источника
+                            // больше не авторитетен — кэш в prefs и список версий
+                            // в памяти сбрасываются (до следующей проверки).
+                            app.prefs.setUpdateLastManifestJson("")
+                            UpdaterManager.ensureInit(context.applicationContext).onSourceChanged()
                             Toast.makeText(context, "Источник обновлений сохранён", Toast.LENGTH_SHORT).show()
                         }
                     },
@@ -5091,6 +5335,9 @@ private fun UpdateSourceCard(
                             app.prefs.setUpdateManifestUrl("")
                             app.prefs.setUpdateToken("")
                             app.prefs.setUpdateEtag("")
+                            // Волна 45: кэш манифеста привязан к источнику — сбрасываем.
+                            app.prefs.setUpdateLastManifestJson("")
+                            UpdaterManager.ensureInit(context.applicationContext).onSourceChanged()
                             Toast.makeText(context, "Возвращён стандартный источник", Toast.LENGTH_SHORT).show()
                         }
                     },
