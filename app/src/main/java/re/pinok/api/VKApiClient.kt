@@ -695,6 +695,13 @@ class VKApiClient(
         // #CHANNEL-MUTE-FIX: для каналов is_enabled=false — ДЕФОЛТ (уведомления
         // о постах выключены по умолчанию), а не ручной mute. Раньше это давало
         // 🔕-иконку у КАЖДОГО канала — неверно. PushSettings оставляем null.
+        // #IM-CHANNEL-FIX (56-b-5): сам флаг теперь НЕ ОТБРАСЫВАЕТСЯ — парсим
+        // is_enabled в Chat.channelNotificationsEnabled (null = поля нет).
+        // Семантика VK web (снапшот 55, футер «Включить уведомления»): канал
+        // молчит по умолчанию, пуш — только при is_enabled=true. Источник флага
+        // для пуш-конвейера (SovaApp) — этот парсер + кэш SovaPrefs (см. 56-b-5).
+        val channelNotificationsEnabled = userData?.getAsJsonObject("notification_settings")
+            ?.get("is_enabled")?.takeIf { !it.isJsonNull }?.asBoolean
         val adminLevel = userData?.get("admin_level")?.takeIf { !it.isJsonNull }?.asInt ?: 0
 
         // sort_id — закрепление (major_id > 0).
@@ -738,6 +745,9 @@ class VKApiClient(
             pushSettings = null,
             sortId = sortId,
             important = null,
+            // #IM-CHANNEL-FIX (56-b-5): распарсенный user_data.notification_settings.is_enabled
+            // (см. выше). Для не-канальных записей parseChannelItem не вызывается.
+            channelNotificationsEnabled = channelNotificationsEnabled,
         )
     }
 
@@ -1564,6 +1574,14 @@ class VKApiClient(
      *
      * @param force если true — игнорируем DNR (явное действие пользователя
      *   «отметить прочитанным» из меню диалога).
+     *
+     * #IM-CHANNEL-FIX (56-b-1): при upToMessageId <= 0 параметр start_message_id
+     * НЕ ПЕРЕДАЁТСЯ. В VK API он опционален: вызов только с peer_id помечает
+     * прочитанной ВСЮ беседу. Раньше в запрос уходил литеральный
+     * start_message_id=0 — для канальных пиров (wall-режим, в ChatDetailScreen
+     * нет cmid последнего поста беседы: у wall-постов другой id-пространства)
+     * это означало no-op и вечный непрочитанный бейдж при открытии из
+     * пуша/deep-link. Вызывающие с реальным message_id (>0) работают как раньше.
      */
     suspend fun messagesMarkAsRead(peerId: Long, upToMessageId: Long, force: Boolean = false): Boolean {
         val snap = prefs.data.first()
@@ -1571,10 +1589,11 @@ class VKApiClient(
             AppLog.d("VKApiClient", "messagesMarkAsRead: suppressed by DNR (peer=$peerId)")
             return false
         }
-        val args = mapOf(
+        // NULL-ЯВНО: mutableMapOf + условный аргумент (без элвис-чейнинга).
+        val args = mutableMapOf<String, String>(
             "peer_id" to peerId.toString(),
-            "start_message_id" to upToMessageId.toString(),
         )
+        if (upToMessageId > 0) args["start_message_id"] = upToMessageId.toString()
         val json = call("messages.markAsRead", args)
         return json != null
     }

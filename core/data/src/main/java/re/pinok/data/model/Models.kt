@@ -626,6 +626,15 @@ data class Chat(
     // null для 1-1 диалогов и чатов без описания. Используется в ChangeDescriptionDialog
     // для pre-fill (раньше был хардкод "" → пользователь не видел текущее описание).
     @SerializedName("description") val description: String? = null,
+    // #IM-CHANNEL-FIX (56-b-5): уведомления канала — user_data.notification_settings.is_enabled
+    // из messages.getItems (parseChannelItem). Семантика VK web (снапшот 55): канал по
+    // умолчанию МОЛЧИТ, пуш включается только явным действием («Включить уведомления»).
+    //  - true  = уведомления канала явно включены (пуш на посты разрешён);
+    //  - false = явно выключены (дефолт сервера);
+    //  - null  = не канал ИЛИ флаг недоступен (не из getItems) — трактуется как «неизвестно».
+    // Существующий pushSettings для каналов НЕ трогается: он остаётся null
+    // (#CHANNEL-MUTE-FIX — is_enabled=false это дефолт канала, а не ручной mute).
+    @SerializedName("channel_notifications_enabled") val channelNotificationsEnabled: Boolean? = null,
 ) {
     data class Peer(
         @SerializedName("id")    val id: Long,

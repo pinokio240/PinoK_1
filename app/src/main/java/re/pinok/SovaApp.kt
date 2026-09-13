@@ -1608,6 +1608,29 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             // Используем server-side unread_count если доступен, иначе 1.
                             unread = chat?.unreadCount?.takeIf { it > 0 } ?: 1
                             muted = chat?.pushSettings?.isMuted() == true
+                            // #IM-CHANNEL-FIX (56-b-5): дефолт-тишина КАНАЛОВ (peerId<0,
+                            // can_write запрещён — Chat.isChannel). Раньше pushSettings
+                            // канала из getConversationsById = null → «не muted» → пуш на
+                            // КАЖДЫЙ пост. Семантика VK web (снапшот 55, футер «Включить
+                            // уведомления»): канал молчит, пока юзер ЯВНО не включил пуш.
+                            // Источники разрешения: (1) распарсенный флаг
+                            // channelNotificationsEnabled (сейчас getConversationsById не
+                            // отдаёт user_data → null, проверка задел на будущее);
+                            // (2) кэш SovaPrefs channelNotifEnabledIds — пишут
+                            // MessagesScreen после первичного merge (сервер отдал
+                            // is_enabled=true) и тумблер футера канала.
+                            // Диалоги сообществ (peerId<0, can_write разрешён) НЕ трогаем:
+                            // у них работает обычный push_settings-механизм выше.
+                            val channelChat = chat
+                            if (channelChat != null && channelChat.isChannel &&
+                                channelChat.channelNotificationsEnabled != true &&
+                                !snap.channelNotifEnabledIds.contains(channelChat.peer.id)
+                            ) {
+                                AppLog.d("SovaApp",
+                                    "#IM-CHANNEL-FIX: канал ${channelChat.peer.id} молчит " +
+                                        "(уведомления не включены) — пуш подавлен")
+                                return@collect
+                            }
                         }
 
                         // Fix #137: для чатов (peerId >= 2_000_000_000) пытаемся

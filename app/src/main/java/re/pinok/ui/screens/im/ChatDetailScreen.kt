@@ -795,6 +795,19 @@ fun ChatDetailScreen(
         .collectAsState(initial = true)
     // P3.4: определяется при загрузке chat info (messagesGetConversationsById).
     var isChannel by remember { mutableStateOf(false) }
+    // #IM-CHANNEL-FIX (56-b-3): can_write-гейт — «canWrite известен и запрещён».
+    // Задаётся из chat state (messagesGetConversationsById) в обоих местах его
+    // резолва (ранний канальный блок + поздний P0.3-блок LaunchedEffect).
+    // Композер должен скрываться ВСЕГДА когда писать нельзя — НЕ зависимо от
+    // тумблера channelModeEnabled (админ канала с allowed=true сюда не попадает).
+    var channelWriteDenied by remember { mutableStateOf(false) }
+    // #IM-CHANNEL-FIX (56-b-5): уведомления канала — реактивно из кэша SovaPrefs.
+    // Канал по умолчанию МОЛЧИТ (дефолт VK web, снапшот 55) → initial=false,
+    // true появляется только из кэша (юзер включил тумблером / сервер отдал
+    // is_enabled=true при первичном merge списка).
+    val channelNotifEnabled by app.prefs.data
+        .map { it.channelNotifEnabledIds.contains(peerId) }
+        .collectAsState(initial = false)
 
     // ═══ #CHANNEL-WALL-MODE (Fix #393) ═══════════════════════════════════
     // Root-cause «каналы — диалоги не открываются, ошибки»: контент канала
@@ -1698,6 +1711,84 @@ fun ChatDetailScreen(
         }
     }
 
+    // ═══ #IM-CHANNEL-FIX (56-b-5): уведомления канала ═════════════════════
+    // ЗАМЕНА toggleMute для канальных пиров (peerId<0): push_settings-механизм
+    // (messages.setConversationPushSettings) для каналов не доказан, зато есть
+    // готовые обёртки messagesAllowFromGroup/messagesDenyFromGroup
+    // (group_id = -peerId) — ровно то, чем VK web включает/выключает пуш канала
+    // (снапшот 55: футер «Включить уведомления»). Для обычных чатов peerId>0
+    // toggleMute выше НЕ тронут.
+    //
+    // Порядок: (1) оптимистично пишем кэш SovaPrefs — он же источник реактивного
+    // стейта футера (channelNotifEnabled) и гейта пуша в SovaApp; (2) синхронизируем
+    // кэш MessageNotifier (паттерн Fix #285 — иначе после выключения следующий
+    // пост канала прошёл бы через cached.muted=false); (3) серверный вызов, при
+    // отказе — откат (1)+(2) и честный Toast.
+    fun toggleChannelNotifications() {
+        val newState = !channelNotifEnabled
+        scope.launch {
+            // (1) Оптимистичный локальный стейт (NULL-ЯВНО: сбой DataStore не роняет UI).
+            try {
+                app.prefs.setChannelNotifEnabled(peerId, newState)
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen",
+                    "#IM-CHANNEL-FIX: channel notif cache write failed: ${e.message}")
+            }
+            // (2) Кэш нотифаера: выключили канал → активный пуш-контекст глушится.
+            re.pinok.realtime.MessageNotifier.setMuted(peerId, !newState)
+            // (3) Сервер: allow/deny по group_id (peerId отрицательный).
+            try {
+                val groupId = -peerId
+                val ok = if (newState) app.apiClient.messagesAllowFromGroup(groupId)
+                else app.apiClient.messagesDenyFromGroup(groupId)
+                if (ok) {
+                    AppLog.i("ChatDetailScreen",
+                        "#IM-CHANNEL-FIX: channel notifications ${if (newState) "ENABLED" else "DISABLED"} " +
+                            "peer=$peerId groupId=$groupId")
+                    Toast.makeText(
+                        ctx,
+                        if (newState) "Уведомления канала включены" else "Уведомления канала выключены",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    // Сервер отклонил — откат оптимистичных (1)+(2).
+                    try {
+                        app.prefs.setChannelNotifEnabled(peerId, !newState)
+                    } catch (e2: Exception) {
+                        AppLog.w("ChatDetailScreen",
+                            "#IM-CHANNEL-FIX: channel notif cache revert failed: ${e2.message}")
+                    }
+                    re.pinok.realtime.MessageNotifier.setMuted(peerId, newState)
+                    val err = app.apiClient.lastApiError
+                    AppLog.w("ChatDetailScreen",
+                        "#IM-CHANNEL-FIX: channel notif toggle rejected (err=$err) peer=$peerId")
+                    Toast.makeText(
+                        ctx,
+                        if (err.isNullOrBlank()) "Не удалось изменить уведомления канала" else "Ошибка: $err",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                // Сетевая ошибка — откат оптимистичных (1)+(2) + честный Toast.
+                try {
+                    app.prefs.setChannelNotifEnabled(peerId, !newState)
+                } catch (e2: Exception) {
+                    AppLog.w("ChatDetailScreen",
+                        "#IM-CHANNEL-FIX: channel notif cache revert failed: ${e2.message}")
+                }
+                re.pinok.realtime.MessageNotifier.setMuted(peerId, newState)
+                AppLog.e("ChatDetailScreen", "#IM-CHANNEL-FIX: channel notif toggle error", e)
+                Toast.makeText(
+                    ctx,
+                    "Ошибка: ${e.message ?: "network error"}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
     // W30-1 #IM-UNREAD-MENU: «Отметить непрочитанным/прочитанным» из меню шапки
     // чата — семантика 1:1 со списком диалогов (MessagesScreen.onToggleUnread,
     // Fix #274 + #MARK-READ-REVERT):
@@ -1784,6 +1875,68 @@ fun ChatDetailScreen(
     // ═══ #CHANNEL-WALL-MODE (Fix #393): функции канального режима ════════
 
     /**
+     * #IM-CHANNEL-FIX (56-b-4): метаданные канала в шапку — подписчики, имя,
+     * аватар (groupsGetById(-peerId), снапшот 29-a: «название + N подписчиков»)
+     * + GroupInfo для PostHolder.lastGroups (паритет CommunityScreen).
+     *
+     * Раньше блок жил ИНЛАЙНОМ только в основном isChannel-пути LaunchedEffect —
+     * probe/empty-history/error ветки wall-режима оставались без подписчиков.
+     * Теперь это общая fun, вызываемая из ВСЕХ wall-веток. Асинхронно
+     * (scope.launch): посты канала грузятся параллельно, шапка доворачивается
+     * при приходе ответа.
+     */
+    fun loadChannelMeta() {
+        scope.launch {
+            try {
+                val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
+                if (g != null) {
+                    channelGroup = g
+                    if (g.name.isNotBlank() && g.name != currentTitle) currentTitle = g.name
+                    // NULL-ЯВНО: photo200 может отсутствовать — фолбэк на
+                    // photo100 (паттерн рендера аватарок всего проекта).
+                    val gPhoto = if (g.photo200 != null) g.photo200 else g.photo100
+                    if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
+                        currentPhoto = gPhoto
+                    }
+                    if (g.membersCount > 0) channelSubscribers = g.membersCount
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                // Уход с экрана — нормальный lifecycle, не ошибка (паттерн Fix #151).
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen", "#IM-CHANNEL-FIX loadChannelMeta failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * #IM-CHANNEL-FIX (56-b-1): сброс непрочитанного бейджа канала при открытии.
+     *
+     * Тап по карточке канала в списке уже чистит бейдж (MessagesScreen.onMarkAsRead),
+     * но при открытии из пуша/deep-link список не участвует, а wall-ветки
+     * LaunchedEffect выходили до markAsRead обычного чата → бейдж канала висел до
+     * следующего refresh. Маркер: start_message_id НЕ передаётся (upToMessageId=0
+     * → VK помечает всю беседу — у wall-постов другой id-пространства, cmid
+     * беседы канала у нас недоступен; см. messagesMarkAsRead в VKApiClient).
+     * DNR-режим уважается внутри messagesMarkAsRead (suppressRead).
+     */
+    fun markChannelConversationAsRead() {
+        if (peerId >= 0) return
+        scope.launch {
+            try {
+                val ok = app.apiClient.messagesMarkAsRead(peerId, 0L)
+                AppLog.d("ChatDetailScreen",
+                    "#IM-CHANNEL-FIX markChannelConversationAsRead: peer=$peerId ok=$ok")
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen",
+                    "#IM-CHANNEL-FIX markChannelConversationAsRead failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Загрузка постов канала через wall.get (ownerId = peerId — посты
      * сообщества и есть контент канала, снапшот 29-a). [preloaded] — уже
      * полученная страница (probe-вызов wallGet при недоступном chat state),
@@ -1805,6 +1958,9 @@ fun ChatDetailScreen(
                 if (preloaded != null) {
                     channelPosts = preloaded
                     if (preloaded.size < 30) channelPostsEnd = true
+                    // #IM-CHANNEL-FIX (56-b-1): probe-ветка — канал успешно открыт,
+                    // сбрасываем бейдж канала (см. markChannelConversationAsRead).
+                    if (initial) markChannelConversationAsRead()
                 } else {
                     val posts = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
                     // #IM-CHANNEL-OPEN: успех/пустота wall.get — ключевой пункт
@@ -1820,6 +1976,10 @@ fun ChatDetailScreen(
                         val err = app.apiClient.lastApiError
                         if (err != null) channelPostsError = "Не удалось загрузить канал: $err"
                     }
+                    // #IM-CHANNEL-FIX (56-b-1): загрузка УСПЕШНА (посты получены либо
+                    // канал честно пуст) — сбрасываем бейдж канала на сервере
+                    // (открытие из пуша/deep-link, тап-путь из списка уже умеет).
+                    if (initial && channelPostsError == null) markChannelConversationAsRead()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1933,6 +2093,23 @@ fun ChatDetailScreen(
 
     // Отправка (или отправка редактированного).
     fun doSend() {
+        // #IM-CHANNEL-FIX (56-b-3): ранний guard — в канал нельзя писать.
+        // Срабатывает ДО любых веток (текст/фото/файлы/стикеры через композер):
+        // peerId<0 и (wall-режим канала ИЛИ can_write известен и запрещён).
+        // Админ канала (allowed=true) сюда не попадает — обычный композер.
+        // Toast вместо errorText: в wall-режиме errorText не рендерится
+        // (контент канала = wall-лента), а при пустых messages errorText
+        // подменял бы экран ошибкой с «Повторить» (перезагрузка истории).
+        if (peerId < 0 && (isChannel || channelWriteDenied)) {
+            AppLog.i("ChatDetailScreen",
+                "#IM-CHANNEL-FIX: send blocked for channel peer=$peerId (isChannel=$isChannel writeDenied=$channelWriteDenied)")
+            Toast.makeText(
+                ctx,
+                "В этот канал нельзя писать — доступны только чтение и реакции",
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
         val text = inputText.trim()
         // Fix #234 (multi-photo preview): если есть pendingPhotos — отправляем
         // батч фото. Каждое фото: copy URI → temp-file → uploadPhotoForMessage
@@ -2233,10 +2410,28 @@ fun ChatDetailScreen(
                     // пользователь видел «отправленное» сообщение, которое
                     // на самом деле не ушло. Восстанавливаем текст в поле ввода
                     // чтобы пользователь мог попробовать снова.
-                    errorText = "Не удалось отправить сообщение"
+                    // #IM-CHANNEL-FIX (56-b-3): VK отклонил отправку кодом 901/902
+                    // («нет права писать» — для каналов peer<0 это «вы не админ»)
+                    // — показываем понятный текст вместо голого «Не удалось
+                    // отправить сообщение». lastApiErrorCode живёт ОДИН вызов
+                    // (#STALE-ERR-FIX) → после messagesSend это код ИМЕННО этого
+                    // отклонения. Для peer>0 (приватность юзера) текст не трогаем.
+                    val sendErrCode = app.apiClient.lastApiErrorCode
+                    val isChannelWriteDeny = peerId < 0 && (sendErrCode == 901 || sendErrCode == 902)
+                    errorText = if (isChannelWriteDeny) {
+                        "Писать в этот канал нельзя (вы не админ)"
+                    } else {
+                        "Не удалось отправить сообщение"
+                    }
+                    // #IM-CHANNEL-FIX (56-b-3): в wall-режиме errorText не рендерится
+                    // (контент = wall-лента) — дублируем честный текст Toast'ом,
+                    // иначе отказ канала остаётся невидимым.
+                    if (isChannelWriteDeny) {
+                        Toast.makeText(ctx, errorText, Toast.LENGTH_LONG).show()
+                    }
                     messages = messages.filterNot { it.id == optimistic.id }
                     inputText = text
-                    AppLog.w("ChatDetailScreen", "send failed (id=$id) — optimistic message rolled back, text restored to input (Fix #233)")
+                    AppLog.w("ChatDetailScreen", "send failed (id=$id, errCode=$sendErrCode) — optimistic message rolled back, text restored to input (Fix #233)")
                 }
             } catch (e: Exception) {
                 AppLog.e("ChatDetailScreen", "send error", e)
@@ -2300,6 +2495,11 @@ fun ChatDetailScreen(
                     chatInfoResolved = true
                     val cw = chat.canWrite
                     chatCanWriteKnown = cw != null
+                    // #IM-CHANNEL-FIX (56-b-3): фиксируем can_write-гейт (независимо
+                    // от тумблера channelModeEnabled — см. bottomBar/doSend).
+                    if (cw != null) {
+                        channelWriteDenied = !cw.allowed
+                    }
                     val push = chat.pushSettings
                     muted = if (push != null) push.isMuted() else false
                     isChannel = chat.isChannel
@@ -2327,27 +2527,10 @@ fun ChatDetailScreen(
             if (isChannel) {
                 AppLog.i("ChatDetailScreen",
                     "#IM-CHANNEL-OPEN wall-mode ON (chat state = channel): peerId=$peerId")
-                // Шапка канала: «N подписчиков» (снапшот 29-a) + GroupInfo для
-                // PostHolder.lastGroups (имя сообщества в PostDetailScreen —
-                // паритет CommunityScreen).
-                try {
-                    val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
-                    if (g != null) {
-                        channelGroup = g
-                        if (g.name.isNotBlank() && g.name != currentTitle) currentTitle = g.name
-                        // NULL-ЯВНО: photo200 может отсутствовать — фолбэк на
-                        // photo100 (паттерн рендера аватарок всего проекта).
-                        val gPhoto = if (g.photo200 != null) g.photo200 else g.photo100
-                        if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
-                            currentPhoto = gPhoto
-                        }
-                        if (g.membersCount > 0) channelSubscribers = g.membersCount
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    AppLog.w("ChatDetailScreen", "#CHANNEL-WALL-MODE groupsGetById failed: ${e.message}")
-                }
+                // Шапка канала: «N подписчиков» + имя/аватар/GroupInfo —
+                // #IM-CHANNEL-FIX (56-b-4): общая fun (та же вызывается из
+                // probe/empty-history/error веток — см. loadChannelMeta).
+                loadChannelMeta()
                 // wall-режим: messages-история для канала не запрашивается вовсе.
                 loadChannelPosts(initial = true)
                 loading = false
@@ -2368,6 +2551,9 @@ fun ChatDetailScreen(
                     AppLog.i("ChatDetailScreen",
                         "#IM-CHANNEL-OPEN wall-mode ON (probe): peerId=$peerId posts=${probe.size}")
                     isChannel = true
+                    // #IM-CHANNEL-FIX (56-b-4): подписчики/имя/аватар в шапку —
+                    // раньше в probe-ветке groupsGetById не вызывался вовсе.
+                    loadChannelMeta()
                     loadChannelPosts(initial = true, preloaded = probe)
                     loading = false
                     return@LaunchedEffect
@@ -2396,6 +2582,9 @@ fun ChatDetailScreen(
                     // не показываем.
                     AppLog.i("ChatDetailScreen",
                         "#IM-CHANNEL-OPEN history empty → wall-mode: peerId=$peerId resolved=$chatInfoResolved canWriteKnown=$chatCanWriteKnown")
+                    // #IM-CHANNEL-FIX (56-b-4): метаданные канала и в этой ветке
+                    // (раньше тут шапка оставалась без подписчиков).
+                    loadChannelMeta()
                     loadChannelPosts(initial = true)
                 } else {
                     errorText = when {
@@ -2443,6 +2632,9 @@ fun ChatDetailScreen(
                 // channelPostsError с «Повторить» (честное состояние).
                 AppLog.i("ChatDetailScreen",
                     "#IM-CHANNEL-OPEN history failed → wall-mode: peerId=$peerId resolved=$chatInfoResolved canWriteKnown=$chatCanWriteKnown")
+                // #IM-CHANNEL-FIX (56-b-4): метаданные канала и в error-ветке
+                // (раньше тут шапка оставалась без подписчиков).
+                loadChannelMeta()
                 loadChannelPosts(initial = true)
             } else {
                 errorText = "Не удалось загрузить: ${e.message}"
@@ -2488,6 +2680,16 @@ fun ChatDetailScreen(
             // isChannel=false — «убил» бы уже включённую wall-ленту канала.
             if (!isChannel) {
                 isChannel = channelModeEnabled && chat?.isChannel == true
+            }
+            // #IM-CHANNEL-FIX (56-b-3): can_write-гейт из ЭТОГО резолва chat state —
+            // он выполняется ВСЕГДА (в т.ч. при выключенном тумблере channelModeEnabled,
+            // когда ранний канальный блок пропущен). «canWrite известен и запрещён»
+            // → read-only футер + doSend-гейт независимо от тумблера. allowed=true
+            // (админ/диалог сообщества) сбрасывает гейт — семантика не тронута.
+            val chatForGate = chat
+            val gateCw = chatForGate?.canWrite
+            if (gateCw != null) {
+                channelWriteDenied = !gateCw.allowed
             }
             // Fix #133: добиваем актуальные title/photo из того же ответа.
             // messagesGetConversationsById с extended=1 отдаёт profiles[]/groups[]
@@ -2961,6 +3163,11 @@ fun ChatDetailScreen(
                                 // подписчиков (снапшот 29-a: заголовок + «N подписчиков»);
                                 // typing/online для пиров-каналов не приходят.
                                 isChannel && channelSubscribers >= 0 -> subscribersLabel(channelSubscribers)
+                                // #IM-CHANNEL-FIX (56-b-4): подписчики ещё не загружены или
+                                // groupsGetById не удался (channelSubscribers=-1) — вместо
+                                // пустого подзаголовка честно показываем род канала
+                                // (VK web в этот момент показывает «Загружается...»).
+                                isChannel -> "Канал"
                                 typingEnabled && typingIds.isNotEmpty() && isGroupChat && typingNames.isNotEmpty() -> {
                                     // Group chat: show up to 2 names, then "+N"
                                     when {
@@ -3028,7 +3235,9 @@ fun ChatDetailScreen(
                                 onDismissRequest = { showChatMenu = false },
                             ) {
                                 // P3.1: информация о чате → ChatInfoScreen (если флаг включён).
-                                if (chatInfoEnabled) {
+                                // #IM-CHANNEL-FIX (56-b-6): для канала СКРЫТ — ChatInfoScreen
+                                // построен вокруг участников/ACL бесед, у канала их нет.
+                                if (chatInfoEnabled && !isChannel) {
                                     DropdownMenuItem(
                                         text = { Text("Информация о чате") },
                                         leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
@@ -3070,6 +3279,11 @@ fun ChatDetailScreen(
                                         if (isChannel) showChannelSearch = true else showSearch = true
                                     },
                                 )
+                                // #IM-CHANNEL-FIX (56-b-6): «Очистить историю» СКРЫТА для канала —
+                                // у канала нет messages-истории (контент = wall.get),
+                                // messages.deleteConversation для канала удаляет сам диалог,
+                                // что в VK web делается отдельным осознанным «Покинуть».
+                                if (!isChannel) {
                                 DropdownMenuItem(
                                     text = { Text("Очистить историю") },
                                     onClick = {
@@ -3085,26 +3299,57 @@ fun ChatDetailScreen(
                                         }
                                     },
                                 )
+                                }
                                 // P3.2: mute/unmute chat (если флаг включён).
-                                if (muteEnabled) {
-                                    DropdownMenuItem(
-                                        text = { Text(if (muted) "Включить уведомления" else "Заглушить") },
-                                        leadingIcon = {
-                                            Icon(
-                                                if (muted) Icons.Outlined.Notifications else Icons.Outlined.NotificationsOff,
-                                                contentDescription = null,
-                                            )
-                                        },
-                                        onClick = {
-                                            showChatMenu = false
-                                            toggleMute()
-                                        },
-                                    )
+                                // #IM-CHANNEL-FIX (56-b-5): для канала — пункт управления
+                                // уведомлениями канала (allow/denyMessagesFromGroup, см.
+                                // toggleChannelNotifications), для обычных диалогов — прежний
+                                // toggleMute (push_settings) без изменений.
+                                if (muteEnabled || isChannel) {
+                                    if (isChannel) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    if (channelNotifEnabled) "Выключить уведомления"
+                                                    else "Включить уведомления"
+                                                )
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (channelNotifEnabled) Icons.Outlined.NotificationsOff
+                                                    else Icons.Outlined.Notifications,
+                                                    contentDescription = null,
+                                                )
+                                            },
+                                            onClick = {
+                                                showChatMenu = false
+                                                toggleChannelNotifications()
+                                            },
+                                        )
+                                    } else {
+                                        DropdownMenuItem(
+                                            text = { Text(if (muted) "Включить уведомления" else "Заглушить") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (muted) Icons.Outlined.Notifications else Icons.Outlined.NotificationsOff,
+                                                    contentDescription = null,
+                                                )
+                                            },
+                                            onClick = {
+                                                showChatMenu = false
+                                                toggleMute()
+                                            },
+                                        )
+                                    }
                                 }
                                 // W30-1 #IM-UNREAD-MENU: «Отметить непрочитанным/
                                 // прочитанным» — после mute, паритет VK web (в меню
                                 // чата веба пункт есть, у нас отсутствовал). Тот же
                                 // API-флоу, что в long-press меню списка диалогов.
+                                // #IM-CHANNEL-FIX (56-b-6): для канала СКРЫТ — у канала нет
+                                // messages-непрочитанного в нашем UI (контент = wall.get,
+                                // бейдж чистится при открытии — 56-b-1).
+                                if (!isChannel) {
                                 DropdownMenuItem(
                                     text = { Text(if (hasUnreadMark) "Отметить прочитанным" else "Отметить непрочитанным") },
                                     leadingIcon = {
@@ -3118,6 +3363,7 @@ fun ChatDetailScreen(
                                         toggleUnreadMark()
                                     },
                                 )
+                                }
                                 // P0.3: stub «Закрепить сообщение» удалён — теперь pin
                                 // доступен через long-press на конкретном сообщении
                                 // (context menu → «Закрепить» / «Открепить»).
@@ -3154,12 +3400,20 @@ fun ChatDetailScreen(
                         )
                     }
                 }
-            } else if (isChannel) {
+            } else if (isChannel || channelWriteDenied) {
                 // P3.4: channel mode — скрываем composer, показываем footer с mute/leave.
                 // Канал = broadcast-сообщество, пользователь только читает (не пишет).
+                // #IM-CHANNEL-FIX (56-b-3): read-only футер рисуется ВСЕГДА когда
+                // peerId<0 и canWrite известен и запрещён (channelWriteDenied) —
+                // НЕ зависимо от тумблера channelModeEnabled (раньше при выключенном
+                // тумблере рисовался обычный композер → messages.send давал err 901).
+                // Админ канала (allowed=true) получает обычный композер — семантика
+                // не тронута (channelWriteDenied=false при allowed=true).
+                // #IM-CHANNEL-FIX (56-b-5): тумблер mute заменён на уведомления канала
+                // (allow/denyMessagesFromGroup) — см. toggleChannelNotifications.
                 ChannelFooterBar(
-                    muted = muted,
-                    onToggleMute = { toggleMute() },
+                    notificationsEnabled = channelNotifEnabled,
+                    onToggleNotifications = { toggleChannelNotifications() },
                     onLeave = { leaveChannel() },
                 )
             } else {
@@ -7582,8 +7836,12 @@ private fun PinnedMessageBar(
  * Канал = диалог где пользователь не может писать (conversation.can_write.allowed == false).
  * Это происходит в сообществах с отключёнными сообщениями или где пользователь не админ.
  * Вместо composer показывается:
- *   - Иконка + текст «Вы подписаны» / «Канал заглушен»
- *   - Кнопка mute/unmute (Notifications / NotificationsOff)
+ *   - Иконка + текст состояния подписки/уведомлений канала
+ *   - Кнопка «Включить/Выключить уведомления» (#IM-CHANNEL-FIX 56-b-5:
+ *     messages.allowMessagesFromGroup / messages.denyMessagesFromGroup —
+ *     заменили прежний toggleMute/messages.setConversationPushSettings,
+ *     применимость которого к каналам не доказана; семантика VK web —
+ *     снапшот 55: футер vkme_channel_footer_enable_notifications)
  *   - Кнопка «Покинуть» (Delete) — с confirmation dialog (разрушительное действие)
  *
  * Аналог m.vk.ru: канал показывает footer «Вы подписаны на канал» без поля ввода.
@@ -7591,8 +7849,8 @@ private fun PinnedMessageBar(
  */
 @Composable
 private fun ChannelFooterBar(
-    muted: Boolean,
-    onToggleMute: () -> Unit,
+    notificationsEnabled: Boolean,
+    onToggleNotifications: () -> Unit,
     onLeave: () -> Unit,
 ) {
     var showLeaveDialog by remember { mutableStateOf(false) }
@@ -7609,23 +7867,26 @@ private fun ChannelFooterBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                imageVector = if (muted) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+                imageVector = if (notificationsEnabled) Icons.Outlined.Notifications else Icons.Outlined.NotificationsOff,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp),
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                text = if (muted) "Канал заглушен" else "Вы подписаны",
+                text = if (notificationsEnabled) "Вы подписаны — уведомления включены" else "Вы подписаны — уведомления выключены",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            // mute/unmute — переключает push_settings для канала.
-            IconButton(onClick = onToggleMute) {
+            // #IM-CHANNEL-FIX (56-b-5): включить/выключить уведомления канала
+            // (вместо прежнего mute-тумблера). Обработчик — toggleChannelNotifications
+            // в ChatDetailScreen (allow/denyMessagesFromGroup + кэш SovaPrefs +
+            // синхронизация MessageNotifier).
+            IconButton(onClick = onToggleNotifications) {
                 Icon(
-                    imageVector = if (muted) Icons.Outlined.Notifications else Icons.Outlined.NotificationsOff,
-                    contentDescription = if (muted) "Включить уведомления" else "Заглушить канал",
+                    imageVector = if (notificationsEnabled) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+                    contentDescription = if (notificationsEnabled) "Выключить уведомления" else "Включить уведомления",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

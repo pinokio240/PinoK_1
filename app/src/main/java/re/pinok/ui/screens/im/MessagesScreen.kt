@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.MarkChatUnread
@@ -410,6 +411,24 @@ fun MessagesScreen(
             AppLog.w("MessagesScreen", "#CHANNEL-NET: getAllChannels failed (non-fatal): ${e.message}")
         }
         mergedExtras = extras
+        // #IM-CHANNEL-FIX (56-b-5): сервер отдал флаг уведомлений канала
+        // (user_data.notification_settings.is_enabled, parseChannelItem) — переносим
+        // включённые каналы в локальный кэш SovaPrefs. Пуш-конвейер (SovaApp) не
+        // может получить флаг канала через getConversationsById (push_settings у
+        // каналов = null) → этот кэш — единственный источник «юзер включил пуш
+        // каналу» на момент прихода LP-события. На refresh запись no-op
+        // (addChannelNotifEnabledIds сам пропускает уже существующие id).
+        val serverEnabledChannels = extras
+            .filter { it.isChannel && it.channelNotificationsEnabled == true }
+            .map { it.peer.id }
+        if (serverEnabledChannels.isNotEmpty()) {
+            try {
+                app.prefs.addChannelNotifEnabledIds(serverEnabledChannels)
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen",
+                    "#IM-CHANNEL-FIX: channel notif cache write failed (non-fatal): ${e.message}")
+            }
+        }
         return list
     }
 
@@ -558,8 +577,41 @@ fun MessagesScreen(
                         // (те, что legacy getConversations не отдаёт) и запросы
                         // исчезали из списка при КАЖДОМ входящем сообщении.
                         val freshIds = fresh.map { it.peer.id }.toHashSet()
-                        val preserved = mergedExtras.filter { it.peer.id !in freshIds }
+                        var preserved = mergedExtras.filter { it.peer.id !in freshIds }
+                        // #IM-CHANNEL-FIX (56-b-2): LP-рефетч — ДОП. messagesGetAllChannels()
+                        // (один вызов на LP-событие) и пере-мердж канальных записей тем же
+                        // кодом, что первичный merge (#CHANNEL-NET). Раньше preserved-каналы
+                        // переносились в новый список КАК ЕСТЬ — бейджи/позиции stale до
+                        // pull-to-refresh. Теперь: (1) свежие версии из getItems замещают
+                        // stale-копии (позиция в хвосте списка сохраняется, бейдж оживёт);
+                        // (2) новые каналы, которых нет ни в fresh, ни в preserved, —
+                        // добавляются. Ошибка канального фетча non-fatal: основной список
+                        // обновится как раньше.
+                        try {
+                            val allChannels = app.apiClient.messagesGetAllChannels()
+                            if (allChannels.isNotEmpty()) {
+                                val freshChannelById = allChannels.associateBy { it.peer.id }
+                                preserved = preserved.map { extra ->
+                                    // NULL-ЯВНО: map-lookup nullable, явная ветка без ?.
+                                    val freshChannel = if (extra.peer.id < 0) freshChannelById[extra.peer.id] else null
+                                    if (freshChannel != null) freshChannel else extra
+                                }
+                                val knownIds = freshIds + preserved.map { it.peer.id }.toHashSet()
+                                val missing = allChannels.filter { it.peer.id !in knownIds }
+                                if (missing.isNotEmpty()) {
+                                    preserved = preserved + missing
+                                    AppLog.i("MessagesScreen",
+                                        "#IM-CHANNEL-FIX: LP re-merge: добавлено каналов: ${missing.size}")
+                                }
+                            }
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            AppLog.w("MessagesScreen",
+                                "#IM-CHANNEL-FIX: LP channel re-merge failed (non-fatal): ${e.message}")
+                        }
                         chats = if (preserved.isEmpty()) fresh else (fresh + preserved)
+                        mergedExtras = preserved
                         errorText = null
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1844,6 +1896,21 @@ private fun ChatCard(
                         Text(text = title, style = MaterialTheme.typography.titleSmall,
                             fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Medium,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        // #IM-CHANNEL-FIX (56-b-6): маркер канала рядом с названием.
+                        // Карточка канала ничем не отличалась от диалога сообщества;
+                        // иконка «рупор» (Campaign, material-icons-extended — уже в
+                        // зависимостях :app, новых библиотек нет) даёт каналу
+                        // собственную идентичность (аналог online-точки, которая для
+                        // каналов исключена — Fix #286). 14dp — не меняет высоту карточки.
+                        if (chat.isChannel) {
+                            Icon(
+                                imageVector = Icons.Outlined.Campaign,
+                                contentDescription = "Канал",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         // Fix #274: pin-иконка рядом с названием (для закреплённых).
                         if (isPinned) {
                             Icon(

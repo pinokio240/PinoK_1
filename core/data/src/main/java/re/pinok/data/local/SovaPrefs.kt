@@ -234,6 +234,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // как source of truth UI — одноразовая миграция:
             // migrateLegacyPinnedDialogsIfNeeded().
             imPinnedDialogs    = parseImPinnedDialogs(p[Keys.IM_PINNED_DIALOGS] ?: ""),
+            // #IM-CHANNEL-FIX (56-b-5): кэш «уведомления канала включены» — CSV peer_id.
+            // Каналы в VK молчат по умолчанию (снапшот 55: апселл «Включить уведомления»);
+            // пуш-конвейер (SovaApp) не может получить флаг канала через
+            // getConversationsById (push_settings у канала=null) → источник — этот
+            // кэш: пишут MessagesScreen (первичный merge, сервер отдал is_enabled=true)
+            // и ChannelFooterBar/toggle (явное действие юзера). Парс в Snapshot —
+            // чтобы гейт в startMessageNotifier читал готовое Set<Long> без CSV-логики.
+            channelNotifEnabledIds = parseChannelNotifIds(p[Keys.CHANNEL_NOTIF_ENABLED] ?: ""),
             // P3.7: bubble-less дизайн — flat layout сообщений (без Card/bubble).
             // Аналог m.vk.ru: ConvoMessageWithoutBubble. Default false (opt-in, экспериментально).
             msgBubbleless      = p[Keys.MSG_BUBBLELESS]           ?: false,
@@ -633,6 +641,54 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setArchivedConvsData(v: String)          = put(Keys.ARCHIVED_CONVS_DATA, v)
     /** Fix #392 #IM-LOCAL-PIN: персист порядка закреплённых диалогов (List<Long> → JSON, атомарный put). */
     suspend fun setImPinnedDialogs(peerIds: List<Long>)  = put(Keys.IM_PINNED_DIALOGS, imPinnedGson.toJson(peerIds))
+
+    // ─── #IM-CHANNEL-FIX (56-b-5): кэш «уведомления канала включены» ───
+    // Source of truth — ключ Keys.CHANNEL_NOTIF_ENABLED (CSV peer_id каналов,
+    // для которых пуш разрешён ЯВНО: тумблером в футере канала или серверным
+    // is_enabled=true при первичном merge). Канал ОТСУТСТВУЮЩИЙ в кэше = молчит
+    // (дефолт VK web). Читатели: Snapshot.channelNotifEnabledIds (SovaApp),
+    // ChatDetailScreen (реактивный стейт футера).
+
+    /**
+     * #IM-CHANNEL-FIX (56-b-5): добавить каналы в белый список пуша.
+     * Вызывается MessagesScreen после первичного merge каналов (записи Chat с
+     * channelNotificationsEnabled==true). No-op если добавлять нечего —
+     * без лишней DataStore-записи на каждый refresh.
+     */
+    suspend fun addChannelNotifEnabledIds(peerIds: List<Long>) {
+        if (peerIds.isEmpty()) return
+        val raw = ds.data.first()[Keys.CHANNEL_NOTIF_ENABLED]
+        val current = parseChannelNotifIds(raw ?: "").toMutableSet()
+        val newOnes = peerIds.filter { pid -> !current.contains(pid) }
+        if (newOnes.isEmpty()) return
+        current.addAll(newOnes)
+        put(Keys.CHANNEL_NOTIF_ENABLED, current.joinToString(","))
+        AppLog.i("SovaPrefs", "#IM-CHANNEL-FIX: channel notif cache +${newOnes.size} (total ${current.size})")
+    }
+
+    /**
+     * #IM-CHANNEL-FIX (56-b-5): включить/выключить уведомления ОДНОГО канала
+     * (тумблер футера канала в ChatDetailScreen). enabled=false убирает peer
+     * из кэша → канал снова молчит. No-op при повторной установке того же стейта.
+     */
+    suspend fun setChannelNotifEnabled(peerId: Long, enabled: Boolean) {
+        val raw = ds.data.first()[Keys.CHANNEL_NOTIF_ENABLED]
+        val current = parseChannelNotifIds(raw ?: "").toMutableSet()
+        val changed = if (enabled) current.add(peerId) else current.remove(peerId)
+        if (!changed) return
+        put(Keys.CHANNEL_NOTIF_ENABLED, current.joinToString(","))
+        AppLog.i("SovaPrefs", "#IM-CHANNEL-FIX: channel notif cache peer=$peerId enabled=$enabled (total ${current.size})")
+    }
+
+    /** #IM-CHANNEL-FIX (56-b-5): безопасный парс CSV peer_id ("-123,-456" → Set<Long>). */
+    private fun parseChannelNotifIds(raw: String): Set<Long> {
+        if (raw.isBlank()) return emptySet()
+        // toLongOrNull — без исключений: битый элемент просто пропускается
+        // (NULL-ЯВНО: никаких throw из парсера префов).
+        return raw.split(',')
+            .mapNotNull { it.trim().toLongOrNull() }
+            .toSet()
+    }
 
     // ─── Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков ───
     // Отдельный ключ ВНЕ Snapshot (паттерн #CALLS-SNAP ниже: не расширять большой
@@ -1335,6 +1391,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val archivedConvsData: String,
         /** Fix #392 #IM-LOCAL-PIN: peer_id локально закреплённых диалогов в ПОРЯДКЕ ЗАКРЕПЛЕНИЯ (0-й — верх списка; уже распарсен из JSON). Дефолт обязателен: FeedScreen:234 строит dummy-Snapshot named-параметрами (класс бага Fix #276/#356 — без дефолта компиляция падает). */
         val imPinnedDialogs: List<Long> = emptyList(),
+        /** #IM-CHANNEL-FIX (56-b-5): peer_id каналов с ЯВНО включёнными уведомлениями (уже распарсен из CSV). Дефолт обязателен: конструкторы Snapshot строятся named-параметрами (класс бага Fix #276/#356). */
+        val channelNotifEnabledIds: Set<Long> = emptySet(),
         /** P3.7: bubble-less дизайн — flat layout (без Card/bubble), default false. */
         val msgBubbleless: Boolean,
         /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий (default false). */
@@ -1713,6 +1771,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Fix #392 #IM-LOCAL-PIN: локальный закреп диалогов (JSON array of peer_id в порядке
         // закрепления; "" = ключ ещё не создавался, "[]" = список сознательно пуст).
         val IM_PINNED_DIALOGS     = stringPreferencesKey("im_pinned_dialogs")
+        // #IM-CHANNEL-FIX (56-b-5): кэш «уведомления канала включены» (CSV peer_id;
+        // "" = ключ не создавался → все каналы молчат по умолчанию, как в VK web).
+        val CHANNEL_NOTIF_ENABLED = stringPreferencesKey("channel_notif_enabled")
         // Волна 40 #BOOKMARKS-TRACKS: локальные закладки треков (JSON array of Track).
         val TRACK_BOOKMARKS_DATA  = stringPreferencesKey("track_bookmarks_data")
         // #CALLS-SNAP (2026-09-05): конфигурация сайдбара «Звонков» (Этап А3)
