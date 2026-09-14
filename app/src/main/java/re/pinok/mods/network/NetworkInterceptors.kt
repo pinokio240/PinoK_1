@@ -243,6 +243,20 @@ object NetworkInterceptors {
                     }
                 } catch (e: IOException) {
                     lastError = e
+                    // Fix #395 #NET-CANCEL-RETRY: отменённый вызов (call.cancel() —
+                    // notifyResumed LongPollClient'а при резюме приложения, отмена
+                    // корутины, эвикция in-flight poll) приходит сюда как обычный
+                    // IOException("Canceled") и СЛЕПА ретраился: 2 спящих ожидания
+                    // (500+1000мс) на уже мёртвом запросе → LP-рестарт после резюма
+                    // откладывался на ~1.5с (логкат 14.09 22:17: NetRetry Retry 1/2
+                    // и 2/2 на poll, который notifyResumed отменил), а хост
+                    // api.vk.com зря уходил в 60с-кулдаун (все новые вызовы — без
+                    // ретраев). Отменённый вызов НЕ transient: ретраить бессмысленно,
+                    // пробрасываем немедленно, кулдаун не трогаем.
+                    if (chain.call().isCanceled() || e.message == "Canceled") {
+                        AppLog.d(TAG, "Call canceled — no retry for $host${request.url.encodedPath}")
+                        throw e
+                    }
                     // Fix #181: если сеть недавно переключилась и это первая ошибка —
                     // принудительно evictAll OkHttp connection pool. StaleConnectionInterceptor
                     // добавляет Connection: close, но он срабатывает только если

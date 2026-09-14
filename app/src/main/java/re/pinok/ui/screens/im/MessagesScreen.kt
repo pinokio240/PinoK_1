@@ -90,6 +90,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import android.widget.Toast
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -361,40 +363,71 @@ fun MessagesScreen(
     // голым ответом getConversations — дозагруженные каналы и запросы исчезали
     // при каждом обновлении (жалоба: «сброс списка при обновлении», каналы
     // пропадали из вкладки «Каналы»).
+    //
+    // Fix #395 #IM-FAST-LIST: base/«Запросы»/канальный скан раньше шли СТРОГО
+    // последовательно (логкат 14.09 22:17: getConversations 2569мс/663КБ +
+    // requests 300мс + getItems-пагинация каналов 1225+478+557мс ≈ 5.2с до
+    // показа списка; юзер жаловался «раздел сообщения долго грузятся»). Теперь
+    // три ветки стартуют ПАРАЛЛЕЛЬНО — критический путь = getConversations
+    // (~2.6с, экономия ~2.5с на каждом открытии/refresh). Семантика merge НЕ
+    // изменилась: «Запросы» и каналы — non-fatal (ошибка ветки = пустой
+    // результат, не падение общего контура), base остаётся fatal (retry-цикл
+    // снаружи в LaunchedEffect(Unit)).
     suspend fun fetchConversationsMerged(): List<Chat> {
-        var list = app.apiClient.messagesGetConversations(count = pageSize)
-            .distinctBy { it.peer.id }
-        val extras = ArrayList<Chat>()
-        // §44 #MSG-REQUESTS: merge запросов от не-друзей (non-fatal — пустые
-        // запросы или ошибка фильтра не ломают основной список).
-        if (list.isNotEmpty()) {
-            try {
-                val requests = app.apiClient.messagesGetConversationRequests(count = 50)
-                if (requests.isNotEmpty()) {
-                    val existingIds = list.map { it.peer.id }.toHashSet()
-                    val newRequests = requests.filter { it.peer.id !in existingIds }
-                    if (newRequests.isNotEmpty()) {
-                        list = (list + newRequests)
-                            // NULL-ЯВНО: сортировочный ключ, null-ветка тривиальна
-                            // (нет даты последнего сообщения = 0, дефолт для UI).
-                            .sortedByDescending { it.lastMessage?.date ?: 0L }
-                        extras.addAll(newRequests)
-                        AppLog.i("MessagesScreen",
-                            "#CHANNEL-NET: merged ${newRequests.size} message_request(s) into conversation list")
-                    }
-                }
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (e: Exception) {
-                AppLog.w("MessagesScreen",
-                    "#CHANNEL-NET: message_request merge failed (non-fatal): ${e.message}")
+        val startedMs = System.currentTimeMillis()
+        val (list, extras) = coroutineScope {
+            // Каждая дочерняя ветка ловит свои исключения (кроме отмены) — ошибка
+            // non-fatal ветки НЕ роняет sibling'и и общий scope. Отмена (уход с
+            // экрана / отмена lpRefetchJob) пробрасывается — coroutineScope
+            // каскадно отменяет остальные ветки, запросы не утекают.
+            val baseDeferred = async {
+                app.apiClient.messagesGetConversations(count = pageSize)
+                    .distinctBy { it.peer.id }
             }
-        }
-        // #MODERN-SYNC-CURSOR: merge каналов, которых нет в legacy getConversations
-        // (non-fatal). ВАЖНО: после основного списка, не внутри retry-цикла —
-        // иначе следующий while-цикл перезапишет список и каналы пропадут.
-        try {
-            val allChannels = app.apiClient.messagesGetAllChannels()
+            val requestsDeferred = async<List<Chat>> {
+                try {
+                    app.apiClient.messagesGetConversationRequests(count = 50)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    AppLog.w("MessagesScreen",
+                        "#CHANNEL-NET: message_request fetch failed (non-fatal): ${e.message}")
+                    emptyList()
+                }
+            }
+            val channelsDeferred = async<List<Chat>> {
+                try {
+                    app.apiClient.messagesGetAllChannels()
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    AppLog.w("MessagesScreen",
+                        "#CHANNEL-NET: getAllChannels fetch failed (non-fatal): ${e.message}")
+                    emptyList()
+                }
+            }
+            var list = baseDeferred.await()
+            val extras = ArrayList<Chat>()
+            // §44 #MSG-REQUESTS: merge запросов от не-друзей (non-fatal — пустые
+            // запросы или ошибка фильтра не ломают основной список).
+            val requests = requestsDeferred.await()
+            if (list.isNotEmpty() && requests.isNotEmpty()) {
+                val existingIds = list.map { it.peer.id }.toHashSet()
+                val newRequests = requests.filter { it.peer.id !in existingIds }
+                if (newRequests.isNotEmpty()) {
+                    list = (list + newRequests)
+                        // NULL-ЯВНО: сортировочный ключ, null-ветка тривиальна
+                        // (нет даты последнего сообщения = 0, дефолт для UI).
+                        .sortedByDescending { it.lastMessage?.date ?: 0L }
+                    extras.addAll(newRequests)
+                    AppLog.i("MessagesScreen",
+                        "#CHANNEL-NET: merged ${newRequests.size} message_request(s) into conversation list")
+                }
+            }
+            // #MODERN-SYNC-CURSOR: merge каналов, которых нет в legacy getConversations
+            // (non-fatal). ВАЖНО: после основного списка, не внутри retry-цикла —
+            // иначе следующий while-цикл перезапишет список и каналы пропадут.
+            val allChannels = channelsDeferred.await()
             if (allChannels.isNotEmpty()) {
                 val existingIds = list.map { it.peer.id }.toHashSet()
                 val missing = allChannels.filter { it.peer.id !in existingIds }
@@ -405,12 +438,12 @@ fun MessagesScreen(
                         "#CHANNEL-NET: merged ${missing.size} missing channels via getItems")
                 }
             }
-        } catch (ce: kotlinx.coroutines.CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            AppLog.w("MessagesScreen", "#CHANNEL-NET: getAllChannels failed (non-fatal): ${e.message}")
+            Pair(list, extras)
         }
         mergedExtras = extras
+        AppLog.i("MessagesScreen",
+            "#IM-FAST-LIST: merged list ready in ${System.currentTimeMillis() - startedMs}ms " +
+                "(base+requests+channels=${list.size}, extras=${extras.size})")
         // #IM-CHANNEL-FIX (56-b-5): сервер отдал флаг уведомлений канала
         // (user_data.notification_settings.is_enabled, parseChannelItem) — переносим
         // включённые каналы в локальный кэш SovaPrefs. Пуш-конвейер (SovaApp) не
@@ -568,9 +601,31 @@ fun MessagesScreen(
             if (refetchJob != null) refetchJob.cancel()
             lpRefetchJob = scope.launch {
                 try {
-                    val targetCount = maxOf(chats.size, pageSize)
-                    val fresh = app.apiClient.messagesGetConversations(count = targetCount)
-                        .distinctBy { it.peer.id }
+                    // Fix #395 #IM-FAST-LIST: канальный скан (getItems-пагинация,
+                    // до ~2.3с — логкат 14.09 22:17) стартует ПАРАЛЛЕЛЬНО с
+                    // getConversations — раньше шёл строго ПОСЛЕ него и каждое
+                    // LP-событие обновляло список ~2-4с. coroutineScope привязывает
+                    // дочернюю ветку к lpRefetchJob: отмена нового LP-события
+                    // (single-flight) отменяет и скан — без утёкших запросов.
+                    // Ветка non-fatal: ошибка скана не ломает обновление fresh.
+                    val freshAndChannels = kotlinx.coroutines.coroutineScope {
+                        val channelsDeferred = async<List<Chat>> {
+                            try {
+                                app.apiClient.messagesGetAllChannels()
+                            } catch (ce: kotlinx.coroutines.CancellationException) {
+                                throw ce
+                            } catch (e: Exception) {
+                                AppLog.w("MessagesScreen",
+                                    "#IM-CHANNEL-FIX: LP channel re-merge failed (non-fatal): ${e.message}")
+                                emptyList()
+                            }
+                        }
+                        val targetCount = maxOf(chats.size, pageSize)
+                        val fresh = app.apiClient.messagesGetConversations(count = targetCount)
+                            .distinctBy { it.peer.id }
+                        Pair(fresh, channelsDeferred.await())
+                    }
+                    val (fresh, allChannels) = freshAndChannels
                     if (fresh.isNotEmpty()) {
                         // #CHANNEL-NET: сохраняем дозагруженные каналы/«Запросы»
                         // (mergedExtras), которых нет в свежем ответе — иначе каналы
@@ -579,36 +634,29 @@ fun MessagesScreen(
                         val freshIds = fresh.map { it.peer.id }.toHashSet()
                         var preserved = mergedExtras.filter { it.peer.id !in freshIds }
                         // #IM-CHANNEL-FIX (56-b-2): LP-рефетч — ДОП. messagesGetAllChannels()
-                        // (один вызов на LP-событие) и пере-мердж канальных записей тем же
+                        // (Fix #395 #IM-FAST-LIST: теперь ПАРАЛЛЕЛЬНО с getConversations,
+                        // результат в allChannels выше; ошибка скана уже поглощена веткой
+                        // async — allChannels будет пуст) и пере-мердж канальных записей тем же
                         // кодом, что первичный merge (#CHANNEL-NET). Раньше preserved-каналы
                         // переносились в новый список КАК ЕСТЬ — бейджи/позиции stale до
                         // pull-to-refresh. Теперь: (1) свежие версии из getItems замещают
                         // stale-копии (позиция в хвосте списка сохраняется, бейдж оживёт);
                         // (2) новые каналы, которых нет ни в fresh, ни в preserved, —
-                        // добавляются. Ошибка канального фетча non-fatal: основной список
-                        // обновится как раньше.
-                        try {
-                            val allChannels = app.apiClient.messagesGetAllChannels()
-                            if (allChannels.isNotEmpty()) {
-                                val freshChannelById = allChannels.associateBy { it.peer.id }
-                                preserved = preserved.map { extra ->
-                                    // NULL-ЯВНО: map-lookup nullable, явная ветка без ?.
-                                    val freshChannel = if (extra.peer.id < 0) freshChannelById[extra.peer.id] else null
-                                    if (freshChannel != null) freshChannel else extra
-                                }
-                                val knownIds = freshIds + preserved.map { it.peer.id }.toHashSet()
-                                val missing = allChannels.filter { it.peer.id !in knownIds }
-                                if (missing.isNotEmpty()) {
-                                    preserved = preserved + missing
-                                    AppLog.i("MessagesScreen",
-                                        "#IM-CHANNEL-FIX: LP re-merge: добавлено каналов: ${missing.size}")
-                                }
+                        // добавляются.
+                        if (allChannels.isNotEmpty()) {
+                            val freshChannelById = allChannels.associateBy { it.peer.id }
+                            preserved = preserved.map { extra ->
+                                // NULL-ЯВНО: map-lookup nullable, явная ветка без ?.
+                                val freshChannel = if (extra.peer.id < 0) freshChannelById[extra.peer.id] else null
+                                if (freshChannel != null) freshChannel else extra
                             }
-                        } catch (ce: kotlinx.coroutines.CancellationException) {
-                            throw ce
-                        } catch (e: Exception) {
-                            AppLog.w("MessagesScreen",
-                                "#IM-CHANNEL-FIX: LP channel re-merge failed (non-fatal): ${e.message}")
+                            val knownIds = freshIds + preserved.map { it.peer.id }.toHashSet()
+                            val missing = allChannels.filter { it.peer.id !in knownIds }
+                            if (missing.isNotEmpty()) {
+                                preserved = preserved + missing
+                                AppLog.i("MessagesScreen",
+                                    "#IM-CHANNEL-FIX: LP re-merge: добавлено каналов: ${missing.size}")
+                            }
                         }
                         chats = if (preserved.isEmpty()) fresh else (fresh + preserved)
                         mergedExtras = preserved
