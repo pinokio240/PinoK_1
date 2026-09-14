@@ -1953,6 +1953,56 @@ fun ChatDetailScreen(
     }
 
     /**
+     * Fix #394 #CHANNEL-WALL-FALLBACK: wall.get недоступен (err 15 «wall is
+     * disabled» у канала / сообщество удалено / сеть) — пробуем открыть диалог
+     * канала как ОБЫЧНЫЙ чат: messages.getHistory (сообщения канала приходят
+     * в диалог — иначе бейдж/LP-события не приходили бы). При непустой истории
+     * (или пустой БЕЗ ошибки) переключаем рендер на стандартный messages-режим
+     * (channelWallFallback=true): LazyColumn истории + канальный read-only футер
+     * и шапка сохраняются. Пустая история С ошибкой VK — остаёмся в wall-error
+     * (честный «Повторить»; фолбэк больше не пытается — channelFallbackTried).
+     *
+     * История грузится тем же messagesGetHistoryWithProfiles(count = pageSize),
+     * что и стандартный путь LaunchedEffect — состояние messages/chatProfiles/
+     * endReached совместимо с обычным рендером без ветвлений.
+     *
+     * ВАЖНО (порядок объявления): локальная fun объявлена ДО loadChannelPosts —
+     * Kotlin запрещает опережающие ссылки на локальные функции (Unresolved
+     * reference при сборке, см. баг-репорт тестера 14.09).
+     */
+    fun attemptWallFallbackToHistory() {
+        if (channelWallFallback || channelFallbackTried) return
+        channelFallbackTried = true
+        scope.launch {
+            try {
+                val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
+                val fresh = result.messages.distinctBy { it.id }
+                if (fresh.isNotEmpty() || result.failure == null) {
+                    messages = fresh
+                    chatProfiles = result.profiles
+                    if (fresh.size < pageSize) endReached = true
+                    channelWallFallback = true
+                    channelPostsError = null
+                    // Канал фактически ОТКРЫТ юзером — сбрасываем бейдж
+                    // (тот же контракт, что у успешного wall-режима, 56-b-1).
+                    markChannelConversationAsRead()
+                    AppLog.i("ChatDetailScreen",
+                        "#CHANNEL-WALL-FALLBACK: wall недоступен → показана messages-история " +
+                            "(${fresh.size} сообщений) peerId=$peerId")
+                } else {
+                    AppLog.w("ChatDetailScreen",
+                        "#CHANNEL-WALL-FALLBACK: messages-история пуста и с ошибкой — остаёмся в wall-error peerId=$peerId")
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen",
+                    "#CHANNEL-WALL-FALLBACK: getHistory failed (non-fatal): ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Загрузка постов канала через wall.get (ownerId = peerId — посты
      * сообщества и есть контент канала, снапшот 29-a). [preloaded] — уже
      * полученная страница (probe-вызов wallGet при недоступном chat state),
@@ -2014,52 +2064,6 @@ fun ChatDetailScreen(
                 attemptWallFallbackToHistory()
             } finally {
                 channelPostsLoading = false
-            }
-        }
-    }
-
-    /**
-     * Fix #394 #CHANNEL-WALL-FALLBACK: wall.get недоступен (err 15 «wall is
-     * disabled» у канала / сообщество удалено / сеть) — пробуем открыть диалог
-     * канала как ОБЫЧНЫЙ чат: messages.getHistory (сообщения канала приходят
-     * в диалог — иначе бейдж/LP-события не приходили бы). При непустой истории
-     * (или пустой БЕЗ ошибки) переключаем рендер на стандартный messages-режим
-     * (channelWallFallback=true): LazyColumn истории + канальный read-only футер
-     * и шапка сохраняются. Пустая история С ошибкой VK — остаёмся в wall-error
-     * (честный «Повторить»; фолбэк больше не пытается — channelFallbackTried).
-     *
-     * История грузится тем же messagesGetHistoryWithProfiles(count = pageSize),
-     * что и стандартный путь LaunchedEffect — состояние messages/chatProfiles/
-     * endReached совместимо с обычным рендером без ветвлений.
-     */
-    fun attemptWallFallbackToHistory() {
-        if (channelWallFallback || channelFallbackTried) return
-        channelFallbackTried = true
-        scope.launch {
-            try {
-                val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
-                val fresh = result.messages.distinctBy { it.id }
-                if (fresh.isNotEmpty() || result.failure == null) {
-                    messages = fresh
-                    chatProfiles = result.profiles
-                    if (fresh.size < pageSize) endReached = true
-                    channelWallFallback = true
-                    channelPostsError = null
-                    // Канал фактически ОТКРЫТ юзером — сбрасываем бейдж
-                    // (тот же контракт, что у успешного wall-режима, 56-b-1).
-                    markChannelConversationAsRead()
-                    AppLog.i("ChatDetailScreen",
-                        "#CHANNEL-WALL-FALLBACK: wall недоступен → показана messages-история " +
-                            "(${fresh.size} сообщений) peerId=$peerId")
-                } else {
-                    AppLog.w("ChatDetailScreen",
-                        "#CHANNEL-WALL-FALLBACK: messages-история пуста и с ошибкой — остаёмся в wall-error peerId=$peerId")
-                }
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (e: Exception) {
-                AppLog.w("ChatDetailScreen",
-                    "#CHANNEL-WALL-FALLBACK: getHistory failed (non-fatal): ${e.message}")
             }
         }
     }
