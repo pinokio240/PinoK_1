@@ -835,10 +835,11 @@ fun ChatDetailScreen(
     // «Повторить» wall после неудачи истории не зацикливает запросы.
     var channelWallFallback by remember { mutableStateOf(false) }
     var channelFallbackTried by remember { mutableStateOf(false) }
-    // #CHANNELS-PROBE (Task 65): пробник channels.getHistory через web-шлюз —
-    // ОДИН раз за открытие экрана (см. VKApiClient.channelsGetHistoryProbe).
-    // Поведения не меняет — только лог #CHANNELS-PROBE для решения о волне каналов.
-    var channelProbeDone by remember { mutableStateOf(false) }
+    // Task 67 #CHANNELS-HIST: контент канала загружен через channels.getHistory
+    // (стандартный messages-режим, channelWallFallback=true). Пагинация «старее»
+    // обязана идти тем же методом (start_cmid=minCmid): messages.getHistory для
+    // канальных пиров пуст (лог 14.09 22:17), wall.get — err 15.
+    var channelHistoryMode by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
     // Подписчики в шапке канала (снапшот 29-a: «название + N подписчиков»).
     // -1 = ещё не получены (subtitle не рисуем).
@@ -2017,12 +2018,8 @@ fun ChatDetailScreen(
      */
     fun loadChannelPosts(initial: Boolean, preloaded: List<Post>? = null) {
         if (channelPostsLoading) return
-        // #CHANNELS-PROBE (Task 65): однократный диагностический вызов
-        // channels.getHistory через web-шлюз — асинхронно, поведения не меняет.
-        if (!channelProbeDone) {
-            channelProbeDone = true
-            scope.launch { app.apiClient.channelsGetHistoryProbe(peerId) }
-        }
+        // Task 67: диагностический #CHANNELS-PROBE убран — channels.getHistory
+        // теперь РАБОЧИЙ путь загрузки (см. channels-first ветку ниже).
         scope.launch {
             channelPostsLoading = true
             channelPostsError = null
@@ -2038,30 +2035,56 @@ fun ChatDetailScreen(
                     // сбрасываем бейдж канала (см. markChannelConversationAsRead).
                     if (initial) markChannelConversationAsRead()
                 } else {
-                    val posts = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
-                    // #IM-CHANNEL-OPEN: успех/пустота wall.get — ключевой пункт
-                    // трассировки (пусто + err → честный «Повторить» на экране).
+                    // ══ Task 67 #CHANNELS-HIST: канонический источник контента канала ══
+                    // Пробник v2 (лог 14.09 22:17) доказал: контент канала живёт
+                    // ТОЛЬКО в channels.getHistory и только со start_cmid из
+                    // getById.last_message (без него err=100). wall.get у канала
+                    // — err 15 «wall is disabled», messages.getHistory — пусто.
+                    // Успех → стандартный messages-режим (channelWallFallback=true):
+                    // LazyColumn-история + read-only футер, вложения/аватары из
+                    // groups[] рендерятся штатно.
+                    val ch = app.apiClient.channelsGetHistory(peerId, count = pageSize)
                     AppLog.i("ChatDetailScreen",
-                        "#IM-CHANNEL-OPEN wallGet initial: posts=${posts.size} peerId=$peerId")
-                    channelPosts = posts
-                    if (posts.size < 30) channelPostsEnd = true
-                    if (posts.isEmpty()) {
-                        // wallGet глотает детали ошибки в emptyList — честно
-                        // показываем «Повторить» только при реальной ошибке API;
-                        // без ошибки — канал просто пуст («нет записей»). При
-                        // ошибке сразу пробуем фолбэк на messages-историю —
-                        // err 15 «wall is disabled» постоянна, «Повторить» не
-                        // поможет (Fix #394 #CHANNEL-WALL-FALLBACK).
-                        val err = app.apiClient.lastApiError
-                        if (err != null) {
-                            channelPostsError = "Не удалось загрузить канал: $err"
-                            attemptWallFallbackToHistory()
+                        "#CHANNELS-HIST screen: msgs=${ch.messages.size} " +
+                            "failure=${ch.failure} peerId=$peerId")
+                    if (ch.messages.isNotEmpty()) {
+                        messages = ch.messages
+                        chatProfiles = ch.profiles
+                        if (ch.messages.size < pageSize) endReached = true
+                        channelHistoryMode = true
+                        channelWallFallback = true
+                        channelPostsError = null
+                        // Канал фактически ОТКРЫТ юзером — сбрасываем бейдж
+                        // (тот же контракт, что у wall-режима, 56-b-1).
+                        markChannelConversationAsRead()
+                    } else {
+                        // Каналы-исключения (контент в wall, getHistory пуст/ошибка) —
+                        // прежний wall-путь с честным «Повторить».
+                        val posts = app.apiClient.wallGet(ownerId = peerId, count = 30, offset = 0)
+                        // #IM-CHANNEL-OPEN: успех/пустота wall.get — ключевой пункт
+                        // трассировки (пусто + err → честный «Повторить» на экране).
+                        AppLog.i("ChatDetailScreen",
+                            "#IM-CHANNEL-OPEN wallGet initial: posts=${posts.size} peerId=$peerId")
+                        channelPosts = posts
+                        if (posts.size < 30) channelPostsEnd = true
+                        if (posts.isEmpty()) {
+                            // wallGet глотает детали ошибки в emptyList — честно
+                            // показываем «Повторить» только при реальной ошибке API;
+                            // без ошибки — канал просто пуст («нет записей»). При
+                            // ошибке сразу пробуем фолбэк на messages-историю —
+                            // err 15 «wall is disabled» постоянна, «Повторить» не
+                            // поможет (Fix #394 #CHANNEL-WALL-FALLBACK).
+                            val err = app.apiClient.lastApiError
+                            if (err != null) {
+                                channelPostsError = "Не удалось загрузить канал: $err"
+                                attemptWallFallbackToHistory()
+                            }
                         }
+                        // #IM-CHANNEL-FIX (56-b-1): загрузка УСПЕШНА (посты получены либо
+                        // канал честно пуст) — сбрасываем бейдж канала на сервере
+                        // (открытие из пуша/deep-link, тап-путь из списка уже умеет).
+                        if (initial && channelPostsError == null) markChannelConversationAsRead()
                     }
-                    // #IM-CHANNEL-FIX (56-b-1): загрузка УСПЕШНА (посты получены либо
-                    // канал честно пуст) — сбрасываем бейдж канала на сервере
-                    // (открытие из пуша/deep-link, тап-путь из списка уже умеет).
-                    if (initial && channelPostsError == null) markChannelConversationAsRead()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -2891,9 +2914,21 @@ fun ChatDetailScreen(
             val firstIdx = listState.firstVisibleItemIndex
             val firstOffset = listState.firstVisibleItemScrollOffset
             try {
-                val older = app.apiClient.messagesGetHistory(
-                    peerId, count = pageSize, offset = messages.size,
-                ).filter { np -> messages.none { it.id == np.id } }
+                val older: List<Message> = if (channelHistoryMode) {
+                    // Task 67 #CHANNELS-HIST: старая страница канала —
+                    // channels.getHistory со start_cmid = минимальный cmid текущей
+                    // (граница «старее этого»; дедуп по id покрывает и
+                    // inclusive-семантику start_cmid). messages.getHistory для
+                    // каналов пуст — обычная offset-пагинация дала бы пустоту.
+                    val oldest = messages.minOf { it.id }
+                    app.apiClient.channelsGetHistory(
+                        peerId, count = pageSize, startCmid = oldest,
+                    ).messages
+                } else {
+                    app.apiClient.messagesGetHistory(
+                        peerId, count = pageSize, offset = messages.size,
+                    )
+                }.filter { np -> messages.none { it.id == np.id } }
                 if (older.isEmpty()) {
                     endReached = true
                 } else {

@@ -9758,3 +9758,21 @@ Work Log:
 Stage Summary:
 - Тестеру: git pull → сборка → открыть любой канал → прислать лог #CHANNELS-PROBE (теперь 4 строки [variant]).
 - Если какой-то вариант вернёт OK items>0 — параметры для нативной ленты каналов найдены → волна каналов в 2.1.4 (нативная лента + счётчики, план volna-18).
+
+---
+Task ID: 67
+Agent: Z.ai Code (main)
+Task: Фикс пустого контента каналов — channels.getHistory как рабочий путь (формула из пробника v2) + старт диагностики медленных «Сообщений»
+
+Work Log:
+- Входные данные: логкат ПиноКа (upload/..._1789413482330.txt) + Network-дамп веб-клиента vk.ru (upload/..._1789413504449.txt, только заголовки — тел нет).
+- Пробник v2 в логе тестера ЗЕЛЁНЫЙ: [with-real-cmid=114] OK items=9 105КБ (канал -230967953) и [with-real-cmid=17] OK items=9 58КБ (-230893899) → формула: channels.getById → last_message.cmid → channels.getHistory(start_cmid=<cmid>). Рабочий поток приложения при этом давал err=100 → wall err=15 → messages.getHistory 0 → пустой экран (#CHANNEL-WALL-FALLBACK 0 сообщений).
+- VKApiClient: channelsGetHistoryProbe + probeGetHistoryVariant УДАЛЕНЫ (пробник отработал); вместо них production-метод channelsGetHistory(channelId, count=30, startCmid=null): ChannelsHistoryResult(messages, profiles, oldestCmid, newestCmid, failure); шаг 1 getById.last_message (без кэша — новый пост сдвигает last_cmid), шаг 2 getHistory(start_cmid, count, offset=-1, extended=1, forceWebGateway), шаг 3 толерантный парсер parseChannelHistoryItem (двойная схема draft cmid/author_id/time/cm_payload И message id/from_id/date; id=cmid, peerId=канал, fromId-фолбэк=пир, readState=1, реакции через parseMessageReactions или cm_payload.counters.reactions), groups[] → profiles (паттерн messagesGetHistoryWithProfiles); last_message вставляется, если сервер его не включил в страницу (дедуп по cmid покрывает inclusive/exclusive); отсортировано по cmid DESC (новейший индекс 0 для reverseLayout). Лог #CHANNELS-HIST OK/FAIL + startIncluded=yes/no — закрывает вопрос семантики start_cmid по следующему логкату.
+- ChatDetailScreen: channelProbeDone → channelHistoryMode; loadChannelPosts else-ветка = channels-first: успех (msgs>0) → messages/chatProfiles/channelWallFallback=true/endReached по size<pageSize/markChannelConversationAsRead (рендер штатным messages-режимом с read-only футером); пусто/ошибка → прежний wall.get-путь с честным «Повторить» (каналы-исключения). loadOlder: ветка channelHistoryMode → channelsGetHistory(startCmid=min cmid) вместо messages.getHistory (для каналов пуст).
+- Верификация: скобочный скан всех правленых fun (depth_end=0: channelsGetHistory 7595-7709, parseChannelHistoryItem 7719-7755, loadChannelPosts 2019-2102, loadOlder 2910-2945); остатков channelsGetHistoryProbe/channelProbeDone нет (только комментарии-памятки); check-secrets OK (79), check-nested-comments ALL CLEAN (183), !! в диффе нет; UserProfile.online=0 дефолт подтверждён; скобки loadChannelPosts после первой правки были разбалансированы (добавился уровень else) — поймано и починено ДО коммита.
+- Коммит Task 67 запушен в PinoK.
+
+Stage Summary:
+- Тестеру: git pull → сборка → открыть канал → контент должен появиться (текст/вложения/аватар сообщества из groups), + лог #CHANNELS-HIST (startIncluded=решит семантику; itemKeys=если схема ответа не та).
+- Пагинация «старее» в канале идёт channels.getHistory(start_cmid=minCmid) — если inclusive-семантика, дедуп по id уберёт дубль.
+- Найден параллельный баг для Task 68: «Сообщения» грузятся ~7.3с (getConversations count=200 = 663КБ/2.6с + СЕРИАЙННЫЙ messages.getItems ×3 страницы ~2.3с + IOException-ретрай gim-лонгполла ~1.5с на старте) — диагноз вынесен юзеру, оптимизации по одобрению.

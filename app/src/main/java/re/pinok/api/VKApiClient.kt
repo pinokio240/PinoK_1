@@ -7555,128 +7555,203 @@ class VKApiClient(
     )
 
     /**
-     * #CHANNELS-PROBE v2 (Task 66): подбор корректных параметров channels.getHistory
-     * через web-шлюз web.api.vk.ru (форс независимо от тумблера netUseWebApiGateway).
+     * Task 67 (#CHANNELS-HIST): рабочая загрузка истории канала через
+     * channels.getHistory (web-шлюз web.api.vk.ru, форс независимо от
+     * тумблера netUseWebApiGateway). Пришёл на смену #CHANNELS-PROBE v2
+     * (Task 65/66) — пробник свою задачу выполнил и из потока убран.
      *
-     * Результат v1 (лог тестера 14.09 21:36): err=100 «start_cmid is undefined» —
-     * ТОКЕН ПРИНЯТ (нет err 5/1117), МЕТОД СУЩЕСТВУЕТ (нет err 3 «Unknown method»),
-     * забракован только параметр start_cmid=0. Значит нужен реальный cmid либо
-     * запрос первой страницы вообще без start_cmid.
+     * Рабочая формула установлена пробником v2 (лог тестера 14.09 22:17):
+     *   channels.getById → last_message.cmid → getHistory(start_cmid=<cmid>)
+     * Без start_cmid метод ВСЕГДА отвечает err=100 «start_cmid is undefined»
+     * (варианты [no-start-cmid]/[minimal] провалились на обоих каналах);
+     * со start_cmid — 200 OK с контентом (items=9, 105КБ / 58КБ).
      *
-     * v2 пробует варианты (каждый — отдельная строка лога [variant]):
-     *   A [no-start-cmid]      getHistory без start_cmid (offset=-1 из черновика)
-     *   B [minimal]            getHistory только channel_id+count+extended
-     *   C [get-by-id]          channels.getById → ищем валидный cmid (last_message)
-     *   D [with-real-cmid]     getHistory со start_cmid=<cmid из C> (если C дал)
+     * Семантика start_cmid: судя по items=9 при count=10 и start_cmid=последний
+     * cmid — сервер отдаёт сообщения СТАРШЕ start_cmid (верхняя граница страницы).
+     * Самое свежее сообщение берём из getById.last_message (тот же порядок, что
+     * у веб-клиента: getById → getHistory) и вставляем в выдачу, если сервер
+     * его не включил — дедуп по cmid делает корректным оба сценария
+     * (включительно/исключительно). Лог #CHANNELS-HIST startIncluded=yes/no
+     * закроет вопрос по следующему логкату тестера.
      *
-     * channels.* — недокументированные методы мобильного веб-клиента (m.vk.ru SPA
-     * «Каналы»); схемы — в черновике docs/drafts/channels/ChannelsRepository.kt.
-     * Поведения НЕ меняет: только AppLog #CHANNELS-PROBE. Вызывается из
-     * ChatDetailScreen.loadChannelPosts один раз за открытие канального диалога.
+     * items[] парсим в ОБЩИЙ Message (id=cmid, peerId=канал) — рендер идёт
+     * через стандартный messages-режим (channelWallFallback в ChatDetailScreen)
+     * со всеми вложениями/аватарами, без отдельного канального UI. Парсер
+     * толерантный (двойная схема: draft items[].cmid/author_id/time из
+     * docs/drafts/channels и message-шейп id/from_id/date); если ни один
+     * айтем не распарсился — лог ключей первого (докрутка схемы без гаданий).
      */
-    suspend fun channelsGetHistoryProbe(channelId: Long) {
-        try {
-            // Вариант A: первая страница БЕЗ start_cmid (offset=-1 из черновика).
-            probeGetHistoryVariant(
-                channelId, "no-start-cmid",
-                mapOf(
-                    "channel_id" to channelId.toString(),
-                    "count" to "10",
-                    "offset" to "-1",
-                    "extended" to "1",
-                ),
+    data class ChannelsHistoryResult(
+        val messages: List<Message>,
+        val profiles: Map<Long, UserProfile>,
+        /** Минимальный cmid страницы — start_cmid для следующей (более старой) страницы. */
+        val oldestCmid: Long? = null,
+        /** Новейший cmid канала из getById.last_message (null при пагинации «старее»). */
+        val newestCmid: Long? = null,
+        /** Честная причина пустоты (VK API err / нет сети / парсинг) — null при успехе. */
+        val failure: String? = null,
+    )
+
+    suspend fun channelsGetHistory(
+        channelId: Long,
+        count: Int = 30,
+        startCmid: Long? = null,
+    ): ChannelsHistoryResult {
+        // ── Шаг 1: свежий last_cmid канала (getById.last_message). ──
+        // БЕЗ кэша: новый пост канала сдвигает last_cmid — закэшированное
+        // значение дало бы страницу без новейшего сообщения. getById один
+        // раз за открытие — тот же контракт, что у веб-клиента.
+        var newestCmid: Long? = null
+        var newestRaw: JsonObject? = null
+        var start = startCmid
+        if (start == null) {
+            val byId = call(
+                "channels.getById",
+                mapOf("channel_ids" to channelId.toString(), "extended" to "1"),
+                forceWebGateway = true,
             )
-            // Вариант B: минимальный — без start_cmid и без offset
-            // (заодно проверяем, не браковал ли v1 ещё и offset=-1).
-            probeGetHistoryVariant(
-                channelId, "minimal",
-                mapOf(
-                    "channel_id" to channelId.toString(),
-                    "count" to "10",
-                    "extended" to "1",
-                ),
-            )
-            // Вариант C: метаданные канала — источники валидного cmid
-            // (last_message.cmid по схеме черновика ChannelInfo.lastCmid).
-            var realCmid: Long? = null
-            try {
-                val byId = call(
-                    "channels.getById",
-                    mapOf(
-                        "channel_ids" to channelId.toString(),
-                        "extended" to "1",
-                    ),
-                    forceWebGateway = true,
-                )
-                if (byId == null) {
-                    AppLog.w("VKApiClient",
-                        "#CHANNELS-PROBE [get-by-id] FAIL channelId=$channelId: " +
-                            "lastApiError=$lastApiError (code=$lastApiErrorCode)")
-                } else {
-                    val items = byId.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
-                        ?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
-                    val ch0 = items?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
-                    realCmid = ch0?.get("last_message")?.takeIf { it.isJsonObject }?.asJsonObject
-                        ?.get("cmid")?.takeIf { !it.isJsonNull }?.asLong
-                    AppLog.i("VKApiClient",
-                        "#CHANNELS-PROBE [get-by-id] OK channelId=$channelId " +
-                            "items=${items?.size() ?: 0} lastCmid=$realCmid chKeys=${ch0?.keySet()}")
-                }
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (e: Exception) {
-                AppLog.w("VKApiClient", "#CHANNELS-PROBE [get-by-id] exception: ${e.message}")
-            }
-            // Вариант D: getHistory со start_cmid = РЕАЛЬНЫЙ cmid из C.
-            val cmid = realCmid
-            if (cmid != null && cmid != 0L) {
-                probeGetHistoryVariant(
-                    channelId, "with-real-cmid=$cmid",
-                    mapOf(
-                        "channel_id" to channelId.toString(),
-                        "start_cmid" to cmid.toString(),
-                        "count" to "10",
-                        "offset" to "-1",
-                        "extended" to "1",
-                    ),
-                )
-            } else {
-                AppLog.i("VKApiClient",
-                    "#CHANNELS-PROBE [with-real-cmid] SKIPPED: нет валидного cmid channelId=$channelId")
-            }
-        } catch (ce: kotlinx.coroutines.CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "#CHANNELS-PROBE exception: ${e.message}")
+            val ch0 = byId?.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
+            newestRaw = ch0?.get("last_message")?.takeIf { it.isJsonObject }?.asJsonObject
+            newestCmid = newestRaw?.get("cmid")?.takeIf { !it.isJsonNull }?.asLong
+                ?: newestRaw?.get("conversation_message_id")?.takeIf { !it.isJsonNull }?.asLong
+            if (newestCmid != null && newestCmid != 0L) start = newestCmid
         }
+        if (start == null || start == 0L) {
+            // Канал без единого сообщения (last_message отсутствует) — честная пустота.
+            AppLog.i("VKApiClient",
+                "#CHANNELS-HIST channelId=$channelId: last_message отсутствует — канал пуст")
+            return ChannelsHistoryResult(emptyList(), emptyMap())
+        }
+        // ── Шаг 2: страница истории (старше start_cmid). ──
+        val json = call(
+            "channels.getHistory",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "start_cmid" to start.toString(),
+                "count" to count.toString(),
+                "offset" to "-1",
+                "extended" to "1",
+            ),
+            forceWebGateway = true,
+        )
+        if (json == null) {
+            val vkErr = lastApiError
+            AppLog.w("VKApiClient",
+                "#CHANNELS-HIST FAIL channelId=$channelId: lastApiError=$vkErr (code=$lastApiErrorCode)")
+            return ChannelsHistoryResult(
+                emptyList(), emptyMap(), newestCmid = newestCmid,
+                failure = vkErr?.let { "VK API: $it" }
+                    ?: "запрос не выполнен (нет/мёртвый токен или капча отменена)",
+            )
+        }
+        val resp = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+        val items = resp?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+        if (resp == null || items == null) {
+            AppLog.w("VKApiClient",
+                "#CHANNELS-HIST FAIL channelId=$channelId: нет response/items keys=${json.keySet()}")
+            return ChannelsHistoryResult(
+                emptyList(), emptyMap(), newestCmid = newestCmid,
+                failure = "Некорректный ответ VK: нет response/items",
+            )
+        }
+        // ── Шаг 3: изолированный по айтемам парсинг — один битый не убивает страницу. ──
+        var skipped = 0
+        val parsed = ArrayList<Message>(items.size())
+        for (el in items) {
+            if (!el.isJsonObject) { skipped++; continue }
+            val m = parseChannelHistoryItem(el.asJsonObject, channelId)
+            if (m == null) skipped++ else parsed.add(m)
+        }
+        val startIncluded = parsed.any { it.id == start }
+        // Самое свежее сообщение канала: если last_message не попал в страницу —
+        // вставляем (гарантия видимости новейшего поста при любой семантике
+        // start_cmid; дедуп по cmid в UI защищает от дубля).
+        if (startCmid == null && newestRaw != null && newestCmid != null && newestCmid != 0L &&
+            !startIncluded && parsed.none { it.id == newestCmid }) {
+            parseChannelHistoryItem(newestRaw, channelId)?.let { parsed.add(it) }
+        }
+        if (parsed.isEmpty()) {
+            val firstKeys = items.firstOrNull()
+                ?.takeIf { it.isJsonObject }?.asJsonObject?.keySet()
+            AppLog.w("VKApiClient",
+                "#CHANNELS-HIST channelId=$channelId: items=${items.size()} parsed=0 " +
+                    "skipped=$skipped itemKeys=$firstKeys")
+            return ChannelsHistoryResult(
+                emptyList(), emptyMap(), newestCmid = newestCmid,
+                failure = "Не удалось разобрать ответ канала (itemKeys=$firstKeys)",
+            )
+        }
+        // ── Шаг 4: профили groups[] — аватарки/имена (паттерн messagesGetHistoryWithProfiles). ──
+        val profiles = HashMap<Long, UserProfile>()
+        resp.getAsJsonArray("groups")?.forEach { el ->
+            if (!el.isJsonObject) return@forEach
+            val o = el.asJsonObject
+            val gid = o.get("id")?.asLong ?: return@forEach
+            // Группы — отрицательный ID, маппим как UserProfile для UI.
+            profiles[-gid] = UserProfile(
+                id = -gid,
+                firstName = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                lastName = "",
+                photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
+                photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
+            )
+        }
+        // Новейший сверху (индекс 0) — reverseLayout-рендер ожидает такой порядок.
+        val messages = parsed.sortedByDescending { it.id }
+        val oldestCmid = messages.minOf { it.id }
+        AppLog.i("VKApiClient",
+            "#CHANNELS-HIST OK channelId=$channelId page=${messages.size} " +
+                "oldestCmid=$oldestCmid newestShown=${messages.first().id} startCmid=$start " +
+                "startIncluded=${if (startIncluded) "yes" else "no"} profiles=${profiles.size} skipped=$skipped")
+        return ChannelsHistoryResult(messages, profiles, oldestCmid = oldestCmid, newestCmid = newestCmid)
     }
 
-    /** Один вариант channels.getHistory — лог #CHANNELS-PROBE [variant], поведение не меняет. */
-    private suspend fun probeGetHistoryVariant(channelId: Long, variant: String, args: Map<String, String>) {
-        try {
-            val raw = call("channels.getHistory", args, forceWebGateway = true)
-            if (raw == null) {
-                AppLog.w("VKApiClient",
-                    "#CHANNELS-PROBE [$variant] FAIL channelId=$channelId: " +
-                        "lastApiError=$lastApiError (code=$lastApiErrorCode)")
-                return
-            }
-            val resp = raw.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
-            if (resp == null) {
-                AppLog.w("VKApiClient",
-                    "#CHANNELS-PROBE [$variant] нет 'response' в ответе, " +
-                        "keys=${raw.keySet()} channelId=$channelId")
-                return
-            }
-            val items = resp.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
-            AppLog.i("VKApiClient",
-                "#CHANNELS-PROBE [$variant] OK: items=${items?.size() ?: 0} " +
-                    "respKeys=${resp.keySet()} channelId=$channelId")
-        } catch (ce: kotlinx.coroutines.CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "#CHANNELS-PROBE [$variant] exception: ${e.message}")
+    /**
+     * Task 67: парсинг ОДНОГО канального сообщения (channels.getHistory items[]
+     * или getById.last_message) в общий Message. Толерантен к двум шейпам:
+     *  - draft (docs/drafts/channels): cmid / author_id / time / cm_payload;
+     *  - message-шейп: id / from_id / date / reactions.
+     * id = cmid — уникален в канале и монотонно растёт: на нём строятся и
+     * порядок рендера, и пагинация «старее» (следующий start_cmid).
+     */
+    private fun parseChannelHistoryItem(o: JsonObject, channelId: Long): Message? {
+        fun lng(name: String): Long? = o.get(name)?.takeIf { !it.isJsonNull }?.asLong
+        val cmid = lng("cmid") ?: lng("conversation_message_id") ?: lng("id") ?: return null
+        if (cmid == 0L) return null
+        val payload = o.get("cm_payload")?.takeIf { it.isJsonObject }?.asJsonObject
+        val text = o.get("text")?.takeIf { !it.isJsonNull }?.asString
+            ?: payload?.get("text")?.takeIf { !it.isJsonNull }?.asString
+            ?: ""
+        val date = lng("date") ?: lng("time") ?: 0L
+        // Автор канального поста — само сообщество; без явного from/author
+        // используем пира (отрицательный id), аватар придёт из groups[].
+        val fromId = lng("from_id") ?: lng("author_id") ?: channelId
+        // Реакции: message-шейп (reactions.count) или draft (cm_payload.counters.reactions).
+        val reactions = parseMessageReactions(o) ?: run {
+            val rc = payload?.get("counters")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
+            if (rc != null && rc > 0) MessageReaction(count = rc) else null
         }
+        return Message(
+            id = cmid,
+            peerId = channelId,
+            fromId = fromId,
+            date = date,
+            text = text,
+            // Канальные посты приходят как прочитанные (открытие канала
+            // всё равно вызывает markChannelConversationAsRead).
+            readState = 1,
+            conversationMessageId = cmid,
+            attachments = parseAttachments(o),
+            replyMessage = o.getAsJsonObject("reply_message")?.let { parseMessage(it) },
+            fwdMessages = o.getAsJsonArray("fwd_messages")?.mapNotNull { fm ->
+                if (fm.isJsonObject) parseMessage(fm.asJsonObject) else null
+            }?.takeIf { it.isNotEmpty() },
+            reactions = reactions,
+        )
     }
 
     /**
