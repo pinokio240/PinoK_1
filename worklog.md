@@ -9776,3 +9776,23 @@ Stage Summary:
 - Тестеру: git pull → сборка → открыть канал → контент должен появиться (текст/вложения/аватар сообщества из groups), + лог #CHANNELS-HIST (startIncluded=решит семантику; itemKeys=если схема ответа не та).
 - Пагинация «старее» в канале идёт channels.getHistory(start_cmid=minCmid) — если inclusive-семантика, дедуп по id уберёт дубль.
 - Найден параллельный баг для Task 68: «Сообщения» грузятся ~7.3с (getConversations count=200 = 663КБ/2.6с + СЕРИАЙННЫЙ messages.getItems ×3 страницы ~2.3с + IOException-ретрай gim-лонгполла ~1.5с на старте) — диагноз вынесен юзеру, оптимизации по одобрению.
+
+---
+Task ID: 68
+Agent: Z.ai Code (main)
+Task: Одобренные юзером оптимизации медленной загрузки раздела «Сообщений» (Fix #395 #IM-FAST-LIST + #NET-CANCEL-RETRY)
+
+Work Log:
+- Вход: юзер одобрил диагноз Task 67 (запись в Stage Summary) — «одобряю». Компоненты диагноза по логкату 14.09 22:17: (1) getConversations(200) 2569мс/663КБ; (2) СТРОГО серийная цепочка после него: requests 300мс + messagesGetAllChannels (getItems-пагинация ×3: 1225+478+557мс) — итого ~5.2-5.5с до показа списка; (3) на старте сессии NetRetry ретраил ОТМЕНЁННЫЙ лонгполл (notifyResumed → call.cancel → IOException("Canceled")) — 2 сна 500+1000мс на мёртвом poll, +1.5с к LP-рестарту, и ложный 60с-кулдаун api.vk.com.
+- MessagesScreen.fetchConversationsMerged: три ветки (base getConversations / «Запросы» / канальный скан) стартуют ПАРАЛЛЕЛЬНО через coroutineScope+async; каждая non-fatal ветка ловит свои исключения внутри async (кроме CancellationException) → ошибка не роняет sibling'и; base остаётся fatal (retry-цикл 3× в LaunchedEffect(Unit) не тронут); merge-семантика без изменений (sortedByDescending для requests, distinctBy для каналов, mergedExtras, #IM-CHANNEL-FIX 56-b-5 перенос флагов пуша). coroutineScope гарантирует каскадную отмену веток при уходе с экрана.
+- LP re-fetch (single-flight, :602): messagesGetAllChannels теперь ПАРАЛЛЕЛЬНО с getConversations (корутина привязана к lpRefetchJob через coroutineScope — отмена новым LP-событием отменяет и скан); inner try/catch перенесён в async-ветку, merge-тело без изменений (freshChannelById замещение + missing-добавление).
+- NetworkInterceptors.NetworkRetryInterceptor (#NET-CANCEL-RETRY): в catch(IOException) первым делом chain.call().isCanceled() || e.message=="Canceled" → немедленный rethrow без снов/ретраев и без записи в hostCooldownUntil (OkHttp 4.12.0 — API доступен). Реальные transient-ошибки ретраятся как раньше.
+- Лог #IM-FAST-LIST: мс до готовности merged-списка + размеры (в fetchConversationsMerged) — проверка эффекта по следующему логкату.
+- Верификация: скобочный скан обоих файлов depth=0/min=0; forward-ref скан local fun (decl 376/559/854/884, вызовы строго после) — чисто; check-secrets OK (79), check-nested-comments ALL CLEAN (183), !! в диффе нет; git status — только 2 целевых файла (посторонних модификаций нет); OkHttp 4.12.0 подтверждён для isCanceled().
+- Коммит ed1ee92d запушен (3c3e4a4b..ed1ee92d).
+
+Stage Summary:
+- Ожидаемое у тестера: первое открытие «Сообщений» — спиннер ~2.6-2.7с вместо ~5.5с; pull-to-refresh ~1.5-2.6с вместо ~3.2-5.2с; LP-события обновляют список быстрее (~вдвое); после резюма приложения LP-рестарт на ~1.5с раньше и без ложного кулдауна api.vk.com.
+- Осталось серверное (не лечится кодом): VK отдаёт getConversations(200) за 1.5-2.6с — это критический путь; прогрессирующий показ (base без ожидания каналов) НЕ делал осознанно: при параллельном старте ветки завершаются почти одновременно — выгода ~0с, а риск «мигания» каналов при refresh реален.
+- Кандидат на будущее (не в этом таске): парсинг 663КБ JSON идёт в контексте Main-диспетчера (→/← в логе на main @ callInternal) — потенциальный джанк; вынос парсинга на Default требует ревизии thread-safety lastApiError/lastApiErrorCode.
+- Версии не тронуты: gradle 4/2.1.3, манифест 4/2.1.3. Следующий bump 5/2.1.4 — после подтверждения юзером: (а) каналы показывают контент (Task 67), (б) «Сообщения» грузятся быстрее (этот таск).
