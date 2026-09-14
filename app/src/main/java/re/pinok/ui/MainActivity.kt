@@ -39,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import kotlinx.coroutines.Dispatchers
@@ -192,6 +193,10 @@ class MainActivity : ComponentActivity() {
         // Fix #112: AuthActivity закрылась — снимаем флаг, чтобы boot LaunchedEffect
         // мог перезапустить её если токен всё ещё невалиден.
         authActivityShowing = false
+        // Fix #386 #SILENT-AUTH-KEEP-UI: silent-переавторизация завершилась
+        // (успех/провал/отмена) — когда-условие композиции возвращается к
+        // обычной логике hasValidToken() (см. silentAuthInProgress).
+        silentAuthInProgress = false
         // #SSO-GUARD-RESET: AuthActivity ВЕРНУЛСЯ (SSO-попытка завершена — успех/
         // отмена/провал). Сбрасываем timestamp #SSO-RECREATE-GUARD, чтобы следующий
         // launchAuth (boot-no-token / network-restored-no-token) НЕ блокировался на
@@ -202,6 +207,9 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == AuthActivity.RESULT_OFFLINE_MODE) {
             // #34: guest-режим — показываем офлайн-менеджер без токена.
             isOfflineMode = true
+            // Fix #386: guest-сессия — главный UI больше «не показан»;
+            // последующие silent-сценарии не должны удерживать старый UI.
+            mainUiEverShown = false
         }
         // Fix #49 #SILENT-LOOP-BREAK: считаем SILENT-провалы. Если SILENT-запуск
         // завершился БЕЗ токена (не RESULT_OK) — инкрементим. При успехе — сброс.
@@ -248,6 +256,23 @@ class MainActivity : ComponentActivity() {
                     lockerSnap.lockerPinHash,
                     lockerSnap.lockerBiometric,
                 )
+            }
+            // Fix #386 #SILENT-AUTH-KEEP-UI: если на время silent-auth главный UI
+            // оставался смонтированным (deep-sleep resume) — LP мог уйти в
+            // token-паузу (§43) с мёртвым токеном, а пул — evictAll-нут на resume.
+            // Повторяем ключевой контур onResume: evictAll + LP notifyResumed
+            // (сбрасывает tokenPauseUntilMs/backoff → LP реконнектится уже с
+            // новым токеном, сообщения оживают). Без этого контент смонтированных
+            // экранов мог застрять в error-состоянии до pull-to-refresh (сегодня
+            // эту роль играл ребилд NavHost с нуля).
+            if (lastLaunchWasSilent && mainUiEverShown) {
+                try {
+                    appCtx.httpClient.connectionPool.evictAll()
+                } catch (e: Exception) {
+                    AppLog.w("MainActivity", "#SILENT-AUTH-KEEP-UI: pool.evictAll failed: ${e.message}")
+                }
+                appCtx.longPollClient.notifyResumed()
+                AppLog.i("MainActivity", "#SILENT-AUTH-KEEP-UI: silent auth OK — pool evicted + LP woken (UI stayed mounted)")
             }
         } else if (lastLaunchWasSilent && result.resultCode != AuthActivity.RESULT_OFFLINE_MODE) {
             silentFailCount++
@@ -314,6 +339,40 @@ class MainActivity : ComponentActivity() {
      * Сбрасывается в false в authLauncher result callback (когда AuthActivity закрылась).
      */
     private var authActivityShowing by mutableStateOf(false)
+
+    /**
+     * Fix #386 #SILENT-AUTH-KEEP-UI: «UI живёт во время silent re-auth».
+     *
+     * [silentAuthInProgress] — true пока идёт невидимая (SILENT) переавторизация;
+     * выставляется в [launchAuth] (только для silent-интента), сбрасывается в
+     * authLauncher-колбэке при ЛЮБОМ результате (успех/провал/отмена).
+     *
+     * [mainUiEverShown] — главный UI показывался в этой сессии (SideEffect в
+     * композиции SovaNavHost); сбрасывается при FULL-запуске auth (logout /
+     * ручной вход / offline→login) и при выборе «Офлайн-режим».
+     *
+     * Проблема (баг-репорт 14.09): после долгого сна токен стёрт
+     * (checkTokenValidity → clear) → hasValidToken()=false → when-композиция
+     * падала в ветку else → StartupLoadingScreen и РАЗМОНТИРОВАЛА весь
+     * SovaNavHost на всё время silent-auth (секунды–30с, с #SILENT-RETRY-AFTER-DOZE
+     * ретраями — до минут). Юзер видел только Toast «Подключение к VK…» —
+     * «интерфейс приложения может не отобразится сразу, хотя уведомление о
+     * подключении появляется». После успеха NavHost строился с нуля — контент
+     * появлялся ещё позже (пул evictAll-нут, LP реконнект, рефетчи).
+     *
+     * Фикс (вариант A): пока идёт silent-auth И главный UI уже показывался —
+     * НЕ размонтируем SovaNavHost: экраны живут на досонном стейте (юзер сразу
+     * видит привычный интерфейс), err 5 экраны обрабатывают сами, авто-офлайн
+     * #38 не трипается (он только на IOException, не на err 5; успешные ответы
+     * после успеха сбрасывают счётчик — self-heal VKApiClient).
+     *
+     * [mainUiEverShown] нужен, чтобы при ХОЛОДНОМ старте с мёртвым токеном
+     * поведение не менялось: UI ещё не монтировался → StartupLoadingScreen
+     * как раньше (иначе экраны стартовали бы фетчи без токена и застревали
+     * в error-состояниях до ручного refresh).
+     */
+    private var silentAuthInProgress by mutableStateOf(false)
+    private var mainUiEverShown by mutableStateOf(false)
 
     /**
      * Fix #230: timestamp последнего запуска AuthActivity (для троттлинга).
@@ -426,6 +485,13 @@ class MainActivity : ComponentActivity() {
         // Fix #49: запоминаем был ли этот запуск SILENT — result-callback
         // инкрементит silentFailCount только если SILENT закончился неудачей.
         lastLaunchWasSilent = intent.getBooleanExtra(AuthActivity.EXTRA_SILENT_MODE, false)
+        // Fix #386 #SILENT-AUTH-KEEP-UI: silent-запуск держит главный UI
+        // смонтированным, пока идёт невидимая переавторизация (сброс — в
+        // authLauncher-колбэке при любом результате). FULL-запуск (ручной вход /
+        // logout / offline→login) помечает сессию «UI не показан» — следующее
+        // монтирование пойдёт штатно (loading → NavHost с нуля).
+        silentAuthInProgress = lastLaunchWasSilent
+        if (!lastLaunchWasSilent) mainUiEverShown = false
         AppLog.i("MainActivity", "launchAuth($reason) — launching AuthActivity" +
             (if (lastLaunchWasSilent) " [SILENT]" else " [FULL]"))
         if (lastLaunchWasSilent) {
@@ -1076,11 +1142,26 @@ class MainActivity : ComponentActivity() {
                         snap == null -> StartupLoadingScreen()
 
                         // Авторизованный режим — главный навигационный граф.
-                        app.tokenStorage.hasValidToken() -> {
+                        //
+                        // Fix #386 #SILENT-AUTH-KEEP-UI: во время silent re-auth
+                        // после долгого сна токен стёрт (hasValidToken()=false), но
+                        // если главный UI уже показывался в этой сессии — НЕ
+                        // размонтируем его (баг-репорт 14.09: «интерфейс не
+                        // отображается сразу, хотя уведомление о подключении
+                        // появляется»). Экраны живут на досонном стейте; err 5
+                        // экраны обрабатывают сами; авто-офлайн #38 не трипается
+                        // (только на IOException). Cold-start с мёртвым токеном
+                        // ведёт себя как раньше: mainUiEverShown=false → loading.
+                        app.tokenStorage.hasValidToken() ||
+                            (silentAuthInProgress && mainUiEverShown) -> {
                             // Запрос ВСЕХ необходимых runtime-разрешений.
                             // На Android 13+ без POST_NOTIFICATIONS не работают уведомления
                             // foreground-сервисов (загрузка музыки/видео, плеер).
                             RequestAllPermissionsEffect()
+                            // Fix #386: фиксируем «главный UI был показан в этой
+                            // сессии» — последующий silent re-auth будет держать
+                            // этот UI смонтированным (идемпотентно на recompose).
+                            SideEffect { mainUiEverShown = true }
                             // Task 20: CompositionLocal DI-контракта экранов звонков —
                             // провайдер SovaApp (реализует CallsDependencies).
                             // Этап 3.7-1: рядом провайдер контейнера фото — ЕДИНАЯ
@@ -1348,6 +1429,10 @@ class MainActivity : ComponentActivity() {
                         // Нет токена, не offline — AuthActivity запускается в
                         // LaunchedEffect выше. Пока она не показалась — loading,
                         // чтобы не было белого экрана без FAB.
+                        // Fix #386: сюда попадаем и в паузах МЕЖДУ silent-ретраями
+                        // (#SILENT-RETRY-AFTER-DOZE) и при cold-start silent login —
+                        // это осознанно: держать UI без токена с err 5 хуже, чем
+                        // краткий loading (см. KDoc silentAuthInProgress).
                         else -> StartupLoadingScreen()
                     }
 
