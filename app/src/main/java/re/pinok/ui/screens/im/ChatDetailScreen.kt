@@ -822,6 +822,19 @@ fun ChatDetailScreen(
     var channelPostsError by remember { mutableStateOf<String?>(null) }
     var channelPostsEnd by remember { mutableStateOf(false) }
     var channelPostsLoadingMore by remember { mutableStateOf(false) }
+    // Fix #394 #CHANNEL-WALL-FALLBACK: wall.get для канала может быть ЗАКРЫТ
+    // навсегда (баг-репорт 14.09: «диалоги каналов не открываются» —
+    // wall.get err 15 «Access denied: wall is disabled» у сообщества
+    // -236041950 «Время Перемен. Новости» с удалённой/отключённой стеной;
+    // кнопка «Повторить» в этом случае бесполезна — ошибка постоянная).
+    // channelWallFallback=true → экран переключается на СТАНДАРТНЫЙ
+    // messages-режим (история диалога канала через messages.getHistory —
+    // сообщения канала в диалоге есть, иначе бы бейдж/LP-события не приходили);
+    // read-only футер канала и шапка сохраняются (isChannel не сбрасываем).
+    // channelFallbackTried — попытка фолбэка ОДИН раз за открытие экрана:
+    // «Повторить» wall после неудачи истории не зацикливает запросы.
+    var channelWallFallback by remember { mutableStateOf(false) }
+    var channelFallbackTried by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
     // Подписчики в шапке канала (снапшот 29-a: «название + N подписчиков»).
     // -1 = ещё не получены (subtitle не рисуем).
@@ -1891,7 +1904,10 @@ fun ChatDetailScreen(
                 val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
                 if (g != null) {
                     channelGroup = g
-                    if (g.name.isNotBlank() && g.name != currentTitle) currentTitle = g.name
+                    // Fix #394: удалённое сообщество отдаёт name="DELETED" — НЕ
+                    // затираем исходное имя из карточки диалога (баг-репорт 14.09:
+                    // шапка «Время Перемен. Новости» превращалась в «DELETED»).
+                    if (g.name.isNotBlank() && g.name != "DELETED" && g.name != currentTitle) currentTitle = g.name
                     // NULL-ЯВНО: photo200 может отсутствовать — фолбэк на
                     // photo100 (паттерн рендера аватарок всего проекта).
                     val gPhoto = if (g.photo200 != null) g.photo200 else g.photo100
@@ -1972,9 +1988,15 @@ fun ChatDetailScreen(
                     if (posts.isEmpty()) {
                         // wallGet глотает детали ошибки в emptyList — честно
                         // показываем «Повторить» только при реальной ошибке API;
-                        // без ошибки — канал просто пуст («нет записей»).
+                        // без ошибки — канал просто пуст («нет записей»). При
+                        // ошибке сразу пробуем фолбэк на messages-историю —
+                        // err 15 «wall is disabled» постоянна, «Повторить» не
+                        // поможет (Fix #394 #CHANNEL-WALL-FALLBACK).
                         val err = app.apiClient.lastApiError
-                        if (err != null) channelPostsError = "Не удалось загрузить канал: $err"
+                        if (err != null) {
+                            channelPostsError = "Не удалось загрузить канал: $err"
+                            attemptWallFallbackToHistory()
+                        }
                     }
                     // #IM-CHANNEL-FIX (56-b-1): загрузка УСПЕШНА (посты получены либо
                     // канал честно пуст) — сбрасываем бейдж канала на сервере
@@ -1986,8 +2008,58 @@ fun ChatDetailScreen(
             } catch (e: Exception) {
                 AppLog.e("ChatDetailScreen", "#CHANNEL-WALL-MODE wallGet failed", e)
                 channelPostsError = "Не удалось загрузить канал: ${e.message}"
+                // Fix #394 #CHANNEL-WALL-FALLBACK: сетевой/API-провал wall.get —
+                // тоже пробуем messages-историю (сюда попадают IOException/
+                // таймауты — история может быть доступна, когда лента закрыта).
+                attemptWallFallbackToHistory()
             } finally {
                 channelPostsLoading = false
+            }
+        }
+    }
+
+    /**
+     * Fix #394 #CHANNEL-WALL-FALLBACK: wall.get недоступен (err 15 «wall is
+     * disabled» у канала / сообщество удалено / сеть) — пробуем открыть диалог
+     * канала как ОБЫЧНЫЙ чат: messages.getHistory (сообщения канала приходят
+     * в диалог — иначе бейдж/LP-события не приходили бы). При непустой истории
+     * (или пустой БЕЗ ошибки) переключаем рендер на стандартный messages-режим
+     * (channelWallFallback=true): LazyColumn истории + канальный read-only футер
+     * и шапка сохраняются. Пустая история С ошибкой VK — остаёмся в wall-error
+     * (честный «Повторить»; фолбэк больше не пытается — channelFallbackTried).
+     *
+     * История грузится тем же messagesGetHistoryWithProfiles(count = pageSize),
+     * что и стандартный путь LaunchedEffect — состояние messages/chatProfiles/
+     * endReached совместимо с обычным рендером без ветвлений.
+     */
+    fun attemptWallFallbackToHistory() {
+        if (channelWallFallback || channelFallbackTried) return
+        channelFallbackTried = true
+        scope.launch {
+            try {
+                val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
+                val fresh = result.messages.distinctBy { it.id }
+                if (fresh.isNotEmpty() || result.failure == null) {
+                    messages = fresh
+                    chatProfiles = result.profiles
+                    if (fresh.size < pageSize) endReached = true
+                    channelWallFallback = true
+                    channelPostsError = null
+                    // Канал фактически ОТКРЫТ юзером — сбрасываем бейдж
+                    // (тот же контракт, что у успешного wall-режима, 56-b-1).
+                    markChannelConversationAsRead()
+                    AppLog.i("ChatDetailScreen",
+                        "#CHANNEL-WALL-FALLBACK: wall недоступен → показана messages-история " +
+                            "(${fresh.size} сообщений) peerId=$peerId")
+                } else {
+                    AppLog.w("ChatDetailScreen",
+                        "#CHANNEL-WALL-FALLBACK: messages-история пуста и с ошибкой — остаёмся в wall-error peerId=$peerId")
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen",
+                    "#CHANNEL-WALL-FALLBACK: getHistory failed (non-fatal): ${e.message}")
             }
         }
     }
@@ -3784,13 +3856,16 @@ fun ChatDetailScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.surface),
         ) {
-            if (isChannel) {
+            if (isChannel && !channelWallFallback) {
                 // ═══ #CHANNEL-WALL-MODE (Fix #393): контент канала ═══════════
                 // Посты сообщества (wall.get) карточками WallPostCard — ТОТ ЖЕ
                 // компонент, что на стене профиля (переиспользование, не копипаста):
                 // лайк (likes.add/delete), комментарий/тап → PostDetailScreen,
                 // «Поделиться» → ShareSheet. Композер скрыт (bottomBar →
                 // ChannelFooterBar с тумблером уведомлений).
+                // Fix #394 #CHANNEL-WALL-FALLBACK: при недоступной стене
+                // (channelWallFallback=true) контент рендерит стандартный
+                // messages-режим ниже (история диалога канала).
                 Box(modifier = Modifier.fillMaxSize()) {
                     val chErr = channelPostsError
                     when {
