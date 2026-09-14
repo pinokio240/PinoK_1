@@ -253,7 +253,14 @@ object NetworkInterceptors {
                     // api.vk.com зря уходил в 60с-кулдаун (все новые вызовы — без
                     // ретраев). Отменённый вызов НЕ transient: ретраить бессмысленно,
                     // пробрасываем немедленно, кулдаун не трогаем.
-                    if (chain.call().isCanceled() || e.message == "Canceled") {
+                    // Паттерн детекта — ТОТ ЖЕ, что в LongPollClient.loop (:531,
+                    // §43 #NET-SWITCH-DELAY): message.contains("Canceled") +
+                    // simpleName. Осознанно БЕЗ chain.call().isCanceled() — в OkHttp
+                    // 4.x call может быть property (Kotlin) и шейп API не проверен
+                    // компиляцией (урок Task 64: компилятора в песочнице нет).
+                    val isCanceled = e.message?.contains("Canceled", ignoreCase = true) == true ||
+                        e.javaClass.simpleName == "Canceled"
+                    if (isCanceled) {
                         AppLog.d(TAG, "Call canceled — no retry for $host${request.url.encodedPath}")
                         throw e
                     }
