@@ -9655,3 +9655,28 @@ Stage Summary:
 - Ожидаемое поведение у тестера: после долгого сна — мгновенный интерфейс (досонный контент) + Toast «Подключение к VK…»; после silent-auth LP/сообщения оживают сами; лента — досонная до pull-to-refresh (осознанный трейд-офф варианта A).
 - KDoc-ссылки [mainUiEverShown] в diff-выводе терминала выглядели обрезанными («ainUiEverShown]») — артефакт рендера, в файле корректно (проверено Read).
 - Открыто: следующий манифест-релиз строго versionCode 4 после сборки/заливки APK тестером (поток Task 58).
+
+---
+Task ID: 62
+Agent: Z.ai Code (main)
+Task: публикация релиза V2.1.3 в version.json (пересчёт SHA-256 по ссылке юзера на APK)
+
+Work Log:
+- Юзер прислал APK: …/V2.1.3/Pinok_14091400.apk (запрос «пересчитай хэш и внеси в скрипт для обновления»). Скачан: 138 218 147 Б.
+- SHA-256 = CA348BF6988ACC0C7C4E3278EFE89ACB5FF7F1B78E32A543AC695C7BC896722C (≠ BE57… V2.1.2 — новая сборка).
+- Форензика APK (восстановленный AXML-парсер; структура START_ELEMENT: атрибуты с off+16+attrStart, атрибут: name@+4, dtype@+15, data@+16 — строковый тип 0x03 разрешается strings[data]):
+  * versionCode 4, versionName 2.1.3-debug, package re.pinok.debug, compileSdk 36 — сборка из bump-коммита ce109f99 + фиксы;
+  * маркеры Fix #386 (#SILENT-AUTH-KEEP-UI, silentAuthInProgress, mainUiEverShown) найдены в classes15.dex — фикс deep-sleep UI (Task 61) ВНУТРИ сборки; #IM-CHANNEL-FIX на месте;
+  * #NET-POPUP-DEFAULT-ON/#LOG-FAB-DEFAULT-OFF в dex НЕ ищутся осмысленно — это маркеры комментариев (в dex не попадают); реверс дефолтов подтверждается коммитом 17496801;
+  * BuildStamp: calls-2026.09.06-5 == BuildStamp.STAMP (константа ротируется только звонковыми волнами, bump-ы её не трогают — git log BuildStamp.kt) → манифестный stamp такой же → у сборки 4 НЕ будет ложного «Версия та же, но штамп отличается» (UpdaterManager :402-412).
+- version.json: ЕДИНСТВЕННАЯ запись {versionCode 4, versionName 2.1.3, stamp calls-2026.09.06-5, apkUrl …/V2.1.3/Pinok_14091400.apk, sha256 CA348…722C}; запись V2.1.2 затёрта (поток §1 шаг 6).
+- Подпись: sign_manifest.py sign ключом /home/z/pinok-signing/private_key.hex → verify ПРИВАТНЫМ и ПУБЛИЧНЫМ ключами — ВЕРНА (отпечаток 22520fde…78 == RELEASE_PUBLIC_KEY_B64).
+- Гейты: check-secrets OK (78 md/txt), свип !! в диффе — 0.
+- Коммит 637e9f08 запушен (b2ad2884..637e9f08): version.json + version.json.sig.
+- Raw-проверка: raw.githubusercontent.com/pinokio240/PinoK_1/PinoK/version.json отдаёт 4/2.1.3; ДОПОЛНИТЕЛЬНО raw version.json + version.json.sig скачаны и верифицированы против RELEASE_PUBLIC_KEY — ПОДПИСЬ ВЕРНА (контроль сквозной целостности: то, что получат тестеры, валидно).
+
+Stage Summary:
+- Манифест-релиз V2.1.3 опубликован. Ожидаемое поведение: тестеры с code 1/3 увидят «Доступно 2.1.3» → установка (4 > 1, 4 > 3); у сборки code 4 — UpToDate сразу (stamp совпадает).
+- В V2.1.3 вошли: Fix #386 #SILENT-AUTH-KEEP-UI (интерфейс не пропадает при silent re-auth после сна) + реверс дефолтов (popup сети ON, Жук OFF).
+- AXML-парсер восстановлен полностью (оффсеты задокументированы) — замена утерянного инструмента форензики.
+- Следующий bump gradle (5/2.1.4?) — только после публикации манифеста 4 (готов) и по решению юзера.
