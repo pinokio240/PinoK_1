@@ -632,7 +632,9 @@ fun CallScreen(
                         signaling.start(userId = rejoinUid, conversationId = rejoinConvId, params = fresh, peerId = peerId)
                         var waited = 0
                         while (!signaling.isWsReady() && waited < 10_000) {
-                            kotlinx.coroutines.delay(250); waited += 250
+                            // #PERF-WS-TICK: тик 250→100мс — ре-join продолжается
+                            // сразу после открытия WS (кап 10с прежний).
+                            kotlinx.coroutines.delay(100); waited += 100
                         }
                         if (signaling.isWsReady()) {
                             AppLog.w("CallScreen", "SERVER-REJOIN: WS перерегистрирован (${waited}мс) — жду свежий connection для PC-RESTART")
@@ -734,8 +736,8 @@ fun CallScreen(
                         signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId)
                         var waited = 0
                         while (!signaling.isWsReady() && waited < 10_000) {
-                            kotlinx.coroutines.delay(250)
-                            waited += 250
+                            kotlinx.coroutines.delay(100)
+                            waited += 100
                         }
                         if (reAccept && signaling.isWsReady()) {
                             val ok = signaling.acceptCall(isVideo = isVideoCall)
@@ -835,8 +837,8 @@ fun CallScreen(
                         signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
                         var waited = 0
                         while (!signaling.isWsReady() && waited < 10_000) {
-                            kotlinx.coroutines.delay(250)
-                            waited += 250
+                            kotlinx.coroutines.delay(100)
+                            waited += 100
                         }
                         if (reAccept && signaling.isWsReady()) {
                             val ok = signaling.acceptCall(isVideo = false)
@@ -1494,7 +1496,7 @@ fun CallScreen(
     LaunchedEffect(incoming, peerId) {
         val placeholder = peerName.isBlank() || peerName == "Входящий звонок" || peerName == "Звонок"
         if (!placeholder && !peerPhoto.isNullOrBlank()) return@LaunchedEffect
-        kotlinx.coroutines.delay(300) // даём шанс хосту опередить (refreshIncomingCaller / OutgoingCallMeta)
+        kotlinx.coroutines.delay(150) // даём шанс хосту опередить (refreshIncomingCaller / OutgoingCallMeta) — #PERF-WS-TICK: 300→150, при таймауте фолбэк-фетч профиля не хуже
         try {
             if (incoming) {
                 val fetched = withContext(Dispatchers.IO) {
@@ -2269,10 +2271,12 @@ fun CallScreen(
                                                 sigStarted = true
                                             }
                                             // Ждём открытия WS (до 10с) — иначе accept-call будет отброшен.
+                                            // Тик 100мс (#PERF-WS-TICK): accept уходит быстрее после
+                                            // открытия WS — на пути поднятия трубки (кап прежний).
                                             var wsWaited = 0
                                             while (!signaling.isWsReady() && wsWaited < 10_000) {
-                                                kotlinx.coroutines.delay(250)
-                                                wsWaited += 250
+                                                kotlinx.coroutines.delay(100)
+                                                wsWaited += 100
                                             }
                                             if (!signaling.isWsReady()) {
                                                 AppLog.w("CallScreen", "Принять: WS сигналинга не открылся за 10с — отмена")

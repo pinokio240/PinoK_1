@@ -11798,7 +11798,13 @@ class VKApiClient(
             }
 
             val durationMs = (System.nanoTime() - startNs) / 1_000_000L
-            val respSize = raw.toString().length
+            // #PERF-LOG-OFFMAIN: raw.toString() — полная ре-сериализация ответа
+            // (663КБ на getConversations(200)) на КАЖДЫЙ вызов: десятки мс CPU +
+            // ~2x663КБ мусора прямо на main (джанк скролла/печати). Считаем на
+            // Default — зеркало шейпа: CallsSectionRepositoryImpl
+            // (withContext(Dispatchers.Default) вокруг API-вызовов, компилируется
+            // в проде); lastApiError-поля ниже по-прежнему @Volatile.
+            val respSize = withContext(Dispatchers.Default) { raw.toString().length }
 
             // Безопасное чтение «error»: getAsJsonObject бросает ClassCastException,
             // если член существует, но не является объектом (патологический ответ VK).
@@ -12304,7 +12310,16 @@ class VKApiClient(
     // ─── S7-1: Sliding-window rate limiter ───────────────────────────────
 
     companion object {
-        private const val MAX_REQUESTS_PER_SECOND = 3
+        // #PERF-RPS6 (глубокая оптимизация): 3→6 rps. Слайд-окно серилизует ВСЕ
+        // вызовы callInternal: бёрст 5-7 запросов (открытие «Сообщений» после
+        // #IM-FAST-LIST: base + requests + канальный скан + LP re-fetch, профиль,
+        // счётчики) при 3 rps ждал +1-2с троттлинга ПОВЕРХ сети — Task 68
+        // распараллелил ветки, а лимитёр их снова выстраивал в очередь.
+        // Документируемый Flood Control VK ~20 rps — 6 оставляет ~3.3x запас;
+        // массовая пагинация audio.get по-прежнему сдержана собственной
+        // PAUSE_BETWEEN_PAGES_MS=1500 (AudioLibraryPager, ~0.7 rps фактических).
+        // ОТКАТ при Flood Control в логкате тестера (err=9): вернуть 3.
+        private const val MAX_REQUESTS_PER_SECOND = 6
         private const val RATE_WINDOW_MS = 1000L
 
         /**

@@ -90,10 +90,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import android.widget.Toast
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
@@ -380,13 +382,22 @@ fun MessagesScreen(
             // non-fatal ветки НЕ роняет sibling'и и общий scope. Отмена (уход с
             // экрана / отмена lpRefetchJob) пробрасывается — coroutineScope
             // каскадно отменяет остальные ветки, запросы не утекают.
+            // #IM-PARSE-OFFMAIN (глубокая оптимизация): fetch+парсинг модели
+            // (200 айтемов + parsePeerMaps + resolveMissingPeerInfo) уходят с
+            // main на Dispatchers.Default — main рисует список, а не JSON.
+            // Зеркало шейпа: CallsSectionRepositoryImpl (withContext(Default)
+            // вокруг API-вызовов VKApiClient — компилируется и работает в проде).
             val baseDeferred = async {
-                app.apiClient.messagesGetConversations(count = pageSize)
-                    .distinctBy { it.peer.id }
+                withContext(Dispatchers.Default) {
+                    app.apiClient.messagesGetConversations(count = pageSize)
+                        .distinctBy { it.peer.id }
+                }
             }
             val requestsDeferred = async<List<Chat>> {
                 try {
-                    app.apiClient.messagesGetConversationRequests(count = 50)
+                    withContext(Dispatchers.Default) {
+                        app.apiClient.messagesGetConversationRequests(count = 50)
+                    }
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
                 } catch (e: Exception) {
@@ -397,7 +408,9 @@ fun MessagesScreen(
             }
             val channelsDeferred = async<List<Chat>> {
                 try {
-                    app.apiClient.messagesGetAllChannels()
+                    withContext(Dispatchers.Default) {
+                        app.apiClient.messagesGetAllChannels()
+                    }
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
                 } catch (e: Exception) {
@@ -611,7 +624,9 @@ fun MessagesScreen(
                     val freshAndChannels = kotlinx.coroutines.coroutineScope {
                         val channelsDeferred = async<List<Chat>> {
                             try {
-                                app.apiClient.messagesGetAllChannels()
+                                withContext(Dispatchers.Default) {
+                                    app.apiClient.messagesGetAllChannels()
+                                }
                             } catch (ce: kotlinx.coroutines.CancellationException) {
                                 throw ce
                             } catch (e: Exception) {
@@ -620,9 +635,13 @@ fun MessagesScreen(
                                 emptyList()
                             }
                         }
+                        // targetCount читает compose-стейт — остаётся на main;
+                        // fetch+парсинг уходят на Default (#IM-PARSE-OFFMAIN).
                         val targetCount = maxOf(chats.size, pageSize)
-                        val fresh = app.apiClient.messagesGetConversations(count = targetCount)
-                            .distinctBy { it.peer.id }
+                        val fresh = withContext(Dispatchers.Default) {
+                            app.apiClient.messagesGetConversations(count = targetCount)
+                                .distinctBy { it.peer.id }
+                        }
                         Pair(fresh, channelsDeferred.await())
                     }
                     val (fresh, allChannels) = freshAndChannels

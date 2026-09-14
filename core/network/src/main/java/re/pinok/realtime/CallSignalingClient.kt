@@ -681,8 +681,10 @@ class CallSignalingClient(
                 // реконнект не срабатывал вовсе, звонок молча висел «Соединение…».
                 var waited = 0L
                 while (running && !isWsOpen() && !wsFailed && waited < CONNECT_TIMEOUT_MS) {
-                    delay(250)
-                    waited += 250
+                    // #PERF-WS-TICK: тик 250→100мс — звонок продолжается сразу
+                    // после открытия WS (кап CONNECT_TIMEOUT_MS прежний).
+                    delay(100)
+                    waited += 100
                 }
                 if (!isWsOpen()) {
                     try { webSocket?.cancel() } catch (_: Exception) {}

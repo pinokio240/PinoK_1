@@ -389,8 +389,9 @@ suspend fun performIncomingDecline(
         signaling.start(userId = uid, conversationId = conv, params = wsParams)
         var waited = 0
         while (!signaling.isWsReady() && waited < 6000) {
-            delay(200)
-            waited += 200
+            // #PERF-WS-TICK: тик 200→100мс — decline уходит быстрее (кап 6с прежний).
+            delay(100)
+            waited += 100
         }
         val sent = signaling.hangup(reason)
         AppLog.i("IncomingCall", "decline WS: sent=$sent wsReady=${signaling.isWsReady()}")
