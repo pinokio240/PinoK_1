@@ -9723,3 +9723,21 @@ Stage Summary:
 - Сборка восстановлена: тестеру — git pull + пересборка; Fix #394 (#CHANNEL-WALL-FALLBACK) теперь компилируется, поведение не менялось (чистый перенос).
 - Урок: при добавлении локальных fun внутри Compose-функции проверять порядок объявления относительно вызывающих (компилятора в песочнице нет — это делается grep-сканом decl→call, как в этом таске).
 - Версии не тронуты: gradle 4/2.1.3, манифест 4/2.1.3; следующий bump 5/2.1.4 — по решению юзера.
+
+---
+Task ID: 65
+Agent: Z.ai Code (main)
+Task: Шаги 1-2 волны каналов — сохранить черновики ChannelsRepository/ChannelsContainer + пробник #CHANNELS-PROBE (channels.getHistory через web-шлюз)
+
+Work Log:
+- Шаг 1 (одобрен юзером): черновики из kotling.zip (upload/) сохранены в docs/drafts/channels/ (ChannelsRepository.kt — data-слой channels.get/getById/getHistory/getPinnedMessages веб-API со схемами ответов; ChannelsContainer.kt — контейнер этапа 1.6 #ARCH-CONTAINERS по шаблону CallsContainer; README). В сборку не входят, референс волны каналов.
+- Ключевой факт черновиков: VK web читает контент каналов как СООБЩЕНИЯ (cmid), НЕ wall-посты → фолбэк Fix #394 каноничен, wall.get шаткий.
+- Шаг 2 (одобрен): VKApiClient — параметр forceWebGateway в call/callInternal (форс web.api.vk.ru независимо от тумблера netUseWebApiGateway; captcha-retry пробрасывает параметр); channelsGetHistoryProbe(channelId) — channels.getHistory (недокументированный web-метод), ТОЛЬКО AppLog #CHANNELS-PROBE, поведение не меняет; KDoc расшифровывает err-коды (3/15/5/1117).
+- ChatDetailScreen: стейт channelProbeDone (:841) + триггер в loadChannelPosts (:2018) — пробник стреляет ОДИН раз за открытие канального диалога, асинхронно, до загрузки wall.
+- Верификация: скобочный скан (дифф нейтрален к pre-existing артефакту -1 у VKApiClient HEAD: -1→-1, сдвиг строки = +72 строк выше конца), forward-ref скан канальных local fun — чисто; check-secrets (79 файлов), check-nested-comments (183), свип !! — чисто. Урок: в скобочном сканере строка = «съесть» только открывающую кавычку (i+=1 один раз), иначе false positives; имя-коллизии (get/toggle) в regex-скане вызовов — фильтровать по scope.
+- Коммит e9ea0bda запушен (c8309634..e9ea0bda).
+
+Stage Summary:
+- Тестеру: git pull → сборка → открыть ЛЮБОЙ канальный диалог → logcat с маркером #CHANNELS-PROBE прислать.
+- Интерпретация: OK items=N → web-шлюз принимает наш токен для channels.* → в 2.1.4 можно строить нативную ленту каналов со счётчиками (план volna-18); err=3/15 → остаёмся на wall/messages-пути (Fix #394 уже открывает каналы).
+- Шаг 3 (волна каналов) — только по результату пробника и решению юзера.
