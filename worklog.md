@@ -9627,3 +9627,31 @@ Stage Summary:
 - Дефолты изменены: popup сети ВКЛЮЧЁН, Жук ВЫКЛЮЧЕН — войдёт в следующую сборку (4/2.1.3).
 - Баг диагностирован: silent re-auth размонтирует главный UI (ветка else → StartupLoadingScreen) — ожидание решения юзера (вариант A/B) до правки.
 - Урок: при правках в этой песочнице всегда сверять git status на ПОСТОРОННИЕ модификации tracked-файлов (gitignore перетирается ре-скAFFOLDING'ом песочницы).
+
+---
+Task ID: 61
+Agent: Z.ai Code (main)
+Task: реализация фикса deep-sleep UI-бага (вариант A) — #SILENT-AUTH-KEEP-UI (Fix #386)
+
+Work Log:
+- Юзер одобрил продолжение («продолжай») → реализован вариант A из диагноза Task 60 (не размонтировать UI на время silent-auth).
+- Предварительная проверка рисков перед правкой:
+  (1) авто-офлайн #38 НЕ трипается err 5 — только IOException/UnknownHost/SocketTimeout 3+ подряд (VKApiClient :11557-11586); успешные ответы после silent-auth сбрасывают счётчик и снимают авто-офлайн (self-heal :11612) → смонтированные экраны с err 5 во время silent-auth безопасны;
+  (2) LP notifyResumed() сбрасывает tokenPauseUntilMs и backoff (LongPollClient :164, :358-390) → годится как сигнал перезачитки после успеха;
+  (3) порядок when-веток: hasValidToken → isOfflineMode → else; silentAuthInProgress не может сосуществовать с isOfflineMode (RESULT_OFFLINE_MODE приходит только из FULL LandingScreen).
+- MainActivity.kt (86 вставок, 1 изменение), все точки под маркером Fix #386 #SILENT-AUTH-KEEP-UI:
+  * новые состояния silentAuthInProgress / mainUiEverShown (mutableStateOf, KDoc с полным разбором) после authActivityShowing;
+  * launchAuth: silentAuthInProgress = lastLaunchWasSilent (после гвардов throttle/SSO, до launch) + mainUiEverShown=false при FULL-запуске (logout/ручной вход/offline→login);
+  * authLauncher-колбэк: silentAuthInProgress=false при ЛЮБОМ результате (перед #SSO-GUARD-RESET); при RESULT_OFFLINE_MODE — mainUiEverShown=false;
+  * RESULT_OK + lastLaunchWasSilent + mainUiEverShown → wake-контур: httpClient.connectionPool.evictAll() + longPollClient.notifyResumed() (замена ребилда NavHost: LP реконнект с новым токеном, сообщения оживают; appCtx переиспользован из Fix #385 блока);
+  * when-композиция: app.tokenStorage.hasValidToken() || (silentAuthInProgress && mainUiEverShown) → SovaNavHost; в ветке SideEffect { mainUiEverShown = true } (идемпотентно на recompose);
+  * else-ветка (StartupLoadingScreen) дополнена комментарием: туда попадают паузы МЕЖДУ silent-ретрями и cold-start silent login — осознанно.
+- Сценарии сведены: deep-sleep resume → UI остаётся смонтирован (досонный стейт, юзер сразу видит интерфейс + Toast); cold-start с мёртвым токеном → mainUiEverShown=false → StartupLoadingScreen как раньше (без фетчей без токена); silent-fail → unmount на 20с-паузу ретрая → remount при retry; финальный fail → FULL (unmount, экран входа); logout/офлайн → FULL-сброс mainUiEverShown.
+- Гейты: баланс скобок inline-скриптом (замена утерянного kbrackets.py) — OK 126230 chars; check-nested-comments ALL CLEAN (183 files); check-secrets OK (78 md/txt); свип !! в диффе — 0; git status — только MainActivity.kt modified (посторонних модификаций нет).
+- Коммит a0afffd6 (amend опечатки «ткюеном»→«токеном», коммит не был запушен) — в паре с docs(worklog) коммитом запушен в PinoK.
+
+Stage Summary:
+- Фикс войдёт в сборку 4/2.1.3 (gradle уже 4/2.1.3 с Task 59); манифест по-прежнему 3/2.1.2.
+- Ожидаемое поведение у тестера: после долгого сна — мгновенный интерфейс (досонный контент) + Toast «Подключение к VK…»; после silent-auth LP/сообщения оживают сами; лента — досонная до pull-to-refresh (осознанный трейд-офф варианта A).
+- KDoc-ссылки [mainUiEverShown] в diff-выводе терминала выглядели обрезанными («ainUiEverShown]») — артефакт рендера, в файле корректно (проверено Read).
+- Открыто: следующий манифест-релиз строго versionCode 4 после сборки/заливки APK тестером (поток Task 58).
