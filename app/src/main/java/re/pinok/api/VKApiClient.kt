@@ -7555,6 +7555,64 @@ class VKApiClient(
     )
 
     /**
+     * #CHANNELS-PROBE (Task 65): диагностический вызов channels.getHistory через
+     * web-шлюз web.api.vk.ru (форс независимо от тумблера netUseWebApiGateway).
+     *
+     * channels.* — недокументированные методы мобильного веб-клиента (m.vk.ru SPA
+     * «Каналы»); схемы ответов — в черновике docs/drafts/channels/ChannelsRepository.kt
+     * (прислал тестер 14.09). Цель пробника — одним живым запросом ответить:
+     * принимает ли web.api.vk.ru НАШ токен для channels.* (Web Token Exchange
+     * выдаёт vk1.a.* с client_id=6287487 — тот же client, что у web-SPA).
+     *
+     * Поведения НЕ меняет: только AppLog с маркером #CHANNELS-PROBE. Вызывается
+     * из ChatDetailScreen.loadChannelPosts один раз за открытие канального диалога.
+     *
+     * Интерпретация результата (лог):
+     *   OK items=N    → web-шлюз принимает токен и метод — можно строить нативную
+     *                   ленту каналов со счётчиками (волна каналов, план volna-18)
+     *   err=3         → «Unknown method» — web-шлюз не знает channels.* (или метод
+     *                   запрещён нашему client_id)
+     *   err=15        → метод есть, доступ для нашего токена закрыт
+     *   err=5/1117    → токен не принят web-шлюзом (общая проблема, не channels.*)
+     */
+    suspend fun channelsGetHistoryProbe(channelId: Long) {
+        try {
+            val raw = call(
+                "channels.getHistory",
+                mapOf(
+                    "channel_id" to channelId.toString(),
+                    "start_cmid" to "0",
+                    "count" to "10",
+                    "offset" to "-1",
+                    "extended" to "1",
+                ),
+                forceWebGateway = true,
+            )
+            if (raw == null) {
+                AppLog.w("VKApiClient",
+                    "#CHANNELS-PROBE channels.getHistory FAIL channelId=$channelId: " +
+                        "lastApiError=$lastApiError (code=$lastApiErrorCode)")
+                return
+            }
+            val resp = raw.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+            if (resp == null) {
+                AppLog.w("VKApiClient",
+                    "#CHANNELS-PROBE channels.getHistory: нет 'response' в ответе, " +
+                        "keys=${raw.keySet()} channelId=$channelId")
+                return
+            }
+            val items = resp.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+            AppLog.i("VKApiClient",
+                "#CHANNELS-PROBE channels.getHistory OK: items=${items?.size() ?: 0} " +
+                    "respKeys=${resp.keySet()} channelId=$channelId")
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNELS-PROBE channels.getHistory exception: ${e.message}")
+        }
+    }
+
+    /**
      * §52.5 Sprint A (P0): Modern Sync API — messages.getDiff (lp_version=21).
      *
      * Возвращает LongPoll-credentials, папки и счётчики одним запросом — заменяет
@@ -11306,8 +11364,13 @@ class VKApiClient(
         args: Map<String, String>,
         skipOffline: Boolean = false,
         silent: Boolean = false,
+        forceWebGateway: Boolean = false,
     ): JsonObject? {
-        return callInternal(method, args, captchaAttempt = 0, skipOffline = skipOffline, silent = silent)
+        return callInternal(
+            method, args, captchaAttempt = 0,
+            skipOffline = skipOffline, silent = silent,
+            forceWebGateway = forceWebGateway,
+        )
     }
 
     /**
@@ -11329,6 +11392,7 @@ class VKApiClient(
         captchaAttempt: Int,
         skipOffline: Boolean = false,
         silent: Boolean = false,
+        forceWebGateway: Boolean = false,
     ): JsonObject? {
         // #STALE-ERR-FIX (2026-09-08): error-стейт живёт ОДИН вызов. Раньше
         // lastApiError/lastApiErrorCode перезаписывались только следующей
@@ -11488,8 +11552,12 @@ class VKApiClient(
             // несовместимые: messages.setConversationPushSettings (mute/unmute).
             // Для них форсируем api.vk.com независимо от pref — там метод работает.
             // ─────────────────────────────────────────────────────────────────
-            val useWebGateway = snap.netUseWebApiGateway && !WEB_INCOMPATIBLE_METHODS.contains(method)
-            if (snap.netUseWebApiGateway && WEB_INCOMPATIBLE_METHODS.contains(method)) {
+            // #CHANNELS-PROBE (Task 65): forceWebGateway — форс web-шлюза для
+            // диагностических вызовов недокументированных web-методов (channels.*),
+            // независимо от тумблера netUseWebApiGateway.
+            val useWebGateway = (snap.netUseWebApiGateway || forceWebGateway) &&
+                !WEB_INCOMPATIBLE_METHODS.contains(method)
+            if ((snap.netUseWebApiGateway || forceWebGateway) && WEB_INCOMPATIBLE_METHODS.contains(method)) {
                 AppLog.d("VKApiClient", "call($method): forcing api.vk.com (incompatible with web gateway)")
             }
             val req = Request.Builder()
@@ -11663,7 +11731,11 @@ class VKApiClient(
                             put("captcha_sid", sid)
                             put("captcha_key", key)
                         }
-                        return callInternal(method, newArgs, captchaAttempt + 1, skipOffline = skipOffline, silent = silent)
+                        return callInternal(
+                            method, newArgs, captchaAttempt + 1,
+                            skipOffline = skipOffline, silent = silent,
+                            forceWebGateway = forceWebGateway,
+                        )
                     }
                     AppLog.w("VKApiClient", "Captcha cancelled by user on $method")
                     lastApiError = "$method: captcha cancelled"

@@ -835,6 +835,10 @@ fun ChatDetailScreen(
     // «Повторить» wall после неудачи истории не зацикливает запросы.
     var channelWallFallback by remember { mutableStateOf(false) }
     var channelFallbackTried by remember { mutableStateOf(false) }
+    // #CHANNELS-PROBE (Task 65): пробник channels.getHistory через web-шлюз —
+    // ОДИН раз за открытие экрана (см. VKApiClient.channelsGetHistoryProbe).
+    // Поведения не меняет — только лог #CHANNELS-PROBE для решения о волне каналов.
+    var channelProbeDone by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
     // Подписчики в шапке канала (снапшот 29-a: «название + N подписчиков»).
     // -1 = ещё не получены (subtitle не рисуем).
@@ -2013,6 +2017,12 @@ fun ChatDetailScreen(
      */
     fun loadChannelPosts(initial: Boolean, preloaded: List<Post>? = null) {
         if (channelPostsLoading) return
+        // #CHANNELS-PROBE (Task 65): однократный диагностический вызов
+        // channels.getHistory через web-шлюз — асинхронно, поведения не меняет.
+        if (!channelProbeDone) {
+            channelProbeDone = true
+            scope.launch { app.apiClient.channelsGetHistoryProbe(peerId) }
+        }
         scope.launch {
             channelPostsLoading = true
             channelPostsError = null
