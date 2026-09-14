@@ -69,7 +69,9 @@ fun NetworkSwitchPopup(
     // после старта). Popup рекомпосится при смене networkSwitchState (StateFlow) —
     // тогда перечитывает и netSwitchPopupEnabled. Тумблер меняется в Настройках
     // (popup в этот момент скрыт) — к моменту следующего switch'а будет свежее значение.
-    val enabled = app.prefsSnapshot?.netSwitchPopupEnabled ?: false
+    // #NET-POPUP-DEFAULT-ON (14.09): fallback тоже true — соответствует новому
+    // default в SovaPrefs (popup виден по умолчанию).
+    val enabled = app.prefsSnapshot?.netSwitchPopupEnabled ?: true
 
     // Локально «закрытое» состояние — пользователь нажал «Закрыть».
     // Popup скрыт пока state не сменится на ДРУГОЕ значение.

@@ -70,8 +70,9 @@ private val Context.sovaDataStore by preferencesDataStore(name = "sova_settings"
  * Plus a few SOVA_2.0-only extras (selected accent color index).
  */
 // #ARCH-DATA (Task 20): дефолт showLogFab раньше читался из BuildConfig.DEBUG
-// (:app) — библиотечному модулю :core:data BuildConfig не нужен, значение
-// подаёт хост (SovaApp: SovaPrefs(this, BuildConfig.DEBUG)).
+// (:app). С 14.09 (#LOG-FAB-DEFAULT-OFF, запрос юзера) — всегда false: значок
+// логирования («Жук») по умолчанию СКРЫТ в любых сборках, включается вручную
+// в Настройках. Хост может подать явный debugDefault (SovaApp передаёт false).
 class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     private val ds = context.applicationContext.sovaDataStore
@@ -105,9 +106,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             stickerPhotoScale  = p[Keys.STICKER_PHOTO_SCALE]  ?: 0,
 
             // Fix #237: показ плавающего значка логирования (DraggableLogFab).
-            // Default = BuildConfig.DEBUG — в debug-сборке виден разработчику,
-            // в release-сборке скрыт по умолчанию. Пользователь может включить
-            // в настройках (SettingsScreen → Логирование → «Показывать значок»). 
+            // #LOG-FAB-DEFAULT-OFF (14.09, запрос юзера): default = false — значок
+            // («Жук») скрыт по умолчанию В ЛЮБЫХ сборках (debug включительно;
+            // раньше в debug подставлялся BuildConfig.DEBUG и значок мозолил глаза
+            // тестерам). Включается в настройках (SettingsScreen → Логирование →
+            // «Показывать значок»); у тех, кто тумблер уже трогал, выбор сохранён.
             showLogFab         = p[Keys.SHOW_LOG_FAB]           ?: debugDefault,
             // #LOG-CATEGORIES: множество имён отключенных категорий логов.
             // #LOG-CATEGORIES-DEFAULT-CRITICAL (2026-08-05): default =
@@ -134,11 +137,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // отсутствие ключа DataStore — тривиальный фолбэк на дефолт
             // (паттерн всего Snapshot-конструктора выше).
             feedCarouselEnabled = p[Keys.FEED_CAROUSEL_ENABLED] ?: true,
-            // #NET-SWITCH-POPUP (2026-08-04): popup при переключении сети.
-            // Default = false — popup СКРЫТ по умолчанию (пользователь просил
-            // «по умолчанию выключено»). Переключение сети и silent refresh
-            // продолжают работать в фоне (без UI). Юзер может включить в Настройках.
-            netSwitchPopupEnabled = p[Keys.NET_SWITCH_POPUP_ENABLED] ?: false,
+            // #NET-SWITCH-POPUP (2026-08-04, реверс 2026-09-14 #NET-POPUP-DEFAULT-ON):
+            // popup при переключении сети. Default = true — popup ВИДЕН по умолчанию
+            // (юзер 14.09: «всплывающее уведомление о подключении к сети — включённым
+            // по умолчанию»; единственный видимый сигнал того, что приложение живо
+            // и работает с сетью при resume после Doze/silent refresh). Логика
+            // переключения и silent refresh работают и без popup; выключается
+            // в Настройках → Интерфейс → «Окно переключения сети».
+            netSwitchPopupEnabled = p[Keys.NET_SWITCH_POPUP_ENABLED] ?: true,
 
             // Privacy
             privacyOfflineMode  = p[Keys.PRIVACY_OFFLINE]       ?: false,

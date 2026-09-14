@@ -97,7 +97,8 @@ class OAuthWebViewActivity : ComponentActivity() {
                 // Локальный захват: snap — delegated property (by collectAsState),
                 // smart cast невозможен. Захватываем в обычную val для null-проверки.
                 val snapLocal = snap
-                val showLogFab = if (snapLocal != null) snapLocal.showLogFab else BuildConfig.DEBUG
+                // #LOG-FAB-DEFAULT-OFF (14.09): фолбэк до загрузки snap — false.
+                val showLogFab = if (snapLocal != null) snapLocal.showLogFab else false
                 Box(modifier = Modifier.fillMaxSize()) {
                     OAuthWebViewScreen(
                         url = oauthUrl,

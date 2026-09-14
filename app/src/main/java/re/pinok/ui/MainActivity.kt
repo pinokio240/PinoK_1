@@ -48,7 +48,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
 import re.pinok.auth.AuthActivity
-import re.pinok.BuildConfig
 import re.pinok.updater.UpdaterManager
 import re.pinok.locker.LockerActivity
 import re.pinok.ui.components.DraggableLogFab
@@ -1353,9 +1352,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // FAB логов — управляется настройкой showLogFab (SovaPrefs).
-                    // По умолчанию виден в debug-сборке, скрыт в release.
+                    // #LOG-FAB-DEFAULT-OFF (14.09): по умолчанию скрыт в ЛЮБЫХ
+                    // сборках (фолбэк до загрузки snap — тоже false, не DEBUG).
                     // Явная null-проверка snap вместо Elvis — см. стиль проекта.
-                    val showLogFab = if (snap != null) snap.showLogFab else BuildConfig.DEBUG
+                    val showLogFab = if (snap != null) snap.showLogFab else false
                     if (showLogFab) {
                         DraggableLogFab(onClick = { LogDialogState.show() })
                     }

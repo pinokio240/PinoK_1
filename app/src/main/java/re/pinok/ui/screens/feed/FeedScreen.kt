@@ -121,7 +121,6 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import re.pinok.BuildConfig
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.Attachment
@@ -391,9 +390,9 @@ fun FeedScreen(
             // передавать initial-значение, иначе компилятор падает:
             // «No value passed for parameter 'showLogFab'».
             // (Тот же класс бага что Fix #100 / #110 / #189 — Snapshot расширился.)
-            // Default = BuildConfig.DEBUG (виден в debug, скрыт в release) —
-            // соответствует default в SovaPrefs.
-            showLogFab = BuildConfig.DEBUG,
+            // #LOG-FAB-DEFAULT-OFF (14.09): default = false (значок скрыт во всех
+            // сборках) — соответствует default в SovaPrefs.
+            showLogFab = false,
             // #LOG-CATEGORIES (2026-08-04): logCategoriesDisabled добавлен в
             // Snapshot — FeedScreen тоже должен передавать initial-значение,
             // иначе компилятор падает:
@@ -415,10 +414,10 @@ fun FeedScreen(
             // #MSG-FAVORITES-TOGGLE: показывать «Избранное» в чатах (default true).
             msgShowFavorites = false,
             // #NET-SWITCH-POPUP (2026-08-04): netSwitchPopupEnabled добавлен в
-            // Snapshot — FeedScreen тоже передаёт initial (default false).
+            // Snapshot — FeedScreen тоже передаёт initial.
             // (Тот же класс бага что Fix #100/#110/#189/#237/#302/#337 — Snapshot расширился.)
-            // Default изменён на false (2026-08-04): popup скрыт по умолчанию.
-            netSwitchPopupEnabled = false,
+            // #NET-POPUP-DEFAULT-ON (14.09): default = true (popup виден по умолчанию).
+            netSwitchPopupEnabled = true,
             lastRoute = "feed",
             // Fix #302 (Task 2-b): notifyCacheJson — пустая строка (= нет кэша),
             // реальные значения подгрузятся из SovaPrefs при первом же collect.

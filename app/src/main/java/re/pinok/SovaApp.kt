@@ -985,7 +985,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         }
 
         tokenStorage = TokenStorage(exchangeStorage)
-        prefs = SovaPrefs(this, BuildConfig.DEBUG)
+        // #LOG-FAB-DEFAULT-OFF (14.09, запрос юзера): значок логирования («Жук»)
+        // по умолчанию СКРЫТ в любых сборках. Раньше debugDefault=BuildConfig.DEBUG
+        // делал его видимым в debug — тестерам мешал. Включается в Настройках.
+        prefs = SovaPrefs(this, debugDefault = false)
 
         // #LOG-CATEGORIES (2026-08-04): загрузка отключенных категорий логов
         // из DataStore в AppLog. Делаем ОДИН синхронный read в runBlocking на

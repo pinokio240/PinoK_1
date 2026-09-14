@@ -95,7 +95,6 @@ import kotlinx.coroutines.withContext
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import re.pinok.SovaApp
-import re.pinok.BuildConfig
 import re.pinok.auth.exchange.AuthErrorKind
 import re.pinok.auth.exchange.AuthDomainsConfig
 import re.pinok.auth.exchange.AuthState
@@ -272,7 +271,8 @@ class AuthActivity : ComponentActivity() {
                 // Локальный захват: snap — delegated property (by collectAsState),
                 // smart cast невозможен. Захватываем в обычную val для null-проверки.
                 val snapLocal = snap
-                val showLogFab = if (snapLocal != null) snapLocal.showLogFab else BuildConfig.DEBUG
+                // #LOG-FAB-DEFAULT-OFF (14.09): фолбэк до загрузки snap — false.
+                val showLogFab = if (snapLocal != null) snapLocal.showLogFab else false
                 Box(modifier = Modifier.fillMaxSize()) {
                     Surface(modifier = Modifier.fillMaxSize()) {
                         AuthScreen(
