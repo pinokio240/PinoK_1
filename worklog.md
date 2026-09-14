@@ -9569,3 +9569,24 @@ Stage Summary:
 - Репо на 3/2.1.2: следующая сборка тестера будет versionName «2.1.2-debug» / versionCode 3 (applicationIdSuffix .debug, versionNameSuffix -debug — без изменений).
 - Установленные у тестеров code 1/2 < 3 → манифест 2/2.1.1 для них UpToDate (никто не получит ложное предложение обновления до появления APK 2.1.2).
 - Чек-лист следующего релиза (когда тестер соберёт и зальёт APK V2.1.2 на GitHub Releases): скачать APK → sha256sum → правка version.json (строго versionCode 3) → sign_manifest.py sign+verify ключом /home/z/pinok-signing/private_key.hex (verify --pub принимает base64-строку, не путь) → гейты → пуш version.json + version.json.sig (docs/UPDATER.md §1 шаг 6).
+
+---
+Task ID: 58
+Agent: Z.ai Code (main)
+Task: публикация релиза V2.1.2 в version.json (затереть V2.1.1-test) — продолжение Task 57
+
+Work Log:
+- Релиз V2.1.2 появился на GitHub (APK Pinok_14091100.apk, 138 218 143 Б — размер совпал с прошлым APK, но SHA другой). Скачан, SHA-256 = BE57BEEA9BDB42854AF28EED6B52883AA8B6FE94A4A39A312314F1D1B06E5F86.
+- Форензика APK (AXML-парсер): versionCode 3, versionName 2.1.2-debug, package re.pinok.debug, compileSdk 36, BuildStamp calls-2026.09.06-5 — сборка из bump-коммита 3349fc1d (Task 57). Контроль содержимого: маркерные строки волны 56-b (#IM-CHANNEL-FIX: «В этот канал нельзя писать», «Писать в этот канал нельзя», «Вы подписаны — уведомления») найдены в dex — канальные фиксы внутри.
+- БЛОКЕР и его преодоление: /home/z/pinok-signing/private_key.hex исчез (сброс песочницы между сессиями; копий в /home/z и /tmp нет). Подпись невозможна → манифест-заготовка снята из рабочего дерева (git checkout), сохранена в /tmp/pinok-v212/version.json.next, в git остался прежний подписанный манифест (verify — ВЕРНА). Юзер повторно прислал private_key.hex через upload/.
+- Ключ проверен: pubkey --key → XvaSZqNn…wEI= + отпечаток 22520fde…78 == RELEASE_PUBLIC_KEY_B64 / константа UpdaterSigning.kt. Рабочая копия восстановлена: /home/z/pinok-signing/private_key.hex, chmod 600, вне git; копия из upload/ удалена.
+- version.json переписан: ЕДИНСТВЕННАЯ запись {versionCode 3, versionName 2.1.2, stamp calls-2026.09.06-5, apkUrl …/V2.1.2/Pinok_14091100.apk, sha256 BE57…5F86}; notes — починка каналов по аудиту 56-a. Запись V2.1.1-test затёрта.
+- Подпись по чек-листу §1 шаг 6: sign → verify ПРИВАТНЫМ и ПУБЛИЧНЫМ ключами — ВЕРНА. Stamp манифеста == BuildStamp APK → инфо-лог о «пересборке того же versionCode» не сработает.
+- Гейты: check-secrets OK (78 md/txt), check-nested-comments ALL CLEAN, свип `!!` в диффе — 0.
+- Коммит 84a0d2a8 запушен в PinoK (ba460dff..84a0d2a8): version.json + version.json.sig.
+
+Stage Summary:
+- raw.githubusercontent.com/pinokio240/PinoK_1/PinoK/version.json отдаёт V2.1.2 (raw-кэш ~5 мин).
+- Ожидаемое поведение: тестеры с code 1 (V2.1.1-test) увидят «Доступно 2.1.2» → установка (3 > 1), UpToDate больше не появится ложных предложений (манифест-код == коду новой сборки). У кого сборка с code 3 уже стоит — UpToDate сразу.
+- Риск сессии задокументирован: СБРОС ПЕСОЧНИЦЫ СТИРАЕТ /home/z/pinok-signing/ — ключ придётся запрашивать у юзера повторно; перед ПУШЕМ манифеста всегда verify (старая подпись не верифицирует новый контент).
+- Следующий релиз: строго versionCode 4.
