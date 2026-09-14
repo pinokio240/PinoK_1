@@ -9706,3 +9706,20 @@ Stage Summary:
 - «Диалоги долго грузятся»: корень — флапающий Wi-Fi юзера (DNS-ошибки, offline-окна; приложение само восстанавливается retry-контуром) + VK отдаёт 657КБ на count=200 за 2-2.5с серверного времени. Кодовой фикс НЕ делался осознанно: pageSize=200 — осознанное решение Fix #127 (все подписки видны сразу), снижение ломает видимость диалогов; юзеру дано объяснение (роутер/аплинк).
 - Фикс войдёт в следующую сборку (5/2.1.4 после bump — только по команде юзера).
 - Открыто: LP-рефетч count=200 на каждое событие (трафик) — кандидат на оптимизацию в будущем (не критично).
+
+---
+Task ID: 64
+Agent: Z.ai Code (main)
+Task: Фикс сборки — Unresolved reference 'attemptWallFallbackToHistory' (2 ошибки в ChatDetailScreen.kt:1998/2014 у тестера)
+
+Work Log:
+- Диагноз: Task 63 (d33b179a) объявил локальную fun attemptWallFallbackToHistory на :2035, ПОСЛЕ loadChannelPosts (:1964), которая её вызывает (:1998, :2014). Kotlin запрещает опережающие ссылки на локальные функции → Unresolved reference. В песочнице Android-сборки нет — ошибка поймана только локальной сборкой тестера.
+- Скан всего коммита d33b179a: трогал только ChatDetailScreen.kt (1 файл), нарушений порядка decl→call больше нет (проверены все 5 локальных fun канального блока: markChannelConversationAsRead :1939, attemptWallFallbackToHistory, loadChannelPosts, loadMoreChannelPosts, toggleChannelPostLike — вызовы всех идут после объявлений).
+- Фикс: блок KDoc+fun attemptWallFallbackToHistory перенесён вверх — после markChannelConversationAsRead (:1953), до loadChannelPosts; тело без изменений. В KDoc добавлено предупреждение «порядок объявления локальных fun».
+- Верификация: скобочный баланс inline-скриптом (depth 0, чисто), regex-скан decl→call (forward refs нет), scripts/check-secrets.py (OK, 78 файлов), check-nested-comments.py (183 файла, ALL CLEAN), свип `!!` в диффе (нет).
+- Коммит 25539a47 запушен в PinoK (8c88980b..25539a47).
+
+Stage Summary:
+- Сборка восстановлена: тестеру — git pull + пересборка; Fix #394 (#CHANNEL-WALL-FALLBACK) теперь компилируется, поведение не менялось (чистый перенос).
+- Урок: при добавлении локальных fun внутри Compose-функции проверять порядок объявления относительно вызывающих (компилятора в песочнице нет — это делается grep-сканом decl→call, как в этом таске).
+- Версии не тронуты: gradle 4/2.1.3, манифест 4/2.1.3; следующий bump 5/2.1.4 — по решению юзера.
