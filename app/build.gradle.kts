@@ -17,8 +17,14 @@ android {
         // versionCode 4 / versionName 2.1.3; манифест version.json (сейчас 3/2.1.2 →
         // APK V2.1.2) обновим отдельным релизом, когда APK 2.1.3 появится
         // на GitHub Releases (docs/UPDATER.md §1 шаг 1: манифест-код строго 4).
-        versionCode = 4
-        versionName = "2.1.3"
+        // #RELEASE-V214-BUMP (14.09): bump 4→5 — подготовка к публикации Task 67
+        // (#CHANNELS-HIST: channels.getHistory как рабочий путь контента канала)
+        // и Task 68 (Fix #395 #IM-FAST-LIST + #NET-CANCEL-RETRY: ускорение
+        // «Сообщений» ~5.5с→~2.6с). Манифест version.json (сейчас 4/2.1.3)
+        // обновим отдельным релизом после сборки APK тестером и подтверждения:
+        // (а) каналы показывают контент, (б) «Сообщения» грузятся быстрее.
+        versionCode = 5
+        versionName = "2.1.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
