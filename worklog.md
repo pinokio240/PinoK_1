@@ -9552,3 +9552,20 @@ Stage Summary:
 - Отклонения от плана (осознанные): (1) источник «включённых уведомлений» — кэш SovaPrefs (вариант B), т.к. getConversationsById для каналов не содержит user_data — проверено чтением парсера; (2) markChannelConversationAsRead вызывает markAsRead без start_message_id (понадобилось минимальное расширение messagesMarkAsRead — при upToMessageId<=0 параметр опускается; краевой случай MessagesScreen lastMsgId=0 теперь тоже корректнее); (3) doSend-гейт показывает Toast, а не errorText (в wall-режиме errorText невидим, при пустом списке он ложно подменял экран «ошибка+Повторить»); (4) иконка — Icons.Outlined.Campaign (сверено: Megaphone/RssFeed в наборе не используются, Campaign из material-icons-extended, зависимость уже в :app).
 - Риски: для peer<0 сообществ с can_write=true LP-рефетч не изменился; в lookup-пуше канал с ОТСУТСТВУЮЩИМ can_write в ответе getConversationsById (редкий кейс #IM-CHANNEL-OPEN) пройдёт гейт — известное VK-поведение, чинится только новым источником истины; messages.allowMessagesFromGroup/denyMessagesFromGroup на канальных сообществах ранее не вызывались (обёртки были мёртвые) — серверная применимость подтверждается семантикой VK web, но живой тест на реальном аккаунте желателен.
 ---
+
+---
+Task ID: 57
+Agent: Z.ai Code (main)
+Task: bump версии PinoK до v2.1.2 (запрос юзера: «поменяй версию Pinok на v2.1.2»)
+
+Work Log:
+- Проверка мест версии: rg по *.kt/*.md (app/core/feature/contracts/docs/tools/scripts) — versionName/versionCode задаются ТОЛЬКО в app/build.gradle.kts:19-20; других захардкоженных «2.1.1» в исходниках нет (в docs/UPDATER.md значения — иллюстративные примеры формата).
+- app/build.gradle.kts: versionCode 2→3, versionName 2.1.1→2.1.2, комментарий #RELEASE-V212-BUMP (14.09) с пометкой, что манифест обновится отдельным релизом после появления APK V2.1.2 на GitHub Releases.
+- version.json / version.json.sig ОСОЗНАННО не тронуты: манифест остаётся {versionCode 2, versionName 2.1.1, apkUrl V2.1.1-test, sha256 6899…D96}. Причина: APK 2.1.2 не существует (нет URL и SHA); запись «3/2.1.2» в манифест при единственном APK с внутренним code 1 дала бы тестерам вечное «Доступно 2.1.2» без возможности UpToDate (см. урок 55-c про «вечное обновление»).
+- Гейты: check-secrets OK (78 md/txt), check-nested-comments ALL CLEAN (183 файла). Дифф сверен: 1 файл, +6/−5, только блок версии.
+- Коммит 3349fc1d «chore(release): #RELEASE-V212-BUMP …» запушен в PinoK (d9990032..3349fc1d).
+
+Stage Summary:
+- Репо на 3/2.1.2: следующая сборка тестера будет versionName «2.1.2-debug» / versionCode 3 (applicationIdSuffix .debug, versionNameSuffix -debug — без изменений).
+- Установленные у тестеров code 1/2 < 3 → манифест 2/2.1.1 для них UpToDate (никто не получит ложное предложение обновления до появления APK 2.1.2).
+- Чек-лист следующего релиза (когда тестер соберёт и зальёт APK V2.1.2 на GitHub Releases): скачать APK → sha256sum → правка version.json (строго versionCode 3) → sign_manifest.py sign+verify ключом /home/z/pinok-signing/private_key.hex (verify --pub принимает base64-строку, не путь) → гейты → пуш version.json + version.json.sig (docs/UPDATER.md §1 шаг 6).
