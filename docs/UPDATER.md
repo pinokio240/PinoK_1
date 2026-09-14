@@ -45,9 +45,11 @@ UI: `SettingsScreen.kt` → вкладка «Обновления» (`UpdateTab`
 
 3. **Публикация APK** — где взять `apkUrl` (любое постоянное хранилище):
    - **GitHub Releases** (рекомендуется): создайте Release на тег версии,
-     приложите APK, возьмите постоянную ссылку ассета
-     `https://github.com/pinokio240/PinoK_1/releases/download/v2.1.0/PinoK_2.1.0_2.apk`.
-     Ассеты Releases — не git-объекты, теги не «съедают» файл при перезаписи ветки.
+     приложите APK, возьмите постоянную ссылку ассета, например
+     `https://github.com/pinokio240/PinoK_1/releases/download/V2.1.4/Pinok_1509000.apk`
+     (живой пример релиза 14.09: имя ассета произвольное — берётся точная
+     ссылка со страницы Release). Ассеты Releases — не git-объекты, теги
+     не «съедают» файл при перезаписи ветки.
    - Альтернативы: raw-файл в ветке (для APK >100 МБ упрётесь в лимит git),
      любой статический хостинг/CDN с постоянным URL.
 
@@ -63,29 +65,30 @@ UI: `SettingsScreen.kt` → вкладка «Обновления» (`UpdateTab`
    **ПЕРВОЙ** в массив `versions`, старые записи НЕ удалять — они нужны для
    отката (исключение — тестовые релизы: по решению релиз-менеджера массив
    может содержать только актуальную запись; прецедент V2.1.1-test 13.09 —
-   предыдущая v2.1.0-test затёрта и удалена с GitHub). Пример после публикации 2.1.0:
+   предыдущая v2.1.0-test затёрта и удалена с GitHub; с V2.1.1-test все релизы
+   идут одной записью). Живой пример — запись V2.1.4 после публикации 14.09
+   (notes сокращён, полный — в version.json):
    ```json
    {
      "versions": [
        {
-         "versionCode": 2,
-         "versionName": "2.1.0",
-         "stamp": "wave30",
-         "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/v2.1.0/PinoK_2.1.0_2.apk",
-         "sha256": "AB12...9F",
-         "notes": "Что нового: ..."
-       },
-       {
-         "versionCode": 1,
-         "versionName": "2.0.0",
-         "stamp": "wave29",
-         "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/v2.0.0/PinoK_2.0.0_1.apk",
-         "sha256": "...",
-         "notes": "Первичный манифест обновлений"
+         "versionCode": 5,
+         "versionName": "2.1.4",
+         "stamp": "calls-2026.09.06-5",
+         "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/V2.1.4/Pinok_1509000.apk",
+         "sha256": "c146d461035f179d00642e95f0a9083a6d257c3ddc1f83ffd2a77d7734881532",
+         "notes": "Сборка V2.1.4 (debug): каналы (#CHANNELS-HIST), ускорение «Сообщений» (#IM-FAST-LIST), #NET-CANCEL-RETRY — ..."
        }
      ]
    }
    ```
+   **Двухфазный релиз (прецедент V2.1.4, 14.09):** запись можно готовить
+   ДО сборки и публикации APK — с пустыми `apkUrl=""` и `sha256=""`. Апдейтер
+   на такой версии честно отвечает «APK ещё не опубликован» (UpdaterManager,
+   кнопки скачивания задизейблены) — тестеры не ломаются. После публикации
+   APK заполните оба поля и ОБЯЗАТЕЛЬНО переподпишите манифест (шаг 6):
+   подпись накрывает точные байты version.json — правка без ре-подписи
+   отклоняется всеми установками (fail-closed).
    Поля:
    - `versionCode` — Int, критерий сравнения (обязателен);
    - `versionName` — показывается в UI;
@@ -101,6 +104,8 @@ UI: `SettingsScreen.kt` → вкладка «Обновления» (`UpdateTab`
    python3 tools/updater-sign/sign_manifest.py sign version.json
    git add version.json version.json.sig
    ```
+   Переподписывается КАЖДАЯ правка version.json — включая пост-релизное
+   заполнение apkUrl/sha256 при двухфазном релизе (шаг 5) и правки notes.
    Рядом с version.json появится version.json.sig — base64 detached-подпись
    ed25519 РОВНО над байтами version.json. Публичный ключ зашит в APK
    (`UpdaterSigning.RELEASE_PUBLIC_KEY_B64`), приватный — у релиз-менеджера
