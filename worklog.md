@@ -9606,3 +9606,24 @@ Stage Summary:
 - Репо готов к следующей сборке: тестер соберёт 4/2.1.3-debug.
 - Правило потока релизов устоялось: (1) bump gradle ПОСЛЕ публикации манифеста прошлого релиза; (2) тестер собирает/заливает APK; (3) правка манифеста строго на код сборки + SHA-256 + переподпись ed25519 (§1 шаг 6); (4) пуш манифеста+sig.
 - Следующий манифест-релиз: строго versionCode 4, ожидаемое имя V2.1.3(-test).
+
+---
+Task ID: 60
+Agent: Z.ai Code (main)
+Task: разбор бага «после долгого сна интерфейс не отображается сразу, хотя уведомление о подключении есть» + реверс двух дефолтов (popup сети ON, Жук OFF)
+
+Work Log:
+- Карта resume-контура (MainActivity:1545+): refreshNow → pool.evictAll (>5 мин) → LP notifyResumed → maybeProactiveTokenRefresh → checkTokenValidity; при истёкшем за фон токене — tokenStorage.clear() + tokenInvalidationTicks++ → LaunchedEffect → launchAuth(SILENT).
+- launchAuth(SILENT) (MainActivity:425-460): Toast «Подключение к VK… (тип сети)» показывается МГНОВЕННО (Fix #384 #AUTH-NETWORK-TOAST) — это и есть «уведомление о подключении», которое юзер видит; silent AuthActivity невидима (#AUTH-SILENT-STEALTH), WebView m.vk.ru + обмен до 30с.
+- Корневая причина симптома: в композиции when { snap==null → StartupLoading; hasValidToken() → SovaNavHost; else → StartupLoading } (MainActivity:1077-1352). Токен очищен на время silent-auth → ветка else → ВЕСЬ главный UI РАЗМОНТИРОВАН и заменён StartupLoadingScreen на всё время silent-auth (секунды–30с; после Doze Wi-Fi поднимается с гонками → #SILENT-RETRY-AFTER-DOZE повторяет через ~20с до MAX_SILENT_FAILURES → окно до минут).
+- Отложенный возврат: после успеха authVersion++ (читается в композиции :727 → recompose гарантирован) → SovaNavHost строится С НУЛЯ (initialRoute=snap.lastRoute), пул только что evictAll, LP реконнект, MessagesScreen рефетчит всё → контент появляется ещё позже.
+- Реактивность проверена: hasValidToken() не observable (документировано Fix #380, :278) — UI обновляется только через authVersion++/прочие state; NetworkSwitchPopup живёт ВНУТРИ SovaNavHost — во время silent-auth popup невидим (виден только Toast).
+- Сопутствующий фактор: process death в фоне → холодный старт → snap==null → StartupLoading до первого emission DataStore (обычно быстро).
+- Предложение фиксa (НЕ реализовано — юзер просил «сначала рассуждаем»): вариант A — не размонтировать UI на время silent-auth: состояние silentAuthInProgress (mutableStateOf, true в launchAuth(SILENT), false в authLauncher-колбэке) и в when: hasValidToken() || silentAuthInProgress → SovaNavHost (экраны живут на кэше, API-ошибки err 5 экраны показывают сами; после успеха LP+рефеш); вариант B — StartupLoadingScreen с живым статусом «Обновление входа… (Wi-Fi)» вместо мёртвого loading. A — правильный UX, B — минимальный риск.
+- Реверс дефолтов (реализовано, коммит 17496801): #NET-POPUP-DEFAULT-ON — netSwitchPopupEnabled false→true (SovaPrefs :144, fallback NetworkSwitchPopup :74, initial FeedScreen :421); #LOG-FAB-DEFAULT-OFF — showLogFab BuildConfig.DEBUG→false во всех 5 точках (SovaPrefs debugDefault-семантика + SovaApp:991 SovaPrefs(this, debugDefault=false) + фолбэки MainActivity:1359/OAuthWebViewActivity:101/AuthActivity:276 + initial FeedScreen:396) + удалены 3 осиротевших import BuildConfig. Тумблеры в Настройках не тронуты; выбор юзеров, уже менявших тумблеры, сохранён (отсутствие ключа DataStore → новый дефолт).
+- Инцидент песочницы: /home/z/kbrackets.py исчез (сброс среды, как и ключ в Task 58); gitignore перетёрт дефолтным Next.js-файлом — ВОССТАНОВЛЕН из HEAD до коммита (checkout -- .gitignore), в коммит не попал. kbrackets-проверку заменил review диффа (правки без структурных скобок) + check-nested-comments ALL CLEAN; check-secrets OK; свип !! — 0.
+
+Stage Summary:
+- Дефолты изменены: popup сети ВКЛЮЧЁН, Жук ВЫКЛЮЧЕН — войдёт в следующую сборку (4/2.1.3).
+- Баг диагностирован: silent re-auth размонтирует главный UI (ветка else → StartupLoadingScreen) — ожидание решения юзера (вариант A/B) до правки.
+- Урок: при правках в этой песочнице всегда сверять git status на ПОСТОРОННИЕ модификации tracked-файлов (gitignore перетирается ре-скAFFOLDING'ом песочницы).
