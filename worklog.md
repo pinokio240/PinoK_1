@@ -9680,3 +9680,29 @@ Stage Summary:
 - В V2.1.3 вошли: Fix #386 #SILENT-AUTH-KEEP-UI (интерфейс не пропадает при silent re-auth после сна) + реверс дефолтов (popup сети ON, Жук OFF).
 - AXML-парсер восстановлен полностью (оффсеты задокументированы) — замена утерянного инструмента форензики.
 - Следующий bump gradle (5/2.1.4?) — только после публикации манифеста 4 (готов) и по решению юзера.
+
+---
+Task ID: 63
+Agent: Z.ai Code (main)
+Task: разбор баг-репорта «каналы не открываются + диалоги долго грузятся» → Fix #394 #CHANNEL-WALL-FALLBACK
+
+Work Log:
+- Юзер прислал логкэт (upload/Pasted Content_1789401087578.txt, 18:27-18:51) + скриншот: диалог канала «DELETED/Канал» с ошибкой «Не удалось загрузить канал: wall.get: Access denied: wall is disabled» и бесконечным «Повторить».
+- Лог-форензика канала (peer -236041950): #IM-CHANNEL-OPEN enter → getConversationsById OK (1470B, isChannel=true canWriteKnown=true) → wall-mode ON (Fix #393) → wall.get {owner_id=-236041950} → err 15 «wall is disabled» ×5 (18:48:42-18:50:46) → channelPostsError → тупик. messages.getHistory для пира НЕ вызывался ни разу — wall-mode полностью вытеснил историю. В шапке «DELETED» — groupsGetById удалённого сообщества затирал имя из карточки («Время Перемен. Новости»).
+- Лог-форензика «диалоги долго грузятся»: Wi-Fi ФЛАПАЕТ (18:49:53 LP «Unable to resolve host api.vk.com»; 18:50:00 NetworkObserver «fully offline — evicting pool + cancelAll»; Default network Mobile → Wi-Fi 18:50:00-18:50:03; NetRetry evictAll queuev4.vk.ru) → messages.getConversations {count=200,extended=1} упёрся в 10с таймаут (18:49:54→18:50:04 ✗NET 10020ms), мгновенный retry ✗NET 9ms, затем успехи 1853-2485ms по 657КБ (VK серверное время на 200 extended-диалогов). LP-рефетчи множили 657КБ-запросы (single-flight есть, count=maxOf(chats.size,200)).
+- Фикс Fix #394 #CHANNEL-WALL-FALLBACK (ChatDetailScreen, +79/-4):
+  * состояния channelWallFallback/channelFallbackTried (KDoc с полным разбором);
+  * loadChannelPosts: err!=null-ветка И Exception-ветка → attemptWallFallbackToHistory();
+  * новая fun attemptWallFallbackToHistory(): messagesGetHistoryWithProfiles(peerId, count=pageSize) — тот же метод/структуры, что стандартный путь LaunchedEffect; непустая история (или пустая без failure) → messages/chatProfiles/endReached наполняются, channelWallFallback=true, channelPostsError=null, markChannelConversationAsRead() (контракт 56-b-1); пустая+ошибка → остаёмся в wall-error;
+  * рендер: if (isChannel && !channelWallFallback) → wall-контент, иначе стандартный messages-режим (LazyColumn истории, empty/error-стейты переиспользованы); канальный read-only футер/шапка сохраняются (isChannel не сбрасывается);
+  * loadChannelMeta: имя «DELETED» не затирает тайтл из карточки;
+  * фолбэк ОДИН раз за открытие экрана — «Повторить» не зацикливает.
+- Инцидент инструментария: MultiEdit в этой среде НЕ атомарен (вопреки описанию) — первая пачка применила правку №1, упала на №2; вторая пачка продублировала №1. Дубль замечен по git diff (+26 строк), убран Edit'ом; оставшиеся правки применялись по одной. Урок: после MultiEdit-ошибки ВСЕГДА git diff до повторной попытки.
+- Гейты: скобки inline-скриптом OK (437952 chars), check-nested-comments ALL CLEAN, check-secrets OK, свип !! — 0; порядок объявлений локальных fun-захватов проверен (scope/messages/chatProfiles/endReached :550-567 < fun :2032).
+- Коммит d33b179a запушен (7b7f0549..d33b179a).
+
+Stage Summary:
+- Канальные диалоги: канал с закрытой стеной + историей → ОТКРЫВАЕТСЯ историей сообщений; удалённый без истории → честная ошибка как раньше; нормальные каналы (wall читается) → wall-режим не тронут.
+- «Диалоги долго грузятся»: корень — флапающий Wi-Fi юзера (DNS-ошибки, offline-окна; приложение само восстанавливается retry-контуром) + VK отдаёт 657КБ на count=200 за 2-2.5с серверного времени. Кодовой фикс НЕ делался осознанно: pageSize=200 — осознанное решение Fix #127 (все подписки видны сразу), снижение ломает видимость диалогов; юзеру дано объяснение (роутер/аплинк).
+- Фикс войдёт в следующую сборку (5/2.1.4 после bump — только по команде юзера).
+- Открыто: LP-рефетч count=200 на каждое событие (трафик) — кандидат на оптимизацию в будущем (не критично).
