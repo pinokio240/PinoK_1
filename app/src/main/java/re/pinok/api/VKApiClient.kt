@@ -7555,60 +7555,127 @@ class VKApiClient(
     )
 
     /**
-     * #CHANNELS-PROBE (Task 65): диагностический вызов channels.getHistory через
-     * web-шлюз web.api.vk.ru (форс независимо от тумблера netUseWebApiGateway).
+     * #CHANNELS-PROBE v2 (Task 66): подбор корректных параметров channels.getHistory
+     * через web-шлюз web.api.vk.ru (форс независимо от тумблера netUseWebApiGateway).
+     *
+     * Результат v1 (лог тестера 14.09 21:36): err=100 «start_cmid is undefined» —
+     * ТОКЕН ПРИНЯТ (нет err 5/1117), МЕТОД СУЩЕСТВУЕТ (нет err 3 «Unknown method»),
+     * забракован только параметр start_cmid=0. Значит нужен реальный cmid либо
+     * запрос первой страницы вообще без start_cmid.
+     *
+     * v2 пробует варианты (каждый — отдельная строка лога [variant]):
+     *   A [no-start-cmid]      getHistory без start_cmid (offset=-1 из черновика)
+     *   B [minimal]            getHistory только channel_id+count+extended
+     *   C [get-by-id]          channels.getById → ищем валидный cmid (last_message)
+     *   D [with-real-cmid]     getHistory со start_cmid=<cmid из C> (если C дал)
      *
      * channels.* — недокументированные методы мобильного веб-клиента (m.vk.ru SPA
-     * «Каналы»); схемы ответов — в черновике docs/drafts/channels/ChannelsRepository.kt
-     * (прислал тестер 14.09). Цель пробника — одним живым запросом ответить:
-     * принимает ли web.api.vk.ru НАШ токен для channels.* (Web Token Exchange
-     * выдаёт vk1.a.* с client_id=6287487 — тот же client, что у web-SPA).
-     *
-     * Поведения НЕ меняет: только AppLog с маркером #CHANNELS-PROBE. Вызывается
-     * из ChatDetailScreen.loadChannelPosts один раз за открытие канального диалога.
-     *
-     * Интерпретация результата (лог):
-     *   OK items=N    → web-шлюз принимает токен и метод — можно строить нативную
-     *                   ленту каналов со счётчиками (волна каналов, план volna-18)
-     *   err=3         → «Unknown method» — web-шлюз не знает channels.* (или метод
-     *                   запрещён нашему client_id)
-     *   err=15        → метод есть, доступ для нашего токена закрыт
-     *   err=5/1117    → токен не принят web-шлюзом (общая проблема, не channels.*)
+     * «Каналы»); схемы — в черновике docs/drafts/channels/ChannelsRepository.kt.
+     * Поведения НЕ меняет: только AppLog #CHANNELS-PROBE. Вызывается из
+     * ChatDetailScreen.loadChannelPosts один раз за открытие канального диалога.
      */
     suspend fun channelsGetHistoryProbe(channelId: Long) {
         try {
-            val raw = call(
-                "channels.getHistory",
+            // Вариант A: первая страница БЕЗ start_cmid (offset=-1 из черновика).
+            probeGetHistoryVariant(
+                channelId, "no-start-cmid",
                 mapOf(
                     "channel_id" to channelId.toString(),
-                    "start_cmid" to "0",
                     "count" to "10",
                     "offset" to "-1",
                     "extended" to "1",
                 ),
-                forceWebGateway = true,
             )
+            // Вариант B: минимальный — без start_cmid и без offset
+            // (заодно проверяем, не браковал ли v1 ещё и offset=-1).
+            probeGetHistoryVariant(
+                channelId, "minimal",
+                mapOf(
+                    "channel_id" to channelId.toString(),
+                    "count" to "10",
+                    "extended" to "1",
+                ),
+            )
+            // Вариант C: метаданные канала — источники валидного cmid
+            // (last_message.cmid по схеме черновика ChannelInfo.lastCmid).
+            var realCmid: Long? = null
+            try {
+                val byId = call(
+                    "channels.getById",
+                    mapOf(
+                        "channel_ids" to channelId.toString(),
+                        "extended" to "1",
+                    ),
+                    forceWebGateway = true,
+                )
+                if (byId == null) {
+                    AppLog.w("VKApiClient",
+                        "#CHANNELS-PROBE [get-by-id] FAIL channelId=$channelId: " +
+                            "lastApiError=$lastApiError (code=$lastApiErrorCode)")
+                } else {
+                    val items = byId.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                    val ch0 = items?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
+                    realCmid = ch0?.get("last_message")?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.get("cmid")?.takeIf { !it.isJsonNull }?.asLong
+                    AppLog.i("VKApiClient",
+                        "#CHANNELS-PROBE [get-by-id] OK channelId=$channelId " +
+                            "items=${items?.size() ?: 0} lastCmid=$realCmid chKeys=${ch0?.keySet()}")
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("VKApiClient", "#CHANNELS-PROBE [get-by-id] exception: ${e.message}")
+            }
+            // Вариант D: getHistory со start_cmid = РЕАЛЬНЫЙ cmid из C.
+            val cmid = realCmid
+            if (cmid != null && cmid != 0L) {
+                probeGetHistoryVariant(
+                    channelId, "with-real-cmid=$cmid",
+                    mapOf(
+                        "channel_id" to channelId.toString(),
+                        "start_cmid" to cmid.toString(),
+                        "count" to "10",
+                        "offset" to "-1",
+                        "extended" to "1",
+                    ),
+                )
+            } else {
+                AppLog.i("VKApiClient",
+                    "#CHANNELS-PROBE [with-real-cmid] SKIPPED: нет валидного cmid channelId=$channelId")
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNELS-PROBE exception: ${e.message}")
+        }
+    }
+
+    /** Один вариант channels.getHistory — лог #CHANNELS-PROBE [variant], поведение не меняет. */
+    private suspend fun probeGetHistoryVariant(channelId: Long, variant: String, args: Map<String, String>) {
+        try {
+            val raw = call("channels.getHistory", args, forceWebGateway = true)
             if (raw == null) {
                 AppLog.w("VKApiClient",
-                    "#CHANNELS-PROBE channels.getHistory FAIL channelId=$channelId: " +
+                    "#CHANNELS-PROBE [$variant] FAIL channelId=$channelId: " +
                         "lastApiError=$lastApiError (code=$lastApiErrorCode)")
                 return
             }
             val resp = raw.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
             if (resp == null) {
                 AppLog.w("VKApiClient",
-                    "#CHANNELS-PROBE channels.getHistory: нет 'response' в ответе, " +
+                    "#CHANNELS-PROBE [$variant] нет 'response' в ответе, " +
                         "keys=${raw.keySet()} channelId=$channelId")
                 return
             }
             val items = resp.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
             AppLog.i("VKApiClient",
-                "#CHANNELS-PROBE channels.getHistory OK: items=${items?.size() ?: 0} " +
+                "#CHANNELS-PROBE [$variant] OK: items=${items?.size() ?: 0} " +
                     "respKeys=${resp.keySet()} channelId=$channelId")
         } catch (ce: kotlinx.coroutines.CancellationException) {
             throw ce
         } catch (e: Exception) {
-            AppLog.w("VKApiClient", "#CHANNELS-PROBE channels.getHistory exception: ${e.message}")
+            AppLog.w("VKApiClient", "#CHANNELS-PROBE [$variant] exception: ${e.message}")
         }
     }
 
