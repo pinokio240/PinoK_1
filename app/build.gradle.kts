@@ -13,12 +13,12 @@ android {
         applicationId = "re.pinok"
         minSdk = 24
         targetSdk = 36
-        // #RELEASE-V212-BUMP (14.09): bump 2→3 — следующая сборка тестера будет
-        // versionCode 3 / versionName 2.1.2; манифест version.json обновим отдельным
-        // релизом, когда APK 2.1.2 появится на GitHub Releases
-        // (манифест-код тогда строго 3, см. docs/UPDATER.md §1 шаг 1).
-        versionCode = 3
-        versionName = "2.1.2"
+        // #RELEASE-V213-BUMP (14.09): bump 3→4 — следующая сборка тестера будет
+        // versionCode 4 / versionName 2.1.3; манифест version.json (сейчас 3/2.1.2 →
+        // APK V2.1.2) обновим отдельным релизом, когда APK 2.1.3 появится
+        // на GitHub Releases (docs/UPDATER.md §1 шаг 1: манифест-код строго 4).
+        versionCode = 4
+        versionName = "2.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
