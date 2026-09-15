@@ -2169,8 +2169,8 @@ fun VideoPlayerScreen(
                                     enter = fadeIn(tween(250)),
                                     exit = fadeOut(tween(250)),
                                     modifier = Modifier
-                                        .align(Alignment.CenterEnd)
-                                        .padding(end = 4.dp),
+                                        .align(Alignment.BottomEnd)
+                                        .padding(end = 4.dp, bottom = 72.dp),
                                 ) {
                                     ImmersiveVideoActionsColumn(
                                         video = resolvedVideo,

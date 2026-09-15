@@ -124,7 +124,7 @@ fun CallsHistorySection(onNavigateToCall: (Long) -> Unit) {
             LazyColumn(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize().padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 4.dp),
             ) {
                 items(clusters, key = { it.key }) { cluster ->
                     CallsClusterRow(

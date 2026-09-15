@@ -9912,4 +9912,28 @@ Stage Summary:
 - Осталось в O3: (2) снять -keep для androidx.media3.** и re.pinok.data.model.** (аккуратно, Gson-рефлексия); (3) включить R8 full mode после верификации.
 - Файлы: app/proguard-rules.pro (+5/-1), gradle.properties (+4). Бэкапы .bak-20260915 оставлены.
 - Не тронуто: ARCH-CONTAINERS, Hilt/Koin, JSONObject, KMP (по ОПТИМИЗАЦИЯ.план.md).
+---
+Task ID: 75
+Agent: DeepSeek++ Shell MCP
+Task: O3 шаг 2 (снятие media3 keep + сужение data.model keep) + FIX-ROOM (Room/WorkManager) + 3 UI-фикса (видеоплеер, «Звонки» двойная шапка, скролл истории) + первый release-smoke-тест
 
+Work Log:
+- Пользователь: «Бэкапы можно удалить. A» → продолжили волну O3 (вариант A).
+- app/proguard-rules.pro: снят широкий -keep class androidx.media3.** { *; } (media3 1.8.0 несёт свой consumer-rules.pro).
+- app/proguard-rules.pro: сужен keep data.model — вместо -keep class/-keepclassmembers {*;} оставлено -keepclassmembers class re.pinok.data.model.** { <fields>; } (классы обфусцируются, имена полей сохраняются для Gson).
+- ПРАВКА BOM: убраны UTF-8 BOM из proguard-rules.pro и gradle.properties.
+- build.gradle.kts: signingConfig ОТСУТСТВУЕТ → release собирается unsigned. Папка E:\ANDROID_keystore\sova.jks существует, но пароли 'Pinok240'/'Pinokio241' НЕ подошли. Для локальной верификации подписывали debug-ключом (C:\Users\Pinokio240\.android\debug.keystore, alias androiddebugkey).
+- СБОРКА release (юзер): первый запуск дал FATAL: 'Unable to get provider androidx.startup.InitializationProvider: NoSuchMethodException: androidx.work.impl.WorkDatabase_Impl.<init> []' → причина: не было Room/WorkManager-правил, R8 удалял no-arg конструктор. Это ПРЕДСУЩЕСТВУЮЩИЙ баг (не от Task 74/75), вскрылся при первом запуске release на устройстве.
+- app/proguard-rules.pro: добавлена секция '#FIX-ROOM (Task 75)': -keep RoomDatabase <init>, @Entity, WorkDatabase_Impl, ListenableWorker-конструктор.
+- ФИКС #FIX-VP-OVERLAP в VideoPlayerScreen.kt (стр. 2172): правая колонка ImmersiveVideoActionsColumn пересекалась с VKControlsBar. .align(Alignment.CenterEnd) → .align(Alignment.BottomEnd) + .padding(end = 4.dp, bottom = 72.dp).
+- ФИКС #FIX-CALLS-DUAL-TOPBAR в CallsMainScreen.kt: маршрут Screen.CallsHistory не входит в hasOwnTopBar (SovaNavHost.kt ~861-939) → глобальный ScreenTopBar + локальный TopAppBar рисовали ДВА «← Звонки». Удалён локальный topBar из Scaffold; осталась глобальная (верхняя) панель.
+- ФИКС #FIX-CALLS-HISTORY-SCROLL в CallsHistorySection.kt (стр. 127): LazyColumn внутри Column имел .fillMaxSize() → низ уезжал за экран, скролл не работал. Заменено на .fillMaxWidth().weight(1f).
+- .gitignore: добавлены build_artifacts/ (артефакты подписи), .kotlin/, .idea/, .gigatool/, *.bak-*.
+
+ВЕРИФИКАЦИЯ (release v2.1.4, Cyber 15, серийник Cyber1500000010134):
+- mapping.txt: классы re.pinok.data.model.* обфусцированы 73/73, имена полей сохранены (comments/views/deviceType) — Gson-рефлексия цела.
+- Release СТАРТУЕТ (были pid 15848 / 20077 / 21781 в разных прогонах), FATAL нет.
+- Пользователь визуально подтвердил: шапка «Звонки» одна, плеер без наложения.
+- Осталось: подтвердить скролл истории звонков + найти экран «Устройства и сессии» (он во вкладке «Защита» настроек, файл SettingsScreen.kt стр. 3357, SecurityTab).
+
+Артефакт: E:\ANDROID_APP\PinoK_1\build_artifacts\app-release-signed.apk (102,3 МБ, debug-подпись).

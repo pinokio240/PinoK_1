@@ -41,3 +41,13 @@ local-*
 # Волна 46 #UPDATER-SIGNING: приватный ключ подписи манифеста обновлений —
 # НИКОГДА не в репозитории (живёт у релиз-менеджера вне git)
 tools/updater-sign/private_key*
+# #PERF-R8 (Task 74): локальные артефакты подписи (apksigner --out). Не в git.
+build_artifacts/
+
+# IDE / Kotlin (PinoK)
+.kotlin/
+.idea/
+.gigatool/
+
+# Резервные копии правок
+*.bak-*

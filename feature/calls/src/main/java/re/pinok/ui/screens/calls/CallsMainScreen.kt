@@ -164,21 +164,11 @@ fun CallsMainScreen(
 
     AppLog.i("CallsMain", "selectedTab=${effectiveTab.label} sidebarExpanded=$sidebarExpanded")
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Звонки") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-        },
-    ) { padding ->
+    // #FIX-CALLS-DUAL-TOPBAR (2026-09-15): локальный TopAppBar удалён.
+    // На маршруте CallsHistory уже показывается глобальный ScreenTopBar из SovaNavHost
+    // (маршрут НЕ входит в hasOwnTopBar), из-за чего рисовались ДВА заголовка «← Звонки».
+    // Оставляем верхнюю (глобальную) панель, локальную убираем. Scaffold оставлен для padding.
+    Scaffold { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             CallsHeader(
                 onCreateCall = { showCreateDialog = true },

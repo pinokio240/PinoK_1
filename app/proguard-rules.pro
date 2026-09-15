@@ -40,17 +40,38 @@
 -dontwarn coil.**
 
 # --- Media3 ---
--keep class androidx.media3.** { *; }
+# #PERF-R8 (Task 75): снят широкий -keep class androidx.media3.** { *; }.
+# media3 1.8.0 поставляется с consumer-rules.pro (сам объявляет нужные keep
+# для рефлексии и сервисов), дублирующий широкий keep только мешал R8
+# удалять неиспользуемые части ExoPlayer/UI/session. -dontwarn оставлен.
 -dontwarn androidx.media3.**
 
 # --- App models (Gson reflection) ---
--keep class re.pinok.data.model.** { *; }
--keepclassmembers class re.pinok.data.model.** { *; }
+# #PERF-R8 (Task 75): снят широкий -keep class re.pinok.data.model.** { *; }.
+# Gson десериализует поля рефлексией. В Models.kt/UserProfile.kt все поля
+# покрыты @SerializedName (общее правило Gson выше), но в VkAccountModels/
+# CallModels/VideoQuality аннотаций нет — там имя поля берётся из JSON,
+# поэтому его НЕЛЬЗЯ обфусцировать. Сохраняем имена полей, но разрешаем R8
+# удалять/обфусцировать имена классов и неиспользуемые методы.
+-keepclassmembers class re.pinok.data.model.** {
+    <fields>;
+}
 
 # --- BuildConfig ---
 -keep class re.pinok.BuildConfig { *; }
 
 # --- Navigation Screen sealed class ---
-# R8 не должен удалять/обfuscate sealed class объекты, используемые в Compose Navigation.
+# R8 не должен удалять/обфусцировать sealed class объекты, используемые в Compose Navigation.
 -keep class re.pinok.ui.navigation.Screen { *; }
 -keepclassmembers class re.pinok.ui.navigation.Screen { *; }
+# --- Room / WorkManager ---
+# #FIX-ROOM (Task 75): R8 удалял no-arg конструктор у androidx.work.impl.WorkDatabase_Impl,
+# а Room/WorkManager инстанцируют *Database_Impl рефлексией -> краш при старте:
+#   NoSuchMethodException: androidx.work.impl.WorkDatabase_Impl.<init> []
+# (Падал androidx.startup.InitializationProvider -> WorkManagerInitializer).
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+-keep @androidx.room.Entity class * { *; }
+-keep class androidx.work.impl.WorkDatabase_Impl { *; }
+-keepclassmembers class * extends androidx.work.ListenableWorker {
+    <init>(android.content.Context, androidx.work.WorkerParameters);
+}
