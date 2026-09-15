@@ -9955,4 +9955,20 @@ Stage Summary:
 - Волна O3 + UI-фиксы + пагинация звонков — верифицированы на реальном устройстве, release работает.
 - Смежные правки этой сессии (уже в коммите 46a9aba): O3 шаг 2 (media3/data.model keep), FIX-ROOM (Room/WorkManager), #FIX-VP-OVERLAP (плеер), #FIX-CALLS-DUAL-TOPBAR (Звонки шапка), #FIX-CALLS-SCROLL (weight(1f)), .gitignore.
 - ОТКРЫТО для следующих волн: DevicesScreen дёргает НЕпубличный VK ID web-API (accountPersonal.getActivityHistoryDevices → apiCode 3 Unknown method); нужен переход на публичный account.getActiveSessions или WebView. Baseline Profile (O1) не внедрён (ProfileInstaller: Skipping profile installation).
+---
+Task ID: 76
+Agent: DeepSeek++ Shell MCP
+Task: O3 шаг 3 (R8 full mode) — проверка, откат устаревшего флага, пояснение
+
+Work Log:
+- Попытка включить R8 full mode через android.enableR8.fullMode=true в gradle.properties.
+- После clean-пересборки (:app:clean + :app:assembleRelease) APK оказался БАЙТ-В-БАЙТ идентичен (107 205 236 б) старому — при том что mapping.txt/usage.txt/configuration.txt перегенерировались (R8 запускался).
+- Разгадка: проект на AGP 9.1.1 + Gradle 9.3.1. С AGP 8.0 R8 full mode ВКЛЮЧЁН ПО УМОЛЧАНИЮ; флаг android.enableR8.fullMode устарел и игнорируется. Подтверждение: configuration.txt содержит -allowaccessmodification (признак optimize/full mode R8).
+- Действие: флаг откачен, вместо него комментарий-пояснение в gradle.properties (чтобы не повторять попытку).
+- ВЕРИФИКАЦИЯ: release на Cyber 15 после сборки 15:20 — стартует, FATAL нет, ошибок нет.
+
+Stage Summary:
+- Волна O3 ЗАКРЫТА полностью: шаг 1 (Compose keep, Task 74) + шаг 2 (media3/data.model keep + FIX-ROOM, Task 75) + шаг 3 (full mode уже default, Task 76).
+- Размер APK ~102 МБ определяется нативными либами (ffmpeg-kit, media3), не DEX — эффект от R8-keep'ов в пределах единиц МБ, незаметен в общем размере.
+- ОСТАЛОСЬ: O1 (Baseline Profile) — в проекте нет :macrobenchmark модуля и своего baseline-prof.txt; требует отдельной задачи с итерациями сборки/теста на Android 13+ (Cyber 15 подходит). O2 (split VKApiClient.kt 17 735 строк). O4/O5. Открытый баг: DevicesScreen — непубличный VK ID web-API (apiCode 3).
 
