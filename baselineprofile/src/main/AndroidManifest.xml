@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- O1 #PERF-BASELINE (Task 77): тестовый модуль-генератор Baseline Profile. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="PinoK BaselineProfile">
+        <profileable android:shell="true" />
+    </application>
+</manifest>

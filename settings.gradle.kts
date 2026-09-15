@@ -73,3 +73,6 @@ include(":feature:photos")
 // в :app — блокер data-слой (SovaApp/data.model) — см. контейнеры.план.md,
 // Этап 1.5-б.
 include(":feature:audio")
+// O1 #PERF-BASELINE (Task 77): модуль-генератор Baseline Profile.
+// Тип com.android.test, targetProjectPath = :app. Профиль ускоряет холодный старт.
+include(":baselineprofile")

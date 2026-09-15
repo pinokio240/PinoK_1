@@ -3,6 +3,8 @@ plugins {
     // kotlin-android НЕ нужен — AGP 9.0+ имеет встроенную поддержку Kotlin
     // https://kotl.in/gradle/agp-built-in-kotlin
     alias(libs.plugins.kotlin.compose)
+    // O1 #PERF-BASELINE (Task 77): плагин генерации Baseline Profile в :app.
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 android {
@@ -118,6 +120,9 @@ android {
 }
 
 dependencies {
+    // O1 #PERF-BASELINE (Task 77): модуль-генератор профиля (com.android.test).
+    baselineProfile(project(":baselineprofile"))
+
     // AndroidX core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

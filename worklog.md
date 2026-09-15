@@ -9971,4 +9971,26 @@ Stage Summary:
 - Волна O3 ЗАКРЫТА полностью: шаг 1 (Compose keep, Task 74) + шаг 2 (media3/data.model keep + FIX-ROOM, Task 75) + шаг 3 (full mode уже default, Task 76).
 - Размер APK ~102 МБ определяется нативными либами (ffmpeg-kit, media3), не DEX — эффект от R8-keep'ов в пределах единиц МБ, незаметен в общем размере.
 - ОСТАЛОСЬ: O1 (Baseline Profile) — в проекте нет :macrobenchmark модуля и своего baseline-prof.txt; требует отдельной задачи с итерациями сборки/теста на Android 13+ (Cyber 15 подходит). O2 (split VKApiClient.kt 17 735 строк). O4/O5. Открытый баг: DevicesScreen — непубличный VK ID web-API (apiCode 3).
+---
+Task ID: 77
+Agent: DeepSeek++ Shell MCP
+Task: O1 (Baseline Profile) — инфраструктура: :baselineprofile модуль + плагины + генератор
+
+Work Log:
+- Создан новый Gradle-модуль :baselineprofile (com.android.test + плагин androidx.baselineprofile).
+  * baselineprofile/build.gradle.kts — targetProjectPath=:app, baselineProfile{saveInSrc=true; useConnectedDevices=true}, зависимости benchmark-macro-junit4 + uiautomator + test-ext-junit.
+  * baselineprofile/src/main/AndroidManifest.xml — <profileable android:shell="true"/>.
+  * baselineprofile/src/main/kotlin/re/pinok/baselineprofile/BaselineProfileGenerator.kt — @RunWith(AndroidJUnit4), BaselineProfileRule().collect(packageName="re.pinok", maxIterations=5, stableIterations=3){ pressHome(); startActivityAndWait(); swipe }.
+- gradle/libs.versions.toml: добавлены [versions] baselineprofile=1.4.1, benchmark=1.3.4, uiautomator=2.3.0, androidxTestJunit=1.3.0; [libraries] androidx-benchmark-macro-junit4, androidx-test-uiautomator, androidx-test-ext-junit; [plugins] androidx-baselineprofile, android-test.
+- settings.gradle.kts: include(":baselineprofile").
+- root build.gradle.kts: alias(libs.plugins.android.test) apply false + alias(libs.plugins.androidx.baselineprofile) apply false.
+- app/build.gradle.kts: применён плагин androidx.baselineprofile; добавлена зависимость baselineProfile(project(":baselineprofile")).
+- ГРАБЛИ: PowerShell here-string не экранирует "" — в libs.versions.toml попали двойные кавычки (""group""); исправлено Replace('""','"'). Правка app/build.gradle.kts через PowerShell падала на кавычках — выполнена через python_exec.
+
+Stage Summary:
+- Инфраструктура O1 создана, НО ЕЩЁ НЕ СОБИРАЛАСЬ/НЕ ПРОГОНЯЛАСЬ. Следующий шаг (за пользователем): собрать проект и прогнать генератор на Cyber 15 (Android 13, API 33 — требование выполнено):
+    cd E:\ANDROID_APP\PinoK_1
+    .\gradlew.bat :baselineprofile:connectedBenchmarkAndroidTest
+  Ожидаемый результат: в baselineprofile/src/main/ или app/src/main/ появится baseline-prof.txt. Затем пересобрать release и замерить холодный старт.
+- Возможные проблемы при первой сборке: несовместимость androidx.baselineprofile 1.4.1 с AGP 9.1.1 (если Gradle Sync упадёт — подобрать версию плагина); plugin требует JDK 17+ (у нас JDK 25 — ок).
 
