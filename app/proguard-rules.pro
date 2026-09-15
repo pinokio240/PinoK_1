@@ -11,7 +11,11 @@
 -keepclassmembernames class kotlin.coroutines.** { volatile <fields>; }
 
 # --- Compose ---
--keep class androidx.compose.** { *; }
+# #PERF-R8 (Task 74): снят широкий -keep class androidx.compose.** { *; }.
+# Плагин kotlin-compose 2.4.0 генерирует всю рантайм-метаинформацию
+# (Composer-индексы, групповые ключи, диспатч) прямо в классах, поэтому
+# внешний -keep не нужен и мешает R8 удалять/обфусцировать неиспользуемый
+# Compose-код. Оставлен только -dontwarn для опциональных модулей.
 -dontwarn androidx.compose.**
 
 # --- OkHttp ---

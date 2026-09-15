@@ -9893,4 +9893,23 @@ Stage Summary:
 - P2/P3: чистка app/build, Compose-аннотации, зависимости, retry Coil.
 - Отличие от Task 72: Task 72 = runtime (rate-limiter, off-main parse, WS-тики). Task 73 = статический архитектурный/сборочный аудит без правок кода.
 - Волны O1-O5 в ОПТИМИЗАЦИЯ.план.md НЕ запущены: только после явной команды.
+---
+Task ID: 74
+Agent: DeepSeek++ Shell MCP
+Task: Волна O3 (первый под-шаг) — снятие широкого -keep class androidx.compose.** в proguard-rules.pro; подготовка R8 full mode (закомментирован)
+
+Work Log:
+- Юзер: «На чём остановились?» -> продолжение после Task 73.
+- Диагностика рабочего дерева: незакоммиченные M app/proguard-rules.pro, M gradle.properties (задел Task 74 от 15.09.2026).
+- app/proguard-rules.pro: СНЯТ широкий -keep class androidx.compose.** { *; }. Оставлен -dontwarn androidx.compose.**. Обоснование в комментарии: kotlin-compose 2.4.0 генерирует рантайм-метаинформацию (Composer-индексы, групповые ключи, диспатч) прямо в классах, внешний -keep не нужен и мешал R8 удалять/обфусцировать неиспользуемый Compose-код.
+- gradle.properties: добавлен ЗАКОММЕНТИРОВАННЫЙ # android.enableR8.fullMode=true с пометкой «включать ПОСЛЕ верификации релиза» (риск для Gson-рефлексии и media3).
+- Убран случайный UTF-8 BOM, попавший в начало обоих файлов (powershell-запись UTF8Encoding(False)); первые байты теперь 0x23 (без EF BB BF), дифф чистый.
+- СБОРКА (выполнял пользователь): cd E:\ANDROID_APP\PinoK_1; .\gradlew.bat :app:assembleRelease — прошла БЕЗ ОШИБОК (R8 отработал, Compose-экраны не сломались).
+- Регламент ролей зафиксирован: ассистент правит код, сборку/компиляцию запускает пользователь.
+
+Stage Summary:
+- Волна O3, под-шаг 1 (из ~3): снятие Compose-keep — ВЫПОЛНЕНО и верифицировано сборкой release.
+- Осталось в O3: (2) снять -keep для androidx.media3.** и re.pinok.data.model.** (аккуратно, Gson-рефлексия); (3) включить R8 full mode после верификации.
+- Файлы: app/proguard-rules.pro (+5/-1), gradle.properties (+4). Бэкапы .bak-20260915 оставлены.
+- Не тронуто: ARCH-CONTAINERS, Hilt/Koin, JSONObject, KMP (по ОПТИМИЗАЦИЯ.план.md).
 
