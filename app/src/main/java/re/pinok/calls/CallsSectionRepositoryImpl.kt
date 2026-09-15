@@ -481,6 +481,10 @@ class CallsSectionRepositoryImpl(
             if (!seen.contains(e.callId)) fresh.add(e)
         }
         val merged = latest.items + fresh
+        // #FIX-CALLS-PAGING (2026-09-15): если вся страница — дубликаты по callId,
+        // VK продолжит возвращать тот же слайс при любом offset → новых не будет.
+        // Ставим endReached=true, иначе бесконечный scroll-to-end → loadMore.
+        if (fresh.isEmpty() && merged.isNotEmpty()) pg.endReached = true
         publishHistoryState(
             key,
             CallsSectionState(

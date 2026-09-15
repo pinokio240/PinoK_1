@@ -9937,3 +9937,22 @@ Work Log:
 - Осталось: подтвердить скролл истории звонков + найти экран «Устройства и сессии» (он во вкладке «Защита» настроек, файл SettingsScreen.kt стр. 3357, SecurityTab).
 
 Артефакт: E:\ANDROID_APP\PinoK_1\build_artifacts\app-release-signed.apk (102,3 МБ, debug-подпись).
+---
+Task ID: 75 (follow-up)
+Agent: DeepSeek++ Shell MCP
+Task: #FIX-CALLS-PAGING — бесконечный scroll-to-end → loadMore в разделе «Звонки»
+
+Work Log:
+- По логу работы release-сборки (файл 2026-09-15 140535 PinoK.txt) обнаружен бесконечный цикл пагинации: сотни повторов 'loadMore(HISTORY): raw=25, new=0, total=23, endReached=false' + 'scroll-to-end → loadMore' каждые ~200мс. Скролл «История звонков» и «Пропущенные» залипал в вечной догрузке.
+- ПРИЧИНА: VK calls.getHistory отдаёт полную страницу 25 записей, но все — дубликаты по callId (new=0), total не растёт. Код (app/src/main/java/re/pinok/calls/CallsSectionRepositoryImpl.kt, loadMoreHistory) ставил endReached только при raw.size < HISTORY_PAGE_SIZE → никогда → hasMore=true → UI снова дёргал loadMore.
+- ФИКС: в loadMoreHistory после val merged = latest.items + fresh добавлено:
+    if (fresh.isEmpty() && merged.isNotEmpty()) pg.endReached = true
+  Действует для HISTORY и MISSED (общая функция).
+- (Промежуточно первую вставку сделал ДО val merged — порядок нарушен; исправлено перестановкой, компиляция прошла.)
+- ВЕРИФИКАЦИЯ на Cyber 15 (release, v2.1.4): пользователь пролистал «История»/«Пропущенные» до конца — список ОСТАНАВЛИВАЕТСЯ. В logcat: 'loadMore(MISSED): raw=25, new=0, total=24, endReached=true', всего 4 вызова loadMore вместо сотен.
+
+Stage Summary:
+- Волна O3 + UI-фиксы + пагинация звонков — верифицированы на реальном устройстве, release работает.
+- Смежные правки этой сессии (уже в коммите 46a9aba): O3 шаг 2 (media3/data.model keep), FIX-ROOM (Room/WorkManager), #FIX-VP-OVERLAP (плеер), #FIX-CALLS-DUAL-TOPBAR (Звонки шапка), #FIX-CALLS-SCROLL (weight(1f)), .gitignore.
+- ОТКРЫТО для следующих волн: DevicesScreen дёргает НЕпубличный VK ID web-API (accountPersonal.getActivityHistoryDevices → apiCode 3 Unknown method); нужен переход на публичный account.getActiveSessions или WebView. Baseline Profile (O1) не внедрён (ProfileInstaller: Skipping profile installation).
+
