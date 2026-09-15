@@ -9873,3 +9873,24 @@ Stage Summary:
 - КАНДИДАТЫ СЛЕДУЮЩИХ ВОЛН (требуют одобрения/живой проверки, сознательно НЕ тронуто): ClipCreateViewModel delay(8000) — фиктивное ожидание публикации клипа, правильное решение = реальный status-poll (video.get/image_processing) — фича, не таймер; INLINE_ICE_WAIT_MS 1500 (WebRtcEngine, +1.5с к установлению КАЖДОГО звонка) — событийная отправка при iceGatheringState==COMPLETE с капом 1500, трогать только с живой проверкой звонков; унификация debounce поиска 350/400/500/600мс ×7 мест (маргинально, каждый поиск всё равно через лимитёр); NetRetry backoff [500,1000]→[300,600] (защита «лишний hammering»); Coil disk-cache (выключен по умолчанию, конфига нет — нет зеркала в коде, риск Unresolved reference); EncryptedSharedPreferences+runBlocking×3 в SovaApp.onCreate (холодный старт, отдельное решение); старт NotificationPoller 5с→3с (маргинально).
 - НЕ ТРОНУТО (защищённые зоны с прецедентами багов в комментариях): HOST_COOLDOWN 60с (шторм 82 хостов 13.09), LP/Queuev4 backoff, method-aware grace IP-binding 2с/5с, SILENT_REFRESH_COOLDOWN 90с, звонковые watchdog'и, EQ-reattach debounce BT, auth-поллы.
 - Гейт-детали: скобочный сканер проекта (грубый) на этих файлах ложно падает и на HEAD — для будущих волн использовать дельту диффа (в worklog зафиксировано).
+
+---
+Task ID: 73
+Agent: DeepSeek++ Shell MCP (внешний аудит, отдельный чат)
+Task: Внешний статический аудит оптимизации PinoK_1 -> ОПТИМИЗАЦИЯ.план.md (код НЕ переписан)
+
+Work Log:
+- Юзер: «пере прочитай проект Пинок, посмотри как можно его оптимизировать?» -> «Запиши этот план в проект, но код не переписывай» -> «отправляй его».
+- АУДИТ (внешний агент через Shell MCP): 256 .kt, 163 394 строк, 8,93 МБ, app/build 509,5 МБ, 10+ модулей. R8/minify включён, shrinkResources=true, Coil 3 с общим OkHttp. Baseline Profile отсутствует.
+- ТОП-файлы: VKApiClient.kt = 1014 КБ (17 735 строк, 492 fun, 399 suspend, 989 JSONObject, 1 класс — god object); ChatDetailScreen 495 КБ; SettingsScreen 455 КБ; FeedScreen 240 КБ; SovaNavHost 188 КБ; SovaApp 169 КБ.
+- proguard-rules.pro: слишком широкие -keep (androidx.compose.**, androidx.media3.**, re.pinok.data.model.**).
+- ДОКУМЕНТ: E:\ANDROID_APP\PinoK_1\ОПТИМИЗАЦИЯ.план.md (13 886 байт, 9 разделов). КОД НЕ ТРОНУТ.
+- Коммит e078945 (docs(opt)) — план запушен/будет запушен в origin/PinoK.
+
+Stage Summary:
+- P0: (1) baseline profile отсутствует (Macrobenchmark, ожидаемо -20..40% холодного старта); (2) VKApiClient.kt дробление на extension-файлы; (3) ProGuard/R8 снять широкие -keep (-5..15% APK).
+- P1: SovaApp.kt ленивая инициализация (-200..500 мс), ChatDetailScreen/SettingsScreen разбить, R8 full mode (-3..8%), Configuration Cache.
+- P2/P3: чистка app/build, Compose-аннотации, зависимости, retry Coil.
+- Отличие от Task 72: Task 72 = runtime (rate-limiter, off-main parse, WS-тики). Task 73 = статический архитектурный/сборочный аудит без правок кода.
+- Волны O1-O5 в ОПТИМИЗАЦИЯ.план.md НЕ запущены: только после явной команды.
+
