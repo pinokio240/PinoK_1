@@ -3600,19 +3600,6 @@ class VKApiClient(
         )
     }
 
-    /** #MUSIC-CATALOG-WEB-GATEWAY: AudioPlaylist → CatalogPlaylist. */
-    private fun toCatalogPlaylist(p: re.pinok.data.model.AudioPlaylist): re.pinok.data.model.CatalogPlaylist =
-        re.pinok.data.model.CatalogPlaylist(
-            id = p.id,
-            ownerId = p.ownerId,
-            title = p.title,
-            subtitle = p.description,
-            coverUrl = p.coverUrl,
-            count = p.count,
-            plays = p.plays,
-            accessKey = p.accessKey,
-        )
-
     /**
      * Парсит массив блоков из ответа catalog.getAudio.
      *
@@ -3693,53 +3680,6 @@ class VKApiClient(
             subtitle = o.get("subtitle")?.takeIf { !it.isJsonNull }?.asString,
             genreId = o.get("genre_id")?.takeIf { !it.isJsonNull }?.asInt,
         )
-    }
-
-    /** Парсит main_artists массив. */
-    private fun parseMainArtists(o: JsonObject): List<TrackArtist>? {
-        val arr = o.getAsJsonArray("main_artists") ?: return null
-        if (arr.isEmpty) return null
-        return arr.mapNotNull { el ->
-            if (!el.isJsonObject) return@mapNotNull null
-            val a = el.asJsonObject
-            TrackArtist(
-                id = a.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                name = a.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                domain = a.get("domain")?.takeIf { !it.isJsonNull }?.asString,
-            )
-        }.takeIf { it.isNotEmpty() }
-    }
-
-    /** Парсит плейлист из элемента каталога. */
-    private fun parseCatalogPlaylist(o: JsonObject): re.pinok.data.model.CatalogPlaylist {
-        val playlist = o.getAsJsonObject("playlist") ?: o
-        return re.pinok.data.model.CatalogPlaylist(
-            id = playlist.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-            ownerId = playlist.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-            title = playlist.get("title")?.takeIf { !it.isJsonNull }?.asString ?: "",
-            subtitle = playlist.get("subtitle")?.takeIf { !it.isJsonNull }?.asString,
-            description = playlist.get("description")?.takeIf { !it.isJsonNull }?.asString,
-            coverUrl = extractPlaylistCover(playlist),
-            count = playlist.get("count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-            plays = playlist.get("plays")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-            accessKey = playlist.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
-            blockId = o.get("id")?.takeIf { !it.isJsonNull }?.asString,
-            // match_percent для блока «Слушайте друг друга»
-            matchPercent = o.get("match_percent")?.takeIf { !it.isJsonNull }?.asInt,
-        )
-    }
-
-    /** Фильтрация рекламных/подписочных блоков. */
-    private fun isAdOrSubscriptionBlock(title: String?, viewType: CatalogViewType): Boolean {
-        if (viewType == CatalogViewType.SEPARATOR || viewType == CatalogViewType.HEADER) return false
-        val t = (title ?: "").lowercase()
-        return t.contains("подписк") ||
-            t.contains("_vk Music pass") ||
-            t.contains("premium") ||
-            t.contains("пробн") ||
-            t.contains("0 ₽") ||
-            t.contains("реклам") ||
-            viewType == CatalogViewType.UNKNOWN
     }
 
     /**
