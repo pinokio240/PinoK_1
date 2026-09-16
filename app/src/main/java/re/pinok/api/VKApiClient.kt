@@ -2646,21 +2646,6 @@ class VKApiClient(
         return AudioUrlUnmasker.unmask(raw, userId)
     }
 
-    private fun extractAlbumThumb(o: JsonObject): String? {
-        // Прямая строка URL в album_thumb
-        val direct = o.get("album_thumb")?.takeIf { !it.isJsonNull }?.asString
-        if (!direct.isNullOrBlank()) return direct
-        // Объект album.thumb.photo_XXX
-        val thumbObj = o.getAsJsonObject("album")?.getAsJsonObject("thumb") ?: return null
-        // Берём самый большой размер
-        listOf("photo_270", "photo_300", "photo_135", "photo_68", "photo_34")
-            .forEach { key ->
-                val url = thumbObj.get(key)?.takeIf { !it.isJsonNull }?.asString
-                if (!url.isNullOrBlank()) return url
-            }
-        return null
-    }
-
     // ─── Sprint 5: Музыка v2 — API-методы ────────────────────────────
 
     /**
@@ -3739,23 +3724,6 @@ class VKApiClient(
         )
     }
 
-    /** Извлекает обложку из разных форматов каталога. */
-    private fun extractCatalogAlbumThumb(o: JsonObject): String? {
-        // Прямая строка
-        val direct = o.get("album_thumb")?.takeIf { !it.isJsonNull }?.asString
-        if (!direct.isNullOrBlank()) return direct
-        // Объект album.thumb
-        val thumbObj = o.getAsJsonObject("album")?.getAsJsonObject("thumb") ?: return null
-        for (key in listOf("photo_600", "photo_300", "photo_270", "photo_135", "photo_68", "photo_34")) {
-            val url = thumbObj.get(key)?.takeIf { !it.isJsonNull }?.asString
-            if (!url.isNullOrBlank()) return url
-        }
-        // Массив thumb (новый формат): cover_url или photos[]
-        val coverUrl = o.get("cover_url")?.takeIf { !it.isJsonNull }?.asString
-        if (!coverUrl.isNullOrBlank()) return coverUrl
-        return null
-    }
-
     /** Парсит main_artists массив. */
     private fun parseMainArtists(o: JsonObject): List<TrackArtist>? {
         val arr = o.getAsJsonArray("main_artists") ?: return null
@@ -3788,23 +3756,6 @@ class VKApiClient(
             // match_percent для блока «Слушайте друг друга»
             matchPercent = o.get("match_percent")?.takeIf { !it.isJsonNull }?.asInt,
         )
-    }
-
-    /** Извлекает обложку плейлиста (разные форматы VK). */
-    private fun extractPlaylistCover(o: JsonObject): String? {
-        for (key in listOf("photo_600", "photo_300", "photo_270", "photo_200", "photo_135", "photo_100")) {
-            val url = o.get(key)?.takeIf { !it.isJsonNull }?.asString
-            if (!url.isNullOrBlank()) return url
-        }
-        val photos = o.getAsJsonArray("thumbs")
-        if (photos != null && photos.size() > 0) {
-            // Берём последний (самый большой)
-            for (i in (photos.size() - 1) downTo 0) {
-                val url = photos.get(i)?.takeIf { !it.isJsonNull }?.asString
-                if (!url.isNullOrBlank()) return url
-            }
-        }
-        return o.get("photo")?.takeIf { !it.isJsonNull }?.asString
     }
 
     /** Фильтрация рекламных/подписочных блоков. */
