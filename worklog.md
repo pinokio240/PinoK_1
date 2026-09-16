@@ -9994,3 +9994,25 @@ Stage Summary:
   Ожидаемый результат: в baselineprofile/src/main/ или app/src/main/ появится baseline-prof.txt. Затем пересобрать release и замерить холодный старт.
 - Возможные проблемы при первой сборке: несовместимость androidx.baselineprofile 1.4.1 с AGP 9.1.1 (если Gradle Sync упадёт — подобрать версию плагина); plugin требует JDK 17+ (у нас JDK 25 — ок).
 
+
+---
+Task ID: 77 (продолжение, O2)
+Agent: DeepSeek++ Shell MCP
+Task: O2 (#PERF-STRUCT) шаг 1 — вынос 16 data-классов из VKApiClient.kt
+
+Work Log:
+- Анализ VKApiClient.kt: 18472 строки, 331 suspend fun, 90 fun, 37 data class (вложенных в класс).
+- Из 37 вложенных data class: 18 референсятся снаружи как VKApiClient.X (UI/realtime) — нельзя выносить без правки call-sites. 1 — локальный в функции (MissingKey). 1 — nested в MessagesDiff (Folder).
+- Вынесено 16 top-level data class в новый файл app/src/main/java/re/pinok/api/VKApiResponseModels.kt:
+  HistoryResult, WallByIdResult, UploadedPhoto, CommentsResult, ChannelsHistoryResult, MessagesDiff (+ nested Folder), MessagesItems, MessagesConfig, LongPollHistory, NotificationProfile, CreatedPoll, ContentTab, WallTab, WallGetExtendedResult, ClipsFeedResult, VideoLongPollServer.
+- VKApiClient.kt: 18472 -> 18287 строк (-185).
+- GroupInfo остался вложенным в VKApiClient (референсится как VKApiClient.GroupInfo из WallByIdResult и ClipsFeedResult).
+- Импорты в новом файле: JsonArray (gson), Chat, Comment, Message, Post, UserProfile, Video (re.pinok.data.model).
+- Техника: Python 3 (py -3), скрипты в build_artifacts/: extract_classes.py, extract_to_file.py, delete_classes.py, validate_o2.py. MCP-default python = Python 2.7 — не работает с json.dump(unicode).
+- ВАЖНЫЕ ГРАБЛИ: PowerShell (не Python) неверно считает баланс скобок для data class — используются круглые (), не фигурные {}. Парсер обязан считать и (), и {}.
+
+Stage Summary:
+- BUILD SUCCESSFUL in 4m 9s (:app:compileDebugKotlin --no-build-cache). 79 actionable tasks: 11 executed, 68 up-to-date.
+- Коммит 6907e84: perf(opt): O2 шаг 1 — вынос 16 data-классов из VKApiClient.kt в VKApiResponseModels.kt.
+- 2 files changed, 143 insertions(+), 186 deletions(-), create mode 100644 VKApiResponseModels.kt.
+- O2 шаг 2 (функциональный вынос audio-домена) — на паузе: требует смены private->internal у ~10 членов, дополнительных итераций сборки.
