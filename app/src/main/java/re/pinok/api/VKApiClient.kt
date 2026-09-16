@@ -1310,23 +1310,6 @@ class VKApiClient(
         }
     }
 
-    /**
-     * #74: результат messagesGetHistory — сообщения + профили отправителей.
-     *
-     * #IM-EMPTY-HONEST (волна 36, 2026-09-11): [failure] разделяет «диалог
-     * действительно пуст» от «запрос не выполнен». null = успех (messages
-     * может быть пуст — сервер честно ответил пустой историей). Не-null =
-     * человекочитаемая причина сбоя (офлайн-гейт, нет токена, капча отменена,
-     * битый ответ, парсинг) — UI показывает её как ошибку вместо лживого
-     * «Нет сообщений» (жалоба пользователя: «открывал диалог — пишет "нет
-     * сообщений", но они есть»).
-     */
-    data class HistoryResult(
-        val messages: List<Message>,
-        val profiles: Map<Long, UserProfile>,
-        val failure: String? = null,
-    )
-
     suspend fun messagesGetHistory(
         peerId: Long,
         count: Int = 30,
@@ -4304,12 +4287,6 @@ class VKApiClient(
         }
     }
 
-    /** Результат wall.getById: посты + группы (для отображения имени сообщества). */
-    data class WallByIdResult(
-        val posts: List<re.pinok.data.model.Post>,
-        val groups: Map<Long, GroupInfo>,
-    )
-
     /** wall.likeComment — лайк комментария (type=comment). */
     suspend fun wallLikeComment(ownerId: Long, commentId: Long): Boolean {
         if (isOffline()) return false
@@ -7271,13 +7248,6 @@ class VKApiClient(
         return postId
     }
 
-    /** Результат multipart-загрузки фото (шаг 2 из 3). */
-    data class UploadedPhoto(
-        val server: Int,
-        val photo: String,  // JSON-encoded строка от VK
-        val hash: String,
-    )
-
     /**
      * Получить комментарии к посту. VK: wall.getComments — owner_id, post_id, count.
      *
@@ -7348,12 +7318,6 @@ class VKApiClient(
             CommentsResult(emptyList(), emptyMap())
         }
     }
-
-    /** Результат запроса комментариев: список + профили авторов. */
-    data class CommentsResult(
-        val comments: List<Comment>,
-        val profiles: Map<Long, UserProfile>,
-    )
 
     /**
      * Получить заявки в друзья. VK: friends.getRequests — count, offset, extended=1.
@@ -7552,44 +7516,6 @@ class VKApiClient(
         val key: String,
         val ts: Long,
         val pts: Long,
-    )
-
-    /**
-     * Task 67 (#CHANNELS-HIST): рабочая загрузка истории канала через
-     * channels.getHistory (web-шлюз web.api.vk.ru, форс независимо от
-     * тумблера netUseWebApiGateway). Пришёл на смену #CHANNELS-PROBE v2
-     * (Task 65/66) — пробник свою задачу выполнил и из потока убран.
-     *
-     * Рабочая формула установлена пробником v2 (лог тестера 14.09 22:17):
-     *   channels.getById → last_message.cmid → getHistory(start_cmid=<cmid>)
-     * Без start_cmid метод ВСЕГДА отвечает err=100 «start_cmid is undefined»
-     * (варианты [no-start-cmid]/[minimal] провалились на обоих каналах);
-     * со start_cmid — 200 OK с контентом (items=9, 105КБ / 58КБ).
-     *
-     * Семантика start_cmid: судя по items=9 при count=10 и start_cmid=последний
-     * cmid — сервер отдаёт сообщения СТАРШЕ start_cmid (верхняя граница страницы).
-     * Самое свежее сообщение берём из getById.last_message (тот же порядок, что
-     * у веб-клиента: getById → getHistory) и вставляем в выдачу, если сервер
-     * его не включил — дедуп по cmid делает корректным оба сценария
-     * (включительно/исключительно). Лог #CHANNELS-HIST startIncluded=yes/no
-     * закроет вопрос по следующему логкату тестера.
-     *
-     * items[] парсим в ОБЩИЙ Message (id=cmid, peerId=канал) — рендер идёт
-     * через стандартный messages-режим (channelWallFallback в ChatDetailScreen)
-     * со всеми вложениями/аватарами, без отдельного канального UI. Парсер
-     * толерантный (двойная схема: draft items[].cmid/author_id/time из
-     * docs/drafts/channels и message-шейп id/from_id/date); если ни один
-     * айтем не распарсился — лог ключей первого (докрутка схемы без гаданий).
-     */
-    data class ChannelsHistoryResult(
-        val messages: List<Message>,
-        val profiles: Map<Long, UserProfile>,
-        /** Минимальный cmid страницы — start_cmid для следующей (более старой) страницы. */
-        val oldestCmid: Long? = null,
-        /** Новейший cmid канала из getById.last_message (null при пагинации «старее»). */
-        val newestCmid: Long? = null,
-        /** Честная причина пустоты (VK API err / нет сети / парсинг) — null при успехе. */
-        val failure: String? = null,
     )
 
     suspend fun channelsGetHistory(
@@ -7819,28 +7745,6 @@ class VKApiClient(
         }
     }
 
-    /** Результат messages.getDiff — Modern Sync API (lp_version=21). */
-    data class MessagesDiff(
-        val key: String,
-        val ts: Long,
-        val serverLp: String,
-        val serverVersion: Long,
-        val invalidateAll: Boolean,
-        val countersMessages: Int,
-        val countersUnreadUnmuted: Int,
-        val folders: List<Folder>,
-    ) {
-        data class Folder(
-            val id: Int,
-            val name: String,
-            val type: String,
-            val flags: Int,
-        )
-
-        /** Готовы ли credentials к LongPoll-опросу. */
-        val hasCredentials: Boolean get() = key.isNotBlank() && ts > 0L && serverLp.isNotBlank()
-    }
-
     /**
      * §52.5 Sprint A (P0): Modern Sync API — messages.getItems (пагинация диалогов).
      *
@@ -7936,18 +7840,6 @@ class VKApiClient(
         return distinct
     }
 
-    /** Результат messages.getItems — пагинированный список диалогов. */
-    data class MessagesItems(
-        val chats: List<Chat>,
-        /** Сколько диалогов (conversations) в этой странице — для курсора conversations_{N}. */
-        val conversationsCount: Int,
-        /** Сколько каналов в этой странице — для курсора channels_{N}. */
-        val channelsCount: Int,
-        val totalCount: Int,
-        /** Курсор следующей страницы ("conversations_{cmid},channels_{minor_id}"). */
-        val nextFrom: String = "",
-    )
-
     /**
      * §52.5 Sprint A (P0): Modern Sync API — messages.getConfig (конфиг v17).
      *
@@ -7970,11 +7862,6 @@ class VKApiClient(
             null
         }
     }
-
-    /** Результат messages.getConfig — конфиг мессенджера (v17). */
-    data class MessagesConfig(
-        val version: Int,
-    )
 
     /**
      * P4.2: messages.getLongPollHistory — получить пропущенные события
@@ -8069,21 +7956,6 @@ class VKApiClient(
             null
         }
     }
-
-    /**
-     * P4.2: результат messages.getLongPollHistory — пропущенные между сессиями события.
-     *
-     * [history] — сырые события (тот же формат что и в LongPoll `updates[]`),
-     * обрабатываются [re.pinok.realtime.LongPollClient.handleEvent] без изменений.
-     * [newPts] — обновлённый pts для следующего backfill (сохранить в SovaPrefs.lpLastPts).
-     */
-    data class LongPollHistory(
-        val history: List<JsonArray>,
-        val newPts: Long,
-        val newTs: Long,
-        val messagesCount: Int,
-        val conversationsCount: Int,
-    )
 
     /**
      * Базовый профиль пользователя (короткий набор полей).
@@ -8487,15 +8359,6 @@ class VKApiClient(
             else -> "Уведомление от $names"
         }
     }
-
-    /** Профиль пользователя/группы для уведомлений (лёгкая модель). */
-    data class NotificationProfile(
-        val id: Long,
-        val name: String,
-        val photo100: String,
-        val photo200: String,
-        val isGroup: Boolean,
-    )
 
     /** Одна запись уведомления (расширенная модель). */
     data class NotificationItem(
@@ -12257,12 +12120,6 @@ class VKApiClient(
         return true
     }
 
-    /** Результат polls.add: owner_id + id — для attachment-строки «poll{owner_id}_{id}». */
-    data class CreatedPoll(
-        val ownerId: Long,
-        val id: Long,
-    )
-
     /**
      * polls.add — создание опроса (пункт «Опрос» меню прикреплений веб-композера
      * vk.com; внедрение волны #ATTACH-UNIFY, идея-референс — OpenVK legacy, §2
@@ -14458,22 +14315,6 @@ class VKApiClient(
         }
     }
 
-    /** Таб контента профиля (users.getContentTabs). */
-    data class ContentTab(
-        val name: String,
-        val toSectionButton: Boolean = false,
-        val canAddButton: Boolean = false,
-        val contentTypes: List<String> = emptyList(),
-    )
-
-    /** Фильтр стены (users.getWallTabs). */
-    data class WallTab(
-        val type: String,
-        val title: String,
-        val count: Int = 0,
-        val isWallOwn: Boolean = false,
-    )
-
     /**
      * stories.get — получение историй из ленты (v5.282, extended=1).
      *
@@ -14764,16 +14605,6 @@ class VKApiClient(
             emptyList()
         }
     }
-
-    /**
-     * #POST-SIGNER (волна 39): результат wall.get extended=1 — посты + имена
-     * профилей (для подписи автора, signer_id).
-     */
-    data class WallGetExtendedResult(
-        val posts: List<Post>,
-        /** id профиля → «Имя Фамилия» (только users из ответа). */
-        val profileNames: Map<Long, String>,
-    )
 
     /**
      * #POST-SIGNER (волна 39): wall.get extended=1 — посты + profiles для имён
@@ -16664,14 +16495,6 @@ class VKApiClient(
     // возвращают JSON-safe значения: null/empty при ошибке, без FATAL.
     // ════════════════════════════════════════════════════════════════════
 
-    /** Результат ленты clips: список + курсор пагинации + профили/группы. */
-    data class ClipsFeedResult(
-        val items: List<Video>,
-        val nextFrom: String?,
-        val profiles: Map<Long, UserProfile>,
-        val groups: Map<Long, GroupInfo>,
-    )
-
     /**
      * newsfeed.getFeed с section="clips" — LEGACY clips-лента.
      *
@@ -17051,15 +16874,6 @@ class VKApiClient(
             null
         }
     }
-
-    /** data class для video.getLongPollServer ответа (live-clip чат).
-     *  Отдельная от [LongPollServer] (messages LP) — поля отличаются
-     *  (String ts без pts), поэтому не переиспользуем messages-вариант. */
-    data class VideoLongPollServer(
-        val server: String,
-        val key: String,
-        val ts: String,
-    )
 
     /**
      * video.getAds — реклама перед/после клипа.
