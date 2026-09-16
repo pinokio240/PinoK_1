@@ -2946,35 +2946,6 @@ class VKApiClient(
         return finalizeAudioSearchResult(tracks, artists, playlists, count, null)
     }
 
-    /**
-     * Fix #281 (crash): финальная дедупликация результатов поиска.
-     *
-     * Артисты, спарсенные из links[] catalog.getAudioSearch, приходят с id=0 у
-     * ВСЕХ (VK не отдаёт числовой id в links). Без дедупа два таких артиста в
-     * результате давали два item с key="artist_0" в LazyRow →
-     * IllegalArgumentException «Key was already used» → процесс падал (пользователь
-     * видел «приложение закрылось при поиске»).
-     *
-     * Идентичность артиста: id>0 → по числовому id; id=0 → по имени (lowercase).
-     * Плейлисты/треки — по (ownerId, id). Треки обрезаются до maxTracks.
-     */
-    private fun finalizeAudioSearchResult(
-        tracks: MutableList<Track>,
-        artists: MutableList<re.pinok.data.model.AudioArtist>,
-        playlists: MutableList<AudioPlaylist>,
-        maxTracks: Int,
-        nextFrom: String? = null,
-    ): re.pinok.data.model.AudioSearchResult {
-        val uniqueTracks = tracks.distinctBy { "${it.ownerId}_${it.id}" }.take(maxTracks)
-        val uniqueArtists = artists.distinctBy { a ->
-            if (a.id > 0L) "id_${a.id}" else "name_${a.name.lowercase()}"
-        }
-        val uniquePlaylists = playlists.distinctBy { "${it.ownerId}_${it.id}" }
-        return re.pinok.data.model.AudioSearchResult(
-            uniqueTracks, uniqueArtists, uniquePlaylists, nextFrom,
-        )
-    }
-
     /** Сырой ответ catalog.getAudioSearch (Fix #281: переиспользование одним запросом). */
     private suspend fun catalogGetAudioSearchRaw(
         query: String,
@@ -5394,58 +5365,6 @@ class VKApiClient(
             )
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "parseTrackFromJson failed: ${e.message}")
-            null
-        }
-    }
-
-    /** Универсальный парсер AudioPlaylist из JsonObject. */
-    private fun parseAudioPlaylist(o: JsonObject): re.pinok.data.model.AudioPlaylist? {
-        return try {
-            val id = o.get("id")?.asLong ?: return null
-            val ownerId = o.get("owner_id")?.asLong ?: 0L
-            val photo = o.getAsJsonObject("photo")
-            re.pinok.data.model.AudioPlaylist(
-                id = id,
-                ownerId = ownerId,
-                title = o.get("title")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                description = o.get("description")?.takeIf { !it.isJsonNull }?.asString,
-                photo = photo?.get("photo_1200")?.takeIf { !it.isJsonNull }?.asString
-                    ?: photo?.get("photo_600")?.takeIf { !it.isJsonNull }?.asString,
-                photo200 = photo?.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                photo300 = photo?.get("photo_300")?.takeIf { !it.isJsonNull }?.asString,
-                photo600 = photo?.get("photo_600")?.takeIf { !it.isJsonNull }?.asString,
-                count = o.get("count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                genreId = o.get("genre_id")?.takeIf { !it.isJsonNull }?.asInt,
-                type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
-                accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
-                followers = o.get("followers")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                plays = o.get("plays")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-            )
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "parseAudioPlaylist failed: ${e.message}")
-            null
-        }
-    }
-
-    /** Универсальный парсер AudioArtist из JsonObject. */
-    private fun parseAudioArtist(o: JsonObject): re.pinok.data.model.AudioArtist? {
-        return try {
-            val id = o.get("id")?.asLong ?: return null
-            re.pinok.data.model.AudioArtist(
-                id = id,
-                name = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                domain = o.get("domain")?.takeIf { !it.isJsonNull }?.asString,
-                photo = o.get("photo")?.takeIf { !it.isJsonNull }?.asString,
-                photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
-                photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                followers = o.get("followers")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                genres = o.getAsJsonArray("genres")?.mapNotNull {
-                    it.takeIf { !it.isJsonNull }?.asString
-                },
-                isFollowed = o.get("is_followed")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
-            )
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "parseAudioArtist failed: ${e.message}")
             null
         }
     }
