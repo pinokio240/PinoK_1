@@ -181,6 +181,12 @@
         android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="34">
 
+        <!-- O1 #PERF-BASELINE (Task 77, plugin-free): включаем профилирование.
+             Раньше этот тег добавлял плагин androidx.baselineprofile автоматически,
+             но он несовместим с AGP 9.1.1 — добавляем вручную. Обязателен для
+             BaselineProfileRule при генерации baseline-prof.txt на Android 13+. -->
+        <profileable android:shell="true" />
+
         <!-- Launcher activity (single-activity Compose architecture) -->
         <!--
           Fix #142 (2026-08-03): android:supportsPictureInPicture="true" —

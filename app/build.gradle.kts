@@ -3,8 +3,6 @@ plugins {
     // kotlin-android НЕ нужен — AGP 9.0+ имеет встроенную поддержку Kotlin
     // https://kotl.in/gradle/agp-built-in-kotlin
     alias(libs.plugins.kotlin.compose)
-    // O1 #PERF-BASELINE (Task 77): плагин генерации Baseline Profile в :app.
-    alias(libs.plugins.androidx.baselineprofile)
 }
 
 android {
@@ -67,7 +65,6 @@ android {
             isDebuggable = true
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-
         }
         release {
             isDebuggable = false
@@ -77,7 +74,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-
         }
     }
 
@@ -120,9 +116,6 @@ android {
 }
 
 dependencies {
-    // O1 #PERF-BASELINE (Task 77): модуль-генератор профиля (com.android.test).
-    baselineProfile(project(":baselineprofile"))
-
     // AndroidX core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -170,6 +163,10 @@ dependencies {
 
     // Browser (Chrome Custom Tabs — OAuth via external browser to bypass "direct auth" block)
     implementation(libs.androidx.browser)
+
+    // O1 #PERF-BASELINE (Task 77): ProfileInstallReceiver - priyom broadcast ot BaselineProfileRule.
+    // Bez etoy zavisimosti generaciya baseline-prof.txt padayet s "save profile broadcast event was not received".
+    implementation(libs.androidx.profileinstaller)
 
     // OkHttp
     implementation(libs.okhttp)

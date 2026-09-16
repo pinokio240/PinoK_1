@@ -8,6 +8,4 @@ plugins {
     alias(libs.plugins.android.library) apply false
     // O1 #PERF-BASELINE (Task 77): com.android.test для модуля :baselineprofile.
     alias(libs.plugins.android.test) apply false
-    // O1 #PERF-BASELINE (Task 77): плагин генерации Baseline Profile.
-    alias(libs.plugins.androidx.baselineprofile) apply false
 }

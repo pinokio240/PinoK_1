@@ -55,6 +55,8 @@ baselineprofile = "1.4.1"
 benchmark = "1.3.4"
 uiautomator = "2.3.0"
 androidxTestJunit = "1.3.0"
+# O1 #PERF-BASELINE (Task 77): profileinstaller version (ProfileInstallReceiver).
+profileinstaller = "1.4.1"
 [libraries]
 # AndroidX core
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -100,6 +102,8 @@ androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "w
 
 # Browser (for Chrome Custom Tabs — OAuth redirect bypass)
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
+# O1 #PERF-BASELINE (Task 77): ProfileInstallReceiver for baseline profile generation.
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
 
 # Splash screen
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splashscreen" }
