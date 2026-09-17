@@ -15085,7 +15085,7 @@ class VKApiClient(
                 // §43 #LOG-NOISE: downgrade WARN → DEBUG. mediaThumbs EMPTY —
                 // ожидаемое поведение когда уведомления содержат только posts
                 // (VK не отдаёт thumbnails для posts в notificationsGetRedesign).
-                AppLog.d("VKApiClient", "getRedesign: mediaThumbs EMPTY вЂ” posts=${resp.getAsJsonArray("posts")?.size() ?: 0} photos=${resp.getAsJsonArray("photos")?.size() ?: 0} videos=${resp.getAsJsonArray("videos")?.size() ?: 0} clips=${resp.getAsJsonArray("clips")?.size() ?: 0} market=${resp.getAsJsonArray("market_items")?.size() ?: 0} keys=[${resp.entrySet().joinToString(",") { it.key }}]" { it.key }}]")
+                AppLog.d("VKApiClient", "getRedesign: mediaThumbs EMPTY — keys=" + resp.entrySet().joinToString(",") { it.key })
             }
 
             // Fix #254: выбираем парсер по формату. Если items — это redesigned
