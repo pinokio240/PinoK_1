@@ -51,3 +51,7 @@ build_artifacts/
 
 # Резервные копии правок
 *.bak-*
+
+# W37 C1: vremennye montazhnye skripty/logi
+tools/_*
+tools/*.log

@@ -121,6 +121,7 @@ fun CommunityScreen(
     // (CommunityAdminBlock рендерится при admin_level >= 1 — сверка §5.1).
     onAdminSettingsClick: (groupId: Long) -> Unit = {},
     onAdminStatsClick: (groupId: Long) -> Unit = {},
+    onAdminLinksClick: (groupId: Long) -> Unit = {},
     onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
@@ -821,6 +822,7 @@ fun CommunityScreen(
         item {
             CommunityAdminBlock(
                 groupInfo = groupInfo,
+                onLinksClick = onAdminLinksClick,
                 onSettingsClick = onAdminSettingsClick,
                 onStatsClick = onAdminStatsClick,
                 onPeopleClick = onAdminPeopleClick,

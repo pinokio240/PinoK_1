@@ -105,6 +105,7 @@ import re.pinok.ui.screens.community.GroupMembersScreen
 import re.pinok.ui.screens.community.AdminPeopleScreen
 import re.pinok.ui.screens.community.AdminSettingsScreen
 import re.pinok.ui.screens.community.AdminStatsScreen
+import re.pinok.ui.screens.community.AdminLinksScreen
 import re.pinok.ui.screens.documents.DocumentsScreen
 // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты).
 import re.pinok.ui.screens.feed.FeedHiddenSourcesScreen
@@ -936,6 +937,7 @@ listOf(
         Screen.AdminSettings.route,
         Screen.AdminStats.route,
         Screen.AdminPeople.route,
+        Screen.AdminLinks.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -2301,6 +2303,9 @@ composable(Screen.CallsHistory.route) {
                         onAdminPeopleClick = { adminGroupId, tab ->
                             nav.navigate(Screen.AdminPeople.buildRoute(adminGroupId, tab))
                         },
+                        onAdminLinksClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminLinks.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2348,6 +2353,18 @@ composable(Screen.CallsHistory.route) {
                     )
                 }
                 // W35-b (волна 35): «Люди» (Руководители/Заявки/ЧС) — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminLinks.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminLinks.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val linksGroupId = entry.arguments?.getLong(Screen.AdminLinks.ARG_GROUP_ID) ?: 0L
+                    AdminLinksScreen(
+                        groupId = linksGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
                 composable(
                     route = Screen.AdminPeople.route,
                     arguments = listOf(

@@ -188,6 +188,12 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
             "admin_people/$groupId?tab=${android.net.Uri.encode(tab)}"
     }
 
+    /** W37 (C1): ссылки сообщества — groups.addLink/editLink/deleteLink. */
+    object AdminLinks : Screen("admin_links/{groupId}", "Ссылки", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_links/$groupId"
+    }
+
     /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query

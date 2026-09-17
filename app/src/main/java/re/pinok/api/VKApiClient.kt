@@ -17060,6 +17060,77 @@ class VKApiClient(
         return json.has("response")
     }
 
+    // ── W37 (C1): администрирование сообществ — ссылки ──
+
+    /** W37 (C1): ссылка сообщества. */
+    data class GroupLink(
+        val id: Long,
+        val url: String,
+        val name: String,
+        val desc: String? = null,
+    )
+
+    /** W37 (C1): groups.getById(fields=links) — ссылки сообщества. */
+    suspend fun groupsGetLinks(groupId: Long): List<GroupLink> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getById", mapOf(
+            "group_id" to groupId.toString(),
+            "fields" to "links",
+        )) ?: return emptyList()
+        return try {
+            val arr = json.getAsJsonArray("response") ?: return emptyList()
+            val first = arr.firstOrNull()
+            if (first == null || !first.isJsonObject) return emptyList()
+            val links = first.asJsonObject.getAsJsonArray("links") ?: return emptyList()
+            links.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
+                val url = o.get("url")?.takeIf { !it.isJsonNull }?.asString ?: return@mapNotNull null
+                GroupLink(
+                    id = id,
+                    url = url,
+                    name = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    desc = o.get("desc")?.takeIf { !it.isJsonNull }?.asString,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetLinks parse error", e)
+            emptyList()
+        }
+    }
+
+    /** W37 (C1): groups.addLink — добавить ссылку. */
+    suspend fun groupsAddLink(groupId: Long, url: String): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.addLink", mapOf(
+            "group_id" to groupId.toString(),
+            "link" to url,
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /** W37 (C1): groups.editLink — изменить текст ссылки. */
+    suspend fun groupsEditLink(groupId: Long, linkId: Long, text: String?): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "link_id" to linkId.toString(),
+        )
+        if (text != null) args["text"] = text
+        val json = call("groups.editLink", args) ?: return false
+        return json.has("response")
+    }
+
+    /** W37 (C1): groups.deleteLink — удалить ссылку. */
+    suspend fun groupsDeleteLink(groupId: Long, linkId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.deleteLink", mapOf(
+            "group_id" to groupId.toString(),
+            "link_id" to linkId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
     // ── конец W35-b: администрирование сообществ ────────────────────────
 
 

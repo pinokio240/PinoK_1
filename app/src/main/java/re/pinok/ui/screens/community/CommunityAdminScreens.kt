@@ -120,6 +120,7 @@ fun CommunityAdminBlock(
     onSettingsClick: (Long) -> Unit,
     onStatsClick: (Long) -> Unit,
     onPeopleClick: (groupId: Long, tab: String) -> Unit,
+    onLinksClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
@@ -191,6 +192,13 @@ fun CommunityAdminBlock(
                 title = "Чёрный список",
                 subtitle = "Забаненные участники",
                 onClick = { onPeopleClick(gi.id, "banned") },
+            )
+
+            AdminBlockRow(
+                icon = Icons.Filled.Settings,
+                title = "Ссылки сообщества",
+                subtitle = "Добавить, изменить, удалить",
+                onClick = { onLinksClick(gi.id) },
             )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
@@ -1111,6 +1119,108 @@ fun AdminPeopleScreen(
             dismissButton = {
                 TextButton(onClick = { roleDialogFor = null }) { Text("Отмена") }
             },
+        )
+    }
+}
+
+// W37 (C1): экран ссылок сообщества.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminLinksScreen(groupId: Long, onBack: () -> Unit) {
+    val app = SovaApp.get()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var links by remember { mutableStateOf<List<VKApiClient.GroupLink>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var showAdd by remember { mutableStateOf(false) }
+    var addUrl by remember { mutableStateOf("") }
+    var editTarget by remember { mutableStateOf<VKApiClient.GroupLink?>(null) }
+    var editName by remember { mutableStateOf("") }
+    fun load() {
+        scope.launch {
+            loading = true; error = null
+            try { links = app.apiClient.groupsGetLinks(groupId) }
+            catch (e: Exception) { AppLog.e("AdminLinks", "load", e); error = e.message ?: "Ошибка" }
+            finally { loading = false }
+        }
+    }
+    LaunchedEffect(groupId) { load() }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Ссылки сообщества") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад") } },
+            actions = { TextButton(onClick = { addUrl = ""; showAdd = true }, enabled = !busy) { Text("Добавить") } },
+        )
+    }) { pad ->
+        when {
+            loading -> Box(modifier = Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            error != null -> ErrorView(message = error, onRetry = { load() }, modifier = Modifier.padding(pad))
+            links.isEmpty() -> Box(modifier = Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) { Text("Ссылок пока нет") }
+            else -> LazyColumn(Modifier.fillMaxSize().padding(pad)) {
+                items(links) { link ->
+                    Card(Modifier.fillMaxWidth().padding(16.dp, 6.dp), RoundedCornerShape(12.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                if (link.name.isNotBlank()) { Text(link.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium) }
+                                Text(link.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(onClick = { editTarget = link; editName = link.name }, enabled = !busy) { Text("Изменить") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    busy = true
+                                    val ok = app.apiClient.groupsDeleteLink(groupId, link.id)
+                                    busy = false
+                                    if (ok) { Toast.makeText(context, "Ссылка удалена", Toast.LENGTH_SHORT).show(); load() }
+                                    else { Toast.makeText(context, app.apiClient.lastApiError ?: "Не удалось удалить", Toast.LENGTH_LONG).show() }
+                                }
+                            }, enabled = !busy) { Text("Удалить") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (showAdd) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) showAdd = false },
+            title = { Text("Новая ссылка") },
+            text = { OutlinedTextField(addUrl, { addUrl = it }, label = { Text("URL (https://...)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val url = addUrl.trim()
+                    if (url.isBlank()) return@TextButton
+                    scope.launch {
+                        busy = true
+                        val ok = app.apiClient.groupsAddLink(groupId, url)
+                        busy = false
+                        if (ok) { showAdd = false; Toast.makeText(context, "Ссылка добавлена", Toast.LENGTH_SHORT).show(); load() }
+                        else { Toast.makeText(context, app.apiClient.lastApiError ?: "Не удалось добавить", Toast.LENGTH_LONG).show() }
+                    }
+                }, enabled = !busy && addUrl.isNotBlank()) { Text("Добавить") }
+            },
+            dismissButton = { TextButton(onClick = { showAdd = false }, enabled = !busy) { Text("Отмена") } },
+        )
+    }
+    val et = editTarget
+    if (et != null) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) editTarget = null },
+            title = { Text("Изменить подпись") },
+            text = { OutlinedTextField(editName, { editName = it }, label = { Text("Текст ссылки") }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        busy = true
+                        val ok = app.apiClient.groupsEditLink(groupId, et.id, editName.trim())
+                        busy = false
+                        if (ok) { editTarget = null; Toast.makeText(context, "Сохранено", Toast.LENGTH_SHORT).show(); load() }
+                        else { Toast.makeText(context, app.apiClient.lastApiError ?: "Не удалось сохранить", Toast.LENGTH_LONG).show() }
+                    }
+                }, enabled = !busy) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { editTarget = null }, enabled = !busy) { Text("Отмена") } },
         )
     }
 }
