@@ -15001,6 +15001,10 @@ class VKApiClient(
                 val url = o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_604")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
+                    // NOTIF-THUMB-FIX2: redesign отдаёт photo_200/100/50 - добавляем в конец
+                    ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
                 putThumb("photo", oid, pid, url)
             }
             // videos: photo_320 → fallback photo_130
@@ -15012,6 +15016,9 @@ class VKApiClient(
                 val url = o.get("photo_320")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_800")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
                 putThumb("video", oid, vid, url)
             }
             // clips: photo_320 → fallback photo_130
@@ -15023,6 +15030,9 @@ class VKApiClient(
                 val url = o.get("photo_320")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_800")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
                 putThumb("clip", oid, cid, url)
             }
             // market_items: thumb_photo → fallback photo_130
@@ -15033,6 +15043,8 @@ class VKApiClient(
                 val mid = o.get("id")?.asLong ?: return@forEach
                 val url = o.get("thumb_photo")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                    ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                 putThumb("market", oid, mid, url)
             }
             // #NOTIF-POST-THUMBS (волна 41): для post-уведомлений attachment.items
@@ -15056,6 +15068,9 @@ class VKApiClient(
                         ?: ph.get("photo_604")?.takeIf { !it.isJsonNull }?.asString
                         ?: ph.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
                         ?: ph.get("photo_807")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ph.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ph.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ph.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
                     if (url.isNullOrBlank()) continue
                     putThumb("post", oid, pid, url)
                     val phOwner = ph.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
@@ -15070,7 +15085,7 @@ class VKApiClient(
                 // §43 #LOG-NOISE: downgrade WARN → DEBUG. mediaThumbs EMPTY —
                 // ожидаемое поведение когда уведомления содержат только posts
                 // (VK не отдаёт thumbnails для posts в notificationsGetRedesign).
-                AppLog.d("VKApiClient", "getRedesign: mediaThumbs EMPTY — resp keys=[${resp.entrySet().joinToString(",") { it.key }}]")
+                AppLog.d("VKApiClient", "getRedesign: mediaThumbs EMPTY вЂ” posts=${resp.getAsJsonArray("posts")?.size() ?: 0} photos=${resp.getAsJsonArray("photos")?.size() ?: 0} videos=${resp.getAsJsonArray("videos")?.size() ?: 0} clips=${resp.getAsJsonArray("clips")?.size() ?: 0} market=${resp.getAsJsonArray("market_items")?.size() ?: 0} keys=[${resp.entrySet().joinToString(",") { it.key }}]" { it.key }}]")
             }
 
             // Fix #254: выбираем парсер по формату. Если items — это redesigned
@@ -15764,6 +15779,9 @@ class VKApiClient(
                         ?: a.get("photo_800")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_320")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
+                        ?: a.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                        ?: a.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                        ?: a.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("url")?.takeIf { !it.isJsonNull }?.asString?.let { u ->
                             // NOTIF-THUMB-FIX (#352): поле url обычно это permalink
                             // (vk.com/wall-123_456), но для некоторых типов (market_item,
