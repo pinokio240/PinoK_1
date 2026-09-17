@@ -15154,7 +15154,7 @@ class VKApiClient(
         if (isOffline()) return null
         val args = mutableMapOf<String, String>()
         if (!hash.isNullOrBlank()) args["hash"] = hash
-        val json = call("accountPersonal.getSecurityAlerts", args) ?: return null
+        val json = call("accountPersonal.getSecurityAlerts", args, forceWebGateway = true) ?: return null
         return try {
             val respEl = json.get("response")
             when {
@@ -15194,7 +15194,7 @@ class VKApiClient(
             "is_enabled" to if (isEnabled) "1" else "0",
         )
         if (!hash.isNullOrBlank()) args["hash"] = hash
-        val json = call("accountPersonal.setSafetyNetEnabled", args) ?: return false
+        val json = call("accountPersonal.setSafetyNetEnabled", args, forceWebGateway = true) ?: return false
         val errObj = json.getAsJsonObject("error")
         if (errObj != null) {
             AppLog.w("VKApiClient", "setSafetyNetEnabled error: ${errObj.get("error_msg")?.asString}")
@@ -15234,7 +15234,7 @@ class VKApiClient(
         if (isOffline()) return null
         val args = mutableMapOf<String, String>()
         if (!hash.isNullOrBlank()) args["hash"] = hash
-        val json = call("accountPersonal.getActivityHistoryDevices", args) ?: return null
+        val json = call("accountPersonal.getActivityHistoryDevices", args, forceWebGateway = true) ?: return null
         val errObj = json.getAsJsonObject("error")
         if (errObj != null) {
             AppLog.w("VKApiClient", "getActivityHistoryDevices error: ${errObj.get("error_msg")?.asString}")
@@ -15338,7 +15338,7 @@ class VKApiClient(
         if (!validationToken.isNullOrBlank()) args["validation_token"] = validationToken
         if (!appId.isNullOrBlank()) args["app_id"] = appId
         if (!excludeDeviceId.isNullOrBlank()) args["exclude_device_id"] = excludeDeviceId
-        val json = call("accountPersonal.resetSessions", args) ?: return false
+        val json = call("accountPersonal.resetSessions", args, forceWebGateway = true) ?: return false
         val errObj = json.getAsJsonObject("error")
         if (errObj != null) {
             AppLog.w("VKApiClient", "resetSessions error: ${errObj.get("error_msg")?.asString}")
@@ -15372,7 +15372,7 @@ class VKApiClient(
         if (!validationToken.isNullOrBlank()) args["validation_token"] = validationToken
         if (!appId.isNullOrBlank()) args["app_id"] = appId
         if (!excludeDeviceId.isNullOrBlank()) args["exclude_device_id"] = excludeDeviceId
-        val json = call("accountPersonal.resetAllSessions", args) ?: return false
+        val json = call("accountPersonal.resetAllSessions", args, forceWebGateway = true) ?: return false
         val errObj = json.getAsJsonObject("error")
         if (errObj != null) {
             AppLog.w("VKApiClient", "resetAllSessions error: ${errObj.get("error_msg")?.asString}")
@@ -15394,12 +15394,83 @@ class VKApiClient(
         if (isOffline()) return null
         val args = mutableMapOf("login_hash" to loginHash)
         if (!hash.isNullOrBlank()) args["hash"] = hash
-        val json = call("accountPersonal.getSessionInfoForReset", args) ?: return null
+        val json = call("accountPersonal.getSessionInfoForReset", args, forceWebGateway = true) ?: return null
         val errObj = json.getAsJsonObject("error")
         if (errObj != null) {
             AppLog.w("VKApiClient", "getSessionInfoForReset error: ${errObj.get("error_msg")?.asString}")
             return null
         }
+        return json.getAsJsonObject("response")
+    }
+
+    // ── P1 #CALLS-WIRE (2026-09-17): realtime eventHub + batch + stickers queues ──
+
+    /**
+     * P1 #CALLS-WIRE: token для eventHub (новый realtime-канал VK web).
+     * Web-метод: `eventHub.getToken` -> {"response":{"token":"..."}}.
+     */
+    suspend fun eventHubGetToken(): String? {
+        if (isOffline()) return null
+        val json = call("eventHub.getToken", emptyMap(), forceWebGateway = true) ?: return null
+        return try {
+            json.getAsJsonObject("response")
+                ?.get("token")?.takeIf { it.isJsonPrimitive }?.asString
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "eventHubGetToken parse error", e)
+            null
+        }
+    }
+
+    /**
+     * P1 #CALLS-WIRE: batch.call — пачка методов одним HTTP (POST JSON + Bearer vk1.a*).
+     * @param calls список пар (method, params).
+     */
+    suspend fun batchCall(calls: List<Pair<String, Map<String, String>>>): JsonObject? {
+        if (isOffline()) return null
+        val token = exchangeAuthRepository?.accessToken()
+        if (token.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "batchCall: no access token")
+            return null
+        }
+        return try {
+            val arr = com.google.gson.JsonArray()
+            for ((m, p) in calls) {
+                val obj = com.google.gson.JsonObject()
+                obj.addProperty("method", m)
+                val params = com.google.gson.JsonObject()
+                for ((k, v) in p) params.addProperty(k, v)
+                obj.add("params", params)
+                arr.add(obj)
+            }
+            val body = com.google.gson.JsonObject().apply {
+                addProperty("v", VKEndpoints.API_VERSION)
+                add("calls", arr)
+            }
+            val req = Request.Builder()
+                .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/batch.call")
+                .header("Authorization", "Bearer $token")
+                .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            withContext(Dispatchers.IO) {
+                httpClient.newCall(req).execute().use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful || raw.isBlank()) null
+                    else JsonParser.parseString(raw).takeIf { it.isJsonObject }?.asJsonObject
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "batchCall error", e)
+            null
+        }
+    }
+
+    /**
+     * P1 #CALLS-WIRE: подписка на очередь стикеров (VK web).
+     * Web-метод: `stickers.subscribeToQueue`.
+     */
+    suspend fun stickersSubscribeToQueue(): JsonObject? {
+        if (isOffline()) return null
+        val json = call("stickers.subscribeToQueue", emptyMap(), forceWebGateway = true) ?: return null
         return json.getAsJsonObject("response")
     }
 
