@@ -1794,7 +1794,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 //    если его ещё нет. Как браузер: get_anonym_token → auth.anonymLogin.
                 ensureCallsSessionKey(force = false)
                 // 1) Сначала — автоматический queue.subscribe (свежий credential).
-                val cred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = null)
+                val callsUid = exchangeAuthRepository.userId()
+                val cred = apiClient.queueSubscribe(
+                    userId = 0L,
+                    queueIdSuffix = re.pinok.api.VKEndpoints.callsQueueId(
+                        callsUid, re.pinok.BuildConfig.VK_WEB_CLIENT_ID,
+                    ),
+                )
                 if (cred != null) {
                     AppLog.i("SovaApp", "queue.subscribe OK (key=${cred.key.take(8)}… ts=${cred.ts})")
                     queuev4Client.setCredential(cred)
@@ -1806,9 +1812,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 //     events_queue<uid> — из queue_connection_events_queue<uid>.
                 try {
                     val uid = exchangeAuthRepository.userId()
-                    var eventsCred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = "nccts$uid")
+                    var eventsCred = apiClient.queueSubscribe(
+                        userId = 0L,
+                        queueIdSuffix = re.pinok.api.VKEndpoints.countersQueueId(uid),
+                    )
                     if (eventsCred == null) {
-                        eventsCred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = "events_queue$uid")
+                        eventsCred = apiClient.queueSubscribe(
+                            userId = 0L,
+                            queueIdSuffix = re.pinok.api.VKEndpoints.multiaccountQueueId(uid),
+                        )
                     }
                     if (eventsCred != null) {
                         AppLog.i("SovaApp", "events_queue.subscribe OK (key=${eventsCred.key.take(8)}… ts=${eventsCred.ts})")

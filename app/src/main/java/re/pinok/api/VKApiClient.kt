@@ -12341,7 +12341,7 @@ class VKApiClient(
     override suspend fun queueSubscribe(userId: Long, queueIdSuffix: String?): QueueCredential? {
         if (isOffline()) return null
         val uid = if (userId > 0L) userId else (exchangeAuthRepository?.userId() ?: 0L)
-        val suffix = queueIdSuffix ?: "accountcounters_$uid"
+        val suffix = queueIdSuffix ?: VKEndpoints.callsQueueId(uid, re.pinok.BuildConfig.VK_WEB_CLIENT_ID)
 
         // 1) SAT-токен — прямой POST к api.vk.com (queue.subscribe требует SAT).
         val sat = exchangeAuthRepository?.satToken()
@@ -12355,7 +12355,7 @@ class VKApiClient(
                     .add("lang", "ru")
                     .build()
                 val req = Request.Builder()
-                    .url("${VKEndpoints.API_HOST}/method/queue.subscribe")
+                    .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST}/method/queue.subscribe")
                     .post(form)
                     .build()
                 httpClient.newCall(req).execute().use { resp ->

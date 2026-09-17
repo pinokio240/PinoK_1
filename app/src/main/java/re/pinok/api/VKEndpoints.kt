@@ -56,6 +56,20 @@ object VKEndpoints {
     /** Hostname without scheme — used by SSL pinning & header logic in SovaApp. */
     const val WEB_API_HOSTNAME = "web.api.vk.ru"
 
+    /** #CALLS-WIRE (2026-09-17): realtime host for queue.subscribe / eventHub. */
+    const val QUEUE_SUBSCRIBE_HOST = "https://api.vk.ru"
+    const val QUEUE_SUBSCRIBE_HOST_WEB = "https://web.api.vk.ru"
+    const val QUEUE_POLL_BASE_URL = "https://queuev4.vk.ru/im1180"
+
+    /** calls_<uid>_<client_id>_1 - real calls queue id (CDP-verified). */
+    fun callsQueueId(uid: Long, clientId: String): String = "calls_${uid}_${clientId}_1"
+
+    /** onlfriends_<uid>,accountcounters_<uid> - combined counters/online queue. */
+    fun countersQueueId(uid: Long): String = "onlfriends_$uid,accountcounters_$uid"
+
+    /** multiaccount_<uid> - standalone valid queue (fallback). */
+    fun multiaccountQueueId(uid: Long): String = "multiaccount_$uid"
+
     /**
      * Fix #154 docs upload 405: VK WEB API (web.api.vk.ru) возвращает для
      * `docs.getMessagesUploadServer` upload_url на сервер `kittenx` (web-upload
