@@ -19,6 +19,15 @@ package re.pinok
  * выполнен НЕ той сборкой, разбор проводить бессмысленно.
  */
 object BuildStamp {
+    // -1 (18.09) = #RELEASE-V215: релиз 2.1.5. Звонковая цепочка изменена —
+    // P0 фикс входящих звонков (queue.subscribe переведён на api.vk.ru +
+    // канал calls_<uid>_<client>_1, err=100 устранён, bef85d4b) и
+    // #FIX-CALLS-PAGING (endReached при странице из дублей — бесконечная
+    // догрузка «Истории»/«Пропущенных», 46a9abaf). Также в релизе (не звонки):
+    // perf Task 72 (RPS 3→6, парсинг «Сообщений» off-main, WS-тики 100мс —
+    // впервые в релизе), уведомления (медиа-превью photo_200/100/50),
+    // vkid-контур (accountPersonal через web.api.vk.ru), W37 C1 «Ссылки
+    // сообщества», O2-вынос парсеров из VKApiClient.
     // -3 (06.09) = #CALLS-SNAP Этап Ж-2 (план «звонки.перенос.план.md»), волна-6.
     // Ж6 запись (record-start/stop), Ж7 субтитры (DC "asr"/"producerCommand"
     // в WebRtcEngine — АДДИТИВНО, кадр Ж-0 §5.3, request-asr §5.2, оверлей,
@@ -190,5 +199,5 @@ object BuildStamp {
     // чат звонка: история messages.getHistory + отправка messages.send (random_id
     // round(2e9·rand)) + сервисные action-типы; записи: переименование video.edit
     // (wire-гипотеза); фасад CallsApi 48→56 членов.
-    const val STAMP: String = "calls-2026.09.06-5"
+    const val STAMP: String = "calls-2026.09.18-1"
 }

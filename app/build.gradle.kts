@@ -23,8 +23,17 @@ android {
         // «Сообщений» ~5.5с→~2.6с). Манифест version.json (сейчас 4/2.1.3)
         // обновим отдельным релизом после сборки APK тестером и подтверждения:
         // (а) каналы показывают контент, (б) «Сообщения» грузятся быстрее.
-        versionCode = 5
-        versionName = "2.1.4"
+        // #RELEASE-V215-BUMP (18.09): bump 5→6 — накопленные после V2.1.4 фиксы:
+        // P0 входящие звонки (queue.subscribe на api.vk.ru, err=100, bef85d4b),
+        // #FIX-CALLS-PAGING (бесконечная догрузка «Истории звонков», 46a9abaf),
+        // perf Task 72 (#PERF-RPS6/#IM-PARSE-OFFMAIN/#PERF-WS-TICK — впервые
+        // в релизе), уведомления (медиа-превью, 86d76200), vkid-контур
+        // (accountPersonal через web.api.vk.ru, 31bd6c1b), W37 C1 «Ссылки
+        // сообщества». Двухфазный релиз: version.json 6/2.1.5 с пустыми
+        // apkUrl/sha256 заполним после публикации APK на GitHub Releases
+        // (docs/UPDATER.md §1 шаг 5).
+        versionCode = 6
+        versionName = "2.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
