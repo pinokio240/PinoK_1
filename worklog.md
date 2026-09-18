@@ -10064,3 +10064,48 @@ Stage Summary:
 - Ключ подписи восстановлен из upload/ — копию в upload/ оставить (снапшот на случай
   нового сброса песочницы; из git не светит, .gitignore /upload/ на месте).
 - После релиза 2.1.5: O1 Baseline Profile прогон на Cyber 15 (инфраструктура уже в репо).
+
+---
+Task ID: 79
+Agent: DeepSeek++ Shell MCP (аудит с машины юзера; перенесён Z.ai Code в remote после
+конфликта локальных правок с Task 78; локальный дубликат записи и занятый ID 78 устранены)
+Task: Аудит рантайм-лога PinoK 2.1.4-debug (ciber.txt, 2026-09-17 18:01:54–18:10:38, HOTWAV Cyber 15, Android 13/API33, PID 15373)
+
+Work Log (аудит без правок кода):
+
+КРИТИЧНЫЕ ОШИБКИ:
+1. queue.subscribe err=15 Access denied для queue_ids=calls_171093180_6287487_1 (5 раз: 18:01:58, 18:02:04, 18:09:09, 18:09:55, 18:09:56). SovaApp.kt:1850 — входящие звонки НЕДОСТУПНЫ. При этом onlfriends_171093180,accountcounters_171093180 проходят OK. Регресс от bef85d4b: хост api.vk.ru принят, но формат calls_<uid>_<client>_1 отвергнут (err=15, не err=100). Нужен wire-эталон VK web.
+2. settingsGeneral.setNotifySettings err=3 Unknown method passed — 50+ вызовов (18:05:37–18:08:18): sn_messages, sn_chats, sn_mentions, sn_likes, pf_wall, pc_photo, pc_market, pe_group, pe_feed и др. Экран настроек уведомлений НЕ сохраняет.
+3. accountPersonal.getSecurityAlerts err=3 Unknown method (18:01:57, 18:06:39) — SecurityAlertsPoller вхолостую.
+4. accountPersonal.getActivityHistoryDevices err=3 Unknown method (18:08:58–18:09:04, 4 попытки) — открытый баг DevicesScreen (Task 75).
+5. groups.getById err=100 'group_id is deprecated from version 5.218' (18:03:10, group_id=165284550, fields=links) — W37 C1 getGroupLinks шлёт старый параметр group_id вместо group_ids.
+6. notificationsGetRedesign: mediaThumbs EMPTY, thumb NULL для всех 27 items (18:02,04,06,08,10). В ответе есть photos/videos, но mediaThumbsSize=0. Парсер parseRedesignNotificationItem (VKApiClient.kt:15826) не читает redesign-формат thumbs (фикс 86d76200 не сработал/не был в сборке).
+7. ProfileScreen ForgottenCoroutineScopeException: rememberCoroutineScope left the composition (18:02:33) — скоуп используется после выхода из композиции (ProfileScreen.kt:425).
+
+ПРЕДУПРЕЖДЕНИЯ:
+- MANAGE_EXTERNAL_STORAGE not granted → EPERM /storage/emulated/0/Music/PinoK → fallback internal (TrackDownloadManager.kt:296, VideoDownloadManager.kt:135).
+- Просадки main thread: Skipped 104/46/42/44/38 frames, Davey 1033/1008/755/838/725ms (старт).
+- MediaSessionCompat: Couldn't find a unique registered media button receiver — кнопки гарнитуры.
+- FeatureFlagsImplExport NoClassDefFoundError (18:01:57).
+- 'A resource failed to call close' (18:02:03).
+- Choreographer 'Frame time ... ms in the future' (18:07:11) — сбой таймбазы vsync (вендор).
+
+РАБОТАЕТ:
+- LongPoll poll-response events=0..3 ms~25000 стабильно.
+- groups.getById с admin-полями (админка W35) OK.
+- audio.get пейджер до total=3241, pages=70.
+- channels.getHistory через web.api.vk.ru OK (перевод на веб-шлюз работает).
+- messages.getConversations (662KB), getItems, stories.get, wall.get — ок.
+
+СЛЕДУЮЩИЕ ШАГИ (от аудитора):
+- Снять wire-эталон VK web для setNotifySettings и для calls queue.subscribe.
+- Уточнить правильные queue_ids для calls в web-клиенте.
+- Починить парсер thumbs для notifications.getRedesign.
+- Перевести groups.getById links-запрос на group_ids.
+- Поправить скоуп в ProfileScreen.
+
+Stage Summary:
+- Аудит опровергает P0-заявку релиза 2.1.5 в манифесте: «входящие звонки снова работают» —
+  НЕ так (err=15 Access denied; bef85d4b решил только err=100/хост). Notes манифеста 6/2.1.5
+  (apkUrl ещё пустой — двухфазный релиз) НЕОБХОДИМО скорректировать до публикации APK.
+- Влияние на релиз V2.1.5 и план волн — см. Task 80 (Z.ai Code, план A/B, ждёт одобрения юзера).
