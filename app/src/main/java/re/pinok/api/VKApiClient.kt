@@ -17163,7 +17163,7 @@ class VKApiClient(
     suspend fun groupsGetLinks(groupId: Long): List<GroupLink> {
         if (isOffline()) return emptyList()
         val json = call("groups.getById", mapOf(
-            "group_id" to groupId.toString(),
+            "group_ids" to groupId.toString(),
             "fields" to "links",
         )) ?: return emptyList()
         return try {

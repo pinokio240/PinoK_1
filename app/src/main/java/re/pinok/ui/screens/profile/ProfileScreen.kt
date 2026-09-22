@@ -356,7 +356,7 @@ fun ProfileScreen(
     var statusError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        scope.launch {
+        launch {
             loading = true
             errorText = null
             try {
@@ -369,11 +369,11 @@ fun ProfileScreen(
                 if (prof != null) {
                     // П-1: доступность «Архива» (users.getWallTabs) и подарки
                     // (gifts.get) — параллельные доборы, стену не задерживают.
-                    scope.launch {
+                    launch {
                         val wallTabs = app.apiClient.usersGetWallTabs(prof.id)
                         hasArchiveWallTab = wallTabs.any { it.type == "archived" && it.count > 0 }
                     }
-                    scope.launch {
+                    launch {
                         try {
                             val giftPage = app.apiClient.giftsGet(prof.id, count = PROFILE_GIFTS_PAGE)
                             gifts = giftPage
@@ -389,7 +389,7 @@ fun ProfileScreen(
                     // включён в настройках (по умолчанию выключен) — лишний
                     // friends.getRecommendations при выключенном блоке не делаем.
                     if (showFriendSuggestions) {
-                        scope.launch {
+                        launch {
                             try {
                                 friendSuggestions = app.apiClient.friendsGetRecommendations(count = 10)
                             } catch (e: Exception) {
@@ -400,7 +400,7 @@ fun ProfileScreen(
                     // П-7-AB: счётчик «Подписок» правой колонки (users.getSubscriptions
                     // count=1 → total из response). Параллельный добор (паттерн
                     // подарков); не распознан → строка «Подписки» без числа.
-                    scope.launch {
+                    launch {
                         try {
                             subscriptionsCount = followSubscriptionsTotal(
                                 app.apiClient.usersGetSubscriptions(userId = prof.id, count = 1),
@@ -433,7 +433,7 @@ fun ProfileScreen(
     // Перезагрузка стены после создания нового поста (reloadWallTrigger меняется).
     LaunchedEffect(reloadWallTrigger) {
         if (reloadWallTrigger == 0) return@LaunchedEffect // пропускаем первичную загрузку
-        scope.launch {
+        launch {
             val p = profile ?: return@launch
             try {
                 // П-1: перезагрузка уважает активную подвкладку стены (wall.get filter).
@@ -460,7 +460,7 @@ fun ProfileScreen(
             wallFilterStarted = true
             return@LaunchedEffect
         }
-        scope.launch {
+        launch {
             val prof = profile ?: return@launch
             wallLoading = true
             try {
