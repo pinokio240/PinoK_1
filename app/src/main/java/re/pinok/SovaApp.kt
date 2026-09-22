@@ -1797,9 +1797,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 val callsUid = exchangeAuthRepository.userId()
                 val cred = apiClient.queueSubscribe(
                     userId = 0L,
-                    queueIdSuffix = re.pinok.api.VKEndpoints.callsQueueId(
-                        callsUid, re.pinok.BuildConfig.VK_WEB_CLIENT_ID,
-                    ),
+                    queueIdSuffix = re.pinok.api.VKEndpoints.multiaccountQueueId(callsUid),
                 )
                 if (cred != null) {
                     AppLog.i("SovaApp", "queue.subscribe OK (key=${cred.key.take(8)}… ts=${cred.ts})")
