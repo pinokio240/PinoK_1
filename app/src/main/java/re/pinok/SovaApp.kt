@@ -178,6 +178,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     /** «Принять» на экране входящего/баннера: навигация на CallScreen —
      *  существующий путь SovaNavHost (incoming=true, payload — как сейчас). */
     fun acceptIncomingCall() {
+        // #CALLS-DOUBLE-UI-FIX (2026-09-22)
+        incomingCallCollapsed = false
         incomingCallAccepted = true
     }
 

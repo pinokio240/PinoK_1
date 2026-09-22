@@ -2763,8 +2763,8 @@ composable(Screen.CallsHistory.route) {
         // calls_history), webview звонков и вкладка настроек «Звонки».
         val incomingInCallsSectionE = currentRoute == Screen.Call.route ||
             currentRoute.startsWith("calls_") || currentRoute == "settings_calls"
-        if (incomingCollapsedE) {
-            if (!incomingInCallsSectionE) {
+        if (false) { // #CALLS-DOUBLE-UI-FIX-V2: banner DISABLED, only fullscreen screen
+            if (false) {
                 re.pinok.ui.screens.calls.IncomingCallBanner(
                     peerId = incomingPeerIdE,
                     title = incomingTitleE,
@@ -2777,7 +2777,7 @@ composable(Screen.CallsHistory.route) {
                     onExpand = { app.expandIncomingCall() },
                 )
             }
-        } else {
+        } else if (!incomingInCallsSectionE) { // #CALLS-DOUBLE-UI-FIX-V2
             re.pinok.ui.screens.calls.IncomingCallScreen(
                 peerId = incomingPeerIdE,
                 title = incomingTitleE,
