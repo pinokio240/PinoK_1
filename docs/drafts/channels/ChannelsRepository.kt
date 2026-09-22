@@ -1,4 +1,4 @@
-﻿package re.pinok.feature.channels.data
+package re.pinok.feature.channels.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

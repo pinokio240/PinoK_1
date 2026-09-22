@@ -55,3 +55,10 @@ build_artifacts/
 # W37 C1: vremennye montazhnye skripty/logi
 tools/_*
 tools/*.log
+
+# PinoK: локальные бэкапы и скрипты-правки
+*.bak
+*.mojibake*
+*.mojibake-bak*
+*_mojibake*
+scripts/_fix_*.py

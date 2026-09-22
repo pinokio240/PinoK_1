@@ -1,4 +1,4 @@
-﻿# VK web: calls queue.subscribe — точный эталон (2026-09-18)
+# VK web: calls queue.subscribe — точный эталон (2026-09-18)
 
 > Снято живым CDP-захватом (Chrome --remote-debugging-port=9222 --user-data-dir=C:\chrome-debug)
 > с залогиненной сессии vk.ru, uid **171093180** (Сергей).

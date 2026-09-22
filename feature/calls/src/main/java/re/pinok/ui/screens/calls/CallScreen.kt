@@ -35,7 +35,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-// #CALLS-ZH2 (Task 6-a): В«ЕщёВ» (меню Ж6/Ж7/Ж8/Ж9) — extended-иконка.
+// #CALLS-ZH2 (Task 6-a): «Ещё» (меню Ж6/Ж7/Ж8/Ж9) — extended-иконка.
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
@@ -95,16 +95,16 @@ import re.pinok.feature.calls.CallsDependencies
  * #CALLS: экран активного звонка — входящий, исходящий, разговор.
  *
  * Состояния:
- *  - RINGING: анимация звонка + кнопки В«ПринятьВ»/В«ОтклонитьВ»
- *  - CONNECTING: спиннер + В«СоединениевЂ¦В»
+ *  - RINGING: анимация звонка + кнопки «Принять»/«Отклонить»
+ *  - CONNECTING: спиннер + «Соединение…»
  *  - ACTIVE: разговор — кнопки mute/speaker/end
- *  - ENDED/FAILED: результат + кнопка В«ЗакрытьВ»
+ *  - ENDED/FAILED: результат + кнопка «Закрыть»
  *
  * #CALLS-VIDEO-ROUTE (2026-09-06, Этап Г): параметр [video] — видеозвонок,
  * доносится из маршрута Screen.Call (SovaNavHost читает
  * SovaApp.pendingOutgoingCallVideo). Влияет ТОЛЬКО на точку старта исходящего
  * (messagesStartCall(peerId, video)); входящий accept/ack не менялся
- * (В«Принять с видеоВ» — Этап Е плана, отдельная задача).
+ * («Принять с видео» — Этап Е плана, отдельная задача).
  *
  * #CALLS-JOIN-BY-LINK (Этап Г/Г4): параметр [joinByLink] — вход через
  * присоединение по ссылке vk.ru/call/join/<token>. API-часть (анонимный
@@ -131,7 +131,7 @@ fun CallScreen(
     val joinSession = remember { if (joinByLink) CallJoinByLinkHolder.consume() else null }
     // По wire-семантике join-по-ссылке — мы ОТВЕТЧРК (offer присылает инициатор),
     // поэтому направление/фаза как у входящего (RINGING: пользователь подтверждает
-    // вход кнопкой В«ПринятьВ» — эквивалент web-превью calls_preview_*, REV-UI В§6.4).
+    // вход кнопкой «Принять» — эквивалент web-превью calls_preview_*, REV-UI В§6.4).
     val direction = if (incoming || joinByLink) CallDirection.INCOMING else CallDirection.OUTGOING
     var phase by remember { mutableStateOf(if (incoming || joinByLink) CallPhase.RINGING else CallPhase.CONNECTING) }
     var isMuted by remember { mutableStateOf(false) }
@@ -176,10 +176,10 @@ fun CallScreen(
     val incomingParams = remember(incomingPayload) {
         incomingPayload?.let { re.pinok.media.ConversationParamsDecoder.decode(it) }
     }
-    // #CALLS-IN-FIX (2026-08-29, лог 20:54): входящий звонок завис в В«СоединениевЂ¦В»:
+    // #CALLS-IN-FIX (2026-08-29, лог 20:54): входящий звонок завис в «Соединение…»:
     // vchat.getConversationParams висел 45с (readTimeout long-poll), а кнопка
-    // В«ПринятьВ» сработала сразу — accept-call ушёл в никуда (сигналинг не был
-    // поднят), offer не пришёл. Теперь В«ПринятьВ» ждёт готовности params через
+    // «Принять» сработала сразу — accept-call ушёл в никуда (сигналинг не был
+    // поднят), offer не пришёл. Теперь «Принять» ждёт готовности params через
     // этот deferred, поднимает сигналинг и шлёт accept только при открытом WS.
     val incomingParamsDeferred = remember {
         kotlinx.coroutines.CompletableDeferred<re.pinok.media.ConversationParamsDecoder.Params?>()
@@ -187,14 +187,14 @@ fun CallScreen(
     // #CALLS: participantId собеседника (из offer/candidate в сигналинге).
     // Нужен для отправки answer SDP и ICE candidates обратно.
     val remoteParticipantId = remember { mutableStateOf<String?>(null) }
-    // #CALLS-IN-OFFER (2026-08-29, лог 21:26): флаги В«offer полученВ» / В«answer отправленВ» —
+    // #CALLS-IN-OFFER (2026-08-29, лог 21:26): флаги «offer получен» / «answer отправлен» —
     // для watchdog'а входящего и экранной диагностики. Раньше offer кэшировался в
-    // pendingOffer и читался ТОЛЬКО кнопкой В«ПринятьВ»: offer, прилетевший в момент
+    // pendingOffer и читался ТОЛЬКО кнопкой «Принять»: offer, прилетевший в момент
     // нажатия, затирался (pendingOffer.value = null) — answer не создавался вовсе,
     // звонящий повисал и сбрасывал звонок (remote-hangup через ~37с).
     val offerReceived = remember { mutableStateOf(false) }
     val answerSent = remember { mutableStateOf(false) }
-    // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): флаг В«ICE подключёнВ» — блокирует
+    // #CALLS-ICE-REANSWER (2026-08-29, лог 22:29): флаг «ICE подключён» — блокирует
     // ретрансмит answer после установления связи (дубликат answer после stable
     // может уронить setRemoteDescription у собеседника).
     val iceConnected = remember { mutableStateOf(false) }
@@ -202,7 +202,7 @@ fun CallScreen(
     // (анти-спам: не чаще раза в 3с, максимум 4 повторов за звонок).
     var reanswerCount by remember { mutableStateOf(0) }
     var lastAnswerSentAt by remember { mutableStateOf(0L) }
-    // #CALLS-ACK-REOFFER (2026-08-29): diag-строка ретраев answer ("answerГ—N")
+    // #CALLS-ACK-REOFFER (2026-08-29): diag-строка ретраев answer ("answer×N")
     var diagAnswer by remember { mutableStateOf("") }
     val uiScope = rememberCoroutineScope()
     // #CALLS-ACK-REOFFER (2026-08-29): надёжная отправка answer. Раньше answerSent
@@ -216,7 +216,7 @@ fun CallScreen(
                 if (ok) {
                     answerSent.value = true
                     lastAnswerSentAt = System.currentTimeMillis()
-                    if (attempt > 1) diagAnswer = "answerГ—$attempt"
+                    if (attempt > 1) diagAnswer = "answer×$attempt"
                     AppLog.i("CallScreen", "ANSWER отправлен (участник=$pid, попытка $attempt)")
                     return@launch
                 }
@@ -232,7 +232,7 @@ fun CallScreen(
     // WS (входящий: если offer не пришёл, перерегистрация заставит сервер снова
     // разослать registered-peer → звонящий переотправит offer — семантика В§8.3 звонки.md).
     // Аргумент reAccept (#CALLS-ACK-REOFFER): после перерегистрации ЗАНОВО отправить
-    // accept-call — новый WS-peer может считаться сервером В«не принявшимВ», и его
+    // accept-call — новый WS-peer может считаться сервером «не принявшим», и его
     // transmit-data не будет ретранслироваться, пока он не подтвердит участие.
     var sigRestart: ((Boolean) -> Unit)? by remember { mutableStateOf(null) }
     // #CALLS-ACK-REOFFER: сигналинг поднялся (триггер RINGING-nudge)
@@ -240,7 +240,7 @@ fun CallScreen(
     // #CALLS-OUTGOING: кэш нашего offer/candidates до получения participantId.
     val pendingLocalSdp = remember { mutableStateOf<org.webrtc.SessionDescription?>(null) }
     val pendingLocalCandidates = remember { mutableStateOf<MutableList<org.webrtc.IceCandidate>>(mutableListOf()) }
-    // #CALLS-REOFFER (2026-08-29): флаг В«answer уже полученВ» + ПОЛНЫЙ кэш локальных
+    // #CALLS-REOFFER (2026-08-29): флаг «answer уже получен» + ПОЛНЫЙ кэш локальных
     // ICE-кандидатов за звонок. Offer/кандидаты, отправленные ДО registered-peer
     // собеседника, сервер ВЫБРАСЫВАЕТ (у него ещё нет активного WS-peer'а) —
     // поэтому на registered-peer переотправляем offer + все кандидаты заново.
@@ -262,7 +262,7 @@ fun CallScreen(
     var diagReoffer by remember { mutableStateOf("") }
     // #CALLS-SERVER-REJOIN (2026-09-02, лог ciber.txt 12:45—12:49): параметры последнего
     // signaling.start (uid/convId) — нужны ре-join'у при topology→SERVER. Доказано
-    // логом: переподключение WS со СТАРЫМ token даёт В«conversation-not-foundВ» Г—2
+    // логом: переподключение WS со СТАРЫМ token даёт «conversation-not-found» ×2
     // (регистрация WS-peer'а умирает вместе с сокетом, token одноразовый). Ре-join =
     // СВЕЖРЕ params (getCallConversationParams → новый token) + stop/start сигналинга.
     var sigUid by remember { mutableStateOf(0L) }
@@ -270,12 +270,12 @@ fun CallScreen(
     var lastServerRejoinAt by remember { mutableStateOf(0L) }
     // #CALLS-ANSWER-CYCLE (2026-09-02, лог ciber.txt звонок в„–2): o=-строки последнего
     // ПРРМЕНЁННОГО удалённого offer/answer. Дедуп по булеву флагу терял answer нового
-    // SDP-цикла (accepted-call → рестарт → новый offer → answer пира В«повторный
-    // answer проигнорированВ» → рассинхрон ufrag/pwd → DISCONNECTED→FAILED). Новый
+    // SDP-цикла (accepted-call → рестарт → новый offer → answer пира «повторный
+    // answer проигнорирован» → рассинхрон ufrag/pwd → DISCONNECTED→FAILED). Новый
     // SDP-цикл узнаём по ДРУГОЙ o=-строке (session-id/version меняются).
     var lastAppliedAnswerOLine by remember { mutableStateOf<String?>(null) }
     var lastAppliedOfferOLine by remember { mutableStateOf<String?>(null) }
-    // #CALLS: call_id активного звонка — для кнопки В«СсылкаВ» (vchat.createJoinLink).
+    // #CALLS: call_id активного звонка — для кнопки «Ссылка» (vchat.createJoinLink).
     val activeCallId = remember { mutableStateOf<String?>(null) }
     // #CALLS-DIAG (2026-08-29): экранная диагностика — состояние WS/PC/ICE и последнее
     // событие сигналинга. Видна при CONNECTING/FAILED/ENDED: пользователь шлёт скриншот
@@ -291,8 +291,8 @@ fun CallScreen(
     // #CALLS-RX-DEBUG (2026-08-30, скриншот 00:17): скриншот показал пар=0/reqS=0
     // при 10 локальных кандидатах — кандидаты собеседника НЕ ДОЕХАЛР. Но на экране
     // не было видно, какие команды сигналинга мы вообще получали. Теперь считаем
-    // все входящие команды по именам: строка В«Принято: candidateГ—3, connectionГ—2вЂ¦В»
-    // покажет, приходил ли В«candidateВ» и что ещё приходит от сервера/собеседника.
+    // все входящие команды по именам: строка «Принято: candidate×3, connection×2…»
+    // покажет, приходил ли «candidate» и что ещё приходит от сервера/собеседника.
     val rxCommands = remember { mutableStateMapOf<String, Int>() }
     // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): счётчик ПОДРЯД идущих ошибок сервера
     // (type:"error" на наши transmit-data). Сервер отвергает данные, когда разговор
@@ -329,29 +329,29 @@ fun CallScreen(
     val subtitleLines = remember { mutableStateListOf<String>() }
 
     // #CALLS-SDP-DUP-GUARD-REVERT (2026-09-01, тест после 106d0281): дедуп SDP
-    // (В«максимум 2 отправки одного SDPВ») УДАЛЁН, цепочка отправки возвращена к
+    // («максимум 2 отправки одного SDP») УДАЛЁН, цепочка отправки возвращена к
     // проверенной (первый успешный звонок 17:55 и 4/4 исходящих — там отправка
     // была ПРЯМОЙ, без choke-point). Причины:
     //  1) Дедуп молча БЛОКРРОВАЛ легитимные ретрансмиты: doReanswer лимит 4,
     //     но 3-я и 4-я копии answer рубились дедупом (n>=3) — а ретрансмит answer
-    //     существует РМЕННО для случая В«пир первую копию не применилВ» (#CALLS-ICE-REANSWER);
-    //  2) Премиса В«пир умирает на повторном setRemoteDescription того же originВ»
+    //     существует РМЕННО для случая «пир первую копию не применил» (#CALLS-ICE-REANSWER);
+    //  2) Премиса «пир умирает на повторном setRemoteDescription того же origin»
     //     НЕ ПОДТВЕРДРЛАСЬ: в логе 12:31 (с дедупом) пир так же молчал (reqR=0 с 7-й
     //     секунды) — это сетевая проблема same-NAT, не SDP; эталон Chrome (calls-sdk)
     //     наоборот, переотправляет offer на каждый registered-peer БЕЗ дедупа;
     //  3) Прямая отправка = точное поведение той цепочки, которая давала успешные
-    //     звонки. Никаких В«улучшенийВ» серединной логики — только изолированные фиксы.
+    //     звонки. Никаких «улучшений» серединной логики — только изолированные фиксы.
     // НОВАЯ ПРАКТРКА ДРАГНОСТРКР: BuildStamp.STAMP в CALL START/SovaApp — лог
     // однозначно доказывает, какой КОД исполнялся (в логе 12:32 два процесса
     // re.pinok.debug: новый 106d0281 и СТАРЫЙ APK со старым форматом hangup —
-    // В«hangup не доходил до официальногоВ» был именно у старого APK).
+    // «hangup не доходил до официального» был именно у старого APK).
 
     // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP В§11.2): приём видео собеседника.
     //  - remoteVideoTrack — от движка (onAddTrack, signaling-поток — присваивание
     //    Compose-состоянию потокобезопасно);
     //  - peerVideoEnabled — из сигналинга (media-settings-changed isVideoEnabled);
-    //  - isVideoCall — маркер В«m=video в offerВ» (В§8.8; connection.mediaSettings НЕ маркирует);
-    //  - videoFrames — framesDecoded inbound-rtp (страж В«камера включена, а кадров нетВ»);
+    //  - isVideoCall — маркер «m=video в offer» (В§8.8; connection.mediaSettings НЕ маркирует);
+    //  - videoFrames — framesDecoded inbound-rtp (страж «камера включена, а кадров нет»);
     //  - videoRxEnabled — kill-switch из настроек (callsVideoRx, default true).
     var remoteVideoTrack by remember { mutableStateOf<org.webrtc.VideoTrack?>(null) }
     var peerVideoEnabled by remember { mutableStateOf(false) }
@@ -367,7 +367,7 @@ fun CallScreen(
                 // #CALLS-ICE-REANSWER: ICE CONNECTED — дальше answer не повторяем.
                 if (it == CallPhase.ACTIVE) iceConnected.value = true
                 // #CALLS-ICE-WATCHDOG (2026-08-29): ICE FAILED без установленного failText
-                // показывал безликое В«Ошибка соединенияВ», а звонящий с запущенным таймером
+                // показывал безликое «Ошибка соединения», а звонящий с запущенным таймером
                 // оставался висеть навсегда (никто не клал трубку). Теперь: причина на экране.
                 if (it == CallPhase.FAILED && failText == null) {
                     failText = if (incoming) "Медиа-соединение не установлено (ICE)" else "Не удалось установить соединение (ICE)"
@@ -430,8 +430,8 @@ fun CallScreen(
     }
 
     // ══ #CALLS-ZH2 (Task 6-a): Ж6/Ж7 имена по умолчанию + тоггл субтитров ══
-    // Ж0 В§4: имя записи по умолчанию В«<имя звонившего> <дата>В» (лимит 128 — guard в Client);
-    // Ж0 В§5.1: заголовок расшифровки В«Расшифровка <дата>В». Формируются один раз на звонок.
+    // Ж0 В§4: имя записи по умолчанию «<имя звонившего> <дата>» (лимит 128 — guard в Client);
+    // Ж0 В§5.1: заголовок расшифровки «Расшифровка <дата>». Формируются один раз на звонок.
     val callDateStamp = remember {
         java.text.SimpleDateFormat("d.MM", java.util.Locale.getDefault()).format(java.util.Date())
     }
@@ -492,7 +492,7 @@ fun CallScreen(
     // #CALLS-REOFFER (2026-08-29): повторная отправка offer + всех локальных ICE-кандидатов.
     // Лог 20:31: offer ушёл в 24.720, REGISTERED_PEER собеседника пришёл только в 25.316 —
     // сервер выбросил offer (некому доставлять), answer не пришёл вовсе, звонок висел
-    // в В«СоединениевЂ¦В». Эталон Chrome (calls-sdk, звонки.md В§13) переотправляет offer
+    // в «Соединение…». Эталон Chrome (calls-sdk, звонки.md В§13) переотправляет offer
     // на каждый registered-peer, пока не получит answer — делаем то же самое.
     val doReoffer: (String) -> Unit = { reason ->
         if (direction != CallDirection.OUTGOING) {
@@ -504,7 +504,7 @@ fun CallScreen(
             // молчал при наших reqS=250). Вместо повтора — ICE RESTART: новый
             // оффер-цикл (свежие ufrag/pwd + сборка кандидатов) уйдёт через
             // onLocalSdpReady автоматически. Рменно в этой ветке был потерян
-            // В«accepted-callВ»-рерофер (REOFFER пропущен: answer уже получен).
+            // «accepted-call»-рерофер (REOFFER пропущен: answer уже получен).
             if (iceConnected.value) {
                 AppLog.i("CallScreen", "REOFFER пропущен ($reason): answer получен, ICE подключён")
             } else if (iceRestartCount >= 2) {
@@ -514,7 +514,7 @@ fun CallScreen(
             } else {
                 iceRestartCount++
                 lastIceRestartAt = System.currentTimeMillis()
-                diagReoffer = "restartГ—$iceRestartCount"
+                diagReoffer = "restart×$iceRestartCount"
                 AppLog.w("CallScreen", "REOFFER→RESTART #$iceRestartCount ($reason): answer есть, ICE нет — restartIce() (VK web pattern)")
                 engine.restartIce()
             }
@@ -530,7 +530,7 @@ fun CallScreen(
                     signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
                 }
                 reofferCount++
-                diagReoffer = "offerГ—$reofferCount"
+                diagReoffer = "offer×$reofferCount"
                 AppLog.i("CallScreen", "REOFFER #$reofferCount ($reason): offer + ${allLocalCandidates.value.size} кандидатов → $pid")
             }
         }
@@ -571,7 +571,7 @@ fun CallScreen(
                         signaling.sendCandidate(pid, c.sdpMid, c.sdpMLineIndex, c.sdp)
                     }
                     reanswerCount++
-                    diagAnswer = "ansГ—$reanswerCount"
+                    diagAnswer = "ans×$reanswerCount"
                     AppLog.i("CallScreen", "REANSWER #$reanswerCount ($reason): answer + ${allLocalCandidates.value.size} кандидатов → $pid")
                 }
             }
@@ -605,13 +605,13 @@ fun CallScreen(
     }
 
     // #CALLS-SERVER-REJOIN (2026-09-02, лог ciber.txt звонок в„–1): при topology→SERVER
-    // bounce() со СТАРЫМ token давал В«conversation-not-foundВ» Г—2 → ZOMBIE: регистрация
+    // bounce() со СТАРЫМ token давал «conversation-not-found» ×2 → ZOMBIE: регистрация
     // WS-peer'а умирает вместе с сокетом, token одноразовый. Эталон (whitelist-bypass)
     // делает ПОЛНЫЙ rejoin: свежий session/endpoint/TURN-креды. Наш эквивалент:
     // getCallConversationParams → СВЕЖРЕ params (новый token) → stop/start сигналинга →
     // свежий `connection` (обработчик сбросит srvErrCount и запустит PC-RESTART).
     // Для входящего после перерегистрации — повторный accept-call (сервер мог считать
-    // нас В«не принявшимиВ»). Фолбэк при неудаче — прежний bounce() (старые params).
+    // нас «не принявшими»). Фолбэк при неудаче — прежний bounce() (старые params).
     val startServerRejoin: () -> Unit = {
         lastServerRejoinAt = System.currentTimeMillis()
         val rejoinUid = sigUid
@@ -625,7 +625,7 @@ fun CallScreen(
                     val (_, vchatResp) = deps.getCallConversationParams(rejoinConvId)
                     val fresh = vchatResp?.let { re.pinok.media.ConversationParamsDecoder.decodeParamsJson(it) }
                     if (fresh != null && fresh.token.isNotBlank() && fresh.endpoint.isNotBlank()) {
-                        AppLog.w("CallScreen", "SERVER-REJOIN: свежие params получены (token=${fresh.token.take(8)}вЂ¦, turn=${fresh.turnServer?.urls?.firstOrNull() ?: "нет"}) — перерегистрация WS")
+                        AppLog.w("CallScreen", "SERVER-REJOIN: свежие params получены (token=${fresh.token.take(8)}…, turn=${fresh.turnServer?.urls?.firstOrNull() ?: "нет"}) — перерегистрация WS")
                         engine.setIceServers(fresh)
                         signaling.stop()
                         kotlinx.coroutines.delay(200)
@@ -699,7 +699,7 @@ fun CallScreen(
             // ответ — conversation params (форма как у vchat.getConversationParams:
             // {id, endpoint/wssBase, token, stun{urls}, turn{urls,username,credential}}).
             // Здесь БЕЗ нового startCall/join-API — мы уже участник: параметры
-            // из сессии, signaling, RINGING; В«ПринятьВ» шлёт accept-call существующим
+            // из сессии, signaling, RINGING; «Принять» шлёт accept-call существующим
             // кодом входящего-accept (incomingParamsDeferred завершён ниже).
             val decoded = if (joinSession != null) {
                 re.pinok.media.ConversationParamsDecoder.decodeParamsJson(joinSession.paramsJson)
@@ -723,7 +723,7 @@ fun CallScreen(
                 val snap = deps.prefs.data.first()
                 val okUid = snap.callsSessionUid
                 val uid = if (okUid > 0L) okUid else deps.exchangeAuthRepository.userId()
-                AppLog.i("CallScreen", "JOIN_BY_LINK: conv=$convId uid=$uid endpoint=${decoded.endpoint.take(40)}вЂ¦")
+                AppLog.i("CallScreen", "JOIN_BY_LINK: conv=$convId uid=$uid endpoint=${decoded.endpoint.take(40)}…")
                 activeCallId.value = convId
                 engine.setIceServers(decoded)
                 sigUid = uid
@@ -746,9 +746,9 @@ fun CallScreen(
                     }
                 }
                 sigStarted = true
-                // params готовы — В«ПринятьВ» (incomingParamsDeferred.await) их получит.
+                // params готовы — «Принять» (incomingParamsDeferred.await) их получит.
                 incomingParamsDeferred.complete(decoded)
-                AppLog.i("CallScreen", "JOIN_BY_LINK: signaling поднят — ждём В«ПринятьВ» и offer инициатора")
+                AppLog.i("CallScreen", "JOIN_BY_LINK: signaling поднят — ждём «Принять» и offer инициатора")
             }
         } else if (incoming) {
             // #CALLS: входящий звонок. Если есть payload — декодируем conversation
@@ -788,12 +788,12 @@ fun CallScreen(
                         // через get_anonym_token → auth.anonymLogin → повтор.
                         // См. SovaApp.getCallConversationParams.
                         val (sessionKey, vchatResp) = deps.getCallConversationParams(conv)
-                        AppLog.i("CallScreen", "getCallParams: sessionKey=${sessionKey?.take(12) ?: "null"}вЂ¦ vchat=${if (vchatResp != null) "OK" else "null"}")
+                        AppLog.i("CallScreen", "getCallParams: sessionKey=${sessionKey?.take(12) ?: "null"}… vchat=${if (vchatResp != null) "OK" else "null"}")
                         if (vchatResp != null) {
                             params = re.pinok.media.ConversationParamsDecoder.decodeParamsJson(vchatResp)
                             if (params != null) {
                                 AppLog.i("CallScreen",
-                                    "vchat params: endpoint=${params.endpoint.take(40)}вЂ¦ token=${params.token.take(8)}вЂ¦")
+                                    "vchat params: endpoint=${params.endpoint.take(40)}… token=${params.token.take(8)}…")
                             }
                         }
                     } else {
@@ -806,7 +806,7 @@ fun CallScreen(
             val resolvedParams = params
             if (resolvedParams == null) {
                 AppLog.w("CallScreen", "Не удалось получить conversation params — звонок принять нельзя")
-                // #CALLS-IN-FIX: сообщаем ошибку и ждущему В«ПринятьВ» (иначе он ждал бы deferred вечно).
+                // #CALLS-IN-FIX: сообщаем ошибку и ждущему «Принять» (иначе он ждал бы deferred вечно).
                 failText = "Не удалось получить параметры звонка"
                 incomingParamsDeferred.complete(null)
                 if (phase == CallPhase.RINGING) phase = CallPhase.FAILED
@@ -848,7 +848,7 @@ fun CallScreen(
                 }
                 sigStarted = true
                 AppLog.i("CallScreen", "Signaling started — ждём accept/decline от пользователя")
-                // #CALLS-IN-FIX: В«ПринятьВ» ждёт эти params — сообщаем в самом конце,
+                // #CALLS-IN-FIX: «Принять» ждёт эти params — сообщаем в самом конце,
                 // когда activeCallId/ICE-серверы/сигналинг уже готовы.
                 incomingParamsDeferred.complete(resolvedParams)
             }
@@ -876,14 +876,14 @@ fun CallScreen(
                     if (cred != null) {
                         deps.queuev4Client.setCredential(cred)
                         deps.queuev4Client.start()
-                        AppLog.i("CallScreen", "queuev4 started (key=${cred.key.take(8)}вЂ¦ ts=${cred.ts})")
+                        AppLog.i("CallScreen", "queuev4 started (key=${cred.key.take(8)}… ts=${cred.ts})")
                     } else {
                         AppLog.w("CallScreen", "queueSubscribe returned null — входящий звонок не будет обработан")
                     }
-                    // #CALLS-OUT-DIAG (30.08, В«звонок с пинок на официальный вк не проходитВ»):
+                    // #CALLS-OUT-DIAG (30.08, «звонок с пинок на официальный вк не проходит»):
                     // сверяем, что сервер ЗАРЕГРСТРРРОВАЛ звонок — если getCurrentCalls пуст,
                     // официальный клиент не получит push, не зазвонит и registered-peer
-                    // не придёт никогда (45с → CANCELED В«no answerВ» — это будет ВРДНО из лога).
+                    // не придёт никогда (45с → CANCELED «no answer» — это будет ВРДНО из лога).
                     try {
                         val calls = deps.apiClient.messagesGetCurrentCalls()
                         AppLog.i("CallScreen", "OUTGOING-SETUP: callId=$callId, getCurrentCalls=${calls.size} шт.")
@@ -901,7 +901,7 @@ fun CallScreen(
                         // вернул null (кэш $-токен протух → auth.anonymLogin 401), и весь блок
                         // system.getInfo + startConversation ПРОПУСКАЛСЯ: conversation не
                         // начиналась → сервер не рассылал registered-peer/FULL_CONNECTION →
-                        // offer навсегда в кэше (В«local SDP готов, participantId неизвестенВ»),
+                        // offer навсегда в кэше («local SDP готов, participantId неизвестен»),
                         // звонок умирал через 15с (CALL END: offer=false). Теперь при null
                         // берём session_key из prefs: начать conversation важнее свежести ключа
                         // (свежесть чинится отдельно — #CALLS-TOKEN-REFRESH в SovaApp).
@@ -1003,16 +1003,16 @@ fun CallScreen(
             AppLog.i("CallScreen", "queuev4 event: queue=${ev.queueId} payload=${ev.payload}")
             val code = ev.payload["code"] as? Long
             // #CALLS-IN-OFFER: для входящего этот collect — ловушка: queuev4Client остаётся
-            // подписан на очередь В«callsВ» после любого исходящего звонка и при входящем
+            // подписан на очередь «calls» после любого исходящего звонка и при входящем
             // получает то же событие LP 115 — фаза прыгала RINGING→CONNECTING без нажатия
-            // В«ПринятьВ». Состояния входящего меняет только WS-сигналинг.
-            // #CALLS-OUT-QUEUE-FIX (30.08, В«звонок с пинок на официальный вк не проходитВ»):
+            // «Принять». Состояния входящего меняет только WS-сигналинг.
+            // #CALLS-OUT-QUEUE-FIX (30.08, «звонок с пинок на официальный вк не проходит»):
             // для РСХОДЯЩЕГО фазу из queuev4 больше НЕ меняем вовсе. Прежнее условие
             // (code == 115L || queueId == "calls") ловило и СОБСТВЕННОЕ событие созданного
-            // нами звонка — нашу же очередь В«callsВ» сервер доставляет и звонящему. Фаза
-            // прыгала RINGING→CONNECTING в момент НАБОРА: экран показывал В«СоединениевЂ¦В»
-            // вместо В«ЗвонимвЂ¦В», и запускались watchdog'и CONNECTING — 60с → FAILED
-            // В«Не удалось установить соединениеВ» ДО того, как собеседник вообще успевал
+            // нами звонка — нашу же очередь «calls» сервер доставляет и звонящему. Фаза
+            // прыгала RINGING→CONNECTING в момент НАБОРА: экран показывал «Соединение…»
+            // вместо «Звоним…», и запускались watchdog'и CONNECTING — 60с → FAILED
+            // «Не удалось установить соединение» ДО того, как собеседник вообще успевал
             // взять трубку (у эталона между registered-peer и accepted-call бывает 7с+,
             // а взять трубку — ещё дольше). Авторитетный сигнал принятия у исходящего —
             // notification accepted-call из сигналинга (доказан логом 20:31:
@@ -1040,7 +1040,7 @@ fun CallScreen(
         signaling.messages.collect { msg ->
             AppLog.i("CallScreen", "signaling: command=${msg.command} sdp=${msg.sdp?.take(40)} cand=${msg.candidate?.take(40)}")
             diagEvent = msg.command
-            // #CALLS-RX-DEBUG: считаем входящие команды для экранной строки В«Принято:В».
+            // #CALLS-RX-DEBUG: считаем входящие команды для экранной строки «Принято:».
             rxCommands[msg.command] = (rxCommands[msg.command] ?: 0) + 1
             when (msg.command) {
                 re.pinok.realtime.CallSignalingClient.CMD_ANSWER,
@@ -1087,10 +1087,10 @@ fun CallScreen(
                                 AppLog.i("CallScreen", "offer содержит m=video — ВРДЕО-звонок")
                             }
                         }
-                        // #CALLS-IN-OFFER: решение В«применить сейчас или буферизовать до
-                        // acceptВ» принял на себя движок (setRemoteSdp: PC нет → буфер,
+                        // #CALLS-IN-OFFER: решение «применить сейчас или буферизовать до
+                        // accept» принял на себя движок (setRemoteSdp: PC нет → буфер,
                         // применится в acceptCall; PC есть → сразу). Гонки с кнопкой
-                        // В«ПринятьВ» больше нет.
+                        // «Принять» больше нет.
                         AppLog.i("CallScreen", "remote ${type.name.lowercase()} → engine (участник=${remoteParticipantId.value}, len=${sdp.length})")
                         engine.setRemoteSdp(sdp, type)
                         if (!isOffer) {
@@ -1114,7 +1114,7 @@ fun CallScreen(
                     msg.candidate?.let { c ->
                         // #CALLS-IN-OFFER: движок сам буферизует кандидата, если
                         // remoteDescription ещё не установлен (pendingRemoteIce → drain
-                        // после setRemoteSdp) — кэш В«до acceptВ» в UI больше не нужен.
+                        // после setRemoteSdp) — кэш «до accept» в UI больше не нужен.
                         engine.addRemoteIceCandidate(msg.candidateSdpMid, msg.candidateSdpMLineIndex ?: 0, c)
                     }
                 }
@@ -1134,10 +1134,10 @@ fun CallScreen(
                     val pids = msg.json.get("participantIds")?.takeIf { it.isJsonArray }?.asJsonArray?.toString()
                     AppLog.i("CallScreen", "сервер ack: ${msg.command} response=$resp participantIds=$pids")
                     diagEvent = if (msg.command == "error") "ошибка сервера" else "ack:$resp"
-                    // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): В«ошибка сервераВ» при
+                    // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): «ошибка сервера» при
                     // входящем с отправленным answer и без ICE = разговор мёртв
-                    // (собеседник вышел — его participant больше нет; скриншот: ansГ—4,
-                    // В«на обратной стороне трубку повесилиВ», а экран висел В«СоединениевЂ¦В»).
+                    // (собеседник вышел — его participant больше нет; скриншот: ans×4,
+                    // «на обратной стороне трубку повесили», а экран висел «Соединение…»).
                     // 2 ошибки подряд → терминалим звонок сами, а не спамим в никуда.
                     if (msg.command == "error") {
                         srvErrCount++
@@ -1169,12 +1169,12 @@ fun CallScreen(
                     // #CALLS-ACK-REOFFER (2026-08-29): собеседник ПРРНЯЛ звонок. Единственный
                     // гарантированный момент, когда вызываемый готов принимать transmit-data
                     // (лог 20:31: registered-peer 25.316 → accepted-call 32.487). Если сервер
-                    // ретранслирует transmit-data только В«принявшимВ» peer'ам, reoffer на
+                    // ретранслирует transmit-data только «принявшим» peer'ам, reoffer на
                     // registered-peer тоже выбрасывался — переотправляем offer ещё раз.
                     // Для входящего это эхо нашего собственного accept — doReoffer пропустит.
                     AppLog.i("CallScreen", "accepted-call: собеседник принял звонок — reoffer")
                     // #CALLS-OUT-ACCEPTED-PHASE: для исходящего это ЕДРНСТВЕННЫЙ
-                    // авторитетный момент В«собеседник взял трубкуВ» — только здесь
+                    // авторитетный момент «собеседник взял трубку» — только здесь
                     // RINGING→CONNECTING (queuev4 больше фазу не меняет,
                     // #CALLS-OUT-QUEUE-FIX). Для входящего это эхо НАШЕГО accept —
                     // фаза уже CONNECTING, не трогаем.
@@ -1204,7 +1204,7 @@ fun CallScreen(
                         }
                         // #CALLS-REOFFER (2026-08-29): переотправляем offer+кандидаты
                         // ВСЕГДА, а не только когда participantId узнали впервые.
-                        // Раньше условие В«remoteParticipantId == nullВ» почти всегда ложно
+                        // Раньше условие «remoteParticipantId == null» почти всегда ложно
                         // (pid заполняется из connection.participants за секунду ДО
                         // registered-peer) — переотправка не срабатывала никогда.
                         doReoffer("registered-peer")
@@ -1215,7 +1215,7 @@ fun CallScreen(
                 }
                 "media-settings-changed" -> {
                     // #CALLS-VIDEO-RX (В§11.2.4): собеседник включил/выключил камеру.
-                    // Форма: {command:"media-settings-changed", mediaSettings:{isVideoEnabled,вЂ¦}}
+                    // Форма: {command:"media-settings-changed", mediaSettings:{isVideoEnabled,…}}
                     val ms = msg.json.get("mediaSettings")?.takeIf { it.isJsonObject }?.asJsonObject
                     val v = ms?.get("isVideoEnabled")?.takeIf { it.isJsonPrimitive }?.asBoolean
                         ?: msg.json.get("isVideoEnabled")?.takeIf { it.isJsonPrimitive }?.asBoolean
@@ -1237,8 +1237,8 @@ fun CallScreen(
                                 engine.setIceServers(wsParams)
                                 AppLog.i("CallScreen",
                                     "ICE обновлены из WS connection: turn=${wsParams.turnServer?.urls} " +
-                                    "user=${wsParams.turnServer?.username?.take(12)}вЂ¦ " +
-                                    "cred=${wsParams.turnServer?.credential?.take(8)}вЂ¦")
+                                    "user=${wsParams.turnServer?.username?.take(12)}… " +
+                                    "cred=${wsParams.turnServer?.credential?.take(8)}…")
                             } else {
                                 AppLog.w("CallScreen", "WS connection без TURN/STUN в conversationParams")
                             }
@@ -1272,8 +1272,8 @@ fun CallScreen(
                             // #CALLS-OUT-FIX (2026-08-27): наш okcdn uid берём из prefs
                             // (callsSessionUid — заполняет ensureCallsSessionKey). Хардкод
                             // 584520805550 был верен только на устройстве разработчика —
-                            // на любом другом В«яВ» не распознавалось, и offer уходил
-                            // самому себе → звонок вечно В«ЗвонимвЂ¦В».
+                            // на любом другом «я» не распознавалось, и offer уходил
+                            // самому себе → звонок вечно «Звоним…».
                             val myOkUid = runCatching { deps.prefs.data.first().callsSessionUid }.getOrDefault(0L)
                             for (el in participantsArr) {
                                 if (!el.isJsonObject) continue
@@ -1384,7 +1384,7 @@ fun CallScreen(
                     // #CALLS-ZH Ж2: participant-state-changed (Ж0 В§1.2/В§3.2) — синк СВОЕЙ
                     // поднятой руки. Значения hand "1"/"0" — ParticipantStateDataValue
                     // (16131@480035; живая проверка — Этап Р, Ж0 В§13.1). Форма события:
-                    // {participantId, participantState{state{вЂ¦}, stateUpdateTs{вЂ¦}}}.
+                    // {participantId, participantState{state{…}, stateUpdateTs{…}}}.
                     // NULL-ЯВНО: захваты в val — умный каст делегированных свойств невозможен.
                     val pidEl = msg.json.get("participantId")
                     val pidStr = if (pidEl != null && pidEl.isJsonPrimitive) pidEl.asString else msg.participantId
@@ -1439,7 +1439,7 @@ fun CallScreen(
     }
 
     // #CALLS-VIDEO-RX (В§11.2.4): поллинг framesDecoded удалённого видео (каждые 2с).
-    // Видео считаем В«живымВ» (рендерим) только когда кадры реально декодируются;
+    // Видео считаем «живым» (рендерим) только когда кадры реально декодируются;
     // пока кадров нет — плейсхолдер. Callback приходит с потока getStats —
     // присваивание Compose-состоянию потокобезопасно.
     LaunchedEffect(remoteVideoTrack, peerVideoEnabled, videoRxEnabled) {
@@ -1453,8 +1453,8 @@ fun CallScreen(
         }
         videoFrames = 0
         // #CALLS-VIDEO-BG (2026-08-31, звонок 21:22 LTE): камера собеседника включена,
-        // но видео не показалось — по логу невозможно было отличить В«кадры не декодируютсяВ»
-        // от В«кадры есть, но рендерер перекрыт фономВ». Логируем каждое изменение счётчика.
+        // но видео не показалось — по логу невозможно было отличить «кадры не декодируются»
+        // от «кадры есть, но рендерер перекрыт фоном». Логируем каждое изменение счётчика.
         var lastLogged = Int.MIN_VALUE
         while (true) {
             engine.pollVideoFramesDecoded { f ->
@@ -1483,7 +1483,7 @@ fun CallScreen(
     }
 
     // #CALLS-NAME-FIX (2026-08-29): самостоятельная подтяжка имени/аватара звонящего.
-    // Лог 22:29: экран открылся с заглушкой В«Входящий звонокВ» — refreshIncomingCaller
+    // Лог 22:29: экран открылся с заглушкой «Входящий звонок» — refreshIncomingCaller
     // не успел (гонка с навигацией) либо молча не нашёл caller_id. Дублируем логику
     // на экране и ЛОГРРУЕМ результат (раньше отказ был невидим).
     //
@@ -1536,7 +1536,7 @@ fun CallScreen(
 
     // #CALLS-TIMER-FIX (2026-08-31, лог 22:28): раньше корутина ОБНОВЛЯЛА callDuration
     // РОВНО ОДРН РАЗ (delay(1000) → присвоить → завершиться) и никогда не просыпалась
-    // снова — таймер навсегда застывал на первой секунде ACTIVE (симптом В«0:05В» на
+    // снова — таймер навсегда застывал на первой секунде ACTIVE (симптом «0:05» на
     // скриншоте при dur=215с в логе). Теперь цикл: тик каждую секунду до смены фазы
     // (LaunchedEffect(phase) отменяет корутину при уходе с ACTIVE — утечки нет).
     LaunchedEffect(phase) {
@@ -1574,8 +1574,8 @@ fun CallScreen(
     }
 
     // ══ #SETTINGS-FIX (P2-4, аудит настроек вќЊ3/вќЊ4, Task 3-b) — дефолты микрофона/камеры ══
-    // Сверка ключей SovaPrefs: callsMicDefault: Flow<String> (В«type:addressВ», ""=авто),
-    // callsCameraDefault: Flow<String> (В«frontВ»|В«backВ») — проводка через deps.prefs
+    // Сверка ключей SovaPrefs: callsMicDefault: Flow<String> («type:address», ""=авто),
+    // callsCameraDefault: Flow<String> («front»|«back») — проводка через deps.prefs
     // (паттерн callsRouteDefault/callsNoiseCancelDefault выше), вне-зонных правок нет.
 
     // Микрофон по умолчанию (calls_mic_default, З2). Применение: маршрут связи —
@@ -1585,7 +1585,7 @@ fun CallScreen(
     // реальное применение без правки WebRtcEngine. Точечный выбор входа
     // (AudioRecord.setPreferredDevice на AudioRecord внутри JavaAudioDeviceModule)
     // требует правки WebRtcEngine/WebRtcEngine.kt — вне зоны волны (честно, KDoc).
-    // Значение В«type:addressВ» резолвится по AudioManager.getDevices(INPUTS); если
+    // Значение «type:address» резолвится по AudioManager.getDevices(INPUTS); если
     // устройство не найдено / API < 31 — молча системный выбор + лог.
     LaunchedEffect(Unit) {
         val saved = runCatching { deps.prefs.callsMicDefault.first() }.getOrDefault("")
@@ -1652,7 +1652,7 @@ fun CallScreen(
     }
 
     // #CALLS-OUT-FIX (2026-08-27): таймаут дозвона. Если за 45с answer не пришёл
-    // (абонент офлайн/не отвечает) — рвём звонок, а не висим в В«ЗвонимвЂ¦В» навсегда.
+    // (абонент офлайн/не отвечает) — рвём звонок, а не висим в «Звоним…» навсегда.
     LaunchedEffect(phase) {
         if (phase == CallPhase.RINGING && !incoming) {
             kotlinx.coroutines.delay(45_000L)
@@ -1669,7 +1669,7 @@ fun CallScreen(
 
     // #CALLS-REOFFER (2026-08-29): watchdog CONNECTING для исходящего. Раньше при
     // переходе в CONNECTING (собеседник принял) таймаутов не оставалось вовсе —
-    // если answer потерялся, экран висел В«СоединениевЂ¦В» вечно. Теперь: 20с без answer
+    // если answer потерялся, экран висел «Соединение…» вечно. Теперь: 20с без answer
     // → последний повторный offer; 60с → рвём с понятной ошибкой.
     LaunchedEffect(phase) {
         if (phase == CallPhase.CONNECTING && !incoming) {
@@ -1715,7 +1715,7 @@ fun CallScreen(
 
     // #CALLS-IN-OFFER (2026-08-29, лог 21:26): watchdog CONNECTING для ВХОДЯЩЕГО.
     // Раньше при потере offer (сервер выбросил transmit-data до нашей регистрации /
-    // регистрация не дошла до звонящего) мы молча висели В«СоединениевЂ¦В», пока звонящий
+    // регистрация не дошла до звонящего) мы молча висели «Соединение…», пока звонящий
     // сам не сбрасывал звонок (~37с, remote-hangup). Теперь:
     //  8с без offer → nudge: перерегистрация WS (сервер снова разошлёт registered-peer,
     //                  звонящий переотправит offer — семантика В§8.3 звонки.md);
@@ -1750,11 +1750,11 @@ fun CallScreen(
         }
     }
 
-    // #CALLS-ACK-REOFFER (2026-08-29): nudge ещё на этапе RINGING (до В«ПринятьВ»).
+    // #CALLS-ACK-REOFFER (2026-08-29): nudge ещё на этапе RINGING (до «Принять»).
     // offer звонящего, отправленный до нашей регистрации, сервер выбрасывает; если
     // звонящий сам не переотправляет offer — перерегистрация WS порождает
     // registered-peer → звонящий переотправит offer, и он буферизуется в движке
-    // ещё ДО нажатия В«ПринятьВ» (к моменту accept ответ создаётся мгновенно).
+    // ещё ДО нажатия «Принять» (к моменту accept ответ создаётся мгновенно).
     var inRingNudgeDone by remember { mutableStateOf(false) }
     LaunchedEffect(sigStarted) {
         if (!sigStarted || !incoming) return@LaunchedEffect
@@ -1767,12 +1767,12 @@ fun CallScreen(
         }
     }
 
-    // #CALLS-ICE-WATCHDOG (2026-08-29, симптом В«у звонящего таймер идёт, а PinoK не
-    // поднимает трубкуВ»): accept/join уходят (сервер отмечает звонок отвечённым —
+    // #CALLS-ICE-WATCHDOG (2026-08-29, симптом «у звонящего таймер идёт, а PinoK не
+    // поднимает трубку»): accept/join уходят (сервер отмечает звонок отвечённым —
     // у звонящего стартует таймер), но МЕДРА (ICE) на нашей стороне не подключается —
-    // и для состояния В«answer отправлен, ICE не подключилсяВ» НЕ БЫЛО никакого
+    // и для состояния «answer отправлен, ICE не подключился» НЕ БЫЛО никакого
     // таймаута вовсе (старый IN-Watchdog на 45с срабатывал только при
-    // !answerSent). Звонок висел В«СоединениевЂ¦В» вечно, звонящий — со своим таймером.
+    // !answerSent). Звонок висел «Соединение…» вечно, звонящий — со своим таймером.
     // Теперь: +15с → снимок ICE stats + doReanswer; +35с → ещё doReanswer;
     // +60с → сами кладём трубку (и у звонящего таймер остановится).
     LaunchedEffect(phase, answerSent.value) {
@@ -1809,7 +1809,7 @@ fun CallScreen(
     LaunchedEffect(phase) {
         if (phase != CallPhase.FAILED || !incoming || !answerSent.value || iceConnected.value) return@LaunchedEffect
         // #CALLS-ZOMBIE: при 2+ ошибках сервера подряд разговор мёртв — ретраить нельзя
-        // (иначе FAILED-retry В«оживитВ» зомби обратно в CONNECTING и цикл повторится).
+        // (иначе FAILED-retry «оживит» зомби обратно в CONNECTING и цикл повторится).
         if (iceFailRetries < 2 && srvErrCount < 2) {
             iceFailRetries++
             engine.dumpIceStatsNow()
@@ -1832,10 +1832,10 @@ fun CallScreen(
         }
     }
 
-    // #CALLS-ICE-STATS-UI (2026-08-30, скриншот В«ICE FAILED вЂў ansГ—2 — трубка не
-    // поднимается с обоих сторонВ»): симметричный watchdog для РСХОДЯЩЕГО звонка.
-    // Раньше у звонящей стороны не было НРКАКРХ таймаутов на В«offer ушёл, ICE не
-    // подключилсяВ» — если собеседник молчит по медиа, исходящий висел вечно.
+    // #CALLS-ICE-STATS-UI (2026-08-30, скриншот «ICE FAILED вЂў ans×2 — трубка не
+    // поднимается с обоих сторон»): симметричный watchdog для РСХОДЯЩЕГО звонка.
+    // Раньше у звонящей стороны не было НРКАКРХ таймаутов на «offer ушёл, ICE не
+    // подключился» — если собеседник молчит по медиа, исходящий висел вечно.
     // Ретраить offer со звонящей стороны опасно (внезапный re-offer может сломать
     // собеседника) — поэтому только снимки статистики (15с/35с) и терминация на 45с.
     LaunchedEffect(phase) {
@@ -1864,7 +1864,7 @@ fun CallScreen(
 
     // #CALLS-ICE-STATS-UI: поллинг снимка ICE раз в секунду, пока звонок не активен.
     // (RINGING тоже обновляем — diag-блок с 00:17 виден и там; собранных кандидатов
-    // до accept не будет, но В«прин:0 sdpR:-В» сразу покажет, что PC ещё не создан.)
+    // до accept не будет, но «прин:0 sdpR:-» сразу покажет, что PC ещё не создан.)
     // dumpIceStatsNow() на watchdog'ах обновляет агрегат асинхронно (getStats-callback) —
     // поллинг гарантирует появление статистики на экране без доп. recompose-крючков.
     LaunchedEffect(Unit) {
@@ -1876,8 +1876,8 @@ fun CallScreen(
     }
 
     // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): единый поллинг-сторож зомби-состояний
-    // входящего. Скриншот показал немыслимое: фаза В«СоединениевЂ¦В» при В«PC нет вЂў ICE
-    // CLOSEDВ» и В«ошибка сервераВ» — движок давно мёртв, собеседник вышел, а экран висел
+    // входящего. Скриншот показал немыслимое: фаза «Соединение…» при «PC нет вЂў ICE
+    // CLOSED» и «ошибка сервера» — движок давно мёртв, собеседник вышел, а экран висел
     // в CONNECTING вечно. Причины: (1) движок закрыт (endCall из любой ветки), а фазу
     // никто не терминализировал; (2) FAILEDв†”CONNECTING-ретраи перезапускали 60с-watchdog
     // (потенциально бесконечно). Теперь — два железных предохранителя:
@@ -1939,7 +1939,7 @@ fun CallScreen(
     // #CALLS-HW-DIAG: логируем isHardwareAccelerated — если false, это дополнительное
     // объяснение проблем с TextureView (SurfaceView это чинит в любом случае).
     // LocalView.current — @Composable-геттер: читается ТОЛЬКО в композиции (строкой ниже);
-    // внутри LaunchedEffect/runCatching — ошибка компиляции "@Composable invocationsвЂ¦".
+    // внутри LaunchedEffect/runCatching — ошибка компиляции "@Composable invocations…".
     // В корутину уходит уже захваченная hwView.
     val hwView = LocalView.current
     LaunchedEffect(videoRenderActive) {
@@ -1951,7 +1951,7 @@ fun CallScreen(
         topBar = {
             TopAppBar(
                 title = { Text(peerName, color = Color.White) },
-                // #CALLS-ZH Ж5: В«СвернутьВ» (web calls_call_footer_button_collapse /
+                // #CALLS-ZH Ж5: «Свернуть» (web calls_call_footer_button_collapse /
                 // calls_collapse) — локальный UI-стейт, wire нет (Ж0 В§10).
                 actions = {
                     if (phase == CallPhase.ACTIVE || phase == CallPhase.CONNECTING) {
@@ -1974,7 +1974,7 @@ fun CallScreen(
         ) {
             // #CALLS-UI-SHIFT (2026-08-30): контент поднят на 5% высоты экрана выше центра
             // (запрос пользователя после теста 30.08): аватарка выше, внизу больше места
-            // для блока диагностики, который при В«СоединениевЂ¦В» обрезался нижней навигацией.
+            // для блока диагностики, который при «Соединение…» обрезался нижней навигацией.
             val shiftUp = (LocalConfiguration.current.screenHeightDp * 0.10f).dp
 
             // ══ #CALLS-SURFACEVIEW (2026-09-01): удалённое видео через SurfaceViewRenderer ══
@@ -2049,8 +2049,8 @@ fun CallScreen(
                 CallCollapsedWidget(
                     name = peerName,
                     phaseLabel = when (phase) {
-                        CallPhase.RINGING -> "ЗвонимвЂ¦"
-                        CallPhase.CONNECTING -> "СоединениевЂ¦"
+                        CallPhase.RINGING -> "Звоним…"
+                        CallPhase.CONNECTING -> "Соединение…"
                         CallPhase.ACTIVE -> formatDuration(callDuration)
                         CallPhase.ENDED -> "Завершён"
                         else -> "Ошибка"
@@ -2147,8 +2147,8 @@ fun CallScreen(
                 // Phase text (статус)
                 Text(
                     text = when (phase) {
-                        CallPhase.RINGING -> if (incoming) (if (isVideoCall) "Входящий видеозвоноквЂ¦" else "Входящий звоноквЂ¦") else "ЗвонимвЂ¦"
-                        CallPhase.CONNECTING -> "СоединениевЂ¦"
+                        CallPhase.RINGING -> if (incoming) (if (isVideoCall) "Входящий видеозвонок…" else "Входящий звонок…") else "Звоним…"
+                        CallPhase.CONNECTING -> "Соединение…"
                         CallPhase.ACTIVE -> formatDuration(callDuration)
                         CallPhase.ENDED -> if (noAnswer) "Абонент не отвечает" else "Звонок завершён"
                         CallPhase.FAILED -> failText ?: "Ошибка соединения"
@@ -2171,7 +2171,7 @@ fun CallScreen(
                         text = when {
                             !videoRxEnabled -> "Приём видео выключен (Настройки → Звонки)"
                             !peerVideoEnabled -> "Камера собеседника выключена"
-                            else -> "Ждём видео собеседникавЂ¦"
+                            else -> "Ждём видео собеседника…"
                         },
                         color = Color.White.copy(alpha = 0.6f),
                         fontSize = 13.sp,
@@ -2242,7 +2242,7 @@ fun CallScreen(
                                             // #CALLS-IN-FIX (2026-08-29, лог 20:54): раньше accept
                                             // выполнялся мгновенно — если params ещё резолвились
                                             // (vchat при сбое висит до 45с), сигналинг не был поднят:
-                                            // accept-call и answer уходили в никуда, В«СоединениевЂ¦В» висело
+                                            // accept-call и answer уходили в никуда, «Соединение…» висело
                                             // вечно. Теперь: ждём params → поднимаем сигналинг (если ещё
                                             // не поднят) → ждём открытия WS → и только потом accept.
                                             phase = CallPhase.CONNECTING
@@ -2303,7 +2303,7 @@ fun CallScreen(
                                             val acceptOk = signaling.acceptCall(isVideo = false)
                                             AppLog.i("CallScreen", "Принять: accept-call ${if (acceptOk) "отправлен" else "ОТБРОШЕН (WS закрыт!)"}")
                                             // #CALLS-IN-OFFER: PC создаётся здесь; offer, буферизованный
-                                            // движком (пришёл до В«ПринятьВ»), применяется САМ в acceptCall
+                                            // движком (пришёл до «Принять»), применяется САМ в acceptCall
                                             // (setRemoteDescription → createAnswer → answer уйдёт).
                                             engine.acceptCall(call)
                                             AppLog.i("CallScreen", "Принять: PC создаётся, offerReceived=${offerReceived.value}")
@@ -2423,7 +2423,7 @@ fun CallScreen(
                                 color = if (showMediaSettings) Color(0xFF43A047) else Color(0xFF37474F),
                                 onClick = { showMediaSettings = true },
                             )
-                            // ══ #CALLS-ZH2 (Task 6-a): В«ЕщёВ» — Ж6 запись / Ж7 расшифровка+субтитры / Ж8 зал ожидания / Ж9 залы ══
+                            // ══ #CALLS-ZH2 (Task 6-a): «Ещё» — Ж6 запись / Ж7 расшифровка+субтитры / Ж8 зал ожидания / Ж9 залы ══
                             // (web-меню calls_call_menu_*; панели — CallMorePanel и вложенные).
                             CallControlButton(
                                 icon = Icons.Default.MoreHoriz,
@@ -2467,7 +2467,7 @@ fun CallScreen(
                 if (phase != CallPhase.ACTIVE) {
                     Spacer(Modifier.height(20.dp))
                     // #CALLS-DIAG-FIT (2026-08-30): блок диагностики ограничен 120dp и
-                    // прокручивается — при В«СоединениевЂ¦В» все строки (Диагностика/Сигналинг/
+                    // прокручивается — при «Соединение…» все строки (Диагностика/Сигналинг/
                     // Принято/Медиа) гарантированно видимы и не обрезаются нижней навигацией.
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2480,19 +2480,19 @@ fun CallScreen(
                             textAlign = TextAlign.Center,
                         )
                         Text(
-                            text = "Сигналинг: $diagEvent вЂў $diagPid вЂў conv ${if (activeCallId.value.isNullOrBlank()) "—" else "вњ“"} вЂў offer ${if (offerReceived.value) "вњ“" else "—"} вЂў answer ${if (answerSent.value) "вњ“" else "—"}${if (diagReoffer.isBlank()) "" else " вЂў $diagReoffer"}${if (diagAnswer.isBlank()) "" else " вЂў $diagAnswer"}${if (srvErrCount > 0) " вЂў errГ—$srvErrCount" else ""}",
+                            text = "Сигналинг: $diagEvent вЂў $diagPid вЂў conv ${if (activeCallId.value.isNullOrBlank()) "—" else "вњ“"} вЂў offer ${if (offerReceived.value) "вњ“" else "—"} вЂў answer ${if (answerSent.value) "вњ“" else "—"}${if (diagReoffer.isBlank()) "" else " вЂў $diagReoffer"}${if (diagAnswer.isBlank()) "" else " вЂў $diagAnswer"}${if (srvErrCount > 0) " вЂў err×$srvErrCount" else ""}",
                             color = Color.White.copy(alpha = 0.45f),
                             fontSize = 11.sp,
                             textAlign = TextAlign.Center,
                         )
                         // #CALLS-RX-DEBUG (2026-08-30): какие команды сигналинга ПРРХОДРЛР
-                        // (топ-6 по частоте). В«candidateГ—NВ» отсутствует при N локальных
+                        // (топ-6 по частоте). «candidate×N» отсутствует при N локальных
                         // кандидатах = собеседник кандидаты не шлёт/не доходят — его сторона.
                         if (rxCommands.isNotEmpty()) {
                             val rxLine = rxCommands.entries
                                 .sortedByDescending { it.value }
                                 .take(6)
-                                .joinToString(", ") { "${it.key}Г—${it.value}" }
+                                .joinToString(", ") { "${it.key}×${it.value}" }
                             Text(
                                 text = "Принято: $rxLine",
                                 color = Color.White.copy(alpha = 0.45f),
@@ -2567,7 +2567,7 @@ fun CallScreen(
         )
     }
 
-    // ══ #CALLS-ZH2 (Task 6-a): панели Ж-2 — В«ЕщёВ» (Ж6/Ж7) / залы (Ж9) / зал ожидания (Ж8) ══
+    // ══ #CALLS-ZH2 (Task 6-a): панели Ж-2 — «Ещё» (Ж6/Ж7) / залы (Ж9) / зал ожидания (Ж8) ══
     if (showMorePanel) {
         CallMorePanel(
             signaling = signaling,
@@ -2643,7 +2643,7 @@ private fun sdpOLine(sdp: String): String? =
  * #CALLS-ZH Ж5 (Task 5-b, Этап Ж): мини-виджет свёрнутого звонка — ТОЛЬКО внутри
  * экрана звонка. Web-эталон (CollapsedCall, REV-UI В§8.2) — отдельное перетаскиваемое
  * окно поверх ВСЕГО приложения с сохранением позиции в sessionStorage; здесь это
- * НЕ имитируется: signaling/WebRtcEngine живут в композиции CallScreen, В«переживатьВ»
+ * НЕ имитируется: signaling/WebRtcEngine живут в композиции CallScreen, «переживать»
  * навигацию в другие разделы без переноса архитектуры звонка — нельзя честно
  * (зафиксировано в отчёте 5-b; кандидат на отдельный этап — звонковый Service/
  * foreground-нота). Кнопки — ключевые по заданию: mute / завершить / развернуть

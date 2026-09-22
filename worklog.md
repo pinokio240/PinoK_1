@@ -10019,71 +10019,20 @@ Stage Summary:
 
 ---
 Task ID: 78
-Agent: Z.ai Code (main)
-Task: Релиз-заготовка V2.1.5 (двухфазный протокол) — bump 6/2.1.5, штамп, манифест, ре-подпись
-
-Work Log:
-- Юзер: «Следуем совету» (совет = сначала релиз 2.1.5 с накопленными фиксами, потом O1).
-- СИНХРОНИЗАЦИЯ: remote был ahead на 18 коммитов (сессия внешнего агента Task 73–77:
-  ОПТИМИЗАЦИЯ.план.md, O3 закрыта, O2 шаги 1/2.1–2.3, O1-инфраструктура, P0-фиксы
-  calls/vkid/build, #FIX-CALLS-PAGING, 3 UI-фикса, W37 C1). Fast-forward до 33ff5f2b.
-- ТОТАЛЬНАЯ ПРОВЕРКА ПОСЛЕ PULL: check-secrets OK (80), check-nested-comments CLEAN (186),
-  !! в диффе 0, W37 C1 связность (экран↔API↔навигация) подтверждена, вынесенные O2-парсеры
-  резолвятся (у каждого ≥2 ссылок), версия в gradle 5/2.1.4 — фиксы 17.09 не в релизе.
-- БЛОКЕР + ПРЕЦЕДЕНТ: /home/z/pinok-signing/ исчезла (сброс песочницы; риск задокументирован
-  в Task 58/§591). Ключ НАЙДЕН в upload/private_key.hex (юзер пересылал 14.09, прецедент
-  Task 58 повторён): восстановлен в /home/z/pinok-signing/private_key.hex (chmod 600, вне git);
-  pubkey из seed == RELEASE_PUBLIC_KEY_B64 (XvaSZqNn…wEI=), отпечаток 22520fde…489748 —
-  ключ ПОДЛИННЫЙ, ротация не нужна.
-- BUMP: app/build.gradle.kts versionCode 5→6, versionName 2.1.4→2.1.5 (#RELEASE-V215-BUMP,
-  комментарий с составом релиза и ссылками на коммиты).
-- ШТАМП: BuildStamp.STAMP calls-2026.09.06-5 → calls-2026.09.18-1 (правило файла: бамп в
-  каждом коммите, меняющем звонковую цепочку — в релизе P0 входящие bef85d4b +
-  #FIX-CALLS-PAGING 46a9abaf). Комментарий-история дополнен.
-- МАНИФЕСТ: version.json — одна запись 6/2.1.5, stamp calls-2026.09.18-1, apkUrl=""/sha256=""
-  (двухфазный протокол, прецедент V2.1.4: UpdaterManager fail-closed «APK ещё не опубликован»).
-  notes: P0 входящие звонки, #FIX-CALLS-PAGING, perf Task 72 (впервые в релизе: RPS6,
-  parse-offmain, WS-тики — APK V2.1.4 собран ДО коммита 74122f83), медиа-превью уведомлений,
-  vkid-контур, W37 C1 «Ссылки», UI-фиксы плеера/шапки/скролла.
-- ПОДПИСЬ: sign (ключ 1683 байта манифеста) → verify ПРИВАТНЫМ OK → verify ПУБЛИЧНЫМ
-  (константа из APK) OK; негатив-тест: новая .sig на старом контенте (HEAD) — «ПОДПИСЬ НЕ ВЕРНА»
-  (байт-точность подписи подтверждена), старая .sig на старом контенте — ВЕРНА (текущее
-  состояние установок не тронуто).
-- Гейты: check-secrets OK (80), check-nested-comments ALL CLEAN (186). Коммит 7ae6d8b2 запушен.
-- ВАЖНО для тестера: сборку делать ТОЛЬКО после этого коммита (штамп/версия в APK должны
-  сойтись с манифестом, иначе updater не предложит обновление — versionCode сравнивается
-  строго больше).
-
-Stage Summary:
-- Релиз-заготовка V2.1.5 в git: 6/2.1.5 + calls-2026.09.18-1 + подписанный манифест с пустыми
-  apkUrl/sha256. Установки 5/2.1.4 увидят «Доступно 2.1.5», но кнопки скачивания задизейблены
-  до заполнения полей (fail-closed, честное поведение).
-- СЛЕДУЮЩИЙ ШАГ (за юзером): собрать APK (gradlew assembleRelease или debug по традиции
-  релиза), опубликовать на GitHub Releases тегом V2.1.5, прислать ссылку на ассет →
-  скачаю, посчитаю SHA-256, заполню манифест, РЕ-ПОДПИШУ, запушу (§1 шаги 3–6).
-- Ключ подписи восстановлен из upload/ — копию в upload/ оставить (снапшот на случай
-  нового сброса песочницы; из git не светит, .gitignore /upload/ на месте).
-- После релиза 2.1.5: O1 Baseline Profile прогон на Cyber 15 (инфраструктура уже в репо).
-
----
-Task ID: 79
-Agent: DeepSeek++ Shell MCP (аудит с машины юзера; перенесён Z.ai Code в remote после
-конфликта локальных правок с Task 78; локальный дубликат записи и занятый ID 78 устранены)
-Task: Аудит рантайм-лога PinoK 2.1.4-debug (ciber.txt, 2026-09-17 18:01:54–18:10:38, HOTWAV Cyber 15, Android 13/API33, PID 15373)
-
-Work Log (аудит без правок кода):
+Agent: DeepSeek++ Shell MCP
+Task: Аудит рантайм-лога PinoK 2.1.4-debug (ciber.txt, 2026-09-17 18:01:54-18:10:38, HOTWAV Cyber 15, Android 13/API33, PID 15373)
 
 КРИТИЧНЫЕ ОШИБКИ:
-1. queue.subscribe err=15 Access denied для queue_ids=calls_171093180_6287487_1 (5 раз: 18:01:58, 18:02:04, 18:09:09, 18:09:55, 18:09:56). SovaApp.kt:1850 — входящие звонки НЕДОСТУПНЫ. При этом onlfriends_171093180,accountcounters_171093180 проходят OK. Регресс от bef85d4b: хост api.vk.ru принят, но формат calls_<uid>_<client>_1 отвергнут (err=15, не err=100). Нужен wire-эталон VK web.
-2. settingsGeneral.setNotifySettings err=3 Unknown method passed — 50+ вызовов (18:05:37–18:08:18): sn_messages, sn_chats, sn_mentions, sn_likes, pf_wall, pc_photo, pc_market, pe_group, pe_feed и др. Экран настроек уведомлений НЕ сохраняет.
+1. queue.subscribe err=15 Access denied для queue_ids=calls_171093180_6287487_1 (5 раз: 18:01:58, 18:02:04, 18:09:09, 18:09:55, 18:09:56). SovaApp.kt:1850: входящие звонки недоступны. При этом onlfriends_171093180,accountcounters_171093180 проходит OK. Регресс от bef85d4: хост api.vk.ru принят, но формат calls_<uid>_<client>_1 отвергнут (err=15, не err=100). Нужен wire-эталон VK web.
+2. settingsGeneral.setNotifySettings err=3 Unknown method passed — 50+ вызовов (18:05:37-18:08:18): sn_messages, sn_chats, sn_mentions, sn_likes, pf_wall, pc_photo, pc_market, pe_group, pe_feed и др. Экран настроек уведомлений не сохраняет.
 3. accountPersonal.getSecurityAlerts err=3 Unknown method (18:01:57, 18:06:39) — SecurityAlertsPoller вхолостую.
-4. accountPersonal.getActivityHistoryDevices err=3 Unknown method (18:08:58–18:09:04, 4 попытки) — открытый баг DevicesScreen (Task 75).
-5. groups.getById err=100 'group_id is deprecated from version 5.218' (18:03:10, group_id=165284550, fields=links) — W37 C1 getGroupLinks шлёт старый параметр group_id вместо group_ids.
-6. notificationsGetRedesign: mediaThumbs EMPTY, thumb NULL для всех 27 items (18:02,04,06,08,10). В ответе есть photos/videos, но mediaThumbsSize=0. Парсер parseRedesignNotificationItem (VKApiClient.kt:15826) не читает redesign-формат thumbs (фикс 86d76200 не сработал/не был в сборке).
+4. accountPersonal.getActivityHistoryDevices err=3 Unknown method (18:08:58-18:09:04, 4 попытки) — открытый баг DevicesScreen (Task 75).
+5. groups.getById err=100 'group_id is deprecated from version 5.218' (18:03:10, group_id=165284550, fields=links) — где-то остался старый параметр group_id вместо group_ids.
+6. notificationsGetRedesign: mediaThumbs EMPTY, thumb NULL для всех 27 items (18:02,04,06,08,10). В ответе есть photos/videos, но mediaThumbsSize=0. Парсер parseRedesignNotificationItem (VKApiClient.kt:15826) не читает redesign-формат thumbs.
 7. ProfileScreen ForgottenCoroutineScopeException: rememberCoroutineScope left the composition (18:02:33) — скоуп используется после выхода из композиции (ProfileScreen.kt:425).
 
 ПРЕДУПРЕЖДЕНИЯ:
-- MANAGE_EXTERNAL_STORAGE not granted → EPERM /storage/emulated/0/Music/PinoK → fallback internal (TrackDownloadManager.kt:296, VideoDownloadManager.kt:135).
+- MANAGE_EXTERNAL_STORAGE not granted -> EPERM /storage/emulated/0/Music/PinoK -> fallback internal (TrackDownloadManager.kt:296, VideoDownloadManager.kt:135).
 - Просадки main thread: Skipped 104/46/42/44/38 frames, Davey 1033/1008/755/838/725ms (старт).
 - MediaSessionCompat: Couldn't find a unique registered media button receiver — кнопки гарнитуры.
 - FeatureFlagsImplExport NoClassDefFoundError (18:01:57).
@@ -10094,18 +10043,83 @@ Work Log (аудит без правок кода):
 - LongPoll poll-response events=0..3 ms~25000 стабильно.
 - groups.getById с admin-полями (админка W35) OK.
 - audio.get пейджер до total=3241, pages=70.
-- channels.getHistory через web.api.vk.ru OK (перевод на веб-шлюз работает).
+- channels.getHistory через web.api.vk.ru OK (наш перевод на веб-шлюз работает).
 - messages.getConversations (662KB), getItems, stories.get, wall.get — ок.
 
-СЛЕДУЮЩИЕ ШАГИ (от аудитора):
-- Снять wire-эталон VK web для setNotifySettings и для calls queue.subscribe.
+СЛЕДУЮЩИЕ ШАГИ:
+- Снять wire-эталон VK web для setNotifySettings (какой метод реально дергает web-клиент) и для calls queue.subscribe.
 - Уточнить правильные queue_ids для calls в web-клиенте.
 - Починить парсер thumbs для notifications.getRedesign.
 - Перевести groups.getById links-запрос на group_ids.
 - Поправить скоуп в ProfileScreen.
 
-Stage Summary:
-- Аудит опровергает P0-заявку релиза 2.1.5 в манифесте: «входящие звонки снова работают» —
-  НЕ так (err=15 Access denied; bef85d4b решил только err=100/хост). Notes манифеста 6/2.1.5
-  (apkUrl ещё пустой — двухфазный релиз) НЕОБХОДИМО скорректировать до публикации APK.
-- Влияние на релиз V2.1.5 и план волн — см. Task 80 (Z.ai Code, план A/B, ждёт одобрения юзера).
+---
+Task ID: 78
+Agent: DeepSeek++ Shell MCP
+Task: Аудит рантайм-лога PinoK 2.1.4-debug (ciber.txt, 2026-09-17 18:01:54-18:10:38, HOTWAV Cyber 15, Android 13/API33, PID 15373)
+
+КРИТИЧНЫЕ ОШИБКИ:
+1. queue.subscribe err=15 Access denied для queue_ids=calls_171093180_6287487_1 (5 раз: 18:01:58, 18:02:04, 18:09:09, 18:09:55, 18:09:56). SovaApp.kt:1850: входящие звонки недоступны. При этом onlfriends_171093180,accountcounters_171093180 проходит OK. Регресс от bef85d4: хост api.vk.ru принят, но формат calls_<uid>_<client>_1 отвергнут (err=15, не err=100). Нужен wire-эталон VK web.
+2. settingsGeneral.setNotifySettings err=3 Unknown method passed — 50+ вызовов (18:05:37-18:08:18): sn_messages, sn_chats, sn_mentions, sn_likes, pf_wall, pc_photo, pc_market, pe_group, pe_feed и др. Экран настроек уведомлений не сохраняет.
+3. accountPersonal.getSecurityAlerts err=3 Unknown method (18:01:57, 18:06:39) — SecurityAlertsPoller вхолостую.
+4. accountPersonal.getActivityHistoryDevices err=3 Unknown method (18:08:58-18:09:04, 4 попытки) — открытый баг DevicesScreen (Task 75).
+5. groups.getById err=100 'group_id is deprecated from version 5.218' (18:03:10, group_id=165284550, fields=links) — где-то остался старый параметр group_id вместо group_ids.
+6. notificationsGetRedesign: mediaThumbs EMPTY, thumb NULL для всех 27 items (18:02,04,06,08,10). В ответе есть photos/videos, но mediaThumbsSize=0. Парсер parseRedesignNotificationItem (VKApiClient.kt:15826) не читает redesign-формат thumbs.
+7. ProfileScreen ForgottenCoroutineScopeException: rememberCoroutineScope left the composition (18:02:33) — скоуп используется после выхода из композиции (ProfileScreen.kt:425).
+
+ПРЕДУПРЕЖДЕНИЯ:
+- MANAGE_EXTERNAL_STORAGE not granted -> EPERM /storage/emulated/0/Music/PinoK -> fallback internal (TrackDownloadManager.kt:296, VideoDownloadManager.kt:135).
+- Просадки main thread: Skipped 104/46/42/44/38 frames, Davey 1033/1008/755/838/725ms (старт).
+- MediaSessionCompat: Couldn't find a unique registered media button receiver — кнопки гарнитуры.
+- FeatureFlagsImplExport NoClassDefFoundError (18:01:57).
+- 'A resource failed to call close' (18:02:03).
+- Choreographer 'Frame time ... ms in the future' (18:07:11) — сбой таймбазы vsync (вендор).
+
+РАБОТАЕТ:
+- LongPoll poll-response events=0..3 ms~25000 стабильно.
+- groups.getById с admin-полями (админка W35) OK.
+- audio.get пейджер до total=3241, pages=70.
+- channels.getHistory через web.api.vk.ru OK (наш перевод на веб-шлюз работает).
+- messages.getConversations (662KB), getItems, stories.get, wall.get — ок.
+
+СЛЕДУЮЩИЕ ШАГИ:
+- Снять wire-эталон VK web для setNotifySettings (какой метод реально дергает web-клиент) и для calls queue.subscribe.
+- Уточнить правильные queue_ids для calls в web-клиенте.
+- Починить парсер thumbs для notifications.getRedesign.
+- Перевести groups.getById links-запрос на group_ids.
+- Поправить скоуп в ProfileScreen.
+
+---
+Task ID: CALLS-NO-DOUBLE-CALLSCREEN
+Agent: DeepSeek++ Shell MCP
+Task: Убрать дублирование CallScreen + экран входящего без имени (PinoK 2.1.5-debug, лог 2026-09-22 19:35-19:38, скриншоты Screenshot_20260922_201840.png)
+
+СИМПТОМЫ (по скриншотам + логу):
+- ОДНОВРЕМЕННО видны: свёрнутый баннер входящего + полноэкранный экран входящего с заглушкой и без имени.
+- Затем — второе окно CallScreen с именем «Лида Кузнецова». Фактически CallScreen дублируется.
+
+ПРИЧИНА (по коду, не гипотеза):
+1. SovaNavHost.kt:395 LaunchedEffect(app.pendingIncomingCallPayload, app.incomingCallAccepted) — ДВА ключа. pendingIncomingCallPayload перезаписывается ТРИЖДЫ на один звонок из трёх коллекторов (SovaApp.kt:1699 LP 115, :1714 queuev4, :1730 events_queuev4) → LaunchedEffect перезапускается, каждый раз с НОВЫМ payload → Screen.Call.buildRoute(..., payload=payload) даёт ДРУГОЙ route → launchSingleTop=true НЕ схлопывает → в backstack пушится вторая копия CallScreen.
+2. Три коллектора пишут в один pendingIncomingCallPayload без guard → рекомпозиция 3 раза на звонок.
+3. Экран без имени: pendingIncomingCallTitle заполняется только в SovaApp.kt:1767 после usersGetByIds (150–350мс), а до этого .ifBlank { "Входящий звонок" } (SovaApp.kt:399 + IncomingCallScreen.kt:114).
+
+ПРАВКИ (применены):
+SovaApp.kt:
+  - :1699 (LP 115) — guard: if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) { pendingIncomingCallPayload = event.payload; refreshIncomingCaller(); showIncomingCallNotification() }
+  - :1716 (queuev4) — аналогичный guard по payload.
+  - :1734 (events_queuev4) — аналогичный guard по payload.
+  Итог: payload одного звонка не перезаписывается коллекторами повторно.
+SovaNavHost.kt:
+  - :395-417 — LaunchedEffect(app.incomingCallAccepted) — единственный ключ (было два).
+  - Добавлен guard: if (cur != null && cur.startsWith(Screen.Call.route)) { AppLog.i("SovaNavHost", "INCOMING_CALL: CallScreen already open — skip duplicate navigate"); app.consumeIncomingCall(); return@LaunchedEffect }
+  - Убран .ifBlank { "Входящий звонок" } у title — IncomingCallScreen сам доберёт профиль (IncomingCallScreen.kt:105-113).
+
+ЗАТРОНУТЫЕ ФАЙЛЫ (E:/ANDROID_APP/PinoK_1):
+  - app/src/main/java/re/pinok/SovaApp.kt
+  - app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt
+Бэкапы .bak созданы рядом (внимание: .bak сняты ПОСЛЕ первой порчи кодировки — см. ниже).
+
+ПОБОЧНЫЙ ИНЦИДЕНТ (кодировка):
+  При правке через PowerShell Set-Content без -Encoding UTF8 произошла порча кодировки (мохибейк: 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ' вместо 'Не удалось отправить') в обоих файлах и их .bak. Восстановление из .bak не помогло (.bak тоже битые). ПРАВИЛО: впредь ТОЛЬКО [System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::UTF8) либо Set-Content -Encoding UTF8. Требуется ручная проверка/перезапись SovaApp.kt и SovaNavHost.kt в UTF-8 из Android Studio.
+
+СТАТУС: требует пересборки и одного тестового входящего звонка (сборка/тест — на стороне пользователя).

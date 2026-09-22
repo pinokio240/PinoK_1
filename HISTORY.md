@@ -1906,7 +1906,7 @@ Sprint 3 — 5/7. Sprint 4 — 0/4.**
   стоит часть перевести в `false` для safe-rollout — обсудить с пользователем.
 
 ### Ключевые файлы для продолжения
-- `MESSENGER_PLAN.MD` — полный план, §«Итоговая таблица приоритетов».
+- `MESSENGER_PLAN.MD` — полный план, §«Итоговая таблица приоритето».
 - `VK_IMPORT_API.MD` §ЧАСТЬ 21-25 — карта экранов/API/аудит/реализации.
 - `app/src/main/java/re/pinok/data/local/SovaPrefs.kt` — все feature-flags `msg*`.
 - `app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt` — основной
@@ -1972,7 +1972,7 @@ HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в 
 - `Screen.kt` — `Screen.FoldersSettings` route
 - `SovaNavHost.kt` — composable registration + `onFoldersSettings` callback
 - `MessagesScreen.kt` — динамические табы (`FolderTabRow` + `FolderTabChip`) + safety-clamp + legacy 3-tab mode сохранён
-- `SettingsScreen.kt` — toggle «Папки диалогов»
+- `SettingsScreen.kt` — toggle «Папки диалого»
 - `FeedScreen.kt` — preview default
 
 ### Коммит 3: `c02602799` — P3.7 Bubble-less дизайн
@@ -2190,7 +2190,7 @@ HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в 
   - Детальные комментарии с тем, что ИЗВЕСТНО о протоколе (endpoint, auth, subscribe,
     event types, heartbeat) и что НЕ ИЗВЕСТНО (FIXME при активации).
   - 5-шаговый план активации (снифф → фиксация → парсер → интеграция → skip в LP).
-- `SettingsScreen`: тумблер «WebSocket для каналов» с пометкой STUB.
+- `SettingsScreen`: тумблер «WebSocket для канало» с пометкой STUB.
 - **STUB НЕ ИНТЕГРИРОВАН** в основной flow (`SovaApp` НЕ запускает `ChannelWebSocketClient`).
   Причина: протокол недокументирован, может измениться без notice. Активация только
   когда VK форсирует отказ от LongPoll для каналов.
@@ -3129,7 +3129,7 @@ commits сегодня: 3 (Fix #165, #166, #167)
 
 ### Контекст
 Пользователь (другая сессия) сообщил: при авторизации в разделе почты
-отображался «непонятный набор букв» — классический симптом HTML-entity /
+отображался «непонятный набор бук» — классический симптом HTML-entity /
 encoding-мismatch в email, возвращаемом VK.
 
 ### Что сделано (коммит 978505d50, уже в origin/PinoK)
@@ -3137,7 +3137,7 @@ encoding-мismatch в email, возвращаемом VK.
   до инициализации WebView.
 - WebView UTF-8 safety: принудительная установка UTF-8 при парсинге
   ответов VK в ExternalBrowserAuth / WebTokenAuth.
-- Покрыты все 4 типа «набора букв»: HTML entities (&#64;), JSON escape
+- Покрыты все 4 типа «набора бук»: HTML entities (&#64;), JSON escape
   (\u0040), URL encoding (%40), encoding mismatch (UTF-8 как 1251).
 
 ### Источник
@@ -3837,7 +3837,7 @@ HISTORY подробно не описаны. Текущая сессия — Fi
 | 2 | `ff91c4a57` | Fix #237 (docs): VK_IMPORT_API.MD §32 — wall.getComments/createComment + баг булевых полей (safeInt/safeLong/safeBool) |
 | 3 | `e7bbb28b2` | Fix #237 compile: `LocalContext.current` вызывался внутри `onClick = { ... }` (non-Composable scope) → вынесли в тело `ParamRow` |
 | 4 | `df5e9eb6b` | Fix #237 warnings: `Icons.Default.ArrowBack/VolumeOff` → `AutoMirrored.Filled.*`, убрали лишние `!!` после smart-cast |
-| 5 | `beafb316f` | Fix #237 (UX): «кто кому отвечает» — quote-bar с автором+текстом родителя, вертикальная линия-connector для reply, бейдж «↓ N ответов» (thread.count), аватар в reply-preview bottomBar |
+| 5 | `beafb316f` | Fix #237 (UX): «кто кому отвечает» — quote-bar с автором+текстом родителя, вертикальная линия-connector для reply, бейдж «↓ N ответо» (thread.count), аватар в reply-preview bottomBar |
 | 6 | `db4205cf0` | Fix #237 (notifications not loading): VK отключил `notifications.get` для web-токенов (err=3) → fallback на `notifications.getRedesign` |
 
 ### Fix #237 — подробно
@@ -3886,7 +3886,7 @@ HISTORY подробно не описаны. Текущая сессия — Fi
 - Fallback: если родителя нет в выборке — имя из `reply_to_user`
   или нейтральное «В ответ на комментарий».
 - Отступ 20dp + вертикальная линия 3dp (primary 35%) для reply.
-- Бейдж «↓ N ответов» (правильное склонение: ответ/ответа/ответов).
+- Бейдж «↓ N ответо» (правильное склонение: ответ/ответа/ответов).
 - Аватар автора в reply-preview (bottomBar) — нагляднее.
 
 **F. Уведомления не работали** (`db4205cf0`)
@@ -3915,7 +3915,7 @@ HISTORY подробно не описаны. Текущая сессия — Fi
 
 1. **Комментарии:** открыть пост с комментариями → должны отображаться
    (раньше пусто). Под комментарием-ответом — quote-bar
-   «↩ Ответ для Имя: текст…». Под комментарием с веткой — «↓ N ответов».
+   «↩ Ответ для Имя: текст…». Под комментарием с веткой — «↓ N ответо».
 2. **Composer:** тап «Ответить» → в bottomBar появляется reply-preview
    с аватаром автора. Можно прикрепить фото/файл/emoji. Отправка через
    `wall.createComment` с `reply_to_comment`.
@@ -4149,7 +4149,7 @@ Mute-кнопка сдвинута ниже FAB «создать клип» (top
 
 ### #328 — Развёртывание ответов в комментариях
 
-Баг: кнопка «↓ N ответов» под комментарием не работала (`clickable { /* placeholder */ }`).
+Баг: кнопка «↓ N ответо» под комментарием не работала (`clickable { /* placeholder */ }`).
 `comment.thread.items` (превью до 10 ответов) вообще не рендерились.
 
 - `VKApiClient.wallGetComments` — добавлен параметр `commentId: Long?` (→ `comment_id` arg)
@@ -4177,7 +4177,7 @@ Mute-кнопка сдвинута ниже FAB «создать клип» (top
 4-я вкладка «Клипы (N)» в OfflineManagerScreen (было 3: Аудио/Видео/Истории):
 - `ClipOfflineTab` — LazyColumn + поиск (title/author/description) + сортировка
 - `ClipOfflineRow` — 64dp thumbnail + PlayArrow overlay + duration badge, автор, title, дата+размер, delete
-- Empty state: «Нет скачанных клипов» + подсказка
+- Empty state: «Нет скачанных клипо» + подсказка
 - Footer: добавлен clipCount + clipBytes
 
 `ClipOfflinePlayerScreen` (новый) — fullscreen офлайн-плеер:
@@ -4213,7 +4213,7 @@ Mute-кнопка сдвинута ниже FAB «создать клип» (top
 1. **Clips воспроизведение** — открыть Клипы, свайпать, должны играть
 2. **Лайки** — нажать сердечко на clip, должно работать (err=100 для приватных исправлен)
 3. **UI Clips** — сверху нет панели «Клипы», overlay (← 🔊 ➕) наверху, снизу навигация на месте
-4. **Комментарии** — открыть пост, нажать «↓ N ответов» → разворачивается ветка
+4. **Комментарии** — открыть пост, нажать «↓ N ответо» → разворачивается ветка
 5. **Скачать clip** — в Клипах нажать ⬇️ → прогресс → ✓ (скачано)
 6. **Офлайн-клипы** — Офлайн-менеджер → вкладка «Клипы» → тап → fullscreen плеер без сети
 
@@ -4497,7 +4497,7 @@ push-уведомления не приходят; часто приходитс
 - **B.** `MessagesScreen`: retry 3× с backoff 500ms/1.5s/3s на transient
   IOException. При err=5/1117 — НЕ показываем «Авторизуйтесь заново», оставляем
   loading → silent re-login идёт в фоне. При `lastException != null`
-  (IOException) — приоритет на ошибку сети, а не «Нет диалогов».
+  (IOException) — приоритет на ошибку сети, а не «Нет диалого».
 - **C.** `MainActivity` boot: если `hasValidToken()=false` AND есть `remixsid` →
   передаём `EXTRA_SILENT_MODE=true`. `AuthActivity` в silent mode применяет
   `Theme.PinoK.Silent` (transparent, windowIsTranslucent, no animation) → юзер
@@ -5573,7 +5573,7 @@ BUG#2 — синхронная загрузка битмапов в showSingle()
 отдельно, тапаемое. User feedback: «Пуши так и не разворачиваются в список
 уведомлений с ссылками на пост». Корневая причина: default
 `pushGroupingMode = "category"` сворачивал 3+ уведомления в стопку «N новых
-лайков» — чтобы увидеть отдельные посты, нужен pinch-out (жест двумя пальцами),
+лайко» — чтобы увидеть отдельные посты, нужен pinch-out (жест двумя пальцами),
 который почти никто не знает. §42.5 чинил механику, но не UX. Фикс: (1) default
 изменён на "none" — каждое уведомление отдельной карточкой, напрямую тапаемое.
 (2) `migratePushGroupingDefault()` — one-time миграция сбрасывает "category"→"none"
@@ -8019,7 +8019,7 @@ vmp 1.8.6) в PinoK, сохранив существующие функции (�
   - SD-копия получает только имя файла (без подпапки) — остаётся плоской.
 - `MusicScreen` (диалог «Плейлисты»): добавлена кнопка «скачать плейлист»
   (Download-иконка) рядом с play — грузит треки, вызывает
-  `enqueuePlaylistDownload`, Toast «Скачивание плейлиста: N треков».
+  `enqueuePlaylistDownload`, Toast «Скачивание плейлиста: N треко».
 
 **Проверка:** `compileDebugKotlin` + `assembleDebug` → BUILD SUCCESSFUL; APK
 установлен, приложение запущено без крашей.
@@ -8433,7 +8433,7 @@ PiP должен встать на паузу сам. Проблема с зад
 - Фикс-скрипт: `C:\Users\Pinokio240\Desktop\fix_mtp_code19.bat` (запустить от имени
   администратора) — `pnputil /remove-device` битых MTP-узлов + `/scan-devices` + переподключение.
   Альтернатива вручную: Диспетчер устройств → Переносные устройства → MTP → Удалить устройство
-  (галочка «Удалить программы драйверов») → переподключить телефон.
+  (галочка «Удалить программы драйверо») → переподключить телефон.
 
 **Проверка:** `compileDebugKotlin` + `assembleDebug` → BUILD SUCCESSFUL, 0 предупреждений;
 APK установлен.
@@ -8819,7 +8819,7 @@ APK установлен, без крашей (pid OK).
 
 ### 3. Названия + комментарии у видео (#VIDEO-TITLE-COMMENTS)
 - `FeedScreen.VideoThumbnail` и `CommunityScreen.VideoThumbnail`: под превью — название
-  (2 строки) + «N просмотров • M комментариев» (если доступны).
+  (2 строки) + «N просмотров • M комментарие» (если доступны).
 - `VideoScreen.VKVideoCard`: в строку meta добавлен счётчик комментариев.
 
 ### 4. Профиль: вложения репостов (#PROFILE-REPOST-ATTACH)
@@ -9006,7 +9006,7 @@ FAB «Обновить ленту» + «Наверх» и открытие му�
   - `selectedTab` default 0 → «Моя музыка» открывается первой.
   - `searchActive = selectedTab == 0` (поиск живёт во вкладке «Моя музыка»).
   - `when(selectedTab)`: 0→`MusicMyTracksTab`, 1→`MusicHomeTab`, 2→`DiscoverTab`.
-  - Оба фоновых `LaunchedEffect` («подгрузка треков») — условие `selectedTab != 0`.
+  - Оба фоновых `LaunchedEffect` («подгрузка треко») — условие `selectedTab != 0`.
   - Inline-поле поиска — `if (selectedTab == 0)`.
 
 **Проверка на устройстве:** BUILD SUCCESSFUL, 0 предупреждений. Вкладки: «Моя музыка»
@@ -9376,7 +9376,7 @@ Assassination Under God, CHAMPION SOUND, Я идиотка), Новые имен
 
 ### 2. Вкладка «Каталоги»
 - `videoGetCatalogSections()` — video.getCatalog → `response.sections[]`
-  («Для вас»/«Тренды»/«Детям»/«Телеканалы»/«Политика»/«Интерактив»/«Шоу»/
+  («Для вас»/«Тренды»/«Детям»/«Телеканалы»/«Политика»/«Интеракти»/«Шоу»/
   «Подписки»/«Спорт»/«Трансляции»/«Киберспорт и игры»/«Фильмы»/«Сериалы»).
 - Модель `VideoCatalogSection` (id, name, url, is_selected).
 - Клик по разделу → `catalog.getSection(section_id)` (ТОТ ЖЕ паттерн, что в
@@ -10048,7 +10048,7 @@ PiP снова показывает старый клип.
   4. `auth.anonymLogin` с `$`-токеном (version=3) → session_key (правильный формат).
 - **Вывод:** для рабочего session_key нужен `$`-токен из `messages.getAnonymCallToken`, который требует: (а) anonym.eyJ-токен (есть), (б) **решение капчи error 14** (PoW captchaNotRobot — реализовано в vk-turn-proxy), (в) правильный `secret` из getCallPreview + `link`.
 
-**4. Redmi 9 (второй участник):** официальный VK 8.192 запущен, залогинен под rc-grinpark@mail.ru, открыт диалог с «Сергей Ширабоков» (171093180). VK на Redmi звонок от PinoK НЕ получил (нет экрана/уведомления) — потому что исходящий в PinoK не завершён.
+**4. Redmi 9 (второй участник):** официальный VK 8.192 запущен, залогинен под rc-grinpark@mail.ru, открыт диалог с «Сергей Ширабоко» (171093180). VK на Redmi звонок от PinoK НЕ получил (нет экрана/уведомления) — потому что исходящий в PinoK не завершён.
 
 ### Сборка: BUILD SUCCESSFUL без warnings. APK установлен на эмулятор.
 
@@ -10553,7 +10553,7 @@ vchatGetConversationParams перебирает 3 хоста × 4 ключа П�
    vchatJoinConversation → engine.acceptCall → применить кэшированные
    offer/кандидаты (кэш чистится) → signaling.acceptCall. Провал →
    FAILED с текстом («Не удалось получить параметры звонка» / «Нет связи
-   с сервером звонков»).
+   с сервером звонко»).
 4. CallScreen «Отклонить»: если WS не готов — HTTP-fallback
    vchat.hangupConversation(reason="declined") (раньше decline молча терялся,
    звонок продолжал звонить на других устройствах).
@@ -10737,7 +10737,7 @@ answer —, answer×N), «сервер отверг команду» (ошибк
 ### Контекст: пользователь после сборки ffc39c3 прислал скриншот входящего звонка + лог 22:29:
 «Ошибка соединения», diag «WS подключён • PC есть • ICE FAILED», сигналинг
 «settings-update • участник 595859469344 • conv ✓ • offer ✓ • answer ✓» + «имя
-входящего с аватаркой нет» (заглушка «Входящий+звонок», аватар — буква «В»).
+входящего с аватаркой нет» (заглушка «Входящий+звонок», аватар — буква «»).
 
 ### Разбор лога 22:29 (входящий, VK Desktop ← PinoK):
 
@@ -11837,7 +11837,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 **Корневая причина:** треки `catalog.getAudioSearch` лежат в `response.audios[]` (top-level) — задокументировано в HISTORY 2026-08-17 и подтверждено работающим на устройстве `audioGetAudiosByArtist` (38 треков «Баста» из этого поля). `audioSearchWithSections` парсил треки ТОЛЬКО из `blocks[]` (поиск их там не отдаёт — blocks живут в `response.catalog.sections[].blocks[]` и отдают suggestions) → `tracks = 0` всегда. Сверху Fix #281 добавил ранний return при «хоть что-то найдено» — возврат с нулевыми треками, до `audio.search` (даёт треки для direct-токенов) код не доходил. Тот же слепой патч — в `audioSearchCatalogFallback` (Fix #266). Секция «Треки» в UI была и всегда пустовала.
 
-**Исправления (VKApiClient.kt):** новый парсер `parseTracksFromCatalogSearchResponse` (response.audios[], дедуп (ownerId,id) через общий seen, URL-фильтр на стороне вызывателя); `audioSearchWithSections` — audios[] как первичный источник + blocks легаси-добор, ранний return ТОЛЬКО при ненулевых треках (иначе провал в audio.search); `audioSearchCatalogFallback` — audios[] первым источником (raw через catalogGetAudioSearchRaw). UI не тронут; бюджет HTTP не ухудшен (audios[] — из уже скачанного ответа; extra audio.search только в edge-case «каталог без треков»).
+**Исправления (VKApiClient.kt):** новый парсер `parseTracksFromCatalogSearchResponse` (response.audios[], дедуп (ownerId,id) через общий seen, URL-фильтр на стороне вызывателя); `audioSearchWithSections` — audios[] как первичный источник + blocks легаси-добор, ранний return ТОЛЬКО при ненулевых треках (иначе провал в audio.search); `audioSearchCatalogFallback` — audios[] первым источником (raw через catalogGetAudioSearchRaw). UI не тронут; бюджет HTTP не ухудшен (audios[] — из уже скачанного ответа; extra audio.search только в edge-case «каталог без треко»).
 
 **Док:** МУЗЫКА-ПОИСК-ТРЕКИ-ФИКС.md (диагноз, было/стало, матрица проверки 6 пунктов). BuildStamp не бампнут (calls-2026.09.06-5 в силе, музыкально-звонковая зона не пересекается).
 
@@ -11866,7 +11866,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 **Волна A — этапы П-3/П-4 (параллельно, opus):**
 - `PROFILE-P3-4a` (П-3 редактирование): НОВЫЙ EditProfileScreen.kt (918 строк) — префилл accountGetProfileInfo (терпеливый JsonObject-парсинг), сохранение account.saveProfileInfo dirty-diff (только изменённые поля; changed=1 → Toast+возврат, ошибка/captcha → форма остаётся); АВАТАР: photosGetProfileUploadServer → photosUploadWallPhoto (транспорт) → photosSave(albumId=-6); ОБЛОЖКА: photosGetOwnerCoverPhotoUploadServer(upload_v2) → локальный OkHttp-multipart полем "file" (VKA-транспорт шлёт "photo" — для cover-сервера не годится) → photosSaveOwnerCoverPhoto(responseJson, upload_v2), «Удалить обложку» при cover.enabled → photosRemoveOwnerCoverPhoto(null); relation 0–8, sex FilterChip; маршрут Screen.ProfileEdit + composable в SovaNavHost; кнопка «Редактировать профиль» в ProfileScreen (onEditProfileClick, дефолт {}). Отклонения честные: город read-only (city принимает ID, cities-поиска в VKA нет), «О себе/Сайт» вне сигнатуры saveProfileInfo, обложка без crop, bdate текстом. Верификация: скобки аддитивно 0-дельта, 15 именованных аргументов saveProfileInfo ⊆ сигнатуре, дубли 0, импорты 100%.
-- `PROFILE-P4-4b` (П-4 настройки): НОВЫЙ PrivacySettingsScreen.kt (588 строк) — VK-приватность целиком на BFF settingsGeneralGet/SetPrivacySettings: динамический рендер секций, toggle→settingsGeneralToggleNotify, select→SetPrivacySettings, индикатор «Сохранение…/Изменения сохранены» (§1.4) с авто-скрытием 2с, оптимистичный откат+Toast, PullToRefreshBox; НОВЫЙ BlacklistScreen.kt (707 строк) — самостоятельный чёрный список §1.6: accountGetBanned c пагинацией, фильтр bl-filter, unban с подтверждением, «Добавить» (bl-add-btn): парсинг числовой id±/id123/club123/ссылки vk.com|m.vk.com|vk.ru/короткого имени → resolveScreenName → превью usersGet/groupsGetById → accountBan (отрицательный id сообществам); NotificationSettingsScreen: секция «Заблокированные» ПЕРЕНЕСЕНА (state/загрузка/BannedUserRow удалены), добавлена «Уведомления сообществ» (groupsGet(filter="editor") + groupsEditNotifications, тумблер уровня группы); SettingsScreen: серверная строка «Настройки приватности VK» в PRIVACY-табе перед локальными тумблерами + строка «Чёрный список» в NOTIFICATIONS-табе; Screen.kt +2 маршрута (settings_privacy, blacklist), SovaNavHost +2 composable по callback-паттерну. Отклонения честные: 16 событийных тумблеров §1.5 + «Удалить источник» — legacy al_settings.php (wire нет), начальное положение тумблера группы API не отдаёт (VK-дефолт «вкл»), privacy-«button» — честный Toast; sn_*/nm_*/nf_* §1.4 — SSR-testid'ы, не API-ключи (BFF отдаёт секции as-is — фейков нет).
+- `PROFILE-P4-4b` (П-4 настройки): НОВЫЙ PrivacySettingsScreen.kt (588 строк) — VK-приватность целиком на BFF settingsGeneralGet/SetPrivacySettings: динамический рендер секций, toggle→settingsGeneralToggleNotify, select→SetPrivacySettings, индикатор «Сохранение…/Изменения сохранены» (§1.4) с авто-скрытием 2с, оптимистичный откат+Toast, PullToRefreshBox; НОВЫЙ BlacklistScreen.kt (707 строк) — самостоятельный чёрный список §1.6: accountGetBanned c пагинацией, фильтр bl-filter, unban с подтверждением, «Добавить» (bl-add-btn): парсинг числовой id±/id123/club123/ссылки vk.com|m.vk.com|vk.ru/короткого имени → resolveScreenName → превью usersGet/groupsGetById → accountBan (отрицательный id сообществам); NotificationSettingsScreen: секция «Заблокированные» ПЕРЕНЕСЕНА (state/загрузка/BannedUserRow удалены), добавлена «Уведомления сообщест» (groupsGet(filter="editor") + groupsEditNotifications, тумблер уровня группы); SettingsScreen: серверная строка «Настройки приватности VK» в PRIVACY-табе перед локальными тумблерами + строка «Чёрный список» в NOTIFICATIONS-табе; Screen.kt +2 маршрута (settings_privacy, blacklist), SovaNavHost +2 composable по callback-паттерну. Отклонения честные: 16 событийных тумблеров §1.5 + «Удалить источник» — legacy al_settings.php (wire нет), начальное положение тумблера группы API не отдаёт (VK-дефолт «вкл»), privacy-«button» — честный Toast; sn_*/nm_*/nf_* §1.4 — SSR-testid'ы, не API-ключи (BFF отдаёт секции as-is — фейков нет).
 - Слив параллельных правок SovaNavHost.kt/Screen.kt: хунки не пересеклись (оркестратор: маршруты 3/3 уникальны, composable 3/3).
 
 **Волна B — закрытие остатков скоупов П-1/П-2 (последовательно, общий файл ProfileScreen.kt):**
@@ -11883,7 +11883,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ## 2026-09-07 — fix(music): Fix #283 — очередь воспроизведения плейлиста обрезана страницей VK (100+ треков)
 
-**Запрос:** «Почему при воспроизведении плейлиста в 100 треков или более в список на воспроизведения не соответствует количеству треков».
+**Запрос:** «Почему при воспроизведении плейлиста в 100 треков или более в список на воспроизведения не соответствует количеству треко».
 
 **Диагноз:** VK отдаёт `audio.get{album_id}` страницами (кап ~100/запрос); PinoK грузил плейлист ОДНОЙ страницей в 5 местах: `openPlaylistAndPlay` (дефолт 50!), `PlaylistDetailScreen` (100), PlaylistsDialog ×3 (дефолт 50), `PlaylistAttachmentCard` (100). Очередь `PlayerConnection` лимита не имеет — узкое место только в загрузке.
 
@@ -11977,7 +11977,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ## 2026-09-07 — fix+feat(multi): Fix #285 + три направления: OpenVK-извлечения, унификация вложений (VK web), аудит настроек
 
-**Запрос:** лог компиляции (16 ошибок VkMultiAccount) + «что можно вытащить из OpenVK/mobile-android-legacy?» (распределить по лучшим суб-агентам) + «изучи как файлы прикрепляются в веб версии вк, унифицируй это меню везде… как из самого вк так и из внешних источников» + «изучи раздел настроек и проверь работоспособность, а не просто заглушки».
+**Запрос:** лог компиляции (16 ошибок VkMultiAccount) + «что можно вытащить из OpenVK/mobile-android-legacy?» (распределить по лучшим суб-агентам) + «изучи как файлы прикрепляются в веб версии вк, унифицируй это меню везде… как из самого вк так и из внешних источнико» + «изучи раздел настроек и проверь работоспособность, а не просто заглушки».
 
 **Fix #285 (оркестратор):** `VkMultiAccount` — вложенный data class внутри VKApiClient (:16231), экран импортировал несуществующий top-level `re.pinok.api.VkMultiAccount` → все 16 ошибок. Фикс 3 правками VkIdAccountScreen.kt (импорт `re.pinok.api.VKApiClient` + `VKApiClient.VkMultiAccount` ×2 — паттерн `VKApiClient.CitySuggestion` EditProfileScreen:1030). VKA не тронут.
 
@@ -11990,7 +11990,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 **Внедрение (3 opus-агента параллельно, зоны строго непересекающиеся):**
 - **3-a ATTACH-UNIFY** (6 файлов, +1451/−156): P0 — фото комментария ленты → uploadPhotoForComment (attach `photo{owner}_{id}`, 1:1 с PostDetail), камера честно прокинута в Feed/PostDetail (TakePicture+FileProvider+rememberSaveable, паттерн чата), CreatePostDialog multi-фото ≤10 (PickMultipleVisualMedia); P1 — AttachmentPickerSheet +табы «Фото» (photosGetAll) и «Документы» (docsGet) = источник «Из VK», UnifiedAttachMenu порядок по спеке, «Из VK» во всех 4 поверхностях (только дефолтные параметры); P2 — «Видео с устройства» (videoSave isClips=false + videoUploadFile), «Видео по ссылке» (videoSave linkUrl), конструктор «Опрос» (вопрос + 2-10 вариантов + анонимность → pollsAdd → `poll{owner}_{id}`), единый хелпер `buildVkAttachment` (1 декларация, все рукописные строки переведены). ChatDetail — минимальный дифф 58.
-- **3-b SETTINGS-FIX** (6 файлов, +524/−107): P1 — Прокси реально применяется (OkHttp builder.proxy в SovaApp:993-зоне; честно «после перезапуска» + тост; SOCKS не рисован — no-stub), пути загрузок reconfigurePath при старте (Track/VideoDownloadManager), «Звук уведомлений о сообщениях» переименован в честное «Заглушение чатов»; P2 — mic/camera-дефолты звонков читаются CallScreen'ом (mic → setCommunicationDevice; камера — честное отклонение: WebRtcEngine без видеозахвата), EmailNotifyCard → серверный контур settingsGeneralGetNotifySettings(page="email") + ToggleNotify (оптимистично, откат), obscene-фильтр — честная подпись (геттера в VK API нет); P3 — мёртвый «Сбросить» удалён, select-без-options без шеврона, мёртвые SovaPrefs-поля помечены @Deprecated-KDoc (используются в FeedScreen Snapshot — не удалены), «Оповещения о входе» синхронизированы.
+- **3-b SETTINGS-FIX** (6 файлов, +524/−107): P1 — Прокси реально применяется (OkHttp builder.proxy в SovaApp:993-зоне; честно «после перезапуска» + тост; SOCKS не рисован — no-stub), пути загрузок reconfigurePath при старте (Track/VideoDownloadManager), «Звук уведомлений о сообщениях» переименован в честное «Заглушение чато»; P2 — mic/camera-дефолты звонков читаются CallScreen'ом (mic → setCommunicationDevice; камера — честное отклонение: WebRtcEngine без видеозахвата), EmailNotifyCard → серверный контур settingsGeneralGetNotifySettings(page="email") + ToggleNotify (оптимистично, откат), obscene-фильтр — честная подпись (геттера в VK API нет); P3 — мёртвый «Сбросить» удалён, select-без-options без шеврона, мёртвые SovaPrefs-поля помечены @Deprecated-KDoc (используются в FeedScreen Snapshot — не удалены), «Оповещения о входе» синхронизированы.
 - **3-c OPVK-EXTRACT** (5 файлов +1 новый, +170/−2): UserProfileScreen +92 — секция «Информация» (6 строк из непустых about/activities/interests/music/movies/books уже загруженного usersGetFullExtended; bdate/city не дублируются — в хедере; quotes не парсится в модель — честное отклонение); GroupMembersScreen NEW 346 (эталон FollowersSubscriptionsScreen: пагинация 50/hasMore=полная страница/фильтр/PTR/error-стейт; groupsGetMembers:4106 отдаёт профили сразу — обогащение не понадобилось); CommunityScreen — кликабельный счётчик участников (+33/−2); Screen.GroupMembers ("group_members/{groupId}", hasOwnTopBar) + SovaNavHost composable (+28).
 
 **Приёмка оркестратора:** git-union ровно 18 код-файлов (3 зоны + VKA/VkIdAccount оркестратора) + 3 дока + worklog; скобки 17/19 OK, 2 MISMATCH = преждесуществующие артефакты с нейтральными дельтами (VKA {2616,2617}→{2626,2627} +10/+10; SettingsScreen {1112,1113}→{1168,1169} +56/+56); nested-comments ALL CLEAN (168); дубли ключевых символов = 0 (buildVkAttachment/pollsAdd/CreatedPoll/GroupMembersScreen/onMembersClick — по 1 декларации; посторонние pollsAdd-матчи = преждесуществующий pollsAddVote); spot-check P0 (photo-пайплайн) и proxy-проводки — корректны; Models.kt/core-data-модели не тронуты.
@@ -12245,15 +12245,15 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ## 2026-09-09 — feat(im): волна 24 — Fix #355 серверный поиск «по чатам и сообщениям» (#MSG-SEARCH-SERVER), Fix #356 архив диалогов «Убрать чат из списка» (#MSG-ARCHIVE)
 
-**Симптом (бэклог 19-D, мессенджер.снапшоты.разбор.md §4 К-1/К-2):** (1) поиск в списке диалогов — клиент-фильтр ТОЛЬКО по заголовкам загруженных 200 чатов: сообщения не ищутся вовсе, чаты за пределами первой страницы не находятся; (2) единственный «уход» чата из списка — необратимое удаление, архива нет (в VK web/m.vk.ru — «Архив» в шапке + «Убрать чат из списка» в меню диалога).
+**Симптом (бэклог 19-D, мессенджер.снапшоты.разбор.md §4 К-1/К-2):** (1) поиск в списке диалогов — клиент-фильтр ТОЛЬКО по заголовкам загруженных 200 чатов: сообщения не ищутся вовсе, чаты за пределами первой страницы не находятся; (2) единственный «уход» чата из списка — необратимое удаление, архива нет (в VK web/m.vk.ru — «Архи» в шапке + «Убрать чат из списка» в меню диалога).
 
 **Root-cause:** VKA-методы messages.searchConversations / messages.archiveConversation / messages.unarchiveConversation никогда не заводились (rg = 0 вхождений — гэп 19-D); в UI обе фичи отсутствовали целиком.
 
 **Фиксы:**
 - **Fix #355 (VKA+UI):** НОВЫЙ `messagesSearchConversations(query, count=20)` — messages.searchConversations {q, count, extended=1, fields="photo_100,photo_200,online,last_seen"}; парсинг терпеливый (снапшот §7.2 — wire не снят живым ответом): items понимаются И как обёртка {conversation:…} (как у getConversations), И как ПЛОСКИЕ объекты conversation; last_message может отсутствовать → lastMessage=null; parsePeerMaps/parseConversationItem/resolveMissingPeerInfo — 1:1 паттерн messagesGetConversations. `MessageSearchResult.peerTitle` (+поле, дефолт null — обратная совместимость in-chat поиска) резолвится из extended profiles[]/groups[]. UI MessagesScreen: q ≥ 2 символов → серверный режим (debounce 400мс через LaunchedEffect(searchQuery) с отменой), две секции «Чаты» (локальные совпадения + серверные dedup по peer.id — уникальность ключей LazyColumn) и «Сообщения» (MessageSearchResultRow: титул/дата toChatDate/сниппет; тап → onChatClick — ChatDetail сам резолвит титул, прецедент Fix #348). err → честный текст «Ошибка поиска: … — показаны только локальные совпадения» в пустом стейте (тосты на каждый кейстрок — шум, выбран инлайн-текст).
-- **Fix #356 (VKA+prefs+UI):** НОВЫЕ `messagesArchiveConversation(peerId)` / `messagesUnarchiveConversation(peerId)` (response 1 / boolean true — паттерн markAsImportantConversation). НОВЫЙ `ArchivedConversationsRepository` (1:1 PinnedConversationsRepository: JSON-массив Long в SovaPrefs.archivedConvsData — Keys.ARCHIVED_CONVS_DATA + Snapshot.archivedConvsData + setArchivedConvsData; FeedScreen dummy-snapshot дополнен — Snapshot расширился). SovaApp: archivedConvsRepository. UI: FilterChip «Архив (N)» над списком (аналог кнопки шапки m.vk.ru; открытие догружает messagesGetConversations(filter="archived") — серверный архив мерджится с локальным, dedup); filteredChats исключает localArchivedIds (чат в `chats` НЕ удаляется → разархивация мгновенно возвращает без перезагрузки); ChatCard +isArchived/+showArchiveAction/+showListActions: пункт «Убрать чат из списка»/«Вернуть из архива» (Archive/Unarchive-иконки), для карточек вне основного списка (архив/поиск) pin/mute/unread/delete СКРЫТЫ (обработчики не подключены — иначе мёртвые кнопки, honest UI); long-press в результатах поиска не открывает пустое меню. Обработчик — паттерн pin: локальный список = source of truth (персист), API best-effort в фоне, НЕ откатываем при err=8/15 (честный AppLog), тосты «Убрано в архив»/«Возвращено из архива».
+- **Fix #356 (VKA+prefs+UI):** НОВЫЕ `messagesArchiveConversation(peerId)` / `messagesUnarchiveConversation(peerId)` (response 1 / boolean true — паттерн markAsImportantConversation). НОВЫЙ `ArchivedConversationsRepository` (1:1 PinnedConversationsRepository: JSON-массив Long в SovaPrefs.archivedConvsData — Keys.ARCHIVED_CONVS_DATA + Snapshot.archivedConvsData + setArchivedConvsData; FeedScreen dummy-snapshot дополнен — Snapshot расширился). SovaApp: archivedConvsRepository. UI: FilterChip «Архив (N)» над списком (аналог кнопки шапки m.vk.ru; открытие догружает messagesGetConversations(filter="archived") — серверный архив мерджится с локальным, dedup); filteredChats исключает localArchivedIds (чат в `chats` НЕ удаляется → разархивация мгновенно возвращает без перезагрузки); ChatCard +isArchived/+showArchiveAction/+showListActions: пункт «Убрать чат из списка»/«Вернуть из архива» (Archive/Unarchive-иконки), для карточек вне основного списка (архив/поиск) pin/mute/unread/delete СКРЫТЫ (обработчики не подключены — иначе мёртвые кнопки, honest UI); long-press в результатах поиска не открывает пустое меню. Обработчик — паттерн pin: локальный список = source of truth (персист), API best-effort в фоне, НЕ откатываем при err=8/15 (честный AppLog), тосты «Убрано в архи»/«Возвращено из архива».
 
-**Проверка юзером:** (1) список диалогов → поиск → набрать 2+ символа → секции «Чаты» и «Сообщения» с серверными результатами (включая чаты за пределами первой страницы и тексты сообщений); тап по сообщению открывает диалог; (2) long-press на чате → «Убрать чат из списка» → чат исчез из списка, появился тост; чип «Архив (N)» над списком → раздел «Архив» → чат на месте → long-press → «Вернуть из архива» → чат вернулся в основной список; (3) из поиска long-press не открывает меню (действия там не подключены — честно); (4) архив переживает перезапуск приложения (локальное хранилище).
+**Проверка юзером:** (1) список диалогов → поиск → набрать 2+ символа → секции «Чаты» и «Сообщения» с серверными результатами (включая чаты за пределами первой страницы и тексты сообщений); тап по сообщению открывает диалог; (2) long-press на чате → «Убрать чат из списка» → чат исчез из списка, появился тост; чип «Архив (N)» над списком → раздел «Архи» → чат на месте → long-press → «Вернуть из архива» → чат вернулся в основной список; (3) из поиска long-press не открывает меню (действия там не подключены — честно); (4) архив переживает перезапуск приложения (локальное хранилище).
 
 ---
 
@@ -12338,11 +12338,11 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - **Fix #368 (#FEED-MENU-RENDER):** вызов FeedRightPanel ПЕРЕНЕСЁН (не скопирован) выше обоих ранних return'ов, непосредственно перед `if (loading)`; т.к. это inline-оверлей (в отличие от ModalBottomSheet в NotificationsScreen), обёрнут в `Box(Modifier.zIndex(1f))` — иначе Scrim/панель рисовались бы ПОД карточками ленты (сиблинги в порядке композиции). При visible=false клики не перехватываются (Scrim внутри AnimatedVisibility, BackHandler enabled=visible). Все аргументы объявлены выше точки вставки.
 - **Fix #369 (#DRAWER-LOGOUT):** закреплённый хвост drawer: Настройки → **«Выйти из аккаунта»** (NavigationDrawerItem, Icons.AutoMirrored.Filled.Logout, selected=false) → Выйти из приложения (finishAffinity — это ДРУГОЕ действие, различие задокументировано в коде). onClick: закрыть drawer → показать ОЖИВЛЁННЫЙ диалог: «Выйти из аккаунта?» / «Сессия будет остановлена, куки авторизации будут очищены. Потребуется повторный вход.» / Выйти→logout, Отмена. «Выйти из аккаунта» добавлен в longestDrawerText (расчёт ширины drawer).
 - **Fix #370 (#LOGOUT-HOLDER-CLEAR / #LOGOUT-WEBTOKEN-CLEAR):** (a) holders получили public clear() (VideoHolder: last+active; PostHolder: last+lastGroups; FeedScrollHolder: position; FeedDataHolder/StoriesHolder — уже были) и вызываются ВСЕ через обёртку onLogoutWithHoldersClear ДО mainActivity-логики (longPoll stop → signOut → clearAllVkCookies 34 куки + storage.clear() → AuthActivity) — из drawer-диалога и из ProfileScreen.onLogout; (b) logout-intent несёт EXTRA_AUTH_REASON="logout" → AuthActivity → VkAuthWebViewScreenV2: на ПЕРВОЙ загруженной странице origin m.vk.ru/m.vk.com (one-shot) выполняется новый WebTokenAuth.clearAllWebTokenKeysNow(view) (не-suspend evaluateJavascript; JS вынесен в CLEAR_WEB_TOKEN_KEYS_JS, clearAllWebTokenKeys private→internal) — очистка именно после загрузки origin (localStorage привязан к документу), до логина — свежий токен новой сессии не затрагивается, старый не подбирается.
-- **#CALLS-DNS-PIN (ручной IP DNS-пина звонков):** SovaPrefs: новый ключ `calls_dns_pin_ip` (stringPreferencesKey; Keys:1427 / дефолт-маппинг :468 / Snapshot-поле callsDnsPinIp с дефолтом "" :1215 / сеттер setCallsDnsPinIp(trim) :868; оба места конструирования Snapshot — именованные, сборка не ломается). SovaApp Dns-объект: pinned-мапа → pinnedHosts setOf + file-level `AUTO_IP = "155.212.204.12"` + `isValidIpv4` (4 октета 0..255, ведущие нули запрещены — InetAddress трактует «012» как восьмеричную запись); lookup читает @Volatile prefsSnapshot на КАЖДОЕ новое соединение: непустой валидный ручной IP перекрывает AUTO_IP БЕЗ перезапуска приложения (живой WS-сигналинг не рвётся — возьмёт IP при reconnect; невалидный/пустой → авто; прокси-режим не конфликтует — hostname резолвит прокси). SettingsScreen → вкладка «Звонки» → секция «DNS-пин звонков» (после «Программный декодер видео», до «Входящие звонки»): пояснение (3 домена, сигналинг+vchat API, ICE/TURN резолвится libwebrtc отдельно — честно), OutlinedTextField с локальным remember-стейтом (не сохраняет промежуточные невалидные значения), placeholder «авто (155.212.204.12)», isError+валидация (blank разрешён), клавиатура Number с авто-заменой «,»→«.» (ru-клавиатура), кнопки «Сохранить» (тост «IP сохранён — применится для новых соединений звонков») и «Сбросить (авто)». Двойная валидация: UI (кнопка disabled) + lookup (мусор в сторе игнорируется → звонки не ломаются).
+- **#CALLS-DNS-PIN (ручной IP DNS-пина звонков):** SovaPrefs: новый ключ `calls_dns_pin_ip` (stringPreferencesKey; Keys:1427 / дефолт-маппинг :468 / Snapshot-поле callsDnsPinIp с дефолтом "" :1215 / сеттер setCallsDnsPinIp(trim) :868; оба места конструирования Snapshot — именованные, сборка не ломается). SovaApp Dns-объект: pinned-мапа → pinnedHosts setOf + file-level `AUTO_IP = "155.212.204.12"` + `isValidIpv4` (4 октета 0..255, ведущие нули запрещены — InetAddress трактует «012» как восьмеричную запись); lookup читает @Volatile prefsSnapshot на КАЖДОЕ новое соединение: непустой валидный ручной IP перекрывает AUTO_IP БЕЗ перезапуска приложения (живой WS-сигналинг не рвётся — возьмёт IP при reconnect; невалидный/пустой → авто; прокси-режим не конфликтует — hostname резолвит прокси). SettingsScreen → вкладка «Звонки» → секция «DNS-пин звонко» (после «Программный декодер видео», до «Входящие звонки»): пояснение (3 домена, сигналинг+vchat API, ICE/TURN резолвится libwebrtc отдельно — честно), OutlinedTextField с локальным remember-стейтом (не сохраняет промежуточные невалидные значения), placeholder «авто (155.212.204.12)», isError+валидация (blank разрешён), клавиатура Number с авто-заменой «,»→«.» (ru-клавиатура), кнопки «Сохранить» (тост «IP сохранён — применится для новых соединений звонко») и «Сбросить (авто)». Двойная валидация: UI (кнопка disabled) + lookup (мусор в сторе игнорируется → звонки не ломаются).
 - **Fix #377 (#DOZE-RESUME-AUTH), 5 компонент:** (1) NetworkObserver.refreshNow() — принудительный fresh-снапшот checkOnline() в _isOnline (идемпотентен), вызывается ПЕРВЫМ делом в MainActivity.onResume при isBackgrounded — весь resume-контур видит РЕАЛЬНУЮ сеть, а не значение до сна; (2) maybeProactiveTokenRefresh: токен на исходе (<5 мин до expiresAt) или invalidated → ensureFreshToken(force=true) в appScope (лёгкий HTTP Path 1.5 ~200мс, до AuthActivity; успех → authVersion++ в Main → главный экран БЕЗ AuthActivity; throttle 30с; гонок нет — launchAuth гуардится authActivityShowing/throttle/hasValidToken); (3) scheduleSilentAuthRetryAfterCancel: после RESULT_CANCELED от SILENT-попытки одноразовый retry через 20с (все guard'ы: не в фоне, не offline, токена нет, AuthActivity не показана, сеть поднялась; через общий launchAuth — вторая AuthActivity наслоиться не может); (4) Fix #341 тело retry вынесено в networkRestoredAuthRetry + НЕМЕДЛЕННАЯ однократная проверка ПЕРЕД collect (StateFlow давно true без emission — главный стопор старой петли); (5) connectionPool.evictAll() на resume при фоне >5 мин (мёртвые keep-alive после Doze → IOException-каскад и трип авто-офлайна #38); SovaApp.foregroundTicks (MutableStateFlow, инкремент немедленно в ProcessLifecycleOwner ON_RESUME до debounce) → FeedScreen LaunchedEffect: tick>0 && errorText!=null && posts.isEmpty() && !isOffline && !privacyOfflineMode → reloadFeed() (паттерн 1:1 MusicScreen Fix #367) + авто-reload при возврате сети пока экран открыт с ошибкой; CookieManager.flush() добавлен в 4 места: AuthActivity.onTokenExchange, RemixsidCapturer.capture/snapshotCookies, silent-ветка VkAuthWebViewScreenV2 после успешного обмена, SovaApp foreground cookie-sync.
 - **Fix #371-376 (#PROFILE-POST-PARITY):** (371) текст поста WallPostCard — паттерн Fix #345 + linkifyVkText (textExpanded/textOverflowed/hasVisualOverflow/«Показать ещё»; клик: свёрнутый→развернуть, развёрнутый/короткий→onPostClick; ссылки/упоминания перехватываются раньше); (372) видео поста: carouselEnabled && size>1 → PostVideoCarousel (общий компонент Fix #366), иначе прежний стопк; (373) RepostBlock: + onPostClick параметр, Card .clickable{onPostClick(repost)} после .clip (вложенные просмотр-клики перехватывают раньше), текст репоста expand 5→∞ + linkify, видео репоста — то же ветвление карусель/стопк; (374) onPostClick прокинут в вызов WallPostCard из ProfileScreen (обёртка SovaNavHost PostHolder.last+buildRoute уже работала; UserProfileScreen получил паритет автоматически); (375) лейбл «Закреплённый пост» (post.isPinnedBool) + индикатор копирайта; (376) link/page → LinkCard + PollCard (реальное голосование pollsAddVote) + DocAttachmentCard — сделаны internal в FeedScreen (только модификаторы видимости), нормализация URL Fix #51-A (trim/https-досхематизация/scheme-host/resolveActivity/честные тосты).
 
-**Проверка юзером:** (1) Лента: кнопка «меню ленты» в верхней панели открывает меню СРАЗУ — на скелетоне загрузки, на экране ошибки/офлайна и после загрузки; после загрузки панель «сама» не выскакивает; (2) боковая панель: внизу закреплено Настройки → Выйти из аккаунта → Выйти из приложения; «Выйти из аккаунта» показывает предупреждение про остановку сессии и очистку кукисов; «Выйти» реально выходит (экран входа), «Отмена» ничего не делает; повторный вход другим аккаунтом — лента/посты/истории БЕЗ контента прежней сессии; (3) Настройки → Звонки → «DNS-пин звонков»: ввести кривой IP («300.1.1.1») — красная подсветка и «Сохранить» недоступна; ввести валидный → сохранить → значение переживает перезапуск; «Сбросить (авто)» возвращает встроенный 155.212.204.12; пусто = прежнее поведение; (4) глубокий сон: оставить телефон в сне на 15-30+ мин → открыть приложение — лента грузится САМА (при неудачном первом silent-обмене контент появится через ~20-50с сам, сворачивать не нужно); в logcat маркеры `refreshNow: stale → fresh`, `Proactive token refresh on resume`, `SILENT retry after cancel`, `foregroundTick=… — авто-reload`, `connectionPool.evictAll()`, `CookieManager.flush()`; (5) профиль: длинный пост — «Показать ещё»/разворот, тап по развёрнутому — пост целиком; 2+ видео — карусель (свайп/стрелки/«n/N», флаг «Карусель фото в постах» общий); репост кликается целиком → оригинал; закреплённая запись — лейбл; ссылки/опросы (с голосованием)/документы — рендерятся и работают; на чужом профиле то же самое.
+**Проверка юзером:** (1) Лента: кнопка «меню ленты» в верхней панели открывает меню СРАЗУ — на скелетоне загрузки, на экране ошибки/офлайна и после загрузки; после загрузки панель «сама» не выскакивает; (2) боковая панель: внизу закреплено Настройки → Выйти из аккаунта → Выйти из приложения; «Выйти из аккаунта» показывает предупреждение про остановку сессии и очистку кукисов; «Выйти» реально выходит (экран входа), «Отмена» ничего не делает; повторный вход другим аккаунтом — лента/посты/истории БЕЗ контента прежней сессии; (3) Настройки → Звонки → «DNS-пин звонко»: ввести кривой IP («300.1.1.1») — красная подсветка и «Сохранить» недоступна; ввести валидный → сохранить → значение переживает перезапуск; «Сбросить (авто)» возвращает встроенный 155.212.204.12; пусто = прежнее поведение; (4) глубокий сон: оставить телефон в сне на 15-30+ мин → открыть приложение — лента грузится САМА (при неудачном первом silent-обмене контент появится через ~20-50с сам, сворачивать не нужно); в logcat маркеры `refreshNow: stale → fresh`, `Proactive token refresh on resume`, `SILENT retry after cancel`, `foregroundTick=… — авто-reload`, `connectionPool.evictAll()`, `CookieManager.flush()`; (5) профиль: длинный пост — «Показать ещё»/разворот, тап по развёрнутому — пост целиком; 2+ видео — карусель (свайп/стрелки/«n/N», флаг «Карусель фото в постах» общий); репост кликается целиком → оригинал; закреплённая запись — лейбл; ссылки/опросы (с голосованием)/документы — рендерятся и работают; на чужом профиле то же самое.
 
 ---
 
@@ -12399,7 +12399,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 ### Симптом (пользователь)
 - «Отключение пин кода корректно, пин код не блокирует приложение, пин код в ядре приложения?» — PIN отключается нормально, но при включённом PIN приложение НЕ блокируется.
 - «При открытии Pinok виднеется черный фон от авторизации… можно както его скрыть и просто показать всплывающее сообщение о подключении к сети и указать тип сети, но если свернуть и развернуть то проходит сплеш и все работает» (скриншот Screenshot_20260909_131000.png, логкат сессии 13:09).
-- «Если просматривать в сообществах в разделе видео видео ролики то нет: кнопок поделится, кнопок лайк, комментариев (если доступны), количество просмотров».
+- «Если просматривать в сообществах в разделе видео видео ролики то нет: кнопок поделится, кнопок лайк, комментариев (если доступны), количество просмотро».
 
 ### Root-cause
 - **#384 чёрный фон**: Theme.PinoK.Silent (Fix #339) делал прозрачным только ОКНО AuthActivity, но Compose-контент внутри рисовался поверх: M3 Surface красит весь экран colorScheme.surface (тёмная тема ≈ чёрный), VkAuthWebViewScreenV2 в silent-режиме рисовал WebView + оверлей «Сессия найдена, получаем токен…» — silentMode влиял только на timeout (30с) и статус-текст, но не на видимость. Логкат: чёрный экран висел 104 секунды (13:09:35→13:11:19). Свернуть/развернуть помогало, потому что resume триггерил цепочку Fix #377 (refreshNow → evictAll → proactive refresh) и приложение достраивало вход.
@@ -12444,9 +12444,9 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ### Фиксы (волна 29)
 - **Fix #386 #PIN-CORE #LOCKER-TO-CORE-UI** (29-c): LockerActivity.kt перенесён в `core/ui/src/main/java/re/pinok/locker/` С СОХРАНЕНИЕМ пакета re.pinok.locker — манифест (`.locker.LockerActivity`) и все FQCN-вызовы не тронуты. Зависимости от app сняты: launch(context, pinHash, biometric) через Intent-extras EXTRA_PIN_HASH/EXTRA_BIOMETRIC (SovaApp-доступ удалён, 4 места вызова в MainActivity обновлены: после-auth/boot/onResume-cached/onResume-fallback); SOVATheme → самодостаточная LockerTheme (палитры 1:1 из SOVATheme, dark/light по системе — вид прежний). core/ui/build.gradle.kts + androidx.biometric, androidx.fragment-ktx, activity-compose, core-ktx (все алиасы уже были в libs.versions.toml). BootReceiver остался в app (LongPollKeepAliveService-зависимость). hashPin/vibrate/grace остались в companion — SettingsScreen-дубли оказались FQCN-вызовами и компилируются без правок.
-- **Fix #390 #NOTIFY-MODES** (29-d): SovaPrefs + ключи notify_mode (константы NOTIFY_MODE_MESSAGES_ONLY=0/ALL=1/COMMUNITIES_ONLY=2/SILENT=3, дефолт ALL — текущее поведение), notify_communities_sound/vibration (дефолт true). MessageNotifier: 5 каналов (messages, messages_silent, communities, communities_novib, communities_silent — все IMPORTANCE_HIGH; silent = без звука и вибрации), showNotification + channelId-параметр. SovaApp.startMessageNotifier: isCommunity = fromId<0 || peerId<0; режим 0 → сообщества скипаются; режим 2 → юзеры скипаются; режим 3 → сообщества скипаются, юзеры беззвучно; сообщества → канал по настройкам звука/вибрации. VkNotificationsNotifier: новостные от сообществ (parentOwnerId<0) скрываются в режимах 0/3, новостные от юзеров скрываются в режиме 2; vk_security_alerts не тронут (безопасность). FeedRightPanel: ЗАКРЕПЛЁННАЯ СВЕРХУ секция «Режим уведомлений» (иконка+текущий режим+шеврон) → AlertDialog с 4 RadioButton (формулировки 1:1 с ТЗ). NotificationsTab: секция «Режимы уведомлений» с 4 радио + условные «Звук/Вибрация от сообществ» (видны в режимах 1/2) + честные подсказки.
+- **Fix #390 #NOTIFY-MODES** (29-d): SovaPrefs + ключи notify_mode (константы NOTIFY_MODE_MESSAGES_ONLY=0/ALL=1/COMMUNITIES_ONLY=2/SILENT=3, дефолт ALL — текущее поведение), notify_communities_sound/vibration (дефолт true). MessageNotifier: 5 каналов (messages, messages_silent, communities, communities_novib, communities_silent — все IMPORTANCE_HIGH; silent = без звука и вибрации), showNotification + channelId-параметр. SovaApp.startMessageNotifier: isCommunity = fromId<0 || peerId<0; режим 0 → сообщества скипаются; режим 2 → юзеры скипаются; режим 3 → сообщества скипаются, юзеры беззвучно; сообщества → канал по настройкам звука/вибрации. VkNotificationsNotifier: новостные от сообществ (parentOwnerId<0) скрываются в режимах 0/3, новостные от юзеров скрываются в режиме 2; vk_security_alerts не тронут (безопасность). FeedRightPanel: ЗАКРЕПЛЁННАЯ СВЕРХУ секция «Режим уведомлений» (иконка+текущий режим+шеврон) → AlertDialog с 4 RadioButton (формулировки 1:1 с ТЗ). NotificationsTab: секция «Режимы уведомлений» с 4 радио + условные «Звук/Вибрация от сообщест» (видны в режимах 1/2) + честные подсказки.
 - **Fix #392 #IM-LOCAL-PIN** (29-e): SovaPrefs key im_pinned_dialogs (JSON peer_id в порядке закрепления) + Snapshot.imPinnedDialogs (безопасный парс, битый JSON → emptyList) + setImPinnedDialogs + migrateLegacyPinnedDialogsIfNeeded (одноразовая миграция legacy pinned_convs_data Fix #274/#276 с guard-ами). MessagesScreen: долгий тап на ChatCard → «Закрепить/Открепить диалог» (иконка PushPin в строке); сортировка ТОЛЬКО на вкладке «Диалоги»: локально-закреплённые В ПОРЯДКЕ ЗАКРЕПЛЕНИЯ (позиция фиксируется порядком в prefs — новые сообщения НЕ двигают) → серверно-pinned majorId DESC → остальные по дате; вкладки Каналы/Непрочитанные — прежний порядок; открепление при удалении диалога; drag-reorder персистит новый порядок закрепления.
-- **Fix #393 #CHANNEL-WALL-MODE** (29-f, субагент + доработка мейн): VKApiClient.wallSearch (wall.search, дедуп). ChatDetailScreen: канал определяется ДО запроса messages-истории (messagesGetConversationsById → isChannel → сразу wallGet-режим; fallback probe wallGet при недоступном chat state); ошибки messages для негативного пира больше не показываются. Канал рендерится лентой WallPostCard (переиспользование компонента стены): лайк (likes.add/delete type=post, optimistic+откат), комментарии/поделиться (ShareSheet), offset-пагинация, баннер «Закреплённый пост» над лентой (тап → скролл к посту), шапка «N подписчиков» (groupsGetById + subscribersLabel с русской плюрализацией), PostHolder.lastGroups для пост-деталки, ChannelFooterBar (mute/leave с диалогом) вместо композера.
+- **Fix #393 #CHANNEL-WALL-MODE** (29-f, субагент + доработка мейн): VKApiClient.wallSearch (wall.search, дедуп). ChatDetailScreen: канал определяется ДО запроса messages-истории (messagesGetConversationsById → isChannel → сразу wallGet-режим; fallback probe wallGet при недоступном chat state); ошибки messages для негативного пира больше не показываются. Канал рендерится лентой WallPostCard (переиспользование компонента стены): лайк (likes.add/delete type=post, optimistic+откат), комментарии/поделиться (ShareSheet), offset-пагинация, баннер «Закреплённый пост» над лентой (тап → скролл к посту), шапка «N подписчико» (groupsGetById + subscribersLabel с русской плюрализацией), PostHolder.lastGroups для пост-деталки, ChannelFooterBar (mute/leave с диалогом) вместо композера.
 - **Fix #394 #IM-SEARCH** (29-g, субагент + доработка мейн): лупа (Icons.Filled.Search) в шапке КАЖДОГО диалога/канала. Диалог → диалог поиска: локальная фильтрация загруженной истории (живой) + серверный messagesSearch(query, peerId) с дебаунсом 600мс; тап по результату → скролл к сообщению с подсветкой, а вне загруженного диапазона → preview-диалог «Показать в чате» (переиспользование Fix #206 с догрузкой истории). Канал → правая панель «Поиск по постам» (scrim+slide как FeedRightPanel, BackHandler): поле «Поиск по истории записей», wallSearch, результаты WallPostCard с рабочими лайком/комментом/шером, честные hint/loading/error+«Повторить»/«Ничего не найдено», race-guard seq.
 - **Fix #389 #SCROLL-TOP-PARITY** (29-h, субагент; упал по таймауту — финализирован мейн): единый ScrollToTopFab (app/ui/components, derivedStateOf firstVisibleItemIndex>6, AnimatedVisibility, sync с LocalBottomBarVisible — паттерн Fix #238) на 14 экранов: Notifications, Video ×5 вкладок (отдельные listState), Groups, UserProfile, Profile, FollowersSubscriptions, Bookmarks, Search, Community, BoardTopic, Blacklist, GroupMembers, Friends ×2, Documents. Feed/Music/Messages/ChatDetail не тронуты (уже имели).
 - **Fix #391 #IN-APP-UPDATER** (29-i): version.json в корне репо (манифест версий: versionCode/versionName/stamp/apkUrl/sha256/notes); UpdaterManager (~410 строк: fetchManifest через raw.githubusercontent.com/pinokio240/PinoK_1/PinoK/version.json, сравнение с BuildConfig.VERSION_CODE, OkHttp-стрим скачивания с прогрессом + tmp→rename + sha256-проверка + кэш-хит, installApk через существующий FileProvider + ACTION_VIEW package-archive + ACTION_MANAGE_UNKNOWN_APP_SOURCES без крэша); SettingsScreen: вкладка «Обновления» (текущая версия+stamp, «Проверить обновления», список версий со статусами «Установлена/Доступно обновление/Предыдущая версия», «Скачать APK» с прогрессом → «Установить APK», «Откатиться» для старых версий с честным диалогом (Android не ставит более старую версию поверх — сначала удаление, сессия теряется), «В браузере» — ручное скачивание; apkUrl пуст → disabled + «APK ещё не опубликован»); AndroidManifest + REQUEST_INSTALL_PACKAGES; docs/UPDATER.md — полный чек-лист публикации релиза. Ответ юзеру: сложность СРЕДНЯЯ, механизм реализован целиком.
@@ -12455,9 +12455,9 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 
 ### Проверка пользователем (сборка волны 29 на Windows)
 1. **PIN в core**: PIN-сценарии как в волне 27 (установка/смена/биометрия/блокировка из фона/boot-локер/локер после silent re-login) — поведение НЕ должно измениться; в дереве проекта app/src/.../locker/LockerActivity.kt больше нет, появился core/ui/src/main/java/re/pinok/locker/.
-2. **Режимы уведомлений**: лента → кнопка «меню ленты» (TopAppBar) → закреплённая сверху секция «Режим уведомлений» → 4 режима; выбрать «Уведомления Сообщений» → попросить друга кинуть сообщение И подписаться на активное сообщество → попап только от сообщения; «Уведомления Сообществ» → наоборот; «Тихий режим» → попап от сообщения беззвучно; Настройки → Уведомления → «Режимы уведомлений» → те же 4 радио + «Звук/Вибрация от сообществ» (в режимах 1/2) → выкл. звука сообществ → попап от сообщества без звука.
+2. **Режимы уведомлений**: лента → кнопка «меню ленты» (TopAppBar) → закреплённая сверху секция «Режим уведомлений» → 4 режима; выбрать «Уведомления Сообщений» → попросить друга кинуть сообщение И подписаться на активное сообщество → попап только от сообщения; «Уведомления Сообщест» → наоборот; «Тихий режим» → попап от сообщения беззвучно; Настройки → Уведомления → «Режимы уведомлений» → те же 4 радио + «Звук/Вибрация от сообщест» (в режимах 1/2) → выкл. звука сообществ → попап от сообщества без звука.
 3. **Локальный закреп**: Сообщения → долгий тап на диалог → «Закрепить диалог» → строка уехала наверх с иконкой пина → получить в НЕГО новое сообщение → он НЕ спустился; открепить → вернулся в дату-порядок; закрепить три диалога в разном порядке → порядок закрепа сохраняется.
-4. **Каналы**: Мессенджер → Каналы → открыть канал → лента постов (не ошибки!): лайк работает, комментарии/поделиться открываются, шапка «N подписчиков», закреп-баннер, низ — «Включить уведомления»; старые «сломанные» каналы должны открыться вместо ошибки.
+4. **Каналы**: Мессенджер → Каналы → открыть канал → лента постов (не ошибки!): лайк работает, комментарии/поделиться открываются, шапка «N подписчико», закреп-баннер, низ — «Включить уведомления»; старые «сломанные» каналы должны открыться вместо ошибки.
 5. **Поиск**: открыть любой диалог → лупа в шапке → «Поиск по сообщениям» → ввести → локальные результаты → тап → скролл+подсветка; «Найти на сервере» → серверные результаты → тап → «Показать в чате» догружает; в канале → лупа → панель «Поиск по постам» справа → найти слово из поста → карточка поста → тап → скролл к посту в ленте.
 6. **Стрелка «наверх»**: Уведомления/Видео/Закладки/Друзья/Сообщество/Документы/Чёрный список и остальные 8 экранов → проскроллить ~10+ позиций → FAB-стрелка справа снизу → тап → плавно наверх.
 7. **Обновления**: Настройки → Обновления → «Проверить обновления» (пока apkUrl пуст — честно «APK ещё не опубликован»; для реального релиза: docs/UPDATER.md — bump versionCode, signed APK, sha256, запись в version.json, push).
@@ -12759,7 +12759,7 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 | 2 | #NOTIF-POST-THUMBS | Уведомления о постах: превью — серые заглушки (лог: 60× «thumb NULL for type=post … mediaThumbsSize=0») — attachment ссылается на ID ПОСТА, а карта превью собиралась только из photos[]/videos[] (пусты для постов) | response.posts парсится: первое фото-вложение поста → ключи «post:owner_postId» и «photo:photoOwner_photoId»; lookup'ы (attachment + parent-fallback) получили post:-ключи |
 | 3 | #MEDIA-RETRY-COOLDOWN | При DNS-сбое CDN: каждый URL до 4 ретраев с Thread.sleep-блокировкой, при переподвесках UI — тысячи повторов (лог: 1580 строк NetRetry за 4 минуты) | После «retries exhausted» хост уходит в кулдаун 60с: запросы идут одним проходом без ретраев; успех снимает кулдаун; кап 256 записей |
 
-**Исправленные места пагинации (stop-условия → «непустая страница»):** AudioLibraryPager («Моя музыка» панели), ProfileScreen (профиль-музыка: init + loadMore + честная ошибка вместо «нет треков» при сбое + прыжки через дыры + dedup), CommunityScreen (музыка сообщества), AttachmentPickerSheet (выбор музыки), MyMusicMenuList и AudioPlayerScreen (диалоги плейлистов), MusicPlaylistsScreen (список плейлистов + честная причина при сбое), audioGetPlaylistTracks (треки плейлиста при воспроизведении — раньше короткая страница обрезала очередь).
+**Исправленные места пагинации (stop-условия → «непустая страница»):** AudioLibraryPager («Моя музыка» панели), ProfileScreen (профиль-музыка: init + loadMore + честная ошибка вместо «нет треко» при сбое + прыжки через дыры + dedup), CommunityScreen (музыка сообщества), AttachmentPickerSheet (выбор музыки), MyMusicMenuList и AudioPlayerScreen (диалоги плейлистов), MusicPlaylistsScreen (список плейлистов + честная причина при сбое), audioGetPlaylistTracks (треки плейлиста при воспроизведении — раньше короткая страница обрезала очередь).
 
 **Картинки в постах / превью видео — вердикт по логу (НЕ баг приложения):** за 4,5 минуты лога 100% запросов к VK медиа-CDN (`sun*.userapi.com`, `sun*.vkuserphoto.ru`, `iv.okcdn.ru`) падают по DNS/сети (UnknownHostException «Unable to resolve host», IOException), при этом `api.vk.com` работает идеально всю сессию (wall.get 305КБ, newsfeed.get 825КБ, video.get 367КБ — успешны). Это селективная недоступность именно медиа-доменов VK на уровне устройства/сети: VPN-фильтр, Private DNS, adblocker-фильтр хостов или блокировка провайдером. Приложение увидит картинки, как только CDN станут доступны; #MEDIA-RETRY-COOLDOWN убирает лишний шторм попыток.
 

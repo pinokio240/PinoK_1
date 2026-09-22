@@ -1,4 +1,4 @@
-﻿package re.pinok.api
+package re.pinok.api
 
 import com.google.gson.JsonObject
 import re.pinok.data.model.CatalogViewType
