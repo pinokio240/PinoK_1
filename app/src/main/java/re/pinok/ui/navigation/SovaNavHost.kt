@@ -2753,31 +2753,15 @@ composable(Screen.CallsHistory.route) {
     // LaunchedEffect выше (CallScreen incoming=true, payload — как до Этапа Е).
     // «Отклонить» → WS hangup REJECTED/BUSY (HTTP-фолбэк) внутри экрана, успех →
     // app.consumeIncomingCall().
+    // #CALLS-INCOMING-UI: оверлей входящего (accept/decline/collapse).
     val incomingPayloadE = app.pendingIncomingCallPayload
     if (!incomingPayloadE.isNullOrBlank()) {
         val incomingPeerIdE = app.pendingIncomingCallPeerId
         val incomingTitleE = app.pendingIncomingCallTitle
         val incomingPhotoE = app.pendingIncomingCallPhoto
-        val incomingCollapsedE = app.incomingCallCollapsed
-        // Звонковый раздел: экран активного звонка + раздел «Звонки» (контейнер
-        // calls_history), webview звонков и вкладка настроек «Звонки».
         val incomingInCallsSectionE = currentRoute == Screen.Call.route ||
             currentRoute.startsWith("calls_") || currentRoute == "settings_calls"
-        if (false) { // #CALLS-DOUBLE-UI-FIX-V2: banner DISABLED, only fullscreen screen
-            if (false) {
-                re.pinok.ui.screens.calls.IncomingCallBanner(
-                    peerId = incomingPeerIdE,
-                    title = incomingTitleE,
-                    photo = incomingPhotoE,
-                    payload = incomingPayloadE,
-                    deps = app,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                    onAccept = { app.acceptIncomingCall() },
-                    onDone = { app.consumeIncomingCall() },
-                    onExpand = { app.expandIncomingCall() },
-                )
-            }
-        } else if (!incomingInCallsSectionE) { // #CALLS-DOUBLE-UI-FIX-V2
+        if (!incomingInCallsSectionE) {
             re.pinok.ui.screens.calls.IncomingCallScreen(
                 peerId = incomingPeerIdE,
                 title = incomingTitleE,

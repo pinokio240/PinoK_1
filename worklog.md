@@ -10123,3 +10123,18 @@ SovaNavHost.kt:
   При правке через PowerShell Set-Content без -Encoding UTF8 произошла порча кодировки (мохибейк: 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ' вместо 'Не удалось отправить') в обоих файлах и их .bak. Восстановление из .bak не помогло (.bak тоже битые). ПРАВИЛО: впредь ТОЛЬКО [System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::UTF8) либо Set-Content -Encoding UTF8. Требуется ручная проверка/перезапись SovaApp.kt и SovaNavHost.kt в UTF-8 из Android Studio.
 
 СТАТУС: требует пересборки и одного тестового входящего звонка (сборка/тест — на стороне пользователя).
+
+## 2026-09-23 — CallScreen: восстановлены guard + IncomingCallScreen (accept)
+
+Файл: app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt
+
+Было сломано фиксом #CALLS-DOUBLE-UI-FIX-V2 (22.09 22:00):
+- :397 убран guard '&& app.incomingCallAccepted' -> CallScreen навигировался без accept
+- :2756-2796 удалён блок IncomingCallScreen -> пропала кнопка Принять
+
+Правки:
+- :397 вернуто 'if (!payload.isNullOrBlank() && app.incomingCallAccepted) {'
+- :2756 перед '} // Box' добавлен overlay IncomingCallScreen (accept/decline/collapse)
+
+Статус: требует пересборки и одного тестового входящего звонка.
+

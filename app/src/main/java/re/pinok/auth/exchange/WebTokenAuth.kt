@@ -296,6 +296,7 @@ object WebTokenAuth {
             }
 
             // Step 2: Пробуем прочитать SAT токен (не критично для работы мессенджера)
+            try { persistQueueCredential(webView, webTokenResp.userId) } catch (_: Exception) {}
             val satToken = try {
                 tryReadSatToken(webView).also {
                     if (it != null) AppLog.i(TAG, "Step 2: SAT token из localStorage -> OK")
@@ -1443,6 +1444,41 @@ object WebTokenAuth {
      * SAT нужен для LongPoll v4 (queuev4.vk.com).
      * Если его нет в localStorage — мессенджер сделает retry
      * через messages.getLongPollServer с access_token.
+     */
+    /**
+     * #CALLS-INCOMING: читает queue-credential из localStorage m.vk.ru
+     * (queue_credential_calls_cache_<uid>_<appId> + im_m_comms_key), склейка key/ts
+     * как делает VK web, и сохраняет в SovaPrefs.callsQueueKey/callsQueueTs.
+     * Вызывать ПОКА WebVew жив (сразу после логина).
+     */
+    private suspend fun persistQueueCredential(webView: WebView, uid: Long) {
+        try {
+            val appId = "6287487"
+            val credJson = evaluateJsSafely(webView, "localStorage.getItem('queue_credential_calls_cache_" + uid + "_" + appId + "'")
+            val commsJson = evaluateJsSafely(webView, "localStorage.getItem('im_m_comms_key')")
+            if (credJson.isNullOrBlank() || credJson == "null" || commsJson.isNullOrBlank() || commsJson == "null") {
+                AppLog.d(TAG, "persistQueueCredential: нет queue-ключей в localStorage")
+                return
+            }
+            val cred = JsonParser.parseString(credJson).asJsonObject.getAsJsonObject("data")
+            val comms = JsonParser.parseString(commsJson).asJsonObject
+            val key = cred.get("key").asString + comms.get("key").asString
+            val tsStr = cred.get("ts").asString + "_" + comms.get("ts").asString
+            val tsLong = tsStr.toLongOrNull() ?? 0L
+            val app = re.pinok.SovaApp.get()
+            app.prefs.setCallsQueueKey(key)
+            app.prefs.setCallsQueueTs(tsLong)
+            AppLog.i(TAG, "persistQueueCredential OK: key.len=" + key.length + " ts=" + tsLong)
+        } catch (e: Exception) {
+            AppLog.w(TAG, "persistQueueCredential failed: " + e.message)
+        }
+    }
+
+    /**
+     * #CALLS-INCOMING: читает queue-credential из localStorage m.vk.ru
+     * (queue_credential_calls_cache_<uid>_<appId> + im_m_comms_key), склейка key/ts
+     * как делает VK web, и сохраняет в SovaPrefs.callsQueueKey/callsQueueTs.
+     * Вызывать ПОКА WebVew жив (сразу после логина).
      */
     private suspend fun tryReadSatToken(webView: WebView): String? =
         withContext(Dispatchers.Main) {
