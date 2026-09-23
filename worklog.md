@@ -10181,3 +10181,20 @@ Stage Summary:
   потерянные guard'ы двойного CallScreen (SovaApp ×3 + SovaNavHost). Замаскирован
   закоммиченный vk1.a токен. Требуется пересборка + 1 тестовый входящий звонок (лог:
   «Принять: params готовы...» → join без err=10 → accept-call → ICE CONNECTED).
+
+---
+Task ID: 1
+Agent: Z.ai Code (main)
+Task: #CALLS-ONE-TAP — устранить двойное поднятие трубки при входящем звонке («пустышка» на IncomingCallScreen)
+
+Work Log:
+- Подтверждено по коду: «Принять» на IncomingCallScreen ставит только incomingCallAccepted → навигация; вся join-цепочка жила только в зелёной кнопке фазы RINGING (CallScreen.kt ~2290)
+- Логика accept'а вынесена из кнопки в общую лямбду performIncomingAccept (params → WS wait → ensureCallsSessionKey + vchat.joinConversation → accept-call → engine.acceptCall) с guard'ом acceptStarted от двойного срабатывания
+- Добавлен LaunchedEffect(incoming, joinByLink) — авто-accept после поднятия трубки на IncomingCallScreen (как VK web: тап «Войти» → join сразу); joinByLink не затронут (свой холл/модалка)
+- Кнопка «Принять» теперь зовёт performIncomingAccept (дубль кода удалён, ~85 строк)
+- Валидаторы: баланс скобок сходится с HEAD (−3 parens — преждесуществующие строковые литералы), 0 новых `!!`
+
+Stage Summary:
+- Входящий звонок теперь соединяется с ОДНОГО нажатия: IncomingCallScreen «Принять» → авто-join в CallScreen
+- Файл: feature/calls/src/main/java/re/pinok/ui/screens/calls/CallScreen.kt
+- Маркер в логе: ONE-TAP: авто-accept

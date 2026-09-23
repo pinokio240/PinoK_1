@@ -670,6 +670,103 @@ fun CallScreen(
         }
     }
 
+    // ═══ #CALLS-ONE-TAP (2026-09-23): единая точка accept'а входящего ═══
+    // «Принять» на полноэкранном IncomingCallScreen — «пустышка»: только флаг
+    // incomingCallAccepted → навигация сюда (серверу ничего не уходит). Раньше
+    // join-цепочка (params → WS → vchat.joinConversation → accept-call → PC)
+    // жила ТОЛЬКО в зелёной кнопке фазы RINGING — трубку приходилось поднимать
+    // дважды. Выносим логику в лямбду: кнопка (ниже) и авто-accept зовут ОДИН
+    // и тот же код.
+    var acceptStarted by remember { mutableStateOf(false) }
+    val performIncomingAccept: () -> Unit = {
+        if (!acceptStarted) {
+            acceptStarted = true
+            uiScope.launch {
+                // #CALLS-IN-FIX (2026-08-29, лог 20:54): раньше accept выполнялся
+                // мгновенно — если params ещё резолвились (vchat при сбое висит до
+                // 45с), сигналинг не был поднят: accept-call и answer уходили в
+                // никуда, «Соединение…» висело вечно. Теперь: ждём params →
+                // поднимаем сигналинг (если ещё не поднят) → ждём открытия WS →
+                // и только потом accept.
+                phase = CallPhase.CONNECTING
+                val resolved = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                    incomingParamsDeferred.await()
+                }
+                if (resolved == null) {
+                    AppLog.w("CallScreen", "Принять: params не получены (таймаут 20с/ошибка) — отмена")
+                    failText = "Не удалось получить параметры звонка"
+                    phase = CallPhase.FAILED
+                    return@launch
+                }
+                if (!signaling.isRunning()) {
+                    // LaunchedEffect не успел/не смог — поднимаем сигналинг сами.
+                    val snap0 = deps.prefs.data.first()
+                    val okUid0 = snap0.callsSessionUid
+                    val uid0 = if (okUid0 > 0L) okUid0 else deps.exchangeAuthRepository.userId()
+                    engine.setIceServers(resolved)
+                    AppLog.i("CallScreen", "Принять: сигналинг не был поднят — стартуем (convId=${activeCallId.value})")
+                    signaling.start(
+                        userId = uid0,
+                        conversationId = activeCallId.value ?: "",
+                        params = resolved,
+                        peerId = peerId,
+                    )
+                    sigStarted = true
+                }
+                // Ждём открытия WS (до 10с) — иначе accept-call будет отброшен.
+                // Тик 100мс (#PERF-WS-TICK): accept уходит быстрее после открытия WS.
+                var wsWaited = 0
+                while (!signaling.isWsReady() && wsWaited < 10_000) {
+                    kotlinx.coroutines.delay(100)
+                    wsWaited += 100
+                }
+                if (!signaling.isWsReady()) {
+                    AppLog.w("CallScreen", "Принять: WS сигналинга не открылся за 10с — отмена")
+                    failText = "Нет связи с сервером звонков"
+                    phase = CallPhase.FAILED
+                    return@launch
+                }
+                AppLog.i("CallScreen", "Принять: params готовы, ws готов — accept")
+                // Task 22: force=false — прежний дефолт SovaApp.
+                // #CALLS-JOIN-BY-LINK: при join-по-ссылке API-ack уже сделан модалкой —
+                // повторный vchat.joinConversation пропускаем.
+                // #CALLS-RESTORE-JOIN (2026-09-23): НЕ УДАЛЯТЬ! Регистрация участника
+                // с mediaSettings на calls.okcdn.ru ДО accept-call. Удаление этого
+                // блока в 7d1e459 сломало соединение входящего звонка.
+                val sk = deps.ensureCallsSessionKey(force = false)
+                if (sk != null && !joinByLink) {
+                    withContext(Dispatchers.IO) {
+                        deps.apiClient.vchatJoinConversation(
+                            activeCallId.value ?: "", sk, isVideo = false
+                        )
+                    }
+                }
+                // #CALLS-ACK-REOFFER (2026-08-29): accept-call ДО создания PC/answer —
+                // детерминированный порядок (engine.acceptCall — асинхронный post).
+                val acceptOk = signaling.acceptCall(isVideo = false)
+                AppLog.i("CallScreen", "Принять: accept-call ${if (acceptOk) "отправлен" else "ОТБРОШЕН (WS закрыт!)"}")
+                // #CALLS-IN-OFFER: PC создаётся здесь; буферизованный offer
+                // применяется САМ в acceptCall (setRemoteDescription → answer).
+                engine.acceptCall(call)
+                AppLog.i("CallScreen", "Принять: PC создаётся, offerReceived=${offerReceived.value}")
+                phase = CallPhase.CONNECTING
+            }
+        }
+    }
+    // #CALLS-ONE-TAP: авто-accept входящего — как в VK web (тап «Войти» в модалке
+    // входящего → join сразу, без второй трубки). CallScreen(incoming=true)
+    // достижим ТОЛЬКО после «Принять» на IncomingCallScreen (SovaNavHost), поэтому
+    // автопрессинг безопасен. joinByLink не трогаем: там свой холл/модалка.
+    LaunchedEffect(incoming, joinByLink) {
+        if (!incoming || joinByLink) return@LaunchedEffect
+        val resolved = kotlinx.coroutines.withTimeoutOrNull(25_000L) { incomingParamsDeferred.await() }
+        if (resolved == null) return@LaunchedEffect // params нет — FAILED уже поставлен основным эффектом
+        if (phase == CallPhase.RINGING) {
+            AppLog.i("CallScreen", "ONE-TAP: авто-accept (трубка уже поднята на экране входящего)")
+            performIncomingAccept()
+        }
+    }
+
     LaunchedEffect(Unit) {
         // #CALLS-LOG-MARK (2026-08-30): маркер начала звонка — по нему в экспортированном
         // логе мгновенно находится сегмент звонка (когда экранные флаги не видны/
@@ -2237,87 +2334,11 @@ fun CallScreen(
                             // Принять (phone_24, appearancePositive)
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                                 IconButton(
-                                    onClick = {
-                                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                            // #CALLS-IN-FIX (2026-08-29, лог 20:54): раньше accept
-                                            // выполнялся мгновенно — если params ещё резолвились
-                                            // (vchat при сбое висит до 45с), сигналинг не был поднят:
-                                            // accept-call и answer уходили в никуда, «Соединение…» висело
-                                            // вечно. Теперь: ждём params → поднимаем сигналинг (если ещё
-                                            // не поднят) → ждём открытия WS → и только потом accept.
-                                            phase = CallPhase.CONNECTING
-                                            val resolved = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
-                                                incomingParamsDeferred.await()
-                                            }
-                                            if (resolved == null) {
-                                                AppLog.w("CallScreen", "Принять: params не получены (таймаут 20с/ошибка) — отмена")
-                                                failText = "Не удалось получить параметры звонка"
-                                                phase = CallPhase.FAILED
-                                                return@launch
-                                            }
-                                            if (!signaling.isRunning()) {
-                                                // LaunchedEffect не успел/не смог — поднимаем сигналинг сами.
-                                                val snap0 = deps.prefs.data.first()
-                                                val okUid0 = snap0.callsSessionUid
-                                                val uid0 = if (okUid0 > 0L) okUid0 else deps.exchangeAuthRepository.userId()
-                                                engine.setIceServers(resolved)
-                                                AppLog.i("CallScreen", "Принять: сигналинг не был поднят — стартуем (convId=${activeCallId.value})")
-                                                signaling.start(
-                                                    userId = uid0,
-                                                    conversationId = activeCallId.value ?: "",
-                                                    params = resolved,
-                                                    peerId = peerId,
-                                                )
-                                                sigStarted = true
-                                            }
-                                            // Ждём открытия WS (до 10с) — иначе accept-call будет отброшен.
-                                            // Тик 100мс (#PERF-WS-TICK): accept уходит быстрее после
-                                            // открытия WS — на пути поднятия трубки (кап прежний).
-                                            var wsWaited = 0
-                                            while (!signaling.isWsReady() && wsWaited < 10_000) {
-                                                kotlinx.coroutines.delay(100)
-                                                wsWaited += 100
-                                            }
-                                            if (!signaling.isWsReady()) {
-                                                AppLog.w("CallScreen", "Принять: WS сигналинга не открылся за 10с — отмена")
-                                                failText = "Нет связи с сервером звонков"
-                                                phase = CallPhase.FAILED
-                                                return@launch
-                                            }
-                                            AppLog.i("CallScreen", "Принять: params готовы, ws готов — accept")
-                                            // Task 22: force=false — прежний дефолт SovaApp
-                                            // (аргумент без дефолта в интерфейсе CallsDependencies).
-                                            // #CALLS-JOIN-BY-LINK: при join-по-ссылке API-ack уже
-                                            // сделан модалкой (joinConversationByLink) — повторный
-                                            // vchat.joinConversation пропускаем (иначе при анонимном
-                                            // входе повторная регистрация шла бы от authed-сессии).
-                                            // #CALLS-RESTORE-JOIN (2026-09-23): НЕ УДАЛЯТЬ! Регистрация
-                                            // участника с mediaSettings на calls.okcdn.ru ДО accept-call.
-                                            // Удаление этого блока в 7d1e459 («бесполезный», err=10 WAF
-                                            // — симптом стухшего session key, а не join) сломало
-                                            // соединение входящего звонка: accept уходил, медиа — нет.
-                                            val sk = deps.ensureCallsSessionKey(force = false)
-                                            if (sk != null && !joinByLink) {
-                                                withContext(Dispatchers.IO) {
-                                                    deps.apiClient.vchatJoinConversation(
-                                                        activeCallId.value ?: "", sk, isVideo = false
-                                                    )
-                                                }
-                                            }
-                                            // #CALLS-ACK-REOFFER (2026-08-29): accept-call ДО создания PC/answer —
-                                            // сервер ретранслирует transmit-data участникам, подтвердившим участие;
-                                            // answer, ушедший раньше accept, мог выбрасываться. Плюс это
-                                            // детерминированный порядок (engine.acceptCall — асинхронный post).
-                                            val acceptOk = signaling.acceptCall(isVideo = false)
-                                            AppLog.i("CallScreen", "Принять: accept-call ${if (acceptOk) "отправлен" else "ОТБРОШЕН (WS закрыт!)"}")
-                                            // #CALLS-IN-OFFER: PC создаётся здесь; offer, буферизованный
-                                            // движком (пришёл до «Принять»), применяется САМ в acceptCall
-                                            // (setRemoteDescription → createAnswer → answer уйдёт).
-                                            engine.acceptCall(call)
-                                            AppLog.i("CallScreen", "Принять: PC создаётся, offerReceived=${offerReceived.value}")
-                                            phase = CallPhase.CONNECTING
-                                        }
-                                    },
+                                    // #CALLS-ONE-TAP (2026-09-23): логика accept'а вынесена в
+                                    // performIncomingAccept — общая с авто-accept'ом, который
+                                    // срабатывает после «Принять» на IncomingCallScreen (одна
+                                    // трубка вместо двух; body раньше дублировался здесь).
+                                    onClick = { performIncomingAccept() },
                                     modifier = Modifier
                                         .size(64.dp)
                                         .clip(CircleShape)
