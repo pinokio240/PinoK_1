@@ -10249,3 +10249,24 @@ Stage Summary:
 - WebRtcEngine.kt: #CALLS-MUTE-HARDEN (setMuted/sendners/mutedState/логи)
 - VKApiClient.kt: #P0-2 batch.call fallback для settingsGeneral.set/getNotifySettings + эталонный wire batchCall
 - Тест юзера: звонок → mute → лог-строка «setMuted(true): track=true enabled=false | аудио-сендеры PC затронуто=N»; если enabled=false, а собеседник слышит — слушать нативный лог
+
+---
+Task ID: 4
+Agent: main (Z.ai Code)
+Task: #AUTH-FIRST-OPEN-GUEST — переделка первого открытия: без авто-логина, guest-режим сразу, вход по кнопке «Войти в аккаунт» в боковой панели (+ план-дока)
+
+Work Log:
+- Изучил код: LandingScreen — фаза AuthActivity (AuthPhase.LANDING), кнопка должна запускать AuthActivity
+- MainActivity: boot-no-token без silent-возможности → авто-guest (isOfflineMode=true, lockerBootCheckDone=true) вместо launchAuth
+- MainActivity: network-restored-no-token и token-invalidation — только silent, иначе guest
+- MainActivity: guest-ветка обёрнута в GuestDrawer; onMenu открывает панель; onBack no-op (offline-back-to-login убран)
+- MainActivity: RESULT_OK сбрасывает isOfflineMode; isManualAction += "drawer-login"
+- НОВЫЙ файл ui/navigation/GuestDrawer.kt (ModalNavigationDrawer, фиксированный хвост «Войти в аккаунт»)
+- OfflineManagerScreen: параметр onMenu (? -> иконка меню вместо стрелки)
+- Доки: docs/AUTH-FIRST-OPEN-GUEST-PLAN.md (создан в e8952ff), HISTORY.md, EXECUTION_QUEUE.md (Блок C)
+
+Stage Summary:
+- Первый запуск без токена: приложение открывается в guest-режиме (офлайн-менеджер + drawer), Landing НЕ показывается
+- Вход: меню (иконка в TopAppBar) → guest-drawer → «Войти в аккаунт» → AuthActivity (reason=drawer-login, без throttle/guard)
+- Silent re-login по remixsid сохранён (невидимый); ветки when в when{} MainActivity не менялись структурно
+- Коммит: <см. git log; тег #AUTH-FIRST-OPEN-GUEST>

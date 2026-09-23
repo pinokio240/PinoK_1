@@ -41,10 +41,10 @@ guest-режим (без AuthActivity); вход — фиксированная 
 guest-drawer (запускает AuthActivity → LandingScreen внутри неё). Silent re-login
 по remixsid остаётся автоматическим (невидимый).
 
-- [ ] **C-1** MainActivity: boot-no-token без remixsid / silent исчерпан → guest (не launchAuth)
-- [ ] **C-2** MainActivity: network-restored-no-token и token-invalidated tick — только silent, иначе guest
-- [ ] **C-3** GuestDrawer.kt: ModalNavigationDrawer вокруг OfflineManagerScreen, фиксированный хвост «Войти в аккаунт» → launchAuth("drawer-login")
-- [ ] **C-4** Guest onBack: убрать relaunch AuthActivity ("offline-back-to-login")
+- [x] **C-1** ВЫПОЛНЕНО: MainActivity boot-no-token без remixsid / silent исчерпан → авто-guest (не launchAuth)
+- [x] **C-2** ВЫПОЛНЕНО: network-restored-no-token и token-invalidated tick — только silent, иначе guest
+- [x] **C-3** ВЫПОЛНЕНО: GuestDrawer.kt (ModalNavigationDrawer вокруг OfflineManagerScreen, фиксированный хвост «Войти в аккаунт» → launchAuth("drawer-login", manual-action)); OfflineManagerScreen: onMenu → иконка меню
+- [x] **C-4** ВЫПОЛНЕНО: guest onBack — relaunch AuthActivity убран (offline-back-to-login устарел)
 
 ## Порядок
 

@@ -28,6 +28,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+// #AUTH-FIRST-OPEN-GUEST: иконка меню для guest-режима (открывает guest-drawer).
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.CloudOff
@@ -114,6 +116,14 @@ enum class OfflineSortOption(val label: String) {
 @Composable
 fun OfflineManagerScreen(
     onBack: () -> Unit,
+    /**
+     * #AUTH-FIRST-OPEN-GUEST (2026-09-23): если задан — в navigationIcon
+     * рисуется иконка МЕНЮ (открывает guest-drawer с кнопкой «Войти в
+     * аккаунт»), а не стрелка «Назад». Используется в guest-ветке MainActivity;
+     * маршрут «Офлайн» внутри SovaNavHost (авторизованный режим) продолжает
+     * использовать стрелку «Назад» (onBack).
+     */
+    onMenu: (() -> Unit)? = null,
     onPlayVideo: ((ownerId: Long, videoId: Long, title: String) -> Unit)? = null,
     /**
      * Fix #111: Колбэк воспроизведения скачанной видео-истории из кэша.
@@ -347,8 +357,16 @@ fun OfflineManagerScreen(
         TopAppBar(
             title = { Text("Офлайн") },
             navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                if (onMenu != null) {
+                    // #AUTH-FIRST-OPEN-GUEST: guest-режим — меню открывает
+                    // боковую панель (там фиксированная кнопка «Войти в аккаунт»).
+                    IconButton(onClick = onMenu) {
+                        Icon(Icons.Default.Menu, contentDescription = "Меню")
+                    }
+                } else {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
                 }
             },
             actions = {

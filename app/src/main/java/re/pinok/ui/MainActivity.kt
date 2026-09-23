@@ -38,6 +38,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
@@ -55,6 +57,7 @@ import re.pinok.ui.components.DraggableLogFab
 import re.pinok.ui.components.LogDialogState
 import re.pinok.ui.components.LogViewerDialog
 import re.pinok.ui.components.ShareToChatSheet
+import re.pinok.ui.navigation.GuestDrawer
 import re.pinok.ui.navigation.SovaNavHost
 import re.pinok.ui.navigation.VideoHolder
 import re.pinok.ui.screens.offline.OfflineAudioPlayerScreen
@@ -220,6 +223,12 @@ class MainActivity : ComponentActivity() {
                 AppLog.i("MainActivity", "SILENT loop broken — silentFailCount $silentFailCount → 0 (Fix #49)")
             }
             silentFailCount = 0
+            // #AUTH-FIRST-OPEN-GUEST: успешный вход из guest-режима (кнопка
+            // «Войти в аккаунт» в guest-drawer) — сбрасываем guest-флаг.
+            if (isOfflineMode) {
+                isOfflineMode = false
+                AppLog.i("MainActivity", "#AUTH-FIRST-OPEN-GUEST: login OK from guest — isOfflineMode reset")
+            }
             // Fix #176-auth-loop: успешный логин — сбрасываем флаг форсированного
             // FULL re-login. Если в будущем снова потребуется форсировать (новый
             // апдейт), SovaApp.onCreate выставит его заново.
@@ -304,10 +313,15 @@ class MainActivity : ComponentActivity() {
     private var authVersion by mutableIntStateOf(0)
 
     /**
-     * #34: Guest-режим — пользователь нажал «Офлайн-режим» на экране авторизации.
-     * Если true — показываем OfflineManagerScreen без проверки токена.
-     * Сбрасывается в false кнопкой «Войти» в TopAppBar офлайн-экрана →
-     * triggers AuthActivity relaunch.
+     * #34 / #AUTH-FIRST-OPEN-GUEST: guest-режим — приложение работает БЕЗ токена
+     * (офлайн-менеджер + GuestDrawer). Включается:
+     *  1) вручную — «Офлайн-режим» на LandingScreen (RESULT_OFFLINE_MODE);
+     *  2) автоматически — первый запуск без токена и без silent-возможности,
+     *     network-restored без silent, token-invalidation без silent
+     *     (#AUTH-FIRST-OPEN-GUEST, 2026-09-23: экран входа больше НЕ
+     *     показывается автоматически — только кнопка «Войти в аккаунт»
+     *     в guest-drawer).
+     * Сбрасывается при успешном логине (result RESULT_OK).
      */
     private var isOfflineMode by mutableStateOf(false)
 
@@ -446,12 +460,12 @@ class MainActivity : ComponentActivity() {
         // не мучить юзера при реальном edge-case.
         // isManualAction: явное действие пользователя — throttle/guard отключены.
         //   - "logout": юзер нажал «Выйти», хочет немедленно войти обратно.
-        //   - "offline-back-to-login": юзер нажал «Назад» в offline guest-режиме,
-        //     ожидает возврат на экран авторизации. БЕЗ этого исключения SSO guard
-        //     (90с) блокирует launchAuth → AuthActivity не запускается →
-        //     hasValidToken()=false + isOfflineMode=false → ни одна ветка when{}
-        //     не матчит → бесконечный StartupLoadingScreen (#OFFLINE-BACK-SPLASH).
-        val isManualAction = reason == "logout" || reason == "offline-back-to-login"
+        //   - "drawer-login": #AUTH-FIRST-OPEN-GUEST — юзер нажал «Войти в аккаунт»
+        //     в guest-drawer. Без исключения throttle 20с мог заблокировать
+        //     повторный тап после быстрой отмены AuthActivity → кнопка «не работает».
+        //   - "offline-back-to-login": устаревший путь (до #AUTH-FIRST-OPEN-GUEST),
+        //     оставлен для совместимости.
+        val isManualAction = reason == "logout" || reason == "drawer-login" || reason == "offline-back-to-login"
         if (!isManualAction && lastAuthActivityLaunchMs > 0L && now - lastAuthActivityLaunchMs < 20_000L) {
             val waitMs = 20_000L - (now - lastAuthActivityLaunchMs)
             AppLog.w("MainActivity", "launchAuth($reason) throttled — last launch ${now - lastAuthActivityLaunchMs}ms ago (need ${waitMs}ms more). Skipping (Fix #230).")
@@ -857,34 +871,33 @@ class MainActivity : ComponentActivity() {
                         if (!app.tokenStorage.hasValidToken()) {
                             // Fix #339: web_token истекает каждые ~15 мин. При холодном
                             // старте после простоя boot видел истёкший токен и запускал
-                            // AuthActivity в ОБЫЧНОМ режиме → юзер видел WebView flash
-                            // («часто приходится переходить в аккаунт»).
-                            // Теперь: если есть сохранённый remixsid → передаём
-                            // EXTRA_SILENT_MODE=true (как в token-invalidation пути).
-                            // AuthActivity применит Theme.PinoK.Silent (transparent) и
-                            // сделает silent re-login через CookieManager — юзер увидит
-                            // предыдущий кадр MainActivity, а не WebView.
+                            // AuthActivity в ОБЫЧНОМ режиме → юзер видел WebView flash.
+                            // Если есть сохранённый remixsid → SILENT-запуск (невидимый).
                             val hasRemixsid = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
-                            // Fix #49: после MAX_SILENT_FAILURES подряд — FULL режим,
-                            // иначе мёртвый remixsid зацикливает SILENT-запуски.
-                            // Fix #176-auth-loop: при форсированном FULL re-login
-                            // (апдейт + протухший токен) — тоже FULL, иначе SILENT
-                            // loop на мёртвом remixsid после установки поверх.
+                            // Fix #49: после MAX_SILENT_FAILURES подряд — silent недоступен.
+                            // Fix #176-auth-loop: при форсированном FULL re-login — тоже.
                             val useSilent = hasRemixsid && silentFailCount < MAX_SILENT_FAILURES
                                 && !app.forceFullReloginOnNextLaunch
-                            val intent = Intent(this@MainActivity, AuthActivity::class.java).apply {
-                                if (useSilent) {
+                            if (useSilent) {
+                                val intent = Intent(this@MainActivity, AuthActivity::class.java).apply {
                                     putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
-                                    AppLog.i("MainActivity", "No token (expired after process restore) — silent re-login via remixsid (Fix #339)")
-                                } else if (hasRemixsid) {
-                                    AppLog.w("MainActivity", "No token — forcing FULL mode: silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES" +
-                                        (if (app.forceFullReloginOnNextLaunch) ", forceFullRelogin=true (Fix #176-auth-loop)" else "") +
-                                        " (Fix #49)")
-                                } else {
-                                    AppLog.i("MainActivity", "No token (expired or cleared after process restore), launching AuthActivity")
                                 }
+                                AppLog.i("MainActivity", "No token — silent re-login via remixsid (Fix #339; #AUTH-FIRST-OPEN-GUEST — невидимый, без Landing)")
+                                launchAuth(intent, reason = "boot-no-token")
+                                return@LaunchedEffect
                             }
-                            launchAuth(intent, reason = "boot-no-token")
+                            // #AUTH-FIRST-OPEN-GUEST (2026-09-23, требование юзера):
+                            // видимый экран входа при первом открытии УБРАН. Нет
+                            // silent-возможности (нет remixsid / silent исчерпан /
+                            // forceFull) → АВТОМАТИЧЕСКИ guest-режим: OfflineManagerScreen
+                            // + guest-drawer с кнопкой «Войти в аккаунт» (GuestDrawer).
+                            // Экран входа (AuthActivity → LandingScreen) показывается
+                            // ТОЛЬКО по этой кнопке (reason="drawer-login").
+                            lockerBootCheckDone = true // boot-решение принято: guest не требует локера
+                            isOfflineMode = true
+                            AppLog.i("MainActivity", "#AUTH-FIRST-OPEN-GUEST: no token, silent unavailable " +
+                                "(hasRemixsid=$hasRemixsid, silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES, " +
+                                "forceFull=${app.forceFullReloginOnNextLaunch}) → auto-guest; login via drawer button")
                             return@LaunchedEffect
                         }
                         // Fix #380 #LOCKER-BOOT-SKIP: токен жив — boot-решение
@@ -1012,29 +1025,26 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) {
                         AppLog.w("MainActivity", "Clipboard clear on invalidation failed: ${e.message}")
                     }
-                    val intent = Intent(this@MainActivity, AuthActivity::class.java).apply {
-                        // Fix #49: после MAX_SILENT_FAILURES подряд — FULL режим,
-                        // иначе мёртвый remixsid зацикливает SILENT-запуски.
-                        // Fix #176-auth-loop: при форсированном FULL re-login
-                        // (апдейт + протухший токен) — тоже FULL, иначе SILENT
-                        // loop на мёртвом remixsid после установки поверх.
-                        val useSilent = hasRemixsid && silentFailCount < MAX_SILENT_FAILURES
-                            && !app.forceFullReloginOnNextLaunch
-                        if (useSilent) {
-                            putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
-                            AppLog.i("MainActivity", "Token invalidated (tick=$tokenInvalidationTick) — silent re-login via remixsid (Fix #107)")
-                        } else if (hasRemixsid) {
-                            AppLog.w("MainActivity", "Token invalidated (tick=$tokenInvalidationTick) — forcing FULL mode: silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES" +
-                                (if (app.forceFullReloginOnNextLaunch) ", forceFullRelogin=true (Fix #176-auth-loop)" else "") +
-                                " (Fix #49)")
-                        } else {
-                            AppLog.w("MainActivity", "Token invalidated (tick=$tokenInvalidationTick) — no remixsid, full re-login required")
-                        }
+                    val intent = Intent(this@MainActivity, AuthActivity::class.java)
+                    // Fix #49: после MAX_SILENT_FAILURES подряд — silent недоступен.
+                    // Fix #176-auth-loop: при форсированном FULL re-login — тоже.
+                    val useSilent = hasRemixsid && silentFailCount < MAX_SILENT_FAILURES
+                        && !app.forceFullReloginOnNextLaunch
+                    if (useSilent) {
+                        intent.putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
+                        AppLog.i("MainActivity", "Token invalidated (tick=$tokenInvalidationTick) — silent re-login via remixsid (Fix #107)")
+                        // Fix #112 + Fix #233 (P1): launchAuth единая точка запуска —
+                        // обновляет lastAuthActivityLaunchMs + проверяет throttle (Fix #230).
+                        launchAuth(intent, reason = "token-invalidation")
+                    } else {
+                        // #AUTH-FIRST-OPEN-GUEST (2026-09-23): silent исчерпан/невозможен —
+                        // НЕ показываем экран логина автоматически. Юзер продолжает в
+                        // guest-режиме; вход — кнопка «Войти в аккаунт» в guest-drawer.
+                        isOfflineMode = true
+                        AppLog.i("MainActivity", "#AUTH-FIRST-OPEN-GUEST: token invalidated (tick=$tokenInvalidationTick), " +
+                            "silent unavailable (hasRemixsid=$hasRemixsid, silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES, " +
+                            "forceFull=${app.forceFullReloginOnNextLaunch}) → guest mode, login via drawer button")
                     }
-                    // Fix #112 + Fix #233 (P1): launchAuth единая точка запуска —
-                    // обновляет lastAuthActivityLaunchMs + проверяет throttle (Fix #230).
-                    // Throttle теперь централизован в launchAuth, не дублируется тут.
-                    launchAuth(intent, reason = "token-invalidation")
                 }
 
                 // #NET-RESTORE-AUTH-RETRY (Fix #341):
@@ -1103,18 +1113,26 @@ class MainActivity : ComponentActivity() {
                         }
                         lastRetryMs = now
                         val hasRemixsid = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
-                        // Fix #49: после MAX_SILENT_FAILURES подряд — FULL режим.
-                        // Fix #176-auth-loop: при форсированном FULL re-login — тоже FULL.
+                        // Fix #49: после MAX_SILENT_FAILURES подряд — silent недоступен.
+                        // Fix #176-auth-loop: при форсированном FULL re-login — тоже.
                         val useSilent = hasRemixsid && silentFailCount < MAX_SILENT_FAILURES
                             && !app.forceFullReloginOnNextLaunch
-                        AppLog.i("MainActivity", "Network restored + no token — retry auth via ${if (useSilent) "silent remixsid" else "full login"} (#341)" +
-                            (if (hasRemixsid && !useSilent) " [forced FULL: silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES" +
-                                (if (app.forceFullReloginOnNextLaunch) ", forceFullRelogin=true (Fix #176-auth-loop)" else "") +
-                                ", Fix #49]" else ""))
-                        val retryIntent = Intent(this@MainActivity, AuthActivity::class.java).apply {
-                            if (useSilent) putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
+                        if (useSilent) {
+                            AppLog.i("MainActivity", "Network restored + no token — retry auth via silent remixsid (#341; #AUTH-FIRST-OPEN-GUEST — невидимый)")
+                            val retryIntent = Intent(this@MainActivity, AuthActivity::class.java).apply {
+                                putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
+                            }
+                            launchAuth(retryIntent, reason = "network-restored-no-token")
+                        } else {
+                            // #AUTH-FIRST-OPEN-GUEST (2026-09-23): silent невозможен —
+                            // НЕ запускаем видимый логин. Переключаемся в guest-режим
+                            // (вместо вечного StartupLoadingScreen из сценария #341);
+                            // вход — кнопка «Войти в аккаунт» в guest-drawer.
+                            isOfflineMode = true
+                            AppLog.i("MainActivity", "#AUTH-FIRST-OPEN-GUEST: network restored but silent unavailable " +
+                                "(hasRemixsid=$hasRemixsid, silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES, " +
+                                "forceFull=${app.forceFullReloginOnNextLaunch}) → guest mode, login via drawer button")
                         }
-                        launchAuth(retryIntent, reason = "network-restored-no-token")
                     }
                     // Fix #377 #NET-RESTORE-IMMEDIATE-CHECK: StateFlow может быть
                     // true УЖЕ ДАВНО (Doze-сон: колбэки не приходили, новых emission
@@ -1324,13 +1342,15 @@ class MainActivity : ComponentActivity() {
                             } // CompositionLocalProvider(LocalCallsDeps, LocalPhotosDeps)
                         }
 
-                        // #34: Guest-режим — пользователь нажал «Офлайн-режим» на
-                        // экране авторизации. Показываем OfflineManagerScreen без
-                        // токена: доступны просмотр и воспроизведение уже скачанных
-                        // аудио/видео (PlayerConnection инициализирован в SovaApp).
-                        // Кнопка «Назад» → выход из guest-режима → relaunch AuthActivity
-                        // (возврат на экран авторизации). Кнопка «Войти» в TopAppBar
-                        // удалена — её функцию выполняет «Назад».
+                        // #34 / #AUTH-FIRST-OPEN-GUEST: guest-режим (ручной выбор
+                        // «Офлайн-режим» на LandingScreen ИЛИ авто-вход — первый
+                        // запуск без токена/silent-возможности). Показываем
+                        // OfflineManagerScreen + GuestDrawer без токена: доступны
+                        // просмотр и воспроизведение уже скачанных аудио/видео
+                        // (PlayerConnection инициализирован в SovaApp).
+                        // Экран входа НЕ запускается автоматически (#AUTH-FIRST-OPEN-GUEST):
+                        // иконка меню в TopAppBar открывает guest-drawer, вход —
+                        // фиксированная кнопка «Войти в аккаунт» (drawer-login).
                         //
                         // Fix #183: раньше колбэки onPlayVideo/onPlayStory/onOpenPlayer
                         // не передавались (default null/{}) → тапы по видео/историям/
@@ -1342,16 +1362,32 @@ class MainActivity : ComponentActivity() {
                             // Fix #183: подписываемся на VideoHolder.active чтобы
                             // оверлей VideoPlayerScreen показывался в guest-режиме.
                             val overlayVideo by VideoHolder.active.collectAsState()
+                            // #AUTH-FIRST-OPEN-GUEST: drawerState хостится здесь (не
+                            // внутри GuestDrawer) — иконка меню в TopAppBar
+                            // OfflineManagerScreen (onMenu) открывает панель.
+                            val guestDrawerState = rememberDrawerState(DrawerValue.Closed)
+                            val guestScope = rememberCoroutineScope()
+                            GuestDrawer(
+                                drawerState = guestDrawerState,
+                                onLogin = {
+                                    // #AUTH-FIRST-OPEN-GUEST: ЕДИНСТВЕННЫЙ вход из
+                                    // guest-режима. AuthActivity покажет LandingScreen
+                                    // (внутренняя фаза AuthPhase.LANDING).
+                                    // reason="drawer-login" — manual-action (throttle/
+                                    // SSO-guard отключены: юзер явно нажал кнопку).
+                                    launchAuth(Intent(this@MainActivity, AuthActivity::class.java), reason = "drawer-login")
+                                },
+                            ) {
                             Box(modifier = Modifier.fillMaxSize()) {
                                 Surface(modifier = Modifier.fillMaxSize()) {
                                     OfflineManagerScreen(
+                                        // #AUTH-FIRST-OPEN-GUEST: иконка меню вместо
+                                        // «Назад» — открывает guest-drawer.
+                                        onMenu = { guestScope.launch { guestDrawerState.open() } },
+                                        // onBack больше не используется в guest-ветке
+                                        // (onMenu заменяет navigationIcon) — no-op.
                                         onBack = {
-                                            AppLog.i("MainActivity", "Back from offline guest mode → auth screen")
-                                            isOfflineMode = false
-                                            bootLocal = false  // позволить LaunchedEffect перезапуститься
-                                            authVersion++
-                                            // Fix #233 (P1): launchAuth единая точка запуска.
-                                            launchAuth(Intent(this@MainActivity, AuthActivity::class.java), reason = "offline-back-to-login")
+                                            AppLog.i("MainActivity", "Guest: onBack ignored (menu mode, #AUTH-FIRST-OPEN-GUEST)")
                                         },
                                         // Fix #183: открываем оверлей VideoPlayerScreen.
                                         // VideoHolder — singleton object, общий с authorized-режимом.
@@ -1424,6 +1460,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
+                            } // GuestDrawer content
                         }
 
                         // Нет токена, не offline — AuthActivity запускается в
