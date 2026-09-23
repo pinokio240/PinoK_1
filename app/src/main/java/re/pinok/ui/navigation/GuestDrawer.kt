@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.outlined.MenuOpen
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,17 +48,22 @@ import kotlinx.coroutines.launch
  *    LandingScreen является внутренней фазой AuthActivity (private enum
  *    AuthPhase.LANDING) и напрямую показан быть не может. См.
  *    docs/AUTH-FIRST-OPEN-GUEST-PLAN.md §2.
- *  - Пункт «Офлайн-данные» — текущий guest-экран (selected, закрытие drawer).
+ *  - Пункты middle: «Офлайн-данные» (текущий guest-экран) + «Настройки»
+ *    (#AUTH-FIRST-OPEN-GUEST-2: локальные настройки — интерфейс/сеть/офлайн/
+ *    данные/обновления — работают без токена; секции, требующие API
+ *    (звонки, VK ID, уведомления), покажут inline-ошибку при попытке).
  *
  * @param drawerState state drawer'а, хостится снаружи (MainActivity guest-ветка)
  *   чтобы стрелка «Назад»/меню в TopAppBar OfflineManagerScreen могла открыть
  *   панель (см. onMenu-параметр OfflineManagerScreen).
+ * @param onSettings колбэк пункта «Настройки» — открывает guest-оверлей настроек.
  * @param onLogin колбэк кнопки «Войти в аккаунт» — ЗАПУСКАЕТ AuthActivity.
  * @param content контент под drawer'ом (OfflineManagerScreen + оверлеи).
  */
 @Composable
 fun GuestDrawer(
     drawerState: DrawerState,
+    onSettings: () -> Unit,
     onLogin: () -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -87,7 +93,8 @@ fun GuestDrawer(
                             )
                         }
                     }
-                    // Middle: единственный guest-экран — офлайн-данные.
+                    // Middle: guest-экраны — офлайн-данные (текущий) + настройки
+                    // (#AUTH-FIRST-OPEN-GUEST-2: локальные настройки доступны без токена).
                     // weight(1f) держит фиксированный хвост прижатым к низу
                     // при любом fontScale (Fix #337-стиль).
                     Column(
@@ -100,6 +107,15 @@ fun GuestDrawer(
                             selected = true,
                             onClick = { scope.launch { drawerState.close() } },
                             icon = { Icon(Icons.Default.CloudOff, contentDescription = null) },
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("Настройки") },
+                            selected = false,
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                onSettings()
+                            },
+                            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
                         )
                     }
                     // Фиксированный хвост: «Войти в аккаунт» — единственный

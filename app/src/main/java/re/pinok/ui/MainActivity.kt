@@ -24,8 +24,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+// #AUTH-FIRST-OPEN-GUEST-2: стрелка «Назад» в guest-настройках.
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +67,7 @@ import re.pinok.ui.navigation.VideoHolder
 import re.pinok.ui.screens.offline.OfflineAudioPlayerScreen
 import re.pinok.ui.screens.offline.OfflineManagerScreen
 import re.pinok.ui.screens.offline.StoryOfflinePlayerScreen
+import re.pinok.ui.screens.settings.SettingsScreen
 import re.pinok.ui.screens.videoplayer.VideoPlatformRouter
 import re.pinok.data.model.Video
 import re.pinok.ui.theme.SOVATheme
@@ -1367,8 +1372,17 @@ class MainActivity : ComponentActivity() {
                             // OfflineManagerScreen (onMenu) открывает панель.
                             val guestDrawerState = rememberDrawerState(DrawerValue.Closed)
                             val guestScope = rememberCoroutineScope()
+                            // #AUTH-FIRST-OPEN-GUEST-2 (2026-09-23): guest-настройки —
+                            // SettingsScreen рендерится локально (DataStore, без токена):
+                            // интерфейс/сеть/офлайн/данные/обновления работают; секции
+                            // с API (звонки, VK ID, уведомления) — inline-ошибка при попытке.
+                            var guestSettingsOpen by rememberSaveable { mutableStateOf(false) }
+                            BackHandler(enabled = guestSettingsOpen) {
+                                guestSettingsOpen = false
+                            }
                             GuestDrawer(
                                 drawerState = guestDrawerState,
+                                onSettings = { guestSettingsOpen = true },
                                 onLogin = {
                                     // #AUTH-FIRST-OPEN-GUEST: ЕДИНСТВЕННЫЙ вход из
                                     // guest-режима. AuthActivity покажет LandingScreen
@@ -1380,6 +1394,30 @@ class MainActivity : ComponentActivity() {
                             ) {
                             Box(modifier = Modifier.fillMaxSize()) {
                                 Surface(modifier = Modifier.fillMaxSize()) {
+                                    if (guestSettingsOpen) {
+                                        // #AUTH-FIRST-OPEN-GUEST-2: guest-настройки —
+                                        // свой Scaffold с TopAppBar (глобальный ScreenTopBar
+                                        // SovaNavHost здесь не монтируется). Все переходы
+                                        // к API-экранам — default {} (пункт не активен без токена).
+                                        Scaffold(
+                                            topBar = {
+                                                TopAppBar(
+                                                    title = { Text("Настройки") },
+                                                    navigationIcon = {
+                                                        IconButton(onClick = { guestSettingsOpen = false }) {
+                                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                                                        }
+                                                    },
+                                                )
+                                            },
+                                        ) { pad ->
+                                            // SettingsScreen не принимает modifier —
+                                            // обёртка Box с content-padding Scaffold'а.
+                                            Box(modifier = Modifier.padding(pad)) {
+                                                SettingsScreen()
+                                            }
+                                        }
+                                    } else {
                                     OfflineManagerScreen(
                                         // #AUTH-FIRST-OPEN-GUEST: иконка меню вместо
                                         // «Назад» — открывает guest-drawer.
@@ -1418,6 +1456,7 @@ class MainActivity : ComponentActivity() {
                                             guestAudioPlayerOpen = true
                                         },
                                     )
+                                    } // else (guestSettingsOpen, #AUTH-FIRST-OPEN-GUEST-2)
                                 }
 
                                 // Fix #183: оверлей VideoPlayerScreen — показывается

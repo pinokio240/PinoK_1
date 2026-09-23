@@ -10270,3 +10270,17 @@ Stage Summary:
 - Вход: меню (иконка в TopAppBar) → guest-drawer → «Войти в аккаунт» → AuthActivity (reason=drawer-login, без throttle/guard)
 - Silent re-login по remixsid сохранён (невидимый); ветки when в when{} MainActivity не менялись структурно
 - Коммит: <см. git log; тег #AUTH-FIRST-OPEN-GUEST>
+
+---
+Task ID: 5
+Agent: main (Z.ai Code)
+Task: #AUTH-FIRST-OPEN-GUEST-2 — доступ к настройкам в guest-режиме (репорт юзера)
+
+Work Log:
+- Проверил SettingsScreen: рендер без токена безопасен (DataStore; API-вызовы только в секциях по действию; LocalBottomBarVisible имеет дефолт)
+- GuestDrawer: новый пункт «Настройки» (onSettings)
+- MainActivity guest-ветка: guestSettingsOpen (rememberSaveable) + Scaffold/TopAppBar оверлей с SettingsScreen, BackHandler
+
+Stage Summary:
+- Guest-drawer: Офлайн-данные / Настройки / ─ / Войти в аккаунт
+- Локальные настройки работают без токена; API-экраны неактивны/inline-ошибка
