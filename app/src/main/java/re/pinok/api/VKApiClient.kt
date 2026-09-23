@@ -15438,6 +15438,10 @@ class VKApiClient(
 
     /**
      * P1 #CALLS-WIRE: batch.call — пачка методов одним HTTP (POST JSON + Bearer vk1.a*).
+     * P0-2 (2026-09-23): wire приведён к ЭТАЛОНУ VK web (CDP-снимок,
+     * docs/VK_CALLS_CDP_CAPTURE.md §3.3): тело {"requests":[{"id","method","params"}]},
+     * v/client_id — в QUERY URL. Раньше тело было неэталонным ({"v":..,"calls":[..]}) —
+     * сервер такой конверт не принял бы.
      * @param calls список пар (method, params).
      */
     suspend fun batchCall(calls: List<Pair<String, Map<String, String>>>): JsonObject? {
@@ -15449,20 +15453,19 @@ class VKApiClient(
         }
         return try {
             val arr = com.google.gson.JsonArray()
-            for ((m, p) in calls) {
+            calls.forEachIndexed { i, (m, p) ->
                 val obj = com.google.gson.JsonObject()
+                obj.addProperty("id", i.toString())
                 obj.addProperty("method", m)
                 val params = com.google.gson.JsonObject()
                 for ((k, v) in p) params.addProperty(k, v)
                 obj.add("params", params)
                 arr.add(obj)
             }
-            val body = com.google.gson.JsonObject().apply {
-                addProperty("v", VKEndpoints.API_VERSION)
-                add("calls", arr)
-            }
+            val body = com.google.gson.JsonObject().apply { add("requests", arr) }
             val req = Request.Builder()
-                .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/batch.call")
+                .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/batch.call" +
+                    "?v=${VKEndpoints.API_VERSION}&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}")
                 .header("Authorization", "Bearer $token")
                 .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
@@ -15475,6 +15478,32 @@ class VKApiClient(
             }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "batchCall error", e)
+            null
+        }
+    }
+
+    /**
+     * P0-2 (2026-09-23): один метод через [batchCall] с толерантным разбором ответа.
+     * Формат ОТВЕТА batch.call в доках не зафиксирован (CDP-снимок содержит только
+     * request-тело) — покрываем обе вероятные формы VK web:
+     *   {"response": {"<id>": <результат>}} и {"response": [<результат>, …]}.
+     * Элемент результата может быть {"response":…}, {"error":{…}} или примитивом.
+     * @return элемент результата ПЕРВОГО вызова или null.
+     */
+    suspend fun batchCallSingle(method: String, params: Map<String, String>): com.google.gson.JsonElement? {
+        val arr = batchCall(listOf(method to params)) ?: return null
+        return try {
+            val resp = arr.get("response") ?: return null
+            when {
+                resp.isJsonObject -> {
+                    val o = resp.asJsonObject
+                    o.get("0") ?: o.entrySet().firstOrNull()?.value
+                }
+                resp.isJsonArray -> resp.asJsonArray.firstOrNull()
+                else -> null
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "batchCallSingle parse: ${e.message}")
             null
         }
     }
@@ -16124,8 +16153,34 @@ class VKApiClient(
     // ════════════════════════════════════════════════════════════════════
 
     /**
+     * Общий парсер sections-дерева для settingsGeneral.*: принимает как полный
+     * ответ {"response":{"sections":[…]}}, так и batch-элемент без обёртки
+     * {"sections":[…]} (P0-2).
+     */
+    private fun parseNotifySections(
+        root: JsonObject?,
+    ): List<re.pinok.data.model.SettingsSection>? {
+        if (root == null) return null
+        return try {
+            val resp = getObj(root, "response") ?: root
+            val sectionsArr = getArr(resp, "sections") ?: return null
+            sectionsArr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                parseSettingsSection(el.asJsonObject)
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "parseNotifySections error", e)
+            null
+        }
+    }
+
+    /**
      * settingsGeneral.getNotifySettings — fetch the full notify-settings
      * document. Returns a generic sections/params tree.
+     *
+     * P0-2 (2026-09-23): одиночный вызов может дать err=3 (settingsGeneral.* VK web
+     * шлёт только внутри batch.call на web.api.vk.ru, docs/PINOK_PROJECT_MEMORY_2026-09-18.md
+     * §4) — при пустом/ошибочном direct-ответе ретрай через [batchCallSingle].
      *
      * @param page BFF page selector. Default "notify" (the settings page).
      *             Other known values: "account", "privacy", "content".
@@ -16135,23 +16190,19 @@ class VKApiClient(
     ): List<re.pinok.data.model.SettingsSection>? {
         if (isOffline()) return null
         val json = call("settingsGeneral.getNotifySettings", mapOf("page" to page))
-            ?: return null
-        return try {
-            val resp = json.getAsJsonObject("response") ?: return null
-            val sectionsArr = resp.getAsJsonArray("sections") ?: return null
-            sectionsArr.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
-                parseSettingsSection(el.asJsonObject)
-            }
-        } catch (e: Exception) {
-            AppLog.e("VKApiClient", "settingsGeneralGetNotifySettings error", e)
-            null
-        }
+        parseNotifySections(json)?.let { return it }
+        AppLog.i("VKApiClient", "getNotifySettings($page): direct не отдал sections — ретрай через batch.call (P0-2)")
+        val el = batchCallSingle("settingsGeneral.getNotifySettings", mapOf("page" to page))
+        return parseNotifySections(el as? JsonObject)
     }
 
     /**
      * settingsGeneral.setNotifySettings — PATCH a single param.
      * Booleans must be sent as "true"/"false" strings.
+     *
+     * P0-2 (2026-09-23, docs/PINOK_PROJECT_MEMORY_2026-09-18.md §4): одиночный вызов
+     * даёт err=3 — VK web шлёт settingsGeneral.* ТОЛЬКО внутри batch.call на
+     * web.api.vk.ru. При провале direct-вызова — ретрай через [batchCallSingle].
      */
     suspend fun settingsGeneralSetNotifySettings(
         key: String,
@@ -16159,11 +16210,23 @@ class VKApiClient(
     ): Boolean {
         if (isOffline()) return false
         val json = call("settingsGeneral.setNotifySettings",
-            mapOf("key" to key, "value" to value)) ?: return false
+            mapOf("key" to key, "value" to value))
         // VK API возвращает {"response": 1} (число, не объект). Раньше вызывали
-        // getAsJsonObject("response") → ClassCastException (#300). Простая
-        // проверка наличия поля — как в account.setObsceneFilter.
-        return json.has("response")
+        // getAsJsonObject("response") → ClassCastException (#300). Проверка наличия
+        // поля + отсутствие error — как в account.setObsceneFilter.
+        if (json != null && json.has("response") && getObj(json, "error") == null) return true
+        val errCode = getObj(json, "error")?.get("error_code")
+            ?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+        AppLog.w("VKApiClient", "setNotifySettings($key) direct не прошёл (err=$errCode) — ретрай через batch.call (P0-2)")
+        val el = batchCallSingle("settingsGeneral.setNotifySettings",
+            mapOf("key" to key, "value" to value)) ?: return false
+        return when {
+            el.isJsonObject -> {
+                val o = el.asJsonObject
+                o.has("response") && getObj(o, "error") == null
+            }
+            else -> true // примитив (1/"1") — успех без обёртки
+        }
     }
 
     /** Convenience wrapper: toggles a boolean param. */

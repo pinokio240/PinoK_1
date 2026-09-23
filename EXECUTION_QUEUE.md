@@ -40,3 +40,10 @@
 2. **A-1..A-8** — параллельно, ждут съёма от юзера.
 3. **B-2, B-3** — после B-1 (P2).
 4. **B-4** — финал, после данных Блока A.
+
+---
+## Статус исполнения (2026-09-23, сессия 2)
+
+- [x] **B-1 (P0-2)** ВЫПОЛНЕНО: settingsGeneral.setNotifySettings (и get) — batch.call fallback на web.api.vk.ru; wire batchCall приведён к эталону CDP (VKApiClient.kt, VKApiClient #P0-2)
+- [x] **ВНЕПЛАНОВО: #CALLS-MUTE-HARDEN** — репорт юзера «mute не отключает микрофон»: setMuted глушит localAudioTrack + все аудио-сендеры PC, mutedState переживает пересоздание трека, диагностический лог enabled (WebRtcEngine.kt). UI-обвязка проверена — корректна. Ждёт теста звонком
+- [ ] B-2, B-3, B-4, A-1..A-8 — как выше

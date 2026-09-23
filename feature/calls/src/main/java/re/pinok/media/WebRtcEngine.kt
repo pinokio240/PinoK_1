@@ -70,6 +70,11 @@ companion object {
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
     private var audioSource: AudioSource? = null
+    // #CALLS-MUTE-HARDEN (2026-09-23): стейт mute переживает пересоздание трека —
+    // если setMuted вызван до acceptCall/startCall (или трек будет создан заново),
+    // createLocalAudioTrack применит его к свежему треку, а не «забудет» mute.
+    @Volatile
+    private var mutedState: Boolean = false
     private val pendingRemoteIce = ConcurrentHashMap<String, MutableList<IceCandidate>>()
     @Volatile
     private var lastLocalSdp: SessionDescription? = null
@@ -470,7 +475,35 @@ companion object {
         }
     }
 
-    fun setMuted(muted: Boolean) { post { localAudioTrack?.setEnabled(!muted) } }
+    /**
+     * #CALLS-MUTE-HARDEN (2026-09-23, репорт юзера: «микрофон не отключается»):
+     * раньше мутился ТОЛЬКО трек из поля localAudioTrack. Если по какой-то причине
+     * сендер PC держит ДРУГОЙ объект трека (пересоздание/гонка), mute на поле
+     * ничего не менял для сендера — собеседник продолжал слышать. Теперь:
+     * 1) mute ставится на localAudioTrack И на ВСЕ аудио-сендеры PC;
+     * 2) стейт помнится в mutedState и применяется при создании/пересоздании трека;
+     * 3) фактическое состояние (enabled) пишется в лог — следующий лог даст точный
+     *    диагноз, дошёл ли mute до нативного трека.
+     */
+    fun setMuted(muted: Boolean) {
+        mutedState = muted
+        post {
+            val t = localAudioTrack
+            t?.setEnabled(!muted)
+            var sendersMuted = 0
+            peerConnection?.senders?.forEach { sender ->
+                val st = sender.track()
+                if (st is AudioTrack) {
+                    st.setEnabled(!muted)
+                    sendersMuted++
+                }
+            }
+            AppLog.i(
+                TAG,
+                "setMuted($muted): track=${t != null} enabled=${t?.enabled()} | аудио-сендеры PC затронуто=$sendersMuted"
+            )
+        }
+    }
     fun setSpeakerOn(speakerOn: Boolean) {
         // #CALLS: переключение динамик/наушник (как CallsAudioManagerV3Impl).
         val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
@@ -900,7 +933,11 @@ companion object {
         audioSource = factory?.createAudioSource(constraints)
         audioSource?.let { src ->
             localAudioTrack = factory?.createAudioTrack("audio0", src)
-            AppLog.i(TAG, "Local audio track created")
+            // #CALLS-MUTE-HARDEN: свежий трек создаётся ВКЛЮЧЁННЫМ — если юзер
+            // уже нажал mute (или дефолт «звонить с выключенным микрофоном»),
+            // применяем стейт сразу, иначе пересоздание трека снимало mute.
+            if (mutedState) localAudioTrack?.setEnabled(false)
+            AppLog.i(TAG, "Local audio track created (mutedState=$mutedState, enabled=${localAudioTrack?.enabled()})")
         }
     }
 

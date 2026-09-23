@@ -10231,3 +10231,21 @@ Work Log:
 Stage Summary:
 - Звонковый критичный остаток: НЕТ (подтверждено юзером)
 - Очередь: B-1 (можно сразу) ∥ A-1..A-8 (ждут юзера) → B-2/B-3 → B-4
+
+---
+Task ID: 4
+Agent: Z.ai Code (main)
+Task: Баг «mute не отключает микрофон» + B-1 (P0-2) setNotifySettings err=3 → batch.call
+
+Work Log:
+- Проверена вся mute-цепочка: 3 UI-точки (CallScreen футер 2386, collapsed-виджет 2173, панель 2592) → engine.setMuted → post → localAudioTrack.setEnabled(!muted) — на бумаге корректно
+- Хардень WebRtcEngine.setMuted: mute на localAudioTrack + ВСЕ аудио-сендеры PC; mutedState (@Volatile) переживает пересоздание трека (createLocalAudioTrack применяет к свежему); лог фактического enabled
+- batchCall: wire приведён к эталону CDP ({"requests":[{"id","method","params"}]}, ?v=&client_id= в query)
+- Добавлен batchCallSingle (толерантный разбор: {"response":{"0":..}} / {"response":[..]} / примитив)
+- settingsGeneralSetNotifySettings: direct → (провал/err) → batch-ретрай; settingsGeneralGetNotifySettings: то же; parseNotifySections — общий парсер ({"response":{"sections"}} и batch-элемент {"sections"})
+- Валидаторы: nested-comments/secrets/скобки/!! — чисто
+
+Stage Summary:
+- WebRtcEngine.kt: #CALLS-MUTE-HARDEN (setMuted/sendners/mutedState/логи)
+- VKApiClient.kt: #P0-2 batch.call fallback для settingsGeneral.set/getNotifySettings + эталонный wire batchCall
+- Тест юзера: звонок → mute → лог-строка «setMuted(true): track=true enabled=false | аудио-сендеры PC затронуто=N»; если enabled=false, а собеседник слышит — слушать нативный лог
