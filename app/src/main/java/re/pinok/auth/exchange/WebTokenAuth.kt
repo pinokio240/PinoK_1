@@ -1463,8 +1463,13 @@ object WebTokenAuth {
             val cred = JsonParser.parseString(credJson).asJsonObject.getAsJsonObject("data")
             val comms = JsonParser.parseString(commsJson).asJsonObject
             val key = cred.get("key").asString + comms.get("key").asString
-            val tsStr = cred.get("ts").asString + "_" + comms.get("ts").asString
-            val tsLong = tsStr.toLongOrNull() ?? 0L
+            // #FIX-COMPILE (2026-09-23): было `tsStr.toLongOrNull() ?? 0L` —
+            // `??` не существует в Kotlin (это `?:`), плюс строка "ts1_ts2"
+            // никогда не парсилась бы в Long (всегда 0 → guard в SovaApp
+            // `callsQueueTs > 0L` отсекал бы весь queue-credential).
+            // VK web склеивает key конкатенацией, ts — СУММОЙ чисел.
+            val tsLong = (cred.get("ts").asString.toLongOrNull() ?: 0L) +
+                (comms.get("ts").asString.toLongOrNull() ?: 0L)
             val app = re.pinok.SovaApp.get()
             app.prefs.setCallsQueueKey(key)
             app.prefs.setCallsQueueTs(tsLong)
