@@ -358,6 +358,8 @@ fun CallScreen(
     var isVideoCall by remember { mutableStateOf(false) }
     var videoFrames by remember { mutableStateOf(-1) }
     var videoRxEnabled by remember { mutableStateOf(false) }
+    // #CALLS-AEC-TOGGLE: hardware AEC/NS из настроек (читается до initialize).
+    var echoCancelPref by remember { mutableStateOf(true) }
 
     val engine = remember {
         WebRtcEngine(
@@ -802,9 +804,13 @@ fun CallScreen(
             // #CALLS-SYMMETRIC: чёрная видеозаглушка наружу (sendrecv без камеры, Этап 2-заготовка).
             val tx = s?.callsVideoTx ?: true
             engine.setVideoTxEnabled(tx)
-            AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx (из настроек, до старта звонка)")
+            // #CALLS-AEC-TOGGLE: эхоподавление из настроек → hardware AEC/NS
+            // JavaAudioDeviceModule (см. initialize). Применяется с этого звонка.
+            val aec = s?.callsEchoCancel ?: true
+            echoCancelPref = aec
+            AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, echoCancel=$aec (из настроек, до старта звонка)")
         }
-        engine.initialize()
+        engine.initialize(echoCancelEnabled = echoCancelPref)
         // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
         if (!micGranted) micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
         if (joinByLink) {

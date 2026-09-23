@@ -586,6 +586,21 @@ private fun CallsTab(
             }
         }
 
+        // #CALLS-AEC-TOGGLE (2026-09-23): hardware AEC/NS аудиодвижка звонков.
+        // Раньше оба были жёстко выключены (WebRtcEngine) — у заглушенного абонента
+        // слышалось собственное эхо. Default true (ВКЛ); потребитель —
+        // WebRtcEngine.initialize (CallScreen, до старта звонка).
+        item { SectionHeader("Звук") }
+        item {
+            ToggleRow(
+                title = "Эхоподавление",
+                subtitle = "Убирает эхо собственного голоса у собеседника (аппаратное подавление эха и шума). Применяется со следующего звонка",
+                checked = s.callsEchoCancel,
+            ) { v ->
+                scope.launch { app.prefs.setCallsEchoCancel(v) }
+            }
+        }
+
         // #CALLS-DNS-PIN (Task 26-2-b): ручной IPv4 для пина okcdn-доменов звонков.
         // Потребитель — Dns-объект OkHttpClient в SovaApp.onCreate: lookup() читает
         // @Volatile prefsSnapshot на каждое НОВОЕ соединение, поэтому смена IP

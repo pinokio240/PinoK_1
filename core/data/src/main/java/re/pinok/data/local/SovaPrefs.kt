@@ -536,6 +536,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // #CALLS-SWDECODE (01.09): принудительный SW-декодер — диагностика
             // чёрного экрана при доказанном рендере (TextureView, 1354 кадра).
             callsVideoSwDecode = p[Keys.CALLS_VIDEO_SW_DECODE] ?: false,
+            // #CALLS-AEC-TOGGLE (2026-09-23): аппаратное эхоподавление (AEC) и
+            // шумоподавление (NS) аудиодвижка звонков. Default true — эхо-репорт
+            // юзера: у заглушенного абонента было слышно собственное эхо.
+            callsEchoCancel = p[Keys.CALLS_ECHO_CANCEL] ?: true,
             // #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков.
             // Пустая строка = авто (встроенный 155.212.204.12). Потребитель —
             // Dns-объект OkHttpClient в SovaApp.onCreate (lookup читает
@@ -1158,6 +1162,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
     // #CALLS-SWDECODE: принудительный программный декодер видео.
     suspend fun setCallsVideoSwDecode(v: Boolean)      = put(Keys.CALLS_VIDEO_SW_DECODE, v)
+    /** #CALLS-AEC-TOGGLE: аппаратное эхоподавление/шумоподавление звонков (default true). */
+    suspend fun setCallsEchoCancel(v: Boolean)         = put(Keys.CALLS_ECHO_CANCEL, v)
 
     /**
      * #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
@@ -1678,6 +1684,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          *  перезапуска приложения (фабрика создаётся один раз на процесс).
          *  Default false. */
         val callsVideoSwDecode: Boolean,
+        /** #CALLS-AEC-TOGGLE: hardware AEC/NS движка звонков (default true).
+         *  Потребитель — WebRtcEngine.initialize (JavaAudioDeviceModule).
+         *  Применяется при СЛЕДУЮЩЕМ звонке (модуль создаётся на звонок). */
+        val callsEchoCancel: Boolean,
         /**
          * #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
          * (calls.okcdn.ru / calls-test.okcdn.ru / api.mycdn.me — сигналинг
@@ -1956,6 +1966,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
         val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
+        /** #CALLS-AEC-TOGGLE: hardware AEC/NS аудиодвижка звонков. */
+        val CALLS_ECHO_CANCEL       = booleanPreferencesKey("calls_echo_cancel")
         // #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
         // (пустая строка = авто — встроенный 155.212.204.12).
         val CALLS_DNS_PIN_IP        = stringPreferencesKey("calls_dns_pin_ip")

@@ -76,6 +76,9 @@ companion object {
     @Volatile
     private var mutedState: Boolean = false
     private val pendingRemoteIce = ConcurrentHashMap<String, MutableList<IceCandidate>>()
+    /** #CALLS-AEC-TOGGLE: hardware AEC/NS (задаётся initialize; default true). */
+    @Volatile
+    private var echoCancelEnabled: Boolean = true
     @Volatile
     private var lastLocalSdp: SessionDescription? = null
     fun lastLocalSdp(): SessionDescription? = lastLocalSdp
@@ -268,8 +271,14 @@ companion object {
         }
     }
 
-    fun initialize() {
+    fun initialize(echoCancelEnabled: Boolean = true) {
         if (factory != null) return
+        // #CALLS-AEC-TOGGLE (2026-09-23): hardware AEC/NS из настроек (Настройки →
+        // Звонки → «Эхоподавление», SovaPrefs.callsEchoCancel). Раньше оба были
+        // жёстко false — у заглушенного абонента было слышно собственное эхо
+        // (микрофон собеседника подхватывал звук из динамика). Читается в
+        // CallScreen до initialize (рядом с #CALLS-VIDEO-PREFS-RACE).
+        this.echoCancelEnabled = echoCancelEnabled
         if (signalingThread == null) {
             signalingThread = HandlerThread("webrtc-signaling").also { it.start() }
             signalingHandler = Handler(signalingThread!!.looper)
@@ -303,8 +312,10 @@ companion object {
             // Без него createAudioSource даёт нативный крэш libjingle
             // "front() called on an empty vector".
             val audioDeviceModule = org.webrtc.audio.JavaAudioDeviceModule.builder(context)
-                .setUseHardwareAcousticEchoCanceler(false)
-                .setUseHardwareNoiseSuppressor(false)
+                // #CALLS-AEC-TOGGLE: true — аппаратные AEC/NS (устройство давит эхо
+                // спикера точнее); false — прежнее поведение (оба выключены).
+                .setUseHardwareAcousticEchoCanceler(echoCancelEnabled)
+                .setUseHardwareNoiseSuppressor(echoCancelEnabled)
                 .createAudioDeviceModule()
             // #CALLS-VIDEO-RX: сохраняем EglBase в поле (см. комментарий к полю) —
             // контекст нужен и factory (кодеки), и рендереру CallScreen.
