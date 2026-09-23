@@ -10213,3 +10213,21 @@ Work Log:
 Stage Summary:
 - CallScreen.kt: join-блок заменён на retry-логику; маркеры лога: JOIN-RETRY
 - Если force-ретрай тоже даёт err=10 — WAF по IP (смена сети/выждать), дальше кодом не лечится
+
+---
+Task ID: 3
+Agent: Z.ai Code (main)
+Task: Разбор 5 файлов tempfile.org + документация + план в очередь выполнения
+
+Work Log:
+- Скачаны 5 файлов (curl /download): все — markdown-доки, не логи
+- asKMQg9Dbrt «Два экрана при входящем» (22.09) — ЗАКРЫТО guard'ами CALLS-NO-DOUBLE-CALLSCREEN (bfd6161)
+- o1eUfLxF1du «удалить joinConversation из accept» — УСТАРЕЛО: bfd6161 доказал, что join обязателен (регресс 7d1e459)
+- Vs8XE4DeDdQ / S7n7upSEhRL / 7Bqc93Eh2AA — DevTools-инструкции; актуальное: §7 чек-лист недоснятого + формат a_check (уже реализовано ee8cb4e/b2d81e5)
+- Учтена поправка юзера: remote-hangup 8–12с = ручное завершение (норма); err=10 не критичен
+- Создан EXECUTION_QUEUE.md: Блок A (съём юзером A-1..A-8) + Блок B (код: B-1 P0-2 setNotifySettings batch.call, B-2 AuthDomainsConfig err=3, B-3 mediaThumbs, B-4 исходящий)
+- HISTORY.md дополнен; коммит + пуш
+
+Stage Summary:
+- Звонковый критичный остаток: НЕТ (подтверждено юзером)
+- Очередь: B-1 (можно сразу) ∥ A-1..A-8 (ждут юзера) → B-2/B-3 → B-4
