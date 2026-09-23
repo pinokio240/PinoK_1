@@ -1,1 +1,12 @@
-
+{
+  "versions": [
+    {
+      "versionCode": 6,
+      "versionName": "2.1.5",
+      "stamp": "calls-2026.09.18-1",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/V2.1.5/PinoK_2309262212.apk",
+      "sha256": "e0267b8bf8677c09040f24d5abc05d053455c031ebc4a21dd33cc1e59ca2eaad",
+      "notes": "Сборка V2.1.5: #AUTH-FIRST-OPEN-GUEST — первый запуск без авто-логина (guest-режим сразу: drawer с «Настройки»/«Войти в аккаунт», офлайн-данные, настройки доступны в guest); #CALLS-AEC-TOGGLE — аппаратное эхоподавление ВКЛ по умолчанию + тумблер «Эхоподавление» в Настройки → Звонки → Звук (фикс эха у заглушенного абонента); #CALLS-MUTE-HARDEN — mute микрофона переживает пересоздание трека; #CALLS-ONE-TAP — одиночное «Принять» (без двойного срабатывания); #CALLS-JOIN-RETRY — ретрай join при err=10; фикс компиляции setNotifySettings (B-1)."
+    }
+  ]
+}
