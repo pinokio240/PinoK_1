@@ -1386,6 +1386,15 @@ class MainActivity : ComponentActivity() {
                             BackHandler(enabled = guestSettingsOpen) {
                                 guestSettingsOpen = false
                             }
+                            // #AUTH-FIRST-OPEN-GUEST-3: при входе в guest (первый
+                            // запуск без токена) боковая панель открыта по умолчанию —
+                            // юзер сразу видит «Офлайн-данные», «Настройки» и
+                            // «Войти в аккаунт». Закрытие — свайпом/тапом по меню.
+                            LaunchedEffect(Unit) {
+                                if (guestDrawerState.currentValue == DrawerValue.Closed) {
+                                    guestDrawerState.open()
+                                }
+                            }
                             GuestDrawer(
                                 drawerState = guestDrawerState,
                                 onSettings = { guestSettingsOpen = true },
