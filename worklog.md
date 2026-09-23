@@ -10138,3 +10138,46 @@ SovaNavHost.kt:
 
 Статус: требует пересборки и одного тестового входящего звонка.
 
+
+---
+Task ID: CALLS-RESTORE-JOIN
+Agent: Z.ai Code (внешний, песочница)
+Task: Найти причину неработоспособности соединения при входящем звонке (регресс после
+удаления одного из экранов входящего) + полный прогон файлов на явные/неявные ошибки.
+
+Work Log:
+- Переклонирование репо (сброс песочницы), обновление: 800373d (restore IncomingCallScreen +
+  guard + WebTokenAuth persistQueueCredential + INCOMING_CALL_REVERSE/CDP-доки).
+- Найден РЕГРЕСС СОЕДИНЕНИЯ (единств. функциональное изменение цепочки в git):
+  7d1e459 «фикс кодировки» СЛУЧАЙНО удалил vchat.joinConversation из accept-пути
+  CallScreen (блок sk -> vchatJoinConversation -> accept-call). Без него calls.okcdn.ru
+  не получает регистрацию участника с mediaSettings до accept-call — accept уходит по WS,
+  медиа не проходит. Комментарий-оправдание («бесполезный», err=10 WAF, 68мс) признан
+  ошибочным: err=10 — симптом сессии, 68мс не объясняет UX-жалобу; join был во всех
+  известных рабочих состояниях.
+- Установлено: эталон кодировки CallScreen.kt — ee8cb4e (файл был УЖЕ ЧИСТЫЙ: 8/8 эталонных
+  слов на месте, 0 mojibake). «Починка» 7d1e459+6f52433 чинила ЛОКАЛЬНО испорченную копию
+  и внесла остаточную порчу И→Р (РСХОДЯЩЕГО, ВРДЕО, ПРРМЕНЕНА, в†”...) — в т.ч. в строках
+  AppLog. Файл восстановлен из ee8cb4e байт-в-байт + добавлен комментарий-предохранитель
+  #CALLS-RESTORE-JOIN («НЕ УДАЛЯТЬ») у join-блока. Join восстановлен к known-good виду.
+- Восстановлены ПОТЕРЯННЫЕ (не были закоммичены) правки CALLS-NO-DOUBLE-CALLSCREEN:
+  guard'ы перезаписи pendingIncomingCallPayload на всех 3 коллекторах (SovaApp: LP 115 /
+  queuev4 / events_queue), LaunchedEffect SovaNavHost — один ключ (incomingCallAccepted),
+  guard дубликата навигации (CallScreen already open → skip + consume), убран ifBlank
+  у title (IncomingCallScreen/CallScreen сами резолвят профиль).
+- Валидаторы: check-secrets FAILED (реальный vk1.a токен в INCOMING_CALL_REVERSE.md:39,
+  закоммичен в 800373d) → прогнан scripts/mask-secrets.py, теперь OK. check-nested-comments
+  ALL CLEAN. Mojibake-скан всех .kt/.java: CallScreen.kt (23 вхождений •/≥/✓/…) исправлены
+  эталоном; BaselineProfileGenerator.kt — полный cp1251-реверс (8 строк, «генератор... для
+  PinoK_1» восстановлен). Итог: 0 файлов с mojibake. Дельта-баланс скобок vs HEAD: 0 по
+  всем 4 правленым файлам. `!!` в диффе: 0.
+- Отмечено на будущее: правки CALLS-NO-DOUBLE-CALLSCREEN делались локально (PowerShell) и
+  в git не попали — коммитить правки ДО теста, иначе регрессы неотслеживаемы (прецедент
+  Task 58/§591 — ключ, теперь guard'ы).
+
+Stage Summary:
+- Причина неработоспособности найдена и устранена: vchat.joinConversation восстановлен в
+  accept-пути CallScreen.kt (эталон ee8cb4e, чистая кодировка, 0 mojibake). Восстановлены
+  потерянные guard'ы двойного CallScreen (SovaApp ×3 + SovaNavHost). Замаскирован
+  закоммиченный vk1.a токен. Требуется пересборка + 1 тестовый входящий звонок (лог:
+  «Принять: params готовы...» → join без err=10 → accept-call → ICE CONNECTED).

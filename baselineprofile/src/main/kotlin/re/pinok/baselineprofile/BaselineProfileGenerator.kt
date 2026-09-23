@@ -9,13 +9,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * O1 #PERF-BASELINE (Task 77): РіРµРЅРµСЂР°С‚РѕСЂ Baseline Profile РґР»СЏ PinoK_1.
+ * O1 #PERF-BASELINE (Task 77): генератор Baseline Profile для PinoK_1.
  *
- * РџСЂРѕРіРѕРЅСЏРµС‚ РєР»СЋС‡РµРІС‹Рµ СЃС†РµРЅР°СЂРёРё СЃС‚Р°СЂС‚Р° РЅР° СѓСЃС‚СЂРѕР№СЃС‚РІРµ Android 13+ (Сѓ РЅР°СЃ Cyber 15),
- * Р·Р°РїРёСЃС‹РІР°РµС‚ РїСЂРѕС„РёР»СЊ AOT-РєРѕРјРїРёР»СЏС†РёРё. РџСЂРѕС„РёР»СЊ Р·Р°С‚РµРј СѓРїР°РєРѕРІС‹РІР°РµС‚СЃСЏ РІ release-APK
- * Рё СѓСЃРєРѕСЂСЏРµС‚ С…РѕР»РѕРґРЅС‹Р№ СЃС‚Р°СЂС‚ РЅР° 20-40%.
+ * Прогоняет ключевые сценарии старта на устройстве Android 13+ (у нас Cyber 15),
+ * записывает профиль AOT-компиляции. Профиль затем упаковывается в release-APK
+ * и ускоряет холодный старт на 20-40%.
  *
- * Р—Р°РїСѓСЃРє: gradlew :baselineprofile:connectedAndroidTest
+ * Запуск: gradlew :baselineprofile:connectedAndroidTest
  */
 @RunWith(AndroidJUnit4::class)
 class BaselineProfileGenerator {
@@ -30,15 +30,15 @@ class BaselineProfileGenerator {
             maxIterations = 5,
             stableIterations = 3,
         ) {
-            // РЎС‚Р°СЂС‚ РїСЂРёР»РѕР¶РµРЅРёСЏ (С…РѕР»РѕРґРЅС‹Р№ СЃС‚Р°СЂС‚).
+            // Старт приложения (холодный старт).
             pressHome()
             startActivityAndWait()
 
-            // Р”РѕР¶РґР°С‚СЊСЃСЏ РѕСЃРЅРѕРІРЅРѕРіРѕ РѕРєРЅР° (РіР»Р°РІРЅС‹Р№ СЌРєСЂР°РЅ/Р»РµРЅС‚Р°).
+            // Дождаться основного окна (главный экран/лента).
             val device = device
             device.wait(Until.hasObject(By.pkg("re.pinok.debug").depth(0)), 5_000)
 
-            // РќРµР±РѕР»СЊС€Р°СЏ РїСЂРѕРєСЂСѓС‚РєР°, С‡С‚РѕР±С‹ РїСЂРѕРіСЂРµС‚СЊ Р»РµРЅС‚Сѓ.
+            // Небольшая прокрутка, чтобы прогреть ленту.
             device.swipe(
                 device.displayWidth / 2,
                 device.displayHeight * 3 / 4,

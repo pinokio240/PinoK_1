@@ -392,11 +392,23 @@ fun SovaNavHost(
     // свёрнутый баннер — см. конец этой composable). Навигация происходит
     // только после «Принять» (app.acceptIncomingCall → incomingCallAccepted),
     // после неё consumeIncomingCall() сбрасывает весь pending-стейт.
-    LaunchedEffect(app.pendingIncomingCallPayload, app.incomingCallAccepted) {
+    // #CALLS-NO-DOUBLE-CALLSCREEN (2026-09-23): ОДИН ключ (incomingCallAccepted).
+    // Раньше ключей было два (+payload): payload одного звонка перезаписывался
+    // коллекторами (теперь у них guard в SovaApp) и перезапускал эффект —
+    // buildRoute с другим payload давал ДРУГОЙ route, launchSingleTop не
+    // схлопывал, и в backstack пушилась вторая копия CallScreen.
+    // + guard дубликата: если CallScreen уже открыт — не навигируем повторно.
+    LaunchedEffect(app.incomingCallAccepted) {
         val payload = app.pendingIncomingCallPayload
         if (!payload.isNullOrBlank() && app.incomingCallAccepted) {
+            val cur = nav.currentBackStackEntry?.destination?.route
+            if (cur != null && cur.startsWith(Screen.Call.route)) {
+                AppLog.i("SovaNavHost", "INCOMING_CALL: CallScreen already open — skip duplicate navigate")
+                app.consumeIncomingCall()
+                return@LaunchedEffect
+            }
             val peerId = app.pendingIncomingCallPeerId
-            val title = app.pendingIncomingCallTitle.ifBlank { "Входящий звонок" }
+            val title = app.pendingIncomingCallTitle
             val photo = app.pendingIncomingCallPhoto
             AppLog.i("SovaNavHost", "INCOMING_CALL: navigating to CallScreen payload.len=${payload.length}")
             nav.navigate(Screen.Call.buildRoute(peerId, title, photo, incoming = true, payload = payload)) {

@@ -1695,10 +1695,16 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 if (event is re.pinok.realtime.LongPollEvent.IncomingCall) {
                     try {
                         AppLog.i("SovaApp", "INCOMING_CALL (LP 115): payload.len=${event.payload?.length ?: 0}")
-                        // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
-                        pendingIncomingCallPayload = event.payload
-                        refreshIncomingCaller()
-                        showIncomingCallNotification()
+                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи — один звонок приходит
+                        // ИЗ ТРЁХ коллекторов (LP 115 / queuev4 / events_queue); повторная
+                        // запись того же payload перезапускала LaunchedEffect в SovaNavHost
+                        // и пушила вторую копию CallScreen в backstack.
+                        if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) {
+                            // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
+                            pendingIncomingCallPayload = event.payload
+                            refreshIncomingCaller()
+                            showIncomingCallNotification()
+                        }
                     } catch (e: Exception) {
                         AppLog.w("SovaApp", "startCallNotifier: ${e.message}")
                     }
@@ -1711,9 +1717,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
                         val payload = ev.payload["payload"] as? String
                         AppLog.i("SovaApp", "INCOMING_CALL (queuev4): payload.len=${payload?.length ?: 0}")
-                        pendingIncomingCallPayload = payload
-                        refreshIncomingCaller()
-                        showIncomingCallNotification()
+                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи (см. LP 115 выше).
+                        if (payload != null && (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != payload)) {
+                            pendingIncomingCallPayload = payload
+                            refreshIncomingCaller()
+                            showIncomingCallNotification()
+                        }
                     }
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "startCallNotifier: ${e.message}")
@@ -1727,9 +1736,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     val payload = ev.payload["payload"] as? String
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS || !payload.isNullOrBlank()) {
                         AppLog.i("SovaApp", "INCOMING_CALL (events_queue): queue=${ev.queueId} payload.len=${payload?.length ?: 0}")
-                        pendingIncomingCallPayload = payload
-                        refreshIncomingCaller()
-                        showIncomingCallNotification()
+                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи (см. LP 115 выше).
+                        if (payload != null && (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != payload)) {
+                            pendingIncomingCallPayload = payload
+                            refreshIncomingCaller()
+                            showIncomingCallNotification()
+                        }
                     }
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "eventsQueuev4 notifier: ${e.message}")

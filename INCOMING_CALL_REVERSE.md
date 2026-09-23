@@ -36,7 +36,7 @@ $SifIAb1F00ZNqWiekngOt7u9kZufonQNhgU65XgC9hORJPuZLLbv6JjJOvZ7TGwqLONzt///https:/
 - calls-токен `$...` + базовый url https://calls.okcdn.ru
 
 ### 6287487:web_token:login:auth (web access_token)
-- access_token = `vk1.a.w3mD8XC08hC4v5vJoHTusPp4ZxNR4_6sh5px10y0Xta8ek7Bil68N3CIwkOcARpaJdowinaVuRMQ8ZfaZbwEg5XxffwXN4DzgVNS3oUaMdvl8nco2_gdm6h5klKxTIJXkrfeQa8-vLqJbn-mTXXCQGHy4pYC44mBRDB8FZAD_znkZxi6pf-cubpKExH6HNZsu8NKzedOKz2UN06pchS9FA`
+- access_token = `vk1.a.w3mD...MASKED...S9FA`
 - user_id=171093180, expires=1790105509, logout_hash=4e51f9e4943d863241
 
 ### 6287487:get_anonym_token:login:auth (anonym -> session key для calls)
