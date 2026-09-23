@@ -34,12 +34,25 @@
 - [ ] **B-3 (P2)** mediaThumbs redesign-парсер
 - [ ] **B-4** Исходящий звонок: сверить params с данными A-1/A-4, добить недостающие поля (после съёма)
 
+## Блок C — #AUTH-FIRST-OPEN-GUEST (план готов, реализация по апруву юзера)
+
+План: `docs/AUTH-FIRST-OPEN-GUEST-PLAN.md`. Суть: первый запуск без токена — сразу
+guest-режим (без AuthActivity); вход — фиксированная кнопка «Войти в аккаунт» в
+guest-drawer (запускает AuthActivity → LandingScreen внутри неё). Silent re-login
+по remixsid остаётся автоматическим (невидимый).
+
+- [ ] **C-1** MainActivity: boot-no-token без remixsid / silent исчерпан → guest (не launchAuth)
+- [ ] **C-2** MainActivity: network-restored-no-token и token-invalidated tick — только silent, иначе guest
+- [ ] **C-3** GuestDrawer.kt: ModalNavigationDrawer вокруг OfflineManagerScreen, фиксированный хвост «Войти в аккаунт» → launchAuth("drawer-login")
+- [ ] **C-4** Guest onBack: убрать relaunch AuthActivity ("offline-back-to-login")
+
 ## Порядок
 
 1. **B-1** — можно делать сразу, данных не требует (P0-2).
 2. **A-1..A-8** — параллельно, ждут съёма от юзера.
 3. **B-2, B-3** — после B-1 (P2).
 4. **B-4** — финал, после данных Блока A.
+5. **Блок C** — по апруву юзера (план составлен 2026-09-23).
 
 ---
 ## Статус исполнения (2026-09-23, сессия 2)
