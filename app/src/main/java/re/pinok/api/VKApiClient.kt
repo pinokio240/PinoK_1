@@ -16215,7 +16215,7 @@ class VKApiClient(
         // getAsJsonObject("response") → ClassCastException (#300). Проверка наличия
         // поля + отсутствие error — как в account.setObsceneFilter.
         if (json != null && json.has("response") && getObj(json, "error") == null) return true
-        val errCode = getObj(json, "error")?.get("error_code")
+        val errCode = json?.let { getObj(it, "error") }?.get("error_code")
             ?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
         AppLog.w("VKApiClient", "setNotifySettings($key) direct не прошёл (err=$errCode) — ретрай через batch.call (P0-2)")
         val el = batchCallSingle("settingsGeneral.setNotifySettings",
