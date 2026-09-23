@@ -733,12 +733,29 @@ fun CallScreen(
                 // #CALLS-RESTORE-JOIN (2026-09-23): НЕ УДАЛЯТЬ! Регистрация участника
                 // с mediaSettings на calls.okcdn.ru ДО accept-call. Удаление этого
                 // блока в 7d1e459 сломало соединение входящего звонка.
-                val sk = deps.ensureCallsSessionKey(force = false)
-                if (sk != null && !joinByLink) {
+                // #CALLS-JOIN-RETRY (2026-09-23, лог 17:27): HTTP-регистрация —
+                // обязательный шаг: без неё сервер не считает нас вошедшим в разговор
+                // (в remote-hangup приходит deviceCount:0), и собеседник сбрасывает
+                // звонок через ~8–12с ПОСЛЕ ICE CONNECTED (HUNGUP + closed-conversation).
+                // err=10 «is blocked for <uid> from IP» на КЭШ-ключе → force-обновление
+                // session_key (свежий getCallToken → anonymLogin) и ОДИН ретрай.
+                if (!joinByLink) {
                     withContext(Dispatchers.IO) {
-                        deps.apiClient.vchatJoinConversation(
-                            activeCallId.value ?: "", sk, isVideo = false
-                        )
+                        val conv = activeCallId.value ?: ""
+                        var joined = deps.ensureCallsSessionKey(force = false)
+                            ?.let { deps.apiClient.vchatJoinConversation(conv, it, isVideo = false) }
+                        if (joined == null) {
+                            AppLog.w("CallScreen", "JOIN-RETRY: joinConversation не прошёл (err=10/пусто) — force-refresh session_key")
+                            val freshSk = deps.ensureCallsSessionKey(force = true)
+                            if (freshSk != null) {
+                                joined = deps.apiClient.vchatJoinConversation(conv, freshSk, isVideo = false)
+                            }
+                        }
+                        if (joined != null) {
+                            AppLog.i("CallScreen", "JOIN-RETRY: joinConversation OK — участник зарегистрирован (HTTP)")
+                        } else {
+                            AppLog.e("CallScreen", "JOIN-RETRY: joinConversation не удался даже после force-ретрая (WAF/антифрод) — звонок держится только на WS-accept, ожидаем сброс ~10с")
+                        }
                     }
                 }
                 // #CALLS-ACK-REOFFER (2026-08-29): accept-call ДО создания PC/answer —

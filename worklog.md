@@ -10198,3 +10198,18 @@ Stage Summary:
 - Входящий звонок теперь соединяется с ОДНОГО нажатия: IncomingCallScreen «Принять» → авто-join в CallScreen
 - Файл: feature/calls/src/main/java/re/pinok/ui/screens/calls/CallScreen.kt
 - Маркер в логе: ONE-TAP: авто-accept
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: Анализ лога redmi (17:25–17:30) — входящий соединяется, но собеседник сбрасывает через 8–12с
+
+Work Log:
+- Разобран лог (5644 строки, 2 входящих от Лида Кузнецова): ONE-TAP авто-accept работает; offer→accept-call→answer→ICE CONNECTED — весь сигналинг и медиа-стек ОК
+- Оба звонка: vchat.joinConversation err=10 «PERMISSION_DENIED: blocked for 512002378693 from IP …» (2 разных мобильных IP) на кэш-ключе
+- Оба звонка: remote-hangup HUNGUP + closed-conversation с deviceCount:0 через ~8–12с ПОСЛЕ ICE CONNECTED → сервер/собеседник не видят HTTP-регистрацию участника
+- Фикс #CALLS-JOIN-RETRY: в performIncomingAccept при null-ответе joinConversation — force-обновление session_key (getCallToken → anonymLogin) и один ретрай; расширенное логирование исхода
+
+Stage Summary:
+- CallScreen.kt: join-блок заменён на retry-логику; маркеры лога: JOIN-RETRY
+- Если force-ретрай тоже даёт err=10 — WAF по IP (смена сети/выждать), дальше кодом не лечится
