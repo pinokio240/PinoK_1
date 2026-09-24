@@ -1048,7 +1048,7 @@ fun AudioPlayerScreen(
                                 DropdownMenuItem(
                                     text = { Text(if (eqPresetName == custom.name) "✓ ${custom.name}" else custom.name) },
                                     onClick = {
-                                        EqualizerHelper.engine()?.applyCustomPreset(custom)
+                                        EqualizerHelper.applyCustomPresetPersist(custom)
                                         eqPresetName = custom.name
                                         showPresetMenu = false
                                     },
@@ -1272,9 +1272,9 @@ fun AudioPlayerScreen(
                     TextButton(
                         onClick = {
                             val name = newPresetName.trim().ifBlank { "Мой пресет" }
-                            val engine = EqualizerHelper.engine()
-                            if (engine != null) {
-                                val snapshot = engine.snapshotCustomPreset(name)
+                            // #EQ-SAVE-NULL-ENGINE: без требования живого engine.
+                            run {
+                                val snapshot = EqualizerHelper.snapshotCustomPreset(name)
                                 CustomPresetStore.upsert(
                                     name = snapshot.name,
                                     eqBands = snapshot.eqBands,

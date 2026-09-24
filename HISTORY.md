@@ -13034,3 +13034,10 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
 **Ожидание от теста:** в шите плеера сразу 9 полос + dropdown пресетов + «Сохранить пресет»; Reverb на вкладке Reverb реально меняет звук; сохранённый пресет появляется в dropdown «Мои пресеты».
 
 **Volume leveling (выравнивание громкости) — ОБСУЖДЕНИЕ, не реализовано:** варианты — (A) DynamicsProcessing compressor/limiter (API28+, низкий CPU, «Sound Check»); (B) software AudioProcessor в ExoPlayer с медленным AGC по RMS (все версии, риск pumping); (C) per-track ReplayGain-стиль: измерение громкости первых N секунд + кэш per trackId + статический gain (слышимо правильнее всего); (D) LoudnessEnhancer — только буст, не выравнивание (уже есть). Рекомендация: C (+limiter A против клиппинга).
+
+## #EQ-SAVE-NULL-ENGINE (2026-09-24) — пользовательский пресет не сохранялся: 2 дыры
+
+1. **Тихий no-save без engine.** engine() появляется только после первой сыгранной дорожки (attach к audio session в PlayerService). «Сохранить пресет» в полном экране и в шите требовал engine != null → без воспроизведения сохранение молча не происходило. Даже ползунки при engine==null не писались в prefs (EqualizerHelper.setBand → no-op).
+   Фикс: EqualizerHelper.snapshotCustomPreset(name) — снапшот из prefs БЕЗ engine (ключи PREF_* движка открыты internal); EqualizerHelper.setBand fallback в prefs; EqualizerHelper.applyCustomPresetPersist(preset) — применение custom-пресета в prefs при engine==null (restoreSettings подхватит при attach). UI (оба экрана) переведён на эти методы.
+2. **Пресет исчезал после перезапуска.** Если eq_bands в prefs пусто (ползунки не трогали), снапшот давал eqBands=[], а CustomPresetStore.load() фильтрует пустые как невалидные.
+   Фикс: fallback полос в снапшоте: saved → live (engine) → полосы активного встроенного пресета → 9 нулей.

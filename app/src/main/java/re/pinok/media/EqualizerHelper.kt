@@ -43,6 +43,10 @@ object EqualizerHelper {
     val currentPresetName: String?
         get() = engine?.currentPresetName
 
+    private fun prefs() = try {
+        SovaApp.get().getSharedPreferences("equalizer", 0)
+    } catch (e: Exception) { null }
+
     // ─── Engine lifecycle (вызывает PlayerService) ───────────────
 
     /**
@@ -129,8 +133,83 @@ object EqualizerHelper {
         engine?.applyPreset(preset)
     }
 
+    /**
+     * #EQ-SAVE-NULL-ENGINE: снимок текущего состояния эффектов БЕЗ требования
+     * живого engine (engine появляется только после первой сыгранной дорожки).
+     * Читает saved-значения из prefs теми же ключами, что AudioEffectsEngine.
+     * Полосы: saved → live (engine) → полосы активного встроенного пресета →
+     * 9 нулей. Пустой eqBands недопустим: CustomPresetStore.load() фильтрует
+     * такие пресеты как невалидные → «исчезновение» после перезапуска.
+     */
+    fun snapshotCustomPreset(name: String): CustomPreset {
+        val bands = loadBands().ifEmpty { engine?.getBands().orEmpty() }.ifEmpty {
+            val presetName = getSavedPresetName()
+            EqualizerPreset.ALL.find { it.name == presetName }
+                ?.bands?.map { (it * 100).toInt().toShort() }
+                ?: List(9) { 0.toShort() }
+        }
+        val p = prefs()
+        fun b(key: String): Boolean = p?.getBoolean(key, false) ?: false
+        fun i(key: String): Int = p?.getInt(key, 0) ?: 0
+        return CustomPreset(
+            id = 0L,
+            name = name,
+            eqBands = bands,
+            eqEnabled = b(AudioEffectsEngine.PREF_EQ_ENABLED),
+            bassEnabled = b(AudioEffectsEngine.PREF_BASS_ENABLED),
+            bassStrength = i(AudioEffectsEngine.PREF_BASS_STRENGTH),
+            virtEnabled = b(AudioEffectsEngine.PREF_VIRT_ENABLED),
+            virtStrength = i(AudioEffectsEngine.PREF_VIRT_STRENGTH),
+            loudEnabled = b(AudioEffectsEngine.PREF_LOUD_ENABLED),
+            loudGainmB = i(AudioEffectsEngine.PREF_LOUD_GAIN),
+            reverbEnabled = b(AudioEffectsEngine.PREF_REVERB_ENABLED),
+            reverbPreset = i(AudioEffectsEngine.PREF_REVERB_PRESET),
+            createdAt = System.currentTimeMillis(),
+        )
+    }
+
+    /**
+     * #EQ-SAVE-NULL-ENGINE: применить custom-пресет без живого engine —
+     * все значения пишутся в prefs, restoreSettings подхватит при attach.
+     */
+    fun applyCustomPresetPersist(preset: CustomPreset) {
+        val e = engine
+        if (e != null) {
+            e.applyCustomPreset(preset)
+            return
+        }
+        saveEnabled(preset.eqEnabled)
+        saveBands(preset.eqBands)
+        savePreset(preset.name)
+        prefs()?.edit()
+            ?.putBoolean(AudioEffectsEngine.PREF_BASS_ENABLED, preset.bassEnabled)
+            ?.putInt(AudioEffectsEngine.PREF_BASS_STRENGTH, preset.bassStrength)
+            ?.putBoolean(AudioEffectsEngine.PREF_VIRT_ENABLED, preset.virtEnabled)
+            ?.putInt(AudioEffectsEngine.PREF_VIRT_STRENGTH, preset.virtStrength)
+            ?.putBoolean(AudioEffectsEngine.PREF_LOUD_ENABLED, preset.loudEnabled)
+            ?.putInt(AudioEffectsEngine.PREF_LOUD_GAIN, preset.loudGainmB)
+            ?.putBoolean(AudioEffectsEngine.PREF_REVERB_ENABLED, preset.reverbEnabled)
+            ?.putInt(AudioEffectsEngine.PREF_REVERB_PRESET, preset.reverbPreset)
+            ?.apply()
+        AppLog.i("EqualizerHelper", "applyCustomPresetPersist: '${preset.name}' в prefs (engine null)")
+    }
+
     fun setBand(bandIndex: Int, gainMilliBels: Short) {
-        engine?.setBand(bandIndex, gainMilliBels)
+        val e = engine
+        if (e != null) {
+            e.setBand(bandIndex, gainMilliBels)
+            return
+        }
+        // #EQ-SAVE-NULL-ENGINE: без движка (музыка в этом процессе ещё не
+        // играла) раньше был тихий no-op — ползунки и «Сохранить пресет»
+        // не работали. Пишем в prefs напрямую: restoreSettings подхватит.
+        if (bandIndex < 0) return
+        saveBands(
+            loadBands().toMutableList().apply {
+                while (size <= bandIndex) add(0.toShort())
+                this[bandIndex] = gainMilliBels
+            }
+        )
     }
 
     fun getBands(): List<Short> = engine?.getBands() ?: emptyList()

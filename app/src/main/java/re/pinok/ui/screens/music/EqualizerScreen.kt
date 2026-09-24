@@ -153,8 +153,9 @@ fun EqualizerScreen(
     }
 
     fun savePresetFromCurrent(name: String) {
-        val engine = EqualizerHelper.engine() ?: return
-        val snapshot = engine.snapshotCustomPreset(name)
+        // #EQ-SAVE-NULL-ENGINE: снапшот из prefs — работает и без живого
+        // engine (раньше при engine==null сохранение тихо не происходило).
+        val snapshot = EqualizerHelper.snapshotCustomPreset(name)
         CustomPresetStore.upsert(
             name = snapshot.name,
             eqBands = snapshot.eqBands,
@@ -297,7 +298,7 @@ fun EqualizerScreen(
                                 }
                             },
                             onClick = {
-                                EqualizerHelper.engine()?.applyCustomPreset(custom)
+                                EqualizerHelper.applyCustomPresetPersist(custom)
                                 currentPreset = custom.name
                                 showPresetMenu = false
                             },

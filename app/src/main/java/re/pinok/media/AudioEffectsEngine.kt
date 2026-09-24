@@ -793,16 +793,16 @@ class AudioEffectsEngine(private val sessionId: Int) {
         private const val TAG = "AudioEffectsEngine"
         // SharedPreferences keys — в том же файле "equalizer" что у EqualizerHelper
         // для обратной совместимости. Новые ключи с префиксами bb_/virt_/loud_/reverb_.
-        private const val PREF_EQ_ENABLED = "eq_enabled"
-        private const val PREF_EQ_PRESET = "eq_preset"
-        private const val PREF_EQ_BANDS = "eq_bands"
-        private const val PREF_BASS_ENABLED = "bb_switch"
-        private const val PREF_BASS_STRENGTH = "bb_slider"
-        private const val PREF_VIRT_ENABLED = "vir_switch"
-        private const val PREF_VIRT_STRENGTH = "vir_slider"
-        private const val PREF_LOUD_ENABLED = "loud_switch"
-        private const val PREF_LOUD_GAIN = "loud_slider"
-        private const val PREF_REVERB_ENABLED = "reverb_switch"
-        private const val PREF_REVERB_PRESET = "reverb_preset"
+        internal const val PREF_EQ_ENABLED = "eq_enabled"
+        internal const val PREF_EQ_PRESET = "eq_preset"
+        internal const val PREF_EQ_BANDS = "eq_bands"
+        internal const val PREF_BASS_ENABLED = "bb_switch"
+        internal const val PREF_BASS_STRENGTH = "bb_slider"
+        internal const val PREF_VIRT_ENABLED = "vir_switch"
+        internal const val PREF_VIRT_STRENGTH = "vir_slider"
+        internal const val PREF_LOUD_ENABLED = "loud_switch"
+        internal const val PREF_LOUD_GAIN = "loud_slider"
+        internal const val PREF_REVERB_ENABLED = "reverb_switch"
+        internal const val PREF_REVERB_PRESET = "reverb_preset"
     }
 }
