@@ -10357,3 +10357,18 @@ Work Log:
 
 Stage Summary:
 - Все три ошибки закрыты; коммит пушится следом за этой записью.
+
+---
+Task ID: S5-community-admin-snapshot
+Agent: Z.ai Code (main)
+Task: Полный разбор снапшота Trace_VK_RU_20260924T135732 (админка сообщества «Плутон»).
+
+Work Log:
+- Скачан trace (55.5MB gz / 373MB json), разобран стримингом (jq --stream + python raw_decode): 52 resources (50 css/2 html), 1459 запросов.
+- Восстановлен таймлайн: вход без пароля VK ID (no_password_flow) → лента → админка сообщества.
+- Зафиксирован поллинг auth.checkAuthCode (~3.07s × 60) + fallback push→SMS + validateAuthCode.
+- Реверс бандлов админки (скачаны с st.vk.ru публично): groups_edit.e76fea33.js → ПОЛНАЯ форма groupsedit.php?act=save (name/addr/description/website/age_limits/access/subject/category_0-2/…); groups.6eae7a81.js → getContentForTabs/setTabsSettings; pageCommunityPage.14f086e2.js → al_groups.php acts (фрагменты).
+- Находки: vk.ru/undefined POST (SPA-shell 105KB), api.vknext.net (vms.*), ст1-зеркала статики, batch.call, businessGroups.getShieldSettings (верификация, screen=verification/unlink_bid).
+
+Stage Summary:
+- Создан «админка.сообществ.снапшоты.разбор.md» (архитектура админки, контракты, находки, план порта, чего не хватает: тела POST/ответов нужны через HAR, чанк owners.getMenu не попал в трассу).
