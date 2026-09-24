@@ -4,6 +4,7 @@ package re.pinok.media
 import android.content.ComponentName
 import android.content.Context
 import androidx.media3.common.MediaItem
+import androidx.media3.common.AuxEffectInfo
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
@@ -797,6 +798,35 @@ object PlayerConnection {
     /** Установить усиление отдельной полосы. */
     fun setEqualizerBand(bandIndex: Int, gainMB: Short) {
         EqualizerHelper.setBand(bandIndex, gainMB)
+    }
+
+    // ─── #REVERB-AUX: PresetReverb — AUX-эффект, без привязки через
+    // Player.setAuxEffectInfo() он НЕ влияет на звук (включается, сохраняется,
+    // но молчит). Обёртки применяют настройку в engine И сразу перепривязывают
+    // AUX на активном плеере. ─────────────────────────────────────────────
+
+    /** Включить/выключить Reverb (+ AUX-привязка). */
+    fun setReverbEnabled(on: Boolean) {
+        EqualizerHelper.engine()?.setReverbEnabled(on)
+        applyReverbAux()
+    }
+
+    /** Выбрать пресет Reverb 0..6 (+ AUX-привязка). */
+    fun setReverbPreset(preset: Int) {
+        EqualizerHelper.engine()?.setReverbPreset(preset)
+        applyReverbAux()
+    }
+
+    /** Перепривязать Reverb AUX после пересоздания engine (смена сессии). */
+    fun rebindReverbAux() = applyReverbAux()
+
+    private fun applyReverbAux() {
+        val c = controller ?: return
+        val engine = EqualizerHelper.engine()
+        val id = engine?.reverbEffectId ?: 0
+        val on = id != 0 && engine?.isReverbEnabled() == true
+        c.setAuxEffectInfo(AuxEffectInfo(if (on) id else 0, on))
+        AppLog.i(TAG, "Reverb AUX bound: effectId=$id on=$on")
     }
 
     /** Fix #62: перемешать текущий плейлист и начать воспроизведение с первого трека. */

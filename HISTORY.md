@@ -13018,3 +13018,19 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
 **Фикс 2 — #BLACKSCREEN-NORENDER (VkAuthWebViewScreenV2):** в ВИДИМОМ режиме при зависании renderer больше не видно чёрный квадрат WebView: под WebView фон-подложка colorScheme.background с центрированным лоадером + статусом; WebView прозрачен (alpha 0), пока pageStartedReceived=false; проявляется при первом onPageStarted. Дерево живо, JS/cookies работают, SAFETY-NET не тронут.
 
 **Исходящие звонки (вопрос юзера):** в логе 5 звонков нет (лог — только auth). Зафиксировано юзером: исходящий заработал. Рабочая цепочка — коммиты после 449332df/44e3047: #CALLS-TOKEN-REFRESH (свежий $-токен через messages.getCallToken при 401 anonymLogin), #CALLS-OUT-SK2-FALLBACK (startConversation с session_key из prefs), #CALLS-OUT-SENDRECV + #CALLS-OFFER-STRIPH265 + #CALLS-SDP-DUP-GUARD + #CALLS-INLINE-ICE (медиа-тракт). До этого исходящий умирал ДО медиа: протухший кэш-токен → sk2=null → startConversation пропущен → нет FULL_CONNECTION.
+
+## #EQ-UI2 + #REVERB-AUX (2026-09-24) — эквалайзер: dropdown пресетов, полосы сразу, Reverb реально работает
+
+**UI (EqualizerScreen + bottom-sheet AudioPlayerScreen):**
+1. **Пресеты → выпадающий список.** Вкладка «Пресеты» удалена. Dropdown под шапкой полного экрана (и в bottom-sheet плеера): встроенные + «Мои пресеты» (применение тапом, удаление — иконкой корзины с подтверждением).
+2. **Полосы EQ видны сразу.** Первая вкладка полного экрана — «Полосы» (9 слайдеров ±15 dB). В bottom-sheet плеера те же 9 полос показаны прямо в шите (общие `EqVerticalSliderThemed` + `eqFrequencyLabels`), без кнопки «Открыть полный эквалайзер» — кнопка переименована в «Расширенные настройки (Reverb, Loudness, визуализатор)».
+3. **«Сохранить» переехала на «Полосы».** FAB «Сохранить» на вкладке «Полосы» (и кнопка в шите под полосами): снапшот всех эффектов → CustomPresetStore → обновление dropdown.
+
+**Баг-фикс #REVERB-AUX (доп. функции — аудит):**
+- **PresetReverb молчал**: это AUX-эффект — без `AudioTrack.attachAuxEffect` (media3: `Player.setAuxEffectInfo`) он создаётся, включается, сохраняется, но на звук НЕ влияет. В коде не было ни одного `AuxEffectInfo`.
+- Фикс: `AudioEffectsEngine.reverbEffectId`; обёртки `PlayerConnection.setReverbEnabled/setReverbPreset/rebindReverbAux` (engine + AUX-перепривязка на MediaController); `PlayerService.applyReverbAuxBinding()` после attachOnce/onAudioSessionIdChanged/reattach (id эффекта меняется при пересоздании). ReverbTab переключён на обёртки.
+- Остальные эффекты (EQ/BassBoost/Virtualizer — INSERT на сессии, LoudnessEnhancer — insert API19+) — ок; Visualizer — RECORD_AUDIO в манифесте есть; кастом-пресеты (Gson+файл) — ок.
+
+**Ожидание от теста:** в шите плеера сразу 9 полос + dropdown пресетов + «Сохранить пресет»; Reverb на вкладке Reverb реально меняет звук; сохранённый пресет появляется в dropdown «Мои пресеты».
+
+**Volume leveling (выравнивание громкости) — ОБСУЖДЕНИЕ, не реализовано:** варианты — (A) DynamicsProcessing compressor/limiter (API28+, низкий CPU, «Sound Check»); (B) software AudioProcessor в ExoPlayer с медленным AGC по RMS (все версии, риск pumping); (C) per-track ReplayGain-стиль: измерение громкости первых N секунд + кэш per trackId + статический gain (слышимо правильнее всего); (D) LoudnessEnhancer — только буст, не выравнивание (уже есть). Рекомендация: C (+limiter A против клиппинга).

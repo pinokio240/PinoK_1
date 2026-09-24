@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +41,9 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
@@ -71,6 +74,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -96,6 +100,8 @@ import re.pinok.data.model.EqualizerPreset
 import re.pinok.data.model.PlayerState
 import re.pinok.data.model.Track
 import re.pinok.media.EqualizerHelper
+import re.pinok.media.CustomPreset
+import re.pinok.media.CustomPresetStore
 import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
 import re.pinok.util.AppLog
@@ -861,6 +867,14 @@ fun AudioPlayerScreen(
         var virtOn by remember { mutableStateOf(false) }
         var virtStr by remember { mutableStateOf(0) }
 
+        // #EQ-UI2: полосы EQ видны сразу в шите, пресеты — dropdown
+        // (встроенные + мои), сохранение пресета — кнопкой на полосах.
+        val customPresets = remember { mutableStateListOf<CustomPreset>() }
+        var showPresetMenu by remember { mutableStateOf(false) }
+        var showSaveDialog by remember { mutableStateOf(false) }
+        var newPresetName by remember { mutableStateOf("") }
+        var bands by remember { mutableStateOf(List(eqFrequencyLabels.size) { 0f }) }
+
         LaunchedEffect(showEqualizer) {
             if (showEqualizer) {
                 eqEnabled = EqualizerHelper.isEnabled() || EqualizerHelper.isSavedEnabled()
@@ -872,6 +886,19 @@ fun AudioPlayerScreen(
                     virtOn = engine.isVirtualizerEnabled() || engine.isVirtualizerSavedEnabled()
                     virtStr = engine.getVirtualizerStrength()
                 }
+                customPresets.clear()
+                customPresets.addAll(CustomPresetStore.list())
+                // #EQ-BANDS-PERSIST: приоритет сохранённому списку (9 слотов),
+                // live-полосы устройства могут быть короче (5 полос на HOTWAV).
+                val liveBands = PlayerConnection.getEqualizerBands()
+                val savedBands = EqualizerHelper.getSavedBands()
+                val source = if (savedBands.isNotEmpty()) savedBands else liveBands
+                val mapped = MutableList(eqFrequencyLabels.size) { 0f }
+                if (source.isNotEmpty()) {
+                    val upper = minOf(source.lastIndex, eqFrequencyLabels.size - 1)
+                    for (i in 0..upper) mapped[i] = source[i].toInt() / 100f
+                }
+                bands = mapped
             }
         }
 
@@ -930,6 +957,7 @@ fun AudioPlayerScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 8.dp),
             ) {
                 // ─── Вкл / Выкл ───────────────────────────────────
@@ -962,34 +990,134 @@ fun AudioPlayerScreen(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // ─── Пресеты ───────────────────────────────────────
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    EqualizerPreset.ALL.forEach { preset ->
-                        val isActive = eqPresetName == preset.name
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    if (isActive) vkAccent
-                                    else vkTextSecondary.copy(alpha = 0.15f)
-                                )
-                                .clickable {
-                                    PlayerConnection.setEqualizerPreset(preset)
-                                    eqPresetName = preset.name
-                                },
-                        ) {
+                // ─── #EQ-UI2: Пресеты — выпадающий список ──────────
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(vkTextSecondary.copy(alpha = 0.12f))
+                            .clickable { showPresetMenu = true }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.GraphicEq,
+                            contentDescription = null,
+                            tint = vkAccent,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Пресет", color = vkTextSecondary, fontSize = 11.sp)
                             Text(
-                                text = preset.name,
-                                color = if (isActive) Color.White else vkTextPrimary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                fontSize = 13.sp,
+                                text = displayPresetName,
+                                color = vkTextPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
                             )
                         }
+                        Icon(
+                            Icons.Filled.ArrowDropDown,
+                            contentDescription = "Выбрать пресет",
+                            tint = vkTextSecondary,
+                        )
                     }
+                    DropdownMenu(
+                        expanded = showPresetMenu,
+                        onDismissRequest = { showPresetMenu = false },
+                    ) {
+                        EqualizerPreset.ALL.forEach { preset ->
+                            DropdownMenuItem(
+                                text = { Text(if (eqPresetName == preset.name) "✓ ${preset.name}" else preset.name) },
+                                onClick = {
+                                    PlayerConnection.setEqualizerPreset(preset)
+                                    eqPresetName = preset.name
+                                    showPresetMenu = false
+                                },
+                            )
+                        }
+                        if (customPresets.isNotEmpty()) {
+                            Text(
+                                "Мои пресеты",
+                                color = vkTextSecondary,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            )
+                            customPresets.forEach { custom ->
+                                DropdownMenuItem(
+                                    text = { Text(if (eqPresetName == custom.name) "✓ ${custom.name}" else custom.name) },
+                                    onClick = {
+                                        EqualizerHelper.engine()?.applyCustomPreset(custom)
+                                        eqPresetName = custom.name
+                                        showPresetMenu = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ─── #EQ-UI2: Полосы эквалайзера — видны сразу ─────
+                Text(
+                    "Полосы эквалайзера",
+                    color = vkTextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    eqFrequencyLabels.forEachIndexed { index, freq ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.width(44.dp),
+                        ) {
+                            Text(
+                                text = "${bands.getOrElse(index) { 0f }.toInt()}",
+                                color = if (bands.getOrElse(index) { 0f } != 0f) vkAccent else vkTextSecondary,
+                                fontSize = 11.sp,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            EqVerticalSliderThemed(
+                                value = bands.getOrElse(index) { 0f },
+                                onValueChange = { v ->
+                                    val updated = bands.toMutableList()
+                                    updated[index] = v
+                                    bands = updated
+                                    PlayerConnection.setEqualizerBand(index, (v * 100).toInt().toShort())
+                                },
+                                enabled = eqEnabled,
+                                modifier = Modifier.height(180.dp),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(text = freq, color = vkTextSecondary, fontSize = 10.sp)
+                        }
+                    }
+                }
+                // ─── #EQ-UI2: Сохранить пресет — кнопка на полосах ─
+                TextButton(
+                    onClick = {
+                        newPresetName = ""
+                        showSaveDialog = true
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Icon(
+                        Icons.Filled.Save,
+                        contentDescription = null,
+                        tint = vkAccent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Сохранить пресет", color = vkAccent, fontSize = 13.sp)
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -1105,7 +1233,7 @@ fun AudioPlayerScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        "Открыть полный эквалайзер",
+                        "Расширенные настройки (Reverb, Loudness, визуализатор)",
                         color = vkAccent,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
@@ -1116,6 +1244,62 @@ fun AudioPlayerScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
             }
+        }
+
+        // ─── #EQ-UI2: диалог сохранения пресета (с полос) ────────────
+        if (showSaveDialog) {
+            AlertDialog(
+                onDismissRequest = { showSaveDialog = false },
+                title = { Text("Сохранить пресет") },
+                text = {
+                    Column {
+                        Text(
+                            "Текущие настройки всех эффектов (полосы EQ, Bass, " +
+                            "Virtualizer, Loudness, Reverb) будут сохранены как новый пресет.",
+                            color = vkTextSecondary,
+                            fontSize = 13.sp,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = newPresetName,
+                            onValueChange = { newPresetName = it },
+                            label = { Text("Название") },
+                            singleLine = true,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val name = newPresetName.trim().ifBlank { "Мой пресет" }
+                            val engine = EqualizerHelper.engine()
+                            if (engine != null) {
+                                val snapshot = engine.snapshotCustomPreset(name)
+                                CustomPresetStore.upsert(
+                                    name = snapshot.name,
+                                    eqBands = snapshot.eqBands,
+                                    eqEnabled = snapshot.eqEnabled,
+                                    bassEnabled = snapshot.bassEnabled,
+                                    bassStrength = snapshot.bassStrength,
+                                    virtEnabled = snapshot.virtEnabled,
+                                    virtStrength = snapshot.virtStrength,
+                                    loudEnabled = snapshot.loudEnabled,
+                                    loudGainmB = snapshot.loudGainmB,
+                                    reverbEnabled = snapshot.reverbEnabled,
+                                    reverbPreset = snapshot.reverbPreset,
+                                )
+                                eqPresetName = name
+                                customPresets.clear()
+                                customPresets.addAll(CustomPresetStore.list())
+                            }
+                            showSaveDialog = false
+                        },
+                    ) { Text("Сохранить") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSaveDialog = false }) { Text("Отмена") }
+                },
+            )
         }
     }
 

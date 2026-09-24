@@ -679,6 +679,15 @@ class AudioEffectsEngine(private val sessionId: Int) {
      * True если эффекты сейчас приостановлены из-за SCO-маршрута.
      * UI может показывать предупреждение «эффекты отключены (звонок)».
      */
+    /**
+     * #REVERB-AUX: effectId PresetReverb для привязки как AUX-эффекта
+     * (Player.setAuxEffectInfo / AudioTrack.attachAuxEffect). 0 = не создан.
+     * PresetReverb на Android работает ТОЛЬКО через AUX-путь: без привязки
+     * эффект создан, enabled, но на звук не влияет.
+     */
+    val reverbEffectId: Int
+        get() = synchronized(lock) { reverb?.id ?: 0 }
+
     fun isScoSuspended(): Boolean = scoSuspended
 
     /**

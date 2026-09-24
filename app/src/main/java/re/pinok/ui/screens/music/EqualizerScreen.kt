@@ -3,7 +3,6 @@ package re.pinok.ui.screens.music
 
 import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,21 +16,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -59,7 +58,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -76,22 +74,26 @@ import re.pinok.ui.components.SpectrumVisualizer
 // ══════════════════════════════════════════════════════════════════════
 //  Этап 2 (#Equalizer): Полноэкранный эквалайзер.
 //
-//  5 вкладок (видимость регулируется [EqualizerFeatureFlags]):
-//    1. Пресеты      — список встроенных, тап = применить
-//    2. Полосы EQ    — 9 вертикальных слайдеров ±15 dB
-//    3. Bass + Virt  — 2 горизонтальных слайдера 0..1000 + switches
-//    4. Reverb       — 6 пресетов (radio) + switch
-//    5. Loudness     — slider 0..15 dB + switch
+//  #EQ-UI2: пресеты — выпадающий список под шапкой (встроенные + мои,
+//  с удалением). Первая вкладка — Полосы EQ, видны сразу. Кнопка
+//  «Сохранить пресет» — на вкладке «Полосы» (FAB снизу справа).
 //
-//  Упрощённый EQ остаётся в AudioPlayerScreen (BottomSheet с пресетами +
-//  master switch + 5 полос). Этот экран — для тонкой настройки.
+//  Вкладки (видимость регулируется [EqualizerFeatureFlags]):
+//    1. Полосы EQ    — 9 вертикальных слайдеров ±15 dB + Сохранить
+//    2. Bass + Virt  — 2 горизонтальных слайдера 0..1000 + switches
+//    3. Reverb       — 6 пресетов (radio) + switch
+//    4. Loudness     — slider 0..15 dB + switch
+//
+//  Упрощённый EQ остаётся в AudioPlayerScreen (BottomSheet: dropdown
+//  пресетов + master switch + 9 полос + Сохранить). Этот экран —
+//  для тонкой настройки (Bass/Virt/Reverb/Loudness/визуализатор).
 //
 //  Источник паттерна: декомпиляция Equalizer v6.3.5.7
 //  (см. reference/equalizer/, EQUALIZER_INTEGRATION_PLAN.md).
 // ══════════════════════════════════════════════════════════════════════
 
 /** Подписи частот для 9 полос EQ (как в AudioPlayerScreen). */
-private val eqFrequencyLabels = listOf(
+val eqFrequencyLabels = listOf(
     "60Hz", "170Hz", "310Hz", "600Hz", "1kHz", "3kHz", "6kHz", "12kHz", "14kHz",
 )
 
@@ -117,8 +119,8 @@ fun EqualizerScreen(
     // ── Динамический список вкладок (только включённые эффекты) ──────────
     val tabs = remember(flags) {
         buildList {
-            // Пресеты всегда видны (это базовая функция).
-            add(EqTabDef("presets", "Пресеты"))
+            // #EQ-UI2: пресеты вынесены в выпадающий список под шапкой;
+            // первая вкладка — Полосы EQ (видны сразу, без лишних кликов).
             if (flags.eqEnabled) add(EqTabDef("bands", "Полосы"))
             if (flags.bassEnabled || flags.virtualizerEnabled) add(EqTabDef("bassvirt", "Bass/Virt"))
             if (flags.reverbEnabled) add(EqTabDef("reverb", "Reverb"))
@@ -138,11 +140,44 @@ fun EqualizerScreen(
     // audioSessionId для SpectrumVisualizer (0 = не привязан).
     var audioSessionId by remember { mutableStateOf(0) }
 
+    // ── #EQ-UI2: пресеты (dropdown под шапкой) + сохранение на «Полосах» ──
+    val customPresets = remember { mutableStateListOf<CustomPreset>() }
+    var showPresetMenu by remember { mutableStateOf(false) }
+    var pendingDeletePreset by remember { mutableStateOf<CustomPreset?>(null) }
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var newPresetName by remember { mutableStateOf("") }
+
+    fun refreshCustomPresets() {
+        customPresets.clear()
+        customPresets.addAll(CustomPresetStore.list())
+    }
+
+    fun savePresetFromCurrent(name: String) {
+        val engine = EqualizerHelper.engine() ?: return
+        val snapshot = engine.snapshotCustomPreset(name)
+        CustomPresetStore.upsert(
+            name = snapshot.name,
+            eqBands = snapshot.eqBands,
+            eqEnabled = snapshot.eqEnabled,
+            bassEnabled = snapshot.bassEnabled,
+            bassStrength = snapshot.bassStrength,
+            virtEnabled = snapshot.virtEnabled,
+            virtStrength = snapshot.virtStrength,
+            loudEnabled = snapshot.loudEnabled,
+            loudGainmB = snapshot.loudGainmB,
+            reverbEnabled = snapshot.reverbEnabled,
+            reverbPreset = snapshot.reverbPreset,
+        )
+        currentPreset = name
+        refreshCustomPresets()
+    }
+
     LaunchedEffect(Unit) {
         masterEnabled = EqualizerHelper.isEnabled() || EqualizerHelper.isSavedEnabled()
         currentPreset = EqualizerHelper.currentPresetName ?: EqualizerHelper.getSavedPresetName()
         scoSuspended = EqualizerHelper.engine()?.isScoSuspended() ?: false
         audioSessionId = EqualizerHelper.engine()?.attachedSessionId ?: 0
+        refreshCustomPresets()
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -181,6 +216,96 @@ fun EqualizerScreen(
                 containerColor = MaterialTheme.colorScheme.surface,
             ),
         )
+
+        // ─── #EQ-UI2: выпадающий список пресетов (встроенные + мои) ───────
+        Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showPresetMenu = true },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.GraphicEq,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Пресет",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            currentPreset ?: "Пользовательский",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    Icon(
+                        Icons.Filled.ArrowDropDown,
+                        contentDescription = "Открыть список пресетов",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            DropdownMenu(
+                expanded = showPresetMenu,
+                onDismissRequest = { showPresetMenu = false },
+                modifier = Modifier.fillMaxWidth(0.9f),
+            ) {
+                Text(
+                    "Встроенные",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                EqualizerPreset.ALL.forEach { preset ->
+                    DropdownMenuItem(
+                        text = { Text(if (currentPreset == preset.name) "✓ ${preset.name}" else preset.name) },
+                        onClick = {
+                            PlayerConnection.setEqualizerPreset(preset)
+                            currentPreset = preset.name
+                            showPresetMenu = false
+                        },
+                    )
+                }
+                if (customPresets.isNotEmpty()) {
+                    Text(
+                        "Мои пресеты",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                    customPresets.forEach { custom ->
+                        DropdownMenuItem(
+                            text = { Text(if (currentPreset == custom.name) "✓ ${custom.name}" else custom.name) },
+                            trailingIcon = {
+                                IconButton(onClick = { pendingDeletePreset = custom }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "Удалить пресет ${custom.name}",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                EqualizerHelper.engine()?.applyCustomPreset(custom)
+                                currentPreset = custom.name
+                                showPresetMenu = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
 
         // #EQ-SCO: баннер-предупреждение при активной звонковой гарнитуре.
         // Virtualizer+Reverb приостановлены до возврата на нормальный output.
@@ -254,43 +379,13 @@ fun EqualizerScreen(
         ) { page ->
             val tab = tabs.getOrNull(page) ?: return@HorizontalPager
             when (tab.id) {
-                "presets"  -> PresetsTab(
+                "bands"    -> BandsTab(
                     enabled = masterEnabled,
-                    currentPreset = currentPreset,
-                    onApplyPreset = { preset ->
-                        PlayerConnection.setEqualizerPreset(preset)
-                        currentPreset = preset.name
-                    },
-                    onApplyCustomPreset = { custom ->
-                        EqualizerHelper.engine()?.applyCustomPreset(custom)
-                        currentPreset = custom.name
-                    },
-                    onPresetSaved = { newName ->
-                        // Сохраняем текущее состояние как новый пресет.
-                        val engine = EqualizerHelper.engine()
-                        if (engine != null) {
-                            val snapshot = engine.snapshotCustomPreset(newName)
-                            CustomPresetStore.upsert(
-                                name = snapshot.name,
-                                eqBands = snapshot.eqBands,
-                                eqEnabled = snapshot.eqEnabled,
-                                bassEnabled = snapshot.bassEnabled,
-                                bassStrength = snapshot.bassStrength,
-                                virtEnabled = snapshot.virtEnabled,
-                                virtStrength = snapshot.virtStrength,
-                                loudEnabled = snapshot.loudEnabled,
-                                loudGainmB = snapshot.loudGainmB,
-                                reverbEnabled = snapshot.reverbEnabled,
-                                reverbPreset = snapshot.reverbPreset,
-                            )
-                            currentPreset = newName
-                        }
-                    },
-                    onPresetDeleted = { id ->
-                        CustomPresetStore.delete(id)
+                    onSaveClick = {
+                        newPresetName = ""
+                        showSaveDialog = true
                     },
                 )
-                "bands"    -> BandsTab(enabled = masterEnabled)
                 "bassvirt" -> BassVirtTab(
                     bassVisible = flags.bassEnabled,
                     virtVisible = flags.virtualizerEnabled,
@@ -300,131 +395,9 @@ fun EqualizerScreen(
             }
         }
     }
-}
 
-// ══════════════════════════════════════════════════════════════════════
-//  Tab: Пресеты (встроенные + пользовательские)
-// ══════════════════════════════════════════════════════════════════════
-
-@Composable
-private fun PresetsTab(
-    enabled: Boolean,
-    currentPreset: String?,
-    onApplyPreset: (EqualizerPreset) -> Unit,
-    onApplyCustomPreset: (CustomPreset) -> Unit,
-    onPresetSaved: (String) -> Unit,
-    onPresetDeleted: (Long) -> Unit,
-) {
-    // Загружаем custom пресеты один раз при входе + храним в mutableStateListOf
-    // чтобы UI обновлялся при добавлении/удалении без полной перезагрузки.
-    val customPresets = remember { mutableStateListOf<CustomPreset>() }
-    LaunchedEffect(Unit) {
-        customPresets.clear()
-        customPresets.addAll(CustomPresetStore.list())
-    }
-
-    // Диалог сохранения нового пресета.
-    var showSaveDialog by remember { mutableStateOf(false) }
-    var newPresetName by remember { mutableStateOf("") }
-
-    // Диалог подтверждения удаления.
-    var pendingDelete by remember { mutableStateOf<CustomPreset?>(null) }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    ),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Filled.GraphicEq,
-                            contentDescription = null,
-                            tint = if (enabled) MaterialTheme.colorScheme.primary
-                                   else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                if (enabled) "Эквалайзер включён" else "Эквалайзер выключен",
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                "Тап по пресету применит его и включит EQ. " +
-                                "Настрой полосы и нажми «+» чтобы сохранить свой.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-            item {
-                Text(
-                    "Встроенные пресеты",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 4.dp),
-                )
-            }
-            items(EqualizerPreset.ALL) { preset ->
-                val isActive = currentPreset == preset.name
-                PresetCard(
-                    preset = preset,
-                    isActive = isActive,
-                    onClick = { onApplyPreset(preset) },
-                )
-            }
-            // ─── Пользовательские пресеты (Этап 4) ──────────────────────
-            if (customPresets.isNotEmpty()) {
-                item {
-                    Text(
-                        "Мои пресеты",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp),
-                    )
-                }
-                items(customPresets) { custom ->
-                    val isActive = currentPreset == custom.name
-                    CustomPresetCard(
-                        preset = custom,
-                        isActive = isActive,
-                        onClick = { onApplyCustomPreset(custom) },
-                        onDelete = { pendingDelete = custom },
-                    )
-                }
-            }
-            // Нижний отступ чтобы FAB не перекрывал последний элемент.
-            item { Spacer(Modifier.height(80.dp)) }
-        }
-
-        // FAB «Сохранить текущий как пресет».
-        ExtendedFloatingActionButton(
-            onClick = {
-                newPresetName = ""
-                showSaveDialog = true
-            },
-            icon = { Icon(Icons.Filled.Save, contentDescription = null) },
-            text = { Text("Сохранить") },
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp),
-        )
-    }
-
-    // ─── Диалог: ввод имени нового пресета ─────────────────────────────
+    // ─── #EQ-UI2: диалог сохранения текущего состояния как пресета ─────
+    // (кнопка «Сохранить» теперь на вкладке «Полосы»)
     if (showSaveDialog) {
         AlertDialog(
             onDismissRequest = { showSaveDialog = false },
@@ -451,10 +424,7 @@ private fun PresetsTab(
                 TextButton(
                     onClick = {
                         val name = newPresetName.trim().ifBlank { "Мой пресет" }
-                        onPresetSaved(name)
-                        // Обновляем список custom пресетов в UI.
-                        customPresets.clear()
-                        customPresets.addAll(CustomPresetStore.list())
+                        savePresetFromCurrent(name)
                         showSaveDialog = false
                     },
                 ) { Text("Сохранить") }
@@ -465,11 +435,11 @@ private fun PresetsTab(
         )
     }
 
-    // ─── Диалог: подтверждение удаления ────────────────────────────────
-    val toDelete = pendingDelete
+    // ─── #EQ-UI2: подтверждение удаления custom-пресета (из dropdown) ──
+    val toDelete = pendingDeletePreset
     if (toDelete != null) {
         AlertDialog(
-            onDismissRequest = { pendingDelete = null },
+            onDismissRequest = { pendingDeletePreset = null },
             title = { Text("Удалить пресет") },
             text = {
                 Text("Удалить пресет «${toDelete.name}»? Действие нельзя отменить.")
@@ -477,151 +447,17 @@ private fun PresetsTab(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onPresetDeleted(toDelete.id)
-                        customPresets.remove(toDelete)
-                        pendingDelete = null
+                        CustomPresetStore.delete(toDelete.id)
+                        refreshCustomPresets()
+                        if (currentPreset == toDelete.name) currentPreset = null
+                        pendingDeletePreset = null
                     },
                 ) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text("Отмена") }
+                TextButton(onClick = { pendingDeletePreset = null }) { Text("Отмена") }
             },
         )
-    }
-}
-
-/**
- * Карточка пользовательского пресета — показывает мини-визуализацию полос +
- * название + активный маркер + кнопку удаления (правая иконка-корзина).
- */
-@Composable
-private fun CustomPresetCard(
-    preset: CustomPreset,
-    isActive: Boolean,
-    onClick: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer
-                             else MaterialTheme.colorScheme.surface,
-        ),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Мини-визуализация полос (mB → dB для отображения).
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.width(70.dp),
-            ) {
-                preset.eqBands.take(9).forEach { gainmB ->
-                    val gainDb = gainmB.toInt() / 100
-                    val h = (kotlin.math.abs(gainDb).coerceIn(0, 15) * 1.6f + 4f).dp
-                    Box(
-                        modifier = Modifier
-                            .width(5.dp)
-                            .height(h)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(
-                                if (gainDb >= 0) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.tertiary
-                            ),
-                    )
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(preset.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                val effectsOn = mutableListOf<String>()
-                if (preset.bassEnabled) effectsOn.add("Bass")
-                if (preset.virtEnabled) effectsOn.add("Virt")
-                if (preset.loudEnabled) effectsOn.add("Loud")
-                if (preset.reverbEnabled) effectsOn.add("Reverb")
-                val effectsLine = if (effectsOn.isEmpty()) "Только EQ" else effectsOn.joinToString(", ")
-                Text(
-                    effectsLine,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (isActive) {
-                Text(
-                    "✓",
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = "Удалить пресет",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-private fun formatDb(v: Float): String =
-    if (v % 1f == 0f) v.toInt().toString() else v.toString()
-
-@Composable
-private fun PresetCard(
-    preset: EqualizerPreset,
-    isActive: Boolean,
-    onClick: () -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer
-                             else MaterialTheme.colorScheme.surface,
-        ),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Мини-визуализация полос пресета
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.width(70.dp),
-            ) {
-                preset.bands.take(9).forEach { gain ->
-                    val h = (kotlin.math.abs(gain).coerceIn(0f, 15f) * 1.6f + 4f).dp
-                    Box(
-                        modifier = Modifier
-                            .width(5.dp)
-                            .height(h)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(
-                                if (gain >= 0) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.tertiary
-                            ),
-                    )
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(preset.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                Text(
-                    "Полосы: ${preset.bands.joinToString(", ") { formatDb(it) + " dB" }}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (isActive) {
-                Text(
-                    "✓",
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
     }
 }
 
@@ -630,7 +466,7 @@ private fun PresetCard(
 // ══════════════════════════════════════════════════════════════════════
 
 @Composable
-private fun BandsTab(enabled: Boolean) {
+private fun BandsTab(enabled: Boolean, onSaveClick: () -> Unit) {
     // 9 UI-слотов (как в AudioPlayerScreen). Мапим в реальное число полос
     // устройства через getEqualizerBands().
     val slotCount = eqFrequencyLabels.size
@@ -654,6 +490,8 @@ private fun BandsTab(enabled: Boolean) {
         bands = mapped
     }
 
+    // #EQ-UI2: FAB «Сохранить» (сохранение пресета теперь здесь, на «Полосах»).
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -725,6 +563,19 @@ private fun BandsTab(enabled: Boolean) {
         }
         Spacer(Modifier.height(16.dp))
     }
+
+    ExtendedFloatingActionButton(
+        onClick = onSaveClick,
+        icon = { Icon(Icons.Filled.Save, contentDescription = null) },
+        text = { Text("Сохранить") },
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
+        modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(16.dp),
+    )
+    }
 }
 
 /**
@@ -732,7 +583,7 @@ private fun BandsTab(enabled: Boolean) {
  * на 270° через [Modifier.layout]. Тематизированный (Material3 colorScheme).
  */
 @Composable
-private fun EqVerticalSliderThemed(
+fun EqVerticalSliderThemed(
     value: Float,
     onValueChange: (Float) -> Unit,
     enabled: Boolean,
@@ -897,7 +748,7 @@ private fun ReverbTab() {
                     checked = reverbOn,
                     onCheckedChange = { on ->
                         reverbOn = on
-                        engine?.setReverbEnabled(on)
+                        PlayerConnection.setReverbEnabled(on)
                     },
                 )
             }
@@ -917,10 +768,10 @@ private fun ReverbTab() {
                     .fillMaxWidth()
                     .clickable {
                         selectedPreset = index
-                        engine?.setReverbPreset(index)
+                        PlayerConnection.setReverbPreset(index)
                         if (!reverbOn) {
                             reverbOn = true
-                            engine?.setReverbEnabled(true)
+                            PlayerConnection.setReverbEnabled(true)
                         }
                     },
                 colors = CardDefaults.cardColors(

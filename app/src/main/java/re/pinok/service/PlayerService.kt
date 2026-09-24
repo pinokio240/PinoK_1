@@ -184,7 +184,26 @@ class PlayerService : MediaSessionService() {
             }
             AppLog.i("PlayerService", "Audio route changed (bt=$isBluetooth, sco=$onSco) — reattaching Equalizer (Fix #287/#342)")
             EqualizerHelper.reattach()
+            applyReverbAuxBinding()
         }, delay)
+    }
+
+    /**
+     * #REVERB-AUX: PresetReverb — AUX-эффект: без AudioTrack.attachAuxEffect
+     * (media3: Player.setAuxEffectInfo) он не влияет на звук. Привязываем
+     * после каждого attach/reattach (id эффекта может смениться).
+     */
+    private fun applyReverbAuxBinding() {
+        try {
+            val p = mediaSession?.player ?: return
+            val engine = re.pinok.media.EqualizerHelper.engine() ?: return
+            val id = engine.reverbEffectId
+            val on = id != 0 && engine.isReverbEnabled()
+            p.setAuxEffectInfo(androidx.media3.common.AuxEffectInfo(if (on) id else 0, on))
+            AppLog.i("PlayerService", "Reverb AUX bound: effectId=$id on=$on")
+        } catch (e: Exception) {
+            AppLog.w("PlayerService", "applyReverbAuxBinding failed: ${e.message}")
+        }
     }
 
     /** Возвращает читаемое имя типа audio device для логов. */
@@ -378,6 +397,7 @@ class PlayerService : MediaSessionService() {
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
                 if (audioSessionId != 0) {
                     EqualizerHelper.attachOnce(audioSessionId)
+                    applyReverbAuxBinding()
                     AppLog.i("PlayerService", "Equalizer attached to sessionId=$audioSessionId (onAudioSessionIdChanged)")
                 }
             }
@@ -389,6 +409,7 @@ class PlayerService : MediaSessionService() {
         val playerSessionId = player.audioSessionId
         if (playerSessionId != 0) {
             EqualizerHelper.attachOnce(playerSessionId)
+            applyReverbAuxBinding()
             AppLog.i("PlayerService", "Equalizer attached immediately to sessionId=$playerSessionId")
         } else {
             AppLog.d("PlayerService", "audioSessionId=0 right after build() — waiting for onAudioSessionIdChanged (Fix #96)")
