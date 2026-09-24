@@ -17,6 +17,7 @@ import re.pinok.feature.calls.LocalCallsSectionRepository
 import re.pinok.feature.photos.LocalPhotosDeps
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
