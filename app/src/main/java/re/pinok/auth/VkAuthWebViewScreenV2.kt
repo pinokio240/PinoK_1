@@ -41,6 +41,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -165,6 +167,11 @@ fun VkAuthWebViewScreenV2(
     // но pageStartedReceived=true — всё ок, страница грузится. Если loading=true
     // и pageStartedReceived=false через 6 сек — chromium starvation → reload.
     var pageStartedReceived by remember { mutableStateOf(false) }
+    // #BLACKSCREEN-RENDERER (2026-09-24): webViewEpoch — инкремент пересоздаёт
+    // AndroidView (key) когда chromium renderer мёртв; rendererFailed включает
+    // оверлей с диагностикой вместо вечного чёрного экрана.
+    var webViewEpoch by remember { mutableIntStateOf(0) }
+    var rendererFailed by remember { mutableStateOf(false) }
     var isExchanging by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -279,26 +286,49 @@ fun VkAuthWebViewScreenV2(
         // Variant A (commit 89a71efe5) удалил recreate safety-net (который thrash'ил
         // 3 destroy+recreate за 3 сек). Этот safety-net — ОДИН reload, без recreate.
         // Если reload тоже не помогает — пользователь жмёт «Отмена»/«Офлайн».
+        // #BLACKSCREEN-RENDERER (2026-09-24): эскалационная версия safety-net.
+        // Логкат юзера (HyperOS, WebView 151.0.7922.202): renderer НЕ поднялся
+        // ВООБЩЕ (cr_ChildProcessConn: Failed to establish the service connection
+        // ×2) — onPageStarted не приходит никогда, onProgressChanged застревает
+        // на 10%, evaluateJavascript не отвечает → вечный цикл reload + чёрный
+        // экран. Одиночный reload такой случай не чинит. Эскалация:
+        //   1) reload → 2) reload → 3) recreate WebView → 4) recreate →
+        //   5) честный оверлей «WebView не запустился» (вместо чёрного экрана).
+        // Каждый шаг ждёт 6 сек на pageStartedReceived.
         val safetyNetJob = coroutineScope.launch(Dispatchers.Main) {
-            kotlinx.coroutines.delay(6_000L)  // 6 сек — больше чем нормальный onPageStarted (~500мс-2с)
-            // P0-3 fix: проверяем pageStartedReceived, НЕ loading.
-            // loading=true может быть легитимным (страница грузится после onPageStarted).
-            // pageStartedReceived=false через 6 сек — настоящий chromium starvation.
-            if (!pageStartedReceived) {
-                AppLog.w(TAG, "#WEBVIEW-SAFETY-NET: onPageStarted не сработал за 6 сек — reload m.vk.ru")
-                val wv = webViewRef
-                if (wv != null) {
-                    try {
-                        AppLog.i(TAG, "#WEBVIEW-SAFETY-NET: reload → $startUrl")
-                        wv.reload()
-                    } catch (e: Exception) {
-                        AppLog.w(TAG, "#WEBVIEW-SAFETY-NET: reload failed: ${e.message}")
+            val steps = listOf("reload", "reload", "recreate", "recreate", "fail")
+            for ((idx, step) in steps.withIndex()) {
+                kotlinx.coroutines.delay(6_000L)  // 6 сек — больше чем нормальный onPageStarted (~500мс-2с)
+                // Страница начала грузиться или идёт обмен/успех — WebView не трогаем.
+                if (pageStartedReceived || isExchanging || authSucceeded) return@launch
+                when (step) {
+                    "reload" -> {
+                        AppLog.w(TAG, "#WEBVIEW-SAFETY-NET [${idx + 1}/${steps.size}]: onPageStarted не сработал за 6 сек — reload $startUrl")
+                        val wv = webViewRef
+                        if (wv != null) {
+                            try {
+                                wv.reload()
+                            } catch (e: Exception) {
+                                AppLog.w(TAG, "#WEBVIEW-SAFETY-NET: reload failed: ${e.message}")
+                            }
+                        } else {
+                            AppLog.w(TAG, "#WEBVIEW-SAFETY-NET: webViewRef == null, reload невозможен")
+                        }
                     }
-                } else {
-                    AppLog.w(TAG, "#WEBVIEW-SAFETY-NET: webViewRef == null, reload невозможен")
+                    "recreate" -> {
+                        AppLog.w(TAG, "#WEBVIEW-SAFETY-NET [${idx + 1}/${steps.size}]: reload не помог — пересоздаём WebView (renderer не поднялся?)")
+                        statusText = "WebView не отвечает, перезапускаем…"
+                        // Сброс page-state — иначе новый инстанс унаследует «живой» флаг
+                        // и safety-net ложно решит, что всё ок.
+                        pageStartedReceived = false
+                        loading = true
+                        webViewEpoch++
+                    }
+                    "fail" -> {
+                        AppLog.e(TAG, "#WEBVIEW-SAFETY-NET: renderer WebView не поднялся после reload/recreate — показываем диагностику вместо чёрного экрана")
+                        rendererFailed = true
+                    }
                 }
-            } else {
-                AppLog.d(TAG, "#WEBVIEW-SAFETY-NET: pageStartedReceived=true — reload не нужен (страница грузится нормально)")
             }
         }
 
@@ -332,6 +362,9 @@ fun VkAuthWebViewScreenV2(
     val hideWebView = isExchanging
 
     Box(modifier = modifier.fillMaxSize().systemBarsPadding()) {
+        // #BLACKSCREEN-RENDERER: key(webViewEpoch) — инкремент epoch полностью
+        // пересоздаёт инстанс WebView (новая попытка поднятия renderer'а).
+        key(webViewEpoch) {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
@@ -636,6 +669,23 @@ fun VkAuthWebViewScreenV2(
                             AppLog.e(TAG, "onReceivedSslError: ${error.primaryError} url=${error.url}")
                             handler.cancel()
                         }
+
+                        override fun onRenderProcessGone(
+                            view: WebView,
+                            detail: android.webkit.RenderProcessGoneDetail,
+                        ): Boolean {
+                            // #BLACKSCREEN-RENDERER: дефолт (return false) УБИВАЕТ
+                            // приложение при смерти renderer'а. Пересоздаём WebView.
+                            val didCrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                detail.didCrash()
+                            } else true
+                            AppLog.e(TAG, "onRenderProcessGone: didCrash=$didCrash — recreate WebView")
+                            rendererFailed = false
+                            pageStartedReceived = false
+                            loading = true
+                            webViewEpoch++
+                            return true
+                        }
                     }
 
                     // P0-2 #AUTH-AUDIT: WebChromeClient — КРИТИЧНО для m.vk.ru SPA.
@@ -738,7 +788,58 @@ fun VkAuthWebViewScreenV2(
             update = { webView ->
                 webViewRef = webView
             },
+            onRelease = { wv ->
+                // #BLACKSCREEN-RENDERER: destroy старого инстанса при recreate
+                // (и при уходе с экрана — двойной destroy безвреден, guarded).
+                try {
+                    val parent = wv.parent
+                    if (parent is android.view.ViewGroup) parent.removeView(wv)
+                } catch (_: Exception) {}
+                try { wv.destroy() } catch (_: Exception) {}
+                AppLog.i(TAG, "AndroidView onRelease: WebView destroyed (epoch=$webViewEpoch)")
+            },
         )
+        }
+
+        // #BLACKSCREEN-RENDERER: честный экран вместо вечного чёрного.
+        // Появляется ТОЛЬКО если renderer не поднялся после 2×reload + 2×recreate.
+        if (rendererFailed) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("WebView не смог запуститься", style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Системный WebView не поднял процесс рендеринга " +
+                            "(renderer). Обычно помогает:\n" +
+                            "1. Перезагрузить телефон.\n" +
+                            "2. Обновить (или откатить) «Android System WebView» " +
+                            "в Play Маркете.\n" +
+                            "3. Снять с PinoK ограничения батареи/автозапуска (MIUI).",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = {
+                            rendererFailed = false
+                            pageStartedReceived = false
+                            loading = true
+                            statusText = "Открываем VK…"
+                            webViewEpoch++
+                        }) { Text("Повторить") }
+                        OutlinedButton(onClick = handleClose) { Text("Отмена") }
+                    }
+                }
+            }
+        }
 
         // Top bar — кнопка "Назад".
         Surface(

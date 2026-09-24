@@ -411,28 +411,39 @@ object WebTokenAuth {
             """.trimIndent()
 
             try {
-                val raw = suspendCancellableCoroutine<String?> { cont ->
-                    webView.evaluateJavascript(js) { result ->
-                        // evaluateJavascript возвращает JS-значение в "кавычках" если строка,
-                        // или null если undefined. Декодируем.
-                        val decoded = when {
-                            result == null -> null
-                            result == "null" -> null
-                            result == "undefined" -> null
-                            result.startsWith("\"") && result.endsWith("\"") -> {
-                                // JSON string — удаляем outer quotes и декодируем escapes
-                                try {
-                                    com.google.gson.JsonParser.parseString(result).asString
-                                } catch (_: Exception) {
-                                    result.substring(1, result.length - 1)
-                                        .replace("\\\"", "\"")
-                                        .replace("\\\\", "\\")
+                // #BLACKSCREEN-RENDERER (2026-09-24): withTimeoutOrNull ОБЯЗАТЕЛЕН.
+                // Если chromium renderer не поднялся (cr_ChildProcessConn: Failed to
+                // establish the service connection) — колбэк evaluateJavascript НЕ
+                // приходит ВООБЩЕ, и flow навсегда висел на Step 0 (silent_token read),
+                // при этом юзер видел только чёрный экран. Тот же класс hang, что
+                // Fix #178 (#EVALJS-HANG-FIX) для tryReadWebToken.
+                val raw = withTimeoutOrNull(EVALJS_TIMEOUT_MS) {
+                    suspendCancellableCoroutine<String?> { cont ->
+                        webView.evaluateJavascript(js) { result ->
+                            // evaluateJavascript возвращает JS-значение в "кавычках" если строка,
+                            // или null если undefined. Декодируем.
+                            val decoded = when {
+                                result == null -> null
+                                result == "null" -> null
+                                result == "undefined" -> null
+                                result.startsWith("\"") && result.endsWith("\"") -> {
+                                    // JSON string — удаляем outer quotes и декодируем escapes
+                                    try {
+                                        com.google.gson.JsonParser.parseString(result).asString
+                                    } catch (_: Exception) {
+                                        result.substring(1, result.length - 1)
+                                            .replace("\\\"", "\"")
+                                            .replace("\\\\", "\\")
+                                    }
                                 }
+                                else -> result
                             }
-                            else -> result
+                            cont.resume(decoded)
                         }
-                        cont.resume(decoded)
                     }
+                } ?: run {
+                    AppLog.w(TAG, "tryReadSilentTokenFromWindowInit: JS не ответил за ${EVALJS_TIMEOUT_MS / 1000}с — renderer не работает?")
+                    return@withContext null
                 }
 
                 if (raw.isNullOrBlank()) {
@@ -521,16 +532,19 @@ object WebTokenAuth {
                 })();
             """.trimIndent()
             try {
-                val raw = suspendCancellableCoroutine<String?> { cont ->
-                    webView.evaluateJavascript(js) { result ->
-                        val decoded = when {
-                            result == null || result == "null" || result == "undefined" -> null
-                            result.startsWith("\"") && result.endsWith("\"") ->
-                                try { com.google.gson.JsonParser.parseString(result).asString }
-                                catch (_: Exception) { result.substring(1, result.length - 1) }
-                            else -> result
+                // #BLACKSCREEN-RENDERER: таймаут — как в tryReadSilentTokenFromWindowInit.
+                val raw = withTimeoutOrNull(EVALJS_TIMEOUT_MS) {
+                    suspendCancellableCoroutine<String?> { cont ->
+                        webView.evaluateJavascript(js) { result ->
+                            val decoded = when {
+                                result == null || result == "null" || result == "undefined" -> null
+                                result.startsWith("\"") && result.endsWith("\"") ->
+                                    try { com.google.gson.JsonParser.parseString(result).asString }
+                                    catch (_: Exception) { result.substring(1, result.length - 1) }
+                                else -> result
+                            }
+                            cont.resume(decoded)
                         }
-                        cont.resume(decoded)
                     }
                 }
                 val uid = raw?.trim()?.toLongOrNull() ?: 0L

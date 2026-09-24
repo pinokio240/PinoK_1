@@ -10387,3 +10387,18 @@ Work Log:
 
 Stage Summary:
 - Чёрный экран = слепой ридер web_token. Фикс в WebTokenAuth.kt, коммит и push следом.
+
+---
+Task ID: S7-blackscreen-renderer-fix
+Agent: Z.ai Code (main)
+Task: «По прежнему чёрный экран» после pull e9262c6 — новый logcat (tempfile GSBM1eg9n6k).
+
+Work Log:
+- Logcat: SyntaxError=0 (READER-FIX сработал), НО cr_ChildProcessConn «Failed to establish the service connection» ×2 → renderer WebView не поднялся вообще.
+- Триада: onPageStarted никогда; onProgressChanged 10% навсегда; shouldOverrideUrlLoading жив (302-цепочка login→m.vk.ru→feed).
+- fullAuthFlow висел на tryReadSilentTokenFromWindowInit (suspend без таймаута, Job was cancelled через 19с).
+- remixsid найден (88) — куки живы, VK «вход выполнен» реален; мёртв только рендерер.
+- Фикс: SAFETY-NET эскалация (reload×2 → recreate×2 → оверлей-диагностика), onRenderProcessGone → recreate, withTimeoutOrNull на обе suspend-точки WebTokenAuth.
+
+Stage Summary:
+- Чёрный экран №2 = системный renderer fail (WebView 151/HyperOS). Приложение теперь: авто-recreate, честный оверлей с инструкцией, flow без вечных зависаний. Коммит + push следом.

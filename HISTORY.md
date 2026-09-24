@@ -12919,3 +12919,32 @@ VK кладёт свежий — PinoK снова слепой/удаляет �
 Фикс: комментарий убран из однострочного JS (перенесён в Kotlin-комментарий с
 предупреждением). Reader проверен в node: single-token / multi-account (is_active) /
 empty / garbage — все ветки корректны.
+## #BLACKSCREEN-RENDERER (2026-09-24): renderer WebView вообще не поднимается — чёрный экран №2
+
+Новый logcat после Fix e9262c6 (READER-FIX): SyntaxError исчез — фикс подействовал.
+Но экран остался чёрным по ВТОРОЙ причине: `cr_ChildProcessConn: Failed to establish
+the service connection` ×2 при старте — chromium renderer НЕ СМОГ ПОДНЯТЬСЯ.
+
+Классическая триада в логкате (renderer мёртв):
+- `onPageStarted` не приходит НИКОГДА → `#WEBVIEW-SAFETY-NET` вечный reload-цикл;
+- `onProgressChanged` застревает на 10% (UI-сторона жива, коммита страницы нет);
+- `shouldOverrideUrlLoading` работает (302 login → m.vk.ru/ → m.vk.ru/feed),
+  т.к. network stack живой — рендерить некому.
+
+Следствие: `evaluateJavascript` не отвечает → `fullAuthFlow` навсегда висел на
+Step 0 (tryReadSilentTokenFromWindowInit — единственная suspend-точка БЕЗ
+таймаута, Fix #178 покрывал только tryReadWebToken). remixsid при этом найден
+(88) — куки живы, flow убивается на чтении silent_token.
+
+Фиксы:
+- VkAuthWebViewScreenV2: SAFETY-NET стал эскалационным: reload → reload →
+  recreate WebView (key(webViewEpoch)) → recreate → оверлей «WebView не смог
+  запуститься» с инструкцией (перезагрузка, обновление/откат Android System
+  WebView, ограничения батареи MIUI) + кнопки Повторить/Отмена.
+- VkAuthWebViewScreenV2: onRenderProcessGone — recreate вместо дефолтного
+  убийства приложения.
+- WebTokenAuth: withTimeoutOrNull(EVALJS_TIMEOUT_MS) вокруг
+  tryReadSilentTokenFromWindowInit и readUserIdFromWindowInit — hang закрыт.
+
+Корень системный: WebView 151.0.7922.202 (HyperOS) не биндит sandbox-процесс.
+Приложение теперь это переживает: перезапуски + честный экран вместо чёрного.
