@@ -789,7 +789,9 @@ class AudioEffectsEngine(private val sessionId: Int) {
     /** True если хотя бы один эффект создан (attach прошёл успешно). */
     fun isAttached(): Boolean = synchronized(lock) { attached }
 
-    private companion object {
+    // companion открыт: PREF_* константы (internal) нужны EqualizerHelper
+    // для снапшотов без живого engine (#EQ-SAVE-NULL-ENGINE)
+    companion object {
         private const val TAG = "AudioEffectsEngine"
         // SharedPreferences keys — в том же файле "equalizer" что у EqualizerHelper
         // для обратной совместимости. Новые ключи с префиксами bb_/virt_/loud_/reverb_.
