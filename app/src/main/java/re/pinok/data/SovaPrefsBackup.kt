@@ -16,6 +16,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import java.io.File
+import re.pinok.auth.exchange.CookieJarBackup
 import re.pinok.auth.exchange.ExchangeTokenStorage
 import re.pinok.data.local.SovaPrefs
 
@@ -43,15 +44,16 @@ import re.pinok.data.local.SovaPrefs
  *     (AudioEffectsEngine/EqualizerHelper/EqualizerFeatureFlags: EQ, bass,
  *     virtualizer, loudness, reverb) — раньше выпадали из экспорта;
  *  3. сессия (EncryptedSharedPreferences через ExchangeTokenStorage) —
- *     access/exchange/webview/silent-токены, remixsid, vk_* куки, trusted_hash,
- *     last_phone/last_password — без этого «вход в аккаунт» после
- *     переустановки не восстановить. Прецедент plaintext-файла с токенами —
- *     account.json (File backup, VTosters pattern #3); в экспорт-файле секреты
- *     защищаются только выбором места пользователем — UI предупреждает ДО
- *     экспорта (красная строка во вкладке «Данные»). ВОЛНА 50
- *     #SESSION-PASSWORD-MATRIX: ИСКЛЮЧЕНИЕ — last_password (неотзываемый
- *     секрет, в отличие от отзываемых токенов) попадает в файл ТОЛЬКО внутри
- *     шифроконверта format=2; plaintext-экспорт строится без него.
+ *     access/exchange/webview/silent-токены, lp-креды + СНИМОК COOKIE JAR из
+ *     CookieManager (секция "cookies", #SESSION-WEB-EXPORT: после
+ *     #SESSION-WEB-MECHANISM cookies — единственный источник web-сессии,
+ *     без них восстановленный токен умирает при первом refresh). Прецедент
+ *     plaintext-файла с токенами — account.json (File backup, VTosters
+ *     pattern #3); в экспорт-файле секреты защищаются только выбором места
+ *     пользователем — UI предупреждает ДО экспорта (красная строка во вкладке
+ *     «Данные»). ВОЛНА 50 #SESSION-PASSWORD-MATRIX + #SESSION-WEB-MECHANISM:
+ *     пароль аккаунта (last_password) больше НЕ хранится на устройстве вовсе
+ *     — флаг includeSessionPassword оставлен для совместимости и no-op.
  *
  * ЧТО НЕ ВХОДИТ (честно, пересоздаётся само или непереносимо by design):
  *  - SharedPreferences «security_alerts_cache» (кэш поллера алертов);
@@ -66,10 +68,14 @@ import re.pinok.data.local.SovaPrefs
  *    "sessionPasswordIncluded":true,
  *    "keys":[{"name":..,"type":"string|boolean|int|long|stringSet","value":..}],
  *    "sp":[{"file":"equalizer","keys":[{"name":..,"type":"...|float","value":..}]}],
- *    "session":[{"name":..,"type":"...","value":..}]}
+ *    "session":[{"name":..,"type":"...","value":..}],
+ *    "cookies":[{"name":..,"value":..,"domain":..}]}
  *   Волна 50 #SESSION-PASSWORD-MATRIX: "sessionPasswordIncluded":false —
  *   last_password в файл НЕ включался (plaintext-экспорт); у файлов волн
  *   45–45-д поле отсутствует → парсер трактует как true (старое поведение).
+ *   #SESSION-WEB-EXPORT (2026-09-24): секция cookies опциональна — файлы
+ *   волн 45–52 без неё импортируются как раньше (токены без web-сессии,
+ *   ре-логин при первом refresh — мягкая деградация).
  *
  * ⚠ ВОЛНА 45-б, ПРИЧИНА ФИКСА СБОРКИ: в datastore 1.1.x у библиотеки СВОЙ
  * infix `to` (Preferences.Key.to(value) → Preferences.Pair) — выражение
@@ -158,8 +164,15 @@ object SovaPrefsBackup {
     private val SETTINGS_SP_FILES = listOf("equalizer")
 
     /** Результат экспорта: готовый JSON + счётчики по секциям (для честного тоста). */
-    data class Exported(val json: String, val keyCount: Int, val spCount: Int, val sessionCount: Int) {
-        val totalCount: Int get() = keyCount + spCount + sessionCount
+    data class Exported(
+        val json: String,
+        val keyCount: Int,
+        val spCount: Int,
+        val sessionCount: Int,
+        /** #SESSION-WEB-EXPORT: число кук в секции "cookies" (0 = не залогинены/без сессии). */
+        val cookiesCount: Int = 0,
+    ) {
+        val totalCount: Int get() = keyCount + spCount + sessionCount + cookiesCount
     }
 
     /** Одна запись legacy SharedPreferences: файл → ключ → типизированное значение. */
@@ -176,6 +189,8 @@ object SovaPrefsBackup {
         val entries: List<Pair<Preferences.Key<*>, Any>> = emptyList(),
         val sp: List<SpEntry> = emptyList(),
         val session: List<Pair<String, Any>> = emptyList(),
+        /** #SESSION-WEB-EXPORT: cookies web-сессии из секции "cookies" (старые файлы — пусто). */
+        val cookies: List<CookieJarBackup.VkCookie> = emptyList(),
         val total: Int = 0,
         val skipped: Int = 0,
         val exportedAt: Long = 0,
@@ -205,6 +220,9 @@ object SovaPrefsBackup {
         val spFailed: List<String> = emptyList(),
         val session: Int = 0,
         val sessionExpected: Int = 0,
+        /** #SESSION-WEB-EXPORT: фактически установленных в CookieManager кук. */
+        val cookies: Int = 0,
+        val cookiesExpected: Int = 0,
         val safetyPath: String? = null,
     )
 
@@ -218,13 +236,13 @@ object SovaPrefsBackup {
      *  @param includeSession false → секция session остаётся ПУСТОЙ (схема
      *         файла стабильна, sessionCount=0) — чекбокс «Экспортировать без
      *         сессии»;
-     *  @param includeSessionPassword false → из секции session вырезается
-     *         last_password (ExchangeTokenStorage.KEY_LAST_PASSWORD) — пароль
-     *         аккаунта живёт только в шифроконверте format=2, plaintext-файл
-     *         его не содержит. Токены остаются: их утечка лечится отзывом,
-     *         утечка пароля — нет.
+     *  @param includeSessionPassword #SESSION-WEB-MECHANISM: пароль аккаунта
+     *         больше не хранится на устройстве (ключ last_password удалён из
+     *         prefs wipe'ом) — параметр оставлен для совместимости формата и
+     *         старых вызовов, является no-op. Cookies сессии (#SESSION-WEB-EXPORT)
+     *         — отзываемый секрет того же класса, что токены: идут в plaintext.
      * Страховочная копия (apply) зовёт export() с дефолтами = полная,
-     * с паролем (в filesDir, UID-изоляция — прецедент account.json).
+     * с cookie jar (в filesDir, UID-изоляция — прецедент account.json).
      */
     suspend fun export(
         context: Context,
@@ -271,8 +289,9 @@ object SovaPrefsBackup {
         // 3) Сессия — расшифрованный снапшот EncryptedSharedPreferences
         //    (токены/куки входа). Пустой, если в аккаунт не входили.
         //    Волна 50 #SESSION-PASSWORD-MATRIX: includeSession=false — секция
-        //    не заполняется вовсе; includeSessionPassword=false — last_password
-        //    (неотзываемый секрет) вырезается, в plaintext-файле его нет.
+        //    не заполняется вовсе. #SESSION-WEB-MECHANISM: last_password в prefs
+        //    больше не живёт — фильтр includeSessionPassword стал no-op
+        //    (оставлен для совместимости).
         val sessionArray = JsonArray()
         var sessionCount = 0
         if (includeSession) {
@@ -282,6 +301,23 @@ object SovaPrefsBackup {
                 if (entry == null) continue
                 sessionArray.add(entry)
                 sessionCount++
+            }
+        }
+
+        // 4) Cookie jar (#SESSION-WEB-EXPORT): cookies живут ТОЛЬКО в
+        //    CookieManager — это и есть web-сессия. Снимок по всем VK-доменам
+        //    (AuthDomainsConfig.vkCookieUrls), дедуп и правила доменов внутри
+        //    CookieJarBackup. includeSession=false убирает и cookies.
+        val cookiesArray = JsonArray()
+        var cookiesCount = 0
+        if (includeSession) {
+            for (c in CookieJarBackup.snapshot()) {
+                val o = JsonObject()
+                o.addProperty("name", c.name)
+                o.addProperty("value", c.value)
+                o.addProperty("domain", c.domain)
+                cookiesArray.add(o)
+                cookiesCount++
             }
         }
 
@@ -298,7 +334,8 @@ object SovaPrefsBackup {
         root.add("keys", keysArray)
         root.add("sp", spArray)
         root.add("session", sessionArray)
-        return Exported(Gson().toJson(root), raw.size, spCount, sessionCount)
+        root.add("cookies", cookiesArray)
+        return Exported(Gson().toJson(root), raw.size, spCount, sessionCount, cookiesCount)
     }
 
     /**
@@ -432,12 +469,34 @@ object SovaPrefsBackup {
         }
         val session = ArrayList(bySession.values)
 
-        val total = entries.size + sp.size + session.size
+        // #SESSION-WEB-EXPORT: секция cookies (опциональна, дедуп по (домен, имя) last-wins).
+        val byCookie = LinkedHashMap<Pair<String, String>, CookieJarBackup.VkCookie>()
+        val cookiesEl = root.get("cookies")
+        if (cookiesEl != null && cookiesEl.isJsonArray) {
+            for (element in cookiesEl.asJsonArray) {
+                val entry = element as? JsonObject
+                if (entry == null) {
+                    skipped++
+                    continue
+                }
+                val cName = entry.get("name")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                val cValue = entry.get("value")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                val cDomain = entry.get("domain")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                if (cName.isEmpty() || cValue.isEmpty() || cDomain.isEmpty()) {
+                    skipped++
+                    continue
+                }
+                if (byCookie.put(Pair(cDomain, cName), CookieJarBackup.VkCookie(cName, cValue, cDomain)) != null) skipped++
+            }
+        }
+        val cookies = ArrayList(byCookie.values)
+
+        val total = entries.size + sp.size + session.size + cookies.size
         if (total == 0) {
             return ImportPlan(false, "Не нашёл ни одного корректного ключа — файл повреждён или из другой программы")
         }
         return ImportPlan(
-            true, "", entries, sp, session, total, skipped, exportedAt, fileAppVersion,
+            true, "", entries, sp, session, cookies, total, skipped, exportedAt, fileAppVersion,
             sessionPasswordIncluded,
         )
     }
@@ -546,12 +605,35 @@ object SovaPrefsBackup {
             if (committed) spWritten += fileWritten else spFailed.add(file)
         }
 
+        // #SESSION-WEB-MECHANISM: старые экспорт-файлы (волны 45–50) несут в
+        // секции session мёртвые ключи (last_phone/last_password, trusted_hash,
+        // storage-копии cookies) — Path 1.5/2.5 удалены, wipeLegacySessionArtifacts
+        // стирает их при старте. Записывать обратно = воскрешать тухлые данные
+        // (и учить читателей несуществующим кукам) — фильтруем честно.
+        val deadSessionKeys = setOf(
+            ExchangeTokenStorage.KEY_LAST_PHONE, ExchangeTokenStorage.KEY_LAST_PASSWORD,
+            ExchangeTokenStorage.KEY_TRUSTED_HASH, ExchangeTokenStorage.KEY_REMIXSID,
+            ExchangeTokenStorage.KEY_P_COOKIE, ExchangeTokenStorage.KEY_REMIXNSID,
+            ExchangeTokenStorage.KEY_HTTP_TOKEN, ExchangeTokenStorage.KEY_REMIX_NTTPID,
+            ExchangeTokenStorage.KEY_REMIX_UACCK, ExchangeTokenStorage.KEY_REMIX_UAS,
+            ExchangeTokenStorage.KEY_REMIX_DMGR, ExchangeTokenStorage.KEY_REMIX_MVK_FP,
+        )
+        val liveSession = plan.session.filter { it.first !in deadSessionKeys }
         val sessionMap = HashMap<String, Any>()
-        for (pair in plan.session) sessionMap[pair.first] = pair.second
+        for (pair in liveSession) sessionMap[pair.first] = pair.second
         val sessionWritten = try {
             exchangeStorage.applyExportedSession(sessionMap)
         } catch (t: Throwable) {
             // applyExportedSession глотает сам, но не полагаемся на чужие гарантии.
+            0
+        }
+
+        // #SESSION-WEB-EXPORT: cookie jar → CookieManager. Это и есть перенос
+        // web-сессии: восстановленные токены без кук живут только до первого
+        // refresh (HiddenSessionRefresher увидит пустой jar → ре-логин).
+        val cookiesRestored = try {
+            CookieJarBackup.restore(plan.cookies)
+        } catch (t: Throwable) {
             0
         }
 
@@ -562,7 +644,9 @@ object SovaPrefsBackup {
             sp = spWritten,
             spFailed = spFailed,
             session = sessionWritten,
-            sessionExpected = plan.session.size,
+            sessionExpected = liveSession.size,
+            cookies = cookiesRestored,
+            cookiesExpected = plan.cookies.size,
             safetyPath = safetyPath,
         )
     }

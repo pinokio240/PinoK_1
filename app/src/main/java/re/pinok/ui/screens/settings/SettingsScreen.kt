@@ -4922,13 +4922,12 @@ private fun UpdateTab(
  * зашифрованного файла (окно открывается НЕЗАВИСИМО от тумблера — по
  * заголовку конверта format = 2). Неверный код = честная ошибка в диалоге.
  *
- * Волна 50 #SESSION-PASSWORD-MATRIX (P0 внешнего ревью): пароль аккаунта
- * (last_password — неотзываемый секрет, в отличие от отзываемых токенов)
- * попадает в файл ТОЛЬКО внутри шифроконверта; plaintext-экспорт честно
- * помечается «без пароля аккаунта» (токены остаются). Чекбокс «Экспортировать
- * без сессии» убирает секцию целиком — красное предупреждение прячет себя,
- * когда сессии в файле не будет. Импорт по штампу sessionPasswordIncluded
- * предупреждает о файле без пароля.
+ * Волна 50 #SESSION-PASSWORD-MATRIX → #SESSION-WEB-MECHANISM (2026-09-24):
+ * пароль аккаунта больше НЕ хранится на устройстве (Path 2.5 удалён), поэтому
+ * штамп sessionPasswordIncluded теперь означает «plaintext без шифроконверта».
+ * #SESSION-WEB-EXPORT: вместе с сессией переносится cookie jar (CookieManager)
+ * — без него восстановленный токен умирает при первом refresh. Чекбокс
+ * «Экспортировать без сессии» убирает и секцию session, и cookies.
  *
  * Честные границы (написаны в UI): медиа-кэш и офлайн-загрузки НЕ переносятся
  * (отдельные файлы); служебные кэши (security_alerts_cache, app_meta) не
@@ -5034,7 +5033,7 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                     val note = when {
                         encryptCode != null -> " (файл зашифрован кодом)"
                         exportNoSession -> " (без сессии)"
-                        else -> " (без пароля аккаунта)"
+                        else -> " (сессия: токены + cookie jar)"
                     }
                     "Экспортировано записей: " + exported.totalCount + note
                 } else {
@@ -5305,7 +5304,9 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                     } else {
                         "Будет перезаписано записей: " + plan.total +
                             " (настроек: " + plan.entries.size + ", эквалайзер: " + plan.sp.size +
-                            ", сессия: " + plan.session.size + "). " +
+                            ", сессия: " + plan.session.size +
+                            (if (plan.cookies.isNotEmpty()) ", cookies: " + plan.cookies.size else "") +
+                            "). " +
                             "ПЕРЕД применением текущее состояние будет автоматически сохранено " +
                             "в страховочную копию — её можно будет восстановить на этой вкладке." +
                             (if (plan.skipped > 0) {
@@ -5315,8 +5316,10 @@ private fun DataTab(app: SovaApp, scope: CoroutineScope) {
                             // Волна 50 #SESSION-PASSWORD-MATRIX: честное
                             // предупреждение о файле без пароля (plaintext-экспорт).
                             (if (plan.session.isNotEmpty() && !plan.sessionPasswordIncluded) {
-                                " Пароля аккаунта в файле нет: сессия восстановится, но после её " +
-                                    "слёта потребуется повторный вход."
+                                // #SESSION-WEB-MECHANISM: пароля в файле нет никогда
+                                // (не хранится) — смысл штампа теперь «не зашифрован конвертом».
+                                " Файл не зашифрован конвертом: внутри токены и cookies сессии — " +
+                                    "храните его только у себя."
                             } else "")
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -5561,6 +5564,14 @@ private fun buildImportToast(applied: SovaPrefsBackup.AppliedResult?, failure: S
             append(", сессия " + r.session + " из " + r.sessionExpected)
             if (r.session == 0) {
                 append(". СЕССИЯ НЕ ВОССТАНОВЛЕНА (в файле нет access_token или запись не удалась)")
+            }
+        }
+        // #SESSION-WEB-EXPORT: cookie jar — сама web-сессия; без кук восстановленные
+        // токены живут только до первого refresh (потом ре-логин).
+        if (r.cookiesExpected > 0) {
+            append(", cookies " + r.cookies + " из " + r.cookiesExpected)
+            if (r.cookies == 0) {
+                append(". COOKIES НЕ ВОССТАНОВЛЕНЫ — при первом refresh потребуется вход")
             }
         }
         append(". Рекомендуется перезапустить приложение.")

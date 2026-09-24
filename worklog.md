@@ -10284,3 +10284,36 @@ Work Log:
 Stage Summary:
 - Guest-drawer: Офлайн-данные / Настройки / ─ / Войти в аккаунт
 - Локальные настройки работают без токена; API-экраны неактивны/inline-ошибка
+
+---
+Task ID: S1-audit-settings-export
+Agent: Z.ai Code (main)
+Task: Проверить, восстановит ли экспорт настроек сессию после #SESSION-WEB-MECHANISM (9d1521d), и найти аналогичные места риска.
+
+Work Log:
+- Разобран SovaPrefsBackup.kt (export/parse/apply): секция session берётся только из exportSessionSnapshot() (EncryptedSharedPreferences).
+- Подтверждено: cookies теперь живут ТОЛЬКО в CookieManager (wipeLegacySessionArtifacts стёр storage-копии, синк удалён); setCookie() в коде нигде не вызывается — восстановить cookie jar при импорте нечем.
+- applyExportedSession() пишет только prefs, CookieManager не заполняет.
+- Проверены смежные места: AccountFileBackup/dumpToFile/restoreFromFileBackup, SAFETY-копия, VkCookieJar, readers remixsid() (репо-фасад читает живой CookieManager — OK), SettingsScreen UI.
+
+Stage Summary:
+- ВЕРДИКТ: экспорт сессию НЕ восстановит. После переустановки access_token живёт до первого refresh → HiddenSessionRefresher получает пустой cookie jar → definitivelyDead → ре-логин.
+- Нужен фикс: секция "cookies" в экспорте (CookieManager.getCookie по VK-доменам) + setCookie()+flush() в apply(); то же для account.json; иначе честно пометить в UI.
+- Прочие места риска: account.json/restoreFromFileBackup (тот же дефект + мёртвые ключи trusted_hash/last_password/cookie-копии), страховочная копия (наследует), Updater rollback (сценарий наследует), VkCookieJar (не мигрирован на CookieManager — шлёт пустой/частичный cookie-set антифрод-эндпоинтам), stale KDoc/UI про last_password.
+
+---
+Task ID: S2-implement-session-web-export
+Agent: Z.ai Code (main)
+Task: Реализовать #SESSION-WEB-EXPORT (апрув юзера «конечно»): cookies в экспорте настроек/account.json, VkCookieJar → живой CookieManager, документация, push.
+
+Work Log:
+- CookieJarBackup.kt (новый, ~155 строк): snapshot/restore VK-куков, правила доменов (p→.login.<base>, remix*/httoken→.<base>, прочие host-only), setCookie с явным Domain/Path + flush.
+- SovaPrefsBackup: секция "cookies" (export/parse/apply, Exported.cookiesCount, AppliedResult.cookies/cookiesExpected), фильтр мёртвых ключей старых файлов (пароль/trusted_hash/копии cookies), format=1 не инкрементирован.
+- ExchangeTokenStorage: dumpToFile → web_cookies, restoreFromFileBackup → заливка в CookieManager.
+- VkCookieJar: loadForRequest = getCookie(url), saveFromResponse = зеркало Set-Cookie в CookieManager; remixstid/stlid — исключение (F-3, storage остаётся).
+- SettingsScreen: breakdown «cookies: N» в диалоге, тост «cookies N из M» + предупреждение, актуализация текстов волны 50.
+- HISTORY.md append + СЕССИЯ-ВЕБ-ПОРТ.md §8 + worklog.
+
+Stage Summary:
+- Веб-сессия теперь переносится обоими бэкапами; старые файлы совместимы (мягкая деградация).
+- Коммит: #SESSION-WEB-EXPORT (см. git log -1), push — статус в следующей записи.

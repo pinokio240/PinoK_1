@@ -1,5 +1,10 @@
 package re.pinok.mods.network
 
+import android.webkit.CookieManager
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -7,9 +12,9 @@ import re.pinok.auth.exchange.ExchangeTokenStorage
 import re.pinok.util.AppLog
 
 /**
- * #CALLS-ANTIFRAUD (2026-08-23): OkHttp CookieJar, который подставляет
- * полный браузерный cookie-set VK из [ExchangeTokenStorage] в исходящие
- * HTTP-запросы — как это делает браузер.
+ * #CALLS-ANTIFRAUD (2026-08-23) + #SESSION-WEB-MECHANISM (2026-09-24): OkHttp
+ * CookieJar, который подставляет ЖИВОЙ cookie-set VK из [CookieManager]
+ * (WebView cookie store) в исходящие HTTP-запросы — как это делает браузер.
  *
  * Зачем: PinoK раньше вообще не отправлял cookies (только Origin/Referer/UA).
  * Обычные API-запросы (access_token в query) работают без кук, но
@@ -19,13 +24,23 @@ import re.pinok.util.AppLog
  * Без них VK отклоняет запрос (401 AUTH_LOGIN / 403), и мы не можем
  * автоматически получить session_key/callToken как браузер.
  *
- * Доменное маппирование (как у браузера):
- *   - `.vk.ru` / `.vk.com` cookies → любые vk.ru/vk.com/m.vk.ru/web.api.vk.ru
- *   - httoken есть на `.api.vk.ru` и `.web.api.vk.ru` — шлём на API-домены
- *   - p (persistent login) — на login.vk.com (для web_token flow)
+ * ## ИСТОЧНИК (изменилось в #SESSION-WEB-MECHANISM)
  *
- * saveFromResponse: Set-Cookie от VK сохраняем в storage (patch-семантика) —
- * чтобы следующая сессия имела обновлённые remix-куки.
+ * CookieManager — ЕДИНСТВЕННЫЙ источник web-сессии (как в веб-версии).
+ * Раньше jar читал storage-копии [ExchangeTokenStorage] — но копии стёрты
+ * wipe'ом и больше не синхронизируются (протухали при ротации remixsid —
+ * корень багов «смена сети → просит логин»). Теперь:
+ *   - loadForRequest → CookieManager.getCookie(url) — тот же jar, что у
+ *     HiddenSessionRefresher/AuthActivity: ротации видны мгновенно, с любого IP;
+ *   - saveFromResponse → зеркало Set-Cookie ОБРАТНО в CookieManager
+ *     (setCookie с атрибутами Domain/Path/Expires из OkHttp Cookie) — ротации,
+ *     пойманные OkHttp-потоками (антифрод-эндпоинты), не теряются для web-сессии;
+ *   - ИСКЛЮЧЕНИЕ для anonym_id: remixstid/remixstlid дублируются в storage
+ *     (Fix F-3 #CALLS-ANTIFRAUD, P0 «персистит вечно») — переживают очистку
+ *     webview-данных; читаются как fallback, пишутся как раньше.
+ *
+ * flush() здесь НЕ зовётся: ON_RESUME flush (#DOZE-COOKIE-FLUSH) в SovaApp
+ * уже покрывает персистентность, а disk-IO на OkHttp-потоках не нужен.
  */
 class VkCookieJar(
     private val storage: ExchangeTokenStorage,
@@ -33,56 +48,54 @@ class VkCookieJar(
 
     private companion object {
         const val TAG = "VkCookieJar"
+
+        /** OkHttp sentinel для session-cookie (без Expires) — «31.12.9999». */
+        const val OKHTTP_MAX_DATE = 253402300799999L
+
+        /** Имена кук, которые зеркалим из Set-Cookie в CookieManager. */
+        val MIRROR_NAMES = setOf(
+            "remixsid", "remixnsid", "p", "httoken",
+            "remixstid", "remixstlid", "remixdmgr",
+            "remixuacck", "remixuas", "remixmvk-fp", "remixnttpid",
+        )
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
         return try {
             val host = url.host.lowercase()
-            val cookies = mutableListOf<Cookie>()
+            if (!host.endsWith("vk.ru") && !host.endsWith("vk.com")) return emptyList()
 
-            fun add(name: String, value: String, domain: String, path: String = "/") {
-                if (value.isBlank()) return
-                // OkHttp требует домен БЕЗ ведущей точки ("vk.ru", не ".vk.ru").
-                val d = domain.removePrefix(".")
-                cookies.add(
-                    Cookie.Builder()
-                        .name(name)
-                        .value(value)
-                        .domain(d)
-                        .path(path)
-                        .build()
-                )
+            val raw = CookieManager.getInstance().getCookie(url.toString())
+            val cookies = ArrayList<Cookie>()
+            if (!raw.isNullOrBlank()) {
+                for (pair in raw.split(";")) {
+                    val parts = pair.trim().split("=", limit = 2)
+                    if (parts.size != 2) continue
+                    val n = parts[0].trim()
+                    val v = parts[1].trim()
+                    if (n.isBlank() || v.isBlank()) continue
+                    // getCookie(url) уже отфильтровал по домену/пути — аттачим к хосту запроса.
+                    cookies.add(
+                        Cookie.Builder().name(n).value(v).domain(host).path("/").build()
+                    )
+                }
             }
 
-            // vk.ru/vk.com и все их поддомены (m.vk.ru, web.api.vk.ru, id.vk.com…)
-            if (host.endsWith("vk.ru") || host.endsWith("vk.com") ||
-                host == "api.vk.ru" || host == "web.api.vk.ru" || host == "m.vk.ru" ||
-                host == "id.vk.com" || host == "login.vk.com"
-            ) {
-                // Session + VK ID
-                storage.remixsid()?.let { add("remixsid", it, ".vk.ru") }
-                storage.remixnsid()?.let { add("remixnsid", it, "vk.ru") }
-                // Anti-fraud
-                storage.remixstid()?.let { add("remixstid", it, ".vk.ru") }
-                storage.remixstlid()?.let { add("remixstlid", it, ".vk.ru") }
-                storage.remixdmgr()?.let { add("remixdmgr", it, ".vk.ru") }
-                storage.remixuacck()?.let { add("remixuacck", it, ".vk.ru") }
-                storage.remixuas()?.let { add("remixuas", it, ".vk.ru") }
-                storage.remixmvkFp()?.let { add("remixmvk-fp", it, ".vk.ru") }
-                // httoken — anti-CSRF (шлём на все vk-домены; VK ставит его на .api.vk.ru)
-                storage.httoken()?.let { add("httoken", it, ".api.vk.ru") }
+            // Fallback anonym_id (#CALLS-ANTIFRAUD F-3): remixstid/remixstlid
+            // персистят в storage и переживают очистку webview-данных. Только
+            // эти два имени — сессионные куки fallback'а НЕ имеют (источник
+            // истины — живой CookieManager).
+            val names = cookies.mapTo(HashSet()) { it.name }
+            if ("remixstid" !in names) {
+                storage.remixstid()?.takeIf { it.isNotBlank() }?.let {
+                    cookies.add(Cookie.Builder().name("remixstid").value(it).domain(host).path("/").build())
+                }
             }
-
-            // login.vk.com — для web_token flow нужен persistent login p
-            if (host == "login.vk.com" || host == "login.vk.ru" || host.endsWith("login.vk.com")) {
-                storage.pCookie()?.let { add("p", it, ".login.vk.com") }
+            if ("remixstlid" !in names) {
+                storage.remixstlid()?.takeIf { it.isNotBlank() }?.let {
+                    cookies.add(Cookie.Builder().name("remixstlid").value(it).domain(host).path("/").build())
+                }
             }
-
-            // calls.okcdn.ru / api.mycdn.me — session_key не в cookie, но
-            // API_SESSION_ID (если захвачена) можно отправить тоже.
-            // (calls аутентифицируется через session_key/callToken, не куки —
-            //  этот блок оставлен на случай, если VK начнёт проверять.)
-
             cookies
         } catch (e: Exception) {
             AppLog.w(TAG, "loadForRequest error: ${e.message}")
@@ -91,43 +104,53 @@ class VkCookieJar(
     }
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        // Сохраняем обновлённые remix-куки в storage (patch-семантика).
-        // Основной захват кук идёт через RemixsidCapturer (CookieManager),
-        // этот метод — дополнительный источник для OkHttp-потоков.
         try {
-            var remixsid: String? = null
-            var remixnsid: String? = null
-            var p: String? = null
-            var httoken: String? = null
+            val host = url.host.lowercase()
+            if (!host.endsWith("vk.ru") && !host.endsWith("vk.com")) return
+            val cm = CookieManager.getInstance()
+            var mirrored = 0
             var stid: String? = null
             var stlid: String? = null
-            var changed = false
+
             for (c in cookies) {
                 when (c.name) {
-                    "remixsid" -> { if (c.value.length >= 20) { remixsid = c.value; changed = true } }
-                    "remixnsid" -> { if (c.value.length >= 50) { remixnsid = c.value; changed = true } }
-                    "p" -> { if (c.value.length >= 50) { p = c.value; changed = true } }
-                    "httoken" -> { if (c.value.length >= 20) { httoken = c.value; changed = true } }
-                    "remixstid" -> { if (c.value.length >= 20) { stid = c.value; changed = true } }
-                    "remixstlid" -> { if (c.value.length >= 20) { stlid = c.value; changed = true } }
+                    "remixstid" -> if (c.value.length >= 20) stid = c.value
+                    "remixstlid" -> if (c.value.length >= 20) stlid = c.value
                 }
+                if (c.name !in MIRROR_NAMES) continue
+                // Зеркало Set-Cookie → CookieManager (формат Set-Cookie ответа):
+                // Domain — для domain-cookie (okhttp хранит без ведущей точки),
+                // Expires — только для персистентных (session-cookie терять
+                // на рестарте процесса и так нечего зеркалить — они умрут вместе
+                // с памятью OkHttp-ответа до всякой пользы).
+                val str = buildString {
+                    append(c.name).append('=').append(c.value)
+                    if (!c.hostOnly) append("; Domain=").append(c.domain)
+                    append("; Path=").append(c.path)
+                    if (c.expiresAt in 1L until OKHTTP_MAX_DATE) {
+                        append("; Expires=").append(httpDate(c.expiresAt))
+                    }
+                    if (c.secure) append("; Secure")
+                }
+                if (runCatching { cm.setCookie(url.toString(), str) }.getOrDefault(false)) mirrored++
             }
-            if (changed) {
-                storage.saveSessionCookiesOnly(
-                    remixsid = remixsid,
-                    remixnsid = remixnsid,
-                    p = p,
-                    httoken = httoken,
-                    remixstid = stid,
-                    remixstlid = stlid,
-                )
-                AppLog.d(TAG, "saveFromResponse: updated ${url.host} cookies " +
-                    "(remixsid=${if (remixsid != null) "yes" else "no"}, " +
-                    "stid=${if (stid != null) "yes" else "no"}, " +
-                    "stlid=${if (stlid != null) "yes" else "no"})")
+
+            // anonym_id → storage (персистентность F-3, patch-семантика как раньше).
+            if (stid != null || stlid != null) {
+                storage.saveSessionCookiesOnly(remixstid = stid, remixstlid = stlid)
+            }
+            if (mirrored > 0) {
+                AppLog.d(TAG, "saveFromResponse: mirrored $mirrored cookies → CookieManager (${url.host})" +
+                    (if (stid != null) " +stid" else "") + (if (stlid != null) " +stlid" else ""))
             }
         } catch (e: Exception) {
             AppLog.w(TAG, "saveFromResponse error: ${e.message}")
         }
     }
+
+    /** unix-ms → HTTP-date (RFC 7231) для атрибута Expires. */
+    private fun httpDate(ms: Long): String =
+        SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("GMT")
+        }.format(Date(ms))
 }

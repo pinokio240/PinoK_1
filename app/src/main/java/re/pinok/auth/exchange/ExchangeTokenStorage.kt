@@ -16,8 +16,9 @@ import java.util.UUID
  *  - `exchange_token` — refresh access_token via auth_by_exchange_token
  *  - `device_id` — stable per-install UUID, sent on every request
  *  - `secret` — user secret for sig= signing
- *  - `trusted_hash` — for passwordless re-login (grant_type=trusted_hash)
- *  - `last_phone` + `last_password` — for VkAuthCredentials re-login
+ *  - `trusted_hash`, `last_phone`, `last_password` — УДАЛЕНЫ
+ *    (#SESSION-WEB-MECHANISM: Path 2.5 снят, пароль не хранится — wipe при
+ *    старте стирает legacy-ключи; константы оставлены для миграции)
  *  - `webview_access_token` + `webview_refresh_token` — web methods
  *  - LongPoll `lp_key`, `lp_server`, `lp_ts`, `lp_pts`
  *  - `utility_tokens` — serialized JSON of UtilityTokens
@@ -680,6 +681,16 @@ class ExchangeTokenStorage(
                 putOpt(KEY_REMIX_STID, prefs.getString(KEY_REMIX_STID, null))
                 putOpt(KEY_REMIX_STLID, prefs.getString(KEY_REMIX_STLID, null))
 
+                // #SESSION-WEB-EXPORT: снимок cookie jar (CookieManager) —
+                // единственный источник web-сессии. Без него account.json
+                // восстанавливает токены, но web-сессия умирает при первом
+                // refresh (HiddenSessionRefresher увидит пустой jar → ре-логин).
+                try {
+                    put(CookieJarBackup.BACKUP_FIELD, CookieJarBackup.snapshotJson())
+                } catch (e: Exception) {
+                    AppLog.w("ExchangeTokenStorage", "dumpToFile: cookie snapshot failed: ${e.message}")
+                }
+
                 // Метка восстановления для диагностики
                 put("__backup_at", System.currentTimeMillis())
                 put("__backup_version", 1)
@@ -843,6 +854,18 @@ class ExchangeTokenStorage(
             // sync commit — восстановление должно зафиксироваться до того,
             // как любой другой код попытается читать prefs.
             editor.commit()
+
+            // #SESSION-WEB-EXPORT: cookies из бэкапа → CookieManager. Это
+            // восстановление САМОЙ web-сессии (remixsid/p/httoken...): без него
+            // токены пережили бы KeyStore-коррупцию, а вход — нет. Старые
+            // account.json без поля web_cookies дают 0 — мягкая деградация.
+            val cookiesRestored = try {
+                CookieJarBackup.restoreJsonArray(json.optJSONArray(CookieJarBackup.BACKUP_FIELD))
+            } catch (e: Exception) {
+                AppLog.w("ExchangeTokenStorage", "restoreFromFileBackup: cookie restore failed: ${e.message}")
+                0
+            }
+            AppLog.i("ExchangeTokenStorage", "restoreFromFileBackup: cookies restored=$cookiesRestored")
 
             // Fix #176-auth-loop / #177+#178: сообщение зависит от того, восстановлен
             // ли access_token или только re-login credentials. Лог "OK — access_token
