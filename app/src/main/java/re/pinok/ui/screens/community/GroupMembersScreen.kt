@@ -2,8 +2,12 @@
 package re.pinok.ui.screens.community
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,8 +26,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -86,6 +92,19 @@ import re.pinok.util.AppLog
 private const val GROUP_MEMBERS_PAGE_SIZE = 50
 
 /**
+ * W38 (C8): причины бана groups.banUser reason 0..4 (офиц. доки VK API).
+ * План §4 C8: «Бан из контекст-меню участника — groups.banUser (метод уже
+ * добавлен в 35-b)». Диалог по long-press на строке участника.
+ */
+private val BAN_REASONS = listOf(
+    "Другое", "Спам", "Оскорбление участников", "Нецензурные выражения", "Угрозы",
+)
+
+/** W38 (C8): сроки бана в секундах (0 = навсегда, end_date=0). */
+private val BAN_DURATION_SECONDS = listOf(0L, 86400L, 604800L, 2592000L)
+private val BAN_DURATION_LABELS = listOf("Навсегда", "1 день", "1 неделя", "1 месяц")
+
+/**
  * #OPVK-EXTRACT: экран «Участники» сообщества [groupId] (положительный id
  * группы, как в Screen.Community). Строка (аватар + имя + статус) → чужой
  * профиль ([re.pinok.ui.navigation.Screen.UserProfile], проводит хост).
@@ -110,6 +129,16 @@ fun GroupMembersScreen(
     var endReached by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("") }
+    // W38 (C8): гейт прав — long-press «Забанить» виден только руководителю
+    // (isManager = admin_level >= 1 || is_admin == 1, W35-a). Статус берётся
+    // отдельным groupsGetById (админ-блок в fields с волны 35-a).
+    var canBan by remember { mutableStateOf(false) }
+    // W38 (C8): состояние диалога бана.
+    var banTarget by remember { mutableStateOf<UserProfile?>(null) }
+    var banBusy by remember { mutableStateOf(false) }
+    var banReason by remember { mutableStateOf(0) }
+    var banDurationIdx by remember { mutableStateOf(0) }
+    var banComment by remember { mutableStateOf("") }
     // Fix #389 #SCROLL-TOP-PARITY: состояние списка для FAB «наверх»
     // (тот же экземпляр передаётся в LazyColumn.state ниже).
     val listState = rememberLazyListState()
@@ -173,7 +202,53 @@ fun GroupMembersScreen(
         }
     }
 
+    // W38 (C8): проверить права текущего пользователя на это сообщество.
+    LaunchedEffect(groupId) {
+        try {
+            canBan = app.apiClient.groupsGetById(listOf(groupId)).firstOrNull()?.isManager == true
+        } catch (e: Exception) {
+            AppLog.e("GroupMembersScreen", "canBan check failed", e)
+        }
+    }
     LaunchedEffect(groupId) { loadFirst() }
+
+    /** W38 (C8): применить бан (groups.banUser) и убрать участника из списка. */
+    fun applyBan(target: UserProfile) {
+        scope.launch {
+            banBusy = true
+            try {
+                val seconds = BAN_DURATION_SECONDS[banDurationIdx]
+                val endDate = if (seconds == 0L) 0L else System.currentTimeMillis() / 1000L + seconds
+                val ok = app.apiClient.groupsBanUser(
+                    groupId = groupId,
+                    userId = target.id,
+                    reason = banReason,
+                    endDate = endDate,
+                    comment = banComment.takeIf { it.isNotBlank() },
+                )
+                if (ok) {
+                    Toast.makeText(context, "Участник забанен", Toast.LENGTH_SHORT).show()
+                    members = members.filterNot { it.id == target.id }
+                    banTarget = null
+                    banComment = ""
+                    banReason = 0
+                    banDurationIdx = 0
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось забанить" else "Ошибка: $err",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("GroupMembersScreen", "ban failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                banBusy = false
+            }
+        }
+    }
 
     val filtered = members.filter { member ->
         filter.isBlank() || member.fullName.lowercase().contains(filter.trim().lowercase())
@@ -261,6 +336,18 @@ fun GroupMembersScreen(
                                     .heightIn(min = 44.dp),
                             )
                         }
+                        if (canBan && filtered.isNotEmpty()) {
+                            item(key = "ban_hint") {
+                                Text(
+                                    "Удерживайте участника, чтобы забанить",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                         if (filtered.isEmpty()) {
                             item(key = "empty") {
                                 Text(
@@ -278,6 +365,8 @@ fun GroupMembersScreen(
                                 GroupMemberRow(
                                     member = member,
                                     onClick = { onMemberClick(member.id) },
+                                    // W38 (C8): long-press → диалог бана (только руководителю).
+                                    onBanClick = if (canBan) ({ banTarget = member }) else null,
                                 )
                             }
                         }
@@ -318,6 +407,66 @@ fun GroupMembersScreen(
             }
         }
     }
+
+    // W38 (C8): диалог бана участника — причина/срок/комментарий (groups.banUser).
+    val target = banTarget
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { if (!banBusy) banTarget = null },
+            title = {
+                Text(
+                    "Забанить: ${target.fullName}",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Причина", style = MaterialTheme.typography.labelLarge)
+                    BAN_REASONS.forEachIndexed { idx, label ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { banReason = idx },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = banReason == idx, onClick = { banReason = idx })
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.heightIn(min = 8.dp))
+                    Text("Срок", style = MaterialTheme.typography.labelLarge)
+                    BAN_DURATION_LABELS.forEachIndexed { idx, label ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { banDurationIdx = idx },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = banDurationIdx == idx, onClick = { banDurationIdx = idx })
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.heightIn(min = 8.dp))
+                    OutlinedTextField(
+                        value = banComment,
+                        onValueChange = { banComment = it },
+                        label = { Text("Комментарий (необязательно)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { applyBan(target) }, enabled = !banBusy) {
+                    Text("Забанить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { banTarget = null }, enabled = !banBusy) { Text("Отмена") }
+            },
+        )
+    }
 }
 
 /**
@@ -325,12 +474,20 @@ fun GroupMembersScreen(
  * буква) + имя + статус (подзаголовок); паттерн FollowListRow
  * FollowersSubscriptionsScreen. Тач-таргет ≥ 44dp (аватар 48dp + паддинги).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GroupMemberRow(member: UserProfile, onClick: () -> Unit) {
+private fun GroupMemberRow(
+    member: UserProfile,
+    onClick: () -> Unit,
+    onBanClick: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onBanClick,
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .defaultMinSize(minHeight = 48.dp),
         verticalAlignment = Alignment.CenterVertically,

@@ -122,6 +122,10 @@ fun CommunityScreen(
     onAdminSettingsClick: (groupId: Long) -> Unit = {},
     onAdminStatsClick: (groupId: Long) -> Unit = {},
     onAdminLinksClick: (groupId: Long) -> Unit = {},
+    // W38 (C2/C5/C4): приглашения / отложенные+предложения / адреса.
+    onAdminInvitesClick: (groupId: Long) -> Unit = {},
+    onAdminQueueClick: (groupId: Long) -> Unit = {},
+    onAdminAddressesClick: (groupId: Long) -> Unit = {},
     onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
@@ -826,6 +830,9 @@ fun CommunityScreen(
                 onSettingsClick = onAdminSettingsClick,
                 onStatsClick = onAdminStatsClick,
                 onPeopleClick = onAdminPeopleClick,
+                onInvitesClick = onAdminInvitesClick,
+                onQueueClick = onAdminQueueClick,
+                onAddressesClick = onAdminAddressesClick,
             )
         }
         item {

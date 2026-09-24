@@ -13041,3 +13041,33 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
    Фикс: EqualizerHelper.snapshotCustomPreset(name) — снапшот из prefs БЕЗ engine (ключи PREF_* движка открыты internal); EqualizerHelper.setBand fallback в prefs; EqualizerHelper.applyCustomPresetPersist(preset) — применение custom-пресета в prefs при engine==null (restoreSettings подхватит при attach). UI (оба экрана) переведён на эти методы.
 2. **Пресет исчезал после перезапуска.** Если eq_bands в prefs пусто (ползунки не трогали), снапшот давал eqBands=[], а CustomPresetStore.load() фильтрует пустые как невалидные.
    Фикс: fallback полос в снапшоте: saved → live (engine) → полосы активного встроенного пресета → 9 нулей.
+
+## #ADMIN-W38 (2026-09-25) — админка сообществ: C2 приглашения, C4 адреса, C5 отложенные/предложения, C7 обложка, C8 бан из списка участников
+
+Продолжение C-серии плана волны 35 (§4). До этой волны были готовы: 35-a/35-b (f829235a), C0 композер (9d4c88cb), C1 ссылки (W37).
+
+**C2 — Приглашения (`AdminInvitesScreen`, вход из блока «Управление»):**
+- API: `groups.invite`, `groups.getInvitedUsers` (items без имён → добор `usersGetByIds` — обогащение стандартный паттерн), `groups.recallInvitation`.
+- UI: 2 вкладки — «Пригласить» (friends.get order=hints 200 + фильтр + кнопка «Пригласить», после успеха локальная метка «Приглашено»), «Приглашённые» (список + «Отозвать»).
+
+**C4 — Адреса (`AdminAddressesScreen`):**
+- API: `groups.getAddresses/addAddress/editAddress/deleteAddress` (офиц. API 5.85+); `GroupAddress` (title/address/phone/work_info_status).
+- UI: карточки адресов (название, адрес, статус работы человекочитаемо, телефон) + добавить/изменить/удалить (диалоги). Расписание-редактор (timetable JSON) сознательно не делаем.
+
+**C5 — Отложенные/Предложения (`AdminWallQueueScreen`):**
+- Данные: существующий `wallGetWithFilter(ownerId=-groupId, filter=postponed/suggests)`.
+- UI: 2 вкладки со счётчиками, дата публикации/текст (3 строки), «Удалить» (wall.delete — офиц. API). ЧЕСТНО: опубликовать предложение / изменить дату официальным API НЕЛЬЗЯ.
+
+**C7 — Обложка (в `AdminSettingsScreen`):**
+- `GroupInfo.coverUrl` (fields groups.getById += cover; images[].url последняя = максимальная).
+- UI: превью обложки, «Загрузить из галереи» (GetContent) / «Удалить». Поток — v2-форма веба: photos.getOwnerCoverPhotoUploadServer(upload_v2, group_id) → multipart "file" (копия uploadCoverMultipart из EditProfileScreen — там приватный) → photos.saveOwnerCoverPhoto(response_json, group_id, upload_v2); удаление photos.removeOwnerCoverPhoto(group_id).
+
+**C8 — Бан из списка участников (`GroupMembersScreen`):**
+- Гейт прав: отдельный groupsGetById → isManager (админ-блок в fields с W35-a); подсказка «Удерживайте участника, чтобы забанить» только руководителю.
+- Long-press на строке (combinedClickable) → диалог: причина (0-4 по докам), срок (навсегда/день/неделя/месяц → end_date), комментарий → `groups.banUser` (метод готов с 35-b) → успех: участник исчезает из списка.
+
+**Блок «Управление»:** +3 строки (Приглашения/Отложенные и предложения/Адреса); disabled-метки «В волне 36» исправлены на честное «Пока не реализовано» (C3 кнопка действия, C6 чаты — не реализованы).
+
+**Навигация:** Screen.kt +3 маршрута (admin_invites/admin_wall_queue/admin_addresses/{groupId}); SovaNavHost — импорты, hasOwnTopBar ×3, композиции ×3; CommunityScreen — 3 колбэка.
+
+**Валидация:** Kotlin-aware чекер (вложенные /* */, строки, char-литералы): скобки/кавычки/скобки[] симметричны по всем 6 файлам (VKApiClient даёт те же дельты, что HEAD — артефакт чекера на легаси-тексте, не регресс). Сборка — за юзером (песочница без Android SDK).

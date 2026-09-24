@@ -268,6 +268,9 @@ class VKApiClient(
         val canMessage: Int = 0,    // can_message — сообщения сообщества доступны
         val canSuggest: Int = 0,    // can_suggest — право предлагать записи
         val memberStatus: Int = 0,  // member_status 0..6 (0 не участник … 6 приглашён)
+        // W38 (C7): обложка сообщества (fields += cover; images[].url последней
+        // картинки = максимальная; AdminSettingsScreen — превью/удаление).
+        val coverUrl: String? = null,
     ) {
         // W35-a: порог показа блока «Управление» — admin_level >= 1 || is_admin==1
         // (сверка §5.1: модератор уже имеет часть админ-пунктов).
@@ -8895,7 +8898,7 @@ class VKApiClient(
         // W35-a: + админ-блок (is_admin/admin_level/is_advertiser/can_message/
         // can_suggest/can_post/member_status) — сверка «Группа_админ» §3.1/§5.1.
         // Доп. поля безопасны для остальных вызовов — парсеры читают только известные.
-        fields: String = "photo_100,photo_200,description,members_count,verified,activity,status,screen_name,site,is_member,type,is_admin,admin_level,is_advertiser,can_message,can_suggest,can_post,member_status",
+        fields: String = "photo_100,photo_200,description,members_count,verified,activity,status,screen_name,site,is_member,type,is_admin,admin_level,is_advertiser,can_message,can_suggest,can_post,member_status,cover",
     ): List<GroupInfo> {
         if (isOffline() || groupIds.isEmpty()) return emptyList()
         // #30i (groups fix): всегда используем group_ids (plural) — это работает
@@ -8960,6 +8963,10 @@ class VKApiClient(
                     canMessage = o.get("can_message")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     canSuggest = o.get("can_suggest")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     memberStatus = o.get("member_status")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    // W38 (C7): cover.images[] — последняя = максимальное разрешение.
+                    coverUrl = o.get("cover")?.takeIf { !it.isJsonNull }?.asJsonObject
+                        ?.getAsJsonArray("images")?.lastOrNull()?.takeIf { it.isJsonObject }
+                        ?.asJsonObject?.get("url")?.takeIf { !it.isJsonNull }?.asString,
                 )
             }
         } catch (e: Exception) {
@@ -17283,6 +17290,180 @@ class VKApiClient(
         )) ?: return false
         return json.has("response")
     }
+    // ── W38 (C2/C4): администрирование сообществ — приглашения и адреса ──
+
+    /** W38 (C2): groups.invite — пригласить пользователя в сообщество
+     *  (офиц. API; приглашать можно только друзей — иначе честная API-ошибка). */
+    suspend fun groupsInvite(groupId: Long, userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.invite", mapOf(
+            "group_id" to groupId.toString(),
+            "user_id" to userId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * W38 (C2): groups.getInvitedUsers — список приглашённых в сообщество.
+     * Ответ {count, items[]}; items содержат user_id (без полей профиля даже
+     * при fields у некоторых версий API) → нет имён: добираем usersGetByIds
+     * (прецедент GroupMembersScreen — обогащение стандартный паттерн).
+     */
+    suspend fun groupsGetInvitedUsers(groupId: Long, count: Int = 50, offset: Int = 0): List<UserProfile> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getInvitedUsers", mapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "fields" to "photo_100,photo_200,first_name,last_name,online,status,verified",
+        )) ?: return emptyList()
+        return try {
+            val arr = json.getAsJsonObject("response")?.getAsJsonArray("items")
+                ?: return emptyList()
+            data class InviteEntry(val id: Long, val profile: UserProfile?)
+            val entries = arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                // id приходит как user_id (getInvitedUsers) или id (users.get).
+                val id = o.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: o.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: return@mapNotNull null
+                val firstName = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString
+                val lastName = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString
+                val photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                val photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                val status = o.get("status")?.takeIf { !it.isJsonNull }?.asString
+                val online = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                val verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                val profile = if (firstName != null) UserProfile(
+                    id = id,
+                    firstName = firstName,
+                    lastName = lastName ?: "",
+                    photo100 = photo100,
+                    photo200 = photo200,
+                    status = status,
+                    online = online,
+                    verified = verified,
+                ) else null
+                InviteEntry(id, profile)
+            }
+            // Нет имён в items → добираем users.get (batch, честное обогащение).
+            val needIds = entries.filter { it.profile == null }.map { it.id }
+            val enriched: Map<Long, UserProfile> = if (needIds.isNotEmpty()) {
+                try { usersGetByIds(needIds) } catch (_: Exception) { emptyMap() }
+            } else emptyMap()
+            entries.map { e -> e.profile ?: enriched[e.id] ?: UserProfile(
+                id = e.id, firstName = "Пользователь", lastName = e.id.toString(),
+            ) }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetInvitedUsers parse error", e)
+            emptyList()
+        }
+    }
+
+    /** W38 (C2): groups.recallInvitation — отозвать приглашение. */
+    suspend fun groupsRecallInvitation(groupId: Long, userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.recallInvitation", mapOf(
+            "group_id" to groupId.toString(),
+            "user_id" to userId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /** W38 (C4): адрес сообщества (groups.getAddresses). */
+    data class GroupAddress(
+        val id: Long,
+        val title: String,
+        val address: String,
+        val additionalAddress: String? = null,
+        val workInfoStatus: String? = null,   // no_information/temporarily_closed/always_open/timetable
+        val phone: String? = null,
+    )
+
+    /** W38 (C4): groups.getAddresses — список адресов сообщества. */
+    suspend fun groupsGetAddresses(groupId: Long, count: Int = 50, offset: Int = 0): List<GroupAddress> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getAddresses", mapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "fields" to "address,work_info_status,phone,additional_address",
+        )) ?: return emptyList()
+        return try {
+            val arr = json.getAsJsonObject("response")?.getAsJsonArray("items")
+                ?: return emptyList()
+            arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
+                GroupAddress(
+                    id = id,
+                    title = o.get("title")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    address = o.get("address")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    additionalAddress = o.get("additional_address")?.takeIf { !it.isJsonNull }?.asString,
+                    workInfoStatus = o.get("work_info_status")?.takeIf { !it.isJsonNull }?.asString,
+                    phone = o.get("phone")?.takeIf { !it.isJsonNull }?.asString,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetAddresses parse error", e)
+            emptyList()
+        }
+    }
+
+    /** W38 (C4): groups.addAddress — добавить адрес (title+address обязательны). */
+    suspend fun groupsAddAddress(
+        groupId: Long,
+        title: String,
+        address: String,
+        phone: String? = null,
+        workInfoStatus: String = "always_open",
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "title" to title,
+            "address" to address,
+            "work_info_status" to workInfoStatus,
+        )
+        if (!phone.isNullOrBlank()) args["phone"] = phone
+        val json = call("groups.addAddress", args) ?: return false
+        return json.has("response")
+    }
+
+    /** W38 (C4): groups.editAddress — изменить адрес. */
+    suspend fun groupsEditAddress(
+        groupId: Long,
+        addressId: Long,
+        title: String,
+        address: String,
+        phone: String? = null,
+        workInfoStatus: String = "always_open",
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "address_id" to addressId.toString(),
+            "title" to title,
+            "address" to address,
+            "work_info_status" to workInfoStatus,
+        )
+        if (!phone.isNullOrBlank()) args["phone"] = phone
+        val json = call("groups.editAddress", args) ?: return false
+        return json.has("response")
+    }
+
+    /** W38 (C4): groups.deleteAddress — удалить адрес (офиц. API, 5.85+). */
+    suspend fun groupsDeleteAddress(groupId: Long, addressId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.deleteAddress", mapOf(
+            "group_id" to groupId.toString(),
+            "address_id" to addressId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
     // ── конец W35-b: администрирование сообществ ────────────────────────
 
 

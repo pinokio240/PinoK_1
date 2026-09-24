@@ -1,7 +1,11 @@
 // File: ui/screens/community/CommunityAdminScreens.kt
 package re.pinok.ui.screens.community
 
+import android.content.Context
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,8 +28,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -63,9 +70,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
+import re.pinok.data.model.Friend
+import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ErrorView
 import re.pinok.util.AppLog
@@ -121,6 +137,9 @@ fun CommunityAdminBlock(
     onStatsClick: (Long) -> Unit,
     onPeopleClick: (groupId: Long, tab: String) -> Unit,
     onLinksClick: (Long) -> Unit,
+    onInvitesClick: (Long) -> Unit,
+    onQueueClick: (Long) -> Unit,
+    onAddressesClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
@@ -201,12 +220,33 @@ fun CommunityAdminBlock(
                 onClick = { onLinksClick(gi.id) },
             )
 
+            // ── W38 (C2/C5/C4) ──
+            AdminBlockRow(
+                icon = Icons.Filled.GroupAdd,
+                title = "Приглашения",
+                subtitle = "Пригласить друзей, отозвать",
+                onClick = { onInvitesClick(gi.id) },
+            )
+            AdminBlockRow(
+                icon = Icons.Filled.Schedule,
+                title = "Отложенные и предложения",
+                subtitle = "Записи, ожидающие публикации",
+                onClick = { onQueueClick(gi.id) },
+            )
+            AdminBlockRow(
+                icon = Icons.Filled.Place,
+                title = "Адреса",
+                subtitle = "Точки сообщества на карте",
+                onClick = { onAddressesClick(gi.id) },
+            )
+
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
-            // ── Честные disabled-пункты (волна 36, план §4 C-серия) ──
-            AdminBlockRow(icon = Icons.Filled.Settings, title = "Сообщения", subtitle = "В волне 36", onClick = {}, enabled = false)
-            AdminBlockRow(icon = Icons.Filled.Settings, title = "Разделы", subtitle = "В волне 36", onClick = {}, enabled = false)
-            AdminBlockRow(icon = Icons.Filled.Settings, title = "Бизнес-инструменты", subtitle = "В волне 36", onClick = {}, enabled = false)
+            // ── Честные disabled-пункты (план §4 C-серия: C3 кнопка действия,
+            //    C6 чаты сообщества — НЕ реализованы, без выдуманных маршрутов) ──
+            AdminBlockRow(icon = Icons.Filled.Settings, title = "Сообщения", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
+            AdminBlockRow(icon = Icons.Filled.Settings, title = "Разделы", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
+            AdminBlockRow(icon = Icons.Filled.Settings, title = "Бизнес-инструменты", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
         }
     }
 }
@@ -295,6 +335,11 @@ fun AdminSettingsScreen(
     var origDescription by remember { mutableStateOf("") }
     var origWebsite by remember { mutableStateOf("") }
     var origScreenName by remember { mutableStateOf("") }
+    // W38 (C7): обложка сообщества — поток как EditProfileScreen.changeCover
+    // (v2-форма: upload_v2 → multipart "file" → saveOwnerCoverPhoto response_json),
+    // но с group_id. Удаление — photos.removeOwnerCoverPhoto(group_id).
+    var coverUrl by remember { mutableStateOf<String?>(null) }
+    var coverBusy by remember { mutableStateOf(false) }
 
     fun load() {
         scope.launch {
@@ -312,6 +357,7 @@ fun AdminSettingsScreen(
                     description = g.description ?: ""; origDescription = g.description ?: ""
                     website = g.site ?: ""; origWebsite = g.site ?: ""
                     screenName = g.screenName ?: ""; origScreenName = g.screenName ?: ""
+                    coverUrl = g.coverUrl
                 }
             } catch (e: Exception) {
                 AppLog.e("AdminSettings", "load failed", e)
@@ -320,6 +366,80 @@ fun AdminSettingsScreen(
                 loading = false
             }
         }
+    }
+
+    /** W38 (C7): загрузка обложки из галереи (v2-форма веба, group_id). */
+    fun changeCover(uri: Uri) {
+        if (coverBusy) return
+        coverBusy = true
+        scope.launch {
+            try {
+                val uploadUrl = app.apiClient.photosGetOwnerCoverPhotoUploadServer(
+                    groupId = groupId,
+                    uploadV2 = true,
+                )
+                if (uploadUrl.isNullOrBlank()) {
+                    Toast.makeText(context, "Не удалось получить адрес загрузки обложки", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val raw = uploadGroupCoverMultipart(context, uploadUrl, uri)
+                if (raw == null) {
+                    Toast.makeText(context, "Не удалось загрузить обложку", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val ok = app.apiClient.photosSaveOwnerCoverPhoto(
+                    responseJson = raw,
+                    groupId = groupId,
+                    uploadV2 = true,
+                )
+                if (ok) {
+                    Toast.makeText(context, "Обложка обновлена", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось сохранить обложку",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminSettings", "changeCover failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                coverBusy = false
+            }
+        }
+    }
+
+    /** W38 (C7): удалить обложку (photos.removeOwnerCoverPhoto, group_id). */
+    fun removeGroupCover() {
+        if (coverBusy) return
+        coverBusy = true
+        scope.launch {
+            try {
+                val ok = app.apiClient.photosRemoveOwnerCoverPhoto(groupId = groupId)
+                if (ok) {
+                    Toast.makeText(context, "Обложка удалена", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось удалить обложку",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminSettings", "removeGroupCover failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                coverBusy = false
+            }
+        }
+    }
+
+    // W38 (C7): пикер галереи (GetContent("image/*") — паттерн EditProfileScreen П-3).
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) changeCover(uri)
     }
 
     LaunchedEffect(groupId) { load() }
@@ -402,6 +522,52 @@ fun AdminSettingsScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
+
+                        // W38 (C7): обложка сообщества.
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Обложка",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val currentCover = coverUrl
+                        if (currentCover != null) {
+                            AsyncImage(
+                                model = currentCover,
+                                contentDescription = "Обложка сообщества",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(120.dp)
+                                    .clip(RoundedCornerShape(10.dp)),
+                            )
+                        } else {
+                            Text(
+                                text = "Обложка не установлена",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row {
+                            Button(
+                                onClick = { coverPicker.launch("image/*") },
+                                enabled = !coverBusy,
+                            ) {
+                                if (coverBusy) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("Загрузить из галереи")
+                                }
+                            }
+                            if (currentCover != null) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                TextButton(onClick = { removeGroupCover() }, enabled = !coverBusy) {
+                                    Text("Удалить")
+                                }
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(
@@ -1219,6 +1385,808 @@ fun AdminLinksScreen(groupId: Long, onBack: () -> Unit) {
                         else { Toast.makeText(context, app.apiClient.lastApiError ?: "Не удалось сохранить", Toast.LENGTH_LONG).show() }
                     }
                 }, enabled = !busy) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { editTarget = null }, enabled = !busy) { Text("Отмена") } },
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W38 (C7): multipart-загрузка обложки сообщества.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * W38 (C7): multipart-загрузка файла обложки на upload_url. Cover-сервер
+ * принимает файл в поле "file", транспорт отдельный от photosUploadWallPhoto
+ * (поле "photo"). Копия приватного uploadCoverMultipart из EditProfileScreen
+ * (там не экспортируется) — VKA не трогаем. Возвращает СЫРОЙ JSON-ответ
+ * сервера (идёт в response_json v2-формы photos.saveOwnerCoverPhoto) или null.
+ */
+private suspend fun uploadGroupCoverMultipart(
+    context: Context,
+    uploadUrl: String,
+    uri: Uri,
+): String? {
+    return withContext(Dispatchers.IO) {
+        try {
+            val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return@withContext null
+            val requestBody = bytes.toRequestBody(mime.toMediaType())
+            val multipart = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", "cover.jpg", requestBody)
+                .build()
+            val request = Request.Builder().url(uploadUrl).post(multipart).build()
+            // Свежий OkHttpClient: upload-серверу (pu.vk.com) авторизация не нужна.
+            OkHttpClient().newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    AppLog.e("AdminSettings", "cover upload HTTP ${resp.code}")
+                    return@use null
+                }
+                val body = resp.body?.string().orEmpty()
+                if (body.isBlank()) {
+                    AppLog.e("AdminSettings", "cover upload: empty body")
+                    return@use null
+                }
+                body
+            }
+        } catch (e: Exception) {
+            AppLog.e("AdminSettings", "cover upload failed", e)
+            null
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W38 (C2): экран «Приглашения» — пригласить друзей / приглашённые.
+// ═══════════════════════════════════════════════════════════════════════════
+
+private const val INVITES_TAB_FRIENDS = 0
+private const val INVITES_TAB_INVITED = 1
+
+/**
+ * W38 (C2, план §4): приглашения в сообщество.
+ *  - Вкладка «Пригласить»: friends.get (order=hints, 200) + groups.invite;
+ *  - Вкладка «Приглашённые»: groups.getInvitedUsers + groups.recallInvitation.
+ * ЧЕСТНО: пригласить можно только друга (офиц. API); чужим — API-ошибка
+ * честным тостом.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminInvitesScreen(
+    groupId: Long,
+    onBack: () -> Unit,
+    onUserClick: (Long) -> Unit = {},
+) {
+    val app = SovaApp.get()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val selectedTab = remember { mutableIntStateOf(INVITES_TAB_FRIENDS) }
+    var friends by remember { mutableStateOf<List<Friend>>(emptyList()) }
+    var friendsLoading by remember { mutableStateOf(false) }
+    var friendsError by remember { mutableStateOf<String?>(null) }
+    var invited by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
+    var invitedLoading by remember { mutableStateOf(false) }
+    var invitedError by remember { mutableStateOf<String?>(null) }
+    var busyUserId by remember { mutableStateOf<Long?>(null) }
+    // Локальный стейт «уже приглашено» (после успешного groups.invite).
+    var invitedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var filter by remember { mutableStateOf("") }
+
+    fun loadFriends() {
+        scope.launch {
+            friendsLoading = true
+            friendsError = null
+            try {
+                friends = app.apiClient.friendsGet(count = 200)
+            } catch (e: Exception) {
+                AppLog.e("AdminInvites", "loadFriends failed", e)
+                friendsError = e.message ?: "Ошибка загрузки"
+            } finally {
+                friendsLoading = false
+            }
+        }
+    }
+
+    fun loadInvited() {
+        scope.launch {
+            invitedLoading = true
+            invitedError = null
+            try {
+                invited = app.apiClient.groupsGetInvitedUsers(groupId)
+            } catch (e: Exception) {
+                AppLog.e("AdminInvites", "loadInvited failed", e)
+                invitedError = e.message ?: "Ошибка загрузки"
+            } finally {
+                invitedLoading = false
+            }
+        }
+    }
+
+    /** W38 (C2): groups.invite — пригласить друга. */
+    fun invite(user: Friend) {
+        scope.launch {
+            busyUserId = user.id
+            try {
+                val ok = app.apiClient.groupsInvite(groupId, user.id)
+                if (ok) {
+                    Toast.makeText(context, "Приглашение отправлено", Toast.LENGTH_SHORT).show()
+                    invitedIds = invitedIds + user.id
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось пригласить" else "Ошибка: $err",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminInvites", "invite failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busyUserId = null
+            }
+        }
+    }
+
+    /** W38 (C2): groups.recallInvitation — отозвать приглашение. */
+    fun recall(user: UserProfile) {
+        scope.launch {
+            busyUserId = user.id
+            try {
+                val ok = app.apiClient.groupsRecallInvitation(groupId, user.id)
+                if (ok) {
+                    Toast.makeText(context, "Приглашение отозвано", Toast.LENGTH_SHORT).show()
+                    invited = invited.filterNot { it.id == user.id }
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось отозвать" else "Ошибка: $err",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminInvites", "recall failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busyUserId = null
+            }
+        }
+    }
+
+    LaunchedEffect(selectedTab.intValue) {
+        when (selectedTab.intValue) {
+            INVITES_TAB_FRIENDS -> if (friends.isEmpty() && friendsError == null) loadFriends()
+            INVITES_TAB_INVITED -> if (invited.isEmpty() && invitedError == null) loadInvited()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Приглашения") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+            )
+        },
+    ) { pad ->
+        Column(modifier = Modifier.fillMaxSize().padding(pad)) {
+            TabRow(selectedTabIndex = selectedTab.intValue) {
+                Tab(
+                    selected = selectedTab.intValue == INVITES_TAB_FRIENDS,
+                    onClick = { selectedTab.intValue = INVITES_TAB_FRIENDS },
+                    text = { Text("Пригласить") },
+                )
+                Tab(
+                    selected = selectedTab.intValue == INVITES_TAB_INVITED,
+                    onClick = { selectedTab.intValue = INVITES_TAB_INVITED },
+                    text = { Text("Приглашённые") },
+                )
+            }
+
+            when (selectedTab.intValue) {
+                INVITES_TAB_FRIENDS -> {
+                    when {
+                        friendsLoading -> Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) { CircularProgressIndicator() }
+
+                        friendsError != null -> ErrorView(
+                            message = friendsError,
+                            onRetry = { loadFriends() },
+                        )
+
+                        else -> {
+                            val filteredFriends = friends.filter { friend ->
+                                filter.isBlank() ||
+                                    friend.fullName.lowercase().contains(filter.trim().lowercase())
+                            }
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                item(key = "filter") {
+                                    OutlinedTextField(
+                                        value = filter,
+                                        onValueChange = { filter = it },
+                                        singleLine = true,
+                                        placeholder = { Text("Фильтр по имени") },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                                    )
+                                }
+                                if (filteredFriends.isEmpty()) {
+                                    item(key = "empty_friends") {
+                                        Text(
+                                            text = "Подходящих друзей нет",
+                                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                } else {
+                                    items(filteredFriends, key = { it.id }) { friend ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { onUserClick(friend.id) }
+                                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            AsyncImage(
+                                                model = friend.photo100,
+                                                contentDescription = null,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .size(44.dp)
+                                                    .clip(CircleShape),
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = friend.fullName,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                            if (invitedIds.contains(friend.id)) {
+                                                Text(
+                                                    text = "Приглашено",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                )
+                                            } else {
+                                                TextButton(
+                                                    onClick = { invite(friend) },
+                                                    enabled = busyUserId != friend.id,
+                                                ) {
+                                                    Text("Пригласить")
+                                                }
+                                            }
+                                            if (busyUserId == friend.id) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    strokeWidth = 2.dp,
+                                                )
+                                            }
+                                        }
+                                        HorizontalDivider()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                INVITES_TAB_INVITED -> {
+                    when {
+                        invitedLoading -> Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) { CircularProgressIndicator() }
+
+                        invitedError != null -> ErrorView(
+                            message = invitedError,
+                            onRetry = { loadInvited() },
+                        )
+
+                        invited.isEmpty() -> ErrorView(
+                            message = "Приглашений нет",
+                            onRetry = { loadInvited() },
+                        )
+
+                        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            items(invited, key = { it.id }) { user ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onUserClick(user.id) }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    AsyncImage(
+                                        model = user.photo100,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(CircleShape),
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = user.fullName,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { recall(user) },
+                                        enabled = busyUserId != user.id,
+                                    ) {
+                                        Text("Отозвать")
+                                    }
+                                    if (busyUserId == user.id) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W38 (C5): экран «Отложенные и предложения» — wall.get filter=postponed/suggests.
+// ═══════════════════════════════════════════════════════════════════════════
+
+private const val QUEUE_TAB_POSTPONED = 0
+private const val QUEUE_TAB_SUGGESTS = 1
+
+/**
+ * W38 (C5, план §4): записи, ожидающие публикации.
+ *  - «Отложенные»: wall.get filter=postponed (дата = дата будущей публикации);
+ *  - «Предложения»: wall.get filter=suggests.
+ * Действие: удаление (wall.delete — офиц. API). ЧЕСТНО: опубликовать
+ * предложение / изменить дату отложенной официальным API НЕЛЬЗЯ — не делаем.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminWallQueueScreen(
+    groupId: Long,
+    onBack: () -> Unit,
+) {
+    val app = SovaApp.get()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val selectedTab = remember { mutableIntStateOf(QUEUE_TAB_POSTPONED) }
+    var postponed by remember { mutableStateOf<List<Post>>(emptyList()) }
+    var suggests by remember { mutableStateOf<List<Post>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busyPostId by remember { mutableStateOf<Long?>(null) }
+
+    fun load() {
+        scope.launch {
+            loading = true
+            error = null
+            try {
+                postponed = app.apiClient.wallGetWithFilter(
+                    ownerId = -groupId, filter = "postponed", count = 50,
+                )
+                suggests = app.apiClient.wallGetWithFilter(
+                    ownerId = -groupId, filter = "suggests", count = 50,
+                )
+            } catch (e: Exception) {
+                AppLog.e("AdminWallQueue", "load failed", e)
+                error = e.message ?: "Ошибка загрузки"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    LaunchedEffect(groupId) { load() }
+
+    /** W38 (C5): удалить запись (wall.delete — офиц. API). */
+    fun removePost(post: Post, tab: Int) {
+        scope.launch {
+            busyPostId = post.id
+            try {
+                val ok = app.apiClient.wallDelete(ownerId = -groupId, postId = post.id)
+                if (ok) {
+                    Toast.makeText(context, "Запись удалена", Toast.LENGTH_SHORT).show()
+                    if (tab == QUEUE_TAB_POSTPONED) {
+                        postponed = postponed.filterNot { it.id == post.id }
+                    } else {
+                        suggests = suggests.filterNot { it.id == post.id }
+                    }
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось удалить" else "Ошибка: $err",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminWallQueue", "removePost failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busyPostId = null
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Отложенные и предложения") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+            )
+        },
+    ) { pad ->
+        when {
+            loading -> Box(
+                modifier = Modifier.fillMaxSize().padding(pad),
+                contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator() }
+
+            error != null -> ErrorView(
+                message = error,
+                onRetry = { load() },
+                modifier = Modifier.padding(pad),
+            )
+
+            else -> {
+                val fmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+                Column(modifier = Modifier.fillMaxSize().padding(pad)) {
+                    TabRow(selectedTabIndex = selectedTab.intValue) {
+                        Tab(
+                            selected = selectedTab.intValue == QUEUE_TAB_POSTPONED,
+                            onClick = { selectedTab.intValue = QUEUE_TAB_POSTPONED },
+                            text = { Text("Отложенные (${postponed.size})") },
+                        )
+                        Tab(
+                            selected = selectedTab.intValue == QUEUE_TAB_SUGGESTS,
+                            onClick = { selectedTab.intValue = QUEUE_TAB_SUGGESTS },
+                            text = { Text("Предложения (${suggests.size})") },
+                        )
+                    }
+
+                    val current = if (selectedTab.intValue == QUEUE_TAB_POSTPONED) postponed else suggests
+                    if (current.isEmpty()) {
+                        ErrorView(
+                            message = if (selectedTab.intValue == QUEUE_TAB_POSTPONED) {
+                                "Отложенных записей нет"
+                            } else {
+                                "Предложенных записей нет"
+                            },
+                            onRetry = { load() },
+                        )
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            items(current, key = { it.id }) { post ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = fmt.format(Date(post.date * 1000L)),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        Text(
+                                            text = post.text.ifBlank { "Без текста" },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { removePost(post, selectedTab.intValue) },
+                                        enabled = busyPostId != post.id,
+                                    ) {
+                                        Text("Удалить")
+                                    }
+                                    if (busyPostId == post.id) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W38 (C4): экран «Адреса» — groups.getAddresses/addAddress/editAddress/deleteAddress.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** W38 (C4): человекочитаемая метка work_info_status (доки VK API). */
+private fun addressStatusLabel(status: String?): String = when (status) {
+    "always_open" -> "Открыто всегда"
+    "temporarily_closed" -> "Временно закрыто"
+    "timetable" -> "По расписанию"
+    else -> "Нет информации"
+}
+
+/**
+ * W38 (C4, план §4): адреса сообщества — список/добавление/правка/удаление.
+ * Офиц. API (5.85+). Расписание (timetable JSON) сознательно не редактируется
+ * — честная строка статуса; полный редактор расписания — следующая волна.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminAddressesScreen(
+    groupId: Long,
+    onBack: () -> Unit,
+) {
+    val app = SovaApp.get()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var addresses by remember { mutableStateOf<List<VKApiClient.GroupAddress>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    // Диалог добавления.
+    var showAdd by remember { mutableStateOf(false) }
+    var addTitle by remember { mutableStateOf("") }
+    var addAddress by remember { mutableStateOf("") }
+    var addPhone by remember { mutableStateOf("") }
+    // Диалог правки.
+    var editTarget by remember { mutableStateOf<VKApiClient.GroupAddress?>(null) }
+    var editTitle by remember { mutableStateOf("") }
+    var editAddress by remember { mutableStateOf("") }
+    var editPhone by remember { mutableStateOf("") }
+
+    fun load() {
+        scope.launch {
+            loading = true
+            error = null
+            try {
+                addresses = app.apiClient.groupsGetAddresses(groupId)
+            } catch (e: Exception) {
+                AppLog.e("AdminAddresses", "load failed", e)
+                error = e.message ?: "Ошибка загрузки"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    LaunchedEffect(groupId) { load() }
+
+    fun submitAdd() {
+        if (addTitle.isBlank() || addAddress.isBlank()) return
+        scope.launch {
+            busy = true
+            try {
+                val ok = app.apiClient.groupsAddAddress(
+                    groupId = groupId,
+                    title = addTitle.trim(),
+                    address = addAddress.trim(),
+                    phone = addPhone.trim().takeIf { it.isNotBlank() },
+                )
+                if (ok) {
+                    showAdd = false
+                    Toast.makeText(context, "Адрес добавлен", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось добавить адрес",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminAddresses", "submitAdd failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun submitEdit() {
+        val target = editTarget ?: return
+        if (editTitle.isBlank() || editAddress.isBlank()) return
+        scope.launch {
+            busy = true
+            try {
+                val ok = app.apiClient.groupsEditAddress(
+                    groupId = groupId,
+                    addressId = target.id,
+                    title = editTitle.trim(),
+                    address = editAddress.trim(),
+                    phone = editPhone.trim().takeIf { it.isNotBlank() },
+                )
+                if (ok) {
+                    editTarget = null
+                    Toast.makeText(context, "Сохранено", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось сохранить",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminAddresses", "submitEdit failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun remove(target: VKApiClient.GroupAddress) {
+        scope.launch {
+            busy = true
+            try {
+                val ok = app.apiClient.groupsDeleteAddress(groupId, target.id)
+                if (ok) {
+                    Toast.makeText(context, "Адрес удалён", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    Toast.makeText(
+                        context,
+                        app.apiClient.lastApiError ?: "Не удалось удалить адрес",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminAddresses", "remove failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Адреса") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { addTitle = ""; addAddress = ""; addPhone = ""; showAdd = true }, enabled = !busy) {
+                        Text("Добавить")
+                    }
+                },
+            )
+        },
+    ) { pad ->
+        when {
+            loading -> Box(
+                modifier = Modifier.fillMaxSize().padding(pad),
+                contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator() }
+
+            error != null -> ErrorView(
+                message = error,
+                onRetry = { load() },
+                modifier = Modifier.padding(pad),
+            )
+
+            addresses.isEmpty() -> Box(
+                modifier = Modifier.fillMaxSize().padding(pad),
+                contentAlignment = Alignment.Center,
+            ) { Text("Адресов пока нет") }
+
+            else -> LazyColumn(modifier = Modifier.fillMaxSize().padding(pad)) {
+                items(addresses, key = { it.id }) { addr ->
+                    Card(Modifier.fillMaxWidth().padding(16.dp, 6.dp), RoundedCornerShape(12.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                if (addr.title.isNotBlank()) {
+                                    Text(addr.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                                }
+                                if (addr.address.isNotBlank()) {
+                                    Text(addr.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(
+                                    text = addressStatusLabel(addr.workInfoStatus) +
+                                        (addr.phone?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    editTarget = addr
+                                    editTitle = addr.title
+                                    editAddress = addr.address
+                                    editPhone = addr.phone ?: ""
+                                },
+                                enabled = !busy,
+                            ) { Text("Изменить") }
+                            TextButton(onClick = { remove(addr) }, enabled = !busy) { Text("Удалить") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAdd) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) showAdd = false },
+            title = { Text("Новый адрес") },
+            text = {
+                Column {
+                    OutlinedTextField(addTitle, { addTitle = it }, label = { Text("Название (например, «Главный офис»)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(addAddress, { addAddress = it }, label = { Text("Адрес") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(addPhone, { addPhone = it }, label = { Text("Телефон (необязательно)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { submitAdd() },
+                    enabled = !busy && addTitle.isNotBlank() && addAddress.isNotBlank(),
+                ) { Text("Добавить") }
+            },
+            dismissButton = { TextButton(onClick = { showAdd = false }, enabled = !busy) { Text("Отмена") } },
+        )
+    }
+
+    val editing = editTarget
+    if (editing != null) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) editTarget = null },
+            title = { Text("Изменить адрес") },
+            text = {
+                Column {
+                    OutlinedTextField(editTitle, { editTitle = it }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(editAddress, { editAddress = it }, label = { Text("Адрес") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(editPhone, { editPhone = it }, label = { Text("Телефон") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { submitEdit() },
+                    enabled = !busy && editTitle.isNotBlank() && editAddress.isNotBlank(),
+                ) { Text("Сохранить") }
             },
             dismissButton = { TextButton(onClick = { editTarget = null }, enabled = !busy) { Text("Отмена") } },
         )

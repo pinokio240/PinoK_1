@@ -194,6 +194,24 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun buildRoute(groupId: Long): String = "admin_links/$groupId"
     }
 
+    /** W38 (C2): приглашения — friends.get + groups.invite/getInvitedUsers/recallInvitation. */
+    object AdminInvites : Screen("admin_invites/{groupId}", "Приглашения", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_invites/$groupId"
+    }
+
+    /** W38 (C5): отложенные/предложения — wall.get filter=postponed/suggests + wall.delete. */
+    object AdminWallQueue : Screen("admin_wall_queue/{groupId}", "Отложенные и предложения", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_wall_queue/$groupId"
+    }
+
+    /** W38 (C4): адреса — groups.getAddresses/addAddress/editAddress/deleteAddress. */
+    object AdminAddresses : Screen("admin_addresses/{groupId}", "Адреса", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_addresses/$groupId"
+    }
+
     /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query

@@ -105,7 +105,10 @@ import re.pinok.ui.screens.community.GroupMembersScreen
 import re.pinok.ui.screens.community.AdminPeopleScreen
 import re.pinok.ui.screens.community.AdminSettingsScreen
 import re.pinok.ui.screens.community.AdminStatsScreen
+import re.pinok.ui.screens.community.AdminAddressesScreen
+import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
+import re.pinok.ui.screens.community.AdminWallQueueScreen
 import re.pinok.ui.screens.documents.DocumentsScreen
 // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты).
 import re.pinok.ui.screens.feed.FeedHiddenSourcesScreen
@@ -950,6 +953,9 @@ listOf(
         Screen.AdminStats.route,
         Screen.AdminPeople.route,
         Screen.AdminLinks.route,
+        Screen.AdminInvites.route,
+        Screen.AdminWallQueue.route,
+        Screen.AdminAddresses.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -2318,6 +2324,15 @@ composable(Screen.CallsHistory.route) {
                         onAdminLinksClick = { adminGroupId ->
                             nav.navigate(Screen.AdminLinks.buildRoute(adminGroupId))
                         },
+                        onAdminInvitesClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminInvites.buildRoute(adminGroupId))
+                        },
+                        onAdminQueueClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminWallQueue.buildRoute(adminGroupId))
+                        },
+                        onAdminAddressesClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminAddresses.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2374,6 +2389,48 @@ composable(Screen.CallsHistory.route) {
                     val linksGroupId = entry.arguments?.getLong(Screen.AdminLinks.ARG_GROUP_ID) ?: 0L
                     AdminLinksScreen(
                         groupId = linksGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W38 (C2): «Приглашения» — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminInvites.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminInvites.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val invitesGroupId = entry.arguments?.getLong(Screen.AdminInvites.ARG_GROUP_ID) ?: 0L
+                    AdminInvitesScreen(
+                        groupId = invitesGroupId,
+                        onBack = { nav.popBackStack() },
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
+                    )
+                }
+                // W38 (C5): «Отложенные и предложения» — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminWallQueue.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminWallQueue.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val queueGroupId = entry.arguments?.getLong(Screen.AdminWallQueue.ARG_GROUP_ID) ?: 0L
+                    AdminWallQueueScreen(
+                        groupId = queueGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W38 (C4): «Адреса» — вход из блока «Управление».
+                composable(
+                    route = Screen.AdminAddresses.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminAddresses.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val addressesGroupId = entry.arguments?.getLong(Screen.AdminAddresses.ARG_GROUP_ID) ?: 0L
+                    AdminAddressesScreen(
+                        groupId = addressesGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
