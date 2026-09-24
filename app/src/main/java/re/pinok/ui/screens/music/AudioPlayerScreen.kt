@@ -685,7 +685,7 @@ fun AudioPlayerScreen(
                     )
                 }
                 DropdownMenu(expanded = showSpeedMenu, onDismissRequest = { showSpeedMenu = false }) {
-                    listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f).forEach { spd ->
+                    listOf(0.25f, 0.5f, 0.65f, 0.85f, 1.0f, 1.15f, 1.2f, 1.25f, 1.5f, 2.0f).forEach { spd ->
                         DropdownMenuItem(
                             text = { Text("${"%.2f".format(spd)}x") },
                             onClick = {
