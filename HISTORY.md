@@ -12895,3 +12895,27 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
    тот же класс бага, что Fix #100/#110/#189. Фикс: `callsEchoCancel = true`
    в initial-Snapshot (default как в SovaPrefs; реальное значение придёт
    из collectAsState).
+## #AUTH-BLACKSCREEN-READER-FIX (2026-09-24): «вход выполнен», но чёрный экран со спиннером
+
+Симптом (logcat redmi, V2 auth): VK ID пишет «вход выполнен», WebView уходит на m.vk.ru/feed,
+куки снимаются (remixsid=88, p=true), но дальше — бесконечный polling «token not yet in
+localStorage», reload каждые ~20 c, WEB-MECHANISM refresh failed (definitivelyDead=false),
+Path 1.5 CONTRACT failure, экран авторизации висит чёрным.
+
+**Корень — один убитый символ** в `WebTokenAuth.readRawWebTokenJson`: JS-ридер web_token
+собирается конкатенацией В ОДНУ строку, и внутри него стоял Kotlin-литерал
+`"    // Мульти-аккаунт: массив токенов — …"` — `//`-комментарий на одной строке
+съедает ВЕСЬ остаток скрипта. Каждый evaluateJavascript падал
+`Uncaught SyntaxError: Unexpected end of input` (видно в logcat, chromium CONSOLE),
+ридер всегда возвращал null.
+
+Замкнутый круг: токен В localStorage (`7879029:web_token:login:auth` — кладёт m.vk.ru SPA),
+но reader слепой; на attempt=2 приложение «для профилактики» удаляло ключи
+(clearAllWebTokenKeys реально находил и удалял `7879029:web_token:login:auth`!), reload,
+VK кладёт свежий — PinoK снова слепой/удаляет → вечный цикл → чёрный экран. Тем же
+ридером пользуется HiddenSessionRefresher → «refresh failed — re-login required» и
+фоновой refresh тоже не работал.
+
+Фикс: комментарий убран из однострочного JS (перенесён в Kotlin-комментарий с
+предупреждением). Reader проверен в node: single-token / multi-account (is_active) /
+empty / garbage — все ветки корректны.

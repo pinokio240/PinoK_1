@@ -1028,7 +1028,13 @@ object WebTokenAuth {
                     "  var v=localStorage.getItem(matches[i]);" +
                     "  if(!v)continue;" +
                     "  try{var parsed=JSON.parse(v);" +
-                    "    // Мульти-аккаунт: массив токенов — берём is_active=true или первый." +
+                    // FIX BLACKSCREEN 2026-09-24: НЕ вставлять в этот ОДНОСТРОЧНЫЙ JS
+                    // "//" комментарии! Весь скрипт собирается в одну строку — "//"
+                    // съедает остаток скрипта до конца строки → "Unexpected end of
+                    // input" при КАЖДОМ evaluateJavascript → токен в localStorage
+                    // никогда не читается (ключ 7879029:web_token:login:auth лежит,
+                    // reader слепой), polling/clear/reload крутится вечно, WebView
+                    // показывает чёрный экран со спиннером после «вход выполнен».
                     "    if(Array.isArray(parsed)){" +
                     "      var active=parsed.find(function(e){return e&&e.is_active===true})||parsed[0];" +
                     "      if(active&&active.access_token){active.__app_id_key=matches[i];result=JSON.stringify(active);break;}" +

@@ -10372,3 +10372,18 @@ Work Log:
 
 Stage Summary:
 - Создан «админка.сообществ.снапшоты.разбор.md» (архитектура админки, контракты, находки, план порта, чего не хватает: тела POST/ответов нужны через HAR, чанк owners.getMenu не попал в трассу).
+
+---
+Task ID: S6-auth-blackscreen-fix
+Agent: Z.ai Code (main)
+Task: Диагноз «чёрный экран после „вход выполнен“» (скриншот + logcat redmi (1).txt).
+
+Work Log:
+- Logcat: polling tryReadWebToken ~1с → всегда null; chromium CONSOLE «Uncaught SyntaxError: Unexpected end of input» синхронно с каждым опросом; clearAllWebTokenKeys реально удалял ключ 7879029:web_token:login:auth (токен ЛЕЖАЛ в localStorage).
+- Корень: WebTokenAuth.readRawWebTokenJson — однострочная JS-конкатенация с "//" комментарием внутри → комментарий съедает весь скрипт → SyntaxError на каждом evaluateJavascript.
+- Воспроизведено на точной строке через node --check (SyntaxError: Missing catch or finally after try / Unexpected end of input).
+- Фикс: комментарий удалён из JS; после фикса node --check OK + функциональный тест (single/multi/empty/garbage) OK.
+- Затронуты оба контура: видимый auth WebView и HiddenSessionRefresher (тот же ридер) — фиксом закрывается и вечный «refresh failed — re-login required».
+
+Stage Summary:
+- Чёрный экран = слепой ридер web_token. Фикс в WebTokenAuth.kt, коммит и push следом.
