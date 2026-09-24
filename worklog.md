@@ -10402,3 +10402,17 @@ Work Log:
 
 Stage Summary:
 - Чёрный экран №2 = системный renderer fail (WebView 151/HyperOS). Приложение теперь: авто-recreate, честный оверлей с инструкцией, flow без вечных зависаний. Коммит + push следом.
+
+---
+Task ID: S8-auth-toast-status
+Agent: Z.ai Code (main)
+Task: Лог dAw67RHmHxm — Toast-статусы авторизации, убрать чёрный экран, разбор цепочек.
+
+Work Log:
+- Цепочки: error 5 каскад (5 методов) → ensureFreshToken → WEB-MECHANISM → renderer мёртв → FAILED; параллельно silent: remixsid найден (куки живы) → fullAuthFlow → JS не отвечает → «Токен не появился за 25 сек» → CONTRACT failure → LANDING (чёрный экран).
+- Контракты при упрощении авторизации НЕ сломаны; сломана живучесть (единая точка отказа = системный WebView после удаления fallback-контуров).
+- Найдена дыра: SAFETY-NET выходил по isExchanging — при живых куках «remixsid найден» приходил мгновенно и эскалация никогда не срабатывала.
+- Фиксы: authToast() в silent (4 статуса), isExchanging выпишен из условия выхода SAFETY-NET, silent fail → Toast+close (Main юзабелен) вместо LANDING, hideWebView при silentMode.
+
+Stage Summary:
+- Silent-авторизация теперь полностью фоновая с Toast-статусами; при мёртвом renderer юзер остаётся в Main (боковая панель/навигация работают). Коммит a6257e7..HEAD, push следом.

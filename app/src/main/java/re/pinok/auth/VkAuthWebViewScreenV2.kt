@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
@@ -174,6 +175,20 @@ fun VkAuthWebViewScreenV2(
     var rendererFailed by remember { mutableStateOf(false) }
     var isExchanging by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // #AUTH-TOAST-STATUS (2026-09-24): в silent-режиме экран невидим (stealth,
+    // Fix #384) — статус авторизации показываем Toast'ом поверх MainActivity:
+    // боковая панель и навигация остаются видимыми и кликабельными.
+    fun authToast(text: String, long: Boolean = false) {
+        if (!silentMode) return
+        try {
+            android.widget.Toast.makeText(
+                context, text,
+                if (long) android.widget.Toast.LENGTH_LONG else android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        } catch (_: Exception) {}
+    }
 
     // Флаг причины закрытия — для точного лога в onDispose.
     var userClosing by remember { mutableStateOf(false) }
@@ -216,6 +231,7 @@ fun VkAuthWebViewScreenV2(
     // вводит 2FA код или QR-подтверждение, нет смысла будить CPU каждую секунду).
     // Уменьшает wakeup на Android Doze когда экран долго включён.
     DisposableEffect(Unit) {
+        if (silentMode) authToast("Авторизация: проверяем сессию…")
         val pollJob = coroutineScope.launch(Dispatchers.Default) {
             val startTime = System.currentTimeMillis()
             val timeoutMs = if (silentMode) 30_000L else 300_000L
@@ -240,6 +256,7 @@ fun VkAuthWebViewScreenV2(
                         withContext(Dispatchers.Main) {
                             isExchanging = true
                             statusText = "Сессия найдена, получаем токен…"
+                            authToast("Сессия найдена, получаем токен…")
                             onTokenExchange(remixsid, cookies, wv)
                             // Fix #377 #DOZE-COOKIE-FLUSH: после успешного обмена
                             // сбрасываем CookieManager на диск. Раньше flush был
@@ -299,8 +316,13 @@ fun VkAuthWebViewScreenV2(
             val steps = listOf("reload", "reload", "recreate", "recreate", "fail")
             for ((idx, step) in steps.withIndex()) {
                 kotlinx.coroutines.delay(6_000L)  // 6 сек — больше чем нормальный onPageStarted (~500мс-2с)
-                // Страница начала грузиться или идёт обмен/успех — WebView не трогаем.
-                if (pageStartedReceived || isExchanging || authSucceeded) return@launch
+                // #BLACKSCREEN-RENDERER: isExchanging ВЫПИСАН из условия выхода.
+                // На устройстве юзера remixsid лежит в куках → isExchanging=true
+                // приходил мгновенно и SAFETY-NET никогда не эскалировал, хотя
+                // renderer мёртв (JS не отвечает, onPageStarted не приходит).
+                // Обмен без работающего renderer невозможен — эскалация нужна
+                // ИМЕННО в этом состоянии. Выходим только по живой странице.
+                if (pageStartedReceived || authSucceeded) return@launch
                 when (step) {
                     "reload" -> {
                         AppLog.w(TAG, "#WEBVIEW-SAFETY-NET [${idx + 1}/${steps.size}]: onPageStarted не сработал за 6 сек — reload $startUrl")
@@ -318,6 +340,7 @@ fun VkAuthWebViewScreenV2(
                     "recreate" -> {
                         AppLog.w(TAG, "#WEBVIEW-SAFETY-NET [${idx + 1}/${steps.size}]: reload не помог — пересоздаём WebView (renderer не поднялся?)")
                         statusText = "WebView не отвечает, перезапускаем…"
+                        authToast("WebView не отвечает, перезапускаем авторизацию…")
                         // Сброс page-state — иначе новый инстанс унаследует «живой» флаг
                         // и safety-net ложно решит, что всё ок.
                         pageStartedReceived = false
@@ -326,7 +349,19 @@ fun VkAuthWebViewScreenV2(
                     }
                     "fail" -> {
                         AppLog.e(TAG, "#WEBVIEW-SAFETY-NET: renderer WebView не поднялся после reload/recreate — показываем диагностику вместо чёрного экрана")
-                        rendererFailed = true
+                        if (silentMode) {
+                            // #AUTH-TOAST-STATUS: в silent чёрного экрана нет и быть не
+                            // должно — закрываем невидимый экран, Main остаётся юзабельным.
+                            authToast(
+                                "WebView не работает: перезагрузите телефон или обновите " +
+                                    "«Android System WebView» (Play Маркет), затем повторите вход",
+                                long = true,
+                            )
+                            userClosing = true
+                            handleClose()
+                        } else {
+                            rendererFailed = true
+                        }
                     }
                 }
             }
@@ -359,7 +394,7 @@ fun VkAuthWebViewScreenV2(
     }
 
     val errorMessage = null  // Error overlay убран — кнопки Отмена/Офлайн достаточно.
-    val hideWebView = isExchanging
+    val hideWebView = isExchanging || silentMode
 
     Box(modifier = modifier.fillMaxSize().systemBarsPadding()) {
         // #BLACKSCREEN-RENDERER: key(webViewEpoch) — инкремент epoch полностью

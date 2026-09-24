@@ -567,6 +567,7 @@ private fun AuthScreen(
     onLaunchExternalBrowser: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
 
     // Fix #190: показываем поле «Вставьте ссылку» после запуска внешнего
     // браузера. Пользователь копирует URL из адресной строки браузера
@@ -626,13 +627,23 @@ private fun AuthScreen(
                 if (phase == AuthPhase.TWO_FA) phase = AuthPhase.LANDING
             }
             is AuthState.Error -> {
-                // Fix #107: silent re-login не удался (remixsid тоже устарел,
-                // либо m.vk.ru не отдал свежий токен). Показываем LANDING —
-                // пользователь введёт логин/пароль вручную.
+                // Fix #107 → #AUTH-TOAST-STATUS (2026-09-24): silent re-login не удался
+                // (remixsid устарел, либо renderer WebView мёртв — см. #BLACKSCREEN-RENDERER).
+                // Раньше: fallback to LANDING — при мёртвом renderer это вечный чёрный
+                // экран (WebView видимый, страницы нет). Теперь: Toast со статусом +
+                // закрытие невидимой AuthActivity — юзер остаётся в Main с боковой
+                // панелью/навигацией (guest-режим), вход вручную — из меню.
                 if (silentMode && phase == AuthPhase.WEBVIEW) {
                     val errKind = (state as AuthState.Error).kind
-                    AppLog.w("AuthActivity", "Silent re-login failed ($errKind) — fallback to LANDING for manual login")
-                    phase = AuthPhase.LANDING
+                    AppLog.w("AuthActivity", "Silent re-login failed ($errKind) — Toast + close (Main остаётся юзабельным)")
+                    try {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Не удалось обновить авторизацию ($errKind) — войдите вручную из бокового меню",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                    } catch (_: Exception) {}
+                    onCancel()
                 }
             }
             is AuthState.OfflineWithCache -> {

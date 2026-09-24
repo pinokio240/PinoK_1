@@ -12948,3 +12948,28 @@ Step 0 (tryReadSilentTokenFromWindowInit — единственная suspend-т
 
 Корень системный: WebView 151.0.7922.202 (HyperOS) не биндит sandbox-процесс.
 Приложение теперь это переживает: перезапуски + честный экран вместо чёрного.
+## #AUTH-TOAST-STATUS (2026-09-24): Toast-статусы silent-авторизации вместо чёрного экрана
+
+Разбор цепочек в логкате 17:05 (после a6257e7): сессия ЖИВА (remixsid=88,
+remixnsid/httoken/p на месте), все API падают error 5 каскадом (setOnline,
+getConversations, getCounters, getSecurityAlerts, getRedesign) — только потому,
+что access_token протух и единственный контур обновления (WEB-MECHANISM) не
+может отработать: renderer WebView системно не поднимается. Контракты запросов
+при «упрощении авторизации» (#SESSION-WEB-MECHANISM) НЕ ломались — сломалась
+живучесть: fallback-контуры (Path 1.5/2.5/5, CookieRefreshWorker) удалены,
+осталась одна точка отказа — системный WebView.
+
+Дыра эскалации: SAFETY-NET выходил при isExchanging=true — а remixsid лежал
+в куках и «найден» приходил мгновенно → recreate никогда не выполнялся, чёрный
+экран оставался. isExchanging выпишен из условия выхода.
+
+Изменения:
+- VkAuthWebViewScreenV2: authToast() — Toast-статусы в silent (проверяем
+  сессию / сессия найдена / перезапуск / инструкция при провале); silent-экран
+  невидим (hideWebView при silentMode) — Main с боковой панелью и навигацией
+  остаётся видимым и юзабельным.
+- SAFETY-NET fail в silent → Toast-инструкция + закрытие невидимого экрана;
+  в non-silent → оверлей диагностики.
+- AuthActivity: silent fail (AuthState.Error) → Toast «Не удалось обновить
+  авторизацию — войдите вручную из бокового меню» + onCancel (finish),
+  ВМЕСТО fallback to LANDING (при мёртвом renderer LANDING = чёрный экран).
