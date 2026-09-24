@@ -132,7 +132,11 @@ class VkCookieJar(
                     }
                     if (c.secure) append("; Secure")
                 }
-                if (runCatching { cm.setCookie(url.toString(), str) }.getOrDefault(false)) mirrored++
+                // Успех = нет исключения: НЕ завязываемся на тип результата
+                // setCookie (Boolean в API 21+ / void в части тулчейнов —
+                // getOrDefault(false) даёт Any и роняет компиляцию). Прецедент
+                // игнорирования результата — CallsWebViewScreen/ExternalBrowserAuth.
+                if (runCatching { cm.setCookie(url.toString(), str) }.isSuccess) mirrored++
             }
 
             // anonym_id → storage (персистентность F-3, patch-семантика как раньше).

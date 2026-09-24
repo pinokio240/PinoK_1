@@ -10343,3 +10343,17 @@ Work Log:
 
 Stage Summary:
 - На GitHub ушли 5 коммитов: 2008f51 (AUTH-2FA-WHITEPAGE docs), 6151234 (СЕССИЯ-ВЕБ-ПОРТ docs), 9d1521d (#SESSION-WEB-MECHANISM), 968fbcb (#SESSION-WEB-EXPORT), 4ee37bb (worklog). Ветка PinoK синхронизирована.
+
+---
+Task ID: S4-compile-hotfix
+Agent: Z.ai Code (main)
+Task: Хотфикс компиляции после #SESSION-WEB-EXPORT (3 ошибки Kotlin у пользователя).
+
+Work Log:
+- CookieJarBackup.kt:115 — `val ok: Boolean = try { cm.setCookie(url, str); true } catch { false }` (результат setCookie непостоянен между тулчейнами → try-catch выводил Any).
+- VkCookieJar.kt:139 — `.getOrDefault(false)` → `.isSuccess` (та же причина).
+- FeedScreen.kt:513 — в initial `SovaPrefs.Snapshot(...)` добавлен `callsEchoCancel = true` (#CALLS-AEC-TOGGLE добавил поле в Snapshot без дефолта, FeedScreen не обновили — pre-existing баг, всплыл на первой сборке после пулла).
+- Проверка: единственное место конструирования Snapshot в app-модуле — FeedScreen:233; других `getOrDefault(false)` на setCookie нет.
+
+Stage Summary:
+- Все три ошибки закрыты; коммит пушится следом за этой записью.

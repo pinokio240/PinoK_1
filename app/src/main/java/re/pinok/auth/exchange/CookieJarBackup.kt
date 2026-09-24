@@ -107,7 +107,12 @@ object CookieJarBackup {
                     if (isDomainCookie) append("; Domain=").append(c.domain)
                     append("; Path=/")
                 }
-                val ok = try { cm.setCookie(url, str) } catch (e: Exception) { false }
+                // ok явно Boolean: успех = нет исключения. Тип результата
+                // setCookie не постоянен между тулчейнами (Boolean в API 21+ /
+                // void в части сборок) — try-catch выводит Any и роняет
+                // компиляцию `if (ok)`. Прецедент игнорирования результата —
+                // CallsWebViewScreen/ExternalBrowserAuth.
+                val ok: Boolean = try { cm.setCookie(url, str); true } catch (e: Exception) { false }
                 if (ok) written++
             }
             // Fix #377 #DOZE-COOKIE-FLUSH: без flush восстановление переживает

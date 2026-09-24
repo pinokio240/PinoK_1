@@ -12877,3 +12877,21 @@ PC-RESTART (входящий SERVER). DIRECT-звонки — без регре�
 - VkCookieJar: переведён со storage-копий (стёрты wipe'ом, синк удалён — jar молча отправлял пустой/частичный cookie-set на антифрод-эндпоинты get_anonym_token/auth.anonymLogin) на ЖИВОЙ CookieManager: loadForRequest = getCookie(url); saveFromResponse зеркалит Set-Cookie обратно в CookieManager (Domain/Path/Expires/Secure из OkHttp Cookie). ИСКЛЮЧЕНИЕ remixstid/remixstlid: fallback-чтение + запись в storage сохранены (#CALLS-ANTIFRAUD F-3 — anonym_id переживает очистку webview-данных).
 - SettingsScreen: диалог импорта показывает cookies; тост — «cookies N из M» + предупреждение «COOKIES НЕ ВОССТАНОВЛЕНЫ»; тексты волны 50 про last_password актуализированы (пароль не хранится — штамп sessionPasswordIncluded теперь значит «plaintext без конверта»).
 - Не сломано и проверено: repo.remixsid()/hasSilentReloginMeans() читают живой CookieManager через фасад — MainActivity/BootReceiver/ChatDetailScreen/AlAudioFallback в порядке; страховочная копия (SAFETY_FILE_NAME) строится тем же export() — теперь тоже с cookie jar.
+## #SESSION-WEB-EXPORT-HOTFIX (2026-09-24): правки компиляции после 968fbcb
+
+Три ошибки `:app:compileDebugKotlin` на сборке пользователя:
+
+1. **CookieJarBackup.kt:111 / VkCookieJar.kt:135** — `Condition type mismatch:
+   inferred type is 'Any' but 'Boolean' was expected`. Тип результата
+   `CookieManager.setCookie(String,String)` непостоянен между тулчейнами
+   (Boolean в API 21+ / void в части сборок) — `try-catch { false }` и
+   `runCatching { }.getOrDefault(false)` выводили `Any`. Фикс: успех =
+   отсутствие исключения (`val ok: Boolean = try { setCookie(...); true }`,
+   `runCatching { }.isSuccess`), семантика как в существующих вызовах
+   setCookie без результата (CallsWebViewScreen/ExternalBrowserAuth).
+2. **FeedScreen.kt:513** — `No value passed for parameter 'callsEchoCancel'`:
+   #CALLS-AEC-TOGGLE добавил `callsEchoCancel` в `SovaPrefs.Snapshot` БЕЗ
+   дефолта, initial-конструкция в FeedScreen (collectAsState) не обновлена —
+   тот же класс бага, что Fix #100/#110/#189. Фикс: `callsEchoCancel = true`
+   в initial-Snapshot (default как в SovaPrefs; реальное значение придёт
+   из collectAsState).

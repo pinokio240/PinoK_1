@@ -510,6 +510,10 @@ fun FeedScreen(
             // #CALLS-SYMMETRIC / #CALLS-SWDECODE (01.09): initial-значения — как в SovaPrefs.
             callsVideoTx = true,
             callsVideoSwDecode = false,
+            // #CALLS-AEC-TOGGLE: callsEchoCancel добавлен в Snapshot БЕЗ дефолта —
+            // initial-конструкция обязана передавать его (тот же класс бага, что
+            // Fix #100 / #110 / #189 / #monet-hybrid). Default true — как в SovaPrefs.
+            callsEchoCancel = true,
             audioQuality = re.pinok.data.local.AudioQuality.Q192,
         )
     )
