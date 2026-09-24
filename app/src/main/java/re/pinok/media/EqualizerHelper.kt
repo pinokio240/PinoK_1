@@ -28,6 +28,17 @@ object EqualizerHelper {
     @Volatile
     private var engine: AudioEffectsEngine? = null
 
+    /**
+     * #REVERB-AUX: мост UI → сервис. PresetReverb — AUX-эффект: кроме
+     * включения в engine его надо привязать к плееру через
+     * ExoPlayer.setAuxEffectInfo (на Player/MediaController метода нет).
+     * PlayerService ставит сюда лямбду привязки при создании сессии;
+     * UI-слой (PlayerConnection) вызывает после каждого изменения Reverb.
+     * null (сервис не создан/уничтожен) — привязка выполнится при attach.
+     */
+    @Volatile
+    var auxBindingHook: (() -> Unit)? = null
+
     /** Текущий пресет (читается из engine). null = пользовательский. */
     val currentPresetName: String?
         get() = engine?.currentPresetName

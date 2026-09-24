@@ -195,7 +195,9 @@ class PlayerService : MediaSessionService() {
      */
     private fun applyReverbAuxBinding() {
         try {
-            val p = mediaSession?.player ?: return
+            // #BUILD-AUX: setAuxEffectInfo есть только на ExoPlayer (media3.exoplayer),
+            // на базовом Player/MediaController его НЕТ — каст обязателен.
+            val p = mediaSession?.player as? ExoPlayer ?: return
             val engine = re.pinok.media.EqualizerHelper.engine() ?: return
             val id = engine.reverbEffectId
             val on = id != 0 && engine.isReverbEnabled()
@@ -442,6 +444,10 @@ class PlayerService : MediaSessionService() {
         // не тронет) и гасим сервис.
         try {
             mediaSession = builder.build()
+            // #REVERB-AUX: hook для живых переключений из UI (PlayerConnection
+            // дёргает его после setReverbEnabled/setReverbPreset). null-safe —
+            // если сервис ещё не создан, привязка произойдёт при attach.
+            EqualizerHelper.auxBindingHook = { applyReverbAuxBinding() }
         } catch (e: IllegalStateException) {
             AppLog.e("PlayerService", "onCreate: MediaSession build failed: ${e.message} — stopSelf", e)
             player.release()
@@ -547,6 +553,7 @@ class PlayerService : MediaSessionService() {
         audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback)
         audioRouteHandler.removeCallbacksAndMessages(null)
         serviceScope.cancel()
+        EqualizerHelper.auxBindingHook = null
         EqualizerHelper.release()
         mediaSession?.run {
             player.release()

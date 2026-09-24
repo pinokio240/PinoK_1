@@ -4,7 +4,6 @@ package re.pinok.media
 import android.content.ComponentName
 import android.content.Context
 import androidx.media3.common.MediaItem
-import androidx.media3.common.AuxEffectInfo
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
@@ -821,12 +820,10 @@ object PlayerConnection {
     fun rebindReverbAux() = applyReverbAux()
 
     private fun applyReverbAux() {
-        val c = controller ?: return
-        val engine = EqualizerHelper.engine()
-        val id = engine?.reverbEffectId ?: 0
-        val on = id != 0 && engine?.isReverbEnabled() == true
-        c.setAuxEffectInfo(AuxEffectInfo(if (on) id else 0, on))
-        AppLog.i(TAG, "Reverb AUX bound: effectId=$id on=$on")
+        // #BUILD-AUX: setAuxEffectInfo есть только на ExoPlayer, которым
+        // владеет PlayerService — MediaController этого метода не имеет.
+        // Дёргаем hook, установленный сервисом (привязка к его плееру).
+        EqualizerHelper.auxBindingHook?.invoke()
     }
 
     /** Fix #62: перемешать текущий плейлист и начать воспроизведение с первого трека. */
