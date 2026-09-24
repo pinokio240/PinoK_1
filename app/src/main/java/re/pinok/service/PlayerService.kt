@@ -79,6 +79,15 @@ class PlayerService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
 
     /**
+     * Прямая ссылка на наш ExoPlayer (создаётся в onCreate, владелец —
+     * сервис). Нужна для API, которых нет на базовом Player/MediaController:
+     * ExoPlayer.setAuxEffectInfo (Reverb AUX), audioSessionId и т.п.
+     * Не «вытягиваем» плеер из mediaSession кастом — типы честные.
+     */
+    @Volatile
+    private var exoPlayer: ExoPlayer? = null
+
+    /**
      * Coroutine scope for the lock-screen download button state subscriber.
      * Cancelled in [onDestroy]. Uses Main.immediate because PlayerService
      * callbacks + MediaSession.setCustomLayout must be called from main thread.
@@ -195,9 +204,7 @@ class PlayerService : MediaSessionService() {
      */
     private fun applyReverbAuxBinding() {
         try {
-            // #BUILD-AUX: setAuxEffectInfo есть только на ExoPlayer (media3.exoplayer),
-            // на базовом Player/MediaController его НЕТ — каст обязателен.
-            val p = mediaSession?.player as? ExoPlayer ?: return
+            val p = exoPlayer ?: return
             val engine = re.pinok.media.EqualizerHelper.engine() ?: return
             val id = engine.reverbEffectId
             val on = id != 0 && engine.isReverbEnabled()
@@ -382,6 +389,7 @@ class PlayerService : MediaSessionService() {
         }
 
         val player = playerBuilder.build()
+        exoPlayer = player
 
         // Fix #96: EQ attach через Player.Listener.onAudioSessionIdChanged.
         // В media3 1.8.0 `player.audioSessionId` сразу после build() возвращает
@@ -560,6 +568,7 @@ class PlayerService : MediaSessionService() {
             release()
         }
         mediaSession = null
+        exoPlayer = null
         super.onDestroy()
     }
 
