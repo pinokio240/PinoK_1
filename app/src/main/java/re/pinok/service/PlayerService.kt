@@ -208,7 +208,14 @@ class PlayerService : MediaSessionService() {
             val engine = re.pinok.media.EqualizerHelper.engine() ?: return
             val id = engine.reverbEffectId
             val on = id != 0 && engine.isReverbEnabled()
-            p.setAuxEffectInfo(androidx.media3.common.AuxEffectInfo(if (on) id else 0, on))
+            // AuxEffectInfo(effectId, sendLevel: Float 0..1). Выключение =
+            // effectId NO_AUX_EFFECT_ID (0) — эффект отвязывается от трека.
+            p.setAuxEffectInfo(
+                androidx.media3.common.AuxEffectInfo(
+                    if (on) id else 0,
+                    if (on) 1f else 0f,
+                )
+            )
             AppLog.i("PlayerService", "Reverb AUX bound: effectId=$id on=$on")
         } catch (e: Exception) {
             AppLog.w("PlayerService", "applyReverbAuxBinding failed: ${e.message}")
