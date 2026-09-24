@@ -430,6 +430,12 @@ class MainActivity : ComponentActivity() {
     private var silentFailCount: Int = 0
     private var lastLaunchWasSilent: Boolean = false
 
+    /**
+     * #SILENT-HEADLESS (2026-09-24): silent-переавторизация идёт БЕЗ AuthActivity.
+     * Гвард от параллельных headless-попыток (несколько триггеров одновременно).
+     */
+    @Volatile private var headlessAuthInProgress: Boolean = false
+
     /** Fix #49: после 2 SILENT-провалов подряд — FULL режим. */
     private val MAX_SILENT_FAILURES = 2
 
@@ -477,6 +483,63 @@ class MainActivity : ComponentActivity() {
         //   - "offline-back-to-login": устаревший путь (до #AUTH-FIRST-OPEN-GUEST),
         //     оставлен для совместимости.
         val isManualAction = reason == "logout" || reason == "drawer-login" || reason == "offline-back-to-login"
+
+        // =================================================================
+        // #SILENT-HEADLESS (2026-09-24): silent-интент → AuthActivity НЕ ЗАПУСКАЕТСЯ.
+        //
+        // Лог 19:00 (HOTWAV, мёртвый renderer): Path 1.5 восстановил токен за
+        // 0.9с (19:00:23.8→24.7), но параллельный silent AuthActivity висел
+        // 37с ЧЁРНЫМ ЭКРАНОМ: система СТОПИТ MainActivity под «прозрачной»
+        // activity (onStop 19:00:24.332, surface уничтожен .367), контент
+        // alpha(0f) (#AUTH-SILENT-STEALTH), под ним пусто → чёрное. SAFETY-NET
+        // 30с + recreate WebView ничего не меняют — окно-то пустое.
+        //
+        // Гарантия «чёрного экрана не существует»: НЕ СОЗДАВАТЬ ОКНО ВОВСЕ.
+        // ensureFreshToken(force=true) делает headless ВСЁ то же, что silent
+        // AuthActivity: Path 1.5 (HTTP ~1с) → WEB-MECHANISM (offscreen WebView
+        // 0x0, не в иерархии) → persist. Провал → видимый AuthActivity (FULL)
+        // для ручного входа (чёрного там нет — не silent).
+        // =================================================================
+        if (!isManualAction && intent.getBooleanExtra(AuthActivity.EXTRA_SILENT_MODE, false)) {
+            if (headlessAuthInProgress) {
+                AppLog.d("MainActivity", "launchAuth($reason): headless auth already in progress — skip")
+                return
+            }
+            headlessAuthInProgress = true
+            // Держим существующие гварды от ПАРАЛЛЕЛЬНЫХ видимых пусков.
+            lastAuthActivityLaunchMs = now
+            lastAuthActivityLaunchedAt = now
+            AppLog.i("MainActivity", "launchAuth($reason) — SILENT → headless ensureFreshToken (AuthActivity не запускается, #SILENT-HEADLESS)")
+            showAuthNetworkToast()
+            lifecycleScope.launch {
+                val app = SovaApp.get(this@MainActivity)
+                val token = try {
+                    app.exchangeAuthRepository.ensureFreshToken(force = true)
+                } catch (e: Exception) {
+                    AppLog.w("MainActivity", "SILENT-HEADLESS: ensureFreshToken exception — ${e.message}")
+                    null
+                }
+                headlessAuthInProgress = false
+                if (token != null) {
+                    if (silentFailCount > 0) {
+                        AppLog.i("MainActivity", "SILENT loop broken — silentFailCount $silentFailCount → 0 (Fix #49, headless)")
+                    }
+                    silentFailCount = 0
+                    authVersion++
+                    AppLog.i("MainActivity", "SILENT-HEADLESS: токен восстановлен без окна — главный UI восстановлен (authVersion++)")
+                } else {
+                    silentFailCount++
+                    AppLog.w("MainActivity", "SILENT-HEADLESS: провал — silentFailCount=$silentFailCount/$MAX_SILENT_FAILURES; открываю видимый логин (FULL)")
+                    // Сбрасываем гварды — видимый FULL после headless-провала разрешён немедленно.
+                    lastAuthActivityLaunchMs = 0L
+                    lastAuthActivityLaunchedAt = 0L
+                    val fullIntent = Intent(this@MainActivity, AuthActivity::class.java)
+                    launchAuth(fullIntent, reason = "$reason-headless-fail")
+                }
+            }
+            return
+        }
+
         if (!isManualAction && lastAuthActivityLaunchMs > 0L && now - lastAuthActivityLaunchMs < 20_000L) {
             val waitMs = 20_000L - (now - lastAuthActivityLaunchMs)
             AppLog.w("MainActivity", "launchAuth($reason) throttled — last launch ${now - lastAuthActivityLaunchMs}ms ago (need ${waitMs}ms more). Skipping (Fix #230).")
@@ -528,25 +591,32 @@ class MainActivity : ComponentActivity() {
             // функция — показывает Toast с типом сети (NetworkObserver.connectionType,
             // уже использовался в настройках). FULL-запуски (ручной вход) НЕ
             // тостятся — юзер и так видит экран авторизации.
-            try {
-                val netType = SovaApp.get(this).networkObserver.connectionType()
-                val typeLabel = when (netType) {
-                    "Wi-Fi" -> "Wi-Fi"
-                    "Mobile" -> "мобильная сеть"
-                    "Ethernet" -> "Ethernet"
-                    "none" -> "сеть недоступна"
-                    else -> "тип сети неизвестен"
-                }
-                val msg = if (netType == "none") "Нет сети — подключение к VK отложено"
-                    else "Подключение к VK… ($typeLabel)"
-                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-            } catch (e: Exception) {
-                // lateinit networkObserver ещё не готов (теоретически невозможно —
-                // SovaApp.onCreate инициализирует его до любой Activity) — не роняем auth.
-                AppLog.d("MainActivity", "AUTH-NETWORK-TOAST: networkObserver not ready: ${e.message}")
-            }
+            showAuthNetworkToast()
         }
         authLauncher.launch(intent)
+    }
+
+    /**
+     * Fix #384 #AUTH-NETWORK-TOAST: сигнал юзеру ЧТО происходит при невидимой
+     * silent-переавторизации. Используется и headless-веткой (#SILENT-HEADLESS),
+     * и прежним SILENT-пуском AuthActivity.
+     */
+    private fun showAuthNetworkToast() {
+        try {
+            val netType = SovaApp.get(this).networkObserver.connectionType()
+            val typeLabel = when (netType) {
+                "Wi-Fi" -> "Wi-Fi"
+                "Mobile" -> "мобильная сеть"
+                "Ethernet" -> "Ethernet"
+                "none" -> "сеть недоступна"
+                else -> "тип сети неизвестен"
+            }
+            val msg = if (netType == "none") "Нет сети — подключение к VK отложено"
+                else "Подключение к VK… ($typeLabel)"
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            AppLog.d("MainActivity", "AUTH-NETWORK-TOAST: networkObserver not ready: ${e.message}")
+        }
     }
 
     /**

@@ -13008,3 +13008,13 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
 3. **Reentrant-guard удалён**: соперники честно ждут refreshMutex (FIFO) и получают токен сразу после лидера, вместо мгновенного null и падения секций. Дедлока нет: внутри мьютекса нет вложенных ensureFreshToken (все вложенные вызовы — прямой HTTP мимо VKApiClient.call).
 
 **Ожидание от след. теста:** при мёртвом renderer разделы получают контент за ~1-2с после старта (лог: «Path 1.5 live-cookie OK — renderer не понадобился» в первые секунды, без 44с WEB-MECHANISM).
+
+## #SILENT-HEADLESS + #BLACKSCREEN-NORENDER (2026-09-24) — чёрный экран при зависании WebView УБИТ
+
+**Лог 19:00 (после 1c934a9):** Path 1.5 восстановил токен за 0.9с (19:00:23.8→24.7, «renderer не понадобился», stampede-guard работал), НО параллельный silent AuthActivity висел **37с ЧЁРНЫМ ЭКРАНОМ** (19:00:24→19:01:01): система СТОПИТ MainActivity под «прозрачной» activity (onStop 19:00:24.332, surface уничтожен .367) → под alpha(0f)-контентом пусто → чёрное. SAFETY-NET 30с крутился вхолостую — окно-то пустое.
+
+**Фикс 1 — #SILENT-HEADLESS (MainActivity.launchAuth):** silent-интент больше НЕ создаёт AuthActivity вовсе. Headless: ensureFreshToken(force=true) (Path 1.5 HTTP ~1с → WEB-MECHANISM offscreen WebView 0x0) + сетевой Toast. Успех → authVersion++ (UI сам перерисуется). Провал → silentFailCount++ и видимый AuthActivity (FULL) для ручного входа. Чёрному экрану неоткуда взяться — окна нет. Гварды от параллельных пусков сохранены (headlessAuthInProgress + timestamps).
+
+**Фикс 2 — #BLACKSCREEN-NORENDER (VkAuthWebViewScreenV2):** в ВИДИМОМ режиме при зависании renderer больше не видно чёрный квадрат WebView: под WebView фон-подложка colorScheme.background с центрированным лоадером + статусом; WebView прозрачен (alpha 0), пока pageStartedReceived=false; проявляется при первом onPageStarted. Дерево живо, JS/cookies работают, SAFETY-NET не тронут.
+
+**Исходящие звонки (вопрос юзера):** в логе 5 звонков нет (лог — только auth). Зафиксировано юзером: исходящий заработал. Рабочая цепочка — коммиты после 449332df/44e3047: #CALLS-TOKEN-REFRESH (свежий $-токен через messages.getCallToken при 401 anonymLogin), #CALLS-OUT-SK2-FALLBACK (startConversation с session_key из prefs), #CALLS-OUT-SENDRECV + #CALLS-OFFER-STRIPH265 + #CALLS-SDP-DUP-GUARD + #CALLS-INLINE-ICE (медиа-тракт). До этого исходящий умирал ДО медиа: протухший кэш-токен → sk2=null → startConversation пропущен → нет FULL_CONNECTION.

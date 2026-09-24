@@ -14,6 +14,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -397,13 +398,40 @@ fun VkAuthWebViewScreenV2(
     val hideWebView = isExchanging || silentMode
 
     Box(modifier = modifier.fillMaxSize().systemBarsPadding()) {
+        // #BLACKSCREEN-NORENDER (2026-09-24): фон-подложка + лоадер ПОД WebView.
+        // Пока renderer не нарисовал ни одной страницы (pageStartedReceived=false),
+        // WebView прозрачен (alpha 0) — вместо чёрного квадрата мёртвого renderer
+        // юзер видит фон приложения и живой индикатор. Как только страница
+        // начала грузиться — WebView проявляется. Дерево живо, JS/cookies работают.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!pageStartedReceived && !isExchanging && !rendererFailed) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(44.dp),
+                        strokeWidth = 4.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+            }
+        }
         // #BLACKSCREEN-RENDERER: key(webViewEpoch) — инкремент epoch полностью
         // пересоздаёт инстанс WebView (новая попытка поднятия renderer'а).
         key(webViewEpoch) {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
-                .then(if (hideWebView) Modifier.alpha(0f) else Modifier),
+                .then(if (hideWebView || !pageStartedReceived) Modifier.alpha(0f) else Modifier),
             factory = { ctx ->
                 AppLog.i(TAG, "factory: создаём FixedInputWebView")
                 FixedInputWebView(ctx).apply {

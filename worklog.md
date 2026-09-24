@@ -10445,3 +10445,17 @@ Work Log:
 
 Stage Summary:
 - Первое восстановление токена при мёртвом renderer: ~1с вместо ~45с; секции больше не падают пачкой во время refresh. Коммит + push следом.
+
+---
+Task ID: S11-silent-headless-blackscreen
+Agent: Z.ai Code (main)
+Task: Лог QWg7hRWt6mr — «ТРЕБУЮ УБРАТЬ ЧЁРНЫЙ ЭКРАН при подвисании WebView»; исходящий звонок заработал (уточнение юзера).
+
+Work Log:
+- Лог 19:00: #FAST-RECOVERY отработал (Path 1.5 за 0.9с, stampede 3/8/17мс), НО silent AuthActivity всё равно запустился параллельно и дал 37с чёрного: система стопит MainActivity под translucent-activity (surface destroyed 19:00:24.367), контент alpha(0f) → под ним пусто → чёрное.
+- #SILENT-HEADLESS: launchAuth(silent) больше не создаёт Activity — headless ensureFreshToken(force) + Toast; успех → authVersion++; провал → silentFailCount++ → видимый FULL. Extract showAuthNetworkToast().
+- #BLACKSCREEN-NORENDER: в VkAuthWebViewScreenV2 WebView прозрачен до первого onPageStarted, под ним фон+лоадер+статус — чёрный квадрат мёртвого renderer исключён в видимом режиме.
+- Исходящий: в логе звонков нет; по истории — рабочая цепочка #CALLS-TOKEN-REFRESH/#CALLS-OUT-SK2-FALLBACK/#CALLS-OUT-SENDRECV и медиа-фиксы (449332df/44e3047+).
+
+Stage Summary:
+- Silent-auth = без окна (чёрный экран невозможен архитектурно); видимый auth при зависании показывает фон+лоадер вместо чёрного WebView. Коммит + push следом.
