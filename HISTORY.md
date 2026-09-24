@@ -13071,3 +13071,6 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
 **Навигация:** Screen.kt +3 маршрута (admin_invites/admin_wall_queue/admin_addresses/{groupId}); SovaNavHost — импорты, hasOwnTopBar ×3, композиции ×3; CommunityScreen — 3 колбэка.
 
 **Валидация:** Kotlin-aware чекер (вложенные /* */, строки, char-литералы): скобки/кавычки/скобки[] симметричны по всем 6 файлам (VKApiClient даёт те же дельты, что HEAD — артефакт чекера на легаси-тексте, не регресс). Сборка — за юзером (песочница без Android SDK).
+
+## #ADMIN-HAR-ANALYSIS (2026-09-25)
+Разобран HAR-дамп веб-сессии админки (vk.ru.har, 506 запросов, сообщество pluton240): карта всех секций настроек, форматы al_profile/groupsedit/al_groups, устройство журнала действий (POST {screen_name}?act=event_log, al=1&filter=1&next_from={ts}, data-additional JSON с action_type/ts/admin_id), search_add_box для бана по поиску. Mobile API аналога журнала нет — план C9 через web-fallback с remixsid (паттерн AlAudioFallback). Полный разбор и рекомендации: docs/план.волна-35.админ-сообщества.2026-09-10.md §12. Правок кода не требуется.
