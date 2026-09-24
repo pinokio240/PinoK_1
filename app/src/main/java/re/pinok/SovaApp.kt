@@ -22,7 +22,6 @@ import okhttp3.OkHttpClient
 import re.pinok.api.VKApiClient
 import re.pinok.contracts.ContainerRegistry
 import re.pinok.auth.exchange.AccountFileBackup
-import re.pinok.auth.exchange.CookieRefreshWorker
 import re.pinok.auth.exchange.ExchangeAuthApi
 import re.pinok.auth.exchange.ExchangeAuthRepository
 import re.pinok.auth.exchange.KeepAliveResult
@@ -472,39 +471,22 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     }
 
     /**
-     * #SESSION-COOKIES-BG-REFRESH: регистрирует фоновые триггеры sync'а session
-     * cookies (remixsid + p + remixnsid) из CookieManager → storage.
+     * #DOZE-COOKIE-FLUSH (бывший #SESSION-COOKIES-BG-REFRESH, упрощён
+     * #SESSION-WEB-MECHANISM 2026-09-24): ON_RESUME хук для foreground-тика
+     * ([foregroundTicks]) и периодического CookieManager.flush() на диск.
      *
-     * Вызывается из [onCreate] после инициализации exchangeAuthRepository.
-     *
-     * Триггеры:
-     *   - Hook #2: [ProcessLifecycleOwner] ON_RESUME — app выходит на foreground.
-     *     Debounce 30с (вместо sync на каждый onResume — activity transitions
-     *     могут генерировать множественные ON_RESUME за секунду).
-     *   - Hook #3: [CookieRefreshWorker] periodic 6ч через WorkManager —
-     *     ловит ротэйты пока app в фоне (LongPoll/push держат session живой).
-     *
-     * Hook #1 (после успешного silentRefreshViaRemixsid) — внутри ExchangeAuthRepository,
-     * здесь не регистрируется.
-     *
-     * Sync best-effort: ошибки НЕ роняют app. [ExchangeAuthRepository.refreshSessionCookiesFromCookieManager]
-     * использует patch-семантику (null = не трогать) — сохраняет только изменившиеся
-     * cookies. Нет access_token → no-op (пользователь не залогинен).
+     * Удалено: sync копий cookies CookieManager → storage (копий больше нет —
+     * источник истины CookieManager) и CookieRefreshWorker (WorkManager 6ч).
      */
     private fun setupCookieBackgroundRefresh() {
         try {
-            // Hook #3: periodic WorkManager (каждые 6ч, network=CONNECTED).
-            // KEEP policy — не перезаписывает существующий график при re-onCreate.
-            CookieRefreshWorker.schedule(this)
-
-            // Hook #2: ProcessLifecycleOwner — ON_RESUME sync.
+            // Hook #2: ProcessLifecycleOwner — ON_RESUME flush.
             // lifecycleScope привязан к process (не к конкретной activity) —
             // корутину отменяет только полный kill процесса.
             val app = this
             androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
                 object : androidx.lifecycle.DefaultLifecycleObserver {
                     private var lastForegroundSyncMs = 0L
-                    private val foregroundSyncMutex = kotlinx.coroutines.sync.Mutex()
 
                     override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
                         // Fix #377 #DOZE-RESUME-RELOAD: инкремент foreground-тика
@@ -514,63 +496,27 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         val prevForegroundTick = foregroundTicks.value
                         foregroundTicks.value = prevForegroundTick + 1
                         val now = System.currentTimeMillis()
-                        // Debounce 30с: быстрые activity transitions не должны
-                        // вызывать множественные CookieManager reads.
-                        if (now - lastForegroundSyncMs < 30_000L) {
-                            AppLog.d("SovaApp", "cookieSync: foreground sync debounced " +
-                                "(${(now - lastForegroundSyncMs) / 1000}s ago) — skip")
-                            return
-                        }
+                        // #SESSION-WEB-MECHANISM (2026-09-24): sync копий cookies
+                        // CookieManager → storage удалён (копий больше нет, источник
+                        // истины — сам CookieManager). Остался #DOZE-COOKIE-FLUSH.
+                        if (now - lastForegroundSyncMs < 30_000L) return@onResume
                         lastForegroundSyncMs = now
-                        // appScope = Dispatchers.IO + SupervisorJob() — живёт пока
-                        // процесс жив, ошибки в одном launch не роняют остальные.
-                        app.appScope.launch {
-                            // Mutex предотвращает параллельные sync'и если несколько
-                            // ON_RESUME пришли почти одновременно (race).
-                            if (!foregroundSyncMutex.tryLock()) {
-                                AppLog.d("SovaApp", "cookieSync: foreground sync already in progress — skip")
-                                return@launch
-                            }
+                        // Fix #377 #DOZE-COOKIE-FLUSH: сбрасываем CookieManager на диск.
+                        // Doze может убить WebView-процесс — незаflush'енные ротации
+                        // cookies (remixsid/p) при этом теряются. flush() — дёшево.
+                        app.appScope.launch(Dispatchers.Main) {
                             try {
-                                if (!app.isExchangeAuthRepositoryInitialized()) {
-                                    AppLog.d("SovaApp", "cookieSync: repo not initialized — skip")
-                                    return@launch
-                                }
-                                val repo = app.exchangeAuthRepository
-                                if (!repo.hasValidAccessToken()) {
-                                    AppLog.d("SovaApp", "cookieSync: no valid access_token — skip foreground sync")
-                                    return@launch
-                                }
-                                val result = repo.refreshSessionCookiesFromCookieManager()
-                                if (result.anyChanged) {
-                                    AppLog.i("SovaApp", "cookieSync: foreground sync UPDATED cookies — " +
-                                        "remixsid=${if (result.remixsidChanged) "rotated" else "same"}, " +
-                                        "p=${if (result.pChanged) "rotated" else "same"}, " +
-                                        "remixnsid=${if (result.remixnsidChanged) "rotated" else "same"}")
-                                } else {
-                                    AppLog.d("SovaApp", "cookieSync: foreground sync — no changes (all 3 match CookieManager)")
-                                }
-                                // Fix #377 #DOZE-COOKIE-FLUSH: после чтения кукисов
-                                // сбрасываем CookieManager на диск. Doze может убить
-                                // WebView-процесс — незаflush'енные ротации (remixsid/p/
-                                // remixnsid) при этом теряются, и Path 1.5 остаётся со
-                                // stale-копией. flush() — дешёвый sync-вызов, безопасен.
-                                try {
-                                    CookieManager.getInstance().flush()
-                                } catch (e: Exception) {
-                                    AppLog.w("SovaApp", "cookieSync: CookieManager.flush() failed: ${e.message}")
-                                }
+                                CookieManager.getInstance().flush()
+                                AppLog.d("SovaApp", "cookieSync: CookieManager.flush() OK (foreground)")
                             } catch (e: Exception) {
-                                AppLog.w("SovaApp", "cookieSync: foreground sync failed: ${e.message}")
-                            } finally {
-                                foregroundSyncMutex.unlock()
+                                AppLog.w("SovaApp", "cookieSync: CookieManager.flush() failed: ${e.message}")
                             }
                         }
                     }
                 }
             )
-            AppLog.i("SovaApp", "setupCookieBackgroundRefresh: hooks registered " +
-                "(ProcessLifecycleOwner ON_RESUME + WorkManager periodic 6h)")
+            AppLog.i("SovaApp", "setupCookieBackgroundRefresh: ON_RESUME flush hook registered " +
+                "(#SESSION-WEB-MECHANISM: cookie-sync/WorkManager удалены — копий cookies нет)")
         } catch (e: Exception) {
             AppLog.w("SovaApp", "setupCookieBackgroundRefresh failed (non-fatal): ${e.message}")
         }
@@ -1236,23 +1182,19 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // для offline-first входа (AuthState.OfflineWithCache) и offline-guard в
         // ensureFreshToken — не тратим retry-попытки когда сеть точно недоступна.
         exchangeAuthRepository.attachNetworkObserver(networkObserver)
+        // #SESSION-WEB-MECHANISM (2026-09-24): app context для скрытого WebView
+        // refresh (HiddenSessionRefresher) + разовая миграция: стираем legacy
+        // пароль/копии cookies (Path 1.5/2.5 удалены — см. СЕССИЯ-ВЕБ-ПОРТ.md).
+        exchangeAuthRepository.attachAppContext(this)
+        exchangeStorage.wipeLegacySessionArtifacts()
 
         // #SESSION-COOKIES-BG-REFRESH (Hook #2 + Hook #3): фоновый sync session
         // cookies (remixsid + p + remixnsid) из CookieManager → storage.
         //
         // Проблема: backfillRemixsidFromCookieManager вызывается ТОЛЬКО в момент
         // логина. После логина VK ротейтит cookies (security events, web-навигация),
-        // CookieManager обновляется, storage — нет. Через дни/недели storage содержит
-        // стейловые cookies → при смене сети silentRefreshViaRemixsid шлёт устаревший
-        // Cookie header → VK отбрасывает → полный re-login.
-        //
-        // Два триггера sync'а:
-        //   Hook #2 — ProcessLifecycleOwner ON_RESUME: ловит ротэйты пока пользователь
-        //            пользовался app (m.vk.ru WebView, stories browser обновляют
-        //            CookieManager). Debounce 30с чтобы не дёргать на каждом onResume.
-        //   Hook #3 — WorkManager periodic 6ч: ловит ротэйты пока app в фоне
-        //            (push notifications, LongPoll держат session живой).
-        // Hook #1 (после успешного silentRefreshViaRemixsid) — внутри ExchangeAuthRepository.
+        // #SESSION-WEB-MECHANISM (2026-09-24): cookie-sync хуки (storage-копий больше
+        // нет) и CookieRefreshWorker удалены. Остался ON_RESUME flush (#DOZE-COOKIE-FLUSH).
         setupCookieBackgroundRefresh()
 
         apiClient = VKApiClient(
@@ -2386,19 +2328,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // сериализует concurrent вызовы (keepAlive / reactive err-handler / этот).
             if (::exchangeAuthRepository.isInitialized) {
                 keepAliveScope.launch {
-                    // #NET-SWITCH-AUTH-FIX (2026-09-07): ДО гварда silent-средств
-                    // синкаем session cookies CookieManager → storage (локальный
-                    // patch, БЕЗ сети). Раньше гвард hasSilentReloginMeans() читал
-                    // СТЕЙЛОВЫЙ storage: если VK ротейтнул remixsid, а CookieManager
-                    // уже держит свежий — гвард ложно говорил «средств нет», proactive
-                    // refresh пропускался (оставался только медленный #SESSION-HOLD
-                    // WebView-capture ≤10с), и первой API-задачей на новом интерфейсе
-                    // занимался reactive err=5-контур. Теперь: sync → гвард → refresh.
-                    try {
-                        exchangeAuthRepository.refreshSessionCookiesFromCookieManager()
-                    } catch (e: Exception) {
-                        AppLog.w("SovaApp", "#NET-SWITCH-AUTH-FIX: cookie sync after switch failed: ${e.message}")
-                    }
+                    // #SESSION-WEB-MECHANISM (2026-09-24): cookie-sync удалён —
+                    // hasSilentReloginMeans() теперь читает ЖИВОЙ CookieManager
+                    // (без стейл-копий), ложных «средств нет» больше не бывает.
                     val canSilent = try { exchangeAuthRepository.hasSilentReloginMeans() } catch (_: Exception) { false }
                     if (canSilent) {
                         try {
@@ -2415,25 +2347,20 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         }
                     } else {
                         AppLog.i("SovaApp", "Proactive silent refresh skipped — no silent relogin means (user not logged in)")
-                        // #SESSION-HOLD: нет silent-средств (remixsid/p/trusted_hash/exchange_token),
-                        // но web-токен может быть валиден (типично для VK-app SSO — токен без
-                        // remixsid). Best-effort: пытаемся захватить remixsid из CookieManager
-                        // через скрытый WebView. Если app WebView имеет VK-сессию — Path 1.5
-                        // станет доступной, и следующие смены сети будут тихими. Дешёво
-                        // (≤10с в фоне), не блокирует UI. (#NET-SWITCH-AUTH-FIX: инлайн
-                        // вместо отдельной корутины — тот же keepAliveScope, последовательное
-                        // исполнение после sync, поведение не изменено.)
+                        // #SESSION-HOLD (упрощён #SESSION-WEB-MECHANISM): нет cookies в
+                        // CookieManager (типично для VK-app SSO — токен без web-сессии).
+                        // Best-effort: прогреваем cookie jar скрытым WebView — если
+                        // VK-сессия есть в webview-хранилище, cookies осядут в
+                        // CookieManager и следующие смены сети будут тихими.
+                        // Дёшево (≤10с в фоне), UI не блокирует.
                         val signedIn = try { exchangeAuthRepository.isSignedIn() } catch (_: Exception) { false }
                         if (signedIn) {
                             try {
                                 val captured = RemixsidCapturer.capture(this@SovaApp)
-                                if (captured != null) {
-                                    exchangeAuthRepository.saveRemixsid(captured)
-                                    AppLog.i("SovaApp", "#SESSION-HOLD: remixsid захвачен после смены сети " +
-                                        "(len=${captured.remixsid.length}) — Path 1.5 enabled")
-                                }
+                                AppLog.i("SovaApp", "#SESSION-HOLD: cookie jar прогрет после смены сети " +
+                                    "(remixsid=${captured?.remixsid?.length ?: "null"}) — cookies в CookieManager")
                             } catch (e: Exception) {
-                                AppLog.w("SovaApp", "#SESSION-HOLD: remixsid capture failed: ${e.message}")
+                                AppLog.w("SovaApp", "#SESSION-HOLD: cookie capture failed: ${e.message}")
                             }
                         }
                     }

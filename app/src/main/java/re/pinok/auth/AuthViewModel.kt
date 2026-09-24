@@ -14,7 +14,6 @@ import re.pinok.auth.exchange.AuthResult
 import re.pinok.auth.exchange.AuthState
 import re.pinok.auth.exchange.ExchangeAuthRepository
 import re.pinok.auth.exchange.LongPollCredentials
-import re.pinok.auth.exchange.RemixsidCapturer
 import re.pinok.auth.exchange.ValidationType
 import re.pinok.auth.exchange.WebTokenAuth
 import re.pinok.SovaApp
@@ -44,19 +43,16 @@ class AuthViewModel(
 
     /** Phone captured from step 1 — needed for 2FA and re-send. */
     private var lastPhone: String = ""
-
-    /** Password captured from step 1 — needed for re-send (VK requires grant_type=password
-     *  with sid to switch validation channel, see decompiled VkAuthState.b). */
     private var lastPassword: String = ""
-
-    /** sid captured from need_validation — needed for submit2FaCode. */
     private var pendingSid: String = ""
+    private var pendingValidationType: ValidationType? = null
 
-    /** Current validation type — for re-send selection. */
-    private var pendingValidationType: ValidationType = ValidationType.SMS
-
-    /** Whether we attempted trusted_hash login already (avoid infinite loop). */
-    private var trustedHashAttempted: Boolean = false
+    /**
+     * #SESSION-WEB-MECHANISM: флаг «скрытый web-refresh при старте уже пытались».
+     * Одна попытка на жизнь ViewModel — как в вебе: cookies есть → молча вошли;
+     * cookies мертвы → форма логина (не дёргаем WebView на каждый resume).
+     */
+    private var webRefreshAttempted: Boolean = false
 
     /**
      * §51 #WEB-TOKEN-DEAD-SESSION-CLEAR (2026-08-05):
@@ -86,46 +82,64 @@ class AuthViewModel(
      * Uses tryTrustedHashLoginFullState() which returns the complete AuthState
      * with all fields properly parsed and persisted (exchange_token, scope, etc.).
      */
+    /**
+     * Авто-вход при старте — веб-механизм (#SESSION-WEB-MECHANISM, 2026-09-24).
+     *
+     * Как в веб-версии: cookies живы → «перепосещение» в скрытом WebView молча
+     * обновляет токен (VK узнаёт пользователя по `p`/`remixsid`); cookies
+     * мертвы → сразу форма логина. Никаких хранённых паролей/trusted_hash.
+     *
+     * Триггер повторной попытки при появлении сети — как раньше: флаг НЕ
+     * выставляется в offline-ветке, AuthActivity/NetworkObserver перезапустит.
+     */
     fun tryAutoLogin() {
-        if (trustedHashAttempted) return
+        if (webRefreshAttempted) return
         if (repo.isSignedIn()) {
             AppLog.i(TAG, "Already signed in, skipping auto-login")
             return
         }
 
-        // #NETWORK-RESILIENCE (2026-08-04): OfflineWithCache — offline-first вход.
-        // Если сеть недоступна И есть сохранённый протухший токен с user_id —
-        // НЕ пытаемся trusted_hash login (он упадёт по IOException после 3 retry
-        // = 7 сек задержки). Сразу показываем OfflineWithCache → пользователь
-        // попадает в главный экран с кэшированными данными + баннер «Нет сети».
-        // tryAutoLogin будет вызван повторно когда NetworkObserver сообщит о
-        // появлении сети (см. AuthActivity.onResume / networkObserver listener).
+        // #NETWORK-RESILIENCE: OfflineWithCache — offline-first вход (без изменений).
         val offlineState = repo.offlineWithCacheState()
         if (offlineState != null) {
             AppLog.i(TAG, "tryAutoLogin: OFFLINE + cached session " +
-                "(user=${offlineState.cachedUserId}, token expired ${offlineState.tokenExpiredAt}) " +
-                "→ OfflineWithCache (skipping trusted_hash — would fail anyway after 7s retry)")
+                "(user=${offlineState.cachedUserId}) → OfflineWithCache")
             _state.value = offlineState
-            // НЕ выставляем trustedHashAttempted=true — при появлении сети
-            // tryAutoLogin должен снова сработать и перейти в Success.
             return
         }
 
-        if (!repo.canTrustedHashLogin()) {
-            AppLog.d(TAG, "No trusted_hash for auto-login")
+        // Веб-семантика: silent-вход возможен ТОЛЬКО если web-сессия (cookies)
+        // есть в CookieManager. Нет cookies → форма логина, WebView не дёргаем.
+        if (!repo.hasSilentReloginMeans()) {
+            AppLog.d(TAG, "tryAutoLogin: нет web-сессии (cookies) в CookieManager — форма логина")
             return
         }
-        trustedHashAttempted = true
+        webRefreshAttempted = true
         _state.value = AuthState.Loading
         currentJob = viewModelScope.launch {
-            val state = withContext(Dispatchers.IO) {
-                repo.tryTrustedHashLoginFullState()
+            val token = withContext(Dispatchers.IO) {
+                try {
+                    repo.ensureFreshToken(force = true)
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "tryAutoLogin: hidden refresh failed: ${e.message}")
+                    null
+                }
             }
-            if (state is AuthState.Success) {
-                _state.value = state
+            if (token != null) {
+                val expiresAt = repo.expiresAt()
+                _state.value = AuthState.Success(
+                    AuthResult(
+                        accessToken = token,
+                        exchangeToken = repo.exchangeToken(),
+                        userId = repo.userId(),
+                        expiresIn = if (expiresAt > 0L)
+                            (expiresAt - System.currentTimeMillis()) / 1000 else 0L,
+                        scope = repo.scope(),
+                    )
+                )
                 prefetchLongPoll()
             } else {
-                AppLog.i(TAG, "Trusted hash login failed, showing login form")
+                AppLog.i(TAG, "tryAutoLogin: web-сессия не сработала — показываем форму логина")
                 _state.value = AuthState.Idle
             }
         }
@@ -206,7 +220,7 @@ class AuthViewModel(
      * напрямую, Path 1.5 (silentRefreshViaRemixsid) включается.
      *
      * Если null (external browser flow, или WebView не нашёл cookie) →
-     * после сохранения токена запускается [RemixsidCapturer.capture] как
+     * после сохранения токена CookieManager.flush() фиксирует cookie-set как
      * best-effort: скрытый WebView пытается silent OAuth sign-in и
      * захватить remixsid. Работает только если CookieManager уже имеет
      * VK session от предыдущей in-app WebView сессии.
@@ -241,29 +255,12 @@ class AuthViewModel(
             }
             handleAuthResult(result)
 
-            // #REMIXSID-CAPTURE (§41.22): Если после saveOAuthToken remixsid
-            // всё ещё нет — запускаем best-effort capture через скрытый WebView.
-            // Это НЕ блокирует UI (запуск в отдельной coroutine) и не влияет
-            // на auth result (токен уже сохранён, app работает).
-            //
-            // Зачем: Path 1.5 (silentRefreshViaRemixsid) позволяет silent refresh
-            // access_token при переключении WiFi↔Mobile без перезапуска
-            // AuthActivity. Без remixsid → #RELOGIN-FORCE (§41.21) → ручной
-            // re-login. С remixsid → silent refresh ~200ms → нет прерывания.
-            if (result is AuthState.Success && !repo.hasRemixsid()) {
-                viewModelScope.launch {
-                    val captured = RemixsidCapturer.capture(SovaApp.get())
-                    if (captured != null) {
-                        withContext(Dispatchers.IO) { repo.saveRemixsid(captured) }
-                        AppLog.i(TAG, "RemixsidCapturer: SUCCESS — remixsid saved " +
-                            "(len=${captured.remixsid.length}, " +
-                            "p=${if (captured.pCookie != null) "yes" else "no"}, " +
-                            "remixnsid=${if (captured.remixnsid != null) "yes" else "no"}), " +
-                            "Path 1.5 enabled (cross-IP silent refresh)")
-                    } else {
-                        AppLog.w(TAG, "RemixsidCapturer: no remixsid captured — " +
-                            "Path 1.5 unavailable (use in-app WebView login once for silent network switching)")
-                    }
+            // #SESSION-WEB-MECHANISM (2026-09-24): RemixsidCapturer-фоллбэк с
+            // сохранением копий в storage удалён — cookies уже в CookieManager
+            // (их поставила страница логина). Только flush на диск (#DOZE-COOKIE-FLUSH).
+            if (result is AuthState.Success) {
+                withContext(Dispatchers.Main) {
+                    runCatching { android.webkit.CookieManager.getInstance().flush() }
                 }
             }
         }
@@ -456,7 +453,7 @@ class AuthViewModel(
                         val p15UserId = repo.userId()
                         val p15ExpiresAt = repo.expiresAt()
                         AppLog.i(TAG, "submitWebToken: §58 #2FA-SESSION-WIPE-FIX — Path 1.5 " +
-                            "silentRefreshViaRemixsid SUCCESS — remixsid обменян на " +
+                            "WEB-MECHANISM refresh SUCCESS — cookies обменяны на " +
                             "access_token через HTTP (user_id=$p15UserId), куки НЕ очищены " +
                             "(2FA сессия сохранена, повторный ввод не требуется)")
                         result = AuthState.Success(

@@ -730,49 +730,14 @@ private fun AuthScreen(
                 // форму входа VK ID. Авторизация ТОЛЬКО через VK ID.
                 startUrl = AuthDomainsConfig.vkIdLoginUrl(),
                 onTokenExchange = { remixsid, cookies, webView ->
-                    // #VKAUTH-V2: сохраняем полный cookie-set (9 remix-ключей) в storage
-                    // ДО вызова submitWebToken. Path 1.5 (silentRefreshViaRemixsid)
-                    // получит полный браузерный cookie-set → удержание сессии при смене IP.
-                    if (remixsid.isNotBlank()) {
-                        try {
-                            val app = re.pinok.SovaApp.get()
-                            val captured = RemixsidCapturer.CapturedCookies(
-                                remixsid = remixsid,
-                                pCookie = cookies.p,
-                                remixnsid = cookies.remixnsid,
-                                httoken = cookies.httoken,
-                                remixnttpid = cookies.remixnttpid,
-                                remixuacck = cookies.remixuacck,
-                                remixuas = cookies.remixuas,
-                                remixdmgr = cookies.remixdmgr,
-                                remixmvkFp = cookies.remixmvkFp,
-                            )
-                            app.exchangeAuthRepository.saveRemixsid(captured)
-                            // Fix #377 #DOZE-COOKIE-FLUSH: после сохранения cookie-set
-                            // сбрасываем CookieManager на диск — иначе незаflush'енные
-                            // ротации кукисов теряются при смерти WebView-процесса
-                            // (Doze), и Path 1.5 остаётся со stale-копией.
-                            try {
-                                CookieManager.getInstance().flush()
-                            } catch (e: Exception) {
-                                AppLog.w("AuthActivity", "#DOZE-COOKIE-FLUSH: CookieManager.flush() failed: ${e.message}")
-                            }
-                            AppLog.i("AuthActivity",
-                                "#VKAUTH-V2: cookie-set сохранён в storage " +
-                                "(remixsid len=${remixsid.length}, " +
-                                "p=${if (cookies.p != null) "yes" else "no"}, " +
-                                "remixnsid=${if (cookies.remixnsid != null) "yes" else "no"}, " +
-                                "httoken=${if (cookies.httoken != null) "yes" else "no"}, " +
-                                "nttpid=${if (cookies.remixnttpid != null) "yes" else "no"}, " +
-                                "uacck=${if (cookies.remixuacck != null) "yes" else "no"}, " +
-                                "uas=${if (cookies.remixuas != null) "yes" else "no"}, " +
-                                "dmgr=${if (cookies.remixdmgr != null) "yes" else "no"}, " +
-                                "mvkfp=${if (cookies.remixmvkFp != null) "yes" else "no"}) — " +
-                                "Path 1.5 silentRefreshViaRemixsid получит полный cookie-set")
-                        } catch (e: Exception) {
-                            AppLog.w("AuthActivity",
-                                "#VKAUTH-V2: не удалось сохранить cookie-set: ${e.message}")
-                        }
+                    // #SESSION-WEB-MECHANISM (2026-09-24): cookie-set живёт в
+                    // CookieManager (единственный источник сессии) — storage-копии
+                    // не ведём. Только flush на диск (#DOZE-COOKIE-FLUSH): иначе
+                    // незаflush'енные ротации теряются при смерти WebView-процесса.
+                    runCatching {
+                        CookieManager.getInstance().flush()
+                    }.onFailure { e ->
+                        AppLog.w("AuthActivity", "#DOZE-COOKIE-FLUSH: flush failed: ${e.message}")
                     }
                     // remixsid найден → m.vk.ru JS получил токен. Читаем web_token.
                     viewModel.submitWebToken(remixsid, webView)

@@ -302,6 +302,41 @@ class ExchangeTokenStorage(
         if (changed) dumpToFile()
     }
 
+    /**
+     * #SESSION-WEB-MECHANISM (2026-09-24, СЕССИЯ-ВЕБ-ПОРТ.md): разовая миграция —
+     * стирает legacy-артефакты прежних refresh-путей, которые больше не нужны:
+     *
+     *   - last_phone / last_password / trusted_hash — Path 2.5 (re-login по
+     *     хранённому паролю) удалён. ПЛЮС БЕЗОПАСНОСТИ: пароль больше не
+     *     хранится на устройстве (как в веб-версии).
+     *   - Копии session cookies (remixsid, p, remixnsid, httoken, nttpid,
+     *     uacck, uas, dmgr, mvkfp) — Path 1.5 (HTTP refresh по копии) удалён.
+     *     Источник истины — CookieManager; копии только протухали.
+     *
+     * НЕ трогает: remixstid/remixstlid (анонимная идентичность для
+     * #CALLS-ANTIFRAUD — используется VkCookieJar), access_token, user_id,
+     * exchange_token, logout_hash, sat_token, device_id, LP-креды.
+     *
+     * Idempotent. Вызывается один раз из [re.pinok.SovaApp.onCreate].
+     */
+    fun wipeLegacySessionArtifacts() {
+        var changed = false
+        prefs.edit().apply {
+            for (key in arrayOf(
+                KEY_LAST_PHONE, KEY_LAST_PASSWORD, KEY_TRUSTED_HASH,
+                KEY_REMIXSID, KEY_P_COOKIE, KEY_REMIXNSID,
+                KEY_HTTP_TOKEN, KEY_REMIX_NTTPID, KEY_REMIX_UACCK,
+                KEY_REMIX_UAS, KEY_REMIX_DMGR, KEY_REMIX_MVK_FP,
+            )) {
+                if (prefs.contains(key)) { remove(key); changed = true }
+            }
+        }.apply()
+        if (changed) {
+            AppLog.i("ExchangeTokenStorage", "wipeLegacySessionArtifacts: legacy phone/password/trusted_hash/cookie-copies wiped (#SESSION-WEB-MECHANISM)")
+            dumpToFile()
+        }
+    }
+
     /** Patch user_id without touching the rest of the auth state. */
     fun setUserId(userId: Long) {
         prefs.edit().putLong(KEY_USER_ID, userId).apply()
