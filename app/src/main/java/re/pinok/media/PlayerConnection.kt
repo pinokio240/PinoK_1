@@ -1144,15 +1144,20 @@ object PlayerConnection {
         if (ctrl != null) {
             block(ctrl)
         } else {
-            AppLog.w(TAG, "Controller ещё не готов — повтор через 300мс")
+            AppLog.w(TAG, "Controller ещё не готов — повтор каждые 300мс (бюджет 3.6с, #PLAY-COLDSTART)")
             // Fix #169: если controller отсутствует после init — значит сервис
             // убит системой (Doze). Запускаем переподключение немедленно, чтобы
             // к моменту 1-й retry-итерации (300мс) controller уже мог появиться.
-            // Без этого 3 retry по 300мс = 900мс ожидания впустую, команда теряется.
             if (initialized) reconnectController()
+            // #PLAY-COLDSTART: бюджет поднят 3×300мс (0.9с) → 12×300мс (3.6с).
+            // Симптом: тап по треку в «Моей музыке» в первые ~1-2с после
+            // холодного старта терялся — MediaController строится 0.5–1.5с
+            // (bind IPC + PlayerService.onCreate: ExoPlayer + OkHttp source),
+            // а reconnectController ещё в 2с guard'е. 3 ретрая не дотягивали
+            // до готовности → команда МОЛЧА падала, помогал только второй тап.
             scope.launch {
                 var done = false
-                repeat(3) {
+                repeat(12) {
                     // audit Medium #3: return@launch (НЕ return@repeat) —
                     // return@repeat лишь переходил на следующую итерацию, не прерывая
                     // цикл. return@launch корректно выходит из корутины сразу после
@@ -1166,7 +1171,7 @@ object PlayerConnection {
                     }
                 }
                 if (!done) {
-                    AppLog.e(TAG, "withController: controller так и не подключился (сервис убит? реконнект запущен ранее)")
+                    AppLog.e(TAG, "withController: controller не подключился за 3.6с (сервис убит? реконнект запущен ранее) — команда потеряна, нужен повторный тап")
                 }
             }
         }
