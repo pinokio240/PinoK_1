@@ -854,20 +854,40 @@ class ExchangeAuthRepository(
      *   cookies уезжают на новый IP сами, VK молча выдаёт свежий web_token.
      */
     suspend fun ensureFreshToken(force: Boolean = false): String? {
-        if (HiddenSessionRefresher.inProgress) {
-            AppLog.d(TAG, "ensureFreshToken: reentrant call during hidden web refresh — " +
-                "returning null (web-mechanism доведёт сам, #SESSION-WEB-MECHANISM)")
-            return null
-        }
+        // #FAST-RECOVERY (2026-09-24): reentrant-guard УДАЛЁН. Раньше параллельные
+        // вызовы получали мгновенный null («reentrant call during hidden web refresh»)
+        // и их API-запросы падали с «no token, refresh failed» — 30 секций × retry,
+        // каждая итерация упиралась в cooldown skip. Теперь соперники ЧЕСТНО ждут
+        // refreshMutex (FIFO) и получают свежий токен сразу после лидера.
+        // Дедлока нет: внутри мьютекса нет вложенных ensureFreshToken
+        // (silentRefreshViaRemixsidLive/saveWebTokenResult/getExchangeTokenDetailed
+        // ходят HTTP напрямую, мимо VKApiClient.call).
         return refreshMutex.withLock {
             // #FORCE-REFRESH: force=true (err=5/1130) — токен отвергнут VK,
             // hasValidAccessToken() лжёт (проверяет только timestamp, не IP-binding).
             if (!force && storage.hasValidAccessToken()) {
                 return@withLock storage.accessToken()
             }
+
+            // #STAMPEDE-GUARD (2026-09-24): если другой вызов ТОЛЬКО ЧТО обновил
+            // токен — VK ещё не успел его отвергнуть (err=5 был на СТАРОМ токене).
+            // Возвращаем свежий вместо повторного каскада, иначе пачка секций
+            // устраивает пачку refresh'ей друг за другом.
+            val stampedeNow = System.currentTimeMillis()
+            if (lastRefreshSuccessMs != 0L &&
+                stampedeNow - lastRefreshSuccessMs < REFRESH_STAMPEDE_WINDOW_MS) {
+                val fresh = storage.accessToken()
+                if (!fresh.isNullOrBlank()) {
+                    AppLog.i(TAG, "ensureFreshToken: токен обновлён " +
+                        "${stampedeNow - lastRefreshSuccessMs}мс назад — переиспользуем " +
+                        "(stampede guard, force=$force)")
+                    return@withLock fresh
+                }
+            }
+
             if (force) {
                 AppLog.i(TAG, "ensureFreshToken: FORCE refresh — bypassing hasValidAccessToken " +
-                    "(err=5/1130 or network switch — token rejected by VK, WEB-MECHANISM refresh)")
+                    "(err=5/1130 or network switch — token rejected by VK)")
             }
 
             // #NETWORK-RESILIENCE: offline-guard (без force — экономим батарею
@@ -878,61 +898,63 @@ class ExchangeAuthRepository(
                 return@withLock null
             }
 
-            // ── WEB-MECHANISM: скрытый WebView «перепосещение» (единственный refresh-путь) ──
             val ctx = appContext
                 ?: runCatching { re.pinok.SovaApp.get() as android.content.Context }.getOrNull()
             if (ctx == null) {
-                AppLog.w(TAG, "ensureFreshToken: no appContext — WEB-MECHANISM refresh impossible")
+                AppLog.w(TAG, "ensureFreshToken: no appContext — refresh impossible")
                 return@withLock null
             }
-            val web = HiddenSessionRefresher.refresh(ctx)
-            if (web == null) {
-                AppLog.w(TAG, "ensureFreshToken: WEB-MECHANISM refresh failed " +
-                    "(definitivelyDead=${HiddenSessionRefresher.lastAttemptDefinitivelyDead}) — " +
-                    "trying HTTP fallback (Path 1.5 live-cookie)")
 
-                // #RENDERER-FALLBACK (2026-09-24): восстановленный Path 1.5 —
-                // HTTP-обмен remixsid → web_token БЕЗ WebView. Единственная причина
-                // сюда попадать: renderer chromium мёртв (cr_ChildProcessConn) и
-                // ни AuthActivity, ни скрытый WebView не могут выполнить JS.
-                // Cookies берём из ЖИВОГО CookieManager (не из storage — копий
-                // больше нет по #SESSION-WEB-MECHANISM), поэтому «смена сети →
-                // просит логин» тут не воспроизводится: с того же cookie jar,
-                // что использовал бы WebView.
-                val httpResult = silentRefreshViaRemixsidLive()
-                if (httpResult != null) {
-                    val state = saveWebTokenResult(
-                        accessToken = httpResult.accessToken,
-                        userId = httpResult.userId,
-                        expiresAt = httpResult.expiresAt,
-                        satToken = null,
-                        logoutHash = httpResult.logoutHash,
-                        remixsid = null,
-                    )
-                    AppLog.i(TAG, "ensureFreshToken: Path 1.5 live-cookie fallback OK " +
-                        "(user_id=${httpResult.userId}, state=$state) — renderer не понадобился")
+            // ── #FAST-RECOVERY (2026-09-24): Path 1.5 ПЕРВЫМ, WEB-MECHANISM ВТОРЫМ ──
+            // Лог 24.09 17:46 (без перестановки): 17:46:33 FORCE → 17:46:35 скрытый
+            // WebView → 17:47:17 FAILED (44с!) → только потом HTTP. С мёртвым renderer
+            // (cr_ChildProcessConn) WEB-MECHANISM гарантированно висит до 60с —
+            // именно он тормозил «разделы долго загружаются» (Wi-Fi ни при чём).
+            // Path 1.5 — HTTP-обмен живых кук (remixsid → web_token) ~0.5–1с,
+            // WebView не нужен. Cookies из ЖИВОГО CookieManager (#SESSION-WEB-MECHANISM).
+            val httpResult = silentRefreshViaRemixsidLive()
+            if (httpResult != null) {
+                val state = saveWebTokenResult(
+                    accessToken = httpResult.accessToken,
+                    userId = httpResult.userId,
+                    expiresAt = httpResult.expiresAt,
+                    satToken = null,
+                    logoutHash = httpResult.logoutHash,
+                    remixsid = null,
+                )
+                if (state is AuthState.Success) {
+                    lastRefreshSuccessMs = System.currentTimeMillis()
+                    AppLog.i(TAG, "ensureFreshToken: Path 1.5 live-cookie OK " +
+                        "(user_id=${httpResult.userId}) — renderer не понадобился")
                     return@withLock httpResult.accessToken
                 }
-
-                AppLog.w(TAG, "ensureFreshToken: WEB-MECHANISM + HTTP fallback оба failed — re-login required")
-                return@withLock null
+                AppLog.w(TAG, "ensureFreshToken: Path 1.5 token rejected on save — $state")
             }
 
-            // Persist через battle-tested saveWebTokenResult (expired-отбраковка,
-            // exchange_token best-effort, privacyOfflineMode reset).
-            // remixsid = null: cookies живут в CookieManager — storage-копии не ведём.
-            val state = saveWebTokenResult(
-                accessToken = web.accessToken,
-                userId = web.userId,
-                expiresAt = web.expiresAt,
-                satToken = web.satToken,
-                logoutHash = web.logoutHash,
-                remixsid = null,
-            )
-            if (state is AuthState.Success) {
-                state.result.accessToken
+            // ── WEB-MECHANISM: скрытый WebView «перепосещение» ──
+            val web = HiddenSessionRefresher.refresh(ctx)
+            if (web != null) {
+                // Persist через battle-tested saveWebTokenResult (expired-отбраковка,
+                // exchange_token best-effort, privacyOfflineMode reset).
+                // remixsid = null: cookies живут в CookieManager — storage-копий нет.
+                val state = saveWebTokenResult(
+                    accessToken = web.accessToken,
+                    userId = web.userId,
+                    expiresAt = web.expiresAt,
+                    satToken = web.satToken,
+                    logoutHash = web.logoutHash,
+                    remixsid = null,
+                )
+                if (state is AuthState.Success) {
+                    lastRefreshSuccessMs = System.currentTimeMillis()
+                    state.result.accessToken
+                } else {
+                    AppLog.w(TAG, "ensureFreshToken: WEB-MECHANISM token rejected on save — $state")
+                    null
+                }
             } else {
-                AppLog.w(TAG, "ensureFreshToken: WEB-MECHANISM token rejected on save — $state")
+                AppLog.w(TAG, "ensureFreshToken: Path 1.5 + WEB-MECHANISM оба failed " +
+                    "(definitivelyDead=${HiddenSessionRefresher.lastAttemptDefinitivelyDead}) — re-login required")
                 null
             }
         }
@@ -1458,6 +1480,15 @@ class ExchangeAuthRepository(
     }
 
     @Volatile private var lastLiveFallbackFailMs: Long = 0L
+
+    /**
+     * #STAMPEDE-GUARD (2026-09-24): момент последнего успешного refresh.
+     * В течение окна параллельные force-вызовы переиспользуют свежий токен
+     * вместо повторного каскада (30 секций = 1 refresh, не 30).
+     */
+    @Volatile private var lastRefreshSuccessMs: Long = 0L
+
+    private val REFRESH_STAMPEDE_WINDOW_MS = 10_000L
 
     private suspend fun doSilentRefreshHttpLive(
         client: OkHttpClient,

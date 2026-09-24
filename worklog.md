@@ -10430,3 +10430,18 @@ Work Log:
 
 Stage Summary:
 - При мёртвом renderer разделы снова получают токен за ~0.5-1с через HTTP (если VK примет куки). Коммит + push следом.
+
+---
+Task ID: S10-fast-recovery-reorder
+Agent: Z.ai Code (main)
+Task: «Почему разделы долго загружаются несмотря на Wi-Fi — проверь всю карту запросов-ответов».
+
+Work Log:
+- Карта подтверждена по логу 17:46: НИ ОДИН API-метод не получил ответа — все секции падали «no token, refresh failed»; Wi-Fi ни при чём, узкое место = порядок refresh-путей.
+- В сборке лога ещё НЕ было b97aa53 (строка «re-login required» на :887 без Path 1.5; лог 17:46 МСК, коммит 17:56 МСК).
+- WEB-MECHANISM с мёртвым renderer висел 44с (17:46:33→17:47:17) ДО первого шанса HTTP-фолбэка; параллельные секции в это окно получали мгновенный null (reentrant guard) → падение → retry → cooldown skip → снова падение; процесс убит юзером на 53-й секунде.
+- ensureFreshToken перестроен: Path 1.5 (HTTP ~0.5-1с) ПЕРВЫМ, WEB-MECHANISM ВТОРЫМ (#FAST-RECOVERY); stampede-guard 10с (переиспользование только-что обновлённого токена force-вызовами); reentrant-guard удалён (соперники ждут refreshMutex FIFO — дедлока нет, вложенных ensureFreshToken под мьютексом нет: getExchangeTokenDetailed/postForm ходят напрямую).
+- HISTORY.md: раздел #FAST-RECOVERY.
+
+Stage Summary:
+- Первое восстановление токена при мёртвом renderer: ~1с вместо ~45с; секции больше не падают пачкой во время refresh. Коммит + push следом.

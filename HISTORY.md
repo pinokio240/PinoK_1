@@ -12991,3 +12991,20 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
   alt login.vk.ru+id.vk.ru; ответ {"type":"okay","data":{access_token,expires,user_id,logout_hash}};
 - кулдаун 90с после провала (Fix #177+#178), reset при успехе;
 - persist через battle-tested saveWebTokenResult.
+
+## #FAST-RECOVERY (2026-09-24) — разделы долго загружаются: порядок refresh-путей + stampede
+
+**Симптом (лог 24.09 17:46, до сборки b97aa53):** все разделы крутят загрузку по 40-50с при живом Wi-Fi; процесс убит пользователем на 53-й секунде.
+
+**Карта запросов-ответов (проверена вся):**
+- Ни один API-метод не получил ответа: все секции (newsfeed.get, audio.get, stories.get, fave.getTags, notifications.getRedesign, queue.subscribe, messages.getLongPollServer, account.setOnline, getSecurityAlerts...) → «no token, refresh failed». Данные корректные, источник данных (токен) отсутствовал. Wi-Fi ни при чём.
+- 17:46:33.574 первый FORCE refresh → WEB-MECHANISM (скрытый WebView, мёртвый renderer) → FAILED только в 17:47:17 (**44 секунды**).
+- Все параллельные секции в этом окне получали мгновенный null («reentrant call during hidden web refresh») → падение → retry → упор в 90с cooldown → снова падение.
+- Сборка лога СТАРЫЕ b97aa53 (строка «— re-login required» на :887 без «trying HTTP fallback»): лог снят 17:46 МСК, коммит в 17:56 МСК.
+
+**Фиксы (ExchangeAuthRepository.ensureFreshToken):**
+1. **#FAST-RECOVERY**: Path 1.5 (HTTP-обмен живых кук remixsid → web_token, ~0.5–1с) выполняется ПЕРВЫМ; WEB-MECHANISM (скрытый WebView, до 60с при мёртвом renderer) — ВТОРЫМ. Первое восстановление токена: ~1с вместо ~45с.
+2. **#STAMPEDE-GUARD**: окно 10с после успешного refresh — параллельные force-вызовы переиспользуют свежий токен (err=5 был на СТАРОМ токене) вместо повторного каскада.
+3. **Reentrant-guard удалён**: соперники честно ждут refreshMutex (FIFO) и получают токен сразу после лидера, вместо мгновенного null и падения секций. Дедлока нет: внутри мьютекса нет вложенных ensureFreshToken (все вложенные вызовы — прямой HTTP мимо VKApiClient.call).
+
+**Ожидание от след. теста:** при мёртвом renderer разделы получают контент за ~1-2с после старта (лог: «Path 1.5 live-cookie OK — renderer не понадобился» в первые секунды, без 44с WEB-MECHANISM).
