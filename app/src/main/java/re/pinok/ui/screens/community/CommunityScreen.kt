@@ -126,6 +126,8 @@ fun CommunityScreen(
     onAdminInvitesClick: (groupId: Long) -> Unit = {},
     onAdminQueueClick: (groupId: Long) -> Unit = {},
     onAdminAddressesClick: (groupId: Long) -> Unit = {},
+    // W39 (C9): журнал действий сообщества (web-only al-эндпоинт, HAR §12.2).
+    onAdminEventLogClick: (groupId: Long) -> Unit = {},
     onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
@@ -833,6 +835,7 @@ fun CommunityScreen(
                 onInvitesClick = onAdminInvitesClick,
                 onQueueClick = onAdminQueueClick,
                 onAddressesClick = onAdminAddressesClick,
+                onEventLogClick = onAdminEventLogClick,
             )
         }
         item {

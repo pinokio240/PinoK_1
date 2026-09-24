@@ -16964,6 +16964,36 @@ class VKApiClient(
         val comment: String?,
     )
 
+    // ═══ W39 (#ADMIN-C9): журнал действий сообщества (web-only, HAR §12.2) ═══
+
+    /** W39: элемент журнала действий (парсинг HTML al-ответа). */
+    data class EventLogItem(
+        /** id события формата {gid}_{actionType}_{adminId}_{ts}_{hash}. */
+        val id: String,
+        /** Категория («Работа со стеной», «Изменение настроек», …). */
+        val title: String,
+        /** Описание, очищенное от HTML-тегов. */
+        val text: String,
+        /** Дата как в вебе («22 сен в 15:21») — локаль VK. */
+        val dateText: String,
+        /** action_type из 2-го сегмента id (HAR §12.3); null если не распознан. */
+        val actionType: Int? = null,
+    )
+
+    /** W39: блок журнала за один день (data-date). */
+    data class EventLogBlock(
+        val dateTs: Long,
+        /** Заголовок блока как в вебе («22 сентября»). */
+        val dateLabel: String,
+        val items: List<EventLogItem>,
+    )
+
+    /** W39: страница журнала; nextFrom=null — история кончилась. */
+    data class EventLogPage(
+        val blocks: List<EventLogBlock>,
+        val nextFrom: Long?,
+    )
+
     /** W35-b: безопасное чтение Int из вложенного JsonObject (stats.get). */
     private fun statInt(obj: com.google.gson.JsonElement?, key: String): Int =
         obj?.takeIf { it.isJsonObject }?.asJsonObject
@@ -17186,6 +17216,110 @@ class VKApiClient(
             "owner_id" to userId.toString(),
         )) ?: return false
         return json.has("response")
+    }
+
+    /**
+     * W39 (#ADMIN-C9): страница журнала действий сообщества. Mobile API метода
+     * НЕТ — web-эндпоинт из HAR (план §12.2):
+     *   POST https://vk.ru/{screen_name}?act=event_log
+     *   body: al=1&filter=1[&action_type=wall|content|roles|users]&next_from={ts}
+     * Cookies подставляет VkCookieJar (живой CookieManager, #SESSION-WEB-MECHANISM).
+     * next_from = data-date последнего блока предыдущего ответа (проверено по HAR:
+     * 170 запросов). Первая страница — nextFrom = «сейчас» (epoch, как веб).
+     * @param actionType фильтр категории; null = все события.
+     */
+    suspend fun groupsEventLogPage(
+        screenName: String,
+        nextFrom: Long,
+        actionType: String? = null,
+    ): EventLogPage = withContext(Dispatchers.IO) {
+        if (screenName.isBlank()) return@withContext EventLogPage(emptyList(), null)
+        val form = okhttp3.FormBody.Builder()
+            .add("al", "1")
+            .add("filter", "1")
+            .add("next_from", nextFrom.toString())
+        if (!actionType.isNullOrBlank()) form.add("action_type", actionType)
+        val req = okhttp3.Request.Builder()
+            .url("https://vk.ru/$screenName?act=event_log")
+            .post(form.build())
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            )
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Accept", "text/plain, */*; q=0.01")
+            .header("Referer", "https://vk.ru/$screenName")
+            .build()
+        val body: String = try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    AppLog.w("VKApiClient", "groupsEventLogPage: HTTP ${resp.code}")
+                    return@withContext EventLogPage(emptyList(), null)
+                }
+                resp.body?.string() ?: ""
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "groupsEventLogPage: network error: ${e.message}")
+            return@withContext EventLogPage(emptyList(), null)
+        }
+        if (body.isBlank()) return@withContext EventLogPage(emptyList(), null)
+        try {
+            // Формат al-ответа: {"payload":[0,[HTML,...],...]} (HAR §12.2).
+            val root = JsonParser.parseString(body)
+            if (!root.isJsonObject) return@withContext EventLogPage(emptyList(), null)
+            val payloadArr = root.asJsonObject.getAsJsonArray("payload")
+            if (payloadArr == null || payloadArr.size() < 2 || !payloadArr.get(1).isJsonArray) {
+                return@withContext EventLogPage(emptyList(), null)
+            }
+            val inner = payloadArr.get(1).asJsonArray
+            if (inner.size() < 1 || inner.get(0).isJsonNull) {
+                return@withContext EventLogPage(emptyList(), null)
+            }
+            parseEventLogHtml(inner.get(0).asString)
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "groupsEventLogPage: parse error: ${e.message}")
+            EventLogPage(emptyList(), null)
+        }
+    }
+
+    /** W39: парсинг HTML-чанка журнала (блоки data-date + item_title/text/date). */
+    private fun parseEventLogHtml(html: String): EventLogPage {
+        val blockRe = Regex("data-date=\"(\\d+)\"")
+        val starts = blockRe.findAll(html).toList()
+        if (starts.isEmpty()) return EventLogPage(emptyList(), null)
+        val itemRe = Regex(
+            "id=\"groups_edit_event_log_item_wrap_([^\"]+)\".*?item_title\">([^<]*)</div>.*?item_text\">(.*?)</div>.*?item_date\">(.*?)</div>",
+            RegexOption.DOT_MATCHES_ALL,
+        )
+        val titleRe = Regex("groups_edit_event_log_title\">([^<]*)</div>")
+        val blocks = starts.mapIndexed { i, m ->
+            val segStart = m.range.last + 1
+            val segEnd = if (i + 1 < starts.size) starts[i + 1].range.first else html.length
+            val seg = html.substring(segStart, segEnd)
+            val label = titleRe.find(seg)?.groupValues?.get(1)?.trim().orEmpty()
+            val items = itemRe.findAll(seg).map { it2 ->
+                val rawId = it2.groupValues[1]
+                EventLogItem(
+                    id = rawId,
+                    title = it2.groupValues[2].trim(),
+                    text = stripEventLogHtml(it2.groupValues[3]),
+                    dateText = it2.groupValues[4].trim(),
+                    actionType = rawId.split("_").getOrNull(1)?.toIntOrNull(),
+                )
+            }.toList()
+            EventLogBlock(dateTs = m.groupValues[1].toLongOrNull() ?: 0L, dateLabel = label, items = items)
+        }
+        return EventLogPage(blocks = blocks, nextFrom = blocks.lastOrNull()?.dateTs)
+    }
+
+    /** W39: очистка item_text от тегов/сущностей (минимальный набор). */
+    private fun stripEventLogHtml(raw: String): String {
+        var s = raw.replace(Regex("<[^>]*>"), "")
+        s = s.replace("&quot;", "\"").replace("&#39;", "'")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&nbsp;", " ").replace("&amp;", "&")
+        return s.replace(Regex("\\s+"), " ").trim()
     }
 
     /** W35-b: groups.getRequests — заявки на вступление. */

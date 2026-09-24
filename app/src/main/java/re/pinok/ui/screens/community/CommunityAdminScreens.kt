@@ -6,6 +6,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,11 +15,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,11 +31,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,6 +52,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -58,7 +66,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -121,6 +131,13 @@ private fun adminRoleLabel(role: String?, isOwner: Boolean): String = when {
     else -> "Участник"
 }
 
+/** W39 (#ADMIN-BL-SEARCH): константы бана — паритет с C8 (GroupMembersScreen). */
+private val ADMIN_BAN_REASONS = listOf(
+    "Другое", "Спам", "Оскорбление участников", "Нецензурные выражения", "Угрозы",
+)
+private val ADMIN_BAN_DURATION_SECONDS = listOf(0L, 86400L, 604800L, 2592000L)
+private val ADMIN_BAN_DURATION_LABELS = listOf("Навсегда", "1 день", "1 неделя", "1 месяц")
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Блок «Управление» в CommunityScreen (вкладка «Стена», над TabRow).
 // ═══════════════════════════════════════════════════════════════════════════
@@ -140,9 +157,15 @@ fun CommunityAdminBlock(
     onInvitesClick: (Long) -> Unit,
     onQueueClick: (Long) -> Unit,
     onAddressesClick: (Long) -> Unit,
+    // W39 (C9): журнал действий сообщества (web-only).
+    onEventLogClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
+
+    // W39 (#ADMIN-COLLAPSE): блок свёрнут по умолчанию — 3 частых пункта +
+    // кнопка «Показать все» (запрос пользователя: админку надо «сворачивать»).
+    var expanded by rememberSaveable { mutableStateOf(false) }
 
     Card(
         modifier = Modifier
@@ -181,6 +204,31 @@ fun CommunityAdminBlock(
                 )
             }
 
+            // ── W39 #ADMIN-COLLAPSE: свёрнутое состояние — 3 частых пункта ──
+            if (!expanded) {
+                AdminBlockRow(
+                    icon = Icons.Filled.Settings,
+                    title = "Настройки сообщества",
+                    subtitle = "Название, описание, сайт, адрес",
+                    onClick = { onSettingsClick(gi.id) },
+                )
+                AdminBlockRow(
+                    icon = Icons.Filled.BarChart,
+                    title = "Статистика",
+                    subtitle = "Посетители, охват, активность (30 дней)",
+                    onClick = { onStatsClick(gi.id) },
+                )
+                AdminBlockRow(
+                    icon = Icons.Filled.ManageAccounts,
+                    title = "Руководители",
+                    subtitle = "Роли и полномочия",
+                    onClick = { onPeopleClick(gi.id, "managers") },
+                )
+                AdminBlockExpander(expanded = expanded, onToggle = { expanded = !expanded })
+            }
+
+            // ── Развёрнутое состояние: полный список (волна 35 + W38 + W39) ──
+            if (expanded) {
             // ── Реализованные пункты (волна 35) ──
             AdminBlockRow(
                 icon = Icons.Filled.Settings,
@@ -240,6 +288,14 @@ fun CommunityAdminBlock(
                 onClick = { onAddressesClick(gi.id) },
             )
 
+            // W39 (#ADMIN-C9): журнал действий — кто и что менял (web-only, HAR §12.2).
+            AdminBlockRow(
+                icon = Icons.Filled.History,
+                title = "Журнал действий",
+                subtitle = "История изменений сообщества",
+                onClick = { onEventLogClick(gi.id) },
+            )
+
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
             // ── Честные disabled-пункты (план §4 C-серия: C3 кнопка действия,
@@ -247,6 +303,10 @@ fun CommunityAdminBlock(
             AdminBlockRow(icon = Icons.Filled.Settings, title = "Сообщения", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
             AdminBlockRow(icon = Icons.Filled.Settings, title = "Разделы", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
             AdminBlockRow(icon = Icons.Filled.Settings, title = "Бизнес-инструменты", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
+
+            // W39 (#ADMIN-COLLAPSE): «Свернуть» внизу развёрнутого списка.
+            AdminBlockExpander(expanded = expanded, onToggle = { expanded = !expanded })
+            } // if (expanded)
         }
     }
 }
@@ -299,6 +359,31 @@ private fun AdminBlockRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** W39 (#ADMIN-COLLAPSE): кнопка раскрытия/сворачивания блока «Управление». */
+@Composable
+private fun AdminBlockExpander(expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = if (expanded) "Свернуть" else "Развернуть",
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = if (expanded) "Свернуть" else "Показать все пункты",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
@@ -872,6 +957,17 @@ fun AdminPeopleScreen(
     var bannedLoading by remember { mutableStateOf(false) }
     var bannedError by remember { mutableStateOf<String?>(null) }
 
+    // W39 (#ADMIN-BL-SEARCH): бан по поиску ЛЮБОГО юзера (users.search →
+    // groups.banUser; web-референс search_add_box to=blacklist, HAR §12.2).
+    var banSearchQuery by remember { mutableStateOf("") }
+    var banSearchResults by remember { mutableStateOf<List<UserProfile>>(emptyList()) }
+    var banSearchBusy by remember { mutableStateOf(false) }
+    var searchBanTarget by remember { mutableStateOf<UserProfile?>(null) }
+    var searchBanBusy by remember { mutableStateOf(false) }
+    var searchBanReason by remember { mutableStateOf(0) }
+    var searchBanDurationIdx by remember { mutableStateOf(0) }
+    var searchBanComment by remember { mutableStateOf("") }
+
     var busyUserId by remember { mutableStateOf<Long?>(null) }
     // Диалог смены роли: userId или null.
     var roleDialogFor by remember { mutableStateOf<VKApiClient.GroupManager?>(null) }
@@ -926,6 +1022,63 @@ fun AdminPeopleScreen(
                 bannedError = e.message ?: "Ошибка загрузки"
             } finally {
                 bannedLoading = false
+            }
+        }
+    }
+
+    /** W39: поиск юзера для бана (users.search). */
+    fun runBanSearch() {
+        val q = banSearchQuery.trim()
+        if (q.isBlank()) return
+        scope.launch {
+            banSearchBusy = true
+            try {
+                banSearchResults = app.apiClient.usersSearch(q, count = 10)
+            } catch (e: Exception) {
+                AppLog.e("AdminPeople", "usersSearch failed", e)
+                banSearchResults = emptyList()
+            } finally {
+                banSearchBusy = false
+            }
+        }
+    }
+
+    /** W39: бан найденного через поиск юзера (groups.banUser — как C8). */
+    fun applySearchBan(target: UserProfile) {
+        scope.launch {
+            searchBanBusy = true
+            try {
+                val seconds = ADMIN_BAN_DURATION_SECONDS[searchBanDurationIdx]
+                val endDate = if (seconds == 0L) 0L else System.currentTimeMillis() / 1000L + seconds
+                val ok = app.apiClient.groupsBanUser(
+                    groupId = groupId,
+                    userId = target.id,
+                    reason = searchBanReason,
+                    endDate = endDate,
+                    comment = searchBanComment.takeIf { it.isNotBlank() },
+                )
+                if (ok) {
+                    Toast.makeText(context, "Пользователь забанен", Toast.LENGTH_SHORT).show()
+                    searchBanTarget = null
+                    searchBanComment = ""
+                    searchBanReason = 0
+                    searchBanDurationIdx = 0
+                    // Перечитываем ЧС — новый бан должен появиться в списке.
+                    banned = emptyList()
+                    loadBanned()
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось забанить" else "Ошибка: $err",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminPeople", "search ban failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                searchBanBusy = false
             }
         }
     }
@@ -1155,7 +1308,74 @@ fun AdminPeopleScreen(
                 }
 
                 TAB_BANNED -> {
-                    when {
+                    // W39: поиск любого юзера по имени → бан (сверка web
+                    // search_add_box to=blacklist); список+разбан — как было.
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        OutlinedTextField(
+                            value = banSearchQuery,
+                            onValueChange = { banSearchQuery = it },
+                            label = { Text("Забанить по поиску: имя или фамилия") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            trailingIcon = {
+                                if (banSearchBusy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    IconButton(onClick = { runBanSearch() }) {
+                                        Icon(Icons.Filled.Search, contentDescription = "Найти")
+                                    }
+                                }
+                            },
+                        )
+                        if (banSearchResults.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                            ) {
+                                Text(
+                                    text = "Результаты поиска",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                banSearchResults.forEach { found ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { searchBanTarget = found }
+                                            .padding(vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        AsyncImage(
+                                            model = found.photo100,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(CircleShape),
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = found.fullName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        TextButton(onClick = { searchBanTarget = found }) {
+                                            Text("Бан")
+                                        }
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                        when {
                         bannedLoading -> Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,
@@ -1242,6 +1462,7 @@ fun AdminPeopleScreen(
                             }
                         }
                     }
+                    } // Column: W39 ban-search wrapper
                 }
             }
         }
@@ -1284,6 +1505,67 @@ fun AdminPeopleScreen(
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { roleDialogFor = null }) { Text("Отмена") }
+            },
+        )
+    }
+
+    // W39 (#ADMIN-BL-SEARCH): диалог бана найденного через поиск юзера
+    // (причина/срок/комментарий — паритет с C8 в GroupMembersScreen).
+    val searchTarget = searchBanTarget
+    if (searchTarget != null) {
+        AlertDialog(
+            onDismissRequest = { if (!searchBanBusy) searchBanTarget = null },
+            title = {
+                Text(
+                    "Забанить: ${searchTarget.fullName}",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Причина", style = MaterialTheme.typography.labelLarge)
+                    ADMIN_BAN_REASONS.forEachIndexed { idx, label ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { searchBanReason = idx },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = searchBanReason == idx, onClick = { searchBanReason = idx })
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.heightIn(min = 8.dp))
+                    Text("Срок", style = MaterialTheme.typography.labelLarge)
+                    ADMIN_BAN_DURATION_LABELS.forEachIndexed { idx, label ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { searchBanDurationIdx = idx },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = searchBanDurationIdx == idx, onClick = { searchBanDurationIdx = idx })
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.heightIn(min = 8.dp))
+                    OutlinedTextField(
+                        value = searchBanComment,
+                        onValueChange = { searchBanComment = it },
+                        label = { Text("Комментарий (необязательно)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { applySearchBan(searchTarget) }, enabled = !searchBanBusy) {
+                    Text("Забанить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { searchBanTarget = null }, enabled = !searchBanBusy) { Text("Отмена") }
             },
         )
     }
@@ -2190,5 +2472,270 @@ fun AdminAddressesScreen(
             },
             dismissButton = { TextButton(onClick = { editTarget = null }, enabled = !busy) { Text("Отмена") } },
         )
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W39 (#ADMIN-C9): «Журнал действий» сообщества.
+// Web-only (mobile API аналога НЕТ): POST https://vk.ru/{screen_name}?act=event_log
+// (HAR §12.2/§12.3: al=1&filter=1[&action_type=…]&next_from={ts}; пагинация —
+// data-date последнего блока; фильтры wall/content/roles/users — подтверждены HAR).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** W39: фильтры журнала (подтверждены HAR: action_type=wall|content|roles|users). */
+private val EVENT_LOG_FILTERS: List<Pair<String, String?>> = listOf(
+    "Все" to null,
+    "Стена" to "wall",
+    "Контент" to "content",
+    "Руководство" to "roles",
+    "Пользователи" to "users",
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminEventLogScreen(
+    groupId: Long,
+    onBack: () -> Unit,
+) {
+    val app = SovaApp.get()
+    val scope = rememberCoroutineScope()
+
+    // screen_name нужен для web-URL; groupsGetById fields уже содержит screen_name.
+    var info by remember { mutableStateOf<VKApiClient.GroupInfo?>(null) }
+    var infoError by remember { mutableStateOf<String?>(null) }
+
+    val selectedTab = remember { mutableIntStateOf(0) }
+    var blocks by remember { mutableStateOf<List<VKApiClient.EventLogBlock>>(emptyList()) }
+    var seenIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var nextFrom by remember { mutableStateOf<Long?>(null) }
+    var endReached by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+
+    fun loadInfo() {
+        scope.launch {
+            infoError = null
+            try {
+                info = app.apiClient.groupsGetById(listOf(groupId)).firstOrNull()
+                if (info == null) {
+                    infoError = app.apiClient.lastApiError?.takeIf { it.isNotBlank() }
+                        ?: "Не удалось загрузить сообщество"
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminEventLog", "loadInfo failed", e)
+                infoError = e.message ?: "Ошибка загрузки"
+            }
+        }
+    }
+
+    /** Страница журнала; append с дедупликацией по id события. */
+    fun loadPage(reset: Boolean) {
+        val gi = info ?: return
+        val sn = gi.screenName?.takeIf { it.isNotBlank() } ?: return
+        if (loading || loadingMore) return
+        if (!reset && (endReached || nextFrom == null)) return
+        scope.launch {
+            if (reset) loading = true else loadingMore = true
+            loadError = null
+            try {
+                val from = if (reset) System.currentTimeMillis() / 1000L else nextFrom ?: return@launch
+                val page = app.apiClient.groupsEventLogPage(
+                    screenName = sn,
+                    nextFrom = from,
+                    actionType = EVENT_LOG_FILTERS[selectedTab.intValue].second,
+                )
+                if (reset) {
+                    blocks = page.blocks
+                    seenIds = page.blocks.flatMap { b -> b.items.map { it.id } }.toSet()
+                    nextFrom = page.nextFrom
+                    endReached = page.nextFrom == null || page.blocks.all { it.items.isEmpty() }
+                } else {
+                    val newBlocks = page.blocks
+                        .map { b -> b.copy(items = b.items.filter { it.id !in seenIds }) }
+                        .filter { it.items.isNotEmpty() }
+                    val newIds = newBlocks.flatMap { b -> b.items.map { it.id } }.toSet()
+                    blocks = blocks + newBlocks
+                    seenIds = seenIds + newIds
+                    nextFrom = page.nextFrom
+                    // 0 новых событий → конец (иначе next_from зациклится).
+                    endReached = page.nextFrom == null || newIds.isEmpty()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminEventLog", "loadPage failed", e)
+                loadError = e.message ?: "Ошибка загрузки"
+            } finally {
+                loading = false
+                loadingMore = false
+            }
+        }
+    }
+
+    /** W39: смена фильтра — полный сброс и первая страница. */
+    fun onTabChange(idx: Int) {
+        if (idx == selectedTab.intValue) return
+        selectedTab.intValue = idx
+        blocks = emptyList()
+        seenIds = emptySet()
+        nextFrom = null
+        endReached = false
+        loadPage(reset = true)
+    }
+
+    LaunchedEffect(groupId) { loadInfo() }
+
+    // Первая страница — после получения GroupInfo (нужен screen_name).
+    LaunchedEffect(info?.id) {
+        val gi = info ?: return@LaunchedEffect
+        if (gi.screenName.isNullOrBlank()) return@LaunchedEffect
+        if (blocks.isEmpty() && !loading && nextFrom == null && !endReached) {
+            loadPage(reset = true)
+        }
+    }
+
+    // Бесконечный скролл: у нижнего края списка — догружаем следующую страницу.
+    LaunchedEffect(nextFrom, endReached, selectedTab.intValue) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .collect { lastIdx ->
+                val total = blocks.sumOf { it.items.size } + blocks.size
+                if (total > 0 && lastIdx >= total - 3 && !loading && !loadingMore &&
+                    !endReached && nextFrom != null
+                ) {
+                    loadPage(reset = false)
+                }
+            }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Журнал действий") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+            )
+        },
+    ) { pad ->
+        val gi = info
+        when {
+            infoError != null -> ErrorView(
+                message = infoError,
+                onRetry = { loadInfo() },
+                modifier = Modifier.padding(pad),
+            )
+
+            gi == null -> Box(
+                modifier = Modifier.fillMaxSize().padding(pad),
+                contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator() }
+
+            gi.screenName.isNullOrBlank() -> ErrorView(
+                message = "У сообщества нет короткого адреса — журнал действий недоступен",
+                onRetry = { loadInfo() },
+                modifier = Modifier.padding(pad),
+            )
+
+            else -> Column(modifier = Modifier.fillMaxSize().padding(pad)) {
+                TabRow(selectedTabIndex = selectedTab.intValue) {
+                    EVENT_LOG_FILTERS.forEachIndexed { idx, filter ->
+                        Tab(
+                            selected = selectedTab.intValue == idx,
+                            onClick = { onTabChange(idx) },
+                            text = { Text(filter.first) },
+                        )
+                    }
+                }
+                when {
+                    loading -> Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator() }
+
+                    loadError != null && blocks.isEmpty() -> ErrorView(
+                        message = loadError,
+                        onRetry = { loadPage(reset = true) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    blocks.isEmpty() -> ErrorView(
+                        message = "Событий пока нет",
+                        onRetry = { loadPage(reset = true) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                        blocks.forEach { block ->
+                            item(key = "d_${block.dateTs}") {
+                                Text(
+                                    text = block.dateLabel.ifBlank {
+                                        SimpleDateFormat("d MMMM yyyy", Locale.getDefault())
+                                            .format(Date(block.dateTs * 1000L))
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
+                            items(block.items, key = { it.id }) { ev ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                ) {
+                                    Text(
+                                        text = ev.title,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = ev.text,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        text = ev.dateText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                        if (loadingMore) {
+                            item(key = "more") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                }
+                            }
+                        }
+                        if (endReached) {
+                            item(key = "end") {
+                                Text(
+                                    text = "Все события загружены",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

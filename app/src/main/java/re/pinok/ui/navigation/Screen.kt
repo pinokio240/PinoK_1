@@ -213,6 +213,15 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     }
 
     /**
+     * W39 (C9): журнал действий сообщества — web-only al-эндпоинт
+     * (mobile API аналога нет; HAR §12.2, паттерн VkCookieJar).
+     */
+    object AdminEventLog : Screen("admin_event_log/{groupId}", "Журнал действий", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_event_log/$groupId"
+    }
+
+    /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query
      * (для TopAppBar). Загружает board.getComments с пагинацией.

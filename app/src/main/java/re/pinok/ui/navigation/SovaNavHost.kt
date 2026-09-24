@@ -106,6 +106,7 @@ import re.pinok.ui.screens.community.AdminPeopleScreen
 import re.pinok.ui.screens.community.AdminSettingsScreen
 import re.pinok.ui.screens.community.AdminStatsScreen
 import re.pinok.ui.screens.community.AdminAddressesScreen
+import re.pinok.ui.screens.community.AdminEventLogScreen
 import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
 import re.pinok.ui.screens.community.AdminWallQueueScreen
@@ -2333,6 +2334,10 @@ composable(Screen.CallsHistory.route) {
                         onAdminAddressesClick = { adminGroupId ->
                             nav.navigate(Screen.AdminAddresses.buildRoute(adminGroupId))
                         },
+                        // W39 (C9): журнал действий сообщества (web-only).
+                        onAdminEventLogClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminEventLog.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2431,6 +2436,19 @@ composable(Screen.CallsHistory.route) {
                     val addressesGroupId = entry.arguments?.getLong(Screen.AdminAddresses.ARG_GROUP_ID) ?: 0L
                     AdminAddressesScreen(
                         groupId = addressesGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W39 (C9): «Журнал действий» — web-only al-эндпоинт (HAR §12.2).
+                composable(
+                    route = Screen.AdminEventLog.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminEventLog.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val logGroupId = entry.arguments?.getLong(Screen.AdminEventLog.ARG_GROUP_ID) ?: 0L
+                    AdminEventLogScreen(
+                        groupId = logGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }

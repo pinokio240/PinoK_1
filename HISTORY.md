@@ -13074,3 +13074,6 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
 
 ## #ADMIN-HAR-ANALYSIS (2026-09-25)
 Разобран HAR-дамп веб-сессии админки (vk.ru.har, 506 запросов, сообщество pluton240): карта всех секций настроек, форматы al_profile/groupsedit/al_groups, устройство журнала действий (POST {screen_name}?act=event_log, al=1&filter=1&next_from={ts}, data-additional JSON с action_type/ts/admin_id), search_add_box для бана по поиску. Mobile API аналога журнала нет — план C9 через web-fallback с remixsid (паттерн AlAudioFallback). Полный разбор и рекомендации: docs/план.волна-35.админ-сообщества.2026-09-10.md §12. Правок кода не требуется.
+
+## #ADMIN-W39 (2026-09-25)
+Сворачиваемый блок «Управление» (#ADMIN-COLLAPSE, по умолчанию свёрнут — 3 пункта + «Показать все»); C9 «Журнал действий» — web-only al-эндпоинт через VkCookieJar (mobile API аналога нет; HAR §12.2: next_from=data-date последнего блока, фильтры wall/content/roles/users, action_type из id события; регексы сверены на реальных HAR-чанках); бан по поиску любого юзера в ЧС (users.search → groups.banUser, сверка web search_add_box). Экран AdminEventLogScreen + маршрут admin_event_log/{groupId}. План §13.
