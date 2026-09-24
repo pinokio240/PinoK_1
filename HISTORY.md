@@ -12973,3 +12973,21 @@ getConversations, getCounters, getSecurityAlerts, getRedesign) — только 
 - AuthActivity: silent fail (AuthState.Error) → Toast «Не удалось обновить
   авторизацию — войдите вручную из бокового меню» + onCancel (finish),
   ВМЕСТО fallback to LANDING (при мёртвом renderer LANDING = чёрный экран).
+## #RENDERER-FALLBACK (2026-09-24): восстановлен Path 1.5 — HTTP silent refresh по живым кукам
+
+Логкат 17:46 (4ENKiJQS3UP): разделы пустые — ВСЕ API-вызовы «no token, refresh failed»
+(newsfeed.get, audio.get, audio.getCatalog, messages.getLongPollServer, account.setOnline,
+account.getCounters, queue.subscribe, notifications.getRedesign, getSecurityAlerts).
+Токен не может появиться: renderer chromium мёртв (та же «Failed to establish the
+service connection»), и WEB-MECHANISM (скрытый WebView) не может выполнить JS.
+Упрощение авторизации (#SESSION-WEB-MECHANISM) оставило ОДНУ точку отказа — WebView.
+
+Фикс: восстановлен удалённый Path 1.5 (silentRefreshViaRemixsid) как fallback ПОСЛЕ
+провала WEB-MECHANISM. Отличия от старой версии:
+- cookies читаются из ЖИВОГО CookieManager (RemixsidCapturer.snapshotCookies), а не
+  из storage-копий (копий больше нет) — «смена сети → просит логин» не воспроизводится;
+- endpoint/контракт прежний: GET login.vk.ru/?act=web_token&app_id=7879029&version=1,
+  Cookie: remixsid+remixsid_user+p+remixnsid+httoken+remixlang; Origin id.vk.com →
+  alt login.vk.ru+id.vk.ru; ответ {"type":"okay","data":{access_token,expires,user_id,logout_hash}};
+- кулдаун 90с после провала (Fix #177+#178), reset при успехе;
+- persist через battle-tested saveWebTokenResult.

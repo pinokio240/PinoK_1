@@ -1,10 +1,13 @@
 package re.pinok.auth.exchange
 
+import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import re.pinok.data.local.SovaPrefs
@@ -886,7 +889,32 @@ class ExchangeAuthRepository(
             if (web == null) {
                 AppLog.w(TAG, "ensureFreshToken: WEB-MECHANISM refresh failed " +
                     "(definitivelyDead=${HiddenSessionRefresher.lastAttemptDefinitivelyDead}) — " +
-                    "re-login required")
+                    "trying HTTP fallback (Path 1.5 live-cookie)")
+
+                // #RENDERER-FALLBACK (2026-09-24): восстановленный Path 1.5 —
+                // HTTP-обмен remixsid → web_token БЕЗ WebView. Единственная причина
+                // сюда попадать: renderer chromium мёртв (cr_ChildProcessConn) и
+                // ни AuthActivity, ни скрытый WebView не могут выполнить JS.
+                // Cookies берём из ЖИВОГО CookieManager (не из storage — копий
+                // больше нет по #SESSION-WEB-MECHANISM), поэтому «смена сети →
+                // просит логин» тут не воспроизводится: с того же cookie jar,
+                // что использовал бы WebView.
+                val httpResult = silentRefreshViaRemixsidLive()
+                if (httpResult != null) {
+                    val state = saveWebTokenResult(
+                        accessToken = httpResult.accessToken,
+                        userId = httpResult.userId,
+                        expiresAt = httpResult.expiresAt,
+                        satToken = null,
+                        logoutHash = httpResult.logoutHash,
+                        remixsid = null,
+                    )
+                    AppLog.i(TAG, "ensureFreshToken: Path 1.5 live-cookie fallback OK " +
+                        "(user_id=${httpResult.userId}, state=$state) — renderer не понадобился")
+                    return@withLock httpResult.accessToken
+                }
+
+                AppLog.w(TAG, "ensureFreshToken: WEB-MECHANISM + HTTP fallback оба failed — re-login required")
                 return@withLock null
             }
 
@@ -1293,6 +1321,195 @@ class ExchangeAuthRepository(
     }
 
 
+    // =====================================================================
+    // #RENDERER-FALLBACK (2026-09-24): восстановленный Path 1.5 —
+    // silentRefreshViaRemixsidLive. Отличие от удалённой версии:
+    // cookies читаются из ЖИВОГО CookieManager (RemixsidCapturer.snapshotCookies),
+    // а не из storage-копий (копий больше нет по #SESSION-WEB-MECHANISM).
+    // Endpoint тот же, что использует m.vk.ru JS:
+    //   GET https://login.vk.ru/?act=web_token&app_id=7879029&version=1
+    //   Cookie: remixsid=…; remixsid_user=…; p=…; remixnsid=…; httoken=…; remixlang=0
+    //   Origin: https://id.vk.com (alt: https://id.vk.ru + login.vk.ru)
+    //   Response: {"type":"okay","data":{"access_token":"vk1.a.*","expires":<sec>,
+    //             "user_id":<id>,"logout_hash":"<hex>"}} — или
+    //             {"type":"error","error_info":"wrong origin"/"unauthorized"}
+    // =====================================================================
+
+    private data class RemixsidRefreshResult(
+        val accessToken: String,
+        val userId: Long,
+        val expiresAt: Long,        // абсолютный ms (0 = offline scope)
+        val logoutHash: String?,
+    )
+
+    private data class OriginStrategy(
+        val origin: String?,
+        val referer: String,
+        val label: String,
+        val urlOverride: String? = null,
+    )
+
+    /**
+     * HTTP silent refresh через remixsid из живого CookieManager — БЕЗ WebView.
+     * Вызывается ТОЛЬКО когда WEB-MECHANISM (скрытый WebView) провалился —
+     * обычно это мёртвый chromium renderer (#BLACKSCREEN-RENDERER).
+     */
+    private suspend fun silentRefreshViaRemixsidLive(): RemixsidRefreshResult? {
+        val client = httpClient ?: run {
+            AppLog.w(TAG, "silentRefreshViaRemixsidLive: no httpClient — skip")
+            return null
+        }
+
+        // Куки — из живого cookie jar (источник истины #SESSION-WEB-MECHANISM).
+        val cookies = try { RemixsidCapturer.snapshotCookies() } catch (e: Exception) {
+            AppLog.w(TAG, "silentRefreshViaRemixsidLive: snapshotCookies failed: ${e.message}")
+            null
+        }
+        if (cookies == null || cookies.remixsid.isBlank()) {
+            AppLog.w(TAG, "silentRefreshViaRemixsidLive: нет remixsid в CookieManager — нечего обменивать")
+            return null
+        }
+
+        // Fix #177+#178 #SILENT-REFRESH-COOLDOWN (восстановлено): не спамим
+        // endpoint, если fallback уже падал за последние 90 секунд.
+        val nowMs = System.currentTimeMillis()
+        if (lastLiveFallbackFailMs != 0L && nowMs - lastLiveFallbackFailMs < LIVE_FALLBACK_COOLDOWN_MS) {
+            AppLog.i(TAG, "silentRefreshViaRemixsidLive: SKIPPED — cooldown " +
+                "(${LIVE_FALLBACK_COOLDOWN_MS - (nowMs - lastLiveFallbackFailMs)}ms remaining)")
+            return null
+        }
+
+        val userId = try { storage.userId() } catch (_: Exception) { 0L }
+        val cookieHeader = buildString {
+            append("remixsid=").append(cookies.remixsid)
+            if (userId > 0L) append("; remixsid_user=").append(userId)
+            cookies.pCookie?.takeIf { it.isNotBlank() }?.let { append("; p=").append(it) }
+            cookies.remixnsid?.takeIf { it.isNotBlank() }?.let { append("; remixnsid=").append(it) }
+            cookies.httoken?.takeIf { it.isNotBlank() }?.let { append("; httoken=").append(it) }
+            append("; remixlang=0")
+        }
+
+        val cfg = AuthDomainsConfig.current
+        val baseUrl = AuthDomainsConfig.loginWebTokenUrl()
+        val strategies = listOf(
+            OriginStrategy(
+                origin = "https://${cfg.idHost}",
+                referer = "https://${cfg.idHost}/",
+                label = "id(${cfg.idHost})",
+            ),
+            OriginStrategy(
+                origin = "https://id.vk.ru",
+                referer = "https://id.vk.ru/",
+                label = "alt-endpoint(login.vk.ru)+id(id.vk.ru)",
+                urlOverride = "https://login.vk.ru/?act=web_token&app_id=7879029&version=1",
+            ),
+        )
+
+        AppLog.i(TAG, "silentRefreshViaRemixsidLive: ${strategies.size} strategies " +
+            "(remixsid len=${cookies.remixsid.length}, p=${cookies.pCookie != null}, " +
+            "remixnsid=${cookies.remixnsid != null}, httoken=${cookies.httoken != null}, user=$userId)")
+
+        for ((idx, strat) in strategies.withIndex()) {
+            val tryUrl = strat.urlOverride ?: baseUrl
+            AppLog.d(TAG, "silentRefreshViaRemixsidLive: strategy ${idx + 1}/${strategies.size} [${strat.label}]")
+            val rawBody = try {
+                doSilentRefreshHttpLive(client, tryUrl, cookieHeader, strat)
+            } catch (e: IOException) {
+                AppLog.w(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] network failure: ${e.message}")
+                return null
+            } catch (e: Exception) {
+                AppLog.w(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] error: ${e.message}")
+                return null
+            }
+
+            if (AuthResponseParser.isWrongOriginResponse(rawBody)) {
+                AppLog.d(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] → wrong origin — next strategy")
+                continue
+            }
+            if (AuthResponseParser.isUnauthorizedResponse(rawBody)) {
+                AppLog.d(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] → unauthorized — next strategy")
+                continue
+            }
+
+            val json = try { JsonParser.parseString(rawBody).asJsonObject } catch (e: Exception) {
+                AppLog.w(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] non-JSON: ${rawBody.take(80)}")
+                return null
+            }
+
+            // #VKID-RESPONSE-WRAP: {"type":"okay","data":{...}} либо плоский формат.
+            val payload = json.getAsJsonObject("data")?.takeIf { it.isJsonObject } ?: json
+            val accessToken = payload.get("access_token")?.takeIf { !it.isJsonNull }?.asString
+            if (accessToken.isNullOrBlank()) {
+                AppLog.d(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] no access_token in response")
+                continue
+            }
+            val respUserId = payload.get("user_id")?.takeIf { !it.isJsonNull }?.asLong ?: userId
+            val expiresSec = payload.get("expires")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+            val logoutHash = payload.get("logout_hash")?.takeIf { !it.isJsonNull }?.asString
+            val expiresAt = if (expiresSec <= 0L) 0L else expiresSec * 1000L
+            AppLog.i(TAG, "silentRefreshViaRemixsidLive: [${strat.label}] OK — " +
+                "access_token получен БЕЗ WebView (user_id=$respUserId, expires=$expiresSec)")
+            lastLiveFallbackFailMs = 0L
+            return RemixsidRefreshResult(accessToken, respUserId, expiresAt, logoutHash)
+        }
+        AppLog.w(TAG, "silentRefreshViaRemixsidLive: все стратегии отвергнуты")
+        lastLiveFallbackFailMs = System.currentTimeMillis()
+        return null
+    }
+
+    @Volatile private var lastLiveFallbackFailMs: Long = 0L
+
+    private suspend fun doSilentRefreshHttpLive(
+        client: OkHttpClient,
+        url: String,
+        cookieHeader: String,
+        strat: OriginStrategy,
+    ): String = withContext(Dispatchers.IO) {
+        val reqBuilder = Request.Builder()
+            .url(url)
+            .header("Cookie", cookieHeader)
+        if (strat.origin != null) reqBuilder.header("Origin", strat.origin)
+        reqBuilder
+            .header("Sec-Fetch-Site", "same-site")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Dest", "empty")
+            .header("Referer", strat.referer)
+            .header("Accept", "application/json, text/plain, */*")
+            .header("User-Agent",
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/120.0.0.0 Mobile Safari/537.36")
+            .get()
+        val req = reqBuilder.build()
+
+        suspendCancellableCoroutine<String> { cont ->
+            val call = client.newCall(req)
+            cont.invokeOnCancellation { runCatching { call.cancel() } }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: IOException) {
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    try {
+                        val body = response.body?.string()
+                        val httpCode = response.code
+                        val safeBody = (body ?: "")
+                            .replace(Regex("\"access_token\"\\s*:\\s*\"[^\"]+\""), "\"access_token\":\"***\"")
+                            .take(400)
+                        AppLog.i(TAG, "silentRefreshViaRemixsidLive [${strat.label}] → HTTP $httpCode body=$safeBody")
+                        if (cont.isActive) {
+                            if (body != null) cont.resume(body)
+                            else cont.resumeWithException(IOException("empty response body (HTTP $httpCode)"))
+                        }
+                    } catch (e: Exception) {
+                        if (cont.isActive) {
+                            cont.resumeWithException(IOException("read body failed: ${e.message}", e))
+                        }
+                    }
+                }
+            })
+        }
+    }
+
     // #SESSION-WEB-MECHANISM (2026-09-24): silentRefreshViaRemixsid + RemixsidRefreshResult +
     // OriginStrategy + doSilentRefreshRequest + doSingleSilentRefreshHttp удалены.
     // HTTP-обмен по стейл-копии cookies из storage — корень багов «смена сети →
@@ -1304,6 +1521,8 @@ class ExchangeAuthRepository(
         const val TAG = "ExchangeAuthRepo"
         // #SESSION-WEB-MECHANISM: SILENT_REFRESH_COOLDOWN_MS переехал в
         // HiddenSessionRefresher.FAIL_COOLDOWN_MS (кулдаун скрытого WebView-refresh).
+        // #RENDERER-FALLBACK: кулдаун live-cookie HTTP fallback (Path 1.5).
+        const val LIVE_FALLBACK_COOLDOWN_MS = 90L * 1000L
     }
 }
 

@@ -10416,3 +10416,17 @@ Work Log:
 
 Stage Summary:
 - Silent-авторизация теперь полностью фоновая с Toast-статусами; при мёртвом renderer юзер остаётся в Main (боковая панель/навигация работают). Коммит a6257e7..HEAD, push следом.
+
+---
+Task ID: S9-renderer-fallback-path15
+Agent: Z.ai Code (main)
+Task: Лог 4ENKiJQS3UP — разделы не отображают контент.
+
+Work Log:
+- Все API «no token, refresh failed» — токен отсутствует, т.к. renderer мёртв и WEB-MECHANISM (скрытый WebView) не может отработать. AuthActivity в этой сессии даже не запускалась (tick 1..4 — Main не перезапустил).
+- Контракты при упрощении не сломаны; сломана живучесть — единственная точка отказа WebView.
+- Восстановлен Path 1.5 из git-истории (9d1521d~1): silentRefreshViaRemixsidLive — HTTP обмен remixsid→web_token БЕЗ WebView, cookies из живого CookieManager, 2 Origin-стратегии, кулдаун 90с, persist через saveWebTokenResult.
+- Fallback вызывается в ensureFreshToken ПОСЛЕ провала HiddenSessionRefresher.
+
+Stage Summary:
+- При мёртвом renderer разделы снова получают токен за ~0.5-1с через HTTP (если VK примет куки). Коммит + push следом.
