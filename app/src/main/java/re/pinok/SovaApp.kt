@@ -2304,9 +2304,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // без onLost не срабатывает (сеть «не терялась»). keepAliveScope —
             // приватный scope приложения, переживающий экраны.
             try {
-                if (apiClient.isAutoOfflineActive()) {
-                    keepAliveScope.launch { runCatching { apiClient.clearAutoOffline() } }
-                }
+                // #AUTO-OFFLINE-SELFHEAL (W41): clearAutoOffline теперь сам чиcтит и
+                // переживший перезапуск преф (маркера нет, преф=true) — условие
+                // isAutoOfflineActive() пропускало этот случай, вызов делаем всегда
+                // (метод идемпотентен: без префа и маркера — no-op).
+                keepAliveScope.launch { runCatching { apiClient.clearAutoOffline() } }
             } catch (_: Exception) {}
             try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true, forceReprepare = true) } catch (_: Exception) {}
 
@@ -2387,9 +2389,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     // Fix #367: сеть восстановилась — снимаем застрявший АВТО-офлайн
                     // (раньше watcher снимал только счётчик, а сам режим оставался
                     // до перезапуска приложения).
-                    try {
-                        if (apiClient.isAutoOfflineActive()) apiClient.clearAutoOffline()
-                    } catch (_: Exception) {}
+                    // #AUTO-OFFLINE-SELFHEAL (W41): без условия — преф мог пережить
+                    // перезапуск (маркера нет), isAutoOfflineActive()=false, а преф
+                    // блокировал все гейты. clear идемпотентен.
+                    try { apiClient.clearAutoOffline() } catch (_: Exception) {}
                     try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true) } catch (_: Exception) {}
                     // #NET-SWITCH-POPUP: сеть восстановилась → Idle (скрыть popup).
                     setNetworkSwitchState(NetworkSwitchState.Idle)

@@ -179,7 +179,23 @@ class VKApiClient(
 
     suspend fun isOffline(): Boolean {
         val snap = prefs.data.first()
-        return networkMods.isOfflineForced(snap) || !networkObserver.isOnline()
+        if (networkMods.isOfflineForced(snap)) {
+            // #AUTO-OFFLINE-SELFHEAL (W41): преф privacyOfflineMode пишет ТОЛЬКО
+            // авто-трип (ручного тумблера нет — Fix #367, toggle убран из настроек,
+            // SettingsScreen #38). Если маркер трипа отсутствует (пережил перезапуск
+            // процесса) ИЛИ кулдаун 30с истёк — снимаем преф и доверяем реальному
+            // состоянию сети. Раньше самолечение жило только в callInternal — туда
+            // заблокированные вызовы не доходили (ранние гейты срабатывали раньше),
+            // и «Повторить» в UI не мог пробить стену. Если сеть реально сломана —
+            // авто-трип сработает снова (3 сбоя/60с), это штатный цикл самолечения.
+            val marker = autoOfflineAt
+            if (marker == 0L || System.currentTimeMillis() - marker >= AUTO_OFFLINE_COOLDOWN_MS) {
+                clearAutoOffline()
+            } else {
+                return true
+            }
+        }
+        return !networkObserver.isOnline()
     }
 
     fun token(): String? = tokenStorage.load()?.accessToken
@@ -11165,12 +11181,26 @@ class VKApiClient(
      * авто-трипом, поэтому снятие безопасно всегда.
      */
     suspend fun clearAutoOffline() {
-        if (autoOfflineAt == 0L) return
+        // #AUTO-OFFLINE-SELFHEAL (W41): раньше ранний return при autoOfflineAt==0L
+        // оставлял ПЕРЕЖИВШИЙ перезапуск преф privacyOfflineMode=true навсегда:
+        // маркер трипа живёт в памяти процесса, преф — в DataStore. После смерти
+        // процесса (очистка кэша, kill, система) преф=true остаётся, маркера нет —
+        // метод ничего не чистил, isAutoOfflineActive()=false, watcher'ы сети
+        // тоже пропускали (сеть по мнению ConnectivityManager не «терялась») →
+        // все гейты isOffline() блокировали контент вечно, «Повторить» бессилен.
+        val hadMarker = autoOfflineAt != 0L
         autoOfflineAt = 0L
         consecutiveNetworkErrors = 0
         lastNetworkErrorTs = 0L
-        runCatching { prefs.setPrivacyOfflineMode(false) }
-        AppLog.i("VKApiClient", "#MUSIC-NET-DIAG: auto-offline cleared (self-heal)")
+        val snap = runCatching { prefs.data.first() }.getOrNull()
+        if (snap?.privacyOfflineMode == true) {
+            runCatching { prefs.setPrivacyOfflineMode(false) }
+            AppLog.i(
+                "VKApiClient",
+                "#AUTO-OFFLINE-SELFHEAL: forced-offline pref cleared (" +
+                    (if (hadMarker) "cooldown-expired" else "persisted-after-restart") + ")",
+            )
+        }
     }
 
     /**
