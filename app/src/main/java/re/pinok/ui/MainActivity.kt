@@ -545,6 +545,14 @@ class MainActivity : ComponentActivity() {
                 val app = SovaApp.get(this@MainActivity)
                 val token = try {
                     app.exchangeAuthRepository.ensureFreshToken(force = true)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // #HEADLESS-CANCEL-FIX (2026-09-25): корутина отменена жизненным
+                    // циклом (Activity пересоздаётся / сворачивается). Это НЕ провал
+                    // refresh'а: boot/tokenInvalidationTick перезапустит попытку сам.
+                    // Открывать FULL из отменённой корутины нельзя и незачем.
+                    AppLog.w("MainActivity", "SILENT-HEADLESS: cancelled (Activity lifecycle) — не открываю логин, boot повторит")
+                    headlessAuthInProgress = false
+                    return@launch
                 } catch (e: Exception) {
                     AppLog.w("MainActivity", "SILENT-HEADLESS: ensureFreshToken exception — ${e.message}")
                     null

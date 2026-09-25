@@ -118,7 +118,18 @@ class SecurityAlertsPoller(
             val hash = getLogoutHash()
             val alerts = api.accountGetSecurityAlerts(hash)
             if (alerts == null) {
-                AppLog.d(TAG, "pollOnce: no alerts (null response)")
+                // #ADMIN-SECURITY-ALERTS-FIX: метод accountPersonal.getSecurityAlerts
+                // не существует на web-шлюзе (err 3 — Unknown method passed) — не шумим.
+                val err = api.lastApiError
+                if (err != null && (
+                        err.contains("Unknown method", ignoreCase = true) ||
+                        err.contains("API error 3", ignoreCase = true)
+                    )) {
+                    AppLog.w(TAG, "pollOnce: method unavailable ($err) — stopping poller")
+                    stop()
+                } else {
+                    AppLog.d(TAG, "pollOnce: no alerts (null response)")
+                }
                 return@withLock
             }
             if (alerts.size() == 0) {

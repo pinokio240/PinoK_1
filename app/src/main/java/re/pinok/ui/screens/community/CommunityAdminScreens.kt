@@ -1870,7 +1870,9 @@ fun AdminInvitesScreen(
                 if (lst.isEmpty() && !err.isNullOrBlank()) {
                     friendsError = err
                 } else {
-                    friends = lst
+                    // Защита от дублей: friends.get может вернуть одного друга
+                    // дважды (hints/пересечение) — LazyColumn key=id не прощает.
+                    friends = lst.distinctBy { it.id }
                 }
             } catch (e: Exception) {
                 AppLog.e("AdminInvites", "loadFriends failed", e)
@@ -1892,7 +1894,8 @@ fun AdminInvitesScreen(
                 if (lst.isEmpty() && !err.isNullOrBlank()) {
                     invitedError = err
                 } else {
-                    invited = lst
+                    // Защита от дублей (key=id в LazyColumn).
+                    invited = lst.distinctBy { it.id }
                 }
             } catch (e: Exception) {
                 AppLog.e("AdminInvites", "loadInvited failed", e)

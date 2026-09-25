@@ -265,7 +265,10 @@ fun AdminMenuScreen(groupId: Long, onBack: () -> Unit) {
                 }
                 item { HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp)) }
 
-                val allItems = visible + hidden
+                // Один пункт может попасть в ОБА ответа owners.getMenu
+                // (visible и hidden) — дубликат id убил бы LazyColumn
+                // (Key already used) → дедупликация обязательна.
+                val allItems = (visible + hidden).distinctBy { it.id }
                 if (allItems.isEmpty()) {
                     item {
                         Box(

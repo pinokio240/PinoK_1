@@ -17943,10 +17943,22 @@ class VKApiClient(
             "fields" to "links",
         )) ?: return emptyList()
         return try {
-            val arr = json.getAsJsonArray("response") ?: return emptyList()
-            val first = arr.firstOrNull()
-            if (first == null || !first.isJsonObject) return emptyList()
-            val links = first.asJsonObject.getAsJsonArray("links") ?: return emptyList()
+            // #ADMIN-LINKS-FIX: web-шлюз может вернуть двойную обёртку
+            // {"response":{"response":[...]}} — нельзя брать getAsJsonArray
+            // вслепую (ClassCastException, см. логи). Нормализуем через
+            // unwrapResponse (как owners.*/stats.*), а links ищем и в
+            // массиве групп, и в объекте самой группы.
+            val resp = unwrapResponse(json) ?: return emptyList()
+            val links: com.google.gson.JsonArray? = when {
+                resp.isJsonArray -> {
+                    val first = resp.asJsonArray.firstOrNull()
+                    if (first == null || !first.isJsonObject) null
+                    else first.asJsonObject.getAsJsonArray("links")
+                }
+                resp.isJsonObject -> resp.asJsonObject.getAsJsonArray("links")
+                else -> null
+            }
+            if (links == null) return emptyList()
             links.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
