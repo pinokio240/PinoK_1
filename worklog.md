@@ -10516,3 +10516,23 @@ Work Log:
 
 Stage Summary:
 - Политика: целиком не портируем; при поломке музыки FIRST сверяем наши AudioUrlUnmasker/AlAudioFallback с фиксами python273/vk_api.
+
+---
+Task ID: C7-SECTIONS
+Agent: main (Z.ai Code)
+Task: Сделать пункт «Разделы» в админ-блоке сообщества реально работающим (по официальной документации dev.vk.ru)
+
+Work Log:
+- Пользователь дал ссылку на https://dev.vk.ru/ru/method?ref=old_portal. Официальный портал — JS-SPA (page_reader вернул пустышку), старый dev.vk.com лежит (500/404), vk.com/dev/* редиректит на 404, web.archive.org из песочницы недоступен.
+- Источник правды: официальные SDK VKCOM — vk-java-sdk (GroupsEditQuery, GetSettingsResponse, enum'ы GroupPhotos/GroupVideo/GroupAudio/GroupDocs/GroupTopics/GroupWiki/GroupWall/GroupFullSection) + vk-php-sdk. Параметры groups.edit и поля groups.getSettings вытянуты из сгенерированного кода VK.
+- Важно: в новом портале groups.edit и groups.getSettings НЕ документированы (удалены из листинга), но метод живой — в проекте W35-b аудит уже установил, что веб-SPA пишет настройки ТОЛЬКО через groups.edit.
+- VKApiClient.kt: data class GroupSections (wall/topics/photos/video/audio/links/events/places/contacts/docs/wiki + mainSection/secondarySection Int? nullable — если придёт нечисловое значение, поле не отправляется, никакой деструктивной записи), groupsGetSettings(groupId) (парсинг примитивов с допуском строковых чисел), groupsEditSections(groupId) (динамическая сборка params для groupsEdit).
+- AdminSectionsScreen.kt (новый файл, 416 строк): стена 0..3 (чипы), 6 трёхпозиционных разделов (Обсуждения/Фотографии/Видеозаписи/Аудиозаписи/Документы/Материалы: Выключен/Открытый/Ограниченный), 4 Switch (Ссылки/События/Места/Контакты), «Основной раздел»/«Дополнительный раздел» (диалог RadioButton по SECTION_CODES из GroupFullSection: 0,1,2,3,4,5,14), сноска про «Товары», кнопка «Сохранить» активна только при diff с прочитанным снимком. Паттерн как в AdminMessagesScreen (Scaffold/TopAppBar/ErrorView/lastApiError/Toast).
+- Маршрут Screen.AdminSections ("admin_sections/{groupId}") + CommunityAdminBlock onSectionsClick + CommunityScreen параметр + SovaNavHost import/callback/composable. «Разделы» активированы (Icons.Filled.Dashboard), «Бизнес-инструменты» остаётся честным disabled.
+- Дизайн-решения: market НЕ включён — groups.getSettings не возвращает market_* полей, round-trip невозможен, включение магазина требует market_country/currency/category (риск error 100). leadForms.* (Бизнес-инструменты) в vk-java-sdk есть с UserActor — кандидат на следующий шаг.
+- Коммит 64f4c5c, push OK (UNPUSHED: 0). Сборка на устройстве — у пользователя (gradle на Windows).
+
+Stage Summary:
+- Пункт «Разделы» админ-блока теперь рабочий: READ groups.getSettings, WRITE groups.edit (13 полей).
+- Коды значений и параметр-лист — из официального vk-java-sdk, ничего не выдумано.
+- Ожидают проверки: C6 (чаты/сообщения), C7 (разделы). Следующий кандидат: leadForms.* для «Бизнес-инструментов» (методы есть в официальном SDK, работают с user-токеном).

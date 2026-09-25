@@ -17130,8 +17130,8 @@ class VKApiClient(
         return try {
             val st = json.getAsJsonObject("response") ?: return null
             // Числа приходят примитивами; на всякий случай допускаем строку-число.
-            fun int(k: String): Int? = st.get(k)?.takeIf { it.isJsonPrimitive }?.let { p ->
-                if (p.isNumber) p.asInt else p.asString?.trim()?.toIntOrNull()
+            fun int(k: String): Int? = st.get(k)?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive?.let { pr ->
+                if (pr.isNumber) pr.asInt else pr.asString.trim().toIntOrNull()
             }
             GroupSections(
                 wall = int("wall") ?: 0,
