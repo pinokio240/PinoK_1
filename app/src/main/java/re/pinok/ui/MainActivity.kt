@@ -222,6 +222,8 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == AuthActivity.RESULT_OFFLINE_MODE) {
             // #34: guest-режим — показываем офлайн-менеджер без токена.
             isOfflineMode = true
+            // #AUTH-OFFLINE-GUARD: юзер выбрал офлайн сам — автологин отменён.
+            autoOfflineGuest = false
             // Fix #386: guest-сессия — главный UI больше «не показан»;
             // последующие silent-сценарии не должны удерживать старый UI.
             mainUiEverShown = false
@@ -239,6 +241,7 @@ class MainActivity : ComponentActivity() {
             // «Войти в аккаунт» в guest-drawer) — сбрасываем guest-флаг.
             if (isOfflineMode) {
                 isOfflineMode = false
+                autoOfflineGuest = false
                 AppLog.i("MainActivity", "#AUTH-FIRST-OPEN-GUEST: login OK from guest — isOfflineMode reset")
             }
             // Fix #176-auth-loop: успешный логин — сбрасываем флаг форсированного
@@ -336,6 +339,15 @@ class MainActivity : ComponentActivity() {
      * Сбрасывается при успешном логине (result RESULT_OK).
      */
     private var isOfflineMode by mutableStateOf(false)
+
+    /**
+     * #AUTH-OFFLINE-GUARD (2026-09-25): guest-режим, введённый АВТОМАТИЧЕСКИ
+     * из-за отсутствия сети (не выбором юзера через «Офлайн-режим»).
+     * Отличие от ручного guest: при появлении сети приложение САМО молча
+     * пере-логинится через silent remixsid (networkRestoredAuthRetry) — юзер
+     * не должен тапать «Войти в аккаунт» только потому, что был выключен WiFi.
+     */
+    private var autoOfflineGuest by mutableStateOf(false)
 
     /**
      * Fix #183: Оверлеи для guest-режима (офлайн без авторизации).
@@ -486,6 +498,23 @@ class MainActivity : ComponentActivity() {
         val isManualAction = reason == "logout" || reason == "drawer-login" || reason == "offline-back-to-login"
 
         // =================================================================
+        // #AUTH-OFFLINE-GUARD (2026-09-25): БЕЗ СЕТИ авторизацию НЕ НАЧИНАЕМ.
+        // Прецедент юзера: открытие приложения с выключенной сетью → boot
+        // запустил silent-auth → headless-провал → FULL AuthActivity, сессия
+        // стёрта. Без сети ни Path 1.5, ни WebView-механизм физически не
+        // вернут токен, а провалы портят silentFailCount и session-стейт.
+        // Ручные действия (logout / «Войти в аккаунт») не блокируем — явное
+        // намерение юзера; авто-пути (boot / tick / bg-loop / network-restored)
+        // при offline просто не делают ничего: сеть вернётся — и тогда
+        // networkRestoredAuthRetry (#341) сам запустит silent re-login.
+        // =================================================================
+        if (!isManualAction && !SovaApp.get(this@MainActivity).networkObserver.isOnline()) {
+            AppLog.w("MainActivity", "launchAuth($reason) BLOCKED — no network (#AUTH-OFFLINE-GUARD): auth postponed until connectivity returns")
+            Toast.makeText(this, "Нет сети — вход отложен до подключения", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // =================================================================
         // #SILENT-HEADLESS (2026-09-24): silent-интент → AuthActivity НЕ ЗАПУСКАЕТСЯ.
         //
         // Лог 19:00 (HOTWAV, мёртвый renderer): Path 1.5 восстановил токен за
@@ -526,6 +555,12 @@ class MainActivity : ComponentActivity() {
                         AppLog.i("MainActivity", "SILENT loop broken — silentFailCount $silentFailCount → 0 (Fix #49, headless)")
                     }
                     silentFailCount = 0
+                    // #AUTH-OFFLINE-GUARD: headless-успех после auto-offline-guest —
+                    // выходим из guest-режима (главный UI восстановлен).
+                    if (isOfflineMode) {
+                        isOfflineMode = false
+                        autoOfflineGuest = false
+                    }
                     authVersion++
                     AppLog.i("MainActivity", "SILENT-HEADLESS: токен восстановлен без окна — главный UI восстановлен (authVersion++)")
                 } else {
@@ -646,6 +681,9 @@ class MainActivity : ComponentActivity() {
      * экран без всякого AuthActivity.
      */
     private fun maybeProactiveTokenRefresh(app: SovaApp) {
+        // #AUTH-OFFLINE-GUARD: офлайн ensureFreshToken бессмыслен и опасен —
+        // провал без сети не должен трогать session-стейт. Ждём сеть.
+        if (!app.networkObserver.isOnline()) return
         val now = System.currentTimeMillis()
         val last = lastProactiveTokenRefreshMs
         if (last > 0L && now - last < PROACTIVE_REFRESH_THROTTLE_MS) return
@@ -951,6 +989,17 @@ class MainActivity : ComponentActivity() {
                             return@LaunchedEffect
                         }
                         if (!app.tokenStorage.hasValidToken()) {
+                            // #AUTH-OFFLINE-GUARD: нет сети — авторизацию не начинаем.
+                            // Сессия НЕ стирается; ждём сеть в guest-режиме с автологином:
+                            // когда сеть вернётся, networkRestoredAuthRetry молча
+                            // восстановит вход через silent remixsid.
+                            if (!app.networkObserver.isOnline()) {
+                                lockerBootCheckDone = true
+                                isOfflineMode = true
+                                autoOfflineGuest = true
+                                AppLog.i("MainActivity", "#AUTH-OFFLINE-GUARD: boot offline + no valid token (remixsid=${!app.exchangeAuthRepository.remixsid().isNullOrBlank()}) → auto-guest, silent re-login deferred to network restore")
+                                return@LaunchedEffect
+                            }
                             // Fix #339: web_token истекает каждые ~15 мин. При холодном
                             // старте после простоя boot видел истёкший токен и запускал
                             // AuthActivity в ОБЫЧНОМ режиме → юзер видел WebView flash.
@@ -1033,6 +1082,13 @@ class MainActivity : ComponentActivity() {
                     if (tokenInvalidationTick <= lastHandledTick) return@LaunchedEffect
                     lastHandledTick = tokenInvalidationTick
                     if (tokenInvalidationTick == 0) return@LaunchedEffect
+                    // #AUTH-OFFLINE-GUARD: сети нет — авторизацию не начинаем.
+                    // Тик считаем обработанным; при появлении сети
+                    // networkRestoredAuthRetry сам запустит silent re-login.
+                    if (!app.networkObserver.isOnline()) {
+                        AppLog.w("MainActivity", "Token invalidated (tick=$tokenInvalidationTick) but NO network — auth postponed (#AUTH-OFFLINE-GUARD)")
+                        return@LaunchedEffect
+                    }
                     if (isOfflineMode) {
                         AppLog.i("MainActivity", "Token invalidated (tick=$tokenInvalidationTick) but offline mode — skip AuthActivity relaunch")
                         return@LaunchedEffect
@@ -1158,9 +1214,25 @@ class MainActivity : ComponentActivity() {
                         if (now - lastRetryMs < 3_000L) return
                         // только если токена реально нет
                         if (app.tokenStorage.hasValidToken()) return
-                        // не мешаем офлайн-режиму
+                        // не мешаем офлайн-режиму, КРОМЕ auto-offline-guest:
+                        // #AUTH-OFFLINE-GUARD — guest был введён ИЗ-ЗА отсутствия
+                        // сети; сеть вернулась → молча пере-логиниваемся через
+                        // silent remixsid. Флаги не сбрасываем здесь: при успехе
+                        // их сбросит headless-ветка launchAuth / RESULT_OK,
+                        // при сбое юзер остаётся в guest (сессия цела).
                         if (isOfflineMode) {
-                            AppLog.i("MainActivity", "Network restored but offline mode — skip auth retry (#341)")
+                            val hasRemixsidAuto = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
+                            if (autoOfflineGuest && hasRemixsidAuto && silentFailCount < MAX_SILENT_FAILURES
+                                && !app.forceFullReloginOnNextLaunch) {
+                                AppLog.i("MainActivity", "#AUTH-OFFLINE-GUARD: network restored after auto-offline-guest — silent re-login (session preserved)")
+                                lastRetryMs = now
+                                val autoGuestIntent = Intent(this@MainActivity, AuthActivity::class.java).apply {
+                                    putExtra(AuthActivity.EXTRA_SILENT_MODE, true)
+                                }
+                                launchAuth(autoGuestIntent, reason = "network-restored-auto-guest")
+                            } else {
+                                AppLog.i("MainActivity", "Network restored but offline mode — skip auth retry (#341)")
+                            }
                             return
                         }
                         // не запускаем второй AuthActivity
@@ -1853,7 +1925,9 @@ class MainActivity : ComponentActivity() {
         // m.vk.ru, tryReadWebToken прочитает localStorage → auth завершится.
         //
         // Throttle (20с) уже есть в launchAuth (Fix #230) — не будет zацикливаться.
-        if (wasStopped && !isOfflineMode && !authActivityShowing) {
+        // #AUTH-OFFLINE-GUARD: без сети auth-процесс не начинаем — сессия цела,
+        // при появлении сети отработает networkRestoredAuthRetry.
+        if (wasStopped && !isOfflineMode && !authActivityShowing && app.networkObserver.isOnline()) {
             if (!app.tokenStorage.hasValidToken()) {
                 val hasRemixsid = !app.exchangeAuthRepository.remixsid().isNullOrBlank()
                 AppLog.i("MainActivity", "onResume (#BG-AUTH-LOOP-FIX): token invalid after background — launching AuthActivity (${if (hasRemixsid) "SILENT" else "FULL"})")

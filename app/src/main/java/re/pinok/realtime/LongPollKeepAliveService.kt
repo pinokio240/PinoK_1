@@ -157,6 +157,13 @@ class LongPollKeepAliveService : Service() {
                     AppLog.i(TAG, "Activity is foreground — letting MainActivity handle re-login")
                     return@collectLatest
                 }
+                // #AUTH-OFFLINE-GUARD: без сети silent re-login невозможен —
+                // не дёргаем сессию; LongPoll сам переподключится при возврате
+                // сети, MainActivity на resume отработает свой контур.
+                if (!app.networkObserver.isOnline()) {
+                    AppLog.i(TAG, "No network — headless re-login postponed (#AUTH-OFFLINE-GUARD)")
+                    return@collectLatest
+                }
                 AppLog.i(TAG, "No foreground activity — attempting headless silent re-login")
                 try {
                     val token = app.exchangeAuthRepository.ensureFreshToken()
