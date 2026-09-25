@@ -13088,3 +13088,18 @@ service connection»), и WEB-MECHANISM (скрытый WebView) не может
 5. Отложено: чёрный экран WebView при подвисании; al_groups get_* инфо-карточки (низкий приоритет, HAR §12.4).
 
 После C3+C6 — паритет каркаса админки с вебом (HAR §12.1).
+
+## #AUTH-OFFLINE-GUARD (2026-09-25, 9953882)
+Прецедент юзера: открытие приложения с ВЫКЛЮЧЕННОЙ сетью → boot запустил silent-auth → headless-провал → FULL AuthActivity → сессия стёрта. Требование юзера: «вообще не начинать авторизацию и процессы авторизации пока нет сети».
+
+Реализация (гвард networkObserver.isOnline() во ВСЕХ авто-путях):
+- launchAuth: не-ручные запуски при offline блокируются (тост «Нет сети — вход отложен»); manual-причины (logout / drawer-login) не тронуты.
+- boot без валидного токена при offline → auto-guest (новый флаг autoOfflineGuest) БЕЗ единой попытки авторизации; remixsid/сессия не трогаются.
+- networkRestoredAuthRetry (#341): сеть вернулась + autoOfflineGuest + жив remixsid → МОЛЧА silent re-login (юзер не должен тапать «Войти» из-за выключенного WiFi). Флаги сбрасываются только при успехе (headless-ветка / RESULT_OK) — при сбое юзер остаётся в guest с целой сессией.
+- tokenInvalidationTick / onResume #BG-AUTH-LOOP-FIX / maybeProactiveTokenRefresh / LongPollKeepAliveService.startHeadlessRefreshObserver — офлайн auth-процессы не запускаются.
+- RESULT_OFFLINE_MODE (юзер сам выбрал офлайн) — autoOfflineGuest=false, автологин отменён.
+MainActivity +80/-3 (9 точек), LongPollKeepAliveService +7. Баланс скобок: дельта +41/+41, скос легаси -2 не изменился.
+
+Ложная тревога того же коммита: «битый идентификатор» в NetworkInterceptors (волна-41) — АРТЕФАКТ канала отображения агента (последовательность квадратная-скобка-h съедалась при выводе/вводе). grep -c (числа) и od (побайтово) доказали: файл корректен с волны-41, сборки юзера проходили законно. Блоб в коммите НЕ изменён (тот же sha). Урок: при сомнениях — только числовые/побайтовые проверки.
+
+Второй репорт юзера: аватар с CDN sun9-62.vkuserphoto.ru «не загрузился, хотя авторизация с мобильной сети прошла». Проверено: URL живой (curl HTTP 200, JPEG с 87.240.185.161), пайплайн приложения блокеров не имеет — AdBlock-домены (ad/rs/targ.mail.ru, ad/ads.vk.com) не матчатся, VkCookieJar чужие хосты игнорирует (emptyList), SSL-pinning выключен по умолчанию, DNS-пин только для calls-хостов. Прецедент DNS-штормов vkuserphoto.ru уже задокументирован (волна-41, HOST_COOLDOWN). Вердикт: нужен logcat в момент повтора (NetRetry/Coil) — вслепую не чиним (правило «не придумывать»).
