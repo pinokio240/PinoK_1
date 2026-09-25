@@ -135,6 +135,11 @@ fun CommunityScreen(
     onMessagesClick: (groupId: Long) -> Unit = {},
     // C7 (#ADMIN-SECTIONS): разделы сообщества.
     onSectionsClick: (groupId: Long) -> Unit = {},
+    // C8 (#ADMIN-COMMENTS): комментарии сообщества (фильтры + лента).
+    onAdminCommentsClick: (groupId: Long) -> Unit = {},
+    // ADMIN-MENU-STRIKES: «Меню» (owners.*) и «Страйки» (strikeSystem.*).
+    onAdminMenuClick: (groupId: Long) -> Unit = {},
+    onAdminStrikesClick: (groupId: Long) -> Unit = {},
     onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
@@ -847,6 +852,9 @@ fun CommunityScreen(
                 onChatsClick = onChatsClick,
                 onMessagesClick = onMessagesClick,
                 onSectionsClick = onSectionsClick,
+                onCommentsClick = onAdminCommentsClick,
+                onMenuClick = onAdminMenuClick,
+                onStrikesClick = onAdminStrikesClick,
             )
         }
         item {

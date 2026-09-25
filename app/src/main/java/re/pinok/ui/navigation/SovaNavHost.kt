@@ -110,9 +110,13 @@ import re.pinok.ui.screens.community.AdminCtaScreen
 import re.pinok.ui.screens.community.AdminChatsScreen
 import re.pinok.ui.screens.community.AdminMessagesScreen
 import re.pinok.ui.screens.community.AdminSectionsScreen
+// C8 (#ADMIN-COMMENTS): «Комментарии» сообщества.
+import re.pinok.ui.screens.community.AdminCommentsScreen
 import re.pinok.ui.screens.community.AdminEventLogScreen
 import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
+import re.pinok.ui.screens.community.AdminMenuScreen
+import re.pinok.ui.screens.community.AdminStrikesScreen
 import re.pinok.ui.screens.community.AdminWallQueueScreen
 import re.pinok.ui.screens.documents.DocumentsScreen
 // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты).
@@ -962,6 +966,13 @@ listOf(
         Screen.AdminInvites.route,
         Screen.AdminWallQueue.route,
         Screen.AdminAddresses.route,
+        // ADMIN-MENU-STRIKES: у «Меню»/«Страйки» сообщества собственные
+        // Scaffold+TopAppBar — та же схема hasOwnTopBar (класс бага
+        // Fix #272/#NOTIF-SETTINGS-DUAL-BAR: двойной AppBar).
+        Screen.AdminMenu.route,
+        Screen.AdminStrikes.route,
+        // C8 (#ADMIN-COMMENTS): «Комментарии» — собственный Scaffold+TopAppBar.
+        Screen.AdminComments.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
@@ -2357,6 +2368,17 @@ composable(Screen.CallsHistory.route) {
                         onSectionsClick = { adminGroupId ->
                             nav.navigate(Screen.AdminSections.buildRoute(adminGroupId))
                         },
+                        // C8 (#ADMIN-COMMENTS): комментарии сообщества.
+                        onAdminCommentsClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminComments.buildRoute(adminGroupId))
+                        },
+                        // ADMIN-MENU-STRIKES: «Меню» и «Страйки» сообщества.
+                        onAdminMenuClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminMenu.buildRoute(adminGroupId))
+                        },
+                        onAdminStrikesClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminStrikes.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2523,6 +2545,45 @@ composable(Screen.CallsHistory.route) {
                     val sectGroupId = entry.arguments?.getLong(Screen.AdminSections.ARG_GROUP_ID) ?: 0L
                     AdminSectionsScreen(
                         groupId = sectGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // C8 (#ADMIN-COMMENTS): «Комментарии» сообщества — фильтры + лента.
+                composable(
+                    route = Screen.AdminComments.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminComments.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val commentsGroupId = entry.arguments?.getLong(Screen.AdminComments.ARG_GROUP_ID) ?: 0L
+                    AdminCommentsScreen(
+                        groupId = commentsGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // ADMIN-MENU-STRIKES: «Меню» сообщества (owners.getMenu/…).
+                composable(
+                    route = Screen.AdminMenu.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminMenu.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val menuGroupId = entry.arguments?.getLong(Screen.AdminMenu.ARG_GROUP_ID) ?: 0L
+                    AdminMenuScreen(
+                        groupId = menuGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // ADMIN-MENU-STRIKES: «Страйки» сообщества (strikeSystem.getStrikesList).
+                composable(
+                    route = Screen.AdminStrikes.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminStrikes.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val strikesGroupId = entry.arguments?.getLong(Screen.AdminStrikes.ARG_GROUP_ID) ?: 0L
+                    AdminStrikesScreen(
+                        groupId = strikesGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }

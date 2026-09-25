@@ -11257,11 +11257,13 @@ class VKApiClient(
         skipOffline: Boolean = false,
         silent: Boolean = false,
         forceWebGateway: Boolean = false,
+        skipTelemetryDrop: Boolean = false,
     ): JsonObject? {
         return callInternal(
             method, args, captchaAttempt = 0,
             skipOffline = skipOffline, silent = silent,
             forceWebGateway = forceWebGateway,
+            skipTelemetryDrop = skipTelemetryDrop,
         )
     }
 
@@ -11285,6 +11287,7 @@ class VKApiClient(
         skipOffline: Boolean = false,
         silent: Boolean = false,
         forceWebGateway: Boolean = false,
+        skipTelemetryDrop: Boolean = false,
     ): JsonObject? {
         // #STALE-ERR-FIX (2026-09-08): error-стейт живёт ОДИН вызов. Раньше
         // lastApiError/lastApiErrorCode перезаписывались только следующей
@@ -11370,10 +11373,23 @@ class VKApiClient(
             //    См. VkSigner.kt, декомпилят xsna.tzs.f() + AuthResult.c.
             // =================================================================
 
-            // Telemetry endpoints suppression — дропаем stats.* и execute.*stat*
-            // вызовы если privacyAntiTelemetry=true (audit #25: подключение PrivacyMods).
+            // Telemetry endpoints suppression — дропаем ТОЛЬКО настоящие трёковые
+            // (stats.track* / событийные .track*) вызовы если
+            // privacyAntiTelemetry=true (audit #25: подключение PrivacyMods).
+            // #ADMIN-STATS-FIX (2026-09-25): старое условие
+            // (method.startsWith("stats.") || method.contains("stat")) убивало
+            // stats.get / stats.getPostReach — легитимную аналитику сообщества
+            // (единственные stats.* методы в проекте, grep: trackEvents =
+            // 0 вхождений). privacyAntiTelemetry=true по умолчанию (SovaPrefs) →
+            // экран «Статистика» админки ВСЕГДА пуст. Теперь analytics-вызовы
+            // проходят, режутся только трек-энпoints. Параметр skipTelemetryDrop
+            // (явный админ-вызов, statsGet/statsGetPostReach) тоже разблокирует
+            // вызов — раньше он декларировался и пробрасывался, но в условии
+            // дропа НЕ использовался (мёртвый код).
             if (privacyMods.shouldDropTelemetry(snap) &&
-                (method.startsWith("stats.") || method.contains("stat", ignoreCase = true))) {
+                !skipTelemetryDrop &&
+                isTelemetryCall(method)
+            ) {
                 AppLog.d("VKApiClient", "call($method): telemetry dropped by PrivacyMods")
                 return null
             }
@@ -11586,6 +11602,7 @@ class VKApiClient(
                             method, newArgs, captchaAttempt + 1,
                             skipOffline = skipOffline, silent = silent,
                             forceWebGateway = forceWebGateway,
+                            skipTelemetryDrop = skipTelemetryDrop,
                         )
                     }
                     AppLog.w("VKApiClient", "Captcha cancelled by user on $method")
@@ -12127,6 +12144,21 @@ class VKApiClient(
             "messages.markAsImportantConversation",
             "messages.markAsUnreadConversation",
         )
+
+        /**
+         * #ADMIN-STATS-FIX (2026-09-25): является ли метод телеметрией
+         * (stats.track* и аналоги). Только такие вызовы дропает
+         * privacyAntiTelemetry. Бизнес-аналитика сообщества (stats.get,
+         * stats.getPostReach) телеметрией НЕ является и дропу не подлежит.
+         */
+        private fun isTelemetryCall(method: String): Boolean {
+            val m = method.lowercase()
+            return m.startsWith("stats.track") ||
+                m.contains(".trackevents") ||
+                m.contains(".trackvisitor") ||
+                m.endsWith("trackevent") ||
+                m.endsWith("trackvisitor")
+        }
 
         // ═══ Fix #47: Safe JSON extractors ═══
         // VK web API (vk1.a.* token) возвращает richer format чем стандартный API.
@@ -17023,6 +17055,32 @@ class VKApiClient(
             ?.get(key)?.takeIf { !it.isJsonNull }?.asInt ?: 0
 
     /**
+     * #ADMIN-STATS-FIX (2026-09-25): нормализация конверта response web-шлюза.
+     *
+     * api.vk.ru/web.api.vk.ru для BFF-методов (owners.*, strikeSystem.* и
+     * частично stats.get) может вернуть ДВОЙНУЮ обёртку:
+     *   {"response":{"response":{…}}}   — вместо ожидаемой одиночной.
+     * Хелпер спускается на один уровень вниз, если первый response-объект
+     * содержит ровно ключ "response" (объект/массив). Для обычных ответов
+     * (single-wrap, плоские объекты, массивы) поведение не меняется.
+     *
+     * @return element под "response" (развёрнутый при двойной обёртке) или
+     *         null, когда ключа "response" в ответе нет вовсе.
+     */
+    private fun unwrapResponse(root: com.google.gson.JsonObject): com.google.gson.JsonElement? {
+        val resp = root.get("response") ?: return null
+        if (resp.isJsonNull) return null
+        if (!resp.isJsonObject) return resp
+        val inner = resp.asJsonObject.get("response")
+        if (inner != null && !inner.isJsonNull &&
+            (inner.isJsonObject || inner.isJsonArray)
+        ) {
+            return inner
+        }
+        return resp
+    }
+
+    /**
      * C6 (#ADMIN-MESSAGES): настройки раздела «Сообщения» сообщества.
      * Web HAR 2026-09-25: READ  groups.getGroupSettings {group_id, fields:
      * messages_enabled,messages_first_message,messages_widget_enabled,
@@ -17202,6 +17260,331 @@ class VKApiClient(
         return groupsEdit(groupId, mapOf("action_button" to json))
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // C8 (#ADMIN-COMMENTS): «Комментарии» сообщества — фильтры модерации.
+    // Источник: web HAR (docs/админ.сообществ.HAR-разбор.md §5 P0 #2, web HAR
+    // 2026-09-25, gid 165284550).
+    // READ  — groups.getSettings {group_id} (legacy settings): obscene_filter,
+    //         obscene_stopwords, toxic_filter, disable_replies_from_groups,
+    //         recognize_photo (+ enable_replies, если присутствует).
+    // WRITE (официальный) — groups.edit теми же именами параметров:
+    //         obscene_filter, obscene_stopwords, toxic_filter,
+    //         disable_replies_from_groups, enable_replies, obscene_words.
+    //         Паттерн groupsEditSections (C7): отправляются только не-null.
+    // WRITE (legacy, web-only fallback) — POST https://vk.ru/groupsedit.php
+    //         ?act=save_comments с hash из groups.getLegacyModalsHashes.
+    //         Транспорт — как groupsEventLogPage (прямой OkHttp POST, cookies
+    //         подставляет VkCookieJar). Если hash не получен — запрос НЕ шлём.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** C8: bool-поле legacy-настроек groups.getSettings; null = ключа нет. */
+    private fun groupSettingBool(st: com.google.gson.JsonObject, key: String): Boolean? {
+        val el = st.get(key)
+        if (el == null || el.isJsonNull) return null
+        return safeBool(el)
+    }
+
+    /** C8: строка legacy-настроек groups.getSettings; null = ключа нет. */
+    private fun groupSettingStr(st: com.google.gson.JsonObject, key: String): String? {
+        val el = st.get(key)
+        if (el == null || el.isJsonNull) return null
+        return safeString(el)
+    }
+
+    /** C8: кладёт bool в param-map только для не-null значения («только не-null»). */
+    private fun putBoolParam(params: MutableMap<String, String>, key: String, v: Boolean?) {
+        if (v != null) params[key] = if (v) "1" else "0"
+    }
+
+    /**
+     * C8: фильтры комментариев сообщества. Все поля nullable — null значит
+     * «поле не прочитано / не менялось» и в запрос записи НЕ попадает
+     * (паттерн «только не-null», как у C7 GroupSections).
+     * recognizePhoto читается из groups.getSettings, но ни официальный
+     * groups.edit, ни legacy save_comments его не пишут — отображающий флаг.
+     */
+    data class GroupCommentFilters(
+        /** Разрешить комментарии (legacy enable_replies). */
+        val enableReplies: Boolean? = null,
+        /** Запретить ответы от сообществ (disable_replies_from_groups). */
+        val disableRepliesFromGroups: Boolean? = null,
+        /** Фильтр мата (obscene_filter). */
+        val obsceneFilter: Boolean? = null,
+        /** Стоп-слова включены (obscene_stopwords). */
+        val obsceneStopwords: Boolean? = null,
+        /** Фильтр токсичных комментариев (toxic_filter). */
+        val toxicFilter: Boolean? = null,
+        /** Список стоп-слов legacy-формы (Obscene_words). */
+        val obsceneWords: String? = null,
+        /** Распознавание фото (recognize_photo; только чтение). */
+        val recognizePhoto: Boolean? = null,
+    )
+
+    /**
+     * C8: чтение фильтров комментариев через groups.getSettings (legacy
+     * settings, формат из web HAR). Возвращает null при ошибке сети/парсинга.
+     */
+    suspend fun groupsGetCommentFilters(groupId: Long): GroupCommentFilters? {
+        if (isOffline()) return null
+        // NULL-ЯВНО: JSON-граница + early-return — null при ошибке/оффлайне (как у соседних чтений).
+        val json = call("groups.getSettings", mapOf("group_id" to groupId.toString())) ?: return null
+        return try {
+            // #ADMIN-STATS-FIX: толерантны к двойной обёртке web-шлюза.
+            val respEl = unwrapResponse(json)
+            val resp = if (respEl != null && respEl.isJsonObject) respEl.asJsonObject else null
+            if (resp == null) return null
+            GroupCommentFilters(
+                enableReplies = groupSettingBool(resp, "enable_replies"),
+                disableRepliesFromGroups = groupSettingBool(resp, "disable_replies_from_groups"),
+                obsceneFilter = groupSettingBool(resp, "obscene_filter"),
+                obsceneStopwords = groupSettingBool(resp, "obscene_stopwords"),
+                toxicFilter = groupSettingBool(resp, "toxic_filter"),
+                obsceneWords = groupSettingStr(resp, "obscene_words"),
+                recognizePhoto = groupSettingBool(resp, "recognize_photo"),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetCommentFilters parse error", e)
+            null
+        }
+    }
+
+    /**
+     * C8: ОФИЦИАЛЬНАЯ запись фильтров комментариев через groups.edit
+     * (без hash; приоритетный путь — как просили в задаче). Отправляются
+     * ТОЛЬКО не-null поля. Неизвестные groups.edit параметры (enable_replies,
+     * toxic_filter, disable_replies_from_groups, obscene_words) VK обычно
+     * игнорирует или возвращает error — результат пробрасывается честно,
+     * а UI при неудаче пробует legacy-фолбэк save_comments (с hash).
+     */
+    suspend fun groupsSetCommentFilters(groupId: Long, filters: GroupCommentFilters): Boolean {
+        if (isOffline()) return false
+        val params = mutableMapOf<String, String>()
+        putBoolParam(params, "obscene_filter", filters.obsceneFilter)
+        putBoolParam(params, "obscene_stopwords", filters.obsceneStopwords)
+        putBoolParam(params, "toxic_filter", filters.toxicFilter)
+        putBoolParam(params, "disable_replies_from_groups", filters.disableRepliesFromGroups)
+        putBoolParam(params, "enable_replies", filters.enableReplies)
+        val words = filters.obsceneWords
+        if (words != null) params["obscene_words"] = words
+        return groupsEdit(groupId, params)
+    }
+
+    /**
+     * C8: hash legacy-форм сообщества из batch-метода groups.getLegacyModalsHashes
+     * (web-only; проверил — метода в коде не было, добавляю обёртку call()).
+     * Формат ответа на момент реализации не снят целиком (HAR фиксирует только
+     * сам batch-вызов), поэтому возвращается сырой JsonObject — извлечение
+     * hash делает groupsGetLegacySettingsHash.
+     */
+    suspend fun groupsGetLegacyModalsHashes(groupId: Long): JsonObject? {
+        if (isOffline()) return null
+        // NULL-ЯВНО: JSON-граница + early-return (паттерн всех call-обёрток класса).
+        return call(
+            "groups.getLegacyModalsHashes",
+            mapOf("group_id" to groupId.toString()),
+            forceWebGateway = true,
+        )
+    }
+
+    /** C8: рекурсивный поиск hex-подобного hash в JsonElement (best-effort). */
+    private fun findGroupHash(el: JsonElement): String? {
+        if (el.isJsonPrimitive && el.asJsonPrimitive.isString) {
+            val s = el.asString
+            if (s.matches(Regex("[0-9a-fA-F]{16,}"))) return s
+            return null
+        }
+        if (el.isJsonObject) {
+            val o = el.asJsonObject
+            for ((_, v) in o.entrySet()) {
+                val nested = findGroupHash(v)
+                if (nested != null) return nested
+            }
+            return null
+        }
+        if (el.isJsonArray) {
+            val arr = el.asJsonArray
+            for (i in 0 until arr.size()) {
+                val nested = findGroupHash(arr.get(i))
+                if (nested != null) return nested
+            }
+            return null
+        }
+        return null
+    }
+
+    /**
+     * C8: извлечение hash для legacy save_comments из ответа
+     * groups.getLegacyModalsHashes. Точный контракт ответа заранее не снят —
+     * поиск толерантный (рекурсивный обход за hex-строками). Не найден →
+     * null: legacy-запись честно отключается, запрос на groupsedit.php НЕ шлём.
+     */
+    suspend fun groupsGetLegacySettingsHash(groupId: Long): String? {
+        // NULL-ЯВНО: JSON-граница + early-return — нет ответа, нет hash.
+        val root = groupsGetLegacyModalsHashes(groupId) ?: return null
+        return findGroupHash(root)
+    }
+
+    /**
+     * C8: LEGACY-запись фильтров комментариев через web-форму (HAR 2026-09-25):
+     *   POST https://vk.ru/groupsedit.php?act=save_comments
+     *   FormBody: act=save_comments&al=1&gid=<gid>&hash=<hex>&enable_replies=…
+     *     &disable_replies_from_groups=…&obscene_filter=…&obscene_stopwords=…
+     *     &toxic_filter=…&Obscene_words=…
+     * Формат значений полей повторяет веб: включено → «1», выключено → «».
+     * Ответ веба: {"payload":[0,[7,false]],"static":…} — успех, когда второй
+     * элемент внутреннего массива НЕ true (в HAR это false).
+     * [hash] обязателен: пустой/null → false БЕЗ сетевого запроса (гейт на UI).
+     */
+    suspend fun groupsSaveCommentsLegacy(
+        groupId: Long,
+        hash: String,
+        filters: GroupCommentFilters,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (groupId <= 0L || hash.isBlank()) return@withContext false
+        val form = okhttp3.FormBody.Builder()
+            .add("act", "save_comments")
+            .add("al", "1")
+            .add("gid", groupId.toString())
+            .add("hash", hash)
+            .add("enable_replies", if (filters.enableReplies == true) "1" else "")
+            .add("disable_replies_from_groups", if (filters.disableRepliesFromGroups == true) "1" else "")
+            .add("obscene_filter", if (filters.obsceneFilter == true) "1" else "")
+            .add("obscene_stopwords", if (filters.obsceneStopwords == true) "1" else "")
+            .add("toxic_filter", if (filters.toxicFilter == true) "1" else "")
+            .add("Obscene_words", filters.obsceneWords.orEmpty())
+        val req = okhttp3.Request.Builder()
+            .url("https://vk.ru/groupsedit.php?act=save_comments")
+            .post(form.build())
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            )
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Accept", "text/plain, */*; q=0.01")
+            .header("Referer", "https://vk.ru/group$groupId")
+            .build()
+        val body: String = try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    AppLog.w("VKApiClient", "groupsSaveCommentsLegacy: HTTP ${resp.code}")
+                    return@withContext false
+                }
+                // NULL-ЯВНО: okhttp-тело может быть null по контракту Java API — пустая строка.
+                val str = resp.body?.string() ?: ""
+                str
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "groupsSaveCommentsLegacy: network error: ${e.message}")
+            return@withContext false
+        }
+        if (body.isBlank()) return@withContext false
+        try {
+            val root = JsonParser.parseString(body)
+            if (!root.isJsonObject) return@withContext true
+            val payload = root.asJsonObject.getAsJsonArray("payload")
+            if (payload == null || payload.size() < 2 || !payload.get(1).isJsonArray) {
+                return@withContext true
+            }
+            val inner = payload.get(1).asJsonArray
+            if (inner.size() >= 2 && inner.get(1).isJsonPrimitive) {
+                if (inner.get(1).asJsonPrimitive.isBoolean && inner.get(1).asBoolean) {
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "groupsSaveCommentsLegacy parse: ${e.message}")
+            true
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // C7-extras (#ADMIN-SECTIONS-EXTRAS): дополнительные тумблеры «Разделов».
+    // Источник: web HAR 2026-09-25 (docs/админ.сообществ.HAR-разбор.md §5 P0 #3).
+    // READ  — groups.getGroupSettings {group_id, fields: hidden_members,
+    //         age_limits, clips_co_ownership_enabled, stories_replies_enabled,
+    //         show_in_left_menu, two_fa_confirmation_enabled} → ответ
+    //         {response:{settings:{…}}} — формат как у messages_* (C6).
+    // WRITE — groups.setGroupSettings {group_id, <toggle>=0|1, …}: standalone
+    //         поля пишутся плоско, content_tabs для них НЕ требуется (в HAR
+    //         тумблер шлётся одним запросом вместе с content_tabs, но сами
+    //         проекции независимы). age_limits — int (0 нет / 1 — 16+ / 2 — 18+).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** C7-extras: дополнительные тумблеры «Разделов» сообщества. */
+    data class GroupExtrasSettings(
+        /** Скрыть список участников (hidden_members). */
+        val hiddenMembers: Boolean = false,
+        /** Требовать подтверждение входа для участников (two_fa_confirmation_enabled). */
+        val twoFaConfirmationEnabled: Boolean = false,
+        /** Совладение клипами (clips_co_ownership_enabled). */
+        val clipsCoOwnershipEnabled: Boolean = false,
+        /** Ответы на истории (stories_replies_enabled). */
+        val storiesRepliesEnabled: Boolean = false,
+        /** Показывать сообщество в левом меню (show_in_left_menu). */
+        val showInLeftMenu: Boolean = false,
+        /** Возрастное ограничение: 0 — нет, 1 — 16+, 2 — 18+ (age_limits). */
+        val ageLimits: Int = 0,
+    )
+
+    /** C7-extras: чтение дополнительных тумблеров (groups.getGroupSettings). */
+    suspend fun groupsGetGroupExtras(groupId: Long): GroupExtrasSettings? {
+        if (isOffline()) return null
+        // NULL-ЯВНО: JSON-граница + early-return (как у соседних чтений C6/C7).
+        val json = call("groups.getGroupSettings", mapOf(
+            "group_id" to groupId.toString(),
+            "fields" to "hidden_members,age_limits,clips_co_ownership_enabled,stories_replies_enabled,show_in_left_menu,two_fa_confirmation_enabled",
+        ), forceWebGateway = true) ?: return null
+        return try {
+            // #ADMIN-STATS-FIX: толерантны к двойной обёртке web-шлюза.
+            val respEl = unwrapResponse(json)
+            val resp = if (respEl != null && respEl.isJsonObject) respEl.asJsonObject else null
+            // NULL-ЯВНО: у groups.getGroupSettings возможны обе формы — вложенная
+            // {"settings":{…}} и плоская {…} (как в groupsGetMessagesSettings C6).
+            val st = resp?.get("settings")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: resp
+                ?: return null
+            GroupExtrasSettings(
+                hiddenMembers = groupSettingBool(st, "hidden_members") == true,
+                twoFaConfirmationEnabled = groupSettingBool(st, "two_fa_confirmation_enabled") == true,
+                clipsCoOwnershipEnabled = groupSettingBool(st, "clips_co_ownership_enabled") == true,
+                storiesRepliesEnabled = groupSettingBool(st, "stories_replies_enabled") == true,
+                showInLeftMenu = groupSettingBool(st, "show_in_left_menu") == true,
+                ageLimits = safeInt(st.get("age_limits")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetGroupExtras parse error", e)
+            null
+        }
+    }
+
+    /** C7-extras: запись дополнительных тумблеров (groups.setGroupSettings). */
+    suspend fun groupsSetGroupExtras(groupId: Long, s: GroupExtrasSettings): Boolean {
+        if (isOffline()) return false
+        // NULL-ЯВНО: JSON-граница + early-return (паттерн groupsSetMessagesSettings C6).
+        val json = call("groups.setGroupSettings", mapOf(
+            "group_id" to groupId.toString(),
+            "hidden_members" to if (s.hiddenMembers) "1" else "0",
+            "two_fa_confirmation_enabled" to if (s.twoFaConfirmationEnabled) "1" else "0",
+            "clips_co_ownership_enabled" to if (s.clipsCoOwnershipEnabled) "1" else "0",
+            "stories_replies_enabled" to if (s.storiesRepliesEnabled) "1" else "0",
+            "show_in_left_menu" to if (s.showInLeftMenu) "1" else "0",
+            "age_limits" to s.ageLimits.toString(),
+        ), forceWebGateway = true) ?: return false
+        val resp = json.get("response") ?: return false
+        // NULL-ЯВНО: поле success необязательное у объектной формы ответа — сравнение с 1.
+        return when {
+            resp.isJsonPrimitive -> resp.asInt == 1
+            resp.isJsonObject ->
+                resp.asJsonObject.get("success")?.takeIf { it.isJsonPrimitive }?.asInt == 1
+            else -> false
+        }
+    }
+
     /** W35-b: groups.getMembers(filter=managers) — руководители сообщества. */
     suspend fun groupsGetManagers(groupId: Long): List<GroupManager> {
         if (isOffline()) return emptyList()
@@ -17262,10 +17645,12 @@ class VKApiClient(
             "interval" to "day",
             "interval_count" to days.toString(),
             "filters" to "visitors,reach,activity",
-        )) ?: return emptyList()
+        ), skipTelemetryDrop = true) ?: return emptyList()
         return try {
             // Официальный формат: {"response":[{period, visitors{}, reach{}, activity{}}]}.
-            val resp = json.get("response") ?: return emptyList()
+            // #ADMIN-STATS-FIX: web-шлюз может вернуть двойную обёртку
+            // {"response":{"response":[…]}} — нормализуем обоими способами.
+            val resp = unwrapResponse(json) ?: return emptyList()
             val arr: com.google.gson.JsonArray? = when {
                 resp.isJsonArray -> resp.asJsonArray
                 resp.isJsonObject -> resp.asJsonObject?.getAsJsonArray("items")
@@ -17303,9 +17688,9 @@ class VKApiClient(
         val json = call("stats.getPostReach", mapOf(
             "owner_id" to ownerId.toString(),
             "post_ids" to postIds.joinToString(",") { it.toString() },
-        )) ?: return emptyList()
+        ), skipTelemetryDrop = true) ?: return emptyList()
         return try {
-            val resp = json.get("response") ?: return emptyList()
+            val resp = unwrapResponse(json) ?: return emptyList()
             val arr: com.google.gson.JsonArray? = when {
                 resp.isJsonArray -> resp.asJsonArray
                 resp.isJsonObject -> resp.asJsonObject?.getAsJsonArray("items")
@@ -17787,6 +18172,270 @@ class VKApiClient(
 
     // ── конец W35-b: администрирование сообществ ────────────────────────
 
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ADMIN-MENU-STRIKES: «Меню» и «Страйки» — два раздела админ-панели
+    // сообщества. Источник: docs/админ.сообществ.HAR-разбор.md §5 (P0 #1/#4).
+    //  - Меню:      owners.getMenu / owners.addMenuItem / owners.hideMenu /
+    //               owners.showMenu (owners.* — web-only, HAR §2; формат сверен).
+    //  - Страйки:   strikeSystem.getStrikesList / strikeSystem.getInfo
+    //               (strikeSystem.* — web-only; данных в HAR нет: count=0,data=[]).
+    // Группа на провод: owners.* уходят owner_id ОТРИЦАТЕЛЬНЫМ (-groupId),
+    // как owner_id=-165284550 в HAR; strikeSystem.* — положительным group_id.
+    // КОНВЕНЦИЯ: во всех методах ниже [groupId] — ПОЛОЖИТЕЛЬНЫЙ id сообщества
+    // (как у остальных административных методов W35-b).
+    // ШЛЮЗ: все методы форсируют WEB-шлюз (forceWebGateway=true) — owners.* /
+    // strikeSystem.* живут ТОЛЬКО на api.vk.ru (HAR §1: «web-only»), на
+    // api.vk.com их нет (err=3). Паттерн — как у web-only messages.* в
+    // AdminChats (messagesEditChat при group-контексте).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Настройки пункта меню сообщества (owners.getMenu / addMenuItem).
+     * HAR: settings{app_id, can_delete, can_edit_app, can_edit_hidden,
+     * can_edit_title, can_edit_url, hidden}.
+     */
+    data class OwnerMenuItemSettings(
+        val appId: Long?,
+        val canDelete: Boolean,
+        val canEditApp: Boolean,
+        val canEditHidden: Boolean,
+        val canEditTitle: Boolean,
+        val canEditUrl: Boolean,
+        val hidden: Boolean,
+    )
+
+    /** Пункт меню сообщества (owners.getMenu / addMenuItem). */
+    data class OwnerMenuItem(
+        val id: Long,
+        val title: String,
+        val type: String,
+        val url: String,
+        val cover: List<String>,
+        val settings: OwnerMenuItemSettings?,
+    )
+
+    /** Полный ответ owners.getMenu. */
+    data class OwnerMenu(
+        val canAdd: Boolean,
+        val items: List<OwnerMenuItem>,
+        /** true — всё меню скрыто (не показывается участникам). */
+        val isHidden: Boolean,
+    )
+
+    /**
+     * Один страйк (strikeSystem.getStrikesList). Точный формат элемента НЕ
+     * подтверждён (в HAR данных нет: count=0, data=[]) — парсим терпеливо,
+     * изобретать поля нечего. При нераспознаваемом элементе он пропускается.
+     */
+    data class StrikeItem(
+        val id: Long,
+        val title: String?,
+        val reason: String?,
+        val date: Long?,
+    )
+
+    /** Ответ strikeSystem.getStrikesList. */
+    data class StrikesPage(
+        val count: Long,
+        val data: List<StrikeItem>,
+    )
+
+    /**
+     * Список пунктов меню сообщества (owners.getMenu, web-only).
+     * @param groupId положительный id сообщества; на провод уходит owner_id = -groupId.
+     * @param isHidden true — запрашиваем скрытые пункты (is_hidden=1), false — видимые.
+     * @return [OwnerMenu] или null при offline/ошибке (lastApiError заполнен).
+     */
+    suspend fun ownersGetMenu(groupId: Long, isHidden: Boolean = false): OwnerMenu? {
+        if (isOffline()) return null
+        val args = mapOf(
+            "owner_id" to (-groupId).toString(),
+            "is_hidden" to if (isHidden) "1" else "0",
+        )
+        val json = call("owners.getMenu", args, forceWebGateway = true) ?: return null
+        return try {
+            // #ADMIN-MENU-STRIKES: web-шлюз owners.getMenu отдаёт ДВОЙНУЮ
+            // обёртку {"response":{"response":{can_add,items,is_hidden}}} —
+            // нормализуем через unwrapResponse (крень: раньше items=[] и
+            // экран всегда показывал «Пунктов меню нет»).
+            val outer = unwrapResponse(json)
+            val resp = if (outer != null && outer.isJsonObject) outer.asJsonObject else null
+            if (resp == null) return null
+            val rawItems = getArr(resp, "items") ?: JsonArray()
+            val items = rawItems.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = safeLongNullable(o.get("id")) ?: return@mapNotNull null
+                val stObj = getObj(o, "settings")
+                OwnerMenuItem(
+                    id = id,
+                    title = safeString(o.get("title")) ?: "",
+                    type = safeString(o.get("type")) ?: "",
+                    url = safeString(o.get("url")) ?: "",
+                    cover = (getArr(o, "cover") ?: JsonArray()).mapNotNull { cov ->
+                        safeString(cov)
+                    },
+                    settings = if (stObj != null) {
+                        OwnerMenuItemSettings(
+                            appId = safeLongNullable(stObj.get("app_id")),
+                            canDelete = safeBool(stObj.get("can_delete")),
+                            canEditApp = safeBool(stObj.get("can_edit_app")),
+                            canEditHidden = safeBool(stObj.get("can_edit_hidden")),
+                            canEditTitle = safeBool(stObj.get("can_edit_title")),
+                            canEditUrl = safeBool(stObj.get("can_edit_url")),
+                            hidden = safeBool(stObj.get("hidden")),
+                        )
+                    } else {
+                        null
+                    },
+                )
+            }
+            OwnerMenu(
+                canAdd = safeBool(resp.get("can_add")),
+                items = items,
+                isHidden = safeBool(resp.get("is_hidden")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "ownersGetMenu parse error", e)
+            null
+        }
+    }
+
+    /**
+     * Добавить пункт меню сообщества (owners.addMenuItem, web-only).
+     * HAR: owner_id & title=<urlencode> & url=<urlencode> & crop_data=0,0,376,256|0
+     * (титул/URL form-кодируются транспортом call — FormBody).
+     * @param groupId положительный id сообщества.
+     * @param title название пункта (обязательно).
+     * @param url ссылка пункта (может быть пустой для типа photo).
+     * @return созданный [OwnerMenuItem] или null при offline/ошибке.
+     */
+    suspend fun ownersAddMenuItem(groupId: Long, title: String, url: String): OwnerMenuItem? {
+        if (isOffline()) return null
+        if (title.isBlank()) return null
+        val json = call("owners.addMenuItem", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "title" to title,
+            "url" to url,
+            "crop_data" to "0,0,376,256|0",
+        ), forceWebGateway = true) ?: return null
+        return try {
+            // #ADMIN-MENU-STRIKES: owners.addMenuItem тоже отдаёт двойную
+            // обёртку {"response":{"response":{id,title,type,url,settings}}}.
+            val outer = unwrapResponse(json)
+            val resp = if (outer != null && outer.isJsonObject) outer.asJsonObject else null
+            if (resp == null) return null
+            val id = safeLongNullable(resp.get("id")) ?: return null
+            val stObj = getObj(resp, "settings")
+            OwnerMenuItem(
+                id = id,
+                title = safeString(resp.get("title")) ?: title,
+                type = safeString(resp.get("type")) ?: "photo",
+                url = safeString(resp.get("url")) ?: url,
+                cover = emptyList(),
+                settings = if (stObj != null) {
+                    OwnerMenuItemSettings(
+                        appId = safeLongNullable(stObj.get("app_id")),
+                        canDelete = safeBool(stObj.get("can_delete")),
+                        canEditApp = safeBool(stObj.get("can_edit_app")),
+                        canEditHidden = safeBool(stObj.get("can_edit_hidden")),
+                        canEditTitle = safeBool(stObj.get("can_edit_title")),
+                        canEditUrl = safeBool(stObj.get("can_edit_url")),
+                        hidden = safeBool(stObj.get("hidden")),
+                    )
+                } else {
+                    null
+                },
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "ownersAddMenuItem parse error", e)
+            null
+        }
+    }
+
+    /** Скрыть всё меню сообщества (owners.hideMenu, web-only). @return true при успехе. */
+    suspend fun ownersHideMenu(groupId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("owners.hideMenu", mapOf("owner_id" to (-groupId).toString()), forceWebGateway = true) ?: return false
+        return json.has("response")
+    }
+
+    /** Показать всё меню сообщества (owners.showMenu, web-only). @return true при успехе. */
+    suspend fun ownersShowMenu(groupId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("owners.showMenu", mapOf("owner_id" to (-groupId).toString()), forceWebGateway = true) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * Список страйков сообщества (strikeSystem.getStrikesList, web-only).
+     * HAR: group_id & tab=active|appealed & date_from <unix> & date_to <unix> →
+     * {"count":0,"data":[]}. Точный формат элемента data не подтверждён —
+     * парсим терпеливо; неизвестная форма → честный пустой список.
+     * @param groupId положительный id сообщества.
+     * @param tab "active" или "appealed".
+     * @param dateFrom Unix-секунды; null → 30 дней назад.
+     * @param dateTo Unix-секунды; null → сейчас.
+     */
+    suspend fun strikeSystemGetStrikesList(
+        groupId: Long,
+        tab: String,
+        dateFrom: Long? = null,
+        dateTo: Long? = null,
+    ): StrikesPage {
+        if (isOffline()) return StrikesPage(0, emptyList())
+        val nowUnix = System.currentTimeMillis() / 1000L
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "tab" to tab,
+            "date_from" to (dateFrom ?: (nowUnix - 30 * 86400L)).toString(),
+            "date_to" to (dateTo ?: nowUnix).toString(),
+        )
+        val json = call("strikeSystem.getStrikesList", args, forceWebGateway = true) ?: return StrikesPage(0, emptyList())
+        return try {
+            // #ADMIN-MENU-STRIKES: web-шлюз strikeSystem.* возвращает ту же
+            // двойную обёртку — нормализуем; без этого count/data всегда 0/[].
+            val outer = unwrapResponse(json)
+            val resp = if (outer != null && outer.isJsonObject) outer.asJsonObject else null
+            if (resp == null) return StrikesPage(0, emptyList())
+            val count = safeLong(resp.get("count"))
+            val rawData = getArr(resp, "data") ?: JsonArray()
+            val items = rawData.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = safeLongNullable(o.get("id")) ?: return@mapNotNull null
+                StrikeItem(
+                    id = id,
+                    title = safeString(o.get("title")),
+                    reason = safeString(o.get("reason")),
+                    date = safeLongNullable(o.get("date")),
+                )
+            }
+            StrikesPage(count = count, data = items)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "strikeSystemGetStrikesList parse error", e)
+            StrikesPage(0, emptyList())
+        }
+    }
+
+    /**
+     * Информация о страйках (strikeSystem.getInfo, web-only; в HAR вызывается
+     * в batch). Формат ответа НЕ зафиксирован — модель по факту ответа: при
+     * пустом/нераспознаваемом ответе честно возвращаем null.
+     * @return сырой response-объект или null.
+     */
+    suspend fun strikeSystemGetInfo(groupId: Long, tab: String): JsonObject? {
+        if (isOffline()) return null
+        val json = call("strikeSystem.getInfo", mapOf(
+            "group_id" to groupId.toString(),
+            "tab" to tab,
+        ), forceWebGateway = true) ?: return null
+        val resp = unwrapResponse(json)
+        if (resp == null || resp.isJsonNull) return null
+        if (resp.isJsonObject) return resp.asJsonObject
+        return null
+    }
 
     /**
      * fave.addPage — добавить clip-автора (user или group) в закладки.

@@ -34,16 +34,19 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -170,6 +173,11 @@ fun CommunityAdminBlock(
     onMessagesClick: (Long) -> Unit,
     // C7 (#ADMIN-SECTIONS): разделы сообщества.
     onSectionsClick: (Long) -> Unit,
+    // C8 (#ADMIN-COMMENTS): комментарии сообщества.
+    onCommentsClick: (Long) -> Unit,
+    // ADMIN-MENU-STRIKES: «Меню» (owners.*) и «Страйки» (strikeSystem.*).
+    onMenuClick: (Long) -> Unit,
+    onStrikesClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
@@ -333,6 +341,22 @@ fun CommunityAdminBlock(
                 onClick = { onChatsClick(gi.id) },
             )
 
+            // ADMIN-MENU-STRIKES: «Меню» (owners.getMenu/addMenuItem/hide/showMenu)
+            // и «Страйки» (strikeSystem.getStrikesList) — web-only методы,
+            // форматы из HAR docs/админ.сообществ.HAR-разбор.md §5 P0 #1/#4.
+            AdminBlockRow(
+                icon = Icons.Filled.Menu,
+                title = "Меню",
+                subtitle = "Пункты меню сообщества",
+                onClick = { onMenuClick(gi.id) },
+            )
+            AdminBlockRow(
+                icon = Icons.Filled.Warning,
+                title = "Страйки",
+                subtitle = "Нарушения и обжалования",
+                onClick = { onStrikesClick(gi.id) },
+            )
+
             // C7 (#ADMIN-SECTIONS): «Разделы» — READ groups.getSettings,
             // WRITE groups.edit (официальные методы; значения сверены с
             // официальным vk-java-sdk: GetSettingsResponse + enum'ы).
@@ -341,6 +365,15 @@ fun CommunityAdminBlock(
                 title = "Разделы",
                 subtitle = "Стена, обсуждения, фото, видео, ссылки…",
                 onClick = { onSectionsClick(gi.id) },
+            )
+
+            // C8 (#ADMIN-COMMENTS): фильтры комментариев + лента последних
+            // комментариев (groups.edit / legacy save_comments, web HAR).
+            AdminBlockRow(
+                icon = Icons.Filled.Forum,
+                title = "Комментарии",
+                subtitle = "Фильтры модерации, последние комментарии",
+                onClick = { onCommentsClick(gi.id) },
             )
 
             // ── Честный disabled-пункт: бизнес-инструменты (формы/виджеты)
@@ -791,8 +824,15 @@ fun AdminStatsScreen(
                 } else {
                     emptyList()
                 }
-                if (stats.isEmpty()) {
-                    error = "Статистика пуста: нет данных или нет прав на это сообщество"
+if (stats.isEmpty()) {
+                    // NULL-ЯВНО: честная диагностика — показываем текст API-ошибки
+                    // (was: заглушка «нет данных или нет прав», скрывала причину).
+                    val apiErr = app.apiClient.lastApiError
+                    error = if (apiErr.isNullOrBlank()) {
+                        "Статистика пуста: нет данных или нет прав на это сообщество"
+                    } else {
+                        "Статистика пуста: $apiErr"
+                    }
                 } else {
                     points = stats
                     reach = postReach
@@ -1042,8 +1082,13 @@ fun AdminPeopleScreen(
             requestsError = null
             try {
                 val list = app.apiClient.groupsGetRequests(groupId)
-                requestsError = null
-                requests = list
+                // NULL-ЯВНО: пустой список + живая API-ошибка — НЕ «нет заявок».
+                val err = app.apiClient.lastApiError
+                if (list.isEmpty() && !err.isNullOrBlank()) {
+                    requestsError = err
+                } else {
+                    requests = list
+                }
             } catch (e: Exception) {
                 AppLog.e("AdminPeople", "loadRequests failed", e)
                 requestsError = e.message ?: "Ошибка загрузки"
@@ -1059,7 +1104,13 @@ fun AdminPeopleScreen(
             bannedError = null
             try {
                 val list = app.apiClient.groupsGetBanned(groupId)
-                banned = list
+                // NULL-ЯВНО: пустой список + живая API-ошибка — НЕ «ЧС пуст».
+                val err = app.apiClient.lastApiError
+                if (list.isEmpty() && !err.isNullOrBlank()) {
+                    bannedError = err
+                } else {
+                    banned = list
+                }
             } catch (e: Exception) {
                 AppLog.e("AdminPeople", "loadBanned failed", e)
                 bannedError = e.message ?: "Ошибка загрузки"
@@ -1632,8 +1683,16 @@ fun AdminLinksScreen(groupId: Long, onBack: () -> Unit) {
     fun load() {
         scope.launch {
             loading = true; error = null
-            try { links = app.apiClient.groupsGetLinks(groupId) }
-            catch (e: Exception) { AppLog.e("AdminLinks", "load", e); error = e.message ?: "Ошибка" }
+            try {
+                val lst = app.apiClient.groupsGetLinks(groupId)
+                // NULL-ЯВНО: пустой список + живая API-ошибка — НЕ «Ссылок нет».
+                val err = app.apiClient.lastApiError
+                if (lst.isEmpty() && !err.isNullOrBlank()) {
+                    error = err
+                } else {
+                    links = lst
+                }
+            } catch (e: Exception) { AppLog.e("AdminLinks", "load", e); error = e.message ?: "Ошибка" }
             finally { loading = false }
         }
     }
@@ -1805,7 +1864,14 @@ fun AdminInvitesScreen(
             friendsLoading = true
             friendsError = null
             try {
-                friends = app.apiClient.friendsGet(count = 200)
+                val lst = app.apiClient.friendsGet(count = 200)
+                // NULL-ЯВНО: пустой список + живая API-ошибка.
+                val err = app.apiClient.lastApiError
+                if (lst.isEmpty() && !err.isNullOrBlank()) {
+                    friendsError = err
+                } else {
+                    friends = lst
+                }
             } catch (e: Exception) {
                 AppLog.e("AdminInvites", "loadFriends failed", e)
                 friendsError = e.message ?: "Ошибка загрузки"
@@ -1820,7 +1886,14 @@ fun AdminInvitesScreen(
             invitedLoading = true
             invitedError = null
             try {
-                invited = app.apiClient.groupsGetInvitedUsers(groupId)
+                val lst = app.apiClient.groupsGetInvitedUsers(groupId)
+                // NULL-ЯВНО: пустой список + живая API-ошибка.
+                val err = app.apiClient.lastApiError
+                if (lst.isEmpty() && !err.isNullOrBlank()) {
+                    invitedError = err
+                } else {
+                    invited = lst
+                }
             } catch (e: Exception) {
                 AppLog.e("AdminInvites", "loadInvited failed", e)
                 invitedError = e.message ?: "Ошибка загрузки"
@@ -2112,12 +2185,20 @@ fun AdminWallQueueScreen(
             loading = true
             error = null
             try {
-                postponed = app.apiClient.wallGetWithFilter(
+                val pos = app.apiClient.wallGetWithFilter(
                     ownerId = -groupId, filter = "postponed", count = 50,
                 )
-                suggests = app.apiClient.wallGetWithFilter(
+                val sug = app.apiClient.wallGetWithFilter(
                     ownerId = -groupId, filter = "suggests", count = 50,
                 )
+                // NULL-ЯВНО: оба пусты + живая API-ошибка — НЕ «нет записей».
+                val err = app.apiClient.lastApiError
+                if (pos.isEmpty() && sug.isEmpty() && !err.isNullOrBlank()) {
+                    error = err
+                } else {
+                    postponed = pos
+                    suggests = sug
+                }
             } catch (e: Exception) {
                 AppLog.e("AdminWallQueue", "load failed", e)
                 error = e.message ?: "Ошибка загрузки"
@@ -2301,7 +2382,14 @@ fun AdminAddressesScreen(
             loading = true
             error = null
             try {
-                addresses = app.apiClient.groupsGetAddresses(groupId)
+                val lst = app.apiClient.groupsGetAddresses(groupId)
+                // NULL-ЯВНО: пустой список + живая API-ошибка — НЕ «Адресов нет».
+                val err = app.apiClient.lastApiError
+                if (lst.isEmpty() && !err.isNullOrBlank()) {
+                    error = err
+                } else {
+                    addresses = lst
+                }
             } catch (e: Exception) {
                 AppLog.e("AdminAddresses", "load failed", e)
                 error = e.message ?: "Ошибка загрузки"

@@ -155,7 +155,9 @@ object EqualizerHelper {
             id = 0L,
             name = name,
             eqBands = bands,
-            eqEnabled = b(AudioEffectsEngine.PREF_EQ_ENABLED),
+            eqEnabled = b(AudioEffectsEngine.
+
+            PREF_EQ_ENABLED),
             bassEnabled = b(AudioEffectsEngine.PREF_BASS_ENABLED),
             bassStrength = i(AudioEffectsEngine.PREF_BASS_STRENGTH),
             virtEnabled = b(AudioEffectsEngine.PREF_VIRT_ENABLED),

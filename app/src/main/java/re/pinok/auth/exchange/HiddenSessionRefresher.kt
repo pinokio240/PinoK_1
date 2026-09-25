@@ -188,7 +188,6 @@ object HiddenSessionRefresher {
         val s = wv.settings
         s.javaScriptEnabled = true
         s.domStorageEnabled = true      // localStorage — источник web_token
-        s.databaseEnabled = false
         s.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
         s.blockNetworkLoads = false
         CookieManager.getInstance().setAcceptCookie(true)

@@ -10536,3 +10536,58 @@ Stage Summary:
 - Пункт «Разделы» админ-блока теперь рабочий: READ groups.getSettings, WRITE groups.edit (13 полей).
 - Коды значений и параметр-лист — из официального vk-java-sdk, ничего не выдумано.
 - Ожидают проверки: C6 (чаты/сообщения), C7 (разделы). Следующий кандидат: leadForms.* для «Бизнес-инструментов» (методы есть в официальном SDK, работают с user-токеном).
+
+---
+Task ID: ADMIN-MENU-STRIKES
+Agent: MultiTool delegate
+Task: Реализация двух разделов админ-панели сообщества — «Меню» (owners.*) и «Страйки» (strikeSystem.*). Форматы из docs/админ.сообществ.HAR-разбор.md §5 (P0 #1/#4), паттерны экранов — C6/C7 (AdminSectionsScreen/AdminChatsScreen).
+
+Work Log:
+- VKApiClient.kt (новый блок #ADMIN-MENU-STRIKES после W35-b): data-классы OwnerMenuItemSettings/OwnerMenuItem/OwnerMenu/StrikeItem/StrikesPage и методы:
+  - ownersGetMenu(groupId: Long, isHidden: Boolean = false): OwnerMenu?
+  - ownersAddMenuItem(groupId: Long, title: String, url: String): OwnerMenuItem?
+  - ownersHideMenu(groupId: Long): Boolean
+  - ownersShowMenu(groupId: Long): Boolean
+  - strikeSystemGetStrikesList(groupId: Long, tab: String, dateFrom: Long? = null, dateTo: Long? = null): StrikesPage
+  - strikeSystemGetInfo(groupId: Long, tab: String): JsonObject?
+  owners.* на провод идут owner_id=-groupId (как owner_id=-165284550 в HAR), strikeSystem.* — положительным group_id; транспорт — call() с forceWebGateway=true (owners.*/strikeSystem.* живут только на api.vk.ru — HAR §1 «web-only», паттерн как у messages.* в AdminChats; FormBody url-encode автоматически).
+- AdminMenuScreen.kt (новый): список пунктов = owners.getMenu(is_hidden=0) + (is_hidden=1) объединённые, у скрытых бейдж «Скрыт»; «Добавить» (owners.addMenuItem, диалог название+URL, гейт can_add из ответа); кнопка «Скрыть меню»/«Показать меню» (owners.hideMenu/showMenu, состояние is_hidden); toggle видимости пункта рисуется только при settings.can_edit_hidden и в disabled-состоянии (метод записи видимости пункта не найден); кнопка удаления НЕ рисуется (owners.deleteMenuItem в HAR и в коде нет) — подсказка «в веб-версии» внизу списка.
+- AdminStrikesScreen.kt (новый): вкладки active/appealed (strikeSystem.getStrikesList с date_from/date_to = 30 дней), список, честный empty-state «Страйков нет» (в HAR {"count":0,"data":[]}), error — ErrorView/lastApiError; строка «Обжалование доступно в веб-версии vk.ru/strikes/-<gid>» (API апелляции нет — кнопку не рисуем).
+- Роутинг: Screen.AdminMenu ("admin_menu/{groupId}") и Screen.AdminStrikes ("admin_strikes/{groupId}") по образцу AdminLinks/AdminSections; SovaNavHost — импорты, 2 composable, колбэки из CommunityScreen, hasOwnTopBar (иначе двойной AppBar — класс бага Fix #272); CommunityScreen — onAdminMenuClick/onAdminStrikesClick pass-through; CommunityAdminBlock — строки «Меню» (Icons.Filled.Menu) и «Страйки» (Icons.Filled.Warning) после «Чаты».
+- Статическая проверка: в новых файлах 0 вхождений «!!», скобки сбалансированы (сканер), импорты сверены. Сборку НЕ запускал — по договорённости за пользователем.
+
+Stage Summary:
+- «Меню» и «Страйки» добавлены в админ-блок сообщества и реализованы по реальным форматам HAR, без выдуманных методов.
+- Gap-решения: удаление/правка/точечное скрытие пункта меню — только в веб-версии (owners.deleteMenuItem/editMenuItem в коде и HAR не найдены), toggle не активен; апелляция страйков — веб-ссылка vk.ru/strikes/-<gid> (API нет).
+
+---
+Task ID: ADMIN-COMMENTS-SECTIONS
+Agent: MultiTool delegate
+Task: Реализация двух блоков админ-панели сообщества — «Комментарии» (фильтры модерации + лента последних комментариев) и «Дополнительные тумблеры Разделов» (C7-extras). Источник: web HAR 2026-09-25, docs/админ.сообществ.HAR-разбор.md §5 P0 #2/#3.
+
+Work Log:
+- VKApiClient.kt (блок #ADMIN-COMMENTS + #ADMIN-SECTIONS-EXTRAS, после groupsEditActionButton):
+  - data class GroupCommentFilters(enableReplies, disableRepliesFromGroups, obsceneFilter, obsceneStopwords, toxicFilter, obsceneWords, recognizePhoto) — все поля nullable («только не-null» на запись).
+  - groupsGetCommentFilters(groupId: Long): GroupCommentFilters? — READ через groups.getSettings (legacy settings).
+  - groupsSetCommentFilters(groupId: Long, filters: GroupCommentFilters): Boolean — ОФИЦИАЛЬНЫЙ WRITE через groups.edit (без hash; расширен param-map, только не-null): obscene_filter, obscene_stopwords, toxic_filter, disable_replies_from_groups, enable_replies, obscene_words.
+  - groupsGetLegacyModalsHashes(groupId: Long): JsonObject? — обёртка call("groups.getLegacyModalsHashes", forceWebGateway=true) (метода в коде не было — добавлена по заданию).
+  - groupsGetLegacySettingsHash(groupId: Long): String? — толерантное извлечение hash (рекурсивный обход JSON за hex-строками); не найден → null.
+  - groupsSaveCommentsLegacy(groupId: Long, hash: String, filters: GroupCommentFilters): Boolean — legacy POST https://vk.ru/groupsedit.php?act=save_comments (паттерн groupsEventLogPage: прямой OkHttp POST с cookie-джаром; включённые поля «1», выключенные «»; Obscene_words = текст стоп-слов); пустой hash → false БЕЗ запроса.
+  - data class GroupExtrasSettings(hiddenMembers, twoFaConfirmationEnabled, clipsCoOwnershipEnabled, storiesRepliesEnabled, showInLeftMenu, ageLimits).
+  - groupsGetGroupExtras(groupId): GroupExtrasSettings? — READ groups.getGroupSettings с полным fields-списком (6 полей, форма ответа как у message_* C6).
+  - groupsSetGroupExtras(groupId, s): Boolean — WRITE groups.setGroupSettings (6 полей плоско, content_tabs не требуется).
+- AdminCommentsScreen.kt (новый, паттерн C6/C7: Scaffold+TopAppBar+ErrorView+lastApiError+Toast):
+  - «Фильтры»: тумблеры «Комментарии включены», «Запретить ответы от сообществ», «Фильтр мата», «Токсичные комментарии», «Стоп-слова» (+ текстовое поле стоп-слов), «Распознавание фото» — read-only.
+  - Сохранение: официальный groupsSetCommentFilters напрямую; при неудаче — legacy save_comments ТОЛЬКО при полученном hash (иначе честная ошибка, запрос не шлётся).
+  - Лента: wall.get(10 постов) → wall.getComments(desc, 5/пост) → сортировка по дате, cap 60. Действия: Удалить (wallDeleteComment), Ответить (wallCreateComment + reply_to_comment), Бан автора (groupsBanUser, гейт fromId > 0).
+- AdminSectionsScreen.kt: блок «Дополнительные настройки» после основной кнопки «Сохранить» — 5 тумблеров (скрытые участники, подтверждение входа, совладение клипами, ответы на истории, показ в левом меню) + возрастное ограничение (чипы 0/1/2: Нет/16+/18+) + отдельная кнопка «Сохранить доп. настройки» (groupsSetGroupExtras).
+- Роутинг: Screen.AdminComments ("admin_comments/{groupId}", «Комментарии», иконка null); SovaNavHost — импорт, hasOwnTopBar (класс бага двойного AppBar Fix #272), колбэк onAdminCommentsClick, composable с NavType.LongType; CommunityScreen — onAdminCommentsClick pass-through; CommunityAdminBlock — строка «Комментарии» (Icons.Filled.Forum) после «Разделы».
+- Статическая проверка: «!!» = 0 в новых файлах и правках (единственное вхождение в VKApiClient — в док-комментарии соседнего метода, не моё); скобки сбалансированы (сканер с пропуском комментариев/строк; у VKApiClient пре-существующий дисбаланс -1/-1 идентичен HEAD — мой блок сбалансирован); импорты сверены с используемыми символами. Сборку НЕ запускал — по договорённости за пользователем.
+
+Stage Summary:
+- «Комментарии» и доп. тумблеры «Разделов» добавлены в админ-блок сообщества.
+- Честные ограничения (gap-решения):
+  1) Запись фильтров: приоритет — официальный groups.edit (может не принять enable_replies/toxic_filter/disable_replies_from_groups/obscene_words — это параметры, не подтверждённые официальным SDK; VK обычно игнорирует неизвестные, результат честно пробрасывается); legacy save_comments — фолбэк ТОЛЬКО с полученным hash (формат ответа groups.getLegacyModalsHashes заранее не снят → hash ищется толерантным поиском; не найден → запрос не шлётся, показывается честная ошибка).
+  2) recognizePhoto — read-only: ни в groups.edit, ни в legacy save_comments он не пишется.
+  3) Лента комментариев — аппроксимация по последним постам стены (официального метода «ленты комментариев сообщества» в API нет).
+  4) age_limits: 0/1/2 → Нет/16+/18+ (значения веб-админки; точный полный round-trip не снят отдельным HAR-запросом).

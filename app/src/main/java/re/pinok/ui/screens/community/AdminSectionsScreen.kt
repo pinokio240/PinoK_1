@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -139,6 +141,12 @@ fun AdminSectionsScreen(
     var loaded by remember { mutableStateOf<VKApiClient.GroupSections?>(null) }
     var cur by remember { mutableStateOf<VKApiClient.GroupSections?>(null) }
 
+    // C7-extras: дополнительные тумблеры (groups.get/setGroupSettings).
+    var extras by remember { mutableStateOf<VKApiClient.GroupExtrasSettings?>(null) }
+    var extrasLoading by remember { mutableStateOf(true) }
+    var extrasError by remember { mutableStateOf<String?>(null) }
+    var extrasSaving by remember { mutableStateOf(false) }
+
     // Диалоги выбора основного/дополнительного раздела.
     var pickMain by remember { mutableStateOf(false) }
     var pickSecondary by remember { mutableStateOf(false) }
@@ -161,6 +169,55 @@ fun AdminSectionsScreen(
                 error = e.message ?: "Ошибка загрузки"
             } finally {
                 loading = false
+            }
+        }
+        scope.launch {
+            extrasLoading = true
+            extrasError = null
+            try {
+                val st = app.apiClient.groupsGetGroupExtras(groupId)
+                if (st == null) {
+                    // NULL-ЯВНО: lastApiError может быть пустым — подставляем фолбэк для ErrorView.
+                    extrasError = app.apiClient.lastApiError?.takeIf { it.isNotBlank() }
+                        ?: "Не удалось загрузить доп. настройки"
+                } else {
+                    extras = st
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminSections", "extras load failed", e)
+                // NULL-ЯВНО: текст ошибки для ErrorView, null-ветка тривиальна (UI-дефолт).
+                extrasError = e.message ?: "Ошибка загрузки доп. настроек"
+            } finally {
+                extrasLoading = false
+            }
+        }
+    }
+
+    fun saveExtras() {
+        // NULL-ЯВНО: экран доп. настроек не рендерится, пока extras == null (guarded кнопкой).
+        val s = extras ?: return
+        if (extrasSaving) return
+        extrasSaving = true
+        scope.launch {
+            try {
+                val ok = app.apiClient.groupsSetGroupExtras(groupId, s)
+                if (ok) {
+                    Toast.makeText(context, "Доп. настройки сохранены", Toast.LENGTH_SHORT).show()
+                    // Перечитываем фактические значения с сервера.
+                    extras = app.apiClient.groupsGetGroupExtras(groupId)
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось сохранить доп. настройки" else "Ошибка: $err",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminSections", "extras save failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                extrasSaving = false
             }
         }
     }
@@ -284,28 +341,100 @@ fun AdminSectionsScreen(
                 ) {
                     Text(if (saving) "Сохранение…" else "Сохранить")
                 }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+                // ── C7-extras: дополнительные тумблеры (groups.get/setGroupSettings) ──
+                val ex = extras
+                when {
+                    extrasLoading -> {
+                        Row(modifier = Modifier.padding(vertical = 8.dp)) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Загрузка доп. настроек…", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    ex != null -> {
+                        Text("Дополнительные настройки", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Записываются отдельно: groups.setGroupSettings (web HAR 2026-09-25).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                        SwitchRow("Скрытые участники", ex.hiddenMembers) { on ->
+                            extras = ex.copy(hiddenMembers = on)
+                        }
+                        SwitchRow("Подтверждение входа для участников", ex.twoFaConfirmationEnabled) { on ->
+                            extras = ex.copy(twoFaConfirmationEnabled = on)
+                        }
+                        SwitchRow("Совладение клипами", ex.clipsCoOwnershipEnabled) { on ->
+                            extras = ex.copy(clipsCoOwnershipEnabled = on)
+                        }
+                        SwitchRow("Ответы на истории", ex.storiesRepliesEnabled) { on ->
+                            extras = ex.copy(storiesRepliesEnabled = on)
+                        }
+                        SwitchRow("Показывать в левом меню", ex.showInLeftMenu) { on ->
+                            extras = ex.copy(showInLeftMenu = on)
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+                        Text("Возрастное ограничение", style = MaterialTheme.typography.bodyLarge)
+                        Spacer(Modifier.height(6.dp))
+                        ChipRow(
+                            values = listOf(0 to "Нет", 1 to "16+", 2 to "18+"),
+                            selected = ex.ageLimits,
+                        ) { v -> extras = ex.copy(ageLimits = v) }
+
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = { saveExtras() },
+                            enabled = !extrasSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (extrasSaving) "Сохранение…" else "Сохранить доп. настройки")
+                        }
+                    }
+
+                    extrasError != null -> {
+                        val exErr = extrasError
+                        if (exErr != null) {
+                            ErrorView(
+                                message = exErr,
+                                onRetry = { load() },
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(24.dp))
             }
         }
     }
 
     if (pickMain) {
+        val curNow = cur
         SectionPickDialog(
             title = "Основной раздел",
-            current = cur?.mainSection,
+            current = if (curNow != null) curNow.mainSection else null,
             onPick = { v ->
-                cur = cur?.copy(mainSection = v)
+                val c = cur
+                if (c != null) cur = c.copy(mainSection = v)
                 pickMain = false
             },
             onDismiss = { pickMain = false },
         )
     }
     if (pickSecondary) {
+        val curNow = cur
         SectionPickDialog(
             title = "Дополнительный раздел",
-            current = cur?.secondarySection,
+            current = if (curNow != null) curNow.secondarySection else null,
             onPick = { v ->
-                cur = cur?.copy(secondarySection = v)
+                val c = cur
+                if (c != null) cur = c.copy(secondarySection = v)
                 pickSecondary = false
             },
             onDismiss = { pickSecondary = false },

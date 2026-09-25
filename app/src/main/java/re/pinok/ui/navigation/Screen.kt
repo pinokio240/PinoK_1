@@ -246,6 +246,37 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     }
 
     /**
+     * C8 (#ADMIN-COMMENTS): «Комментарии» — фильтры модерации (groups.edit /
+     * legacy save_comments) и лента последних комментариев (wall.getComments
+     * по постам). Web HAR 2026-09-25 (docs/админ.сообществ.HAR-разбор.md §5 P0 #2).
+     */
+    object AdminComments : Screen("admin_comments/{groupId}", "Комментарии", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_comments/$groupId"
+    }
+
+    /**
+     * ADMIN-MENU (#ADMIN-MENU-STRIKES): «Меню» сообщества — список пунктов
+     * (owners.getMenu), добавление (owners.addMenuItem), скрытие/показ всего
+     * меню (owners.hideMenu/showMenu). Web-only owners.* (HAR
+     * docs/админ.сообществ.HAR-разбор.md §5 P0 #1).
+     */
+    object AdminMenu : Screen("admin_menu/{groupId}", "Меню", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_menu/$groupId"
+    }
+
+    /**
+     * ADMIN-MENU (#ADMIN-MENU-STRIKES): «Страйки» сообщества — вкладки
+     * active/appealed (strikeSystem.getStrikesList), честный empty-state.
+     * Web-only strikeSystem.* (HAR §5 P0 #4); апелляция — веб-ссылка.
+     */
+    object AdminStrikes : Screen("admin_strikes/{groupId}", "Страйки", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_strikes/$groupId"
+    }
+
+    /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query
      * (для TopAppBar). Загружает board.getComments с пагинацией.
