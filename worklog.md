@@ -10503,3 +10503,16 @@ Work Log:
 
 Stage Summary:
 - Warnings compileDebugKotlin по AdminChatsScreen устранены; функционально копирование то же.
+
+---
+Task ID: REF-VKAPI
+Agent: Z.ai Code (main)
+Task: Юзер предложил python273/vk_api как референс. Оценка и фиксация в журнале.
+
+Work Log:
+- Клонировал https://github.com/python273/vk_api (живой: коммит июль 2026, Apache-2.0) в /tmp/vk_api.
+- Сверка с клиентом: декодер ?extra= (vk_o/vk_xor/vk_s/vk_i, VK-алфавит) уже реализован в AudioUrlUnmasker.kt; al_audio.php fallback — в AlAudioFallback.kt; longpoll/captcha/upload — свои.
+- Ценность = справочник при поломках аудио: свежие паттерны (remixaudio_show_alert_today cookie, RPS 1.5с/2с, m3u8→mp3 regex, AudioUtils.followOwner hash). Auth/bot_longpoll/streaming — не применимы.
+
+Stage Summary:
+- Политика: целиком не портируем; при поломке музыки FIRST сверяем наши AudioUrlUnmasker/AlAudioFallback с фиксами python273/vk_api.
