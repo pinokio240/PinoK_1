@@ -271,6 +271,11 @@ class VKApiClient(
         // W38 (C7): обложка сообщества (fields += cover; images[].url последней
         // картинки = максимальная; AdminSettingsScreen — превью/удаление).
         val coverUrl: String? = null,
+        // W41 (C3): кнопка действия — СЫРОЙ JSON action_button из groups.getById.
+        // Формат вебом не захвачен (чанк groups_edit_cta_button не скачан),
+        // поэтому правка round-trip: читаем объект, меняем enable/title/link,
+        // неизвестные поля сохраняются как есть.
+        val actionButtonRaw: String? = null,
     ) {
         // W35-a: порог показа блока «Управление» — admin_level >= 1 || is_admin==1
         // (сверка §5.1: модератор уже имеет часть админ-пунктов).
@@ -8967,6 +8972,10 @@ class VKApiClient(
                     coverUrl = o.get("cover")?.takeIf { !it.isJsonNull }?.asJsonObject
                         ?.getAsJsonArray("images")?.lastOrNull()?.takeIf { it.isJsonObject }
                         ?.asJsonObject?.get("url")?.takeIf { !it.isJsonNull }?.asString,
+                    // W41 (C3): action_button — сырой JSON для round-trip правки
+                    // (AdminCtaScreen; в default fields поля НЕТ — только явный запрос).
+                    actionButtonRaw = o.get("action_button")?.takeIf { !it.isJsonNull && it.isJsonObject }
+                        ?.asJsonObject?.toString(),
                 )
             }
         } catch (e: Exception) {
@@ -17013,6 +17022,17 @@ class VKApiClient(
         args.putAll(params)
         val json = call("groups.edit", args) ?: return false
         return json.has("response")
+    }
+
+    /**
+     * W41 (C3): groups.edit action_button — включение/выключение и правка кнопки
+     * действия сообщества. [json] — ПОЛНЫЙ JSON-объект кнопки (round-trip:
+     * базируется на прочитанном action_button, редактируются только
+     * enable/title/link — остальное сохраняется как было).
+     */
+    suspend fun groupsEditActionButton(groupId: Long, json: String): Boolean {
+        if (isOffline() || json.isBlank()) return false
+        return groupsEdit(groupId, mapOf("action_button" to json))
     }
 
     /** W35-b: groups.getMembers(filter=managers) — руководители сообщества. */

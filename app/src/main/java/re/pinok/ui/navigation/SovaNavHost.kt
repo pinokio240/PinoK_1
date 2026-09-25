@@ -106,6 +106,7 @@ import re.pinok.ui.screens.community.AdminPeopleScreen
 import re.pinok.ui.screens.community.AdminSettingsScreen
 import re.pinok.ui.screens.community.AdminStatsScreen
 import re.pinok.ui.screens.community.AdminAddressesScreen
+import re.pinok.ui.screens.community.AdminCtaScreen
 import re.pinok.ui.screens.community.AdminEventLogScreen
 import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
@@ -951,6 +952,7 @@ listOf(
         // Scaffold+TopAppBar, та же схема hasOwnTopBar (иначе двойной AppBar —
         // класс бага Fix #272/#NOTIF-SETTINGS-DUAL-BAR).
         Screen.AdminSettings.route,
+        Screen.AdminCta.route,
         Screen.AdminStats.route,
         Screen.AdminPeople.route,
         Screen.AdminLinks.route,
@@ -2338,6 +2340,9 @@ composable(Screen.CallsHistory.route) {
                         onAdminEventLogClick = { adminGroupId ->
                             nav.navigate(Screen.AdminEventLog.buildRoute(adminGroupId))
                         },
+                        onCtaClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminCta.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2449,6 +2454,19 @@ composable(Screen.CallsHistory.route) {
                     val logGroupId = entry.arguments?.getLong(Screen.AdminEventLog.ARG_GROUP_ID) ?: 0L
                     AdminEventLogScreen(
                         groupId = logGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W41 (C3): «Кнопка действия» сообщества.
+                composable(
+                    route = Screen.AdminCta.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminCta.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val ctaGroupId = entry.arguments?.getLong(Screen.AdminCta.ARG_GROUP_ID) ?: 0L
+                    AdminCtaScreen(
+                        groupId = ctaGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }

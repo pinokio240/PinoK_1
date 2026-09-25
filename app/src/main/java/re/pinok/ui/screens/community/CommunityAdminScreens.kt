@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -54,6 +55,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -159,6 +161,8 @@ fun CommunityAdminBlock(
     onAddressesClick: (Long) -> Unit,
     // W39 (C9): журнал действий сообщества (web-only).
     onEventLogClick: (Long) -> Unit,
+    // W41 (C3): кнопка действия сообщества.
+    onCtaClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
@@ -266,6 +270,14 @@ fun CommunityAdminBlock(
                 title = "Ссылки сообщества",
                 subtitle = "Добавить, изменить, удалить",
                 onClick = { onLinksClick(gi.id) },
+            )
+
+            // W41 (C3): кнопка действия (web: settings/cta).
+            AdminBlockRow(
+                icon = Icons.Filled.TouchApp,
+                title = "Кнопка действия",
+                subtitle = "Включить, название, ссылка",
+                onClick = { onCtaClick(gi.id) },
             )
 
             // ── W38 (C2/C5/C4) ──
@@ -2732,6 +2744,244 @@ fun AdminEventLogScreen(
                                         .padding(12.dp),
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W41 (C3): «Кнопка действия» сообщества (web: settings/cta).
+//
+// Источник: docs/админ.сообществ.снапшоты.сверка.md §4.3 — тумблер вкл/выкл +
+// селекты типа/действия + сабмит; чанк формы groups_edit_cta_button НЕ скачан,
+// полный список типов кнопок НЕ восстановим → честные ограничения:
+//  1) правка названия/ссылки — только для типа «link» (самый частый);
+//  2) для других типов (phone_number/book/order/enroll/…) — только вкл/выкл,
+//     поля типа не выдумываем (нет захваченного wire);
+//  3) запись — groups.edit action_button (round-trip JSON: неизвестные поля
+//     сохраняются), чтение — groups.getById fields=action_button.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** W41 (C3): распарсенное состояние кнопки действия. */
+private data class AdminCtaState(
+    val rawJson: String?,
+    val enabled: Boolean,
+    val title: String,
+    val type: String?,
+    val link: String,
+)
+
+private fun parseCta(raw: String?): AdminCtaState {
+    if (raw.isNullOrBlank()) {
+        // Кнопка ещё не задана — честный пустой стейт, тип по умолчанию link.
+        return AdminCtaState(rawJson = null, enabled = false, title = "", type = "link", link = "")
+    }
+    return try {
+        val o = com.google.gson.JsonParser.parseString(raw).asJsonObject
+        // enable может прийти булевым или 0/1 — принимаем оба формата.
+        val enableEl = o.get("enable") ?: o.get("enabled")
+        val enabled = enableEl?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.let { p ->
+            val pr = p.asJsonPrimitive
+            if (pr.isBoolean) pr.asBoolean else try { pr.asInt != 0 } catch (e: Exception) { false }
+        } ?: true
+        AdminCtaState(
+            rawJson = raw,
+            enabled = enabled,
+            title = o.get("title")?.takeIf { !it.isJsonNull }?.asString ?: "",
+            type = o.get("type")?.takeIf { !it.isJsonNull }?.asString ?: "link",
+            link = o.get("link")?.takeIf { !it.isJsonNull }?.asString ?: "",
+        )
+    } catch (e: Exception) {
+        AppLog.w("AdminCta", "parseCta failed: ${e.message}")
+        AdminCtaState(rawJson = null, enabled = false, title = "", type = "link", link = "")
+    }
+}
+
+/**
+ * W41 (C3): экран «Кнопка действия» — вкл/выкл, название, ссылка (тип link).
+ * Запись: groups.edit action_button (единый метод записи настроек, сверка §2 P1.5).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AdminCtaScreen(
+    groupId: Long,
+    onBack: () -> Unit,
+) {
+    val app = SovaApp.get()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var cta by remember { mutableStateOf<AdminCtaState?>(null) }
+
+    var enabled by remember { mutableStateOf(false) }
+    var title by remember { mutableStateOf("") }
+    var link by remember { mutableStateOf("") }
+
+    fun load() {
+        scope.launch {
+            loading = true
+            error = null
+            try {
+                // Явный fields — action_button в дефолтном наборе groupsGetById нет.
+                val fields = "photo_100,photo_200,screen_name,site,is_admin,admin_level,action_button"
+                val g = app.apiClient.groupsGetById(listOf(groupId), fields = fields).firstOrNull()
+                if (g == null) {
+                    error = app.apiClient.lastApiError?.takeIf { it.isNotBlank() }
+                        ?: "Сообщество не найдено"
+                } else {
+                    val st = parseCta(g.actionButtonRaw)
+                    cta = st
+                    enabled = st.enabled
+                    title = st.title
+                    link = st.link
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminCta", "load failed", e)
+                error = e.message ?: "Ошибка загрузки"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    fun save() {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try {
+                // Round-trip: база — прочитанный объект (неизвестные поля живут);
+                // новый — минимальный link-формат (список типов вебом не захвачен).
+                val base = cta?.rawJson
+                val obj = if (base.isNullOrBlank()) {
+                    com.google.gson.JsonObject()
+                } else {
+                    try {
+                        com.google.gson.JsonParser.parseString(base).asJsonObject
+                    } catch (e: Exception) {
+                        AppLog.w("AdminCta", "raw round-trip failed: ${e.message}")
+                        com.google.gson.JsonObject()
+                    }
+                }
+                val type = obj.get("type")?.takeIf { !it.isJsonNull }?.asString ?: "link"
+                if (type == "link") {
+                    obj.addProperty("type", "link")
+                    obj.addProperty("title", title.trim())
+                    obj.addProperty("link", link.trim())
+                }
+                obj.addProperty("enable", enabled)
+                val ok = app.apiClient.groupsEditActionButton(groupId, obj.toString())
+                if (ok) {
+                    Toast.makeText(context, "Сохранено", Toast.LENGTH_SHORT).show()
+                    load() // перечитываем фактическое состояние сервера (честный ответ)
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(
+                        context,
+                        if (err.isNullOrBlank()) "Не удалось сохранить" else "Ошибка: $err",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminCta", "save failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    LaunchedEffect(groupId) { load() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Кнопка действия") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+            )
+        },
+    ) { pad ->
+        when {
+            loading -> {
+                Box(modifier = Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            }
+
+            error != null -> ErrorView(
+                message = error,
+                onRetry = { load() },
+                modifier = Modifier.padding(pad),
+            )
+
+            else -> {
+                val isLinkType = cta?.type == null || cta?.type == "link"
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(pad)
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Кнопка включена",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (isLinkType) {
+                        OutlinedTextField(
+                            value = title,
+                            onValueChange = { title = it },
+                            label = { Text("Название кнопки") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = link,
+                            onValueChange = { link = it },
+                            label = { Text("Ссылка (https://…)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        // Честное ограничение: тип кнопки не «link» — правим только
+                        // вкл/выкл (названия/поля действия для прочих типов вебом
+                        // не захвачены, выдумывать их нельзя).
+                        Text(
+                            text = "Тип кнопки: ${cta?.type ?: "link"} — доступно только включение/выключение. Название и действие редактируются в веб-версии.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { save() },
+                        enabled = !saving,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (saving) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Сохранить")
                         }
                     }
                 }

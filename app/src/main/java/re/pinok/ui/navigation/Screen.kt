@@ -221,6 +221,12 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun buildRoute(groupId: Long): String = "admin_event_log/$groupId"
     }
 
+    /** W41 (C3): «Кнопка действия» — groups.edit action_button. */
+    object AdminCta : Screen("admin_cta/{groupId}", "Кнопка действия", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_cta/$groupId"
+    }
+
     /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query
