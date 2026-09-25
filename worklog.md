@@ -10492,3 +10492,14 @@ Stage Summary:
 - C6 (чаты сообщества + раздел «Сообщения») закрыт по реальным форматам HAR, без выдуманных полей. C3-меню: READ owners.getMenu есть (owner_id=-gid), WRITE не захвачен — остаётся до следующего HAR.
 - Ответ {"response":1} web-шлюза принят в messagesEditChat — важно и для будущих group-вызовов.
 - is_disable_stickers_popup_autoplay шлём =1 как веб (READ-источника в HAR нет — помечено в коде).
+
+---
+Task ID: C6-CHATS-FIX1
+Agent: Z.ai Code (main)
+Task: Устранить warning deprecated LocalClipboardManager (жалоба юзера на сборку).
+
+Work Log:
+- AdminChatsScreen.kt: LocalClipboardManager/AnnotatedString (deprecated в новых Compose) → платформенный ClipboardManager + ClipData.newPlainText (стабильно, без suspend). Импорты вычищены.
+
+Stage Summary:
+- Warnings compileDebugKotlin по AdminChatsScreen устранены; функционально копирование то же.

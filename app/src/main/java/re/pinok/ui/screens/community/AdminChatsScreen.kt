@@ -1,6 +1,8 @@
 // File: ui/screens/community/AdminChatsScreen.kt
 package re.pinok.ui.screens.community
 
+import android.content.ClipData
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -46,9 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
@@ -351,7 +351,6 @@ fun AdminChatsScreen(
             link = app.apiClient.messagesGetGroupChatInviteLink(chat.peer.id, groupId)
             linkErr = link.isNullOrBlank()
         }
-        val clipboard = LocalClipboardManager.current
         AlertDialog(
             onDismissRequest = { linkChat = null },
             title = { Text("Ссылка-приглашение") },
@@ -365,7 +364,9 @@ fun AdminChatsScreen(
             confirmButton = {
                 if (!linkErr && !link.isNullOrBlank()) {
                     TextButton(onClick = {
-                        clipboard.setText(AnnotatedString(link.orEmpty()))
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                            as android.content.ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("link", link.orEmpty()))
                         Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show()
                     }) { Text("Копировать") }
                 }
