@@ -239,6 +239,12 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun buildRoute(groupId: Long): String = "admin_messages/$groupId"
     }
 
+    /** C7 (#ADMIN-SECTIONS): «Разделы» — groups.getSettings / groups.edit. */
+    object AdminSections : Screen("admin_sections/{groupId}", "Разделы", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_sections/$groupId"
+    }
+
     /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query

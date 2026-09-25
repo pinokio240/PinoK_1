@@ -17096,6 +17096,86 @@ class VKApiClient(
     }
 
     /**
+     * C7 (#ADMIN-SECTIONS): разделы сообщества («Обсуждения», «Фотографии», …).
+     * READ  — groups.getSettings {group_id}: официальный метод; формат значений
+     *         сверен с официальным vk-java-sdk (GetSettingsResponse и enum'ы):
+     *         photos/video/audio/docs/topics/wiki — 0 выкл / 1 открыт /
+     *         2 ограничен; wall — 0..3 (3 = закрытая); links/events/places/
+     *         contacts — 0/1; main_section/secondary_section — код
+     *         GroupFullSection (0 нет, 1 фото, 2 обсуждения, 3 аудио, 4 видео,
+     *         5 товары, 14 документы). market-полей в getSettings НЕТ —
+     *         «Товары» этим экраном не управляются.
+     * WRITE — groups.edit (единый метод записи настроек, W35-b) теми же
+     *         полями; отправляются только не-null значения.
+     */
+    data class GroupSections(
+        val wall: Int = 0,
+        val topics: Int = 0,
+        val photos: Int = 0,
+        val video: Int = 0,
+        val audio: Int = 0,
+        val links: Int = 0,
+        val events: Int = 0,
+        val places: Int = 0,
+        val contacts: Int = 0,
+        val docs: Int = 0,
+        val wiki: Int = 0,
+        val mainSection: Int? = null,
+        val secondarySection: Int? = null,
+    )
+
+    suspend fun groupsGetSettings(groupId: Long): GroupSections? {
+        if (isOffline()) return null
+        val json = call("groups.getSettings", mapOf("group_id" to groupId.toString())) ?: return null
+        return try {
+            val st = json.getAsJsonObject("response") ?: return null
+            // Числа приходят примитивами; на всякий случай допускаем строку-число.
+            fun int(k: String): Int? = st.get(k)?.takeIf { it.isJsonPrimitive }?.let { p ->
+                if (p.isNumber) p.asInt else p.asString?.trim()?.toIntOrNull()
+            }
+            GroupSections(
+                wall = int("wall") ?: 0,
+                topics = int("topics") ?: 0,
+                photos = int("photos") ?: 0,
+                video = int("video") ?: 0,
+                audio = int("audio") ?: 0,
+                links = int("links") ?: 0,
+                events = int("events") ?: 0,
+                places = int("places") ?: 0,
+                contacts = int("contacts") ?: 0,
+                docs = int("docs") ?: 0,
+                wiki = int("wiki") ?: 0,
+                mainSection = int("main_section"),
+                secondarySection = int("secondary_section"),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetSettings parse error", e)
+            null
+        }
+    }
+
+    /** C7: запись разделов одним groups.edit (меняются только перечисленные поля). */
+    suspend fun groupsEditSections(groupId: Long, s: GroupSections): Boolean {
+        if (isOffline()) return false
+        val params = mutableMapOf(
+            "wall" to s.wall.toString(),
+            "topics" to s.topics.toString(),
+            "photos" to s.photos.toString(),
+            "video" to s.video.toString(),
+            "audio" to s.audio.toString(),
+            "links" to s.links.toString(),
+            "events" to s.events.toString(),
+            "places" to s.places.toString(),
+            "contacts" to s.contacts.toString(),
+            "docs" to s.docs.toString(),
+            "wiki" to s.wiki.toString(),
+        )
+        s.mainSection?.let { params["main_section"] = it.toString() }
+        s.secondarySection?.let { params["secondary_section"] = it.toString() }
+        return groupsEdit(groupId, params)
+    }
+
+    /**
      * W35-b: groups.edit — ЕДИНЫЙ метод записи настроек сообщества (сверка
      * «Группа_админ» §2 P1.5: веб-SPA пишет настройки ТОЛЬКО им — createGroupsEditFx;
      * groups.getSettings/setSettings вебом НЕ вызываются, из плана убраны).

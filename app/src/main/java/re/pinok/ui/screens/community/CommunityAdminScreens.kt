@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Group
@@ -167,6 +168,8 @@ fun CommunityAdminBlock(
     // W41 (C6): чаты сообщества + раздел «Сообщения» (web HAR 2026-09-25).
     onChatsClick: (Long) -> Unit,
     onMessagesClick: (Long) -> Unit,
+    // C7 (#ADMIN-SECTIONS): разделы сообщества.
+    onSectionsClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
@@ -330,9 +333,18 @@ fun CommunityAdminBlock(
                 onClick = { onChatsClick(gi.id) },
             )
 
-            // ── Честные disabled-пункты (план §4 C-серия: C3 разделы,
-            //    бизнес-инструменты — НЕ реализованы, без выдуманных маршрутов) ──
-            AdminBlockRow(icon = Icons.Filled.Settings, title = "Разделы", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
+            // C7 (#ADMIN-SECTIONS): «Разделы» — READ groups.getSettings,
+            // WRITE groups.edit (официальные методы; значения сверены с
+            // официальным vk-java-sdk: GetSettingsResponse + enum'ы).
+            AdminBlockRow(
+                icon = Icons.Filled.Dashboard,
+                title = "Разделы",
+                subtitle = "Стена, обсуждения, фото, видео, ссылки…",
+                onClick = { onSectionsClick(gi.id) },
+            )
+
+            // ── Честный disabled-пункт: бизнес-инструменты (формы/виджеты)
+            //    требуют отдельной проработки — маршрута без реализации нет. ──
             AdminBlockRow(icon = Icons.Filled.Settings, title = "Бизнес-инструменты", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
 
             // W39 (#ADMIN-COLLAPSE): «Свернуть» внизу развёрнутого списка.

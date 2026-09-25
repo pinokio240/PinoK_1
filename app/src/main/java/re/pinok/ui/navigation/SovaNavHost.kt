@@ -109,6 +109,7 @@ import re.pinok.ui.screens.community.AdminAddressesScreen
 import re.pinok.ui.screens.community.AdminCtaScreen
 import re.pinok.ui.screens.community.AdminChatsScreen
 import re.pinok.ui.screens.community.AdminMessagesScreen
+import re.pinok.ui.screens.community.AdminSectionsScreen
 import re.pinok.ui.screens.community.AdminEventLogScreen
 import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
@@ -2352,6 +2353,10 @@ composable(Screen.CallsHistory.route) {
                         onMessagesClick = { adminGroupId ->
                             nav.navigate(Screen.AdminMessages.buildRoute(adminGroupId))
                         },
+                        // C7 (#ADMIN-SECTIONS): разделы сообщества.
+                        onSectionsClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminSections.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2505,6 +2510,19 @@ composable(Screen.CallsHistory.route) {
                     val msgGroupId = entry.arguments?.getLong(Screen.AdminMessages.ARG_GROUP_ID) ?: 0L
                     AdminMessagesScreen(
                         groupId = msgGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // C7 (#ADMIN-SECTIONS): «Разделы» сообщества.
+                composable(
+                    route = Screen.AdminSections.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminSections.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val sectGroupId = entry.arguments?.getLong(Screen.AdminSections.ARG_GROUP_ID) ?: 0L
+                    AdminSectionsScreen(
+                        groupId = sectGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
