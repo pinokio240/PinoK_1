@@ -697,11 +697,12 @@ fun MusicScreen(
                 secondaryColor = vkTextSecondary,
                 accentColor = vkAccent,
                 apiErrorMessage = apiErrorMessage,
-                // Fix #367 + волна 31 #AUDIO-BG-PAGER: retry — снимает авто-офлайн
-                // и будит пейджер (сокращает паузу/бэкофф, догружает страницу).
+                // Волна 31 #AUDIO-BG-PAGER: retry будит пейджер (сокращает
+                // паузу/бэкофф, догружает страницу).
+                // #AUTO-OFFLINE-REMOVAL (W41): clearAutoOffline убран вместе
+                // с авто-офлайном #38.
                 onRetry = {
                     scope.launch {
-                        runCatching { app.apiClient.clearAutoOffline() }
                         pager.ensureStarted()
                         pager.kick()
                     }

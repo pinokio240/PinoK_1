@@ -328,20 +328,9 @@ class AudioLibraryPager private constructor() {
                 }
                 val tookMs = System.currentTimeMillis() - pageStartedMs
                 val pageGot = raw.size
-                // Auto-offline (Fix #367): 3 сетевых сбоя подряд — гейт API
-                // вернул пусто без исключения. Это пауза, а не конец библиотеки.
-                if (pageGot == 0 && app.apiClient.isAutoOfflineActive()) {
-                    _state.update { s -> s.copy(fetchingPage = false) }
-                    if (_state.value.tracks.isEmpty()) {
-                        _state.update { s ->
-                            s.copy(error = "Музыка остановлена: 3 сетевых сбоя подряд → авто-офлайн. Нажмите «Повторить».")
-                        }
-                    }
-                    AppLog.w(TAG, "#AUDIO-PAGING page: offset=$offsetForThisPage auto-offline active — пауза 60с, потом продолжение")
-                    consecutiveFails++
-                    waitCancellable(LONG_FAIL_PAUSE_MS)
-                    continue
-                }
+                // #AUTO-OFFLINE-REMOVAL (W41): ветка авто-офлайна (Fix #367) удалена —
+                // пустая страница при офлайне обрабатывается проверкой ниже, при сети —
+                // логикой #AUDIO-PAGING-HOLE.
                 // Сеть пропала между гейтом и запросом: пустая страница — пауза,
                 // а не «конец библиотеки».
                 if (pageGot == 0 && app.networkObserver.isOffline()) {

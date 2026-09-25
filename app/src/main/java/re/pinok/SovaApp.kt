@@ -1170,13 +1170,25 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             api = ExchangeAuthApi(httpClient = httpClient),
             storage = exchangeStorage,
             httpClient = httpClient,  // Web token refresh через remixsid (ensureFreshToken)
-            prefs = prefs,  // Fix #211: сброс privacyOfflineMode при успешной авторизации
         )
 
         // 3b. VK API client (offline-aware) — wires to the auth repository for auto-refresh.
         //    NetworkObserver initialized first so VKApiClient can reuse it (C13).
         networkObserver = NetworkObserver(this)
         networkObserver.register()
+
+        // #AUTO-OFFLINE-REMOVAL (W41): авто-офлайн (#38) убран, преф privacyOfflineMode
+        // больше никем не пишется. Застрявший true из старых версий переживал
+        // перезапуск и блокировал контент (репорт: «офлайн-режим который нельзя
+        // выключить» после очистки кэша). Одноразовая тихая миграция при старте.
+        keepAliveScope.launch {
+            runCatching {
+                if (prefs.data.first().privacyOfflineMode) {
+                    prefs.setPrivacyOfflineMode(false)
+                    AppLog.i("SovaApp", "#AUTO-OFFLINE-REMOVAL: stale privacyOfflineMode cleared")
+                }
+            }
+        }
 
         // #NETWORK-RESILIENCE (2026-08-04): подключаем NetworkObserver к auth-repo
         // для offline-first входа (AuthState.OfflineWithCache) и offline-guard в
@@ -2298,18 +2310,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             val ctype = try { networkObserver.connectionType() } catch (_: Exception) { "network" }
             AppLog.i("SovaApp", "Default network SWITCHED to $ctype — soft reset (evictAll, NO cancelAll) + reprepare player")
             try { httpClient.connectionPool.evictAll() } catch (_: Exception) {}
-            try { apiClient.resetNetworkErrorCounter() } catch (_: Exception) {}
-            // Fix #367: смена сети — верный момент снять ЗАСТРЯВШИЙ АВТО-офлайн:
-            // новая сеть может быть рабочей, а watcher isOnlineFlow при switch
-            // без onLost не срабатывает (сеть «не терялась»). keepAliveScope —
-            // приватный scope приложения, переживающий экраны.
-            try {
-                // #AUTO-OFFLINE-SELFHEAL (W41): clearAutoOffline теперь сам чиcтит и
-                // переживший перезапуск преф (маркера нет, преф=true) — условие
-                // isAutoOfflineActive() пропускало этот случай, вызов делаем всегда
-                // (метод идемпотентен: без префа и маркера — no-op).
-                keepAliveScope.launch { runCatching { apiClient.clearAutoOffline() } }
-            } catch (_: Exception) {}
+            // #AUTO-OFFLINE-REMOVAL (W41): resetNetworkErrorCounter/clearAutoOffline
+            // убраны вместе с авто-офлайном #38.
             try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true, forceReprepare = true) } catch (_: Exception) {}
 
             // #VKID-SEAMLESS (vk.id.md P0-5): PROACTIVE silent refresh на смене сети.
@@ -2384,15 +2386,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             var wasOnline = networkObserver.isOnline()
             networkObserver.isOnlineFlow.collect { online ->
                 if (!wasOnline && online) {
-                    AppLog.i("SovaApp", "Network restored (offline→online) — resetting API error counter")
-                    try { apiClient.resetNetworkErrorCounter() } catch (_: Exception) {}
-                    // Fix #367: сеть восстановилась — снимаем застрявший АВТО-офлайн
-                    // (раньше watcher снимал только счётчик, а сам режим оставался
-                    // до перезапуска приложения).
-                    // #AUTO-OFFLINE-SELFHEAL (W41): без условия — преф мог пережить
-                    // перезапуск (маркера нет), isAutoOfflineActive()=false, а преф
-                    // блокировал все гейты. clear идемпотентен.
-                    try { apiClient.clearAutoOffline() } catch (_: Exception) {}
+                    AppLog.i("SovaApp", "Network restored (offline→online)")
+                    // #AUTO-OFFLINE-REMOVAL (W41): resetNetworkErrorCounter/clearAutoOffline
+                    // убраны вместе с авто-офлайном #38.
                     try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true) } catch (_: Exception) {}
                     // #NET-SWITCH-POPUP: сеть восстановилась → Idle (скрыть popup).
                     setNetworkSwitchState(NetworkSwitchState.Idle)

@@ -78,11 +78,6 @@ class PrivacyMods {
         "build"         to "AP3A.241105.007",
         "manufacturer"  to "Google",
     )
-
-    /** True if the offline mode should be forced (no network at all). */
-    fun shouldForceOffline(snapshot: SovaPrefs.Snapshot): Boolean {
-        val force = snapshot.privacyOfflineMode
-        if (force) AppLog.d(tag, "offline mode forced — all network suppressed")
-        return force
-    }
+    // #AUTO-OFFLINE-REMOVAL (W41): shouldForceOffline(privacyOfflineMode) удалён
+    // вместе с авто-офлайном #38.
 }

@@ -10,7 +10,6 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import re.pinok.data.local.SovaPrefs
 import re.pinok.feature.calls.CallsAuth
 import re.pinok.util.AppLog
 import re.pinok.util.ExponentialBackoff
@@ -62,7 +61,6 @@ class ExchangeAuthRepository(
     private val api: ExchangeAuthApi,
     private val storage: ExchangeTokenStorage,
     private val httpClient: OkHttpClient? = null,
-    private val prefs: SovaPrefs? = null,
 ) : CallsAuth {
 
     private val refreshMutex = Mutex()
@@ -418,15 +416,9 @@ class ExchangeAuthRepository(
             // CookieManager (единственный источник сессии) — storage-копии больше
             // не храним, backfillRemixsidFromCookieManager удалён.
 
-            // Fix #211: сбрасываем auto-offline флаг при успешной авторизации.
-            // privacyOfflineMode мог быть включён авто-офлайном (#38) в прошлой
-            // сессии после сетевых ошибок и сохраниться в DataStore. Без сброса
-            // все API-вызовы шорт-сиркитятся → «приложение не грузится» после
-            // re-login. Успешный логин = сеть работает → offline не нужен.
-            runCatching {
-                prefs?.setPrivacyOfflineMode(false)
-                AppLog.i(TAG, "OAuth auth success — privacyOfflineMode reset to false (was auto-enabled by #38)")
-            }
+            // #AUTO-OFFLINE-REMOVAL (W41): сброс privacyOfflineMode при авторизации
+            // (Fix #211) удалён вместе с авто-офлайном #38 — преф больше не пишется,
+            // застрявший из старых версий чистит миграция в SovaApp.
             AppLog.i(TAG, "OAuth WebView auth success — user_id=$userId, exchange_token=${if (exchangeToken != null) "yes" else "no"}")
             AuthState.Success(result)
         } catch (e: Exception) {
@@ -594,17 +586,6 @@ class ExchangeAuthRepository(
                     exchangeToken = exchangeToken,
                 )
                 AppLog.i(TAG, "WebToken: obtained exchange_token for silent refresh")
-            }
-
-            // Fix #211: сбрасываем auto-offline флаг при успешной авторизации.
-            // privacyOfflineMode мог быть включён авто-офлайном (#38) в прошлой
-            // сессии после сетевых ошибок и сохраниться в DataStore. Без сброса
-            // все API-вызовы шорт-сиркитятся → «приложение не грузится» после
-            // re-login (лог 2026-07-24: весь лог забит «Offline mode forced»
-            // даже после Auth success). Успешный логин = сеть работает → offline не нужен.
-            runCatching {
-                prefs?.setPrivacyOfflineMode(false)
-                AppLog.i(TAG, "WebToken saved — privacyOfflineMode reset to false (was auto-enabled by #38)")
             }
 
             // #SESSION-WEB-MECHANISM: cookies уже в CookieManager (их поставила

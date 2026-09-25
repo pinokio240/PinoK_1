@@ -54,7 +54,6 @@ import re.pinok.data.model.Group
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.SearchHint
 import re.pinok.mods.messages.MessageMods
-import re.pinok.mods.network.NetworkMods
 import re.pinok.mods.privacy.PrivacyMods
 import re.pinok.util.AppLog
 import re.pinok.util.NetworkObserver
@@ -112,7 +111,8 @@ class VKApiClient(
 ) : CallsApi, PhotosApi {
 
     private val networkObserver = networkObserver ?: NetworkObserver(context)
-    private val networkMods = NetworkMods()
+    // #AUTO-OFFLINE-REMOVAL (W41): networkMods property удалён — единственный
+    // потребитель (isOfflineForced) убран вместе с авто-офлайном #38.
     private val privacyMods = PrivacyMods()
     private val messageMods = MessageMods()
 
@@ -177,26 +177,13 @@ class VKApiClient(
      */
     private val MAX_CAPTCHA_RETRIES = 3
 
-    suspend fun isOffline(): Boolean {
-        val snap = prefs.data.first()
-        if (networkMods.isOfflineForced(snap)) {
-            // #AUTO-OFFLINE-SELFHEAL (W41): преф privacyOfflineMode пишет ТОЛЬКО
-            // авто-трип (ручного тумблера нет — Fix #367, toggle убран из настроек,
-            // SettingsScreen #38). Если маркер трипа отсутствует (пережил перезапуск
-            // процесса) ИЛИ кулдаун 30с истёк — снимаем преф и доверяем реальному
-            // состоянию сети. Раньше самолечение жило только в callInternal — туда
-            // заблокированные вызовы не доходили (ранние гейты срабатывали раньше),
-            // и «Повторить» в UI не мог пробить стену. Если сеть реально сломана —
-            // авто-трип сработает снова (3 сбоя/60с), это штатный цикл самолечения.
-            val marker = autoOfflineAt
-            if (marker == 0L || System.currentTimeMillis() - marker >= AUTO_OFFLINE_COOLDOWN_MS) {
-                clearAutoOffline()
-            } else {
-                return true
-            }
-        }
-        return !networkObserver.isOnline()
-    }
+    // #AUTO-OFFLINE-REMOVAL (W41): авто-офлайн (#38) убран ПОЛНОСТЬЮ (запрос
+    // пользователя) — преф privacyOfflineMode больше никем не пишется, застрявший
+    // true из старых версий чистит миграция в SovaApp при старте. Офлайн = только
+    // реальное состояние сети (NetworkObserver): без сети — пусто/ошибка, с сетью —
+    // честные запросы. Репорт-история: застрявший преф переживал перезапуск →
+    // «офлайн-режим который нельзя выключить» после очистки кэша.
+    suspend fun isOffline(): Boolean = !networkObserver.isOnline()
 
     fun token(): String? = tokenStorage.load()?.accessToken
 
@@ -1423,17 +1410,10 @@ class VKApiClient(
     ): HistoryResult {
         if (isOffline()) {
             // #IM-EMPTY-HONEST: раньше тихий HistoryResult(empty) → UI показывал
-            // «Нет сообщений» хотя сообщения есть. Причина офлайна различается:
-            // форс-преф (ручной «Офлайн-режим» ИЛИ авто-офлайн после #38-серии
-            // сетевых сбоев; у callInternal есть 30с-probe самолечение, этот
-            // ранний гейт его обходит) vs реальная потеря сети.
-            val snapOff = prefs.data.first()
-            val reason = if (networkMods.isOfflineForced(snapOff)) {
-                "включён офлайн-режим (приватность или авто-офлайн после сетевых " +
-                    "сбоев — выключи в Настройках или подожди ~30с самолечения)"
-            } else {
-                "нет сети (NetworkObserver)"
-            }
+            // «Нет сообщений» хотя сообщения есть.
+            // #AUTO-OFFLINE-REMOVAL (W41): авто-офлайн (#38) убран — офлайн здесь
+            // теперь только реальная потеря сети.
+            val reason = "нет сети (NetworkObserver)"
             AppLog.w("VKApiClient", "messages.getHistory: offline gate — $reason (peerId=$peerId)")
             return HistoryResult(emptyList(), emptyMap(), failure = "Нет сети: $reason")
         }
@@ -11129,79 +11109,13 @@ class VKApiClient(
     override var lastApiErrorCode: Int = 0
         private set
 
-    // ── #38: Auto-offline после N последовательных сетевых неудач ──────────
-    // Если VK API упал (IOException/timeout/DNS) но интернет на устройстве есть
-    // (captive portal, VK IP-блок, сервер лежит) — после MAX_CONSECUTIVE_NET_ERRORS
-    // ошибок в течение NET_ERROR_WINDOW_MS автоматически включаем privacyOfflineMode.
-    // UI реактивно обновится (FeedScreen collectAsState) + все API-методы начнут
-    // возвращать empty (isOffline()=true). Сброс счётчика — на первом успешном
-    // ответе. Пользователь может выйти из авто-офлайна: drawer → «Офлайн» → кнопка
-    // «Войти» в TopAppBar OfflineManagerScreen, либо просто повторный успех API
-    // после восстановления сети (watcher в NetworkObserver).
-    @Volatile private var consecutiveNetworkErrors: Int = 0
-    @Volatile private var lastNetworkErrorTs: Long = 0L
-    private val MAX_CONSECUTIVE_NET_ERRORS = 3
-    private val NET_ERROR_WINDOW_MS = 60_000L
-
-    /**
-     * Fix #45: Сброс счётчика сетевых ошибок при восстановлении сети.
-     *
-     * Вызывается из [re.pinok.SovaApp] через `networkObserver.addOnNetworkLostListener`
-     * точнее при onAvailable (см. SovaApp.kt — watcher подписан на isOnlineFlow).
-     *
-     * Без этого после WiFi→Mobile switch: счётчик может быть близок к
-     * [MAX_CONSECUTIVE_NET_ERRORS] от tail-ошибок на мёртвом WiFi-интерфейсе,
-     * и 1-2 ошибки на новом интерфейсе → ложный auto-offline.
-     */
-    fun resetNetworkErrorCounter() {
-        if (consecutiveNetworkErrors > 0) {
-            AppLog.i("VKApiClient", "Network restored — resetting consecutiveNetworkErrors ($consecutiveNetworkErrors → 0)")
-            consecutiveNetworkErrors = 0
-            lastNetworkErrorTs = 0L
-        }
-    }
-
-    // Fix #367 (#MUSIC-NET-DIAG): маркер АВТО-офлайна. privacyOfflineMode
-    // ставится в true ТОЛЬКО отсюда (авто-трип после 3 сбоев) — маркер хранит
-    // момент трипа. Раньше режим снимался ТОЛЬКО успешной авторизацией
-    // (ExchangeAuthRepository), а watcher'ы сети сбрасывали только счётчик:
-    // если сеть «не терялась» по мнению ConnectivityManager (избоевый Wi-Fi,
-    // switch без onLost), isOnlineFlow не срабатывал → 293 гейта isOffline()
-    // молча возвращали пустоту навсегда — раздел «Музыка» (самый тяжёлый по
-    // запросам, трипается первым) «переставал работать» на Wi-Fi.
-    @Volatile private var autoOfflineAt: Long = 0L
-    private val AUTO_OFFLINE_COOLDOWN_MS = 30_000L
-
-    /** Fix #367: активен ли АВТО-офлайн (включён самим клиентом после сетевых сбоев). */
-    fun isAutoOfflineActive(): Boolean = autoOfflineAt != 0L
-
-    /**
-     * Fix #367: снять авто-офлайн (сетевой watcher SovaApp или кнопка «Повторить»
-     * в UI). Ручного оффлайн-переключателя этого префа нет — ставится он только
-     * авто-трипом, поэтому снятие безопасно всегда.
-     */
-    suspend fun clearAutoOffline() {
-        // #AUTO-OFFLINE-SELFHEAL (W41): раньше ранний return при autoOfflineAt==0L
-        // оставлял ПЕРЕЖИВШИЙ перезапуск преф privacyOfflineMode=true навсегда:
-        // маркер трипа живёт в памяти процесса, преф — в DataStore. После смерти
-        // процесса (очистка кэша, kill, система) преф=true остаётся, маркера нет —
-        // метод ничего не чистил, isAutoOfflineActive()=false, watcher'ы сети
-        // тоже пропускали (сеть по мнению ConnectivityManager не «терялась») →
-        // все гейты isOffline() блокировали контент вечно, «Повторить» бессилен.
-        val hadMarker = autoOfflineAt != 0L
-        autoOfflineAt = 0L
-        consecutiveNetworkErrors = 0
-        lastNetworkErrorTs = 0L
-        val snap = runCatching { prefs.data.first() }.getOrNull()
-        if (snap?.privacyOfflineMode == true) {
-            runCatching { prefs.setPrivacyOfflineMode(false) }
-            AppLog.i(
-                "VKApiClient",
-                "#AUTO-OFFLINE-SELFHEAL: forced-offline pref cleared (" +
-                    (if (hadMarker) "cooldown-expired" else "persisted-after-restart") + ")",
-            )
-        }
-    }
+    // #AUTO-OFFLINE-REMOVAL (W41): механизм авто-офлайна #38 (счётчик сетевых
+    // ошибок, авто-трип privacyOfflineMode, маркер autoOfflineAt, кулдаун 30с,
+    // resetNetworkErrorCounter/clearAutoOffline/isAutoOfflineActive) удалён по
+    // запросу пользователя. Преф трипал после 3 сбоев/60с и ПЕРЕЖИВАЛ перезапуск
+    // (DataStore) при маркере в памяти → вечная стена isOffline() (репорт:
+    // «офлайн-режим который нельзя выключить» после очистки кэша). Осталась
+    // только честная реакция на реальную сеть (NetworkObserver).
 
     /**
      * Sprint 1, P0-3 (#76): обработчик VK Captcha (error 14).
@@ -11272,19 +11186,12 @@ class VKApiClient(
 
         // Fix #99: LongPoll сервер должен пытаться переподключиться даже
         // при кратковременной потере сети, иначе приложение «теряет» соединение навсегда.
+        // #AUTO-OFFLINE-REMOVAL (W41): probe-самолечение авто-офлайна убрано вместе
+        // с самим авто-офлайном — гейт теперь только про РЕАЛЬНУЮ сеть (Fix #99
+        // сохранён: LongPoll переподключается независимо от гейта).
         if (!skipOffline && isOffline()) {
-            // Fix #367: АВТО-офлайн — не вечная стена. Если режим включил сам
-            // клиент (autoOfflineAt > 0) и кулдаун 30с истёк — пропускаем запрос
-            // как self-heal probe: успех снимет режим (см. блок успеха ниже),
-            // провал перезапустит трип (счётчик снова дойдёт до порога).
-            // Раньше гейт возвращал null БЕЗ сети → нечему было снять режим →
-            // дедлок до перезапуска приложения.
-            val nowMs = System.currentTimeMillis()
-            if (autoOfflineAt == 0L || nowMs - autoOfflineAt < AUTO_OFFLINE_COOLDOWN_MS) {
-                AppLog.d("VKApiClient", "call($method): offline, returning null")
-                return null
-            }
-            AppLog.i("VKApiClient", "#MUSIC-NET-DIAG: auto-offline cooldown passed — probe $method")
+            AppLog.d("VKApiClient", "call($method): offline, returning null")
+            return null
         }
 
         // PrivacyMods: читаем snapshot один раз на вызов (безопасно, prefs — DataStore).
@@ -11483,36 +11390,9 @@ class VKApiClient(
                     durationMs = durationMs,
                     error = netErr,
                 )
-                // #38: auto-offline после MAX_CONSECUTIVE_NET_ERRORS сетевых неудач
-                // в течение NET_ERROR_WINDOW_MS. Только для IOException-подобных
-                // ошибок (не для CancellationException — это нормальная отмена).
-                if (netErr is java.io.IOException ||
-                    netErr is java.net.UnknownHostException ||
-                    netErr is java.net.SocketTimeoutException) {
-                    val now = System.currentTimeMillis()
-                    if (now - lastNetworkErrorTs > NET_ERROR_WINDOW_MS) {
-                        consecutiveNetworkErrors = 0
-                    }
-                    consecutiveNetworkErrors++
-                    lastNetworkErrorTs = now
-                    AppLog.w(
-                        "VKApiClient",
-                        "Network error #$consecutiveNetworkErrors (window ${NET_ERROR_WINDOW_MS}ms): ${netErr.javaClass.simpleName}: ${netErr.message}",
-                    )
-                    if (consecutiveNetworkErrors >= MAX_CONSECUTIVE_NET_ERRORS) {
-                        AppLog.w(
-                            "VKApiClient",
-                            "Auto-enabling offline mode after $consecutiveNetworkErrors consecutive network failures — switching to OfflineManager",
-                        )
-                        // Fix #367: фиксируем момент АВТО-трипа — через 30с гейт
-                        // начнёт пропускать запросы как probe (самолечение).
-                        autoOfflineAt = System.currentTimeMillis()
-                        // callInternal — suspend fun, prefs.setPrivacyOfflineMode тоже suspend.
-                        // runCatching глотает возможные исключения DataStore (маловероятно, но безопасно).
-                        runCatching { prefs.setPrivacyOfflineMode(true) }
-                        consecutiveNetworkErrors = 0
-                    }
-                }
+                // #AUTO-OFFLINE-REMOVAL (W41): счётчик/авто-трип #38 удалены —
+                // сетевой сбой просто логируется и пробрасывается вызывающему
+                // (честные error-стейты вместо глобального офлайна).
                 throw netErr
             }
 
@@ -11536,19 +11416,6 @@ class VKApiClient(
                     durationMs = durationMs,
                     bodySize = respSize,
                 )
-                // #38: успешный ответ VK — сбрасываем счётчик сетевых ошибок.
-                // Если до этого были 1-2 неудачи (но не достигли порога), теперь
-                // счётчик обнулён, и следующая серия начнётся сначала.
-                if (consecutiveNetworkErrors > 0) {
-                    consecutiveNetworkErrors = 0
-                }
-                // Fix #367: успешный ответ при АВТО-офлайне — сеть рабочая,
-                // снимаем режим немедленно (self-heal, см. маркер autoOfflineAt).
-                if (autoOfflineAt != 0L) {
-                    autoOfflineAt = 0L
-                    runCatching { prefs.setPrivacyOfflineMode(false) }
-                    AppLog.i("VKApiClient", "#MUSIC-NET-DIAG: auto-offline cleared by successful $method")
-                }
                 return raw
             }
 

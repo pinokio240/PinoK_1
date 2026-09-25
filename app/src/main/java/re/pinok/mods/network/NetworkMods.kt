@@ -1,7 +1,6 @@
 package re.pinok.mods.network
 
 import android.net.Uri
-import re.pinok.data.local.SovaPrefs
 import re.pinok.util.AppLog
 
 /**
@@ -22,12 +21,8 @@ class NetworkMods {
 
     private val tag = "NetworkMods"
 
-    /** True if offline mode is forced via user preference (callers pass a fresh snapshot). */
-    fun isOfflineForced(snapshot: SovaPrefs.Snapshot): Boolean {
-        val forced = snapshot.privacyOfflineMode
-        if (forced) AppLog.d(tag, "Offline mode forced — API call will be short-circuited")
-        return forced
-    }
+    // #AUTO-OFFLINE-REMOVAL (W41): isOfflineForced(privacyOfflineMode) удалён
+    // вместе с авто-офлайном #38 — гейты теперь только на реальной сети.
 
     /**
      * Returns true if the given URL is an ad domain that should be blocked.
