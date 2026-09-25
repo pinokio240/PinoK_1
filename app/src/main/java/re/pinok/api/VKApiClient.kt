@@ -30,6 +30,7 @@ import re.pinok.data.model.Attachment
 import re.pinok.data.model.AudioPlaylist
 import re.pinok.data.model.Chat
 import re.pinok.data.model.ChatFolder
+import re.pinok.data.model.ChatPermissions
 import re.pinok.data.model.Comment
 import re.pinok.data.model.Message
 // #REACTION-WEB-API (волна 32): парсинг reactions объекта сообщения
@@ -1052,13 +1053,37 @@ class VKApiClient(
         chatId: Long,
         title: String? = null,
         description: String? = null,
+        // C6 (#ADMIN-CHATS): контекст сообщества — web HAR 2026-09-25 шлёт ТОТ ЖЕ
+        // метод с group_id: rename  chat_id=1&title=…&group_id=<gid>;
+        // permissions chat_id=1&is_service=0&is_disable_stickers_popup_autoplay=1
+        // &permissions={json}&group_id=<gid> (web-шлюз, ответ {"response":1}).
+        groupId: Long? = null,
+        permissions: ChatPermissions? = null,
     ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf("chat_id" to chatId.toString())
         if (!title.isNullOrBlank()) args["title"] = title
         if (!description.isNullOrBlank()) args["description"] = description
-        val json = call("messages.editChat", args) ?: return false
-        return json.getAsJsonObject("response")?.get("success")?.asInt == 1
+        if (groupId != null) args["group_id"] = groupId.toString()
+        if (permissions != null) {
+            // Константы веб-формы (HAR 2026-09-25): is_service=0 и
+            // is_disable_stickers_popup_autoplay=1 шлются всегда. READ-источника
+            // для autoplay-флага в захвате нет — отправляем как в вебе (1).
+            args["is_service"] = "0"
+            args["is_disable_stickers_popup_autoplay"] = "1"
+            args["permissions"] = com.google.gson.Gson().toJson(permissions)
+        }
+        val json = call("messages.editChat", args, forceWebGateway = groupId != null)
+            ?: return false
+        // Формы ответа: мобильный шлюз {"response":{"success":1}}; web-шлюз
+        // (HAR 2026-09-25) {"response":1}. Принимаем обе честно.
+        val resp = json.get("response") ?: return false
+        return when {
+            resp.isJsonPrimitive -> resp.asInt == 1
+            resp.isJsonObject ->
+                resp.asJsonObject.get("success")?.takeIf { it.isJsonPrimitive }?.asInt == 1
+            else -> false
+        }
     }
 
     /**
@@ -1683,13 +1708,18 @@ class VKApiClient(
     }
 
     /** messages.getConversationsById — инфо о конкретных диалогах. */
-    suspend fun messagesGetConversationsById(peerIds: List<Long>): List<Chat> {
+    suspend fun messagesGetConversationsById(peerIds: List<Long>, groupId: Long? = null): List<Chat> {
         if (isOffline() || peerIds.isEmpty()) return emptyList()
-        val json = call("messages.getConversationsById", mapOf(
+        val args = mutableMapOf(
             "peer_ids" to peerIds.joinToString(","),
             "extended" to "1",
             "fields" to "photo_100,photo_200,online,last_seen",
-        )) ?: return emptyList()
+        )
+        // C6 (#ADMIN-CHATS): web HAR 2026-09-25 шлёт getConversationsById с
+        // group_id — контекст сообщества (peer_ids=2000000001&group_id=<gid>).
+        if (groupId != null) args["group_id"] = groupId.toString()
+        val json = call("messages.getConversationsById", args, forceWebGateway = groupId != null)
+            ?: return emptyList()
         val parsedChats: List<Chat> = try {
             val respObj = json.getAsJsonObject("response") ?: return emptyList()
             val items = respObj.getAsJsonArray("items") ?: return emptyList()
@@ -1934,6 +1964,93 @@ class VKApiClient(
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesSearchConversations parse error", e)
             emptyList()
+        }
+    }
+
+    /**
+     * C6 (#ADMIN-CHATS): список бесед сообщества.
+     *
+     * Web HAR 2026-09-25 (vk.ru_чат_2.har): список бесед в админке веб
+     * строит messages.searchConversations с group_id и q=" " (пробел —
+     * «все»): {q:" ", count:10, extended:1, group_id:<gid>, fields:…}.
+     * Ответ — тот же конверт, что у messages.getConversations
+     * (items[{conversation,last_message}], profiles[]/groups[] при extended).
+     * Требуются права управления сообществом; web-шлюз (forceWebGateway).
+     */
+    suspend fun messagesGetGroupChats(groupId: Long, count: Int = 50): List<Chat> {
+        if (isOffline()) return emptyList()
+        val json = call("messages.searchConversations", mapOf(
+            "q" to " ",
+            "count" to count.toString(),
+            "extended" to "1",
+            "group_id" to groupId.toString(),
+            "fields" to "photo_100,photo_200,online,last_seen",
+        ), forceWebGateway = true) ?: return emptyList()  // NULL-ЯВНО (Gson)
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList()  // NULL-ЯВНО (Gson)
+            val items = resp.getAsJsonArray("items") ?: return emptyList()  // NULL-ЯВНО (Gson)
+            val maps = parsePeerMaps(resp)
+            val parsed = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                if (o.has("conversation")) {
+                    parseConversationItem(o, maps)
+                } else {
+                    // Терпеливый парсинг: ПЛОСКИЙ объект conversation без обёртки.
+                    parseConversationItem(
+                        com.google.gson.JsonObject().apply { add("conversation", o) },
+                        maps,
+                    )
+                }
+            }
+            resolveMissingPeerInfo(parsed)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetGroupChats parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * C6 (#ADMIN-CHATS): удалить беседу сообщества для всех —
+     * messages.dropChatForAll {chat_id, group_id} (web HAR 2026-09-25,
+     * ответ {"response":1}). Требует прав управления сообществом.
+     */
+    suspend fun messagesDropChatForAll(chatId: Long, groupId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("messages.dropChatForAll", mapOf(
+            "chat_id" to chatId.toString(),
+            "group_id" to groupId.toString(),
+        ), forceWebGateway = true) ?: return false
+        val resp = json.get("response") ?: return false
+        return when {
+            resp.isJsonPrimitive -> resp.asInt == 1
+            resp.isJsonObject ->
+                resp.asJsonObject.get("success")?.takeIf { it.isJsonPrimitive }?.asInt == 1
+            else -> false
+        }
+    }
+
+    /**
+     * C6 (#ADMIN-CHATS): ссылка-приглашение в беседу сообщества —
+     * messages.getInviteLink {peer_id=2000000001, visible_messages_count=250,
+     * reset=0, group_id} (web HAR 2026-09-25). Ответ:
+     * {"response":{"link":"https://vk.me/join/…"}}. reset НЕ реализуем —
+     * в захвате только reset=0 (честно, без выдуманного сброса).
+     */
+    suspend fun messagesGetGroupChatInviteLink(peerId: Long, groupId: Long): String? {
+        if (isOffline()) return null
+        val json = call("messages.getInviteLink", mapOf(
+            "peer_id" to peerId.toString(),
+            "visible_messages_count" to "250",
+            "reset" to "0",
+            "group_id" to groupId.toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            json.getAsJsonObject("response")?.get("link")
+                ?.takeIf { !it.isJsonNull }?.asString
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetGroupChatInviteLink parse error", e)
+            null
         }
     }
 
@@ -16904,6 +17021,79 @@ class VKApiClient(
     private fun statInt(obj: com.google.gson.JsonElement?, key: String): Int =
         obj?.takeIf { it.isJsonObject }?.asJsonObject
             ?.get(key)?.takeIf { !it.isJsonNull }?.asInt ?: 0
+
+    /**
+     * C6 (#ADMIN-MESSAGES): настройки раздела «Сообщения» сообщества.
+     * Web HAR 2026-09-25: READ  groups.getGroupSettings {group_id, fields:
+     * messages_enabled,messages_first_message,messages_widget_enabled,
+     * messages_widget_info,messages_widget_offline_info,messages_widget_domains}
+     * → {response:{settings:{…}}} (messages_enabled — bool, first_message —
+     * {text,max_text_length}); WRITE groups.setGroupSettings — те же 6 полей
+     * плоскими строками (enabled 1/0, first_message — plain text), ответ
+     * {"response":1}. Round-trip: не редактируемые здесь widget_* поля
+     * возвращаются прочитанными значениями (пустые — пустыми).
+     */
+    data class GroupMessagesSettings(
+        val messagesEnabled: Boolean,
+        val firstMessage: String,
+        val widgetEnabled: Boolean,
+        val widgetInfo: String,
+        val widgetOfflineInfo: String,
+        val widgetDomains: String,
+    )
+
+    suspend fun groupsGetMessagesSettings(groupId: Long): GroupMessagesSettings? {
+        if (isOffline()) return null
+        val json = call("groups.getGroupSettings", mapOf(
+            "group_id" to groupId.toString(),
+            "fields" to "messages_enabled,messages_first_message,messages_widget_enabled,messages_widget_info,messages_widget_offline_info,messages_widget_domains",
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = json.getAsJsonObject("response")
+            val st = resp?.get("settings")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: resp ?: return null
+            val enabled = st.get("messages_enabled")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
+            val fmObj = st.get("messages_first_message")
+            val first = when {
+                fmObj == null || fmObj.isJsonNull -> ""
+                fmObj.isJsonObject -> fmObj.asJsonObject.get("text")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                else -> fmObj.asString
+            }
+            fun str(k: String): String =
+                st.get(k)?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString ?: ""
+            GroupMessagesSettings(
+                messagesEnabled = enabled,
+                firstMessage = first,
+                widgetEnabled = st.get("messages_widget_enabled")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
+                widgetInfo = str("messages_widget_info"),
+                widgetOfflineInfo = str("messages_widget_offline_info"),
+                widgetDomains = str("messages_widget_domains"),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetMessagesSettings parse error", e)
+            null
+        }
+    }
+
+    suspend fun groupsSetMessagesSettings(groupId: Long, s: GroupMessagesSettings): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.setGroupSettings", mapOf(
+            "group_id" to groupId.toString(),
+            "messages_enabled" to if (s.messagesEnabled) "1" else "0",
+            "messages_first_message" to s.firstMessage,
+            "messages_widget_enabled" to if (s.widgetEnabled) "1" else "0",
+            "messages_widget_info" to s.widgetInfo,
+            "messages_widget_offline_info" to s.widgetOfflineInfo,
+            "messages_widget_domains" to s.widgetDomains,
+        ), forceWebGateway = true) ?: return false
+        val resp = json.get("response") ?: return false
+        return when {
+            resp.isJsonPrimitive -> resp.asInt == 1
+            resp.isJsonObject ->
+                resp.asJsonObject.get("success")?.takeIf { it.isJsonPrimitive }?.asInt == 1
+            else -> false
+        }
+    }
 
     /**
      * W35-b: groups.edit — ЕДИНЫЙ метод записи настроек сообщества (сверка

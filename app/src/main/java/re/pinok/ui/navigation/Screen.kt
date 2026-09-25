@@ -227,6 +227,18 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun buildRoute(groupId: Long): String = "admin_cta/$groupId"
     }
 
+    /** W41 (C6): «Чаты сообщества» — список бесед сообщества (web HAR 2026-09-25). */
+    object AdminChats : Screen("admin_chats/{groupId}", "Чаты", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_chats/$groupId"
+    }
+
+    /** W41 (C6): «Сообщения» сообщества — groups.get/setGroupSettings messages_* (web HAR). */
+    object AdminMessages : Screen("admin_messages/{groupId}", "Сообщения", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_messages/$groupId"
+    }
+
     /**
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query

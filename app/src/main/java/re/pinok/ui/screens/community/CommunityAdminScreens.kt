@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.ManageAccounts
@@ -163,6 +164,9 @@ fun CommunityAdminBlock(
     onEventLogClick: (Long) -> Unit,
     // W41 (C3): кнопка действия сообщества.
     onCtaClick: (Long) -> Unit,
+    // W41 (C6): чаты сообщества + раздел «Сообщения» (web HAR 2026-09-25).
+    onChatsClick: (Long) -> Unit,
+    onMessagesClick: (Long) -> Unit,
 ) {
     val gi = groupInfo ?: return
     if (!gi.isManager) return
@@ -310,9 +314,24 @@ fun CommunityAdminBlock(
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
-            // ── Честные disabled-пункты (план §4 C-серия: C3 кнопка действия,
-            //    C6 чаты сообщества — НЕ реализованы, без выдуманных маршрутов) ──
-            AdminBlockRow(icon = Icons.Filled.Settings, title = "Сообщения", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
+            // W41 (C6): «Сообщения» (groups.get/setGroupSettings messages_*) и
+            // «Чаты» (searchConversations/editChat/dropChatForAll с group_id) —
+            // форматы сняты с веба (HAR vk.ru_чат_2, 2026-09-25).
+            AdminBlockRow(
+                icon = Icons.Filled.Settings,
+                title = "Сообщения",
+                subtitle = "Приветственное сообщение, виджет",
+                onClick = { onMessagesClick(gi.id) },
+            )
+            AdminBlockRow(
+                icon = Icons.Filled.Group,
+                title = "Чаты",
+                subtitle = "Беседы сообщества",
+                onClick = { onChatsClick(gi.id) },
+            )
+
+            // ── Честные disabled-пункты (план §4 C-серия: C3 разделы,
+            //    бизнес-инструменты — НЕ реализованы, без выдуманных маршрутов) ──
             AdminBlockRow(icon = Icons.Filled.Settings, title = "Разделы", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
             AdminBlockRow(icon = Icons.Filled.Settings, title = "Бизнес-инструменты", subtitle = "Пока не реализовано", onClick = {}, enabled = false)
 

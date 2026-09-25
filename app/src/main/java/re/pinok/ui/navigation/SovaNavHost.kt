@@ -107,6 +107,8 @@ import re.pinok.ui.screens.community.AdminSettingsScreen
 import re.pinok.ui.screens.community.AdminStatsScreen
 import re.pinok.ui.screens.community.AdminAddressesScreen
 import re.pinok.ui.screens.community.AdminCtaScreen
+import re.pinok.ui.screens.community.AdminChatsScreen
+import re.pinok.ui.screens.community.AdminMessagesScreen
 import re.pinok.ui.screens.community.AdminEventLogScreen
 import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
@@ -2343,6 +2345,13 @@ composable(Screen.CallsHistory.route) {
                         onCtaClick = { adminGroupId ->
                             nav.navigate(Screen.AdminCta.buildRoute(adminGroupId))
                         },
+                        // W41 (C6): чаты сообщества + раздел «Сообщения».
+                        onChatsClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminChats.buildRoute(adminGroupId))
+                        },
+                        onMessagesClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminMessages.buildRoute(adminGroupId))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -2467,6 +2476,35 @@ composable(Screen.CallsHistory.route) {
                     val ctaGroupId = entry.arguments?.getLong(Screen.AdminCta.ARG_GROUP_ID) ?: 0L
                     AdminCtaScreen(
                         groupId = ctaGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // W41 (C6): «Чаты сообщества».
+                composable(
+                    route = Screen.AdminChats.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminChats.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val chatsGroupId = entry.arguments?.getLong(Screen.AdminChats.ARG_GROUP_ID) ?: 0L
+                    AdminChatsScreen(
+                        groupId = chatsGroupId,
+                        onBack = { nav.popBackStack() },
+                        onOpenChat = { peerId, title, photo ->
+                            nav.navigate(Screen.ChatDetail.buildRoute(peerId, title, photo))
+                        },
+                    )
+                }
+                // W41 (C6): «Сообщения» сообщества.
+                composable(
+                    route = Screen.AdminMessages.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminMessages.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val msgGroupId = entry.arguments?.getLong(Screen.AdminMessages.ARG_GROUP_ID) ?: 0L
+                    AdminMessagesScreen(
+                        groupId = msgGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }

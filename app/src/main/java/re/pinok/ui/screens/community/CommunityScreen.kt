@@ -130,6 +130,9 @@ fun CommunityScreen(
     onAdminEventLogClick: (groupId: Long) -> Unit = {},
     // W41 (C3): кнопка действия сообщества.
     onCtaClick: (groupId: Long) -> Unit = {},
+    // W41 (C6): чаты сообщества + раздел «Сообщения».
+    onChatsClick: (groupId: Long) -> Unit = {},
+    onMessagesClick: (groupId: Long) -> Unit = {},
     onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
@@ -839,6 +842,8 @@ fun CommunityScreen(
                 onAddressesClick = onAdminAddressesClick,
                 onEventLogClick = onAdminEventLogClick,
                 onCtaClick = onCtaClick,
+                onChatsClick = onChatsClick,
+                onMessagesClick = onMessagesClick,
             )
         }
         item {

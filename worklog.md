@@ -10476,3 +10476,19 @@ Work Log:
 Stage Summary:
 - C6-чаты: заблокирован до HAR-захвата веб-админки vk.ru/settings → раздел «Чаты» (методичка docs/VK_CALLS_CDP_CAPTURE.md). C3-меню — там же, тот же захват.
 - cs=1080x0 — норма; если фото битое В КЛИЕНТЕ — нужен logcat, ссылка VK корректна.
+
+---
+Task ID: C6-CHATS
+Agent: Z.ai Code (main)
+Task: C6 «Чаты сообщества» + раздел «Сообщения» — реализация по HAR vk.ru_чат_2 (предоставлен юзером 2026-09-25).
+
+Work Log:
+- HAR разобран (276 запросов): write-форматы сняты — messages.editChat (rename chat_id+title+group_id; permissions {invite,change_info,change_pin,use_mass_mentions,see_invite_link,call,change_style,change_admins} + is_service=0 + is_disable_stickers_popup_autoplay=1), groups.setGroupSettings (messages_enabled/first_message/widget_* ×6 плоско), messages.dropChatForAll, messages.getInviteLink (reset=0); READ — messages.searchConversations {q:" ", group_id} (список бесед), groups.getGroupSettings fields=messages_* (response.settings, first_message — {text,max_text_length:130}).
+- VKApiClient: messagesEditChat расширен (groupId + permissions ChatPermissions→Gson, forceWebGateway при group-контексте, ответ — обе формы {"response":1} и {"response":{"success":1}}); messagesGetConversationsById + optional groupId; НОВЫЕ: messagesGetGroupChats (q=" " + group_id), messagesDropChatForAll, messagesGetGroupChatInviteLink, groupsGetMessagesSettings/groupsSetMessagesSettings (+nested data class GroupMessagesSettings, round-trip widget_*).
+- AdminChatsScreen.kt (новый, 658 строк): AdminChatsScreen — список бесед (аватар/название/последнее), меню на чат: Открыть чат (→ Screen.ChatDetail), Переименовать, Управление (диалог 8×3 permissions, prefill из chat_settings.permissions через getConversationsById+group_id; прав нет — честный отказ), Ссылка-приглашение (+копирование), Удалить для всех (confirm); AdminMessagesScreen — тумблер сообщества, приветственное (≤130), виджет, save = все 6 полей (не редактируемые — round-trip из read).
+- Роутинг: Screen.AdminChats/AdminMessages ("admin_chats|admin_messages/{groupId}"); SovaNavHost — импорт, 2 composable, колбэки; CommunityAdminBlock — строки «Сообщения» и «Чаты» теперь активны (Разделы/Бизнес-инструменты остаются честным disabled), сигнатуры + onChatsClick/onMessagesClick; CommunityScreen — pass-through.
+
+Stage Summary:
+- C6 (чаты сообщества + раздел «Сообщения») закрыт по реальным форматам HAR, без выдуманных полей. C3-меню: READ owners.getMenu есть (owner_id=-gid), WRITE не захвачен — остаётся до следующего HAR.
+- Ответ {"response":1} web-шлюза принят в messagesEditChat — важно и для будущих group-вызовов.
+- is_disable_stickers_popup_autoplay шлём =1 как веб (READ-источника в HAR нет — помечено в коде).
