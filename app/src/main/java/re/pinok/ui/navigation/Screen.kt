@@ -255,6 +255,12 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun buildRoute(groupId: Long): String = "admin_comments/$groupId"
     }
 
+    /** ADMIN-EVENTS: «События» сообщества — панель уведомлений (notifications.getRedesign). */
+    object AdminEvents : Screen("admin_events/{groupId}", "События", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "admin_events/$groupId"
+    }
+
     /**
      * ADMIN-MENU (#ADMIN-MENU-STRIKES): «Меню» сообщества — список пунктов
      * (owners.getMenu), добавление (owners.addMenuItem), скрытие/показ всего

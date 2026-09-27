@@ -18302,7 +18302,7 @@ PromoShowed_8223270     1
 deviceId        87v-we10y1_697oTiTmI8
 landings:unauthId       1993657547
 tracer-device-id        2eb52052-a521-4bf2-93d3-7877e933fbb6
-7344294:web_token:login:auth    {"access_token":"vk1.a.XXXXX","expires":1785855515,"user_id":171093180,"logout_hash":"8e1c761c3209748c99"}
+7344294:web_token:login:auth    {"access_token":"vk1.a.XXXXX","expires":1785855515,"user_id":171093180,"logout_hash":"HASH_MASKED"}
 ```
 
 #### 49.1.2. Расшифровка ключей localStorage (новое, не было в §41)
@@ -18679,7 +18679,7 @@ tracer-device-id        2eb52052-a521-4bf2-93d3-7877e933fbb6
   "access_token": "vk1.a.XXXXX...",
   "expires": 1785855515,           // unix seconds
   "user_id": 171093180,
-  "logout_hash": "8e1c761c3209748c99"
+  "logout_hash": "HASH_MASKED"
 }
 ```
 

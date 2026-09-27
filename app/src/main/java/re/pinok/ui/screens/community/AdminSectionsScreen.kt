@@ -28,6 +28,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -146,6 +147,8 @@ fun AdminSectionsScreen(
     var extrasLoading by remember { mutableStateOf(true) }
     var extrasError by remember { mutableStateOf<String?>(null) }
     var extrasSaving by remember { mutableStateOf(false) }
+    // #HAR-2609-SECTIONS: конфиг табов из owners.getContentTabs (web-админка).
+    var tabs by remember { mutableStateOf<List<VKApiClient.ContentTabConfig>>(emptyList()) }
 
     // Диалоги выбора основного/дополнительного раздела.
     var pickMain by remember { mutableStateOf(false) }
@@ -189,6 +192,13 @@ fun AdminSectionsScreen(
                 extrasError = e.message ?: "Ошибка загрузки доп. настроек"
             } finally {
                 extrasLoading = false
+            }
+        }
+        scope.launch {
+            try {
+                tabs = app.apiClient.ownersGetContentTabs(ownerId = -groupId)
+            } catch (e: Exception) {
+                AppLog.e("AdminSections", "content tabs load failed", e)
             }
         }
     }
@@ -394,6 +404,27 @@ fun AdminSectionsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(if (extrasSaving) "Сохранение…" else "Сохранить доп. настройки")
+                        }
+
+                        // #HAR-2609-SECTIONS: конфиг табов из owners.getContentTabs.
+                        if (tabs.isNotEmpty()) {
+                            Spacer(Modifier.height(16.dp))
+                            Text("Табы сообщества", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(6.dp))
+                            tabs.forEach { tb ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(tb.key, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                        if (tb.contentTypes.isNotEmpty()) {
+                                            Text(tb.contentTypes.joinToString(", "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                    Text("#" + tb.order.toString(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     }
 

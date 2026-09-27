@@ -1128,7 +1128,16 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 // VK Android UA — только если запрос явно не задал свой
                 // (WebTokenAuth задаёт Chrome UA для login.vk.com web-flow).
                 if (original.header("User-Agent") == null) {
-                    builder2.header("User-Agent", ua)
+                    // #ADMIN-STATS-W47: web.api.vk.ru (static.vk.ru mini apps) ЖДЁТ браузерный UA.
+                    val uaForHost = if (original.url.host == re.pinok.api.VKEndpoints.WEB_API_HOSTNAME)
+                        re.pinok.api.VKEndpoints.WEB_BROWSER_UA else ua
+                    builder2.header("User-Agent", uaForHost)
+                }
+                // #ADMIN-STATS-W47 (FIX-4): mini-app gateway требует Origin/Referer = static.vk.ru
+                // (из stats.har). Ставим ВСЕГДА, независимо от UA.
+                if (original.url.host == re.pinok.api.VKEndpoints.WEB_API_HOSTNAME) {
+                    if (original.header("Origin") == null) builder2.header("Origin", re.pinok.api.VKEndpoints.WEB_ORIGIN)
+                    if (original.header("Referer") == null) builder2.header("Referer", re.pinok.api.VKEndpoints.WEB_REFERER)
                 }
                 // #44: X-VK-Android-Client — для VK Android API/auth endpoints
                 // (api.vk.com, oauth.vk.com, id.vk.com). На web-flow endpoints

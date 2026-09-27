@@ -120,7 +120,7 @@
   "access_token": "vk1.a.XXXXX",
   "expires": 1786104708,
   "user_id": 171093180,
-  "logout_hash": "2f10b630b372245ee2"
+  "logout_hash": "HASH_MASKED"
 }
 ```
 
@@ -129,7 +129,7 @@
 | `access_token` | `vk1.a.XXXXX` | Web-token формата `vk1.a.<base64>`, длина 248 символов |
 | `expires` | `1786104708` | Fri Aug 7 12:11:48 UTC 2026 (~24 часа с момента выдачи) |
 | `user_id` | `171093180` | **Совпадает с `sui` cookie из Stage 1!** |
-| `logout_hash` | `2f10b630b372245ee2` | Hash для OAuth-logout endpoint |
+| `logout_hash` | `HASH_MASKED` | Hash для OAuth-logout endpoint |
 
 **Ключевое:** это **первый web_token**, выданный для `app_id = 7344294` (VKID Account app). Префикс ключа `7344294:` означает app_id.
 
@@ -189,7 +189,7 @@
 3. **Сессия установлена через 4 cookie**: `p` (login.vk.ru), `remixsid` (vk.ru), `remixnsid` × 2 домена (vk.ru + id.vk.ru).
 4. **Push-token инициализирован** через `remixnttpid` (но реальный push-channel ещё не открыт — нет `im_m_comms_key`).
 5. **CSRF-токены теперь на 3 доменах**: `.login.vk.ru`, `.api.vk.ru`, `.id.vk.ru`. Это позволяет делать POST-запросы к любому из них.
-6. **`logout_hash = 2f10b630b372245ee2`** — короткий хеш (18 hex = 9 байт = 72 бита), нужен для `id.vk.ru/auth?act=logout&hash=...`.
+6. **`logout_hash = HASH_MASKED`** — короткий хеш (18 hex = 9 байт = 72 бита), нужен для `id.vk.ru/auth?act=logout&hash=...`.
 7. **Expires web_token = 24 часа** (1786104708 = Aug 7 12:11:48, login был ~12:11). Это **типичный silent_token lifetime**.
 8. **`remixdmgr_tmp` живёт 3 часа** — временное устройство, потом convert в `remixdmgr` (финальный).
 9. **`landings:unauthId` НЕ обновлён** — остался `3818433158` (как в Stage 1). Это значит, что VKID SDK считает landing-сессию той же.

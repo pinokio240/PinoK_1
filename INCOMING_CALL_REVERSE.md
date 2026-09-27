@@ -1,4 +1,4 @@
-﻿# INCOMING CALL REVERSE (VK web -> PinoK)
+# INCOMING CALL REVERSE (VK web -> PinoK)
 
 Источник: CDP-снимок localStorage вкладки https://vk.ru/calls (Chrome 153, port 9222)
 Дата: 2026-09-22. uid=171093180, appId=6287487, device=HOTWAV Cyber 15
@@ -7,14 +7,14 @@
 
 ### im_m_comms_key  <- ИМЯ CALLS-ОЧЕРЕДИ + КЛЮЧ
 ```json
-{"ts":"1889084789","key":"f0c05c488b2b982325af528f59bde4b5ebab5443b882f967750a205f5c7a413b","queue":"nccts171093180"}
+{"ts":"1889084789","key":"HASH_MASKEDHASH_MASKEDHASH_MASKED","queue":"nccts171093180"}
 ```
 - queue = `nccts171093180` (совпадает с шаблоном PinoK SovaApp.kt:1345!)
 - key = авторизационный ключ (нужен при subscribe)
 
 ### queue_credential_calls_cache_171093180_6287487  <- ЧТО НУЖНО ДЛЯ queue.subscribe
 ```json
-{"data":{"key":"19e0445b82c736a654167ff452b19c67d4f882742d08967c822958d600bf8d0f","ts":257176134,"url":"https://queuev4.vk.ru/im1180","id":171093180},"lastUpdate":1790104614177}
+{"data":{"key":"HASH_MASKEDHASH_MASKEDHASH_MASKED","ts":257176134,"url":"https://queuev4.vk.ru/im1180","id":171093180},"lastUpdate":1790104614177}
 ```
 - url = `https://queuev4.vk.ru/im1180`  <- АДРЕС для queue.subscribe (не api.vk.com!)
 - key = credential
@@ -22,7 +22,7 @@
 
 ### queue_connection_events_queue171093180  <- ФОРМАТ EVENTS-ОЧЕРЕДИ
 ```json
-{"__client":"NTMyOTI4","__act":"focus","__rnd":0.9545299590241209,"instance_id":"1NTMyOTI4"}
+{"__client":"NTMyOTI4","__act":"focus","__rnd":0.HASH_MASKED,"instance_id":"1NTMyOTI4"}
 ```
 ### server_queue_connection_events_queue171093180
 ```json
@@ -37,7 +37,7 @@ $SifIAb1F00ZNqWiekngOt7u9kZufonQNhgU65XgC9hORJPuZLLbv6JjJOvZ7TGwqLONzt///https:/
 
 ### 6287487:web_token:login:auth (web access_token)
 - access_token = `vk1.a.w3mD...MASKED...S9FA`
-- user_id=171093180, expires=1790105509, logout_hash=4e51f9e4943d863241
+- user_id=171093180, expires=1790105509, logout_hash=HASH_MASKED
 
 ### 6287487:get_anonym_token:login:auth (anonym -> session key для calls)
 - access_token = `anonym.eyJ...` (JWT, expires=1789848585, expired)
@@ -73,13 +73,13 @@ $SifIAb1F00ZNqWiekngOt7u9kZufonQNhgU65XgC9hORJPuZLLbv6JjJOvZ7TGwqLONzt///https:/
 ```
 GET https://queuev4.vk.ru/im1180?act=a_check
     &id=171093180
-    &key=d1109505c92c3439cac1eb8e99040335fd307c4c51bf88080cfdadbaa3238488f0c05c488b2b982325af528f59bde4b5ebab5443b882f967750a205f5c7a413b
+    &key=HASH_MASKEDHASH_MASKEDHASH_MASKEDHASH_MASKEDHASH_MASKED5c7a413b
     &ts=1182138131_1889084796
     &wait=25
 ```
 - key = <queue_credential.key> + <im_m_comms_key.key>
-  = d1109505c92c3439cac1eb8e99040335fd307c4c51bf88080cfdadbaa3238488
-  + f0c05c488b2b982325af528f59bde4b5ebab5443b882f967750a205f5c7a413b
+  = HASH_MASKEDHASH_MASKEDHASH_MASKED
+  + HASH_MASKEDHASH_MASKEDHASH_MASKED
 - ts = <ts>_<im_m_comms_key.ts> = 1182138131_1889084796
 - id=171093180, wait=25, server=im1180 (из url queue_credential)
 - Второй (events) очередь: ?key=62c8b2f0...&act=a_check&wait=25&mode=202&version=10&id=171093180&ts=185710768

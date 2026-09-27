@@ -71,6 +71,13 @@ object VKEndpoints {
     fun multiaccountQueueId(uid: Long): String = "multiaccount_$uid"
 
     /**
+     * #ADMIN-STATS-W47 (2026-09-27): очередь статистики сообщества (Mini App 51912452).
+     * Формат из статистика.har: vboardcard_<uid>_<groupId>_1
+     * (userId — владелец-админ, groupId — положительный id сообщества).
+     */
+    fun statsBoardQueueId(uid: Long, groupId: Long): String = "vboardcard_${uid}_${groupId}_1"
+
+    /**
      * Fix #154 docs upload 405: VK WEB API (web.api.vk.ru) возвращает для
      * `docs.getMessagesUploadServer` upload_url на сервер `kittenx` (web-upload
      * frontend nginx). Этот сервер на уровне nginx отклоняет POST-запросы без
@@ -83,11 +90,14 @@ object VKEndpoints {
      * User-Agent тоже переопределяется на Chrome — мобильный `VKAndroidApp/...`
      * может дополнительно триггерить anti-bot фильтр на web-upload серверах.
      */
-    const val WEB_ORIGIN = "https://vk.com"
-    const val WEB_REFERER = "https://vk.com/"
+    // #ADMIN-STATS-W47 (FIX-4, from stats.har 2026-09-27): VK Mini Apps живут на static.vk.ru,
+    // и statsDashboard.* доступны ТОЛЬКО в этом контексте. С origin/referer = vk.com
+    // шлюз отвечает err=3 Unknown method для методов мини-аппов.
+    const val WEB_ORIGIN = "https://static.vk.ru"
+    const val WEB_REFERER = "https://static.vk.ru/"
     const val WEB_BROWSER_UA =
-        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
 
     fun authorizeUrl(clientId: String, redirectUri: String, scope: String, state: String = "sova2"): String {
         return "$OAUTH_HOST/authorize" +

@@ -10591,3 +10591,52 @@ Stage Summary:
   2) recognizePhoto — read-only: ни в groups.edit, ни в legacy save_comments он не пишется.
   3) Лента комментариев — аппроксимация по последним постам стены (официального метода «ленты комментариев сообщества» в API нет).
   4) age_limits: 0/1/2 → Нет/16+/18+ (значения веб-админки; точный полный round-trip не снят отдельным HAR-запросом).
+
+---
+Task ID: ADMIN-STATS-W47
+Agent: Z.ai Code (main)
+Task: Статистика сообщества — реальный async-пайплайн Mini App 51912452 (замена legacy stats.get err=7).
+
+Work Log:
+- Разобран C:/Users/Pinokio240/Desktop/Ссылки/админка/статистика.har (29.5 МБ, 275 запросов). Статистика = VK Mini App app_id=51912452 (community_dashboard). Поток: mini_app_token -> statsDashboard.getBootstrapData/getDashboardSections (type=stat_board_mobile) -> queue.subscribe (queue_ids=vboardcard_<uid>_<gid>_1) -> getOwnerStats(act=layout) -> long-poll queuev4.vk.ru/im1180?a_check -> events[].data.task_result.chunk -> getOwnerStats(act=data&card_id) -> dropTasks.
+- Шаг1 VKEndpoints.kt: +statsBoardQueueId(uid,groupId)="vboardcard_${uid}_${groupId}_1" (бэкап .bak_stats_w47).
+- Шаг2 VKApiClient.kt (бэкап .bak_stats_w47): type=stat_board -> stat_board_mobile (2 места); блок #ADMIN-STATS-W47: StatsTaskHandle, StatsBoardEvent, statsDashboardGetOwnerStats (act=layout/data, sdate/edate в МС), statsBoardQueueSubscribe, statsBoardQueuePoll (парсит vboardcard-ОБЪЕКТЫ, не LP-массивы), collectBoardEvents, statsDashboardDropTasks.
+- Шаг3 realtime/StatsQueuePoller.kt (новый, 4.8 КБ): long-poll очередь статистики, SharedFlow<StatsBoardEvent> chunks, backoff, переподписка.
+- Шаг4a StatsChunkParser.kt (новый, 8.6 КБ): парсер LAYOUT (items/tabs) и DATA (summary/data_list/doughnut_chart/advanced_timeline_chart).
+- Шаг4b AdminStatsScreenW47.kt (новый, 18.5 КБ): новый AdminStatsScreen (async-пайплайн: bootstrap->sections->poller->layout->data->рендер по типам). Старый AdminStatsScreen в CommunityAdminScreens.kt переименован в AdminStatsScreenLegacy (бэкап .bak_stats_w47).
+
+Stage Summary:
+- Все 4 файла записаны. Сборка НЕ выполнялась (пользователь собирает сам). Бэкапы: VKEndpoints.kt.bak_stats_w47, VKApiClient.kt.bak_stats_w47, CommunityAdminScreens.kt.bak_stats_w47.
+- Откат: скопировать .bak_stats_w47 обратно; удалить 3 новых файла.
+- Возможные точки внимания при сборке: (1) poller.start(userId=0,groupId) — uid берётся из exchangeAuthRepository внутри VKApiClient; (2) awaitChunk использует withTimeoutOrNull+first; (3) mini_app_token в PinoK НЕ реализован — если getOwnerStats будет давать err, понадобится обмен токена (id.vk.ru/mini_app_token).
+
+---
+Task ID: AUDIT-EDIT-MSG-COMMENT
+Agent: Z.ai Code (main)
+Task: Аудит редактирования сообщений (диалоги/чаты) и комментариев; фиксация TODO в документацию.
+
+Work Log:
+- Найден API: messagesEdit (VKApiClient.kt:6130, messages.edit с cmid+keep_forward_messages+keep_snippets=0), wallEditComment (VKApiClient.kt:4218, wall.editComment).
+- Обычные диалоги: ChatDetailScreen.editMessage (1549) -> messagesEdit; реалтайм LongPollClient.kt:885 event 5 -> EditMessage. РАБОТАЕТ.
+- Чаты: тот же editMessage, но БЕЗ groupId/forceWebGateway -> возможен молчаливый отказ. TODO.
+- Комментарии: wallEditComment НЕ вызывается в UI. CommentItem (PostDetailScreen:1393) без onEdit; CommentsBottomSheet (FeedScreen:3324) без editingComment; AdminCommentsScreen без wallEditComment. TODO.
+- Документ: docs/EDIT_MESSAGES_COMMENTS_TODO.md.
+
+Stage Summary:
+- Редактирование комментариев/ответов — НЕ реализовано (API готов). Правка чатов — требует groupId/forceWebGateway.
+- Далее: продолжаем админку.
+
+---
+Task ID: STATS-MINIAPP-TOKEN-FIX + SECRETS-MASK (2026-09-27)
+Agent: Z.ai Code (main)
+
+Work Log:
+- КОРНЕВАЯ ПРИЧИНА err=3 статистики: statsDashboard.* принадлежат VK Mini App app_id=51912452 и видны ТОЛЬКО с mini_app_token. HAR: GET id.vk.ru/mini_app_token?scope=&app_id=51912452&access_token=<web> -> response.access_token. Обычный web-токен -> err=3 Unknown method passed.
+- VKApiClient.kt: добавлен private suspend fun miniAppToken(appId=51912452) (кеш до expires-60с, через httpClient напрямую). В call()/callInternal() добавлен параметр overrideToken: String?; val tk = overrideToken ?: token().
+- statsDashboardGetBootstrapData / GetDashboardSections / GetOwnerStats / DropTasks + statsBoardQueueSubscribe вызываются с overrideToken = miniAppToken() (без forceWebGateway-конфликта).
+- AdminStatsScreenW47.kt (#STATS-FIX3): буфер pendingChunks (гонка чанков до taskToCard), проверка результата poller.start(), DisposableEffect poller.stop(), удалён мёртвый startPoller. Бэкап .bak_stats_fix3.
+- Бэкапы: VKApiClient.kt.bak_miniapp_token; AdminStatsScreenW47.kt.bak_stats_fix3.
+- SECRETS-MASK: замаскированы живые logout_hash (18 hex) в 7 файлах: reference/vk_web_localstorage_dump.txt, vk.id.md, HISTORY_ARCHIVE.md, VK_IMPORT_API.MD, WORKLOG_ARCHIVE.md, app/src/main/java/re/pinok/auth/exchange/WebTokenAuth.kt, INCOMING_CALL_REVERSE.md. Финальный скан tracked-файлов: vk1.a_long=0, jwt=0, remixsid=0, anonym=0, logout_hash_live=0.
+- .gitignore: добавлены *fix*-bak-*, *fixscope-bak-* (bak-файлы не коммитить).
+- ВАЖНО: живые токены остаются в git-ИСТОРИИ (коммиты b2f6622/213115f4, 0f619f5) — при утечке репо нужен git filter-repo/BFG.
+- Сборка НЕ запускалась (пользователь собирает сам).

@@ -6132,6 +6132,8 @@ class VKApiClient(
         cmid: Long,
         message: String,
         keepForwardMessages: Boolean = true,
+        groupId: Long? = null,
+        forceWebGateway: Boolean = false,
     ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
@@ -6140,7 +6142,11 @@ class VKApiClient(
             "message" to message,
         )
         if (keepForwardMessages) args["keep_forward_messages"] = "1"
-        val json = call("messages.edit", args) ?: return false
+        // #IM-EDIT-WEB (HAR vk.ru_чат_редактирование, 2026-09-26): веб всегда
+        // шлёт keep_snippets=0 (сниппеты-превью не сохраняются при правке).
+        args["keep_snippets"] = "0"
+        if (groupId != null) args["group_id"] = groupId.toString()
+        val json = call("messages.edit", args, forceWebGateway = forceWebGateway) ?: return false
         return json.has("response")
     }
 
@@ -8043,9 +8049,11 @@ class VKApiClient(
     }
 
     /** #75: notifications.markAsViewed — отметить уведомление просмотренным. */
-    suspend fun notificationsMarkAsViewed(): Boolean {
+    suspend fun notificationsMarkAsViewed(groupId: Long? = null): Boolean {
         if (isOffline()) return false
-        val json = call("notifications.markAsViewed", emptyMap()) ?: return false
+        val args = mutableMapOf<String, String>()
+        if (groupId != null) args["group_id"] = groupId.toString()
+        val json = call("notifications.markAsViewed", args) ?: return false
         return json.has("response")
     }
 
@@ -11258,12 +11266,14 @@ class VKApiClient(
         silent: Boolean = false,
         forceWebGateway: Boolean = false,
         skipTelemetryDrop: Boolean = false,
+        overrideToken: String? = null,
     ): JsonObject? {
         return callInternal(
             method, args, captchaAttempt = 0,
             skipOffline = skipOffline, silent = silent,
             forceWebGateway = forceWebGateway,
             skipTelemetryDrop = skipTelemetryDrop,
+            overrideToken = overrideToken,
         )
     }
 
@@ -11288,6 +11298,7 @@ class VKApiClient(
         silent: Boolean = false,
         forceWebGateway: Boolean = false,
         skipTelemetryDrop: Boolean = false,
+        overrideToken: String? = null,
     ): JsonObject? {
         // #STALE-ERR-FIX (2026-09-08): error-стейт живёт ОДИН вызов. Раньше
         // lastApiError/lastApiErrorCode перезаписывались только следующей
@@ -11319,7 +11330,7 @@ class VKApiClient(
 
         var attempt = 0
         while (attempt < 2) {
-            val tk = token()
+            val tk = (overrideToken ?: token())
                 ?: run {
                     // #FORCE-REFRESH (2026-08-02): no token → force real refresh.
                     // #NULL-SAFE: smart-cast через локальный val (без ?.).
@@ -12443,7 +12454,7 @@ class VKApiClient(
         }
 
         // 2) Fallback: web-токен через обычный call().
-        val json = call("queue.subscribe", mapOf("queue_ids" to suffix)) ?: return null
+        val json = call("queue.subscribe", mapOf("queue_ids" to suffix), forceWebGateway = true) ?: return null
         return try {
             parseQueueCredential(json.getAsJsonObject("response") ?: json, uid)
         } catch (e: Exception) {
@@ -12455,7 +12466,9 @@ class VKApiClient(
     /** Парсит QueueCredential из response { queues: [{key, timestamp}] }. */
     private fun parseQueueCredential(resp: JsonObject?, uid: Long): QueueCredential? {
         if (resp == null) return null
-        val queues = resp.getAsJsonArray("queues") ?: return null
+        val r = if (resp.has("queues")) resp else (resp.getAsJsonObject("response") ?: resp)
+        val baseUrl = safeString(r.get("base_url")) ?: "https://queuev4.vk.ru/im1180"
+        val queues = r.getAsJsonArray("queues") ?: return null
         val first = queues.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
         val key = safeString(first.get("key")) ?: return null
         // Поле `timestamp` (не `ts`) — см. мобильный бандл: { key, timestamp } = t.queues[0]
@@ -12466,7 +12479,7 @@ class VKApiClient(
         return QueueCredential(
             key = key,
             ts = ts,
-            url = "https://queuev4.vk.ru/im1180",
+            url = baseUrl,
             userId = uid,
         )
     }
@@ -14940,13 +14953,16 @@ class VKApiClient(
      * напрямую). Теперь ищем response.notifications как массив и парсим новым
      * парсером parseRedesignNotificationItem.
      */
-    suspend fun notificationsGetRedesign(count: Int = 30, startFrom: String? = null): Pair<List<NotificationItem>, String?> {
+    suspend fun notificationsGetRedesign(count: Int = 30, startFrom: String? = null, groupId: Long? = null, category: String? = null): Pair<List<NotificationItem>, String?> {
         if (isOffline()) return emptyList<NotificationItem>() to null
         val args = mutableMapOf(
             "count" to count.toString(),
             "extended" to "1",
         )
         if (!startFrom.isNullOrBlank()) args["start_from"] = startFrom
+        // #ADMIN-EVENTS: события сообщества — group_id + category (comments/mentions/followers/suggested_posts/from_vk).
+        if (groupId != null) args["group_id"] = groupId.toString()
+        if (!category.isNullOrBlank()) args["category"] = category
         val json = call("notifications.getRedesign", args) ?: return emptyList<NotificationItem>() to null
 
         return try {
@@ -17529,6 +17545,8 @@ class VKApiClient(
         val showInLeftMenu: Boolean = false,
         /** Возрастное ограничение: 0 — нет, 1 — 16+, 2 — 18+ (age_limits). */
         val ageLimits: Int = 0,
+        /** #ADMIN-SECTIONS-FIX: список ВКЛЮЧЁННЫХ разделов через запятую (content_tabs, как в web-админке VK). */
+        val contentTabs: String = "",
     )
 
     /** C7-extras: чтение дополнительных тумблеров (groups.getGroupSettings). */
@@ -17537,7 +17555,7 @@ class VKApiClient(
         // NULL-ЯВНО: JSON-граница + early-return (как у соседних чтений C6/C7).
         val json = call("groups.getGroupSettings", mapOf(
             "group_id" to groupId.toString(),
-            "fields" to "hidden_members,age_limits,clips_co_ownership_enabled,stories_replies_enabled,show_in_left_menu,two_fa_confirmation_enabled",
+            "fields" to "hidden_members,age_limits,clips_co_ownership_enabled,stories_replies_enabled,show_in_left_menu,two_fa_confirmation_enabled,content_tabs",
         ), forceWebGateway = true) ?: return null
         return try {
             // #ADMIN-STATS-FIX: толерантны к двойной обёртке web-шлюза.
@@ -17555,6 +17573,7 @@ class VKApiClient(
                 storiesRepliesEnabled = groupSettingBool(st, "stories_replies_enabled") == true,
                 showInLeftMenu = groupSettingBool(st, "show_in_left_menu") == true,
                 ageLimits = safeInt(st.get("age_limits")),
+                contentTabs = st.get("content_tabs")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
             )
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "groupsGetGroupExtras parse error", e)
@@ -17566,7 +17585,7 @@ class VKApiClient(
     suspend fun groupsSetGroupExtras(groupId: Long, s: GroupExtrasSettings): Boolean {
         if (isOffline()) return false
         // NULL-ЯВНО: JSON-граница + early-return (паттерн groupsSetMessagesSettings C6).
-        val json = call("groups.setGroupSettings", mapOf(
+        val setArgs = mutableMapOf(
             "group_id" to groupId.toString(),
             "hidden_members" to if (s.hiddenMembers) "1" else "0",
             "two_fa_confirmation_enabled" to if (s.twoFaConfirmationEnabled) "1" else "0",
@@ -17574,7 +17593,9 @@ class VKApiClient(
             "stories_replies_enabled" to if (s.storiesRepliesEnabled) "1" else "0",
             "show_in_left_menu" to if (s.showInLeftMenu) "1" else "0",
             "age_limits" to s.ageLimits.toString(),
-        ), forceWebGateway = true) ?: return false
+        )
+        if (s.contentTabs.isNotBlank()) setArgs["content_tabs"] = s.contentTabs
+        val json = call("groups.setGroupSettings", setArgs, forceWebGateway = true) ?: return false
         val resp = json.get("response") ?: return false
         // NULL-ЯВНО: поле success необязательное у объектной формы ответа — сравнение с 1.
         return when {
@@ -17583,6 +17604,60 @@ class VKApiClient(
                 resp.asJsonObject.get("success")?.takeIf { it.isJsonPrimitive }?.asInt == 1
             else -> false
         }
+    }
+
+    /**
+     * #ADMIN-TABS (HAR vk.ru_2609): список доступных вкладок сообщества.
+     * owners.getContentTabs { owner_id } -> response.tabs_configuration.
+     * Возвращает ключи вкладок, отсортированные по order.
+     * @param ownerId owner-style (-groupId).
+     */
+    suspend fun groupsGetContentTabs(ownerId: Long): List<String> {
+        if (isOffline()) return emptyList()
+        val json = call("owners.getContentTabs", mapOf(
+            "owner_id" to ownerId.toString(),
+        ), forceWebGateway = true) ?: return emptyList()
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
+            val cfg = resp.get("tabs_configuration")?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
+            cfg.entrySet()
+                .mapNotNull { (k, v) ->
+                    val order = v.asJsonObject?.get("base_configuration")?.asJsonObject
+                        ?.get("order")?.takeIf { it.isJsonPrimitive }?.asInt ?: Int.MAX_VALUE
+                    k to order
+                }
+                .sortedBy { it.second }
+                .map { it.first }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetContentTabs parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #ADMIN-TABS: контент конкретной вкладки сообщества.
+     * groups.getContentForTabs { group_id, tabs, content, count, start_from }.
+     * Возвращает сырой response-объект (формат зависит от content).
+     */
+    suspend fun groupsGetContentForTabs(
+        groupId: Long,
+        tabs: String,
+        content: String,
+        count: Int = 20,
+        startFrom: String? = null,
+    ): com.google.gson.JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "tabs" to tabs,
+            "content" to content,
+            "extended" to "",
+            "fields" to "",
+            "count" to count.toString(),
+            "start_from" to (startFrom ?: ""),
+        )
+        val json = call("groups.getContentForTabs", args, forceWebGateway = true) ?: return null
+        return unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
     }
 
     /** W35-b: groups.getMembers(filter=managers) — руководители сообщества. */
@@ -17683,6 +17758,339 @@ class VKApiClient(
      * @param ownerId owner-style (-groupId, отрицательный).
      * @param postIds до 100 id постов.
      */
+    // ═════════════════════════════════════════════════════════════════════════════
+    // #HAR-2609-STATS: синхронные методы статистики из web-админки VK (web.api.vk.ru).
+    // statsDashboard.getOwnerStats — АСИНХРОННЫЙ (task_id + queuev4), здесь НЕ реализован.
+    // ═════════════════════════════════════════════════════════════════════════════
+
+    /** owner статистики (bootstrap). */
+    data class StatsOwner(
+        val id: Long = 0L,
+        val name: String = "",
+        val avatarUrl: String = "",
+        val isActive: Boolean = false,
+        val domain: String = "",
+    )
+
+    /** Ответ statsDashboard.getBootstrapData. */
+    data class StatsBootstrap(
+        val owner: StatsOwner,
+        val profileId: Long = 0L,
+        val profileName: String = "",
+        val profileAvatarUrl: String = "",
+    )
+
+    /** Подсекция дашборда статистики. */
+    data class StatsSubsection(val id: String, val name: String, val disableRange: Boolean = false)
+
+    /** Секция дашборда статистики. */
+    data class StatsSection(val id: String, val name: String, val subsections: List<StatsSubsection> = emptyList())
+
+    // #MINIAPP-TOKEN-FIX (2026-09-27): statsDashboard.* принадлежат VK Mini App app_id=51912452
+    // и резолвятся ТОЛЬКО с mini_app_token для этого app_id (обычный web-токен -> err=3).
+    // HAR: GET https://id.vk.ru/mini_app_token?scope=&app_id=51912452&access_token=<web>
+    @Volatile private var miniAppTokenValue: String? = null
+    @Volatile private var miniAppTokenExpiresAt: Long = 0L
+
+    private suspend fun miniAppToken(appId: Long = 51912452L): String? {
+        val nowSec = System.currentTimeMillis() / 1000L
+        val cached = miniAppTokenValue
+        if (!cached.isNullOrBlank() && nowSec < miniAppTokenExpiresAt - 60L) return cached
+        val web = token() ?: run {
+            val er = exchangeAuthRepository
+            if (er != null) er.ensureFreshToken(force = true) else null
+        } ?: return null
+        if (web.isBlank()) return null
+        return try {
+            val url = "https://id.vk.ru/mini_app_token?scope=&app_id=" + appId + "&access_token=" + web
+            val req = Request.Builder().url(url).get().build()
+            withContext(Dispatchers.IO) {
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    if (body.isBlank()) return@use null
+                    val j = JsonParser.parseString(body)
+                    if (!j.isJsonObject) return@use null
+                    val r = j.asJsonObject.getAsJsonObject("response") ?: return@use null
+                    val tok = r.get("access_token")?.takeIf { it.isJsonPrimitive }?.asString
+                    if (tok.isNullOrBlank()) return@use null
+                    miniAppTokenValue = tok
+                    miniAppTokenExpiresAt = r.get("expires")?.takeIf { it.isJsonPrimitive }?.asLong ?: (nowSec + 3600L)
+                    AppLog.i("VKApiClient", "miniAppToken: ok app_id=" + appId + " expires=" + miniAppTokenExpiresAt)
+                    tok
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "miniAppToken error (app_id=" + appId + ")", e)
+            null
+        }
+    }
+
+    /**
+     * statsDashboard.getBootstrapData {type=stat_board, owner_id} — шапка дашборда.
+     * Синхронный. ownerId — ОТРИЦАТЕЛЬНЫЙ (как -165284550) либо screen_name.
+     */
+    suspend fun statsDashboardGetBootstrapData(ownerId: Long): StatsBootstrap? {
+        if (isOffline()) return null
+        val json = call("statsDashboard.getBootstrapData", mapOf(
+            "type" to "stat_board_mobile",
+            "owner_id" to ownerId.toString(),
+        ), forceWebGateway = true, skipTelemetryDrop = true,
+            overrideToken = miniAppToken()) ?: return null
+        return try {
+            val resp = unwrapResponse(json) ?: return null
+            val o = resp.asJsonObject
+            val own = o.getAsJsonObject("owner")
+            val prof = o.getAsJsonObject("profile")
+            StatsBootstrap(
+                owner = StatsOwner(
+                    id = own?.get("id")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                    name = own?.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                    avatarUrl = own?.get("avatarUrl")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                    isActive = own?.get("isActive")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
+                    domain = own?.get("domain")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                ),
+                profileId = prof?.get("id")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                profileName = prof?.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                profileAvatarUrl = prof?.get("avatarUrl")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsDashboardGetBootstrapData parse error", e)
+            null
+        }
+    }
+
+    /** statsDashboard.getDashboardSections — список секций/подсекций дашборда. Синхронный. */
+    suspend fun statsDashboardGetDashboardSections(ownerId: Long): List<StatsSection> {
+        if (isOffline()) return emptyList()
+        val json = call("statsDashboard.getDashboardSections", mapOf(
+            "type" to "stat_board_mobile",
+            "owner_id" to ownerId.toString(),
+        ), forceWebGateway = true, skipTelemetryDrop = true,
+            overrideToken = miniAppToken()) ?: return emptyList()
+        return try {
+            val resp = unwrapResponse(json) ?: return emptyList()
+            val arr = resp.asJsonObject.getAsJsonArray("sections") ?: return emptyList()
+            arr.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val subs = o.getAsJsonArray("subsections")?.mapNotNull { sEl ->
+                    if (!sEl.isJsonObject) return@mapNotNull null
+                    val so = sEl.asJsonObject
+                    StatsSubsection(
+                        id = so.get("id")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                        name = so.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                        disableRange = so.get("disable_range")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
+                    )
+                } ?: emptyList()
+                StatsSection(
+                    id = o.get("id")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                    name = o.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+                    subsections = subs,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsDashboardGetDashboardSections parse error", e)
+            emptyList()
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // #ADMIN-STATS-W47 (2026-09-27): статистика сообщества — Mini App 51912452.
+    // Async: getOwnerStats (task_id) + queue.subscribe + long-poll
+    // queuev4.vk.ru/im1180 (events[].data.task_result.chunk). Механика из
+    // статистика.har. НЕ legacy stats.get (err=7).
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Задача статистики: task_id + task_jwt_id из getOwnerStats. */
+    data class StatsTaskHandle(val taskId: String, val taskJwtId: String)
+
+    /** Событие очереди статистики (vboardcard): готовый chunk (JSON-строка). */
+    data class StatsBoardEvent(val taskId: String, val chunk: String)
+
+    /**
+     * statsDashboard.getOwnerStats — запуск задачи (async).
+     * act=layout (структура) или act=data&card_id=<id> (данные).
+     * sdate/edate — МИЛЛИсекунды. ownerId ОТРИЦАТЕЛЬНЫЙ. Ответ — task_id.
+     */
+    suspend fun statsDashboardGetOwnerStats(
+        ownerId: Long,
+        section: String,
+        subSection: String,
+        act: String = "layout",
+        cardId: String? = null,
+        period: String = "last7Days",
+        sdateMs: Long,
+        edateMs: Long,
+    ): StatsTaskHandle? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "type" to "stat_board_mobile",
+            "act" to act,
+            "section" to section,
+            "sub_section" to subSection,
+            "owner_id" to ownerId.toString(),
+            "period" to period,
+            "sdate" to sdateMs.toString(),
+            "edate" to edateMs.toString(),
+        )
+        if (!cardId.isNullOrBlank()) args["card_id"] = cardId
+        val json = call(
+            "statsDashboard.getOwnerStats",
+            args,
+            forceWebGateway = true,
+            skipTelemetryDrop = true,
+            overrideToken = miniAppToken(),
+        ) ?: return null
+        return try {
+            val resp = unwrapResponse(json) ?: return null
+            val o = resp.asJsonObject
+            val tid = o.get("task_id")?.takeIf { it.isJsonPrimitive }?.asString ?: return null
+            val jwt = o.get("task_jwt_id")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
+            StatsTaskHandle(taskId = tid, taskJwtId = jwt)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsDashboardGetOwnerStats parse error", e)
+            null
+        }
+    }
+
+    /**
+     * queue.subscribe для очереди статистики:
+     * queue_ids=vboardcard_<uid>_<gid>_1. Возвращает credential для long-poll.
+     */
+    suspend fun statsBoardQueueSubscribe(userId: Long, groupId: Long): QueueCredential? {
+        val uid = if (userId > 0L) userId else (exchangeAuthRepository?.userId() ?: 0L)
+        if (uid <= 0L || groupId <= 0L) return null
+        val suffix = VKEndpoints.statsBoardQueueId(uid, groupId)
+        // #MINIAPP-TOKEN-FIX: очередь статистики подписывается mini_app_token (как в HAR).
+        val json = call(
+            "queue.subscribe",
+            mapOf("queue_ids" to suffix),
+            forceWebGateway = true,
+            skipTelemetryDrop = true,
+            overrideToken = miniAppToken(),
+        )
+        if (json == null) {
+            // fallback на обычный путь (SAT/web), если mini-токен недоступен
+            return queueSubscribe(uid, suffix)
+        }
+        return try {
+            parseQueueCredential(json.getAsJsonObject("response") ?: json, uid)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsBoardQueueSubscribe parse error", e)
+            null
+        }
+    }
+
+    /**
+     * Long-poll очереди статистики:
+     * GET base_url?act=a_check&key&ts&id&wait=45.
+     * События — JSON-ОБЪЕКТЫ (vboardcard), не LP-массивы.
+     */
+    suspend fun statsBoardQueuePoll(
+        cred: QueueCredential,
+        waitSec: Int = 45,
+    ): Pair<Long, List<StatsBoardEvent>>? {
+        if (isOffline()) return null
+        return try {
+            val url = "${cred.url}?act=a_check&key=${cred.key}&ts=${cred.ts}&id=${cred.userId}&wait=$waitSec"
+            val req = Request.Builder().url(url).get().build()
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: return null
+                if (body.isBlank()) return cred.ts to emptyList()
+                val parsed = JsonParser.parseString(body)
+                var newTs = cred.ts
+                val out = mutableListOf<StatsBoardEvent>()
+                if (parsed.isJsonObject) {
+                    val o = parsed.asJsonObject
+                    newTs = o.get("ts")?.takeIf { it.isJsonPrimitive }?.asLong ?: newTs
+                    collectBoardEvents(o, out)
+                } else if (parsed.isJsonArray) {
+                    val arr = parsed.asJsonArray
+                    if (arr.size() > 0 && arr[0].isJsonObject) {
+                        val m = arr[0].asJsonObject
+                        newTs = m.get("ts")?.takeIf { it.isJsonPrimitive }?.asLong ?: newTs
+                        collectBoardEvents(m, out)
+                    }
+                    for (i in 1 until arr.size()) {
+                        if (arr[i].isJsonObject) collectBoardEvents(arr[i].asJsonObject, out)
+                    }
+                }
+                newTs to out
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "statsBoardQueuePoll error", e)
+            null
+        }
+    }
+
+    /** Извлекает vboardcard-события (объекты) из events/updates. */
+    private fun collectBoardEvents(o: JsonObject, out: MutableList<StatsBoardEvent>) {
+        val list = o.getAsJsonArray("events") ?: o.getAsJsonArray("updates") ?: return
+        for (el in list) {
+            if (!el.isJsonObject) continue
+            val eo = el.asJsonObject
+            val data = eo.getAsJsonObject("data") ?: continue
+            val tid = data.get("task_id")?.takeIf { it.isJsonPrimitive }?.asString ?: continue
+            val tr = data.getAsJsonObject("task_result") ?: continue
+            val chunk = tr.get("chunk")?.takeIf { it.isJsonPrimitive }?.asString ?: continue
+            out.add(StatsBoardEvent(taskId = tid, chunk = chunk))
+        }
+    }
+
+    /** statsDashboard.dropTasks — очистка задач статистики. */
+    suspend fun statsDashboardDropTasks(ownerId: Long, taskJwtIds: List<String>): Boolean {
+        if (isOffline() || taskJwtIds.isEmpty()) return false
+        val json = call(
+            "statsDashboard.dropTasks",
+            mapOf(
+                "type" to "stat_board_mobile",
+                "task_jwt_ids" to taskJwtIds.joinToString(","),
+                "owner_id" to ownerId.toString(),
+            ),
+            forceWebGateway = true,
+            skipTelemetryDrop = true,
+            overrideToken = miniAppToken(),
+        ) ?: return false
+        return json.has("response")
+    }
+    /** Конфигурация одного таба (owners.getContentTabs). */
+    data class ContentTabConfig(
+        val key: String = "",
+        val contentTypes: List<String> = emptyList(),
+        val canAdd: Boolean = false,
+        val canMoveToSection: Boolean = false,
+        val order: Int = 0,
+    )
+
+    /** owners.getContentTabs {owner_id} — список табов и их конфигурация. Синхронный. */
+    suspend fun ownersGetContentTabs(ownerId: Long): List<ContentTabConfig> {
+        if (isOffline()) return emptyList()
+        val json = call("owners.getContentTabs", mapOf(
+            "owner_id" to ownerId.toString(),
+        ), forceWebGateway = true, skipTelemetryDrop = true) ?: return emptyList()
+        return try {
+            val resp = unwrapResponse(json) ?: return emptyList()
+            val cfg = resp.asJsonObject.getAsJsonObject("tabs_configuration") ?: return emptyList()
+            cfg.entrySet().mapNotNull { (k, v) ->
+                if (!v.isJsonObject) return@mapNotNull null
+                val base = v.asJsonObject.getAsJsonObject("base_configuration") ?: return@mapNotNull null
+                val types = base.getAsJsonArray("content_types")?.mapNotNull {
+                    it.takeIf { p -> p.isJsonPrimitive }?.asString
+                } ?: emptyList()
+                ContentTabConfig(
+                    key = k,
+                    contentTypes = types,
+                    canAdd = base.get("can_add")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
+                    canMoveToSection = base.get("can_move_to_section")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
+                    order = base.get("order")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+                )
+            }.sortedBy { it.order }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "ownersGetContentTabs parse error", e)
+            emptyList()
+        }
+    }
+
     suspend fun statsGetPostReach(ownerId: Long, postIds: List<Long>): List<PostReach> {
         if (isOffline() || postIds.isEmpty()) return emptyList()
         val json = call("stats.getPostReach", mapOf(
@@ -17802,17 +18210,23 @@ class VKApiClient(
      */
     suspend fun groupsEventLogPage(
         screenName: String,
+        groupId: Long,
         nextFrom: Long,
         actionType: String? = null,
     ): EventLogPage = withContext(Dispatchers.IO) {
         if (screenName.isBlank()) return@withContext EventLogPage(emptyList(), null)
+        // W47-FIX: legacy php требует al=1&al_id=<uid>&hash=<hex>, иначе payload пуст.
+        val uid = exchangeAuthRepository?.userId() ?: 0L
+        val hash = groupsGetLegacySettingsHash(groupId)
         val form = okhttp3.FormBody.Builder()
             .add("al", "1")
             .add("filter", "1")
             .add("next_from", nextFrom.toString())
+        if (uid > 0L) form.add("al_id", uid.toString())
+        if (!hash.isNullOrBlank()) form.add("hash", hash)
         if (!actionType.isNullOrBlank()) form.add("action_type", actionType)
         val req = okhttp3.Request.Builder()
-            .url("https://vk.ru/$screenName?act=event_log")
+            .url("https://vk.ru/public$groupId?act=event_log")
             .post(form.build())
             .header(
                 "User-Agent",
@@ -17821,7 +18235,7 @@ class VKApiClient(
             )
             .header("X-Requested-With", "XMLHttpRequest")
             .header("Accept", "text/plain, */*; q=0.01")
-            .header("Referer", "https://vk.ru/$screenName")
+            .header("Referer", "https://vk.ru/public$groupId")
             .build()
         val body: String = try {
             httpClient.newCall(req).execute().use { resp ->
@@ -18377,6 +18791,49 @@ class VKApiClient(
     suspend fun ownersShowMenu(groupId: Long): Boolean {
         if (isOffline()) return false
         val json = call("owners.showMenu", mapOf("owner_id" to (-groupId).toString()), forceWebGateway = true) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #ADMIN-MENU-EDIT: переименовать / сменить URL пункта меню (owners.editMenuItem, web-only).
+     * Формат снят 2026-09-26 (дамп vk_net2.json): owner_id=-groupId, item_id, title, url,
+     * crop_data (для photo/app; обычно "0,0,376,256|0"). Ответ — двойная обёртка
+     * {"response":{"response":{id,settings,title,type,url}}}.
+     * @return true при успехе (response содержит объект пункта).
+     */
+    suspend fun ownersEditMenuItem(
+        groupId: Long,
+        itemId: Long,
+        title: String? = null,
+        url: String? = null,
+        cropData: String? = null,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "owner_id" to (-groupId).toString(),
+            "item_id" to itemId.toString(),
+        )
+        if (!title.isNullOrBlank()) args["title"] = title
+        if (!url.isNullOrBlank()) args["url"] = url
+        if (!cropData.isNullOrBlank()) args["crop_data"] = cropData
+        val json = call("owners.editMenuItem", args, forceWebGateway = true) ?: return false
+        // Двойная обёртка: response.response.{id,...}. Достаточно наличия объекта.
+        val outer = unwrapResponse(json)
+        return outer != null && outer.isJsonObject && outer.asJsonObject.has("id")
+    }
+
+    /**
+     * #ADMIN-MENU-EDIT: удалить пункт меню (owners.deleteMenuItem, web-only).
+     * Формат снят 2026-09-26: owner_id=-groupId, item_id → {"response":1}.
+     * @return true при успехе.
+     */
+    suspend fun ownersDeleteMenuItem(groupId: Long, itemId: Long): Boolean {
+        if (isOffline()) return false
+        val args = mapOf(
+            "owner_id" to (-groupId).toString(),
+            "item_id" to itemId.toString(),
+        )
+        val json = call("owners.deleteMenuItem", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -19464,6 +19921,653 @@ class VKApiClient(
         }
     }
 
+
+    // ===== BEGIN #ADMIN-HAR-2609: чаты/приглашения/removeUser/donut/appWidgets =====
+    // Источник: HAR-папка «админка» (26.09.2026), 13 файлов. Параметры — ровно
+    // как в vk.ru-web: peer_id = 2000000000 + chatId, group_id положительный.
+
+    /** Беседа сообщества (groups.addChat). */
+    data class VkGroupChat(
+        val id: Long,
+        val title: String,
+        val photo: String,
+        val inviteLink: String,
+        val membersCount: Int,
+        val isClosed: Boolean,
+        val isVisible: Boolean,
+    )
+
+    /** Страница приглашаемых друзей (groups.getFriendsInvitationList). */
+    data class VkInviteFriend(
+        val id: Long,
+        val name: String,
+        val surname: String,
+        val photoUrl: String,
+        val invitationStatus: String,
+        val isAvailable: Boolean,
+    )
+
+    data class VkInviteFriendsPage(
+        val invitedCount: Int,
+        val invitesLimit: Int,
+        val count: Int,
+        val nextFrom: String?,
+        val users: List<VkInviteFriend>,
+    )
+
+    /** Инфо о донатах сообщества (donut.getInfo). Пусто — донаты не включены. */
+    data class VkDonutInfo(val raw: JsonObject)
+
+    /** Виджет приложения сообщества (appWidgets.get). */
+    data class VkAppWidget(val type: Int, val privacy: String, val privacyCode: Int)
+
+    /**
+     * #ADMIN-HAR-2609: groups.addChat — создать беседу сообщества (web-only).
+     * HAR: title=<urlencoded> & is_donut=0 & group_id. Ответ: response.{id,title,
+     * photo,invite_link,members_count,is_closed,is_visible}.
+     */
+    suspend fun groupsAddChat(groupId: Long, title: String, isDonut: Boolean = false): VkGroupChat? {
+        if (isOffline()) return null
+        if (title.isBlank()) return null
+        val json = call("groups.addChat", mapOf(
+            "title" to title,
+            "is_donut" to if (isDonut) "1" else "0",
+            "group_id" to groupId.toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            VkGroupChat(
+                id = safeLongNullable(resp.get("id")) ?: return null,
+                title = safeString(resp.get("title")) ?: "",
+                photo = safeString(resp.get("photo")) ?: "",
+                inviteLink = safeString(resp.get("invite_link")) ?: "",
+                membersCount = safeInt(resp.get("members_count")),
+                isClosed = safeBool(resp.get("is_closed")),
+                isVisible = safeBool(resp.get("is_visible")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsAddChat parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609: groups.editChat — правка беседы (web-only).
+     * HAR: peer_id=2000000000+chatId & is_closed & group_id [& title].
+     * Ответ: response=1.
+     */
+    suspend fun groupsEditChat(
+        groupId: Long,
+        chatId: Long,
+        isClosed: Boolean,
+        title: String? = null,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "peer_id" to (2_000_000_000L + chatId).toString(),
+            "is_closed" to if (isClosed) "1" else "0",
+            "group_id" to groupId.toString(),
+        )
+        if (!title.isNullOrBlank()) args["title"] = title
+        val json = call("groups.editChat", args, forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    /**
+     * #ADMIN-HAR-2609: groups.deleteChat — удалить беседу (web-only).
+     * HAR: peer_id=2000000000+chatId & group_id. Ответ: response=1.
+     */
+    suspend fun groupsDeleteChat(groupId: Long, chatId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.deleteChat", mapOf(
+            "peer_id" to (2_000_000_000L + chatId).toString(),
+            "group_id" to groupId.toString(),
+        ), forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    /**
+     * #ADMIN-HAR-2609: groups.getFriendsInvitationList — список друзей для приглашения.
+     * HAR: group_id & count=20 [& start_from] & with_privacy_groups_invite=1 &
+     * invitation_status=not_invited. Ответ: response.{invited_count,invites_limit,
+     * count,next_from,users:[{id,name,surname,photo_url,invitation_status,is_available}]}.
+     */
+    suspend fun groupsGetFriendsInvitationList(
+        groupId: Long,
+        count: Int = 20,
+        startFrom: String? = null,
+        invitationStatus: String = "not_invited",
+    ): VkInviteFriendsPage? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "with_privacy_groups_invite" to "1",
+            "invitation_status" to invitationStatus,
+        )
+        if (!startFrom.isNullOrBlank()) args["start_from"] = startFrom
+        val json = call("groups.getFriendsInvitationList", args, forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            val users = (getArr(resp, "users") ?: JsonArray()).mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val id = safeLongNullable(o.get("id")) ?: return@mapNotNull null
+                VkInviteFriend(
+                    id = id,
+                    name = safeString(o.get("name")) ?: "",
+                    surname = safeString(o.get("surname")) ?: "",
+                    photoUrl = safeString(o.get("photo_url")) ?: "",
+                    invitationStatus = safeString(o.get("invitation_status")) ?: "",
+                    isAvailable = safeBool(o.get("is_available")),
+                )
+            }
+            VkInviteFriendsPage(
+                invitedCount = safeInt(resp.get("invited_count")),
+                invitesLimit = safeInt(resp.get("invites_limit")),
+                count = safeInt(resp.get("count")),
+                nextFrom = safeString(resp.get("next_from")),
+                users = users,
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetFriendsInvitationList parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609: groups.removeUser — исключить участника из сообщества (web-only).
+     * HAR: group_id & user_id. Ответ: response=1.
+     */
+    suspend fun groupsRemoveUser(groupId: Long, userId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("groups.removeUser", mapOf(
+            "group_id" to groupId.toString(),
+            "user_id" to userId.toString(),
+        ), forceWebGateway = true) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #ADMIN-HAR-2609: donut.getInfo — инфо о донатах сообщества.
+     * HAR: owner_id=-groupId & fields=group_donut_block. Пустой ответ = донаты не вкл.
+     */
+    suspend fun donutGetInfo(groupId: Long): VkDonutInfo? {
+        if (isOffline()) return null
+        val json = call("donut.getInfo", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "fields" to "group_donut_block",
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            VkDonutInfo(raw = resp)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "donutGetInfo parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609: appWidgets.get — виджет сообщества (кто видит приложение).
+     * HAR: group_id. Ответ: response.{type,privacy,privacy_code}.
+     */
+    suspend fun appWidgetsGet(groupId: Long): VkAppWidget? {
+        if (isOffline()) return null
+        val json = call("appWidgets.get", mapOf(
+            "group_id" to groupId.toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            VkAppWidget(
+                type = safeInt(resp.get("type")),
+                privacy = safeString(resp.get("privacy")) ?: "",
+                privacyCode = safeInt(resp.get("privacy_code")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "appWidgetsGet parse error", e)
+            null
+        }
+    }
+
+    // ===== END #ADMIN-HAR-2609 =====
+
+    // ===== BEGIN #ADMIN-HAR-2609-P2 =====
+
+    /** Секция меню настроек сообщества (groups.getGroupSettingsMenu). */
+    data class VkSettingsMenuSection(
+        val key: String,
+        val title: String,
+        val hasUnseen: Boolean,
+        val href: String,
+        val subsections: List<VkSettingsMenuSection> = emptyList(),
+    )
+
+    /** Похожее сообщество (groups.getSuggestions). */
+    data class VkSuggestedGroup(
+        val id: Long,
+        val name: String,
+        val screenName: String,
+        val membersCount: Int,
+        val photo100: String,
+        val isMember: Boolean,
+        val isAdmin: Boolean,
+    )
+
+    data class VkSuggestionsPage(
+        val title: String,
+        val count: Int,
+        val nextFrom: String?,
+        val items: List<VkSuggestedGroup>,
+    )
+
+    /** Пункт верификации/бизнес-отметок (businessGroups.getShieldSettings). */
+    data class VkShieldItem(
+        val name: String,
+        val title: String,
+        val description: String,
+        val link: String,
+        val subtitle: String,
+        val isCompleted: Boolean,
+        val isWarning: Boolean,
+    )
+
+    data class VkShieldSettings(
+        val title: String,
+        val infoText: String,
+        val infoLink: String,
+        val items: List<VkShieldItem>,
+    )
+
+    /** Раздел контента (owners.getContentSections). */
+    data class VkContentSectionImage(val url: String, val width: Int, val height: Int)
+
+    data class VkContentSection(
+        val name: String,
+        val images: List<VkContentSectionImage>,
+    )
+
+    /**
+     * #ADMIN-HAR-2609-P2: groups.getGroupSettingsMenu — дерево меню настроек (web).
+     * HAR: group_id & page=community_settings. Ответ: response.sections[{key,title,
+     * has_unseen,href,sections:[...]}].
+     */
+    suspend fun groupsGetGroupSettingsMenu(
+        groupId: Long,
+        page: String = "community_settings",
+    ): List<VkSettingsMenuSection> {
+        if (isOffline()) return emptyList()
+        val json = call("groups.getGroupSettingsMenu", mapOf(
+            "group_id" to groupId.toString(),
+            "page" to page,
+        ), forceWebGateway = true) ?: return emptyList()
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
+            (getArr(resp, "sections") ?: JsonArray()).mapNotNull { parseSettingsMenuSection(it) }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetGroupSettingsMenu parse error", e)
+            emptyList()
+        }
+    }
+
+    private fun parseSettingsMenuSection(el: JsonElement): VkSettingsMenuSection? {
+        if (!el.isJsonObject) return null
+        val o = el.asJsonObject
+        val subs = (getArr(o, "sections") ?: JsonArray()).mapNotNull { parseSettingsMenuSection(it) }
+        return VkSettingsMenuSection(
+            key = safeString(o.get("key")) ?: "",
+            title = safeString(o.get("title")) ?: "",
+            hasUnseen = safeBool(o.get("has_unseen")),
+            href = safeString(o.get("href")) ?: "",
+            subsections = subs,
+        )
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P2: groups.getSuggestions — похожие сообщества.
+     * HAR: group_id & fields=members_count,friends & count=25 & ref=group.
+     */
+    suspend fun groupsGetSuggestions(
+        groupId: Long,
+        count: Int = 25,
+        startFrom: String? = null,
+    ): VkSuggestionsPage? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "fields" to "members_count,friends",
+            "count" to count.toString(),
+            "ref" to "group",
+        )
+        if (!startFrom.isNullOrBlank()) args["start_from"] = startFrom
+        val json = call("groups.getSuggestions", args, forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            val items = (getArr(resp, "items") ?: JsonArray()).mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val go = getObj(el.asJsonObject, "group") ?: return@mapNotNull null
+                val id = safeLongNullable(go.get("id")) ?: return@mapNotNull null
+                VkSuggestedGroup(
+                    id = id,
+                    name = safeString(go.get("name")) ?: "",
+                    screenName = safeString(go.get("screen_name")) ?: "",
+                    membersCount = safeInt(go.get("members_count")),
+                    photo100 = safeString(go.get("photo_100")) ?: "",
+                    isMember = safeBool(go.get("is_member")),
+                    isAdmin = safeBool(go.get("is_admin")),
+                )
+            }
+            VkSuggestionsPage(
+                title = safeString(resp.get("title")) ?: "",
+                count = safeInt(resp.get("count")),
+                nextFrom = safeString(resp.get("next_from")),
+                items = items,
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetSuggestions parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P2: businessGroups.getShieldSettings — бизнес-отметки/верификация.
+     * HAR: group_id & screen=verification. Ответ: response.{title,info,verification_items[...]}.
+     */
+    suspend fun businessGroupsGetShieldSettings(
+        groupId: Long,
+        screen: String = "verification",
+    ): VkShieldSettings? {
+        if (isOffline()) return null
+        val json = call("businessGroups.getShieldSettings", mapOf(
+            "group_id" to groupId.toString(),
+            "screen" to screen,
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            val info = getObj(resp, "info")
+            val items = (getArr(resp, "verification_items") ?: JsonArray()).mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                VkShieldItem(
+                    name = safeString(o.get("name")) ?: "",
+                    title = safeString(o.get("title")) ?: "",
+                    description = safeString(o.get("description")) ?: "",
+                    link = safeString(o.get("link")) ?: "",
+                    subtitle = safeString(o.get("subtitle")) ?: "",
+                    isCompleted = safeBool(o.get("is_completed")),
+                    isWarning = safeBool(o.get("is_warning")),
+                )
+            }
+            VkShieldSettings(
+                title = safeString(resp.get("title")) ?: "",
+                infoText = safeString(info?.get("text")) ?: "",
+                infoLink = safeString(info?.get("link")) ?: "",
+                items = items,
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "businessGroupsGetShieldSettings parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P2: owners.getContentSections — доступные разделы контента.
+     * HAR: owner_id=-groupId. Ответ: response.sections_list[{name,images[{url,width,height}]}].
+     */
+    suspend fun ownersGetContentSections(groupId: Long): List<VkContentSection> {
+        if (isOffline()) return emptyList()
+        val json = call("owners.getContentSections", mapOf(
+            "owner_id" to (-groupId).toString(),
+        ), forceWebGateway = true) ?: return emptyList()
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
+            (getArr(resp, "sections_list") ?: JsonArray()).mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                val imgs = (getArr(o, "images") ?: JsonArray()).mapNotNull { ie ->
+                    if (!ie.isJsonObject) return@mapNotNull null
+                    val io = ie.asJsonObject
+                    VkContentSectionImage(
+                        url = safeString(io.get("url")) ?: "",
+                        width = safeInt(io.get("width")),
+                        height = safeInt(io.get("height")),
+                    )
+                }
+                VkContentSection(
+                    name = safeString(o.get("name")) ?: "",
+                    images = imgs,
+                )
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "ownersGetContentSections parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P2: notifications.setGroupSettings — настройки уведомлений (web).
+     * HAR: group_id & params=<JSON {"0":1,"1":1,...,"-1":1,"-2":0}>. Ответ: response=1.
+     * @param paramsJson JSON-строка настроек (ключи — коды типов уведомлений).
+     */
+    suspend fun notificationsSetGroupSettings(groupId: Long, paramsJson: String): Boolean {
+        if (isOffline()) return false
+        if (paramsJson.isBlank()) return false
+        val json = call("notifications.setGroupSettings", mapOf(
+            "group_id" to groupId.toString(),
+            "params" to paramsJson,
+        ), forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    // ===== END #ADMIN-HAR-2609-P2 =====
+
+    // ===== BEGIN #ADMIN-HAR-2609-P1 =====
+
+    /** Онлайн в беседе (messages.getChatOnline). */
+    data class VkChatOnline(val onlineCount: Int)
+
+    /** Настройки донатов (donut.getSettings). */
+    data class VkDonutSettings(
+        val isEnabled: Boolean,
+        val isEditAvailable: Boolean,
+        val isOneTimePaymentsEnabled: Boolean,
+        val description: String,
+        val donsDescription: String,
+        val farewellMessage: String,
+        val levelLimit: Int,
+    )
+
+    /** Уровни донатов (donut.getLevels). */
+    data class VkDonutLevels(
+        val canAdd: Boolean,
+        val canAllDons: Boolean,
+        val maxCount: Int,
+    )
+
+    /** Комментарии к постам пакетом (wall.getCommentsForPosts). */
+    data class VkPostComments(
+        val postId: String,
+        val count: Int,
+        val canPost: Boolean,
+    )
+
+    /**
+     * #ADMIN-HAR-2609-P1: messages.getChatOnline — сколько участников онлайн.
+     * HAR: peer_id=2000000000+chatId & group_id. Ответ: response.online_count.
+     */
+    suspend fun messagesGetChatOnline(groupId: Long, chatId: Long): VkChatOnline? {
+        if (isOffline()) return null
+        val json = call("messages.getChatOnline", mapOf(
+            "peer_id" to (2_000_000_000L + chatId).toString(),
+            "group_id" to groupId.toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            VkChatOnline(onlineCount = safeInt(resp.get("online_count")))
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetChatOnline parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P1: donut.getSettings — настройки донатов сообщества.
+     * HAR: owner_id=-groupId. Ответ: response.{is_enabled,is_edit_donut_available,...}.
+     */
+    suspend fun donutGetSettings(groupId: Long): VkDonutSettings? {
+        if (isOffline()) return null
+        val json = call("donut.getSettings", mapOf(
+            "owner_id" to (-groupId).toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            VkDonutSettings(
+                isEnabled = safeBool(resp.get("is_enabled")),
+                isEditAvailable = safeBool(resp.get("is_edit_donut_available")),
+                isOneTimePaymentsEnabled = safeBool(resp.get("is_one_time_payments_enabled")),
+                description = safeString(resp.get("description")) ?: "",
+                donsDescription = safeString(resp.get("dons_description")) ?: "",
+                farewellMessage = safeString(resp.get("farewell_message")) ?: "",
+                levelLimit = safeInt(resp.get("level_limit")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "donutGetSettings parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P1: donut.getLevels — уровни донатов.
+     * HAR: owner_id=-groupId. Ответ: response.{can_add,can_all_dons,levels,max_count}.
+     */
+    suspend fun donutGetLevels(groupId: Long): VkDonutLevels? {
+        if (isOffline()) return null
+        val json = call("donut.getLevels", mapOf(
+            "owner_id" to (-groupId).toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            VkDonutLevels(
+                canAdd = safeBool(resp.get("can_add")),
+                canAllDons = safeBool(resp.get("can_all_dons")),
+                maxCount = safeInt(resp.get("max_count")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "donutGetLevels parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P1: channels.getPinnedMessages — закреплённые сообщения канала.
+     * HAR: channel_id=-groupId & extended=1 & fields=... . Ответ: response.{count,items}.
+     * @return сырой JsonObject response (структура items — как у messages.getHistory).
+     */
+    suspend fun channelsGetPinnedMessages(channelId: Long): JsonObject? {
+        if (isOffline()) return null
+        val json = call("channels.getPinnedMessages", mapOf(
+            "channel_id" to channelId.toString(),
+            "extended" to "1",
+        ), forceWebGateway = true) ?: return null
+        return try {
+            unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "channelsGetPinnedMessages parse error", e)
+            null
+        }
+    }
+
+    /**
+     * #ADMIN-HAR-2609-P1: wall.getCommentsForPosts — комментарии к нескольким постам
+     * пакетом (модерация в админке сообщества).
+     * HAR: owner_id=-groupId & posts_ids=<owner_post,owner_post> & extended=1 & count=3.
+     * @param postIds список id постов (внутренние, без owner).
+     * @return сырой response: {items:[{post_id,comments:[...],count,...}],profiles:[...],groups:[...]}.
+     */
+    suspend fun wallGetCommentsForPosts(
+        groupId: Long,
+        postIds: List<Long>,
+        count: Int = 3,
+        threadItemsCount: Int = 1,
+    ): JsonObject? {
+        if (isOffline()) return null
+        if (postIds.isEmpty()) return null
+        val postsIds = postIds.joinToString(",") { "${-groupId}_$it" }
+        val json = call("wall.getCommentsForPosts", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "posts_ids" to postsIds,
+            "need_likes" to "1",
+            "extended" to "1",
+            "preview_length" to "0",
+            "thread_items_count" to threadItemsCount.toString(),
+            "count" to count.toString(),
+        ), forceWebGateway = true) ?: return null
+        return try {
+            unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "wallGetCommentsForPosts parse error", e)
+            null
+        }
+    }
+
+    // ===== END #ADMIN-HAR-2609-P1 =====
+
+    // ===== BEGIN #ADMIN-POST-ACTIONS (сообщество действи с постами.har, 27.09.2026) =====
+
+    /**
+     * #ADMIN-POST-ACTIONS: wall.openComments — открыть комментарии к посту (web).
+     * HAR: owner_id=-groupId & post_id. Ответ: response=1.
+     */
+    suspend fun wallOpenComments(groupId: Long, postId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("wall.openComments", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "post_id" to postId.toString(),
+        ), forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    /**
+     * #ADMIN-POST-ACTIONS: wall.closeComments — закрыть комментарии к посту (web).
+     * HAR: owner_id=-groupId & post_id. Ответ: response=1.
+     */
+    suspend fun wallCloseComments(groupId: Long, postId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("wall.closeComments", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "post_id" to postId.toString(),
+        ), forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    /**
+     * #ADMIN-POST-ACTIONS: owners.pinToMainTab — закрепить запись в «Главное».
+     * HAR: owner_id=-groupId & item_type=post & item_id=<owner_post>. Ответ: response=1.
+     */
+    suspend fun ownersPinToMainTab(groupId: Long, postId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("owners.pinToMainTab", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "item_type" to "post",
+            "item_id" to "${-groupId}_$postId",
+        ), forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    /**
+     * #ADMIN-POST-ACTIONS: owners.removeFromMainTab — убрать запись из «Главное».
+     * HAR: owner_id=-groupId & item_type=post & item_id=<owner_post>. Ответ: response=1.
+     */
+    suspend fun ownersRemoveFromMainTab(groupId: Long, postId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("owners.unpinFromMainTab", mapOf(
+            "owner_id" to (-groupId).toString(),
+            "item_type" to "post",
+            "item_id" to "${-groupId}_$postId",
+        ), forceWebGateway = true) ?: return false
+        return safeInt(json.get("response")) == 1 || json.has("response")
+    }
+
+    // ===== END #ADMIN-POST-ACTIONS =====
     private suspend fun rateLimitWait() {
         while (true) {
             val now = System.currentTimeMillis()

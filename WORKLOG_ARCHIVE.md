@@ -5352,7 +5352,7 @@ inline в ленте/профиле/чате — не был доступен и
 **Root cause #1 (КРИТИЧНО — parsing bug):**
 VK `login.vk.com/?act=web_token` возвращает обёрнутый формат:
 ```json
-{"type":"okay","data":{"access_token":"vk1.a.*","expires":1786111410,"user_id":171093180,"logout_hash":"2640a59e2c467b2d7c"}}
+{"type":"okay","data":{"access_token":"vk1.a.*","expires":1786111410,"user_id":171093180,"logout_hash":"HASH_MASKED"}}
 ```
 А `silentRefreshViaRemixsid` читал `access_token`/`expires`/`user_id`/`logout_hash` из КОРНЯ json → всегда null для нового формата → "no access_token (contract failure)" → все 7 strategies помечались failed.
 

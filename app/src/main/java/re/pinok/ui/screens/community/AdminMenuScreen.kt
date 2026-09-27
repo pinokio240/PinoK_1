@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -109,6 +111,9 @@ fun AdminMenuScreen(groupId: Long, onBack: () -> Unit) {
     var showAdd by remember { mutableStateOf(false) }
     var addTitle by remember { mutableStateOf("") }
     var addUrl by remember { mutableStateOf("") }
+    var editTarget by remember { mutableStateOf<VKApiClient.OwnerMenuItem?>(null) }
+    var editTitle by remember { mutableStateOf("") }
+    var editUrl by remember { mutableStateOf("") }
 
     fun load() {
         scope.launch {
@@ -203,6 +208,56 @@ fun AdminMenuScreen(groupId: Long, onBack: () -> Unit) {
         }
     }
 
+    fun deleteItem(item: VKApiClient.OwnerMenuItem) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try {
+                val ok = app.apiClient.ownersDeleteMenuItem(groupId, item.id)
+                if (ok) {
+                    Toast.makeText(context, "Пункт удалён", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(context, if (err.isNullOrBlank()) "Не удалось удалить пункт" else "Ошибка: $err", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminMenu", "deleteItem failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun renameItem() {
+        val target = editTarget ?: return
+        if (busy) return
+        busy = true
+        scope.launch {
+            try {
+                val ok = app.apiClient.ownersEditMenuItem(
+                    groupId = groupId,
+                    itemId = target.id,
+                    title = editTitle.trim().takeIf { it.isNotBlank() && it != target.title },
+                    url = editUrl.trim().takeIf { it.isNotBlank() && it != target.url },
+                )
+                if (ok) {
+                    editTarget = null
+                    Toast.makeText(context, "Пункт обновлён", Toast.LENGTH_SHORT).show()
+                    load()
+                } else {
+                    val err = app.apiClient.lastApiError
+                    Toast.makeText(context, if (err.isNullOrBlank()) "Не удалось сохранить пункт" else "Ошибка: $err", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                AppLog.e("AdminMenu", "renameItem failed", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                busy = false
+            }
+        }
+    }
     LaunchedEffect(groupId) { load() }
 
     Scaffold(
@@ -292,6 +347,13 @@ fun AdminMenuScreen(groupId: Long, onBack: () -> Unit) {
                             canDelete = st.canDelete,
                             canEditTitle = st.canEditTitle,
                             canEditUrl = st.canEditUrl,
+                            busy = busy,
+                            onEdit = {
+                                editTarget = mi
+                                editTitle = mi.title
+                                editUrl = mi.url
+                            },
+                            onDelete = { deleteItem(mi) },
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     }
@@ -299,8 +361,8 @@ fun AdminMenuScreen(groupId: Long, onBack: () -> Unit) {
 
                 item {
                     Text(
-                        "Переименование, удаление и скрытие отдельных пунктов — только в веб-версии " +
-                            "админ-панели сообщества. Здесь можно добавить пункт и скрыть/показать всё меню.",
+                        "Пункты меню: добавление, переименование, смена URL, удаление. " +
+                            "Видимость всего меню — кнопкой ниже.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(16.dp),
@@ -308,6 +370,21 @@ fun AdminMenuScreen(groupId: Long, onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    editTarget?.let { tgt ->
+        val tst = menuItemSettings(tgt)
+        EditMenuItemDialog(
+            title = editTitle,
+            url = editUrl,
+            canEditTitle = tst.canEditTitle,
+            canEditUrl = tst.canEditUrl,
+            busy = busy,
+            onTitleChange = { editTitle = it },
+            onUrlChange = { editUrl = it },
+            onDismiss = { if (!busy) editTarget = null },
+            onSave = { renameItem() },
+        )
     }
 
     if (showAdd) {
@@ -332,6 +409,9 @@ private fun MenuItemRow(
     canDelete: Boolean,
     canEditTitle: Boolean,
     canEditUrl: Boolean,
+    busy: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -371,6 +451,18 @@ private fun MenuItemRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+        if (canDelete || canEditTitle || canEditUrl) {
+            if (canEditTitle || canEditUrl) {
+                IconButton(onClick = onEdit, enabled = !busy) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Изменить")
+                }
+            }
+            if (canDelete) {
+                IconButton(onClick = onDelete, enabled = !busy) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Удалить")
+                }
             }
         }
         if (canEditHidden) {
@@ -423,6 +515,51 @@ private fun AddMenuItemDialog(
                 onClick = onAdd,
                 enabled = !busy && title.isNotBlank(),
             ) { Text("Добавить") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Отмена") }
+        },
+    )
+}
+/** Диалог редактирования пункта меню (название + URL, по гейтам). */
+@Composable
+private fun EditMenuItemDialog(
+    title: String,
+    url: String,
+    canEditTitle: Boolean,
+    canEditUrl: Boolean,
+    busy: Boolean,
+    onTitleChange: (String) -> Unit,
+    onUrlChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Изменить пункт") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = onTitleChange,
+                    label = { Text("Название") },
+                    singleLine = true,
+                    enabled = canEditTitle && !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = onUrlChange,
+                    label = { Text("URL (https://…)") },
+                    singleLine = true,
+                    enabled = canEditUrl && !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSave, enabled = !busy) { Text("Сохранить") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !busy) { Text("Отмена") }

@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -121,26 +122,29 @@ fun CommunityScreen(
     // (CommunityAdminBlock рендерится при admin_level >= 1 — сверка §5.1).
     onAdminSettingsClick: (groupId: Long) -> Unit = {},
     onAdminStatsClick: (groupId: Long) -> Unit = {},
-    onAdminLinksClick: (groupId: Long) -> Unit = {},
     // W38 (C2/C5/C4): приглашения / отложенные+предложения / адреса.
+    // W39 (C9): журнал действий сообщества (web-only al-эндпоинт, HAR §12.2).
+    // W41 (C3): кнопка действия сообщества.
+    // W41 (C6): чаты сообщества + раздел «Сообщения».
+    onMessagesClick: (groupId: Long) -> Unit = {},
+    // C7 (#ADMIN-SECTIONS): разделы сообщества.
+    // C8 (#ADMIN-COMMENTS): комментарии сообщества (фильтры + лента).
+    onAdminCommentsClick: (groupId: Long) -> Unit = {},
+    // ADMIN-EVENTS: «События» сообщества (notifications.getRedesign).
+    onAdminEventsClick: (groupId: Long) -> Unit = {},
+    // ADMIN-MENU-STRIKES: «Меню» (owners.*) и «Страйки» (strikeSystem.*).
+    onAdminStrikesClick: (groupId: Long) -> Unit = {},
+    // #ADMIN-WIRE-FIX: недостающие 10 колбэков из SovaNavHost → CommunityAdminBlock.
+    onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
+    onAdminLinksClick: (groupId: Long) -> Unit = {},
     onAdminInvitesClick: (groupId: Long) -> Unit = {},
     onAdminQueueClick: (groupId: Long) -> Unit = {},
     onAdminAddressesClick: (groupId: Long) -> Unit = {},
-    // W39 (C9): журнал действий сообщества (web-only al-эндпоинт, HAR §12.2).
     onAdminEventLogClick: (groupId: Long) -> Unit = {},
-    // W41 (C3): кнопка действия сообщества.
     onCtaClick: (groupId: Long) -> Unit = {},
-    // W41 (C6): чаты сообщества + раздел «Сообщения».
     onChatsClick: (groupId: Long) -> Unit = {},
-    onMessagesClick: (groupId: Long) -> Unit = {},
-    // C7 (#ADMIN-SECTIONS): разделы сообщества.
     onSectionsClick: (groupId: Long) -> Unit = {},
-    // C8 (#ADMIN-COMMENTS): комментарии сообщества (фильтры + лента).
-    onAdminCommentsClick: (groupId: Long) -> Unit = {},
-    // ADMIN-MENU-STRIKES: «Меню» (owners.*) и «Страйки» (strikeSystem.*).
     onAdminMenuClick: (groupId: Long) -> Unit = {},
-    onAdminStrikesClick: (groupId: Long) -> Unit = {},
-    onAdminPeopleClick: (groupId: Long, tab: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -171,6 +175,13 @@ fun CommunityScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
+    // #ADMIN-POST-ACTIONS: пост, для которого открыто меню действий админа.
+    var menuPost by remember { mutableStateOf<Post?>(null) }
+    // #ADMIN-POST-ACTIONS-EDIT: пост в режиме редактирования.
+    var editingPost by remember { mutableStateOf<Post?>(null) }
+    // #ADMIN-SOFT-DELETE: отложенное удаление поста (стрип + таймер 10с).
+    var softDeletedPost by remember { mutableStateOf<Post?>(null) }
+    var softDeleteSeconds by remember { mutableStateOf(0) }
     // W36 #COMMUNITY-COMPOSER (C0 волны 35): композер постинга на стену
     // сообщества (референс web: group_publish_block, сверка §4.1).
     var showComposer by remember { mutableStateOf(false) }
@@ -592,6 +603,21 @@ fun CommunityScreen(
     // не рисуется, insets нужно применять самому. Аналогично ProfileScreen.
     // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
     // (один общий listState на стену/видео/обсуждения — FAB общий для всех табов).
+    // #ADMIN-SOFT-DELETE: soft-delete tick — 1 секунда за шаг; на 0 — реальный wall.delete.
+    LaunchedEffect(softDeletedPost, softDeleteSeconds) {
+        val sd = softDeletedPost
+        if (sd != null) {
+            if (softDeleteSeconds <= 0) {
+                scope.launch { app.apiClient.wallDelete(-groupId, sd.id) }
+                softDeletedPost = null
+                refreshWall()
+            } else {
+                kotlinx.coroutines.delay(1000)
+                softDeleteSeconds -= 1
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
     PullToRefreshBox(
         isRefreshing = isRefreshing,
@@ -840,20 +866,21 @@ fun CommunityScreen(
         item {
             CommunityAdminBlock(
                 groupInfo = groupInfo,
-                onLinksClick = onAdminLinksClick,
                 onSettingsClick = onAdminSettingsClick,
                 onStatsClick = onAdminStatsClick,
                 onPeopleClick = onAdminPeopleClick,
+                onLinksClick = onAdminLinksClick,
                 onInvitesClick = onAdminInvitesClick,
                 onQueueClick = onAdminQueueClick,
                 onAddressesClick = onAdminAddressesClick,
                 onEventLogClick = onAdminEventLogClick,
                 onCtaClick = onCtaClick,
                 onChatsClick = onChatsClick,
-                onMessagesClick = onMessagesClick,
                 onSectionsClick = onSectionsClick,
-                onCommentsClick = onAdminCommentsClick,
                 onMenuClick = onAdminMenuClick,
+                onMessagesClick = onMessagesClick,
+                onCommentsClick = onAdminCommentsClick,
+                onEventsClick = onAdminEventsClick,
                 onStrikesClick = onAdminStrikesClick,
             )
         }
@@ -930,7 +957,16 @@ fun CommunityScreen(
                         )
                     }
                 }
-        items(posts, key = { "${it.ownerId}_${it.id}" }) { post ->
+        // #ADMIN-SOFT-DELETE: стрип восстановления над списком.
+        item {
+            if (softDeletedPost != null) {
+                SoftDeleteStrip(
+                    secondsLeft = softDeleteSeconds,
+                    onRestore = { softDeletedPost = null },
+                )
+            }
+        }
+        items(posts.filter { it.id != softDeletedPost?.id }, key = { "${it.ownerId}_${it.id}" }) { post ->
             val postKey = "${post.ownerId}_${post.id}"
             CommunityPostCard(
                 post = post,
@@ -938,6 +974,9 @@ fun CommunityScreen(
                 authorPhoto = g.photo200 ?: g.photo100,
                 // #POST-SIGNER (волна 39): имя автора подписи из wall.get extended=1.
                 signerName = post.signerId?.let { sid -> signerNames[sid] },
+                // #ADMIN-POST-ACTIONS: меню действий (только для менеджеров).
+                isManager = g.isManager,
+                onActionsClick = { menuPost = it },
                 onVideoClick = onVideoClick,
                 // Fix #365: пробрасываем группы в PostHolder для имени сообщества
                 // в PostDetailScreen (тот же паттерн, что в FeedScreen) — работает
@@ -1311,6 +1350,20 @@ fun CommunityScreen(
     } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
 
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
+    // #ADMIN-POST-ACTIONS: меню действий над постом.
+    menuPost?.let { mp ->
+        PostActionsMenu(
+            groupId = groupId,
+            postId = mp.id,
+            isPinnedInMain = mp.isPinned == 1,
+            isCommentsClosed = (mp.comments?.canPost ?: 1) == 0,
+            onEdit = { editingPost = mp; showComposer = true; menuPost = null },
+            onSoftDelete = { softDeletedPost = mp; softDeleteSeconds = 10; menuPost = null },
+            onDismiss = { menuPost = null },
+            onChanged = { refreshWall() },
+        )
+    }
+
     val viewer = photoViewerState.value
     if (viewer != null) {
         PhotoViewer(
@@ -1341,19 +1394,26 @@ fun CommunityScreen(
     if (showComposer) {
         val composerContext = LocalContext.current
         CreatePostDialog(
-            onDismiss = { showComposer = false },
+            onDismiss = { showComposer = false; editingPost = null },
             onSubmit = { _, _ -> },
+            initialText = editingPost?.text ?: "",
+            submitLabel = if (editingPost != null) "Сохранить" else "Опубликовать",
             targetGroupId = groupId,
             canPostAsGroup = g.isAuthor,
             onSubmitGroup = { message, fromGroup, signed ->
                 scope.launch {
                     try {
-                        val postId = app.apiClient.wallPost(
-                            message,
-                            ownerId = -groupId,
-                            fromGroup = fromGroup,
-                            signed = signed,
-                        )
+                        val postId = if (editingPost != null) {
+                            val ep = editingPost!!
+                            if (app.apiClient.wallEdit(-groupId, ep.id, message)) ep.id else 0L
+                        } else {
+                            app.apiClient.wallPost(
+                                message,
+                                ownerId = -groupId,
+                                fromGroup = fromGroup,
+                                signed = signed,
+                            )
+                        }
                         if (postId > 0) {
                             AppLog.i(
                                 "CommunityScreen",
@@ -1361,6 +1421,7 @@ fun CommunityScreen(
                             )
                             Toast.makeText(composerContext, "Запись опубликована", Toast.LENGTH_SHORT).show()
                             showComposer = false
+                            editingPost = null
                             refreshWall()
                         } else {
                             Toast.makeText(composerContext, "Не удалось опубликовать запись", Toast.LENGTH_SHORT).show()
@@ -1374,13 +1435,19 @@ fun CommunityScreen(
             onSubmitGroupWithAttachments = { message, fromGroup, signed, attachments ->
                 scope.launch {
                     try {
-                        val postId = app.apiClient.wallPostWithAttachments(
-                            message = message,
-                            attachments = attachments.joinToString(","),
-                            ownerId = -groupId,
-                            fromGroup = fromGroup,
-                            signed = signed,
-                        )
+                        val attachStr = attachments.joinToString(",")
+                        val postId = if (editingPost != null) {
+                            val ep = editingPost!!
+                            if (app.apiClient.wallEdit(-groupId, ep.id, message, attachStr)) ep.id else 0L
+                        } else {
+                            app.apiClient.wallPostWithAttachments(
+                                message = message,
+                                attachments = attachStr,
+                                ownerId = -groupId,
+                                fromGroup = fromGroup,
+                                signed = signed,
+                            )
+                        }
                         if (postId > 0) {
                             AppLog.i(
                                 "CommunityScreen",
@@ -1388,6 +1455,7 @@ fun CommunityScreen(
                             )
                             Toast.makeText(composerContext, "Запись опубликована", Toast.LENGTH_SHORT).show()
                             showComposer = false
+                            editingPost = null
                             refreshWall()
                         } else {
                             Toast.makeText(composerContext, "Не удалось опубликовать запись", Toast.LENGTH_SHORT).show()
@@ -1425,6 +1493,9 @@ private fun CommunityPostCard(
     // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, читается
     // на уровне экрана). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
     carouselEnabled: Boolean = true,
+    // #ADMIN-POST-ACTIONS: показывать кнопку «⋮» и колбэк открытия меню.
+    isManager: Boolean = false,
+    onActionsClick: (Post) -> Unit = {},
 ) {
     val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
     val videoAttachments = post.attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
@@ -1492,6 +1563,11 @@ private fun CommunityPostCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                    }
+                }
+                if (isManager) {
+                    IconButton(onClick = { onActionsClick(post) }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "Действия")// #ADMIN-POST-ACTIONS
                     }
                 }
             }

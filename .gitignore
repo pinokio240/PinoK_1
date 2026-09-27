@@ -68,3 +68,5 @@ scripts/_fix_*.py
 *.bak-*
 *.mojibake-*
 _debug/
+*fix*-bak-*
+*fixscope-bak-*

@@ -173,11 +173,15 @@ fun CreatePostDialog(
     canPostAsGroup: Boolean = false,
     onSubmitGroup: ((message: String, fromGroup: Boolean, signed: Boolean) -> Unit)? = null,
     onSubmitGroupWithAttachments: ((message: String, fromGroup: Boolean, signed: Boolean, attachments: List<String>) -> Unit)? = null,
+    // #ADMIN-POST-ACTIONS-EDIT: редактирование — предзаполнение текста.
+    initialText: String = "",
+    // Подпись кнопки (Опубликовать / Сохранить).
+    submitLabel: String = "Опубликовать",
 ) {
     val app = SovaApp.get()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
+    var text by remember(initialText) { mutableStateOf(initialText) }
     var friendsOnly by remember { mutableStateOf(false) }
     // W36 #COMMUNITY-COMPOSER: автор записи + подпись. Дефолт автора для
     // руководителя — «сообщество» (сверка §3.5: defaultPostSettings.official).

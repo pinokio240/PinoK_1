@@ -2,7 +2,7 @@
 52461373:video.getWebToken:login:auth--request	1	
 6287487:get_accounts:login:auth	{"expires":null}	
 6287487:get_anonym_token:login:auth	{"access_token":"anonym.XXXXX","expired_at":1773420808,"expires":null}	
-6287487:web_token:login:auth	{"access_token":"скрыт для безопасности","expires":1781020054,"user_id":171093180,"logout_hash":"e0531bca6740e981a4"}	
+6287487:web_token:login:auth	{"access_token":"скрыт для безопасности","expires":1781020054,"user_id":171093180,"logout_hash":"HASH_MASKED"}	
 7913379:get_accounts:login:auth	{"expires":null}	
 7913379:sign_in_sat:login:auth	{"token":"dZuo...MASKED...st1w","expires":null}	
 @METRICS_171093180_ADBLOCK_STATS	{"timestamps":{"default":1780948524392}}	
@@ -125,7 +125,7 @@ server_queue_connection_events_queue171093180	["MTM4ODc2",1781019390002]
 im_m_comms_key	{"ts":"1433663537","key":"d507a9ca5d0575241aca26a1769be5cdd7748811a0c02d7f0ca574a8a490e6c0","queue":"nccts171093180"}	
 
 лог мобильной версии ВК :"Страница профиля https://m.vk.com/pluton_tut : 7879029:get_anonym_token:login:auth	{"access_token":"anonym.XXXXX","expired_at":1777797558,"expires":null}
-7879029:web_token:login:auth	{"access_token":"vk1.a.XXXXX","expires":1781448788,"user_id":171093180,"logout_hash":"b3e073a24ffbd5876c"}
+7879029:web_token:login:auth	{"access_token":"vk1.a.XXXXX","expires":1781448788,"user_id":171093180,"logout_hash":"HASH_MASKED"}
 @METRICS_171093180_ADBLOCK_STATS	{"timestamps":{"default":1781447894070}}
 @METRICS_171093180_CERT_STATS	{"timestamps":{"default":1781447889900}}
 @METRICS_171093180_USER_INFO_STATS	{"timestamps":{"default":1781447892257}}

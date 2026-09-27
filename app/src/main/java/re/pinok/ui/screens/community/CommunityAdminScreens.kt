@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PersonAdd
@@ -170,6 +171,7 @@ fun CommunityAdminBlock(
     onCtaClick: (Long) -> Unit,
     // W41 (C6): чаты сообщества + раздел «Сообщения» (web HAR 2026-09-25).
     onChatsClick: (Long) -> Unit,
+    onEventsClick: (Long) -> Unit,
     onMessagesClick: (Long) -> Unit,
     // C7 (#ADMIN-SECTIONS): разделы сообщества.
     onSectionsClick: (Long) -> Unit,
@@ -339,6 +341,12 @@ fun CommunityAdminBlock(
                 title = "Чаты",
                 subtitle = "Беседы сообщества",
                 onClick = { onChatsClick(gi.id) },
+            )
+            AdminBlockRow(
+                icon = Icons.Filled.Notifications,
+                title = "События",
+                subtitle = "Комментарии, упоминания, подписчики",
+                onClick = { onEventsClick(gi.id) },
             )
 
             // ADMIN-MENU-STRIKES: «Меню» (owners.getMenu/addMenuItem/hide/showMenu)
@@ -798,7 +806,7 @@ fun AdminSettingsScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AdminStatsScreen(
+fun AdminStatsScreenLegacy(
     groupId: Long,
     onBack: () -> Unit,
 ) {
@@ -809,12 +817,18 @@ fun AdminStatsScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var points by remember { mutableStateOf<List<VKApiClient.StatsPoint>>(emptyList()) }
     var reach by remember { mutableStateOf<List<VKApiClient.PostReach>>(emptyList()) }
+    // #HAR-2609-STATS: шапка + секции дашборда (синхронные методы web-админки).
+    var boot by remember { mutableStateOf<VKApiClient.StatsBootstrap?>(null) }
+    var sections by remember { mutableStateOf<List<VKApiClient.StatsSection>>(emptyList()) }
 
     fun load() {
         scope.launch {
             loading = true
             error = null
             try {
+                // #HAR-2609-STATS: синхронная шапка + секции (не зависят от legacy stats.get).
+                boot = app.apiClient.statsDashboardGetBootstrapData(ownerId = -groupId)
+                sections = app.apiClient.statsDashboardGetDashboardSections(ownerId = -groupId)
                 val stats = app.apiClient.statsGet(groupId, days = 30)
                 // Охват последних 10 постов стены сообщества (owner-style -id).
                 val wall = app.apiClient.wallGet(ownerId = -groupId, count = 10)
@@ -824,8 +838,10 @@ fun AdminStatsScreen(
                 } else {
                     emptyList()
                 }
-if (stats.isEmpty()) {
-                    // NULL-ЯВНО: честная диагностика — показываем текст API-ошибки
+// #HAR-2609-STATS: сохраняем данные даже если пустой legacy stats.
+                points = stats
+                reach = postReach
+                if (stats.isEmpty() && boot == null) {
                     // (was: заглушка «нет данных или нет прав», скрывала причину).
                     val apiErr = app.apiClient.lastApiError
                     error = if (apiErr.isNullOrBlank()) {
@@ -833,9 +849,6 @@ if (stats.isEmpty()) {
                     } else {
                         "Статистика пуста: $apiErr"
                     }
-                } else {
-                    points = stats
-                    reach = postReach
                 }
             } catch (e: Exception) {
                 AppLog.e("AdminStats", "load failed", e)
@@ -889,6 +902,24 @@ if (stats.isEmpty()) {
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 ) {
+                    // #HAR-2609-STATS: шапка и секции дашборда (синхронные методы web-админки).
+                    val ownerName = boot?.owner?.name
+                    if (!ownerName.isNullOrBlank()) {
+                        Text(
+                            text = ownerName,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        if (sections.isNotEmpty()) {
+                            Text(
+                                text = sections.joinToString(" · ") { it.name },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     Text(
                         text = "За 30 дней",
                         style = MaterialTheme.typography.titleMedium,
@@ -944,7 +975,7 @@ if (stats.isEmpty()) {
                     }
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Источник: stats.get / stats.getPostReach (доки VK API; wire-эталона нет — сверка §2 P1.6)",
+                        text = "Источник: statsDashboard.getBootstrapData / getDashboardSections + legacy stats.get/PostReach (HAR 2609)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -2678,6 +2709,7 @@ fun AdminEventLogScreen(
                 val from = if (reset) System.currentTimeMillis() / 1000L else nextFrom ?: return@launch
                 val page = app.apiClient.groupsEventLogPage(
                     screenName = sn,
+                    groupId = groupId,
                     nextFrom = from,
                     actionType = EVENT_LOG_FILTERS[selectedTab.intValue].second,
                 )

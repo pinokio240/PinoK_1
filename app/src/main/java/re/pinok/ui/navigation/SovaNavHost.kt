@@ -112,6 +112,7 @@ import re.pinok.ui.screens.community.AdminMessagesScreen
 import re.pinok.ui.screens.community.AdminSectionsScreen
 // C8 (#ADMIN-COMMENTS): «Комментарии» сообщества.
 import re.pinok.ui.screens.community.AdminCommentsScreen
+import re.pinok.ui.screens.community.AdminEventsScreen
 import re.pinok.ui.screens.community.AdminEventLogScreen
 import re.pinok.ui.screens.community.AdminInvitesScreen
 import re.pinok.ui.screens.community.AdminLinksScreen
@@ -2372,6 +2373,10 @@ composable(Screen.CallsHistory.route) {
                         onAdminCommentsClick = { adminGroupId ->
                             nav.navigate(Screen.AdminComments.buildRoute(adminGroupId))
                         },
+                        // ADMIN-EVENTS: «События» сообщества.
+                        onAdminEventsClick = { adminGroupId ->
+                            nav.navigate(Screen.AdminEvents.buildRoute(adminGroupId))
+                        },
                         // ADMIN-MENU-STRIKES: «Меню» и «Страйки» сообщества.
                         onAdminMenuClick = { adminGroupId ->
                             nav.navigate(Screen.AdminMenu.buildRoute(adminGroupId))
@@ -2426,87 +2431,139 @@ composable(Screen.CallsHistory.route) {
                     )
                 }
                 // W35-b (волна 35): «Люди» (Руководители/Заявки/ЧС) — вход из блока «Управление».
+                // W38 (C2): «Приглашения» — вход из блока «Управление».
+                // W38 (C5): «Отложенные и предложения» — вход из блока «Управление».
+                // W38 (C4): «Адреса» — вход из блока «Управление».
+                // W39 (C9): «Журнал действий» — web-only al-эндпоинт (HAR §12.2).
+                // W41 (C3): «Кнопка действия» сообщества.
+                // W41 (C6): «Чаты сообщества».
+                // W41 (C6): «Сообщения» сообщества.
+                composable(
+                    route = Screen.AdminMessages.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminMessages.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val msgGroupId = entry.arguments?.getLong(Screen.AdminMessages.ARG_GROUP_ID) ?: 0L
+                    AdminMessagesScreen(
+                        groupId = msgGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                // #ADMIN-ROUTES-FIX: регистрация ранее отсутствовавших админ-роутов.
+                composable(
+                    route = Screen.AdminPeople.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminPeople.ARG_GROUP_ID) { type = NavType.LongType },
+                        navArgument(Screen.AdminPeople.ARG_TAB) { type = NavType.StringType; defaultValue = "managers" },
+                    ),
+                ) { entry ->
+                    val peopleGroupId = entry.arguments?.getLong(Screen.AdminPeople.ARG_GROUP_ID) ?: 0L
+                    val peopleTab = entry.arguments?.getString(Screen.AdminPeople.ARG_TAB) ?: "managers"
+                    AdminPeopleScreen(
+                        groupId = peopleGroupId,
+                        initialTab = peopleTab,
+                        onBack = { nav.popBackStack() },
+                        onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
+                    )
+                }
                 composable(
                     route = Screen.AdminLinks.route,
                     arguments = listOf(
                         navArgument(Screen.AdminLinks.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val linksGroupId = entry.arguments?.getLong(Screen.AdminLinks.ARG_GROUP_ID) ?: 0L
+                    val adminLinksScreenGroupId = entry.arguments?.getLong(Screen.AdminLinks.ARG_GROUP_ID) ?: 0L
                     AdminLinksScreen(
-                        groupId = linksGroupId,
+                        groupId = adminLinksScreenGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
-                // W38 (C2): «Приглашения» — вход из блока «Управление».
                 composable(
                     route = Screen.AdminInvites.route,
                     arguments = listOf(
                         navArgument(Screen.AdminInvites.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val invitesGroupId = entry.arguments?.getLong(Screen.AdminInvites.ARG_GROUP_ID) ?: 0L
+                    val adminInvitesScreenGroupId = entry.arguments?.getLong(Screen.AdminInvites.ARG_GROUP_ID) ?: 0L
                     AdminInvitesScreen(
-                        groupId = invitesGroupId,
+                        groupId = adminInvitesScreenGroupId,
                         onBack = { nav.popBackStack() },
-                        onUserClick = { userId ->
-                            nav.navigate(Screen.UserProfile.buildRoute(userId))
-                        },
+                        onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
                     )
                 }
-                // W38 (C5): «Отложенные и предложения» — вход из блока «Управление».
                 composable(
                     route = Screen.AdminWallQueue.route,
                     arguments = listOf(
                         navArgument(Screen.AdminWallQueue.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val queueGroupId = entry.arguments?.getLong(Screen.AdminWallQueue.ARG_GROUP_ID) ?: 0L
+                    val adminWallQueueScreenGroupId = entry.arguments?.getLong(Screen.AdminWallQueue.ARG_GROUP_ID) ?: 0L
                     AdminWallQueueScreen(
-                        groupId = queueGroupId,
+                        groupId = adminWallQueueScreenGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
-                // W38 (C4): «Адреса» — вход из блока «Управление».
                 composable(
                     route = Screen.AdminAddresses.route,
                     arguments = listOf(
                         navArgument(Screen.AdminAddresses.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val addressesGroupId = entry.arguments?.getLong(Screen.AdminAddresses.ARG_GROUP_ID) ?: 0L
+                    val adminAddressesScreenGroupId = entry.arguments?.getLong(Screen.AdminAddresses.ARG_GROUP_ID) ?: 0L
                     AdminAddressesScreen(
-                        groupId = addressesGroupId,
+                        groupId = adminAddressesScreenGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
-                // W39 (C9): «Журнал действий» — web-only al-эндпоинт (HAR §12.2).
                 composable(
                     route = Screen.AdminEventLog.route,
                     arguments = listOf(
                         navArgument(Screen.AdminEventLog.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val logGroupId = entry.arguments?.getLong(Screen.AdminEventLog.ARG_GROUP_ID) ?: 0L
+                    val adminEventLogScreenGroupId = entry.arguments?.getLong(Screen.AdminEventLog.ARG_GROUP_ID) ?: 0L
                     AdminEventLogScreen(
-                        groupId = logGroupId,
+                        groupId = adminEventLogScreenGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
-                // W41 (C3): «Кнопка действия» сообщества.
                 composable(
                     route = Screen.AdminCta.route,
                     arguments = listOf(
                         navArgument(Screen.AdminCta.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val ctaGroupId = entry.arguments?.getLong(Screen.AdminCta.ARG_GROUP_ID) ?: 0L
+                    val adminCtaScreenGroupId = entry.arguments?.getLong(Screen.AdminCta.ARG_GROUP_ID) ?: 0L
                     AdminCtaScreen(
-                        groupId = ctaGroupId,
+                        groupId = adminCtaScreenGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
-                // W41 (C6): «Чаты сообщества».
+                composable(
+                    route = Screen.AdminMenu.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminMenu.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val adminMenuScreenGroupId = entry.arguments?.getLong(Screen.AdminMenu.ARG_GROUP_ID) ?: 0L
+                    AdminMenuScreen(
+                        groupId = adminMenuScreenGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
+                composable(
+                    route = Screen.AdminSections.route,
+                    arguments = listOf(
+                        navArgument(Screen.AdminSections.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val adminSectionsScreenGroupId = entry.arguments?.getLong(Screen.AdminSections.ARG_GROUP_ID) ?: 0L
+                    AdminSectionsScreen(
+                        groupId = adminSectionsScreenGroupId,
+                        onBack = { nav.popBackStack() },
+                    )
+                }
                 composable(
                     route = Screen.AdminChats.route,
                     arguments = listOf(
@@ -2522,32 +2579,7 @@ composable(Screen.CallsHistory.route) {
                         },
                     )
                 }
-                // W41 (C6): «Сообщения» сообщества.
-                composable(
-                    route = Screen.AdminMessages.route,
-                    arguments = listOf(
-                        navArgument(Screen.AdminMessages.ARG_GROUP_ID) { type = NavType.LongType },
-                    ),
-                ) { entry ->
-                    val msgGroupId = entry.arguments?.getLong(Screen.AdminMessages.ARG_GROUP_ID) ?: 0L
-                    AdminMessagesScreen(
-                        groupId = msgGroupId,
-                        onBack = { nav.popBackStack() },
-                    )
-                }
                 // C7 (#ADMIN-SECTIONS): «Разделы» сообщества.
-                composable(
-                    route = Screen.AdminSections.route,
-                    arguments = listOf(
-                        navArgument(Screen.AdminSections.ARG_GROUP_ID) { type = NavType.LongType },
-                    ),
-                ) { entry ->
-                    val sectGroupId = entry.arguments?.getLong(Screen.AdminSections.ARG_GROUP_ID) ?: 0L
-                    AdminSectionsScreen(
-                        groupId = sectGroupId,
-                        onBack = { nav.popBackStack() },
-                    )
-                }
                 // C8 (#ADMIN-COMMENTS): «Комментарии» сообщества — фильтры + лента.
                 composable(
                     route = Screen.AdminComments.route,
@@ -2561,19 +2593,20 @@ composable(Screen.CallsHistory.route) {
                         onBack = { nav.popBackStack() },
                     )
                 }
-                // ADMIN-MENU-STRIKES: «Меню» сообщества (owners.getMenu/…).
+                // ADMIN-EVENTS: «События» сообщества — панель уведомлений.
                 composable(
-                    route = Screen.AdminMenu.route,
+                    route = Screen.AdminEvents.route,
                     arguments = listOf(
-                        navArgument(Screen.AdminMenu.ARG_GROUP_ID) { type = NavType.LongType },
+                        navArgument(Screen.AdminEvents.ARG_GROUP_ID) { type = NavType.LongType },
                     ),
                 ) { entry ->
-                    val menuGroupId = entry.arguments?.getLong(Screen.AdminMenu.ARG_GROUP_ID) ?: 0L
-                    AdminMenuScreen(
-                        groupId = menuGroupId,
+                    val eventsGroupId = entry.arguments?.getLong(Screen.AdminEvents.ARG_GROUP_ID) ?: 0L
+                    AdminEventsScreen(
+                        groupId = eventsGroupId,
                         onBack = { nav.popBackStack() },
                     )
                 }
+                // ADMIN-MENU-STRIKES: «Меню» сообщества (owners.getMenu/…).
                 // ADMIN-MENU-STRIKES: «Страйки» сообщества (strikeSystem.getStrikesList).
                 composable(
                     route = Screen.AdminStrikes.route,
@@ -2585,27 +2618,6 @@ composable(Screen.CallsHistory.route) {
                     AdminStrikesScreen(
                         groupId = strikesGroupId,
                         onBack = { nav.popBackStack() },
-                    )
-                }
-                composable(
-                    route = Screen.AdminPeople.route,
-                    arguments = listOf(
-                        navArgument(Screen.AdminPeople.ARG_GROUP_ID) { type = NavType.LongType },
-                        navArgument(Screen.AdminPeople.ARG_TAB) {
-                            type = NavType.StringType
-                            defaultValue = "managers"
-                        },
-                    ),
-                ) { entry ->
-                    val peopleGroupId = entry.arguments?.getLong(Screen.AdminPeople.ARG_GROUP_ID) ?: 0L
-                    val peopleTab = entry.arguments?.getString(Screen.AdminPeople.ARG_TAB) ?: "managers"
-                    AdminPeopleScreen(
-                        groupId = peopleGroupId,
-                        initialTab = peopleTab,
-                        onBack = { nav.popBackStack() },
-                        onUserClick = { userId ->
-                            nav.navigate(Screen.UserProfile.buildRoute(userId))
-                        },
                     )
                 }
                 // Шаг 4 (#32d): экран темы обсуждения сообщества.
