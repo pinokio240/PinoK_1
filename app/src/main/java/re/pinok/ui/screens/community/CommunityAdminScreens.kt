@@ -2683,36 +2683,59 @@ fun AdminEventLogScreen(
     fun loadInfo() {
         scope.launch {
             infoError = null
+            AppLog.i("AdminEventLog", "#C9 loadInfo: start groupId=$groupId")
             try {
-                info = app.apiClient.groupsGetById(listOf(groupId)).firstOrNull()
+                val gi = app.apiClient.groupsGetById(listOf(groupId)).firstOrNull()
+                info = gi
+                val giId = if (gi != null) gi.id.toString() else "null"
+                val giSn = if (gi != null && gi.screenName != null) gi.screenName else ""
+                val errVal = app.apiClient.lastApiError
+                val errStr = if (errVal != null) errVal else ""
+                AppLog.i("AdminEventLog", "#C9 loadInfo: gi=" + giId + " screenName='" + giSn + "' lastApiError='" + errStr + "'")
                 if (info == null) {
-                    infoError = app.apiClient.lastApiError?.takeIf { it.isNotBlank() }
-                        ?: "Не удалось загрузить сообщество"
+                    val err2 = app.apiClient.lastApiError
+                    val e2 = if (err2 != null && err2.isNotBlank()) err2 else "Не удалось загрузить сообщество"
+                    infoError = e2
+                    AppLog.w("AdminEventLog", "#C9 loadInfo: FAIL infoError=" + e2)
                 }
             } catch (e: Exception) {
                 AppLog.e("AdminEventLog", "loadInfo failed", e)
-                infoError = e.message ?: "Ошибка загрузки"
+                val m = e.message
+                infoError = if (m != null) m else "Ошибка загрузки"
             }
         }
     }
 
     /** Страница журнала; append с дедупликацией по id события. */
     fun loadPage(reset: Boolean) {
-        val gi = info ?: return
-        val sn = gi.screenName?.takeIf { it.isNotBlank() } ?: return
-        if (loading || loadingMore) return
-        if (!reset && (endReached || nextFrom == null)) return
+        val gi = info
+        if (gi == null) { AppLog.w("AdminEventLog", "#C9 loadPage: SKIP info==null"); return }
+        val rawSnVal = gi.screenName
+        val rawSn = if (rawSnVal != null) rawSnVal else ""
+        if (rawSn.isBlank()) { AppLog.w("AdminEventLog", "#C9 loadPage: SKIP screenName пуст ('" + rawSn + "')"); return }
+        val sn = rawSn
+        if (loading || loadingMore) { AppLog.w("AdminEventLog", "#C9 loadPage: SKIP уже грузится"); return }
+        if (!reset) {
+            if (endReached || nextFrom == null) { AppLog.w("AdminEventLog", "#C9 loadPage: SKIP endReached=" + endReached + " nextFrom=" + nextFrom); return }
+        }
         scope.launch {
             if (reset) loading = true else loadingMore = true
             loadError = null
             try {
-                val from = if (reset) System.currentTimeMillis() / 1000L else nextFrom ?: return@launch
+                var from = System.currentTimeMillis() / 1000L
+                if (!reset) {
+                    val nf = nextFrom
+                    if (nf == null) { return@launch }
+                    from = nf
+                }
+                AppLog.i("AdminEventLog", "#C9 loadPage: REQ reset=" + reset + " sn=" + sn + " gid=" + groupId + " next_from=" + from + " actionType=" + EVENT_LOG_FILTERS[selectedTab.intValue].second)
                 val page = app.apiClient.groupsEventLogPage(
                     screenName = sn,
                     groupId = groupId,
                     nextFrom = from,
                     actionType = EVENT_LOG_FILTERS[selectedTab.intValue].second,
                 )
+                AppLog.i("AdminEventLog", "#C9 loadPage: RESP blocks=" + page.blocks.size + " items=" + page.blocks.sumOf { it.items.size } + " nextFrom=" + page.nextFrom)
                 if (reset) {
                     blocks = page.blocks
                     seenIds = page.blocks.flatMap { b -> b.items.map { it.id } }.toSet()
@@ -2731,7 +2754,8 @@ fun AdminEventLogScreen(
                 }
             } catch (e: Exception) {
                 AppLog.e("AdminEventLog", "loadPage failed", e)
-                loadError = e.message ?: "Ошибка загрузки"
+                val mm = e.message
+                loadError = if (mm != null) mm else "Ошибка загрузки"
             } finally {
                 loading = false
                 loadingMore = false
@@ -2753,9 +2777,13 @@ fun AdminEventLogScreen(
     LaunchedEffect(groupId) { loadInfo() }
 
     // Первая страница — после получения GroupInfo (нужен screen_name).
-    LaunchedEffect(info?.id) {
-        val gi = info ?: return@LaunchedEffect
-        if (gi.screenName.isNullOrBlank()) return@LaunchedEffect
+    val infoSnap = info
+    val infoId = if (infoSnap != null) infoSnap.id else 0L
+    LaunchedEffect(infoId) {
+        val gi = info
+        if (gi == null) return@LaunchedEffect
+        val snv = gi.screenName
+        if (snv == null || snv.isBlank()) return@LaunchedEffect
         if (blocks.isEmpty() && !loading && nextFrom == null && !endReached) {
             loadPage(reset = true)
         }
@@ -2763,7 +2791,10 @@ fun AdminEventLogScreen(
 
     // Бесконечный скролл: у нижнего края списка — догружаем следующую страницу.
     LaunchedEffect(nextFrom, endReached, selectedTab.intValue) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+        snapshotFlow {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            if (last != null) last.index else 0
+        }
             .collect { lastIdx ->
                 val total = blocks.sumOf { it.items.size } + blocks.size
                 if (total > 0 && lastIdx >= total - 3 && !loading && !loadingMore &&

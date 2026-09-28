@@ -305,7 +305,7 @@ fun AdminStatsScreen(
                                 periodIdx = defaultPeriodIdx(s.id)
                                 loadLayout()
                             },
-                            text = { Text(s.name) },
+                            text = { Text(statsCardTitle(s.id, s.name)) },
                         )
                     }
                 }
@@ -316,7 +316,7 @@ fun AdminStatsScreen(
                             Tab(
                                 selected = selectedSub == i,
                                 onClick = { selectedSub = i; loadLayout() },
-                                text = { Text(sub.name) },
+                                text = { Text(statsCardTitle(sub.id, sub.name)) },
                             )
                         }
                     }
@@ -371,7 +371,11 @@ fun AdminStatsScreen(
 /** Раскрывает layout в плоский список leaf-карточек. */
 
 /** #STATS-TITLES: человекочитаемые названия карточек вместо raw id. */
-private fun statsCardTitle(id: String, fallback: String): String = when (id) {
+private fun statsCardTitle(id: String, fallback: String): String {
+    // Приоритет — родной заголовок VK из layout (fallback). Маппинг id — только
+    // когда заголовок пуст (иначе выдуманные имена перебивали VK).
+    if (fallback.isNotBlank()) return fallback
+    return when (id) {
     "overview" -> "Обзор"
     "reach" -> "Охват"
     "reach_and_views_tabs/reach" -> "Охват"
@@ -390,12 +394,47 @@ private fun statsCardTitle(id: String, fallback: String): String = when (id) {
     "sections_views" -> "Просмотры разделов"
     "bell_subscribers" -> "Подписки на уведомления"
     "action_button" -> "Кнопка действия"
+    "community_description_action_click" -> "Клики по описанию"
+    "reach_and_views_tabs" -> "Охват и просмотры"
+    "interaction_tabs" -> "Вовлечённость"
+    "message_tabs" -> "Сообщения"
+    "views" -> "Просмотры"
+    "visitors" -> "Посетители"
+    "stat_board_general" -> "Общее"
+    "stat_board_post_details" -> "Записи"
     "messages" -> "Сообщения"
     "message_tabs/messages" -> "Сообщения"
     "all_likes" -> "Лайки"
     "likes" -> "Лайки"
     "interaction_tabs/likes" -> "Лайки"
-    else -> if (fallback.isNotBlank()) fallback else id
+    "post_reach" -> "Охват записей"
+    "reach_timeline" -> "Охват"
+    "subscribers_timeline" -> "Подписчики"
+    "unsubscribers" -> "Отписки"
+    "gender_age" -> "Пол и возраст"
+    "countries" -> "Страны"
+    "datalist_countries" -> "Страны"
+    "datalist_cities" -> "Города"
+    "datalist_sex" -> "Пол"
+    "datalist_age" -> "Возраст"
+    "reach_and_views_tabs/visitors_views" -> "Посетители и просмотры"
+    "reach_and_views_tabs/post_views" -> "Просмотры записей"
+    "reach_and_views_tabs/posts_interaction" -> "Вовлечённость записей"
+    "reach_and_views_tabs/sections_views" -> "Просмотры разделов"
+    "reach_and_views_tabs/subscribers_daily" -> "Подписчики по дням"
+    "interaction_tabs/post_views" -> "Просмотры записей"
+    "interaction_tabs/posts_interaction" -> "Вовлечённость записей"
+    "interaction_tabs/all_likes" -> "Лайки"
+    "interaction_tabs/comments" -> "Комментарии"
+    "interaction_tabs/reposts" -> "Репосты"
+    "comments" -> "Комментарии"
+    "reposts" -> "Репосты"
+    "bookmarks" -> "Закладки"
+    "hidden" -> "Скрытия"
+    "subscribed" -> "Подписки"
+    "unsubscribed" -> "Отписки"
+    else -> prettifyId(id)
+    }
 }
 private fun flatten(cards: List<StatsChunkParser.LayoutCard>): List<StatsChunkParser.LayoutCard> {
     val out = mutableListOf<StatsChunkParser.LayoutCard>()
@@ -579,9 +618,9 @@ private fun TimelineChart(points: List<StatsChunkParser.TimePoint>) {
         drawPath(path, color = lineColor, style = Stroke(width = 4f, cap = StrokeCap.Round))
     }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(pts.firstOrNull()?.x ?: "", style = MaterialTheme.typography.bodySmall)
+        Text(fmtXAxis(pts.firstOrNull()?.x), style = MaterialTheme.typography.bodySmall)
         Text("макс ${maxY.toInt()}", style = MaterialTheme.typography.bodySmall)
-        Text(pts.lastOrNull()?.x ?: "", style = MaterialTheme.typography.bodySmall)
+        Text(fmtXAxis(pts.lastOrNull()?.x), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -615,7 +654,7 @@ private fun BarChartView(series: List<StatsChunkParser.BarSeries>) {
         }
     }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        labels.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+        labels.forEach { Text(fmtXAxis(it), style = MaterialTheme.typography.bodySmall) }
     }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         series.forEachIndexed { si, s ->
@@ -626,8 +665,29 @@ private fun BarChartView(series: List<StatsChunkParser.BarSeries>) {
 }
 
 
+private fun fmtXAxis(raw: String?): String {
+    if (raw.isNullOrBlank()) return ""
+    val v = raw.toLongOrNull() ?: return raw
+    return try {
+        val ms = if (v < 100000000000L) v * 1000L else v
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = ms
+        val hasTime = cal.get(java.util.Calendar.HOUR_OF_DAY) != 0 || cal.get(java.util.Calendar.MINUTE) != 0
+        val fmt = if (hasTime) "HH:mm" else "dd.MM"
+        java.text.SimpleDateFormat(fmt, java.util.Locale.getDefault()).format(cal.time)
+    } catch (_: Exception) { raw }
+}
+
 /** #STATS-PERIOD: дефолтный период по секции (как в VK: Общее=30д, остальное=вчера). */
 private fun defaultPeriodIdx(sectionId: String): Int = when (sectionId) {
     "top_community" -> 3   // 30 дней
     else -> 1              // вчера
+}
+
+/** #STATS-TITLES-FALLBACK: сырой id -> читаемый текст (snake_case -> "Слова"). */
+private fun prettifyId(id: String): String {
+    val tail = id.substringAfterLast('/')
+    if (tail.isBlank()) return id
+    return tail.split('_').filter { it.isNotBlank() }
+        .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
 }

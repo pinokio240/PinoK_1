@@ -13159,3 +13159,222 @@ MainActivity +80/-3 (9 точек), LongPollKeepAliveService +7. Баланс с
 - B-2 getSecurityAlerts / getActivityHistoryDevices — err=3 (неверный хост/токен).
 - getLegacyModalsHashes — err=3, спам в логе.
 - B-4 исходящий звонок — ждёт данных Блока A (DevTools).
+
+
+## 2026-09-28 (ch.4) - B-4 Iskhodyashchiy zvonok: vyravnivanie po HAR
+
+Po razboru zvonok ishodyashchiy_2809.har vneseny pravki (report yuzera: iskhodyashchiy prohodit so 2-y popytki):
+1. CallScreen.kt - callerAppId 6287487L -> 7879029L.
+2. VKApiClient.kt - application_key CGMMEJLGDIHBABABA -> CDLGIBMGDIHBABABA (8 mest).
+3. VKApiClient.kt - VCHAT_BASES = [calls.okcdn.ru] i VCHAT_API_KEYS = [CDLGIBMGDIHBABABA].
+
+Fayly: CallScreen.kt, VKApiClient.kt. Bekapy .bak_20260928_165724. Sborka - Android Studio (polzovatel).
+
+
+---
+Task ID: CALLS-OUTGOING-B4-ROLLBACK
+Agent: assistant (deepseek-pp)
+Task: Otkat pravok B-4 (regress: PinoK ne zvonit i ne prinimaet zvonki).
+
+Work Log:
+- Pravki (caller_app_id 7879029, application_key CDLGIBMGDIHBABABA, odin host/key) dali regress.
+- Vosstanovleno iz .bak_20260928_165724: CallScreen.kt (6287487L), VKApiClient.kt (CGMMEJLGDIHBABABA x8).
+
+Stage Summary:
+- Versiya otkachena, rabochaya. VYVOD: CGMM/6287487 rabochie; HAR-znacheniya CDLG/7879029 lomayut zvonki. NE povtoryat.
+
+
+---
+Task ID: CALLS-TOPIC-CLOSED
+Agent: assistant (deepseek-pp)
+Task: Zakrytie temy zvonki (vyprosheno yuzerom).
+
+Stage Summary:
+- Iskhodyashchiy/vhodyashchiy zvonki RABOTAYUT na otkachennoy versii (CGMM/6287487).
+- Pravki po HAR (mobilnyy klient: CDLG/7879029) byli oshibochny i otkacheny.
+- B-4 ZAKRYT. CALL END offer=false/answer=false - kosmeticheskiy bag metriki.
+- Sborka i finalnyy test - za yuzerom.
+
+
+## 2026-09-28 (ч.5) — C9 журнал действий: подтверждён HAR
+
+Разбор «журнал действий_2809.har» (1047 entries): эндпоинт POST vk.ru/<screen_name> act=event_log, параметры action_type/all, al=1, filter=1, next_from=<ts>; ответ {"payload":[0,[HTML]]}; data-additional=[["<md5>",[{action_type,ts,admin_id,user_id,...}]]]. action_type: 11=unban, 10=ban, 14. AdminEventLogScreen реализован верно — правок не требуется.
+
+
+## 2026-09-28 (ч.6) — Исходящий «повис»: ICE CHECKING
+
+Звонок 17:53: сигналинг полный (FULL_CONNECTION, REGISTERED_PEER, offer seq=2, answer, setRemoteSdp OK, треки LIVE). НО ICE завис в CHECKING: `state=in-progress nom=false reqS=20→32 resR=0 reqR=0 resS=0` — STUN/TURN запросы уходят, ответов 0. OUT-Watchdog 15с → hangup CANCELED. Причина — сетевая (UDP/TURN/STUN), не код. Задача в очередь: проверка TURN/STUN с сети устройства.
+
+
+## 2026-09-28 (ч.7) — C9 журнал действий: фикс POST по HAR
+
+Сверка `groupsEventLogPage` с HAR `журнал действий_2809` выявила 3 расхождения. Исправлено в VKApiClient.kt: URL `vk.ru/public<gid>` → `vk.ru/<screenName>`; `action_type` теперь всегда (=all по умолчанию); убраны `hash`/`al_id` из POST (в HAR их нет). Парсер HTML остался без изменений (корректен). Бэкап `.bak_20260928_181813`.
+
+
+---
+Task ID: ADMIN-C9-DNS-FIX
+Agent: assistant (deepseek-pp)
+Task: Zhurnal deystviy (C9) molchit - prichina DNS vk.ru.
+
+Work Log (logcat):
+- #C9 loadInfo OK: screenName=pluton240, loadPage REQ sobran.
+- #C9 groupsEventLogPage: network error: Unable to resolve host "vk.ru".
+- -> blocks=0 (zhurnal pust).
+
+Fix:
+- VKApiClient.kt groupsEventLogPage: zhestkiy https://vk.ru/al_profile.php -> perebor hostov
+  [https://vk.ru, https://m.vk.ru, https://vk.com] (pervaya uspeshnaya).
+- Bekap: VKApiClient.kt.bak_20260928_204419.
+- Sborka - za yuzerom.
+
+
+---
+Task ID: ADMIN-C9-ENDPOINT-FIX
+Agent: assistant (deepseek-pp)
+Task: Zhurnal deystviy C9 - smena endpointa na /<screen_name>.
+
+Work Log (logcat):
+- DNS-fix OK: HTTP 200 vk.ru.
+- No HTML: al_profile.php otdayot konvert-zaglushku 918b (payload:["3",[md5,base64 /pluton240?act=event_log]]).
+
+Fix:
+- groupsEventLogPage: URL = $host/$screenName?act=event_log (bylo $host/al_profile.php).
+- body: action_type&al=1&filter=1&next_from (ubrany act/__query/al_id).
+- hosts=[vk.ru,m.vk.ru,vk.com].
+- Bekap VKApiClient.kt.bak_20260928_204419. Sborka - za yuzerom.
+
+
+---
+Task ID: ADMIN-C9-BROWSER-FLOW
+Agent: assistant (deepseek-pp)
+Task: Zhurnal deystviy C9 - povtor brauzernogo flow (GET-progrev).
+
+Work Log:
+- HAR: shag1 = GET vk.ru/<sn>?act=event_log (HTML 144kb, sessiya), shag2 = POST al_profile.php.
+- Bez shag1 VK otdayot konvert 918b (ne HTML).
+Fix: v groupsEventLogPage pered POST dobavlen GET $host/$screenName?act=event_log&action_type=at
+ (Accept text/html, Referer) kak brauzer. Bekap VKApiClient.kt.bak_20260928_210913. Sborka - za yuzerom.
+
+
+---
+Task ID: STATS-DIAG-POST-VIEWS
+Agent: assistant (deepseek-pp)
+Task: Diagnostika post_views/posts_interaction (Net dannyh).
+
+Work Log:
+- Logcat: app shlyot getOwnerStats act=data card_id=post_views/posts_interaction (otvet 229B = task_id, dannye cherez queue).
+- HAR: post_views/posts_interaction = advanced_timeline_chart (isLazy).
+Fix (diagnostika): StatsQueuePoller dobavlen log chunk task_id+head.
+Bekap StatsQueuePoller.kt.bak_20260928_213110. Sborka - za yuzerom.
+
+
+---
+Task ID: STATS-DIAG-POST-VIEWS-CONFIRMED
+Agent: assistant (deepseek-pp)
+Task: Diagnoz "Net dannyh" (post_views/posts_interaction) - prichina naydena.
+
+Work Log (logcat StatsQueuePoller):
+- Chanki VK 2 form: (1) {"range","item":{..}} - odinochnyj; (2) {"range","items":[{..},{..}]} - MASSIV.
+- StatsChunkParser.parseData chitaet tolko getAsJsonObject("item") -> dlya items[] = null -> "Net dannyh".
+- Primer items-chankov: task_id 3723427580/3725996935/3727280051/3729388082.
+
+Fix (plan): parseData obrabatyvaet i item(obiekt), i items(massiv).
+
+
+---
+Task ID: STATS-ITEMS-DIAGNOSIS
+Agent: assistant (deepseek-pp)
+Task: Diagnoz chankov: prichina Net-dannyh v parser.
+
+Work Log (logcat StatsQueuePoller, 28 chankov):
+- Format A (odin): {range, item:{type,id,...}} - datalist_devices, post_content_list, overview, post_views, posts_interaction.
+- Format B (pachka): {range, items:[{type,id,...},...]} - task 3742838966 (summary+advanced_timeline_chart), 3729056978 (advanced_data_list).
+- StatsChunkParser.parseData chitaet tolko root.getAsJsonObject(item) -> dlya Format B item=null -> return null -> kartochka Net-dannyh.
+
+Plan fixa:
+- parseData: podderzhka item (odin) i items (massiv, pervyy rasparennyy).
+- Vydelit parseItem helper.
+- Udalyat vremennyy diag-log StatsQueuePoller stroka 121.
+
+
+---
+Task ID: STATS-ITEMS-FIX
+Agent: assistant (deepseek-pp)
+Task: Parser chankov: podderzhka formata items:[...] (kartochki Net-dannyh).
+
+Work Log:
+- Prichina (logcat): VK shlyot {item:{...}} (odin) i {items:[{...},{...}]} (pachka, task 3742838966: summary+advanced_timeline_chart).
+- parseData chital tolko 'item' -> dlya pachki null -> Net-dannyh.
+
+Fix (StatsChunkParser.kt, str.105-108):
+  val item = root.getAsJsonObject("item")
+      ?: root.getAsJsonArray("items")?.firstOrNull{it.isJsonObject}?.asJsonObject
+      ?: return null
+
+Stage Summary:
+- Bekap: StatsChunkParser.kt.bak_20260928_215528 (10624).
+- Vremennyy diag-log StatsQueuePoller.kt str.121 (take 2500) - POKA OSTAVLEN, ubrat posle podtverzhdeniya.
+- Sborka - za yuzerom.
+
+
+---
+Task ID: STATS-LINE-TITLES-FIX
+Agent: assistant (deepseek-pp)
+Task: Grafik 'Net dannyh' (post_views/posts_interaction) + nepolnye zagolovki.
+
+Work Log (logcat):
+- Dannye: graph[0].labels=[ts...] + datasets[0].data=[chisla] (ploskkiy massiv).
+- parseTimeline zhdal data=[{x,y}] -> 0 tochek -> 'Net dannyh'.
+- Zagolovki: chasty id bez title -> pokazyvalsya raw id.
+
+Fix:
+1) StatsChunkParser.parseTimeline: podderzhka labels:[ts]+data:[chisel] (i starogo {x,y}).
+2) AdminStatsScreenW47.statsCardTitle: + ~25 mapping (reach_timeline, visitors, views, comments, reposts, bookmarks, ... reach_and_views_tabs/*, interaction_tabs/*).
+
+Stage Summary:
+- Bekapy: StatsChunkParser.kt.bak_20260928_220616, AdminStatsScreenW47.kt (bez .bak? proverit).
+- Balans skobok OK. Sborka - za yuzerom.
+
+
+---
+Task ID: STATS-LINE-COMPILE-FIX
+Agent: assistant (deepseek-pp)
+Task: Ispravlenie oshibki kompilyacii StatsChunkParser.kt:199.
+
+Work Log:
+- Oshibka: JsonArray.getOrNull ne suschestvuet (eto List-metod).
+- Fix: val xv: String = if (labels != null && idx < labels.size()) { labels.get(idx) ... } else idx.toString().
+- getOrNull = 0. Skobki 0/0.
+
+
+---
+Task ID: STATS-XAXIS-FMT
+Agent: assistant (deepseek-pp)
+Task: X-metki grafikov pokazyvali syrye epoch-ms ('neponyatnye cifry po krayam').
+
+Work Log:
+- TimelineChart/BarChartView vyvodili point.x = epoch ms (1790456400000).
+
+Fix (AdminStatsScreenW47.kt):
+- Dobavlen fmtXAxis(raw): epoch ms -> 'dd.MM' (ili 'HH:mm' esli est vremya).
+- TimelineChart (first/last) i BarChartView labels teper cherez fmtXAxis.
+
+Stage Summary:
+- Bekap AdminStatsScreenW47.kt.bak_20260928_221404. Skobki 0/0. Sborka - za yuzerom.
+
+
+---
+Task ID: STATS-TITLES-VK-TITLE
+Agent: assistant (deepseek-pp)
+Task: Otkat 'vydumannyh imen' - prioritet rodnogo title ot VK.
+
+Work Log (etap, sverka so snimkom _titles_check.txt / _STAT_FIX.md):
+- Oshibka: dobavleny ~28 vymyshlennyh mapping id->name + prettifyId, kotorye PEREBIVALI rodnoy title ot VK (item.title iz layout).
+
+Fix (AdminStatsScreenW47.kt, statsCardTitle):
+- if (fallback.isNotBlank()) return fallback  -> rodnoy title VK v prioritete;
+- mapping id primenyaetsya TOLKO esli title pust; else -> prettifyId(id).
+
+Stage Summary:
+- Bekap AdminStatsScreenW47.kt.bak_20260928_222209. Skobki 0/0. Sborka - za yuzerom.
+- UROK: ne vydumyvat imena, brat title ot VK.

@@ -60,3 +60,19 @@ guest-drawer (запускает AuthActivity → LandingScreen внутри н�
 - [x] **B-1 (P0-2)** ВЫПОЛНЕНО: settingsGeneral.setNotifySettings (и get) — batch.call fallback на web.api.vk.ru; wire batchCall приведён к эталону CDP (VKApiClient.kt, VKApiClient #P0-2)
 - [x] **ВНЕПЛАНОВО: #CALLS-MUTE-HARDEN** — репорт юзера «mute не отключает микрофон»: setMuted глушит localAudioTrack + все аудио-сендеры PC, mutedState переживает пересоздание трека, диагностический лог enabled (WebRtcEngine.kt). UI-обвязка проверена — корректна. Ждёт теста звонком
 - [ ] B-2, B-3, B-4, A-1..A-8 — как выше
+
+
+---
+## Блок D — Звонки: ICE/медиа (2026-09-28)
+
+- [ ] **D-1 (P1)** Исходящий «повис» (ICE CHECKING, resR=0): проверить доступность TURN/STUN (95.163.34.164:19302, 90.156.236.121:19302) с сети устройства; сравнить Wi-Fi vs мобильную. Если сеть ни при чём — копать ICE-негоциацию/кандидаты в WebRtcEngine.
+- [ ] **D-2 (P2)** `nom=false` при ICE connected — проверить ICE renomination/trickle.
+- [ ] **D-3 (P3)** `CALL END offer=false/answer=false` — ложная метрика (сигналинг фактически прошёл).
+
+
+### D-1 уточнение (TURN/STUN из HAR 2809)
+
+- HAR startConversation ответ: turn_server.urls=[turn:95.163.34.137:19302, turn:90.156.234.250:19302], stun=[stun:95.163.34.137:19302]; user=<vkUid>:<okUid>, cred=base64.
+- Лог PinoK 17:53: те же порты/подсети (95.163.34.164, 90.156.236.121) — адреса верные.
+- Значит ICE resR=0 — НЕ из-за адресов, а из-за недоступности UDP 19302 с сети устройства (блок/NAT/фаервол), либо nom=false/trickle.
+- Проверить: звонит ли мобильный VK с той же сети; UDP-доступ к 95.163.34.x:19302.

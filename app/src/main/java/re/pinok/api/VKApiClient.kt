@@ -18229,56 +18229,97 @@ class VKApiClient(
         actionType: String? = null,
     ): EventLogPage = withContext(Dispatchers.IO) {
         if (screenName.isBlank()) return@withContext EventLogPage(emptyList(), null)
-        // W47-FIX: legacy php требует al=1&al_id=<uid>&hash=<hex>, иначе payload пуст.
+        // C9-FIX (2026-09-28, HAR «журнал действий_2809»): эталонный POST — URL = /<screenName>,
+        // body: al=1&filter=1&action_type=all&next_from=<ts>. hash/al_id НЕ шлем (в HAR их нет).
+        // C9-FIX2 (2026-09-28, HAR): эталон = POST /al_profile.php с __query=<sn> + al_id=<myUid>.
         val uid = exchangeAuthRepository?.userId() ?: 0L
-        val hash = groupsGetLegacySettingsHash(groupId)
+        val at = actionType?.takeIf { it.isNotBlank() } ?: "all"
+        // Основной запрос — al_profile.php (__query + al_id).
         val form = okhttp3.FormBody.Builder()
+            .add("__query", screenName)
+            .add("act", "event_log")
+            .add("action_type", at)
             .add("al", "1")
-            .add("filter", "1")
-            .add("next_from", nextFrom.toString())
         if (uid > 0L) form.add("al_id", uid.toString())
-        if (!hash.isNullOrBlank()) form.add("hash", hash)
-        if (!actionType.isNullOrBlank()) form.add("action_type", actionType)
-        val req = okhttp3.Request.Builder()
-            .url("https://vk.ru/public$groupId?act=event_log")
-            .post(form.build())
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            )
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Accept", "text/plain, */*; q=0.01")
-            .header("Referer", "https://vk.ru/public$groupId")
-            .build()
-        val body: String = try {
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    AppLog.w("VKApiClient", "groupsEventLogPage: HTTP ${resp.code}")
-                    return@withContext EventLogPage(emptyList(), null)
-                }
-                resp.body?.string() ?: ""
+        if (nextFrom > 0L) form.add("next_from", nextFrom.toString())
+        if (!actionType.isNullOrBlank()) form.add("filter", "1")
+        // #C9-DNS-FIX (2026-09-28): vk.ru может не резолвиться на устройстве (logcat: Unable to resolve host "vk.ru").
+        // Пробуем несколько хостов по очереди; cookies берёт VkCookieJar (по домену хоста).
+        val hosts = listOf("https://vk.ru", "https://m.vk.ru", "https://vk.com")
+        var bodyOpt: String? = null
+        for (host in hosts) {
+            // #C9-BROWSER-FLOW (2026-09-28): шаг 1 браузера — GET страницы журнала (прогрев сессии vk.ru).
+            runCatching {
+                val getReq = okhttp3.Request.Builder()
+                    .url("$host/$screenName?act=event_log&action_type=" + at)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+                    .header("Referer", "$host/$screenName")
+                    .build()
+                httpClient.newCall(getReq).execute().use { it.body?.string() }
             }
-        } catch (e: Exception) {
-            AppLog.w("VKApiClient", "groupsEventLogPage: network error: ${e.message}")
-            return@withContext EventLogPage(emptyList(), null)
+            val req = okhttp3.Request.Builder()
+                .url("$host/al_profile.php?act=event_log")
+                .post(form.build())
+                .header(
+                    "User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                )
+                .header("X-Requested-With", "XMLHttpRequest")
+                .header("Accept", "*/*")
+                .header("Origin", host)
+                .header("Referer", "$host/$screenName?act=event_log&action_type=" + at)
+                .build()
+            val got: String? = try {
+                httpClient.newCall(req).execute().use { resp ->
+                    val rc = resp.code
+                    if (!resp.isSuccessful) {
+                        AppLog.w("VKApiClient", "#C9 groupsEventLogPage: HTTP " + rc + " host=" + host + " sn=" + screenName)
+                        null
+                    } else {
+                        val bb = resp.body?.string()
+                        AppLog.i("VKApiClient", "#C9 groupsEventLogPage: event_log HTTP " + rc + " len=" + (if (bb != null) bb.length else -1) + " host=" + host + " sn=" + screenName + " al_id=" + uid)
+                        if (bb != null) bb else ""
+                    }
+                }
+            } catch (e: Exception) {
+                AppLog.w("VKApiClient", "#C9 groupsEventLogPage: network error host=" + host + ": " + e.message)
+                null
+            }
+            if (!got.isNullOrBlank()) { bodyOpt = got; break }
         }
-        if (body.isBlank()) return@withContext EventLogPage(emptyList(), null)
+        val body: String = bodyOpt ?: ""
+        if (body.isBlank()) { AppLog.w("VKApiClient", "#C9 groupsEventLogPage: BODY BLANK"); return@withContext EventLogPage(emptyList(), null) }
+        AppLog.i("VKApiClient", "#C9 groupsEventLogPage: bodyHead=" + body.take(220))
         try {
-            // Формат al-ответа: {"payload":[0,[HTML,...],...]} (HAR §12.2).
             val root = JsonParser.parseString(body)
-            if (!root.isJsonObject) return@withContext EventLogPage(emptyList(), null)
+            if (!root.isJsonObject) { AppLog.w("VKApiClient", "#C9 groupsEventLogPage: not JsonObject"); return@withContext EventLogPage(emptyList(), null) }
             val payloadArr = root.asJsonObject.getAsJsonArray("payload")
             if (payloadArr == null || payloadArr.size() < 2 || !payloadArr.get(1).isJsonArray) {
+                AppLog.w("VKApiClient", "#C9 groupsEventLogPage: no payload[1] array; keys=" + root.asJsonObject.keySet() + " head=" + body.take(160))
                 return@withContext EventLogPage(emptyList(), null)
             }
             val inner = payloadArr.get(1).asJsonArray
-            if (inner.size() < 1 || inner.get(0).isJsonNull) {
+            // HTML: либо inner[1] (al_profile: [false,"<div"]), либо inner[0] (/<sn>: ["<div"]).
+            var html: String? = null
+            if (inner.size() >= 2 && inner.get(1).isJsonPrimitive && !inner.get(1).isJsonNull) {
+                val cand = inner.get(1).asString
+                if (cand.contains("groups_edit_event_log") || cand.contains("data-date=")) html = cand
+            }
+            if (html == null && inner.size() >= 1 && inner.get(0).isJsonPrimitive && !inner.get(0).isJsonNull) {
+                val cand = inner.get(0).asString
+                if (cand.contains("groups_edit_event_log") || cand.contains("data-date=")) html = cand
+            }
+            if (html == null) {
+                AppLog.w("VKApiClient", "#C9 groupsEventLogPage: no HTML in payload; innerSize=" + inner.size() + " inner0=" + (if (inner.size() >= 1) inner.get(0).toString().take(80) else "-"))
                 return@withContext EventLogPage(emptyList(), null)
             }
-            parseEventLogHtml(inner.get(0).asString)
+            AppLog.i("VKApiClient", "#C9 groupsEventLogPage: htmlLen=" + html.length + " dataDateCount=" + Regex("data-date=").findAll(html).count() + " itemWrapCount=" + Regex("groups_edit_event_log_item_wrap_").findAll(html).count())
+            parseEventLogHtml(html)
         } catch (e: Exception) {
-            AppLog.w("VKApiClient", "groupsEventLogPage: parse error: ${e.message}")
+            AppLog.w("VKApiClient", "#C9 groupsEventLogPage: parse error: " + e.message)
             EventLogPage(emptyList(), null)
         }
     }

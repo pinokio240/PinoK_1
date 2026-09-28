@@ -102,7 +102,10 @@ object StatsChunkParser {
     fun parseData(chunk: String): DataCard? {
         return try {
             val root = JsonParser.parseString(chunk).asJsonObject
-            val item = root.getAsJsonObject("item") ?: return null
+            // #STATS-ITEMS-FIX (28.09): VK shlyot {item:{...}} ili {items:[{...}]}.
+            val item = root.getAsJsonObject("item")
+                ?: root.getAsJsonArray("items")?.firstOrNull { it.isJsonObject }?.asJsonObject
+                ?: return null
             when (item.str("type")) {
                 "summary" -> parseSummary(item)
                 "data_list" -> parseDataList(item)
@@ -183,11 +186,23 @@ object StatsChunkParser {
         if (datasets != null && datasets.size() > 0) {
             val first = datasets[0].takeIf { it.isJsonObject }?.asJsonObject
             val data = first?.getAsJsonArray("data")
+            // #STATS-LINE-FIX (28.09): VK shlyot labels:[ts] + data:[chisla]
+            // (ploskkiy massiv), a ne [{x,y}]. Podderzhivaem oba varianta.
+            val labels = g.getAsJsonArray("labels")
             if (data != null) {
+                var idx = 0
                 for (p in data) {
-                    if (!p.isJsonObject) continue
-                    val po = p.asJsonObject
-                    points.add(TimePoint(x = po.str("x"), y = po.num("y")))
+                    if (p.isJsonObject) {
+                        val po = p.asJsonObject
+                        points.add(TimePoint(x = po.str("x"), y = po.num("y")))
+                    } else if (p.isJsonPrimitive) {
+                        val xv: String = if (labels != null && idx < labels.size()) {
+                            val le = labels.get(idx)
+                            if (le != null && le.isJsonPrimitive) le.asString else idx.toString()
+                        } else idx.toString()
+                        points.add(TimePoint(x = xv, y = p.asDouble))
+                    }
+                    idx++
                 }
             }
         }

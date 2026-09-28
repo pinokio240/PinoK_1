@@ -487,3 +487,30 @@ pcap: `logs/call2.pcap`.
   крашей; reoffer принимается с 1-й попытки; отзыв согласия останавливает поток кадров.
 - Диагностика: держать наготове `adb logcat -b crash -d > crash.txt` (стек H265-подозреваемого);
   фильтр logcat с `tag:AndroidRuntime | tag:libc` (§35 звонки.md).
+
+
+---
+## Исходящий звонок — разбор «звонок исходящий_2809.har» (2026-09-28)
+
+**Метод старта:** `vchat.startConversation` (НЕ `messages.startCall`).
+**Хост:** `https://calls.okcdn.ru/fb.do` | `application_key=CDLGIBMGDIHBABABA`.
+
+**Params:**
+```
+conversationId=<vcid>&isVideo=false&protocolVersion=5
+&payload={"is_video":false,"with_join_link":false,"join_by_link":false,"community_user_id":0,"caller_app_id":7879029}
+&onlyAdminCanShareMovie=false&externalIds=<peerId>
+&method=vchat.startConversation&format=JSON&application_key=CDLGIBMGDIHBABABA&session_key=<...>
+```
+
+**Ответ startConversation (ключ):** `token`, `endpoint=wss://videowebrtc.okcdn.ru/ws2?...`,
+`ws_ip_addresses[]`, `wt_endpoint=https://videowebrtc.okcdn.ru:23456/wt?...`, `wt_ip_addresses[]`, `turn_server{urls...}`.
+
+- `vchat.getCallParams` / `getConversationParams` — В ДАМПЕ НЕТ (params приходят в ответе startConversation).
+- `messages.getCurrentCalls` — есть; `getCallSettings` — есть.
+- `vchat.clientStats`: call_init(outgoing)→call_start→call_accepted_outgoing→first_media_sent→first_media_received→websocket_connected, далее stats каждые ~5с.
+- A-7: clientStats platform=vk_mvk; WS device=browser, clientType=VK, appVersion=1.1, capabilities=6D7F.
+- A-8: WS `wss://videowebrtc.okcdn.ru/ws2` (+ WT :23456/wt); IP 155.212.204.11/196/205.229; call_topology=D; transport=udp.
+
+**БАГ (репорт юзера):** исходящий проходит только со 2-й попытки (первая — с ошибкой).
+Относится к B-4. Проверить ретрай `vchat.startConversation` (хост/метод/повторная попытка).

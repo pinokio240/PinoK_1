@@ -118,6 +118,7 @@ class StatsQueuePoller(
             val (newTs, events) = result
             if (newTs != cred.ts) cred = cred.copy(ts = newTs)
             for (ev in events) {
+                AppLog.i(TAG, "chunk task_id=" + ev.taskId + " head=" + ev.chunk.take(2500))
                 _chunks.tryEmit(ev)
             }
         }
