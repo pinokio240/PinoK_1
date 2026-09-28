@@ -16,6 +16,10 @@ import com.google.gson.JsonParser
  */
 object StatsChunkParser {
 
+    /** BUILD-МАРКЕР: присуствие в APK подтверждает, что патчи W47 дошли. */
+    const val BUILD_MARKER = "PINOK_STATS_MARKER_W47_20260928"
+
+
     /** Карточка layout-чанка. */
     data class LayoutCard(
         val id: String,

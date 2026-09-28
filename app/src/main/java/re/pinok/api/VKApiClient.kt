@@ -20,6 +20,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.util.concurrent.TimeUnit
 import re.pinok.SovaApp
 import re.pinok.feature.calls.CallsApi
 import re.pinok.feature.photos.PhotosApi
@@ -110,6 +111,14 @@ class VKApiClient(
     private val exchangeAuthRepository: ExchangeAuthRepository? = null,
     networkObserver: NetworkObserver? = null,
 ) : CallsApi, PhotosApi {
+
+    // #STATS-POLL-TIMEOUT: отдельный клиент для long-poll queuev4 (wait=45с > дефолтный read timeout).
+    private val pollHttpClient: OkHttpClient by lazy {
+        httpClient.newBuilder()
+            .readTimeout(65, TimeUnit.SECONDS)
+            .callTimeout(75, TimeUnit.SECONDS)
+            .build()
+    }
 
     private val networkObserver = networkObserver ?: NetworkObserver(context)
     // #AUTO-OFFLINE-REMOVAL (W41): networkMods property удалён — единственный
@@ -17793,26 +17802,28 @@ class VKApiClient(
     @Volatile private var miniAppTokenExpiresAt: Long = 0L
 
     private suspend fun miniAppToken(appId: Long = 51912452L): String? {
+        AppLog.i("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 miniAppToken called app_id=" + appId)
         val nowSec = System.currentTimeMillis() / 1000L
         val cached = miniAppTokenValue
         if (!cached.isNullOrBlank() && nowSec < miniAppTokenExpiresAt - 60L) return cached
         val web = token() ?: run {
             val er = exchangeAuthRepository
             if (er != null) er.ensureFreshToken(force = true) else null
-        } ?: return null
-        if (web.isBlank()) return null
+        } ?: run { AppLog.e("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 FAIL web token null"); return null }
+        if (web.isBlank()) { AppLog.e("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 FAIL web token blank"); return null }
         return try {
-            val url = "https://id.vk.ru/mini_app_token?scope=&app_id=" + appId + "&access_token=" + web
-            val req = Request.Builder().url(url).get().build()
+            val url = "https://id.vk.ru/mini_app_token?scope=&app_id=" + appId + "&access_token=" + web + "&force=0"
+            val req = Request.Builder().url(url).header("Origin", "https://m.vk.ru").header("Referer", "https://m.vk.ru/").header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36").get().build()
             withContext(Dispatchers.IO) {
                 httpClient.newCall(req).execute().use { resp ->
                     val body = resp.body?.string().orEmpty()
-                    if (body.isBlank()) return@use null
+                    AppLog.i("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 mini_app_token HTTP "+resp.code+" len="+body.length)
+                    if (body.isBlank()) { AppLog.e("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 FAIL empty body"); return@use null }
                     val j = JsonParser.parseString(body)
-                    if (!j.isJsonObject) return@use null
-                    val r = j.asJsonObject.getAsJsonObject("response") ?: return@use null
+                    if (!j.isJsonObject) { AppLog.e("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 FAIL not json: "+body.take(300)); return@use null }
+                    val r = j.asJsonObject.getAsJsonObject("response") ?: run { AppLog.e("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 FAIL no response: "+body.take(300)); return@use null }
                     val tok = r.get("access_token")?.takeIf { it.isJsonPrimitive }?.asString
-                    if (tok.isNullOrBlank()) return@use null
+                    if (tok.isNullOrBlank()) { AppLog.e("VKApiClient", "PINOK_STATS_MARKER_W47_20260928 FAIL no access_token: "+body.take(300)); return@use null }
                     miniAppTokenValue = tok
                     miniAppTokenExpiresAt = r.get("expires")?.takeIf { it.isJsonPrimitive }?.asLong ?: (nowSec + 3600L)
                     AppLog.i("VKApiClient", "miniAppToken: ok app_id=" + appId + " expires=" + miniAppTokenExpiresAt)
@@ -17994,7 +18005,7 @@ class VKApiClient(
         return try {
             val url = "${cred.url}?act=a_check&key=${cred.key}&ts=${cred.ts}&id=${cred.userId}&wait=$waitSec"
             val req = Request.Builder().url(url).get().build()
-            httpClient.newCall(req).execute().use { resp ->
+            pollHttpClient.newCall(req).execute().use { resp ->
                 val body = resp.body?.string() ?: return null
                 if (body.isBlank()) return cred.ts to emptyList()
                 val parsed = JsonParser.parseString(body)
@@ -18017,6 +18028,9 @@ class VKApiClient(
                 }
                 newTs to out
             }
+        } catch (e: java.net.SocketTimeoutException) {
+            // Long-poll таймаут (wait=45с без событий) — норма, не ошибка.
+            cred.ts to emptyList()
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "statsBoardQueuePoll error", e)
             null

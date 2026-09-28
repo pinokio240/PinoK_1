@@ -10640,3 +10640,27 @@ Work Log:
 - .gitignore: добавлены *fix*-bak-*, *fixscope-bak-* (bak-файлы не коммитить).
 - ВАЖНО: живые токены остаются в git-ИСТОРИИ (коммиты b2f6622/213115f4, 0f619f5) — при утечке репо нужен git filter-repo/BFG.
 - Сборка НЕ запускалась (пользователь собирает сам).
+
+---
+Task ID: STATS-W47-FIXES
+Agent: assistant (deepseek-pp)
+Task: Довести статистику сообщества (Mini App 51912452) до рабочего состояния.
+
+Work Log:
+- Причина err=3 на statsDashboard.* — mini_app_token возвращал {"error":true}.
+  По HAR (C:/Users/Pinokio240/Desktop/Ссылки/админка): VK web шлёт GET
+  id.vk.ru/mini_app_token?...&force=0 с Origin/Referer https://m.vk.ru.
+- Фикс в VKApiClient.kt: добавлен &force=0 + заголовки Origin/Referer/UA.
+  После фикса: mini_app_token HTTP 200 len=276, miniAppToken: ok.
+  bootstrap/getOwnerStats пошли без err=3, цифры в UI (Охват/Просмотры/Лайки).
+- UI: TabRow -> ScrollableTabRow (секции/подсекции не влезали, текст шёл вертикально).
+- Long-poll: statsBoardQueuePoll использовал общий httpClient (короткий read timeout),
+  wait=45 -> SocketTimeoutException. Добавлен pollHttpClient (readTimeout=65s,
+  callTimeout=75s) + catch(SocketTimeoutException) -> пустой результат без ошибки.
+- VK err=6 (Too many requests per second): data-запросы по карточкам слались пачкой.
+  Добавлен delay(220L) между statsDashboardGetOwnerStats(act=data).
+- Заголовки карточек: overview/post_views/... -> читаемые (statsCardTitle), рус. язык.
+
+Stage Summary:
+- Статистика работает. Файлы: VKApiClient.kt, AdminStatsScreenW47.kt,
+  StatsQueuePoller.kt, StatsChunkParser.kt. Сборку выполняет пользователь (Android Studio).

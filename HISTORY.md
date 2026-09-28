@@ -13112,3 +13112,23 @@ MainActivity +80/-3 (9 точек), LongPollKeepAliveService +7. Баланс с
 
 ## #AUTO-OFFLINE-REMOVAL (2026-09-25)
 Авто-офлайн #38 удалён ПОЛНОСТЬЮ (запрос пользователя после репорта «офлайн-режим который нельзя выключить», 16d09e9; ранее ab8320d делал самолечение — теперь механизма нет вовсе). Убраны: счётчик сетевых ошибок + авто-трип (3 сбоя/60с → privacyOfflineMode), маркер autoOfflineAt/кулдаун 30с, resetNetworkErrorCounter/clearAutoOffline/isAutoOfflineActive, probe-самолечение и success-heal в callInternal, Fix #211 reset-блоки в ExchangeAuthRepository (+ мёртвый prefs-параметр), ветка авто-офлайна в AudioLibraryPager, clearAutoOffline в MusicScreen retry, мёртвые хелперы NetworkMods.isOfflineForced / PrivacyMods.shouldForceOffline. isOffline() = только реальная сеть (NetworkObserver). Одноразовая миграция в SovaApp: застрявший privacyOfflineMode=true из старых версий чистится при старте. ВАЖНО (ответ юзеру): авто-офлайн НЕ трогал сессию/токены — только шорт-сиркаутил API-вызовы; стирание сессии было отдельным багом auth-flow (9953882). Сетевые сбои теперь дают честные error-стейты с «Повторить» вместо глобального офлайна.
+
+
+## 2026-09-28 — Статистика сообщества: запуск Mini App 51912452 в PinoK
+
+**Проблема:** в админ-разделе «Статистика» не отображались данные.
+
+**Причина:** statsDashboard.* принадлежат VK Mini App (app_id=51912452) и резолвятся
+только с mini_app_token. Запрос токена возвращал `{"error":true}` — не хватало
+параметра `&force=0` и заголовков `Origin/Referer: https://m.vk.ru` (выяснено из HAR).
+
+**Что сделано (VKApiClient.kt, AdminStatsScreenW47.kt, StatsQueuePoller.kt, StatsChunkParser.kt):**
+1. miniAppToken: добавлены `&force=0`, Origin/Referer/UA; диагностика по ветвям отказа.
+2. Long-poll queuev4: отдельный pollHttpClient (readTimeout=65s) + корректная
+   обработка SocketTimeoutException (это «нет событий», не ошибка).
+3. Анти-rate-limit: delay(220 ms) между getOwnerStats(act=data) — устранён VK err=6.
+4. UI: ScrollableTabRow (горизонтальный скролл секций вместо вертикального текста).
+5. Читаемые названия карточек: statsCardTitle(id) — Обзор/Охват/Просмотры записей и т.д.
+
+**Результат:** статистика отображает реальные цифры (Охват, Просмотры, Лайки, Комментарии,
+Поделились). Сборка и установка APK — на стороне пользователя (Android Studio).

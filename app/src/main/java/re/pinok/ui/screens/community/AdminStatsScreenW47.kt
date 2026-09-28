@@ -25,6 +25,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -68,6 +69,7 @@ fun AdminStatsScreen(
     onBack: () -> Unit,
 ) {
     val app = SovaApp.get()
+    AppLog.i("AdminStats", "PINOK_STATS_MARKER_W47_20260928 screen open groupId=$groupId")
     val scope = rememberCoroutineScope()
 
     var loading by remember { mutableStateOf(true) }
@@ -139,6 +141,8 @@ fun AdminStatsScreen(
                 // Запускаем data-задачи по каждой leaf-карточке.
                 val newMap = mutableMapOf<String, String>()
                 for (card in flatten(layout)) {
+                    // #STATS-RATE-FIX: пауза между data-запросами (VK err=6 при пачке).
+                    kotlinx.coroutines.delay(220L)
                     val h = app.apiClient.statsDashboardGetOwnerStats(
                         ownerId = -groupId,
                         section = sec.id,
@@ -251,7 +255,7 @@ fun AdminStatsScreen(
                     )
                 }
                 // Табы секций
-                TabRow(selectedTabIndex = selectedSection) {
+                ScrollableTabRow(selectedTabIndex = selectedSection) {
                     sections.forEachIndexed { i, s ->
                         Tab(
                             selected = selectedSection == i,
@@ -266,7 +270,7 @@ fun AdminStatsScreen(
                 }
                 val sec = sections.getOrNull(selectedSection)
                 if (sec != null && sec.subsections.size > 1) {
-                    TabRow(selectedTabIndex = selectedSub) {
+                    ScrollableTabRow(selectedTabIndex = selectedSub) {
                         sec.subsections.forEachIndexed { i, sub ->
                             Tab(
                                 selected = selectedSub == i,
@@ -296,7 +300,7 @@ fun AdminStatsScreen(
                     }
                     for (card in flat) {
                         val data = dataByTask.value[card.id]
-                        StatsCardView(cardTitle = card.title.ifBlank { card.id }, data = data)
+                        StatsCardView(cardTitle = statsCardTitle(card.id, card.title), data = data)
                         Spacer(modifier = Modifier.height(10.dp))
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -312,6 +316,34 @@ fun AdminStatsScreen(
 }
 
 /** Раскрывает layout в плоский список leaf-карточек. */
+
+/** #STATS-TITLES: человекочитаемые названия карточек вместо raw id. */
+private fun statsCardTitle(id: String, fallback: String): String = when (id) {
+    "overview" -> "Обзор"
+    "reach" -> "Охват"
+    "reach_and_views_tabs/reach" -> "Охват"
+    "subscribers" -> "Подписчики"
+    "subscribers_daily" -> "Подписчики по дням"
+    "visitors_views" -> "Посетители и просмотры"
+    "post_views" -> "Просмотры записей"
+    "posts_interaction" -> "Вовлечённость записей"
+    "post_content_list" -> "Посты"
+    "sex" -> "Пол"
+    "age" -> "Возраст"
+    "cities" -> "Города"
+    "datalist_platforms" -> "Платформы"
+    "datalist_devices" -> "Устройства"
+    "datalist_traffic_sources" -> "Источники трафика"
+    "sections_views" -> "Просмотры разделов"
+    "bell_subscribers" -> "Подписки на уведомления"
+    "action_button" -> "Кнопка действия"
+    "messages" -> "Сообщения"
+    "message_tabs/messages" -> "Сообщения"
+    "all_likes" -> "Лайки"
+    "likes" -> "Лайки"
+    "interaction_tabs/likes" -> "Лайки"
+    else -> if (fallback.isNotBlank()) fallback else id
+}
 private fun flatten(cards: List<StatsChunkParser.LayoutCard>): List<StatsChunkParser.LayoutCard> {
     val out = mutableListOf<StatsChunkParser.LayoutCard>()
     for (c in cards) {

@@ -69,6 +69,7 @@ class StatsQueuePoller(
      */
     suspend fun start(userId: Long, groupId: Long): Boolean {
         if (pollJob?.isActive == true) return true
+        AppLog.i(TAG, "PINOK_STATS_MARKER_W47_20260928 start uid=$userId gid=$groupId")
         val cred = apiClient.statsBoardQueueSubscribe(userId, groupId) ?: run {
             AppLog.w(TAG, "statsBoardQueueSubscribe failed (uid=$userId gid=$groupId)")
             return false
