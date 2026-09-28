@@ -13145,3 +13145,17 @@ MainActivity +80/-3 (9 точек), LongPollKeepAliveService +7. Баланс с
 4. Фикс двойного клика периода: periodRange() вычисляется в момент вызова loadLayout.
 
 **Файлы:** StatsChunkParser.kt, AdminStatsScreenW47.kt.
+
+
+## 2026-09-28 (ч.3) — Сверка EXECUTION_QUEUE с кодом
+
+**Закрыто (проверено по коду):**
+- B-1 setNotifySettings -> batch.call fallback (VKApiClient.kt).
+- B-3 mediaThumbs redesign (photo_200/100/50).
+- AuthDomainsConfig Fix #189 (настраиваемые vk.com/vk.ru домены).
+- Статистика W47.
+
+**Осталось:**
+- B-2 getSecurityAlerts / getActivityHistoryDevices — err=3 (неверный хост/токен).
+- getLegacyModalsHashes — err=3, спам в логе.
+- B-4 исходящий звонок — ждёт данных Блока A (DevTools).

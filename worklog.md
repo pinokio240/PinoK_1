@@ -10683,3 +10683,28 @@ Work Log:
 Stage Summary:
 - Статистика отображает все типы карточек; период переключается корректно.
   Файлы: StatsChunkParser.kt, AdminStatsScreenW47.kt (VKApiClient.kt/StatsQueuePoller.kt — ранее).
+
+---
+Task ID: QUEUE-STATUS-AUDIT
+Agent: assistant (deepseek-pp)
+Task: Сверка EXECUTION_QUEUE (блок B) с кодом — что закрыто.
+
+Work Log / Findings:
+- B-1 setNotifySettings err=3 -> batch.call: ЗАКРЫТО. VKApiClient.kt:16299-16309 —
+  direct, при ошибке fallback batchCallSingle("settingsGeneral.setNotifySettings") (P0-2).
+- B-2 getSecurityAlerts / getActivityHistoryDevices err=3: НЕ ЗАКРЫТО. Методы есть
+  (accountGetSecurityAlerts:15255, accountGetActivityHistoryDevices:15335) через
+  forceWebGateway=web.api.vk.ru, но VK всё равно отдаёт err=3 (методы резолвятся не там;
+  аналог statsDashboard+mini_app_token). SecurityAlertsPoller сам стопается при err=3.
+- B-3 mediaThumbs redesign-парсер: ЗАКРЫТО. VKApiClient.kt:15073+ (photo_130/320/thumb;
+  коммит 86d7620 — photo_200/100/50 redesign).
+- AuthDomainsConfig (Fix #189): ЗАКРЫТО. auth/exchange/AuthDomainsConfig.kt —
+  настраиваемые vk.com<->vk.ru домены через UI (snapshot + хелперы).
+- getLegacyModalsHashes err=3: НЕ ЗАКРЫТО. Метод есть в VKApiClient.kt, VK его не принимает — спамит лог.
+- B-4 исходящий звонок: ЖДЁТ Блок A (съём DevTools: A-1 startCall, A-4 getCallParams,
+  A-2/A-3 WS-frames). Без эталона VK правка невозможна.
+- Статистика W47: ЗАКРЫТО (см. STATS-W47-* и коммит 2d1d762).
+
+Stage Summary:
+- Закрыто: B-1, B-3, AuthDomainsConfig, W47.
+- Осталось (код): B-2, getLegacyModalsHashes, B-4 (ждёт A).
