@@ -81,6 +81,12 @@ object StatsChunkParser {
     /** Точка графика (день → значение). */
     data class TimePoint(val x: String, val y: Double)
 
+    /** Точка bar-chart (категория -> значение). */
+    data class BarPoint(val x: String, val y: Double)
+
+    /** Серия bar-chart (одна легенда). */
+    data class BarSeries(val label: String, val points: List<BarPoint>)
+
     data class TimelineChart(val title: String, val points: List<TimePoint>)
 
     /** Разобранный data-item. */
@@ -89,6 +95,8 @@ object StatsChunkParser {
         data class DataList(val id: String, val title: String, val rows: List<ListRow>) : DataCard
         data class Doughnut(val id: String, val title: String, val segments: List<Segment>) : DataCard
         data class Timeline(val id: String, val title: String, val points: List<TimePoint>) : DataCard
+        data class BarChart(val id: String, val title: String, val series: List<BarSeries>) : DataCard
+        data class AdvancedList(val id: String, val title: String, val rows: List<ListRow>) : DataCard
     }
 
     fun parseData(chunk: String): DataCard? {
@@ -99,7 +107,14 @@ object StatsChunkParser {
                 "summary" -> parseSummary(item)
                 "data_list" -> parseDataList(item)
                 "doughnut_chart" -> parseDoughnut(item)
-                "advanced_timeline_chart" -> parseTimeline(item)
+                "bar_chart" -> parseBarChart(item)
+                "advanced_data_list" -> parseDataList(item)
+                "pie_chart" -> parseDoughnut(item)
+                "advanced_timeline_chart" -> {
+                    val tl = parseTimeline(item)
+                    // VK шлёт graph=[] но с summary (число) — отдаём как Summary.
+                    if (tl.points.isEmpty() && item.has("summary")) parseSummary(item) else tl
+                }
                 else -> null
             }
         } catch (_: Exception) {
@@ -127,7 +142,7 @@ object StatsChunkParser {
         return DataCard.Summary(id = item.str("id"), rows = rows)
     }
 
-    private fun parseDataList(item: JsonObject): DataCard.DataList {
+    private fun parseDataList(item: JsonObject): DataCard {
         val rows = item.getAsJsonArray("items")?.mapNotNull { el ->
             if (!el.isJsonObject) return@mapNotNull null
             val o = el.asJsonObject
@@ -137,7 +152,12 @@ object StatsChunkParser {
                 percent = o.num("percentage_value"),
             )
         } ?: emptyList()
-        return DataCard.DataList(id = item.str("id"), title = item.str("title"), rows = rows)
+        val t = item.str("type")
+        return if (t == "advanced_data_list") {
+            DataCard.AdvancedList(id = item.str("id"), title = item.str("title"), rows = rows)
+        } else {
+            DataCard.DataList(id = item.str("id"), title = item.str("title"), rows = rows)
+        }
     }
 
     private fun parseDoughnut(item: JsonObject): DataCard.Doughnut {
@@ -172,6 +192,21 @@ object StatsChunkParser {
             }
         }
         return DataCard.Timeline(id = item.str("id"), title = item.str("title"), points = points)
+    }
+
+    private fun parseBarChart(item: JsonObject): DataCard.BarChart {
+        val g = item.getAsJsonArray("graph")?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
+        val series = g?.getAsJsonArray("datasets")?.mapNotNull { el ->
+            if (!el.isJsonObject) return@mapNotNull null
+            val o = el.asJsonObject
+            val pts = o.getAsJsonArray("data")?.mapNotNull { p ->
+                if (!p.isJsonObject) return@mapNotNull null
+                val po = p.asJsonObject
+                BarPoint(x = po.str("x"), y = po.num("y"))
+            } ?: emptyList()
+            BarSeries(label = o.str("label"), points = pts)
+        } ?: emptyList()
+        return DataCard.BarChart(id = item.str("id"), title = item.str("title"), series = series)
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────

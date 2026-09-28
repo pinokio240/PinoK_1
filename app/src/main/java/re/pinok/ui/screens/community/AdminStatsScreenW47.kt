@@ -1,10 +1,20 @@
 package re.pinok.ui.screens.community
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -89,9 +100,34 @@ fun AdminStatsScreen(
 
     val poller = remember { StatsQueuePoller(app.httpClient, app.apiClient) }
 
-    // Единый период — последние 7 дней (как Mini App по умолчанию).
-    val edateMs = remember { System.currentTimeMillis() }
-    val sdateMs = remember { edateMs - 7L * 24 * 60 * 60 * 1000 }
+    // #STATS-PERIOD: выбор периода (сегодня/вчера/7 дней/30 дней).
+    // VK выравнивает sdate/edate по ЛОКАЛЬНОЙ зоне на границы суток.
+    var periodIdx by remember { mutableIntStateOf(2) }
+    val periodOpts = listOf(
+        Triple("Сегодня", "today", 0),
+        Triple("Вчера", "yesterday", 1),
+        Triple("7 дней", "last7Days", 7),
+        Triple("30 дней", "last30Days", 30),
+    )
+    // Диапазон считается НА МОМЕНТ вызова (а не при рекомпозиции) — иначе первый
+    // клик по чипу использует старые даты (нужно 2 нажатия). #STATS-PERIOD-FIX
+    fun periodRange(idx: Int): Triple<String, Long, Long> {
+        val now = System.currentTimeMillis()
+        val todayStart = java.util.Calendar.getInstance().apply {
+            timeInMillis = now
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val dayMs = 24L * 60 * 60 * 1000
+        return when (idx) {
+            0 -> Triple("today", todayStart, now)
+            1 -> Triple("yesterday", todayStart - dayMs, todayStart - 1)
+            3 -> Triple("last30Days", todayStart - 30L * dayMs, now)
+            else -> Triple("last7Days", todayStart - 7L * dayMs, now)
+        }
+    }
 
     // Сбор chunk'ов от poller'а: сопоставляем task_id -> card_id.
     LaunchedEffect(groupId) {
@@ -111,6 +147,7 @@ fun AdminStatsScreen(
 
     /** Загрузка layout текущей секции/подсекции + запуск data-задач по карточкам. */
     fun loadLayout() {
+        val (curPeriod, sdateMs, edateMs) = periodRange(periodIdx)
         val sec = sections.getOrNull(selectedSection) ?: return
         val sub = sec.subsections.getOrNull(selectedSub) ?: return
         scope.launch {
@@ -122,6 +159,7 @@ fun AdminStatsScreen(
                     section = sec.id,
                     subSection = sub.id,
                     act = "layout",
+                    period = curPeriod,
                     sdateMs = sdateMs,
                     edateMs = edateMs,
                 )
@@ -149,7 +187,8 @@ fun AdminStatsScreen(
                         subSection = sub.id,
                         act = "data",
                         cardId = card.id,
-                        sdateMs = sdateMs,
+                        period = curPeriod,
+                    sdateMs = sdateMs,
                         edateMs = edateMs,
                     )
                     if (h != null) newMap[h.taskId] = card.id
@@ -203,6 +242,7 @@ fun AdminStatsScreen(
                 if (!subOk) {
                     error = "Не удалось подписаться на очередь статистики (queue.subscribe)"
                 } else {
+                    periodIdx = defaultPeriodIdx(sections.firstOrNull()?.id ?: "")
                     loadLayout()
                 }
             }
@@ -262,6 +302,7 @@ fun AdminStatsScreen(
                             onClick = {
                                 selectedSection = i
                                 selectedSub = 0
+                                periodIdx = defaultPeriodIdx(s.id)
                                 loadLayout()
                             },
                             text = { Text(s.name) },
@@ -280,6 +321,18 @@ fun AdminStatsScreen(
                         }
                     }
                 }
+                // #STATS-PERIOD: чипы выбора периода.
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    periodOpts.forEachIndexed { i, opt ->
+                        FilterChip(
+                            selected = periodIdx == i,
+                            onClick = { periodIdx = i; loadLayout() },
+                            label = { Text(opt.first, style = MaterialTheme.typography.bodySmall) },
+                        )
+                    }
+                }
+
                 if (busy) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
@@ -412,6 +465,14 @@ private fun StatsCardView(cardTitle: String, data: StatsChunkParser.DataCard?) {
                     }
                 }
 
+                is StatsChunkParser.DataCard.AdvancedList -> {
+                    for (r in data.rows) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text(r.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Text("${r.value.toInt()}  ${String.format(Locale.US, "%.1f%%", r.percent)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
                 is StatsChunkParser.DataCard.DataList -> {
                     for (r in data.rows) {
                         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -429,23 +490,10 @@ private fun StatsCardView(cardTitle: String, data: StatsChunkParser.DataCard?) {
                     }
                 }
 
+                is StatsChunkParser.DataCard.BarChart -> { BarChartView(data.series) }
                 is StatsChunkParser.DataCard.Doughnut -> {
-                    for (s in data.segments) {
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Text(
-                                text = s.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = "${s.value.toInt()}  ${String.format(Locale.US, "%.1f%%", s.percent)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+                    DoughnutChart(data.segments)
                 }
-
                 is StatsChunkParser.DataCard.Timeline -> {
                     if (data.points.isEmpty()) {
                         Text(
@@ -454,23 +502,132 @@ private fun StatsCardView(cardTitle: String, data: StatsChunkParser.DataCard?) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
-                        for (p in data.points.takeLast(10)) {
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text(
-                                    text = p.x,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Text(
-                                    text = p.y.toInt().toString(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
+                        TimelineChart(data.points)
                     }
                 }
             }
         }
     }
+}
+
+
+/** #STATS-CHARTS: круговая (doughnut) диаграмма. */
+@Composable
+private fun DoughnutChart(segments: List<StatsChunkParser.Segment>) {
+    if (segments.isEmpty()) {
+        Text("Нет данных", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    val palette = listOf(Color(0xFF2688EB), Color(0xFFE03FAB), Color(0xFFA3ADB8),
+        Color(0xFF4BB34B), Color(0xFFFFA000), Color(0xFF9C27B0))
+    val total = segments.sumOf { it.value }.coerceAtLeast(1.0)
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Canvas(modifier = Modifier.size(120.dp)) {
+            val d = size.minDimension
+            val stroke = d * 0.32f
+            var startAngle = -90f
+            segments.forEachIndexed { i, s ->
+                val sweep = (360f * (s.value / total)).toFloat()
+                drawArc(
+                    color = palette[i % palette.size],
+                    startAngle = startAngle,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    style = Stroke(width = stroke, cap = StrokeCap.Butt),
+                    topLeft = Offset(stroke / 2, stroke / 2),
+                    size = Size(d - stroke, d - stroke),
+                )
+                startAngle += sweep
+            }
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            segments.forEachIndexed { i, s ->
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 2.dp)) {
+                    Box(modifier = Modifier.size(10.dp).background(palette[i % palette.size], RoundedCornerShape(2.dp)))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(s.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    Text("${s.value.toInt()} (${String.format(Locale.US, "%.0f%%", s.percent)})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+/** #STATS-CHARTS: линейный график по точкам. */
+@Composable
+private fun TimelineChart(points: List<StatsChunkParser.TimePoint>) {
+    val pts = points.takeLast(30)
+    val maxY = (pts.maxOfOrNull { it.y } ?: 0.0).coerceAtLeast(1.0)
+    val minY = (pts.minOfOrNull { it.y } ?: 0.0)
+    val range = (maxY - minY).coerceAtLeast(1.0)
+    val lineColor = MaterialTheme.colorScheme.primary
+    Canvas(modifier = Modifier.fillMaxWidth().height(120.dp).padding(vertical = 8.dp)) {
+        if (pts.size < 2) return@Canvas
+        val dx = size.width / (pts.size - 1)
+        val path = Path()
+        pts.forEachIndexed { i, pt ->
+            val x = i * dx
+            val norm = ((pt.y - minY) / range).toFloat()
+            val y = size.height * (1f - norm)
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, color = lineColor, style = Stroke(width = 4f, cap = StrokeCap.Round))
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(pts.firstOrNull()?.x ?: "", style = MaterialTheme.typography.bodySmall)
+        Text("макс ${maxY.toInt()}", style = MaterialTheme.typography.bodySmall)
+        Text(pts.lastOrNull()?.x ?: "", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** #STATS-CHARTS: вертикальные бары (bar_chart). */
+@Composable
+private fun BarChartView(series: List<StatsChunkParser.BarSeries>) {
+    if (series.isEmpty() || series.all { it.points.isEmpty() }) {
+        Text("Нет данных", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    val palette = listOf(Color(0xFF2688EB), Color(0xFFE03FAB), Color(0xFF4BB34B), Color(0xFFFFA000))
+    val labels = series.firstOrNull()?.points?.map { it.x } ?: emptyList()
+    val maxY = (series.flatMap { it.points }.maxOfOrNull { it.y } ?: 1.0).coerceAtLeast(1.0)
+    Canvas(modifier = Modifier.fillMaxWidth().height(140.dp)) {
+        val n = labels.size
+        if (n == 0) return@Canvas
+        val groupW = size.width / n
+        val barW = (groupW * 0.7f) / series.size
+        series.forEachIndexed { si, s ->
+            s.points.forEachIndexed { i, p ->
+                val h = (size.height * (p.y / maxY)).toFloat()
+                val x = i * groupW + groupW * 0.15f + si * barW
+                drawRoundRect(
+                    color = palette[si % palette.size],
+                    topLeft = Offset(x, size.height - h),
+                    size = Size(barW * 0.9f, h),
+                    cornerRadius = CornerRadius(2f, 2f),
+                )
+            }
+        }
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        labels.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        series.forEachIndexed { si, s ->
+            Box(modifier = Modifier.padding(4.dp).size(10.dp).background(palette[si % palette.size], RoundedCornerShape(2.dp)))
+            Text(s.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 12.dp))
+        }
+    }
+}
+
+
+/** #STATS-PERIOD: дефолтный период по секции (как в VK: Общее=30д, остальное=вчера). */
+private fun defaultPeriodIdx(sectionId: String): Int = when (sectionId) {
+    "top_community" -> 3   // 30 дней
+    else -> 1              // вчера
 }

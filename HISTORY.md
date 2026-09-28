@@ -13132,3 +13132,16 @@ MainActivity +80/-3 (9 точек), LongPollKeepAliveService +7. Баланс с
 
 **Результат:** статистика отображает реальные цифры (Охват, Просмотры, Лайки, Комментарии,
 Поделились). Сборка и установка APK — на стороне пользователя (Android Studio).
+
+
+## 2026-09-28 (ч.2) — Статистика: графики, периоды, полный парсинг
+
+**Добавлено:**
+1. Парсинг всех типов VK-карточек: summary, data_list, advanced_data_list,
+   doughnut_chart, bar_chart, pie_chart, advanced_timeline_chart.
+2. Графики: круговая (drawArc), вертикальные бары (BarChartView), линия (TimelineChart).
+3. Выбор периода: Сегодня/Вчера/7 дней/30 дней (локальная TZ, границы суток МСК).
+   Дефолт по секции: top_community=30 дней, остальные=вчера.
+4. Фикс двойного клика периода: periodRange() вычисляется в момент вызова loadLayout.
+
+**Файлы:** StatsChunkParser.kt, AdminStatsScreenW47.kt.

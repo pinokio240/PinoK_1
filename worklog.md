@@ -10664,3 +10664,22 @@ Work Log:
 Stage Summary:
 - Статистика работает. Файлы: VKApiClient.kt, AdminStatsScreenW47.kt,
   StatsQueuePoller.kt, StatsChunkParser.kt. Сборку выполняет пользователь (Android Studio).
+
+---
+Task ID: STATS-W47-CHARTS-PERIOD
+Agent: assistant (deepseek-pp)
+Task: Графики статистики + выбор периода + полный парсинг типов карточек VK.
+
+Work Log:
+- Разобран HAR статистика2809.har: 37 уникальных card_id, enum типов VK.
+- Парсер: добавлены bar_chart (BarChart/BarSeries/BarPoint), pie_chart, advanced_data_list (AdvancedList);
+  advanced_timeline_chart с пустым graph но summary -> Summary.
+- UI: DoughnutChart -> круг (Canvas.drawArc); BarChartView -> вертикальные бары;
+  ветка AdvancedList.
+- Период: чипы Сегодня/Вчера/7дней/30дней; диапазон считается внутри loadLayout
+  (periodRange) — переключение с 1 клика (было 2). Дефолт по секции: top_community=30д, остальные=вчера.
+- Границы суток по ЛОКАЛЬНОЙ зоне (МСК), как VK.
+
+Stage Summary:
+- Статистика отображает все типы карточек; период переключается корректно.
+  Файлы: StatsChunkParser.kt, AdminStatsScreenW47.kt (VKApiClient.kt/StatsQueuePoller.kt — ранее).
