@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "versionCode": 7,
+      "versionName": "2.1.6",
+      "stamp": "calls-2026.09.29-1",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/V2.1.6/PiniK_2909261354.apk",
+      "sha256": "3a2458ba0cb924f24ad53db2ac79ec47e084c9dccc8bc712777c0fdec8a13c62",
+      "notes": "⚠️ ВАЖНО: СТАРЫЙ БЭКАП НАСТРОЕК НЕ СРАБОТАЕТ — АВТОРИЗАЦИЯ ПЕРЕДЕЛАНА. Восстанавливайте настройки вручную. PinoK 2.1.6: подготовка релиза, stamp=calls-2026.09.29-1."
+    },
+    {
       "versionCode": 6,
       "versionName": "2.1.5",
       "stamp": "calls-2026.09.18-1",
