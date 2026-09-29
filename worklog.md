@@ -10988,3 +10988,139 @@ Fix (AdminStatsScreenW47.kt, statsCardTitle):
 Stage Summary:
 - Bekap AdminStatsScreenW47.kt.bak_20260928_222209. Skobki 0/0. Sborka - za yuzerom.
 - UROK: ne vydumyvat imena, brat title ot VK.
+
+---
+Task ID: RELEASE-V216-PUBLISH
+Agent: assistant (deepseek-pp)
+Task: Publikaciya PinoK V2.1.6 (versionCode 7) + podpis version.json (ed25519).
+
+Work Log:
+- app/build.gradle.kts: versionCode 6->7, versionName 2.1.5->2.1.6.
+- core/common/.../BuildStamp.kt: STAMP calls-2026.09.18-1 -> calls-2026.09.29-1.
+- version.json: dobavlena zapis V2.1.6 pervoy.
+    apkUrl=https://github.com/pinokio240/PinoK_1/releases/download/V2.1.6/PiniK_2909261354.apk
+    sha256=3a2458ba0cb924f24ad53db2ac79ec47e084c9dccc8bc712777c0fdec8a13c62
+- KRITICHNO (grabli CRLF): repo core.autocrlf=true, raw.githubusercontent otdayot LF.
+    Perepisal version.json s LF-baytami i podpisal IMENNO LF-bayty.
+- Podpis: E:\ANDROID_keystore\private_key.hex (ed25519 seed 32b).
+    Publichnyy klyuch sovpal s vshitym v APK: XvaSZqNn... (fp 22520fde...).
+- version.json.sig = base64 detached ed25519.
+- Push: cd15292..df77d39 (vetka PinoK).
+
+Stage Summary:
+- Proverka: git show HEAD:version.json -> CR=0, LF=19; verify(sig, committed blob)=True.
+- Release V2.1.6 na GitHub est (asset PiniK_2909261354.apk, 29 Sep 11:02).
+- Bekapy: build.gradle.kts.bak, version.json.bak, BuildStamp.kt.bak.
+
+
+---
+Task ID: NOTIFICATIONS-WEB-REWRITE
+Agent: assistant (deepseek-pp)
+Task: Vkladka "Uvedomleniya" — perevod na veb-formy m.vk.ru (settingsGeneral.* NE suschestvuet v VK API).
+
+Work Log (HAR api.vk.com_29.har / api.vk.com_29_2.har):
+- settingsGeneral.toggleNotify -> err=3 "Unknown method passed" (metod NE suschestvuet).
+- settingsGeneral.getNotifySettings -> err=15 "token required".
+- Realnyy mehanizm VK — veb-formy m.vk.ru: POST settings?act=notify_group_save
+    (group, value=all|none, hash), act=notify_push_save/_message_save/_chat_save/_silent_save.
+    hash (CSRF) obyazatelen.
+- Mapping 30 realnyh veb-grupp (likes, comments, comment_commented, copies, mentions,
+    friends_requests, friends_found, voting, wall_posts, related_events, ...).
+    PinoK sn_replies->comment_commented, sn_polls->voting, sn_friend_requests->friends_requests,
+    sn_reposts->copies i t.d.
+- 20 fiktivnyh sn_* (net veb-gruppy) — skryty v UI.
+
+Izmeneniya:
+- NEW app/src/main/java/re/pinok/api/VKNotifyWeb.kt (~24 KB, 537 strok):
+    object VKNotifyWeb — fetch(client):Snapshot?, saveGroup/savePushMessage/savePushChat/
+    savePushMaster/savePushGroup, buildSections(snap):List<SettingsSection>,
+    webGroupForPinoKKey(sn_*):String?, PinoKOrder, PinoKTitles.
+- VKApiClient.kt: settingsGeneralGetNotifySettings -> settingsGetNotifyViaWeb (fallback pri page=notify);
+    settingsGeneralSetNotifySettings -> settingsSetNotifyViaWeb -> VKNotifyWeb.saveGroup.
+- SettingsScreen.kt: helper realNotifyToggles(src)=src.filter{webGroupForPinoKKey(it.key)!=null};
+    obernuty 9 mest rendera grupp tumblerov (NOTIFY_MSG items + 8 notifyToggleSection).
+    Master sn_push_send NE filtruetsya.
+
+Stage Summary:
+- Bekapy: SettingsScreen.kt.bak-20260929-164125, VKApiClient.kt.bak-20260929-164125.
+- Sborka yuzera — OK, prilozhenie startuet.
+- Push: bf6e75a (vetka PinoK).
+- GRABLI: python -c bez `# -*- coding: utf-8 -*-` padает na ne-ASCII;
+    massovyy replace legko zadаet sosednie funkcii (snes parseNotifyCache — vosstanovil iz .bak).
+
+
+---
+Task ID: LOGGING-TOGGLES-PLAN
+Agent: assistant (deepseek-pp)
+Task: C9-tumbler + master-logirovanie (plan; odobren polzovatelem 30.09).
+
+Plan (odobreno):
+- C9-tumbler: SovaPrefs.logC9Enabled (default false), UI "Logi otladki admin (zhurnal deystviy)".
+    Obernut 10 strok #C9 groupsEventLogPage: v VKApiClient.kt L18336-18379.
+- Master-tumbler "Logirovanie razdelov": ispolzuet suschestvuyuschiy SovaPrefs.logSectionsOff (String).
+    Pri off — glushit vse sekcii (krome ERROR).
+    Mesto: SettingsScreen.kt -> "Razdely prilozheniya (filtraciya logov)" L~3674 /
+    "Patterny diagnostiki (sekcii logov)" L~3743.
+
+Work Log (nachato):
+- Naydeno: AppLog.verboseToLogcat (master logcat-geyta; tumbler "Podrobnyy log v logcat" uzhe est).
+- SovaPrefs.logSectionsOff = p[Keys.LOG_SECTIONS_OFF] ?: "" (L128, L1710).
+
+Stage Summary:
+- Nachato. Zhdyom resheniya: delat li odnim zahodom (B+C) ili po shagam.
+
+
+---
+Task ID: SESSION-2026-09-30-SUMMARY
+Agent: assistant (deepseek-pp)
+Task: Itog sessii 29-30.09.2026 + plan rabot.
+
+Sdelano (push):
+- feat(notifications) bf6e75a: vkladka 'Uvedomleniya' perevedena s nestushchestvuyushchego
+  settingsGeneral.toggleNotify (err=3) na veb-formy m.vk.ru. Novyy VKNotifyWeb.kt (537 str),
+  fallback v VKApiClient.kt (chtenie settingsGetNotifyViaWeb + zapis settingsSetNotifyViaWeb),
+  UI-filtr realNotifyToggles (20 fiktivnyh sn_* skryty) v SettingsScreen.kt.
+- release V2.1.6 df77d39: versionCode 7/2.1.6, stamp calls-2026.09.29-1, version.json V2.1.6,
+  re-signed ed25519, opublikovan (APK + manifest).
+
+Provereno: sborka OK, prilozhenie startuet. Git: lokalnyy HEAD = origin/PinoK = bf6e75a.
+
+Plan rabot (sleduyushchee):
+1. Tumbler 'Logi otladki admin (zhurnal deystviy)' dlya #C9 (SovaPrefs.logC9Enabled, default false;
+   obernut 10 AppLog strok v VKApiClient.kt L18336-18379).
+2. Master-tumbler 'Logirovanie razdelov' na baze SovaPrefs.logSectionsOff (String) —
+   glushit vse sekcii krome ERROR. Mesto: SettingsScreen.kt 'Razdely prilozheniya (filtraciya logov)' ~L3674.
+3. Zhurnal deystviy admin (W39 #ADMIN-C9): posle peresborki vsyo eshchyo pust (issue #22) —
+   razbirat AdminEventLogScreen/parsing event_log.
+4. Admin statistika: UI-bag (verikalnye zagolovki tabov), post_views/posts_interaction 'Net dannyh'.
+5. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
+
+Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
+bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
+---
+Task ID: SESSION-2026-09-30-SUMMARY
+Agent: assistant (deepseek-pp)
+Task: Itog sessii 29-30.09.2026 + plan rabot.
+
+Sdelano (push):
+- feat(notifications) bf6e75a: vkladka 'Uvedomleniya' perevedena s nestushchestvuyushchego
+  settingsGeneral.toggleNotify (err=3) na veb-formy m.vk.ru. Novyy VKNotifyWeb.kt (537 str),
+  fallback v VKApiClient.kt (chtenie settingsGetNotifyViaWeb + zapis settingsSetNotifyViaWeb),
+  UI-filtr realNotifyToggles (20 fiktivnyh sn_* skryty) v SettingsScreen.kt.
+- release V2.1.6 df77d39: versionCode 7/2.1.6, stamp calls-2026.09.29-1, version.json V2.1.6,
+  re-signed ed25519, opublikovan (APK + manifest).
+
+Provereno: sborka OK, prilozhenie startuet. Git: lokalnyy HEAD = origin/PinoK = bf6e75a.
+
+Plan rabot (sleduyushchee):
+1. Tumbler 'Logi otladki admin (zhurnal deystviy)' dlya #C9 (SovaPrefs.logC9Enabled, default false;
+   obernut 10 AppLog strok v VKApiClient.kt L18336-18379).
+2. Master-tumbler 'Logirovanie razdelov' na baze SovaPrefs.logSectionsOff (String) —
+   glushit vse sekcii krome ERROR. Mesto: SettingsScreen.kt 'Razdely prilozheniya (filtraciya logov)' ~L3674.
+3. Zhurnal deystviy admin (W39 #ADMIN-C9): posle peresborki vsyo eshchyo pust (issue #22) —
+   razbirat AdminEventLogScreen/parsing event_log.
+4. Admin statistika: UI-bag (verikalnye zagolovki tabov), post_views/posts_interaction 'Net dannyh'.
+5. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
+
+Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
+bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
