@@ -16280,7 +16280,29 @@ class VKApiClient(
         parseNotifySections(json)?.let { return it }
         AppLog.i("VKApiClient", "getNotifySettings($page): direct не отдал sections — ретрай через batch.call (P0-2)")
         val el = batchCallSingle("settingsGeneral.getNotifySettings", mapOf("page" to page))
-        return parseNotifySections(el as? JsonObject)
+        val fromBatch = parseNotifySections(el as? JsonObject)
+        if (fromBatch != null && fromBatch.isNotEmpty()) return fromBatch
+        // #NOTIFY-WEB-REWRITE (2026-09-30): settingsGeneral.* НЕ существует в VK API
+        // (err=3/err=15) — рабочий путь только ВЕБ-ФОРМЫ m.vk.ru (VKNotifyWeb).
+        if (page == "notify") {
+            AppLog.i("VKApiClient", "getNotifySettings(notify): api-путь пуст — читаем веб m.vk.ru")
+            return settingsGetNotifyViaWeb()
+        }
+        return fromBatch
+    }
+
+    /**
+     * #NOTIFY-WEB-REWRITE: чтение настроек уведомлений через веб-страницу m.vk.ru.
+     * Возвращает sections-дерево; null при сбое/оффлайне.
+     */
+    private suspend fun settingsGetNotifyViaWeb(): List<re.pinok.data.model.SettingsSection>? {
+        if (isOffline()) return null
+        val snap = VKNotifyWeb.fetch(httpClient)
+        if (snap == null) {
+            AppLog.w("VKApiClient", "settingsGetNotifyViaWeb: snapshot не получен")
+            return null
+        }
+        return VKNotifyWeb.buildSections(snap)
     }
 
     /**
@@ -16306,14 +16328,49 @@ class VKApiClient(
             ?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
         AppLog.w("VKApiClient", "setNotifySettings($key) direct не прошёл (err=$errCode) — ретрай через batch.call (P0-2)")
         val el = batchCallSingle("settingsGeneral.setNotifySettings",
-            mapOf("key" to key, "value" to value)) ?: return false
-        return when {
-            el.isJsonObject -> {
-                val o = el.asJsonObject
-                o.has("response") && getObj(o, "error") == null
+            mapOf("key" to key, "value" to value))
+        if (el != null) {
+            val okBatch = when {
+                el.isJsonObject -> {
+                    val o = el.asJsonObject
+                    o.has("response") && getObj(o, "error") == null
+                }
+                else -> true // примитив (1/"1") — успех без обёртки
             }
-            else -> true // примитив (1/"1") — успех без обёртки
+            if (okBatch) return true
         }
+        // #NOTIFY-WEB-REWRITE (2026-09-30): settingsGeneral.setNotifySettings НЕ
+        // существует в VK API (err=3) — рабочий путь только ВЕБ-ФОРМЫ m.vk.ru.
+        // См. VKNotifyWeb (значения = "all"/"none", ключ = веб-группа).
+        AppLog.i("VKApiClient", "setNotifySettings($key): api-путь не сработал — веб-фолбэк m.vk.ru")
+        return settingsSetNotifyViaWeb(key, value)
+    }
+
+    /**
+     * #NOTIFY-WEB-REWRITE: запись настройки уведомления через веб-формы m.vk.ru.
+     * Принимает PinoK-ключ (sn_* или голый), значение "true"/"false" (bool-совместимо)
+     * либо "all"/"none". Возвращает true при успехе.
+     */
+    private suspend fun settingsSetNotifyViaWeb(key: String, value: String): Boolean {
+        if (isOffline()) return false
+        // true/all → включено; false/none → выключено.
+        val enabled = value == "true" || value == "1" || value == "all"
+        val group = VKNotifyWeb.webGroupForPinoKKey(key)
+        if (group == null) {
+            AppLog.w("VKApiClient", "settingsSetNotifyViaWeb: ключ '$key' НЕ имеет веб-группы (фиктивный)")
+            return false
+        }
+        val snap = VKNotifyWeb.fetch(httpClient)
+        if (snap == null) {
+            AppLog.w("VKApiClient", "settingsSetNotifyViaWeb: не получен snapshot (hash/cookies)")
+            return false
+        }
+        val hash = snap.hashGroup
+        if (hash == null || hash.isBlank()) {
+            AppLog.w("VKApiClient", "settingsSetNotifyViaWeb: hash не извлечён")
+            return false
+        }
+        return VKNotifyWeb.saveGroup(httpClient, hash, group, enabled)
     }
 
     /** Convenience wrapper: toggles a boolean param. */

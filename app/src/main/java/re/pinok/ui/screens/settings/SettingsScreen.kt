@@ -6167,6 +6167,13 @@ private val NOTIFY_TITLES: Map<String, String> =
     ALL_NOTIFY_TOGGLES.associate { it.key to it.title }
 
 /**
+ * #NOTIFY-WEB-REWRITE (2026-09-30): в UI показываем ТОЛЬКО те sn_*-тумблеры,
+ * у которых есть РЕАЛЬНАЯ веб-группа VK. Фиктивные скрыты.
+ */
+private fun realNotifyToggles(src: List<NotifyToggleDef>): List<NotifyToggleDef> =
+    src.filter { re.pinok.api.VKNotifyWeb.webGroupForPinoKKey(it.key) != null }
+
+/**
  * Fix #302 (Task 2-b): десериализация кэша sn_* состояний из JSON-строки
  * (SovaPrefs.notifyCacheJson). Формат: `{"sn_messages":true,...}`.
  * Толерантна к мусору/повреждённому JSON — возвращает emptyMap.
@@ -6563,7 +6570,7 @@ private fun NotificationsTab(
             ) { scope.launch { app.prefs.setMsgMute(it) } }
         }
         // Fix #302 (Task 2-b): 5 per-category sn_* тогглов (BFF-backed).
-        items(NOTIFY_MSG_TOGGLES, key = { it.key }) { t ->
+        items(realNotifyToggles(NOTIFY_MSG_TOGGLES), key = { it.key }) { t ->
             ToggleRowWithLoading(
                 title = t.title,
                 checked = notifyStates[t.key] ?: NOTIFY_DEFAULTS[t.key] ?: true,
@@ -6575,31 +6582,31 @@ private fun NotificationsTab(
         // Fix #302 (Task 2-b): 5 новых секций с sn_* тогглами (всего ~18 строк).
         notifyToggleSection(
             sectionTitle = "Сообщества",
-            toggles = NOTIFY_GROUPS_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_GROUPS_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
         notifyToggleSection(
             sectionTitle = "Друзья",
-            toggles = NOTIFY_FRIEND_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_FRIEND_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
         notifyToggleSection(
             sectionTitle = "Реакции и комментарии",
-            toggles = NOTIFY_REACTION_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_REACTION_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
         notifyToggleSection(
             sectionTitle = "Контент",
-            toggles = NOTIFY_CONTENT_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_CONTENT_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
         notifyToggleSection(
             sectionTitle = "Прочее",
-            toggles = NOTIFY_OTHER_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_OTHER_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
@@ -6609,19 +6616,19 @@ private fun NotificationsTab(
         // категорий, которые ВК предлагает настроить, но которых не было в UI).
         notifyToggleSection(
             sectionTitle = "Обратная связь",
-            toggles = NOTIFY_FEEDBACK_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_FEEDBACK_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
         notifyToggleSection(
             sectionTitle = "События",
-            toggles = NOTIFY_EVENTS_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_EVENTS_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
         notifyToggleSection(
             sectionTitle = "Дополнительно",
-            toggles = NOTIFY_EXTRA_TOGGLES,
+            toggles = realNotifyToggles(NOTIFY_EXTRA_TOGGLES),
             states = notifyStates,
             loadingKeys = loadingKeys,
         ) { k, v -> toggleNotify(k, v) }
