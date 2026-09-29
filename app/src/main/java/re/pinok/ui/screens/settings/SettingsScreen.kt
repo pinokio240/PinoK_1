@@ -111,7 +111,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.filled.DevicesOther
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Person
@@ -128,8 +127,6 @@ import androidx.compose.material.icons.outlined.Equalizer
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Lock
-// IMP-VKID: иконка строки-входа «Аккаунт VK ID» в SECURITY-таб.
-import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Newspaper
 import androidx.compose.material.icons.outlined.Notifications
@@ -394,9 +391,6 @@ fun SettingsScreen(
     // IMP-FEED-2: экран «Скрытые источники» (менеджер мьютов ленты,
     // newsfeed.getBanned/unban) — тот же callback-паттерн навигации.
     onOpenHiddenSources: () -> Unit = {},
-    // IMP-VKID: экран «Аккаунт VK ID» (мультипрофили account.getMulti +
-    // deeplink-ячейки кабинета id.vk.com) — тот же callback-паттерн навигации.
-    onOpenVkIdAccount: () -> Unit = {},
 ) {
     val app = SovaApp.get()
     val snap by app.prefs.data.collectAsState(initial = null)
@@ -462,7 +456,7 @@ fun SettingsScreen(
                     SettingsTab.NOTIFICATIONS -> NotificationsTab(s, app, scope, onOpenNotificationSettings, onOpenBlacklist)
                     SettingsTab.PANELS -> PanelEditorTab(s, app, scope)
                     SettingsTab.PRIVACY -> PrivacyTab(s, app, scope, onOpenPrivacySettings)
-                    SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices, onOpenVkIdAccount)
+                    SettingsTab.SECURITY -> SecurityTab(s, app, scope, onOpenDevices)
                     SettingsTab.LOGGING -> LoggingTab(s, app, scope)
                     // Волна 45 #SETTINGS-EXPORT: вкладка «Данные» (экспорт/импорт настроек).
                     SettingsTab.DATA -> DataTab(app, scope)
@@ -3324,9 +3318,6 @@ private fun SecurityTab(
     app: SovaApp,
     scope: CoroutineScope,
     onOpenDevices: () -> Unit = {},
-    // IMP-VKID: вход в экран «Аккаунт VK ID» — callback-паттерн
-    // onOpenHiddenSources/onOpenDevices (строка-вход в секции «Аккаунт VK»).
-    onOpenVkIdAccount: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // #SETTINGS-FIX: диалог задания PIN-кода. W31-b #PIN-ALWAYS-SETUP: открывается
@@ -3355,91 +3346,6 @@ private fun SecurityTab(
         // §49.6 Sprint VK-ID-1.2: Управление сессиями/устройствами аккаунта.
         // Позволяет удалённо завершать сессии (через cua verification framework).
         item { SectionHeader("Аккаунт VK") }
-        item {
-            Card(modifier = Modifier.fillMaxWidth().clickable { onOpenDevices() }) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Default.DevicesOther,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.size(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Устройства и сессии",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            "Просмотр активных сессий и удалённое завершение",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-        // IMP-VKID: строка-вход в экран «Аккаунт VK ID» (мультипрофили
-        // account.getMulti + deeplink-ячейки кабинета id.vk.com: пароль,
-        // 2FA, сервисы, VK Pay). Стиль строки «Устройства и сессии» выше.
-        item {
-            Card(modifier = Modifier.fillMaxWidth().clickable { onOpenVkIdAccount() }) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Outlined.ManageAccounts,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.size(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Аккаунт VK ID",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            "Мультипрофили, пароль, 2FA, сервисы, VK Pay",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-        item {
-            // §49.5.1 #SAFETY-NET-ALERTS: quick toggle в security tab тоже.
-            // #SETTINGS-FIX (P3-10): подпись синхронизирована с дублем во вкладке
-            // «Уведомления» (:4810) — оба тумблера на pushSafetyNetAlerts.
-            ToggleRow(
-                title = "Оповещения о входе",
-                subtitle = "Уведомлять о подозрительных входах в аккаунт (новое устройство, " +
-                    "город, IP). Проверка каждые ${s.safetyNetPollIntervalMin} мин. " +
-                    "Канал: «Безопасность аккаунта» (высокий приоритет, звук).",
-                checked = s.pushSafetyNetAlerts,
-                onToggle = { v ->
-                    scope.launch {
-                        app.prefs.setPushSafetyNetAlerts(v)
-                        if (v) app.securityAlertsPoller?.triggerImmediatePoll()
-                    }
-                },
-            )
-        }
 
         item { SectionHeader("Блокировка приложения") }
         // #SETTINGS-FIX: при включении lockerEnabled без PIN — показываем
@@ -6920,27 +6826,6 @@ private fun NotificationsTab(
             )
         }
         item {
-            // §49.5.1 #SAFETY-NET-ALERTS (2026-08-04): уведомления о
-            // подозрительных входах (новое устройство/город/IP).
-            // Poller каждые 10 мин опрашивает accountPersonal.getSecurityAlerts.
-            // Heads-up notification (channel vk_security_alerts, IMPORTANCE_HIGH).
-            ToggleRow(
-                title = "Оповещения о входе",
-                subtitle = "Уведомлять о подозрительных входах в аккаунт (новое устройство, " +
-                    "город, IP). Проверка каждые ${s.safetyNetPollIntervalMin} мин. " +
-                    "Канал: «Безопасность аккаунта» (высокий приоритет, звук).",
-                checked = s.pushSafetyNetAlerts,
-                enabled = s.pushEnabled,
-                onToggle = { v ->
-                    scope.launch {
-                        app.prefs.setPushSafetyNetAlerts(v)
-                        // Триггерим немедленный poll при включении.
-                        if (v) app.securityAlertsPoller?.triggerImmediatePoll()
-                    }
-                },
-            )
-        }
-        item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
@@ -7363,40 +7248,6 @@ private fun NotificationsTab(
                 enabled = s.pushEnabled,
                 onToggle = { v -> scope.launch { app.prefs.setPushQuietHoursEnabled(v) } },
             )
-        }
-        // #SETTINGS-FIX: задержка показа push-уведомлений (была только в Snapshot).
-        item { SectionHeader("Задержка показа") }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "Задержка: ${delayMsLabel(s.pushShowDelayMs)}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (s.pushEnabled) MaterialTheme.colorScheme.onSurface
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "Уведомление показывается через N после получения. " +
-                            "0 = сразу. Полезно при высокой частоте уведомлений.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf(0L, 500L, 1000L, 3000L, 5000L).forEach { ms ->
-                            androidx.compose.material3.FilterChip(
-                                selected = s.pushShowDelayMs == ms,
-                                onClick = { scope.launch { app.prefs.setPushShowDelayMs(ms) } },
-                                label = { Text(delayMsLabel(ms)) },
-                                enabled = s.pushEnabled,
-                            )
-                        }
-                    }
-                }
-            }
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {

@@ -160,8 +160,6 @@ import re.pinok.ui.screens.settings.BlacklistScreen
 import re.pinok.ui.screens.settings.LogScreen
 import re.pinok.ui.screens.settings.PrivacySettingsScreen
 import re.pinok.ui.screens.settings.SettingsScreen
-// IMP-VKID: экран «Аккаунт VK ID» (мультипрофили + deeplink-ячейки кабинета).
-import re.pinok.ui.screens.settings.VkIdAccountScreen
 import re.pinok.ui.screens.superapp.ServicesScreen
 import re.pinok.ui.screens.video.VideoScreen
 import re.pinok.ui.screens.videoplayer.VideoPlatformRouter
@@ -933,9 +931,6 @@ listOf(
         // IMP-FEED-2: у FeedHiddenSourcesScreen («Скрытые источники») собственный
         // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и BlacklistScreen.
         Screen.FeedHidden.route,
-        // IMP-VKID: у VkIdAccountScreen («Аккаунт VK ID») собственный
-        // Scaffold+TopAppBar — та же схема hasOwnTopBar, что и BlacklistScreen.
-        Screen.VkIdAccount.route,
         // #MUSIC-PORT: у музыкальных экранов собственный LibraryTopBar
         // (← Название). Маршруты не были в списке → глобальный ScreenTopBar
         // (← PinoK) рисовался поверх локального → две панели.
@@ -2105,11 +2100,6 @@ composable(Screen.CallsHistory.route) {
                         onOpenHiddenSources = {
                             nav.navigate(Screen.FeedHidden.route)
                         },
-                        // IMP-VKID: «Аккаунт VK ID» (VkIdAccountScreen) — тот же
-                        // callback-паттерн навигации, что и onOpenHiddenSources.
-                        onOpenVkIdAccount = {
-                            nav.navigate(Screen.VkIdAccount.route)
-                        },
                     )
                 }
                 composable(Screen.NotificationSettings.route) {
@@ -2135,17 +2125,6 @@ composable(Screen.CallsHistory.route) {
                         },
                         onGroupClick = { groupId ->
                             nav.navigate(Screen.Community.buildRoute(groupId))
-                        },
-                    )
-                }
-                // IMP-VKID: «Аккаунт VK ID» — мультипрофили (account.getMulti) +
-                // deeplink-ячейки кабинета id.vk.com. Строка «Редактировать
-                // профиль» — вход в существующий EditProfileScreen (П-3).
-                composable(Screen.VkIdAccount.route) {
-                    VkIdAccountScreen(
-                        onBack = { nav.popBackStack() },
-                        onOpenEditProfile = {
-                            nav.navigate(Screen.ProfileEdit.route)
                         },
                     )
                 }

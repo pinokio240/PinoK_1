@@ -23,7 +23,6 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.VideoLibrary
@@ -495,7 +494,6 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * объектов Blacklist/FeedHidden); маршрут в hasOwnTopBar (SovaNavHost):
      * собственный Scaffold+TopAppBar. Без параметров — данные свои.
      */
-    object VkIdAccount : Screen("vkid_account", "Аккаунт VK ID", Icons.Outlined.ManageAccounts)
     /** #CALLS: история звонков (пропущенные/входящие/исходящие). */
     object CallsHistory  : Screen("calls_history", "Звонки",       Icons.Filled.Call)
     object About         : Screen("about",         "О приложении", null)
