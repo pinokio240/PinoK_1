@@ -11124,3 +11124,48 @@ Plan rabot (sleduyushchee):
 
 Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
 bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
+
+---
+
+Task ID: LOG-ERRORS-ONLY-2026-09-30
+
+Agent: assistant (deepseek-pp)
+
+Task: Logging UX — sekcii #C9/#CALLS/#MSG, rezhim "tolko oshibki" + tумбlерy.
+
+
+Sdelano (sborka OK, polzovatel):
+
+- SettingsScreen.kt LOG_SECTION_TOGGLES: dobavleny sekcii "#C9" -> "Admin: zhurnal deystviy",
+
+  "#CALLS" -> "Zvonki: diagnostika", "#MSG" -> "Soobshcheniya: arhiv i poisk".
+
+- #LOG-ERRORS-ONLY: AppLog.kt (core/common) - @Volatile errorsOnly=true, setErrorsOnly(),
+
+  gate v log() posle category: `if (errorsOnly && level != Log.ERROR) return`. ERROR ne gate-itsya.
+
+- SovaPrefs.kt (core/data): Keys.LOG_ERRORS_ONLY ("log_errors_only"), Snapshot.logErrorsOnly=true,
+
+  setLogErrorsOnly().
+
+- SovaApp.kt onCreate: AppLog.setErrorsOnly(snap.logErrorsOnly) posle setDisabledSections.
+
+- SettingsScreen.kt LoggingTab: tумбlер "Logirovat tolko oshibki" (default ON); pri ON vse
+
+  zavisimye log-tумбlерy disable-ny (verbose logcat, kategorii, sekcii, 3 knopki) cherez
+
+  ToggleRow(enabled=!s.logErrorsOnly) / TextButton(enabled=...).
+
+
+Provereno: sborka OK. Bekapy: SettingsScreen.kt.bak-20260929-*, AppLog.kt.bak-*, SovaPrefs.kt.bak-*,
+
+SovaApp.kt.bak-*.
+
+
+Plan rabot (sleduyushchee):
+
+1. Zhurnal deystviy admin (W39 #ADMIN-C9): pust (issue #22) - razbirat AdminEventLogScreen.
+
+2. Admin statistika: UI-bag (vertikalnye zagolovki tabov), post_views/posts_interaction "Net dannyh".
+
+3. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.

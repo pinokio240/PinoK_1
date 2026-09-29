@@ -126,6 +126,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // парсинг CSV в app-слое → AppLog.setDisabledSections().
             // Исключение NULL-ЯВНО — DataStore-дефолт-маппинг (соседи выше).
             logSectionsOff = p[Keys.LOG_SECTIONS_OFF] ?: "",
+            logErrorsOnly = p[Keys.LOG_ERRORS_ONLY] ?: true,
             // #238: показ FAB «подняться в верх ленты» при прокрутке вниз.
             // Default = true — FAB виден по умолчанию, пользователь может скрыть
             // в настройках (SettingsScreen → Интерфейс → «Кнопка наверх в ленте»).
@@ -590,6 +591,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
      * не содержит).
      */
     suspend fun setLogSectionsOff(v: String) = put(Keys.LOG_SECTIONS_OFF, v)
+    /** #LOG-ERRORS-ONLY: quiet mode - only ERROR is recorded. */
+    suspend fun setLogErrorsOnly(v: Boolean) = put(Keys.LOG_ERRORS_ONLY, v)
     /** #238: показ FAB «подняться в верх ленты» в FeedScreen. */
     suspend fun setFeedShowScrollFab(v: Boolean)         = put(Keys.FEED_SHOW_SCROLL_FAB, v)
     /** #FEED-FILTER-TOGGLE: показывать панель разделов ленты. */
@@ -1709,6 +1712,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          */
         val logSectionsOff: String = "",
         /**
+         * #LOG-ERRORS-ONLY (2026-09-30): only ERROR entries are recorded.
+         * Default = true. Applied in SovaApp.onCreate via AppLog.setErrorsOnly().
+         */
+        val logErrorsOnly: Boolean = true,
+        /**
          * Волна 45-д #SETTINGS-CRYPTO: шифровать файл экспорта настроек.
          * Дефолт false задан явно — прецедент logSectionsOff выше: именованные
          * конструкторы Snapshot в чужих файлах собираются без правок.
@@ -1742,6 +1750,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // ("#IM,#AUDIO,…"; "" = все секции логируются — дефолт). Парсинг CSV →
         // Set — в app-слое (SovaApp.parseLogSectionsOff), не в core/data.
         val LOG_SECTIONS_OFF = stringPreferencesKey("log_sections_off")
+        // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR recorded.
+        val LOG_ERRORS_ONLY = booleanPreferencesKey("log_errors_only")
         // #238: показ FAB «подняться в верх ленты» в FeedScreen.
         val FEED_SHOW_SCROLL_FAB = booleanPreferencesKey("feed_show_scroll_fab")
         // #FEED-FILTER-TOGGLE: показывать панель разделов ленты.

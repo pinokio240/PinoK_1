@@ -411,6 +411,22 @@ object AppLog {
      * тега [tag] или сообщения [msg] (либо равен им целиком). Пустое множество
      * = всегда true (дефолт «логируется всё», нулевая цена проверки).
      */
+    /**
+     * #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR entries are
+     * recorded (logcat + buffer + persistent.log). WARN/INFO/DEBUG/VERBOSE
+     * are skipped before any write. Default = true.
+     */
+    @Volatile
+    private var errorsOnly: Boolean = true
+
+    /** Enable/disable errors-only quiet mode (ERROR is never gated). */
+    fun setErrorsOnly(enabled: Boolean) {
+        if (errorsOnly != enabled) {
+            errorsOnly = enabled
+            Log.i("$PREFIX/AppLog", "errorsOnly = $enabled (only ERROR logged)")
+        }
+    }
+
     private fun sectionEnabled(tag: String, msg: String): Boolean {
         val disabled = disabledSections
         if (disabled.isEmpty()) return true
@@ -748,6 +764,11 @@ object AppLog {
         val category = categoryForTag(tag)
         val categoryEnabled = category in enabledCategories
         if (!categoryEnabled && level != Log.WARN && level != Log.ERROR) {
+            return
+        }
+
+        // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR is written.
+        if (errorsOnly && level != Log.ERROR) {
             return
         }
 

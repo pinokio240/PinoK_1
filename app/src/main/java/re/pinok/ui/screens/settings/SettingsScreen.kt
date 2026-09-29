@@ -3607,6 +3607,9 @@ private val LOG_SECTION_TOGGLES: List<Pair<List<String>, String>> = listOf(
     listOf("#NOTIFY") to "Уведомления",
     listOf("#PIN") to "PIN и безопасность",
     listOf("API") to "Сеть и API",
+    listOf("#C9") to "Админка: журнал действий",
+    listOf("#CALLS") to "Звонки: диагностика",
+    listOf("#MSG") to "Сообщения: архив и поиск",
 )
 
 @Composable
@@ -3648,8 +3651,23 @@ private fun LoggingTab(
                     "unmask URL, API-запросы). По умолчанию: ${if (verboseDefault) "вкл (debug)" else "выкл (release)"}. " +
                     "In-app просмотрщик логов содержит всё всегда.",
                 checked = re.pinok.util.AppLog.verboseToLogcat,
+                enabled = !s.logErrorsOnly,
             ) { enabled ->
                 re.pinok.util.AppLog.setVerboseLogcatEnabled(enabled)
+            }
+        }
+
+        // #LOG-ERRORS-ONLY (2026-09-30): quiet mode toggle - only ERROR is
+        // recorded (logcat + buffer + persistent.log). Default = ON.
+        item {
+            ToggleRow(
+                title = "Логировать только ошибки",
+                subtitle = "Тихий режим: пишутся только ERROR в logcat, буфер и persistent.log. " +
+                    "WARN/INFO/DEBUG/VERBOSE пропускаются. Отключите для полной диагностики.",
+                checked = s.logErrorsOnly,
+            ) { v ->
+                scope.launch { app.prefs.setLogErrorsOnly(v) }
+                re.pinok.util.AppLog.setErrorsOnly(v)
             }
         }
 
@@ -3695,6 +3713,7 @@ private fun LoggingTab(
                         title = cat.title,
                         subtitle = cat.description,
                         checked = checked,
+                        enabled = !s.logErrorsOnly,
                     ) { enabled ->
                         catStates[cat] = enabled
                         re.pinok.util.AppLog.setCategoryEnabled(cat, enabled)
@@ -3712,7 +3731,7 @@ private fun LoggingTab(
                     modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
                     horizontalArrangement = Arrangement.End,
                 ) {
-                    TextButton(onClick = {
+                    TextButton(enabled = !s.logErrorsOnly, onClick = {
                         re.pinok.util.AppLog.LogCategory.values().forEach { c ->
                             catStates[c] = true
                             re.pinok.util.AppLog.setCategoryEnabled(c, true)
@@ -3720,7 +3739,7 @@ private fun LoggingTab(
                         scope.launch { app.prefs.setLogCategoriesDisabled(emptySet()) }
                     }) { Text("Включить все") }
                     Spacer(Modifier.width(8.dp))
-                    TextButton(onClick = {
+                    TextButton(enabled = !s.logErrorsOnly, onClick = {
                         // #LOG-CATEGORIES-DEFAULT-CRITICAL: тот же набор что и
                         // default в SovaPrefs/AppLog.CRITICAL_CATEGORIES —
                         // AUTH + SYSTEM + NETWORK. Кнопка возвращает к дефолту.
@@ -3781,6 +3800,7 @@ private fun LoggingTab(
                         subtitle = "Маркеры «${markers.joinToString(", ")}». " +
                             "Включённый тумблер = секция логируется.",
                         checked = markers.none { it in disabledSections },
+                        enabled = !s.logErrorsOnly,
                     ) { enabled ->
                         if (enabled) {
                             disabledSections.removeAll(markers.toSet())
@@ -3801,7 +3821,7 @@ private fun LoggingTab(
                     modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
                     horizontalArrangement = Arrangement.End,
                 ) {
-                    TextButton(onClick = {
+                    TextButton(enabled = !s.logErrorsOnly, onClick = {
                         disabledSections.clear()
                         scope.launch { app.prefs.setLogSectionsOff("") }
                         AppLog.setDisabledSections(emptySet())

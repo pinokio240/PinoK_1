@@ -956,6 +956,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 // логируются (дефолт). Изменение из SettingsScreen применяется
                 // немедленно (AppLog.setDisabledSections сразу после записи префа).
                 AppLog.setDisabledSections(parseLogSectionsOff(snap.logSectionsOff))
+                // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR logged.
+                AppLog.setErrorsOnly(snap.logErrorsOnly)
             }.onFailure { e ->
                 android.util.Log.w("PinoK/SovaApp",
                     "loadLogCategories failed: ${e.message} — default (critical only: AUTH+SYSTEM+NETWORK) used")
