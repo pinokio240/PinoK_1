@@ -13631,3 +13631,21 @@ Task: Audiopodсистема — устойчивость на слабой се
 Проверено: HQ-битрейт работает; MP3 через ffmpeg-kit (SirenTranscoder, libmp3lame) работает.
 Бэкапы: *.bak-20260930-audfix*, *.bak-20260930-hqmobile, *.bak-20260930-hqtrue, *.bak-20260930-audio.
 Открыто (P2): precache следующего трека — частично (precacheAfterCurrentJob).
+
+
+---
+
+Task ID: AUDIO-MOBILE-OPT-2026-09-30
+Agent: assistant (deepseek-pp)
+ТЕМА ЗАКРЫТА: «Оптимизация аудио для мобильного интернета».
+
+Итогово (сборки ОК):
+1. PlayerService.kt — DefaultLoadControl 30s/120s/2.5s/5s (буфер для слабой сети).
+2. PlayerConnection.kt — BUFFERING watchdog 30s -> 9s.
+3. SovaPrefs.kt — music_hq_mobile (default TRUE), поле musicHqOnMobile = true.
+4. VKApiClient.kt — hqAllowedNow() — HQ на мобайле по тумблеру, 8 мест quality=hq.
+5. SettingsScreen.kt — тумблер «HQ на мобильной сети» (default вкл).
+6. PlayerConnection.kt — isOnWifiForPrecache(): read-ahead след. трека на Wi-Fi даже при autoCacheAudio=false; на мобильной не качаем.
+Проверено кодом: HQ-битрейт работает (8 мест); MP3 через ffmpeg-kit (SirenTranscoder/libmp3lame) работает.
+Коммиты: b678ce3 (P0/P1: loadcontrol, watchdog, HQ-mobile) + 441009f (P2: precache на Wi-Fi). Пуш: PinoK -> PinoK, проверено ls-remote = local HEAD.
+Бэкапы: *.bak-20260930-audfix*, *.bak-20260930-hqmobile, *.bak-20260930-hqtrue, *.bak-20260930-precache, *.bak-20260930-audio*.
