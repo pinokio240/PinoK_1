@@ -1003,13 +1003,25 @@ object PlayerConnection {
      * Возвращает true если был запущен pre-cache, false если следующий
      * трек уже скачан / качается / отсутствует / autoCacheAudio выключен.
      */
+    /**
+     * #P2-PRECACHE-WIFI (2026-09-30): true на Wi-Fi/Ethernet, false на мобильной/оффлайн.
+     * Read-ahead следующего трека выполняется на Wi-Fi даже при autoCacheAudio=false.
+     */
+    private fun isOnWifiForPrecache(): Boolean {
+        return try {
+            val type = re.pinok.SovaApp.getOrNull()?.networkObserver?.connectionType() ?: return false
+            type == "Wi-Fi" || type == "Ethernet"
+        } catch (_: Exception) { false }
+    }
+
     private fun precacheNextTrack(): Boolean {
         // Fix #140: diagnostic logging для каждой точки skip — пользователь
         // сможет по logcat проверить, почему pre-cache следующего трека
         // не запустился (disabled / no controller / no next track / not HLS /
         // already cached / in progress). SUCCESS-лог остался прежним (Fix #134).
-        if (!autoCacheAudio) {
-            AppLog.d(TAG, "precacheNext: SKIP (autoCacheAudio disabled)")
+        // #P2-PRECACHE-WIFI: read-ahead на Wi-Fi даже при autoCacheAudio=false.
+        if (!autoCacheAudio && !isOnWifiForPrecache()) {
+            AppLog.d(TAG, "precacheNext: SKIP (autoCacheAudio off && not on Wi-Fi)")
             return false
         }
         // Fix #280: TrackDownloadManager теперь имеет FIFO-очередь (Fix #265) —
@@ -1108,7 +1120,7 @@ object PlayerConnection {
         precacheAfterCurrentJob?.cancel()
         precacheAfterCurrentJob = null
         if (current == null) return
-        if (!autoCacheAudio) return
+        if (!autoCacheAudio && !isOnWifiForPrecache()) return
         val currentId = current.id
         // Case 1: CURRENT уже скачан → precacheNext СРАЗУ.
         if (TrackDownloadManager.isDownloaded(currentId)) {
@@ -1478,7 +1490,7 @@ object PlayerConnection {
             //   - если CURRENT уже скачан → сразу precacheNext
             //   - если CURRENT качается → ждём COMPLETED → потом precacheNext
             //   - если CURRENT будет качаться (auto-cache[READY]) → аналогично ждём
-            if (track != null && autoCacheAudio) {
+            if (track != null && (autoCacheAudio || isOnWifiForPrecache())) {
                 schedulePrecacheAfterCurrent(track)
             }
         }
