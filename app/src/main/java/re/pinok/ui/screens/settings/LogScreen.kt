@@ -1,5 +1,6 @@
 package re.pinok.ui.screens.settings
 
+import android.content.ClipData
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -24,12 +25,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -39,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +60,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.launch
 import re.pinok.util.AppLog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -62,10 +69,17 @@ import java.util.Locale
 
 private data class Lvl(val label: String, val char: String, val color: Color)
 
+private val CALL_TAGS = listOf(
+    "/CallScreen:", "/CallSignaling:", "/WebRtcEngine:", "/Queuev4Client:",
+    "/SovaApp:", "/VKApiClient:",
+)
+private fun isCallLine(line: String): Boolean = CALL_TAGS.any { line.contains(it) }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogScreen(onClose: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // Fix #112: явный BackHandler — перехватывает системный back press
     // (predictive back gesture на Android 13+) и вызывает onClose.
@@ -93,6 +107,9 @@ fun LogScreen(onClose: () -> Unit) {
     var enabledLevels by remember { mutableStateOf(defaultLevels) }
 
     var logLines by remember { mutableStateOf(AppLog.snapshot()) }
+    var searchQuery by remember { mutableStateOf("") }
+    var callsOnly by remember { mutableStateOf(false) }
+    var copyStatus by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(refreshKey) {
@@ -101,13 +118,16 @@ fun LogScreen(onClose: () -> Unit) {
         refreshKey++
     }
 
-    val filtered = remember(logLines, enabledLevels) {
+    val filtered = remember(logLines, enabledLevels, searchQuery, callsOnly) {
+        val q = searchQuery.trim()
         logLines.filter { line ->
             val firstSpace = line.indexOf(' ')
             if (firstSpace < 0) return@filter false
             val afterTs = line.substring(firstSpace + 1)
             val lvlChar = afterTs.firstOrNull() ?: '?'
-            lvlChar.toString() in enabledLevels
+            if (lvlChar.toString() !in enabledLevels) return@filter false
+            if (callsOnly && !isCallLine(line)) return@filter false
+            if (q.isNotEmpty()) line.contains(q, ignoreCase = true) else true
         }
     }
 
@@ -179,6 +199,19 @@ fun LogScreen(onClose: () -> Unit) {
                     }) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить")
                     }
+                    // LOGSEARCH-P2: копировать отфильтрованное в буфер
+                    IconButton(onClick = {
+                        val text = filtered.joinToString("\n")
+                        if (text.isBlank()) {
+                            android.widget.Toast.makeText(context, "Нет строк", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            cm?.setPrimaryClip(android.content.ClipData.newPlainText("PinoK logs", text))
+                            android.widget.Toast.makeText(context, "Скопировано ${filtered.size} строк", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Копировать")
+                    }
                 },
             )
         },
@@ -224,7 +257,24 @@ fun LogScreen(onClose: () -> Unit) {
                     onClick = { enabledLevels = levels.map { it.char }.toSet() },
                     label = { Text("Все") },
                 )
+                FilterChip(
+                    selected = callsOnly,
+                    onClick = { callsOnly = !callsOnly },
+                    label = { Text("Звонки") },
+                )
             }
+
+            // LOGSEARCH-P2: строка поиска (как в FAB-логе)
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                placeholder = { Text("Поиск по логам") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                singleLine = true,
+                shape = OutlinedTextFieldDefaults.shape,
+                colors = OutlinedTextFieldDefaults.colors(),
+            )
 
             Spacer(Modifier.height(4.dp))
 
