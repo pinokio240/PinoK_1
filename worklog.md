@@ -11259,3 +11259,33 @@ Agent: assistant (deepseek-pp)
 Проверено кодом: HQ-битрейт работает (8 мест); MP3 через ffmpeg-kit (SirenTranscoder/libmp3lame) работает.
 Коммиты: b678ce3 (P0/P1: loadcontrol, watchdog, HQ-mobile) + 441009f (P2: precache на Wi-Fi). Пуш: PinoK -> PinoK, проверено ls-remote = local HEAD.
 Бэкапы: *.bak-20260930-audfix*, *.bak-20260930-hqmobile, *.bak-20260930-hqtrue, *.bak-20260930-precache, *.bak-20260930-audio*.
+
+
+---
+
+Task ID: CHATS-HAR-2026-09-30
+Agent: assistant (deepseek-pp)
+Источник: C:\Users\Pinokio240\Desktop\Ссылки\админка\чаты.har (WebInspector, m.vk.ru/vkui/community_manage, 2026-09-26).
+
+ВАЖНО: этот HAR — НЕ про редактирование сообщений и НЕ про вложения. Он про CRUD БЕСЕД (чатов сообщества).
+Записей messages.edit / docs.* / photos.* / удаления вложений в файле НЕТ.
+
+Всего 17 entries, по теме (все POST https://m.vk.ru/method/<name>):
+
+1. groups.addChat  — создание беседы
+   params: lang=0&v=5.289&access_token=<vk1.a...>&title=<name>&is_donut=0&group_id=<gid>
+   response: {"response":{"id":6,"title":"1","photo":"","invite_link":"https://vk.me/join/AZQ...","members_count":1,"is_closed":false,"is_visible":true}}
+   → peer_id беседы = 2000000000 + id (тут 2000000006).
+
+2. groups.editChat  — изменение беседы
+   params: lang=0&v=5.289&access_token=<...>&peer_id=2000000006&is_closed=1&group_id=<gid>
+   response: {"response":1}
+   (поля: title/photo/is_closed по аналогии с VK API groups.editChat).
+
+3. groups.deleteChat  — удаление беседы
+   params: lang=0&v=5.289&access_token=<...>&peer_id=2000000006&group_id=<gid>
+   response: {"response":1}
+
+Прочее: список бесед читается через execute (внутри — groups/chats + count/items), плюс statEvents.addVKUI/stats.trackEvents (аналитика VKUI, игнорируем).
+
+Вывод: для интеграции бесед в PinoK достаточно groups.addChat/editChat/deleteChat (+ execute для списка). Для редактирования сообщений/вложений нужен ДРУГОЙ HAR (messages.edit, docs.getMessagesUploadServer+docs.save, удаление вложений).
