@@ -13460,60 +13460,114 @@ Stage Summary:
 - Nachato. Zhdyom resheniya: delat li odnim zahodom (B+C) ili po shagam.
 
 
----
-Task ID: SESSION-2026-09-30-SUMMARY
-Agent: assistant (deepseek-pp)
-Task: Itog sessii 29-30.09.2026 + plan rabot.
-
-Sdelano (push):
-- feat(notifications) bf6e75a: vkladka 'Uvedomleniya' perevedena s nestushchestvuyushchego
-  settingsGeneral.toggleNotify (err=3) na veb-formy m.vk.ru. Novyy VKNotifyWeb.kt (537 str),
-  fallback v VKApiClient.kt (chtenie settingsGetNotifyViaWeb + zapis settingsSetNotifyViaWeb),
-  UI-filtr realNotifyToggles (20 fiktivnyh sn_* skryty) v SettingsScreen.kt.
-- release V2.1.6 df77d39: versionCode 7/2.1.6, stamp calls-2026.09.29-1, version.json V2.1.6,
-  re-signed ed25519, opublikovan (APK + manifest).
-
-Provereno: sborka OK, prilozhenie startuet. Git: lokalnyy HEAD = origin/PinoK = bf6e75a.
-
-Plan rabot (sleduyushchee):
-1. Tumbler 'Logi otladki admin (zhurnal deystviy)' dlya #C9 (SovaPrefs.logC9Enabled, default false;
-   obernut 10 AppLog strok v VKApiClient.kt L18336-18379).
-2. Master-tumbler 'Logirovanie razdelov' na baze SovaPrefs.logSectionsOff (String) —
-   glushit vse sekcii krome ERROR. Mesto: SettingsScreen.kt 'Razdely prilozheniya (filtraciya logov)' ~L3674.
-3. Zhurnal deystviy admin (W39 #ADMIN-C9): posle peresborki vsyo eshchyo pust (issue #22) —
-   razbirat AdminEventLogScreen/parsing event_log.
-4. Admin statistika: UI-bag (verikalnye zagolovki tabov), post_views/posts_interaction 'Net dannyh'.
-5. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
-
-Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
-bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
----
-Task ID: SESSION-2026-09-30-SUMMARY
-Agent: assistant (deepseek-pp)
-Task: Itog sessii 29-30.09.2026 + plan rabot.
-
-Sdelano (push):
-- feat(notifications) bf6e75a: vkladka 'Uvedomleniya' perevedena s nestushchestvuyushchego
-  settingsGeneral.toggleNotify (err=3) na veb-formy m.vk.ru. Novyy VKNotifyWeb.kt (537 str),
-  fallback v VKApiClient.kt (chtenie settingsGetNotifyViaWeb + zapis settingsSetNotifyViaWeb),
-  UI-filtr realNotifyToggles (20 fiktivnyh sn_* skryty) v SettingsScreen.kt.
-- release V2.1.6 df77d39: versionCode 7/2.1.6, stamp calls-2026.09.29-1, version.json V2.1.6,
-  re-signed ed25519, opublikovan (APK + manifest).
-
-Provereno: sborka OK, prilozhenie startuet. Git: lokalnyy HEAD = origin/PinoK = bf6e75a.
-
-Plan rabot (sleduyushchee):
-1. Tumbler 'Logi otladki admin (zhurnal deystviy)' dlya #C9 (SovaPrefs.logC9Enabled, default false;
-   obernut 10 AppLog strok v VKApiClient.kt L18336-18379).
-2. Master-tumbler 'Logirovanie razdelov' na baze SovaPrefs.logSectionsOff (String) —
-   glushit vse sekcii krome ERROR. Mesto: SettingsScreen.kt 'Razdely prilozheniya (filtraciya logov)' ~L3674.
-3. Zhurnal deystviy admin (W39 #ADMIN-C9): posle peresborki vsyo eshchyo pust (issue #22) —
-   razbirat AdminEventLogScreen/parsing event_log.
-4. Admin statistika: UI-bag (verikalnye zagolovki tabov), post_views/posts_interaction 'Net dannyh'.
-5. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
-
-Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
-bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
+---
+
+Task ID: SESSION-2026-09-30-SUMMARY
+
+Agent: assistant (deepseek-pp)
+
+Task: Itog sessii 29-30.09.2026 + plan rabot.
+
+
+
+Sdelano (push):
+
+- feat(notifications) bf6e75a: vkladka 'Uvedomleniya' perevedena s nestushchestvuyushchego
+
+  settingsGeneral.toggleNotify (err=3) na veb-formy m.vk.ru. Novyy VKNotifyWeb.kt (537 str),
+
+  fallback v VKApiClient.kt (chtenie settingsGetNotifyViaWeb + zapis settingsSetNotifyViaWeb),
+
+  UI-filtr realNotifyToggles (20 fiktivnyh sn_* skryty) v SettingsScreen.kt.
+
+- release V2.1.6 df77d39: versionCode 7/2.1.6, stamp calls-2026.09.29-1, version.json V2.1.6,
+
+  re-signed ed25519, opublikovan (APK + manifest).
+
+
+
+Provereno: sborka OK, prilozhenie startuet. Git: lokalnyy HEAD = origin/PinoK = bf6e75a.
+
+
+
+Plan rabot (sleduyushchee):
+
+1. Tumbler 'Logi otladki admin (zhurnal deystviy)' dlya #C9 (SovaPrefs.logC9Enabled, default false;
+
+   obernut 10 AppLog strok v VKApiClient.kt L18336-18379).
+
+2. Master-tumbler 'Logirovanie razdelov' na baze SovaPrefs.logSectionsOff (String) —
+
+   glushit vse sekcii krome ERROR. Mesto: SettingsScreen.kt 'Razdely prilozheniya (filtraciya logov)' ~L3674.
+
+3. Zhurnal deystviy admin (W39 #ADMIN-C9): posle peresborki vsyo eshchyo pust (issue #22) —
+
+   razbirat AdminEventLogScreen/parsing event_log.
+
+4. Admin statistika: UI-bag (verikalnye zagolovki tabov), post_views/posts_interaction 'Net dannyh'.
+
+5. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
+
+
+
+Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
+
+bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
+
+---
+
+Task ID: SESSION-2026-09-30-SUMMARY
+
+Agent: assistant (deepseek-pp)
+
+Task: Itog sessii 29-30.09.2026 + plan rabot.
+
+
+
+Sdelano (push):
+
+- feat(notifications) bf6e75a: vkladka 'Uvedomleniya' perevedena s nestushchestvuyushchego
+
+  settingsGeneral.toggleNotify (err=3) na veb-formy m.vk.ru. Novyy VKNotifyWeb.kt (537 str),
+
+  fallback v VKApiClient.kt (chtenie settingsGetNotifyViaWeb + zapis settingsSetNotifyViaWeb),
+
+  UI-filtr realNotifyToggles (20 fiktivnyh sn_* skryty) v SettingsScreen.kt.
+
+- release V2.1.6 df77d39: versionCode 7/2.1.6, stamp calls-2026.09.29-1, version.json V2.1.6,
+
+  re-signed ed25519, opublikovan (APK + manifest).
+
+
+
+Provereno: sborka OK, prilozhenie startuet. Git: lokalnyy HEAD = origin/PinoK = bf6e75a.
+
+
+
+Plan rabot (sleduyushchee):
+
+1. Tumbler 'Logi otladki admin (zhurnal deystviy)' dlya #C9 (SovaPrefs.logC9Enabled, default false;
+
+   obernut 10 AppLog strok v VKApiClient.kt L18336-18379).
+
+2. Master-tumbler 'Logirovanie razdelov' na baze SovaPrefs.logSectionsOff (String) —
+
+   glushit vse sekcii krome ERROR. Mesto: SettingsScreen.kt 'Razdely prilozheniya (filtraciya logov)' ~L3674.
+
+3. Zhurnal deystviy admin (W39 #ADMIN-C9): posle peresborki vsyo eshchyo pust (issue #22) —
+
+   razbirat AdminEventLogScreen/parsing event_log.
+
+4. Admin statistika: UI-bag (verikalnye zagolovki tabov), post_views/posts_interaction 'Net dannyh'.
+
+5. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
+
+
+
+Ograntcheniya (pamyat): APK ne skachivat/ne razbirat; sborka — tolko polzovatel;
+
+bеkapy pered pravkoy; ne trim-yt bolshie .md-logi.
+
 
 ---
 
@@ -13559,3 +13613,21 @@ Plan rabot (sleduyushchee):
 2. Admin statistika: UI-bag (vertikalnye zagolovki tabov), post_views/posts_interaction "Net dannyh".
 
 3. VK ID account (app_id 7344294 vs 6287487, err=3): nuzhen HAR s id.vk.ru/account.
+
+
+---
+
+Task ID: AUDIO-NET-2026-09-30
+Agent: assistant (deepseek-pp)
+Task: Audiopodсистема — устойчивость на слабой сети + HQ/MP3 проверка.
+
+Сделано (4 сборки OK):
+- PlayerService.kt: DefaultLoadControl 30_000/120_000/2_500/5_000 (буфер мин30с/max120с/playback2.5с/rebuffer5с).
+- PlayerConnection.kt: BUFFERING watchdog 30s -> 9s (delay(9_000L)), лог '9s timeout'.
+- SovaPrefs.kt: ключ music_hq_mobile (default TRUE), поле musicHqOnMobile: Boolean = true, setter setMusicHqOnMobile.
+- VKApiClient.kt: helper 'private suspend fun hqAllowedNow()' + замена всех 8 мест quality=hq.
+- SettingsScreen.kt: ToggleRow «HQ на мобильной сети» (default вкл).
+
+Проверено: HQ-битрейт работает; MP3 через ffmpeg-kit (SirenTranscoder, libmp3lame) работает.
+Бэкапы: *.bak-20260930-audfix*, *.bak-20260930-hqmobile, *.bak-20260930-hqtrue, *.bak-20260930-audio.
+Открыто (P2): precache следующего трека — частично (precacheAfterCurrentJob).

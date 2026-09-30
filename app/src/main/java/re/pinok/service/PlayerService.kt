@@ -13,6 +13,7 @@ import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.CommandButton
@@ -359,6 +360,13 @@ class PlayerService : MediaSessionService() {
         val playerBuilder = ExoPlayer.Builder(this)
             .setAudioAttributes(attrs, /* handleAudioFocus = */ true)
             .setHandleAudioBecomingNoisy(true)
+            // #AUD-NET (2026-09-30): увеличенный буфер для нестабильного мобайла.
+            // min=30s max=120s playback=2.5s afterRebuffer=5s
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(30_000, 120_000, 2_500, 5_000)
+                    .build()
+            )
 
         // Fix #62: подключаем OkHttpDataSource с VK User-Agent.
         // Пытаемся получить OkHttpClient из SovaApp; если контекст ещё не

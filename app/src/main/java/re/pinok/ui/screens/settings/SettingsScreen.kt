@@ -1857,6 +1857,14 @@ private fun MusicTab(
             ) { scope.launch { app.prefs.setMusicHighQuality(it) } }
         }
         item { ToggleRow("Фоновое воспроизведение", s.musicBackgroundPlay) { scope.launch { app.prefs.setMusicBackgroundPlay(it) } } }
+        // #AUD-NET (2026-09-30): HQ на мобильной сети. По умолчанию ON.
+        item {
+            ToggleRow(
+                title = "HQ на мобильной сети",
+                subtitle = "По умолчанию вкл: на мобайле 320kbps. Выключите для 128kbps (меньше перебоев на слабом интернете).",
+                checked = s.musicHqOnMobile,
+            ) { scope.launch { app.prefs.setMusicHqOnMobile(it) } }
+        }
 
         // #AUDIO-QUALITY: выбор битрейта выходного MP3-файла.
         item { SectionHeader("Качество MP3") }

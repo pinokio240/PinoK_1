@@ -294,6 +294,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             musicDownloadPath  = p[Keys.MUSIC_DOWNLOAD_PATH]   ?: "/Music/PinoK/",
             videoDownloadPath  = p[Keys.VIDEO_DOWNLOAD_PATH]   ?: "",
             musicHighQuality   = p[Keys.MUSIC_HQ]              ?: true,
+            musicHqOnMobile    = p[Keys.MUSIC_HQ_MOBILE]       ?: true,
             musicBackgroundPlay= p[Keys.MUSIC_BG_PLAY]         ?: true,
             // #OFFLINE-TAB: формат сохранения скачанных аудио. Default: M4A.
             audioFormat        = AudioFormat.fromPref(p[Keys.AUDIO_FORMAT]),
@@ -819,6 +820,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setMusicDownloadPath(v: String)          = put(Keys.MUSIC_DOWNLOAD_PATH, v)
     suspend fun setVideoDownloadPath(v: String)          = put(Keys.VIDEO_DOWNLOAD_PATH, v)
     suspend fun setMusicHighQuality(v: Boolean)          = put(Keys.MUSIC_HQ, v)
+    /** #AUD-NET: разрешение HQ на мобильной сети. */
+    suspend fun setMusicHqOnMobile(v: Boolean)           = put(Keys.MUSIC_HQ_MOBILE, v)
     suspend fun setMusicBackgroundPlay(v: Boolean)       = put(Keys.MUSIC_BG_PLAY, v)
     /** #OFFLINE-TAB: установить формат сохранения аудио (M4A/MP3). */
     suspend fun setAudioFormat(v: AudioFormat)           = put(Keys.AUDIO_FORMAT, v.prefValue)
@@ -1444,6 +1447,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val musicDownloadPath: String,
         val videoDownloadPath: String,
         val musicHighQuality: Boolean,
+        /** #AUD-NET: HQ (quality=hq) на мобильной сети. Default false. */
+        val musicHqOnMobile: Boolean = true,
         val musicBackgroundPlay: Boolean,
         /** #OFFLINE-TAB: формат сохранения (M4A по умолчанию, MP3 opt-in через ffmpeg-kit). */
         val audioFormat: AudioFormat,
@@ -1832,6 +1837,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val MUSIC_DOWNLOAD_PATH = stringPreferencesKey("music_download_path")
         val VIDEO_DOWNLOAD_PATH = stringPreferencesKey("video_download_path")
         val MUSIC_HQ            = booleanPreferencesKey("music_hq")
+        /** #AUD-NET: HQ на мобильной сети (default false). */
+        val MUSIC_HQ_MOBILE     = booleanPreferencesKey("music_hq_mobile")
         val MUSIC_BG_PLAY       = booleanPreferencesKey("music_bg_play")
         // #OFFLINE-TAB: формат сохранения аудио ("m4a" | "mp3"). Default: "m4a".
         val AUDIO_FORMAT        = stringPreferencesKey("audio_format")

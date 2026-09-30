@@ -1501,10 +1501,10 @@ object PlayerConnection {
             bufferingWatchdogJob?.cancel()
             if (playbackState == Player.STATE_BUFFERING) {
                 bufferingWatchdogJob = scope.launch {
-                    delay(30_000L)
+                    delay(9_000L)
                     val c = controller ?: return@launch
                     if (c.playbackState == Player.STATE_BUFFERING) {
-                        AppLog.w(TAG, "BUFFERING watchdog: 30s timeout — force reprepare (track=#${track?.id ?: -1})")
+                        AppLog.w(TAG, "BUFFERING watchdog: 9s timeout — force reprepare (track=#${track?.id ?: -1})")
                         try {
                             val pos = c.currentPosition.coerceAtLeast(0L)
                             c.prepare()

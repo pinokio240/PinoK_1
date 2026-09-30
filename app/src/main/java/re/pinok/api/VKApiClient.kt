@@ -195,6 +195,18 @@ class VKApiClient(
     // «офлайн-режим который нельзя выключить» после очистки кэша.
     suspend fun isOffline(): Boolean = !networkObserver.isOnline()
 
+    /**
+     * #AUD-NET (2026-09-30): разрешён ли HQ (quality=hq) сейчас.
+     * На мобильной сети HQ отключается (меньше буферизации),
+     * кроме случая когда включён musicHqOnMobile.
+     */
+    private suspend fun hqAllowedNow(): Boolean {
+        val s = prefs.data.first()
+        if (!s.musicHighQuality) return false
+        val type = try { networkObserver.connectionType() } catch (_: Exception) { "none" }
+        return type != "Mobile" || s.musicHqOnMobile
+    }
+
     fun token(): String? = tokenStorage.load()?.accessToken
 
     suspend fun usersGet(userId: Long? = null): UserProfile? {
@@ -2651,7 +2663,7 @@ class VKApiClient(
         // #30j (community tabs): owner_id для музыки сообщества (отрицательный)
         if (ownerId != null) args["owner_id"] = ownerId.toString()
         // musicHighQuality: VK отдаёт 320kbps MP3 вместо 128kbps OGG.
-        if (snap.musicHighQuality) args["quality"] = "hq"
+        if (hqAllowedNow()) args["quality"] = "hq"
         val json = call("audio.get", args)
         if (json != null) {
             val errorObj = json.getAsJsonObject("error")
@@ -2810,7 +2822,7 @@ class VKApiClient(
             "count" to count.toString(),
             "offset" to offset.toString(),
         )
-        if (snap.musicHighQuality) args["quality"] = "hq"
+        if (hqAllowedNow()) args["quality"] = "hq"
         val json = call("audio.search", args)
         if (json != null) {
             val errorObj = json.getAsJsonObject("error")
@@ -3144,7 +3156,7 @@ class VKApiClient(
         // используется как refresh path когда track.url==null (устарел URL) —
         // без quality=hq получим 128kbps вместо 320kbps.
         val snap = prefs.data.first()
-        if (snap.musicHighQuality) args["quality"] = "hq"
+        if (hqAllowedNow()) args["quality"] = "hq"
         val json = call("audio.getById", args) ?: return null
         val apiResult = try {
             val resp = json.getAsJsonArray("response") ?: return null
@@ -3237,7 +3249,7 @@ class VKApiClient(
         offset: Int = 0,
     ): Pair<Int, List<Track>> {
         if (isOffline()) return 0 to emptyList()
-        val hq = prefs.data.first().musicHighQuality
+        val hq = hqAllowedNow()
         val pageSize = count.coerceIn(10, 100)
         val all = ArrayList<Track>()
         val seen = HashSet<String>()
@@ -3290,7 +3302,7 @@ class VKApiClient(
             "offset" to offset.toString(),
         )
         if (!targetAudio.isNullOrBlank()) args["target_audio"] = targetAudio
-        if (prefs.data.first().musicHighQuality) args["quality"] = "hq"
+        if (hqAllowedNow()) args["quality"] = "hq"
         val json = call("audio.getRecommendations", args)
         return json?.let { parseAudioResponseWithCount(it) } ?: (0 to emptyList())
     }
@@ -3392,7 +3404,7 @@ class VKApiClient(
             val args = mutableMapOf("audios" to audiosParam)
             // Fix #147: quality=hq для максимального качества в batch-запросах
             // (используется для скачивания плейлистов).
-            if (prefs.data.first().musicHighQuality) args["quality"] = "hq"
+            if (hqAllowedNow()) args["quality"] = "hq"
             val json = call("audio.getById", args)
             if (json != null) {
                 try {
@@ -3841,7 +3853,7 @@ class VKApiClient(
         if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
         // #FIX-A-HQ (2026-08-03): quality=hq везде — максимальное качество аудио
         // (320kbps MP3 / HQ AAC). Применяется ко ВСЕМ audio.get-family методам.
-        if (prefs.data.first().musicHighQuality) args["quality"] = "hq"
+        if (hqAllowedNow()) args["quality"] = "hq"
 
         val json = call("audio.getPlaylistById", args)
         // #PLAYLIST-COMMUNITY: для плейлистов сообществ (VK Музыка, owner_id<0)
@@ -5261,7 +5273,7 @@ class VKApiClient(
             "audio_ids" to audioIds.joinToString(","),
         )
         // #FIX-A-HQ: quality=hq везде.
-        if (prefs.data.first().musicHighQuality) args["quality"] = "hq"
+        if (hqAllowedNow()) args["quality"] = "hq"
         val json = call("audio.getSnippets", args) ?: return emptyList()
         return try {
             val arr = json.getAsJsonObject("response")?.getAsJsonArray("items")
