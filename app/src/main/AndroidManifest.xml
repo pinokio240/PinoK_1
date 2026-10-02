@@ -110,6 +110,25 @@
          (см. SovaApp.requestBatteryOptimizationExemption). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!--
+      #PERM-AUDIT-FEATURES: декларация аппаратных функций (API-фильтрация Play).
+
+      Без <uses-feature> Play/система не знает о требованиях приложения к железу:
+        - hardware.camera / hardware.camera.any — камера (фото/видео, кр. кружки);
+        - hardware.microphone — микрофон (голосовые, звонки, видео-сообщения);
+        - hardware.bluetooth — BT-гарнитура (звонки, маршрутизация плеера).
+
+      required="false" — приложение УСТАНАВЛИВАЕТСЯ и на устройствах без камеры/
+      микрофона/BT, но флаги 'hasCamera/hasMic/hasBT' выставляются честно
+      (приложение может проверить и gracefully отключить недоступный функционал).
+      Без этих деклараций на ряде оболочек (MIUI/OneUI) камера/микрофон в рантайме
+      считаются "всегда доступными" → вызов CameraManager/MediaRecorder падает.
+    -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.SEND" />

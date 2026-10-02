@@ -51,7 +51,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Image
@@ -59,6 +58,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -70,6 +70,7 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.automirrored.outlined.Subject
 import androidx.compose.material.icons.outlined.VideoCameraBack
 import androidx.compose.material.icons.outlined.Visibility
@@ -128,11 +129,13 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
+import re.pinok.realtime.VkUrlDeepLinker
 import re.pinok.api.VKApiClient
 import re.pinok.realtime.VkNotificationsNotifier
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
+import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
 import re.pinok.util.toRelativeTime
 
@@ -243,6 +246,34 @@ private val NOTIFICATION_FILTERS = listOf(
     NotificationFilter("group_invites", "Приглашения", Icons.Outlined.GroupAdd),
     NotificationFilter("market", "Магазин", Icons.Outlined.ShoppingCart),
     NotificationFilter("apps_requests", "Игры", Icons.Outlined.Apps),
+)
+
+// ═══════════════════════════════════════════════════════════
+// #NOTIF-NFDCAT (категорийный сайдбар): СЕРВЕРНЫЕ категории
+// notifications.getRedesign. ТЗ из снапшотов VK web-уведомлений:
+//   all(«Уведомления профиля»), communities(«Сообщества»),
+//   feedback(«Обратная связь»), friends(«Друзья»), services(«Сервисы»),
+//   communication(«Общение»), account(«Аккаунт»).
+// Выбор категории → серверная перезагрузка через
+// notificationsGetPage(category=serverKey). Локальные типы-фильтры
+// (NOTIFICATION_FILTERS, bottom-sheet «Фильтр») — ДОП. уровень поверх.
+// ═══════════════════════════════════════════════════════════
+
+/** #NOTIF-NFDCAT: одна серверная категория getRedesign. */
+private data class NotificationCategory(
+    val serverKey: String,   // значение параметра category для метода
+    val label: String,       // человекочитаемое имя из сайдбара VK web
+    val icon: ImageVector,
+)
+
+private val NOTIFICATION_CATEGORIES = listOf(
+    NotificationCategory("all",            "Уведомления профиля", Icons.Outlined.Notifications),
+    NotificationCategory("communities",    "Сообщества",          Icons.Outlined.Group),
+    NotificationCategory("feedback",       "Обратная связь",      Icons.Outlined.AlternateEmail),
+    NotificationCategory("friends",        "Друзья",              Icons.Outlined.PersonAdd),
+    NotificationCategory("services",       "Сервисы",             Icons.Outlined.Apps),
+    NotificationCategory("communication",  "Общение",             Icons.Outlined.ChatBubbleOutline),
+    NotificationCategory("account",        "Аккаунт",             Icons.Outlined.Email),
 )
 
 /**
@@ -485,6 +516,126 @@ private fun NotificationFilterSheet(
 }
 
 // ═══════════════════════════════════════════════════════════
+// #NOTIF-NFDCAT: категорийный сайдбар + переключатель Новые/Просмотренные
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * #NOTIF-NFDCAT: горизонтальный категорийный сайдбар серверных категорий
+ * notifications.getRedesign (VK web-логика: выбор категории в сайдбаре
+ * перезагружает список СЕРВЕРНО через category=..., а не фильтрует локально).
+ * Визуальный паттерн — ленточный (активная категория с жирным текстом/подчёркиванием).
+ * Рендерится в ScreenTopBar.subBar (persistent под TopAppBar).
+ */
+@Composable
+private fun NotificationCategoryBar(
+    categories: List<NotificationCategory>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(categories, key = { it.serverKey }) { cat ->
+            val isSelected = selected == cat.serverKey
+            // Чип-категория (аналог FeedFilterBar выбранного раздела).
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    )
+                    .clickable { onSelect(cat.serverKey) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    cat.icon,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = cat.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * #NOTIF-NFDCAT: переключатель «Новые»/«Просмотренные».
+ * Использует last_viewed (поле ответа getRedesign): «Новые» показывает только
+ * уведомления моложе last_viewed, «Просмотренные» — все (или старше). Простая
+ * UI-реализация: два текстовых сегмента, активный подсвечен. Фильтр применяется
+ * в [filteredNotifications] через viewMatch.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NewViewedToggle(
+    showViewed: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Показать:",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Сегмент «Новые»
+        ToggleSegmentItem(
+            text = "Новые",
+            selected = !showViewed,
+            onClick = { if (showViewed) onToggle() },
+        )
+        // Сегмент «Просмотренные»
+        ToggleSegmentItem(
+            text = "Просмотренные",
+            selected = showViewed,
+            onClick = { if (!showViewed) onToggle() },
+        )
+    }
+}
+
+/** #NOTIF-NFDCAT: один сегмент переключателя Новые/Просмотренные. */
+@Composable
+private fun ToggleSegmentItem(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    )
+}
+
+// ═══════════════════════════════════════════════════════════
 // Main Screen
 // ═══════════════════════════════════════════════════════════
 
@@ -493,9 +644,21 @@ private fun NotificationFilterSheet(
 fun NotificationsScreen(
     onPostClick: ((ownerId: Long, postId: Long) -> Unit)? = null,
     onUserClick: ((userId: Long) -> Unit)? = null,
+    // #NOTIF-DEEPLINK (2026-10-02): переход по клику на уведомление к целевому
+    // объекту (пост/комментарий/ответ/лайк/фото/видео/юзер) через существующий
+    // движок VkUrlDeepLinker. Клик по карточке идёт сюда (deepLinkFor), а не в
+    // примитивные onPostClick/onUserClick (остаются для превью/вложений).
+    onDeepLink: ((VkUrlDeepLinker.DeepLinkAction) -> Unit)? = null,
     // #29: callbacks для notification-actions (§14.2)
     onActionReply: ((targetUserId: Long) -> Unit)? = null,
     onActionGiftReply: ((targetUserId: Long) -> Unit)? = null,
+    // #NOTIF-NFDCAT: кнопка «Настройки» в шапке → экран настроек уведомлений.
+    onOpenNotificationSettings: (() -> Unit)? = null,
+    // #FEED-MENU-NOTIF (2026-10-01): начальная серверная категория getRedesign
+    // (all/communities/feedback/friends/services/communication/account), с которой
+    // экран открывается из меню ленты (srv category → Screen.Notifications path-арг).
+    // default "all" — «Уведомления профиля».
+    initialCategory: String = "all",
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -512,11 +675,22 @@ fun NotificationsScreen(
     var nextFrom by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf("all") }
-    var showFilters by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     // NOTIF-FIX-1 (Task 5): счётчик непрочитанных уведомлений для бейджа в TopBar.
     // VK web показывает красный круг с числом рядом с заголовком «Уведомления».
     var unreadCount by remember { mutableStateOf(0) }
+    // #NOTIF-NFDCAT: категорийный сайдбар + Новые/Просмотренные.
+    val CATEGORY_ALL = "all"
+    // #FEED-MENU-NOTIF: начальная категория — из аргумента маршрута (меню ленты),
+    // иначе "all". remember (не rememberSaveable): при возврате на экран смена
+    // категории в сайдбаре сбрасывается к категории маршрута-входа.
+    var serverCategory by remember { mutableStateOf(initialCategory.ifBlank { CATEGORY_ALL }) }
+    // last_viewed из последнего ответа getRedesign (переключатель Новые/Просмотренные).
+    var lastViewed by remember { mutableStateOf<Long?>(null) }
+    // По умолчанию = «Просмотренные»: true = показываем все/просмотренные.
+    // false = только «Новые» (моложе last_viewed). Переключатель работает
+    // (юзер может переключить на «Новые»).
+    var showViewed by remember { mutableStateOf(true) }
 
     // Скрытые уведомления (для undo)
     val hiddenKeys = remember { mutableStateListOf<String>() }
@@ -526,10 +700,20 @@ fun NotificationsScreen(
     // двухклассовая сортировка sortDialogsFirst — диалоги (класс A) выше
     // новостных (класс B), внутри классов порядок VK. Поиск/undo/пагинация
     // не затронуты (сортировка меняет только порядок).
-    val filteredNotifications = remember(notifications, searchQuery, activeFilter, hiddenKeys) {
+    val filteredNotifications = remember(notifications, searchQuery, activeFilter, hiddenKeys, lastViewed, showViewed) {
         sortDialogsFirst(
             notifications.filter { item ->
                 val keyMatch = item.uniqueKey !in hiddenKeys
+                // #NOTIF-NFDCAT: «Новые»/«Просмотренные» — фильтр по view-state.
+                // Показываем «Новые» (моложе last_viewed) если showViewed=false.
+                // Если last_viewed ещё не известен (null) — без фильтра (все видны).
+                // Локальная val для locally smart cast (lastViewed — delegated property).
+                val lastViewedValue = lastViewed
+                val viewMatch = if (showViewed || lastViewedValue == null || lastViewedValue == 0L) {
+                    true
+                } else {
+                    item.date >= lastViewedValue
+                }
                 val filterMatch = activeFilter == "all" ||
                     when (activeFilter) {
                         // ── Ядро VK web ──
@@ -566,7 +750,7 @@ fun NotificationsScreen(
                     item.text.contains(searchQuery, ignoreCase = true) ||
                     item.parentText.contains(searchQuery, ignoreCase = true) ||
                     item.feedbackProfiles.any { it.name.contains(searchQuery, ignoreCase = true) }
-                keyMatch && filterMatch && searchMatch
+                keyMatch && viewMatch && filterMatch && searchMatch
             },
         )
     }
@@ -578,12 +762,25 @@ fun NotificationsScreen(
     // внутрь catch(Exception), что показывало юзеру «Не удалось загрузить:
     // rememberCoroutineScope left the composition». Теперь корутина живёт
     // в scope самого LaunchedEffect — он отменяет её чисто при уходе.
-    LaunchedEffect(Unit) {
+    // #NOTIF-NFDCAT: ключ = serverCategory — смена серверной категории
+    // (сайдбар) полностью перезагружает список через notificationsGetPage.
+    LaunchedEffect(serverCategory) {
         loading = true
         endReached = false
         errorText = null
+        // Сброс пагинации/скрытых при смене категории.
+        hiddenKeys.clear()
+        lastViewed = null
         try {
-            val (list, nf) = app.apiClient.notificationsGet(count = pageSize)
+            val page = app.apiClient.notificationsGetPage(
+                count = pageSize,
+                category = if (serverCategory == CATEGORY_ALL) null else serverCategory,
+            )
+            val list = page.items
+            val nf = page.nextFrom
+            // #NOTIF-NFDCAT: сохраняем last_viewed для переключателя Новые/Просмотренные.
+            val lv = page.lastViewed
+            if (lv != null && lv > 0L) lastViewed = lv
             // Fix #253: логируем сколько items вернул API и сколько осталось
             // после distinctBy — если list.size > 0 но notifications.size == 0,
             // значит все дубликаты по uniqueKey и юзер видит пусто.
@@ -661,13 +858,21 @@ fun NotificationsScreen(
         scope.launch {
             isRefreshing = true
             try {
-                val (list, nf) = app.apiClient.notificationsGet(count = pageSize)
+                // #NOTIF-NFDCAT: refresh учитывает текущую серверную категорию.
+                val page = app.apiClient.notificationsGetPage(
+                    count = pageSize,
+                    category = if (serverCategory == CATEGORY_ALL) null else serverCategory,
+                )
+                val list = page.items
+                val nf = page.nextFrom
                 notifications = list.distinctBy { it.uniqueKey }
                 nextFrom = nf
                 // Fix #255: endReached по nextFrom, не по размеру страницы
                 endReached = (nf == null)
                 errorText = null
                 hiddenKeys.clear()
+                val lv = page.lastViewed
+                if (lv != null && lv > 0L) lastViewed = lv
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -689,16 +894,20 @@ fun NotificationsScreen(
         scope.launch {
             loadingMore = true
             try {
-                val (page, nf) = app.apiClient.notificationsGet(
+                // #NOTIF-NFDCAT: loadMore сохраняет серверную категорию.
+                val page = app.apiClient.notificationsGetPage(
                     count = pageSize,
                     startFrom = nextFrom,
+                    category = if (serverCategory == CATEGORY_ALL) null else serverCategory,
                 )
-                AppLog.i("NotificationsScreen", "loadMore: page=${page.size}, nextFrom=${nf?.take(40) ?: "null"}, existing=${notifications.size}")
-                if (page.isNotEmpty()) {
+                val pageList = page.items
+                val nf = page.nextFrom
+                AppLog.i("NotificationsScreen", "loadMore: page=${pageList.size}, nextFrom=${nf?.take(40) ?: "null"}, existing=${notifications.size}")
+                if (pageList.isNotEmpty()) {
                     // Fix #255: дедупликация по ПОЛНОМУ uniqueKey (теперь использует
                     // полный rawId, а не take(40)). Существующие + новые.
                     val existingKeys = notifications.map { it.uniqueKey }.toMutableSet()
-                    val newItems = page.filter { it.uniqueKey !in existingKeys }
+                    val newItems = pageList.filter { it.uniqueKey !in existingKeys }
                     notifications = notifications + newItems
                 }
                 nextFrom = nf
@@ -711,6 +920,55 @@ fun NotificationsScreen(
                 AppLog.w("NotificationsScreen", "loadMore failed: ${e.message}")
             } finally {
                 loadingMore = false
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // #NOTIF-NFDCAT: dots_menu действия (hide / unsubscribe) — LOKAльный
+    // dismiss + undo (UX-приоритет) + best-effort API-вызов.
+    //
+    // Точный web-endpoint hide/unsubscribe в архиве НЕ зафиксирован — API-вызовы
+    // notificationsHideItem/notificationsUnsubscribe (VKApiClient) сделаны best-effort
+    // с TODO: реальный endpoint уточнить по web-bundle. Локальный эффект (убрать
+    // из списка + «Отменить») гарантирован всегда, независимо от результата API.
+    // ═══════════════════════════════════════════════════════════════
+
+    fun hideNotificationWithUndo(item: VKApiClient.NotificationItem) {
+        val key = item.uniqueKey
+        hiddenKeys.add(key)
+        // best-effort серверный вызов (endpoint не подтверждён; результат не критичен).
+        val hideAction = item.dotsMenu.firstOrNull { it.isHide }
+        scope.launch {
+            if (hideAction != null) {
+                app.apiClient.notificationsHideItem(hideAction.name, hideAction.query)
+            }
+            val result = snackbarHostState.showSnackbar(
+                "Уведомление убрано",
+                "Отменить",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                hiddenKeys.remove(key)
+            }
+        }
+    }
+
+    fun unsubscribeWithUndo(item: VKApiClient.NotificationItem) {
+        val key = item.uniqueKey
+        hiddenKeys.add(key)
+        val unsubAction = item.dotsMenu.firstOrNull { it.isUnsubscribe }
+        scope.launch {
+            if (unsubAction != null) {
+                app.apiClient.notificationsUnsubscribe(unsubAction.name, unsubAction.query)
+            }
+            val result = snackbarHostState.showSnackbar(
+                "Уведомления этого типа отключены",
+                "Отменить",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                hiddenKeys.remove(key)
             }
         }
     }
@@ -731,17 +989,15 @@ fun NotificationsScreen(
     // Раньше тут был собственный Scaffold.topBar с заголовком «Уведомления» + поиск +
     // фильтр — он дублировал глобальный TopAppBar (hamburger + «Уведомления»).
     // Теперь глобальный TopAppBar один; мы только добавляем в него actions.
-    // Fix #260: showSearch/showFilters в ключе DisposableEffect — иначе
-    // configure() вызывается один раз с showSearch=false, showFilters=false
-    // → titleOverride=null навсегда; TextField поиска и подсветка кнопки
-    // фильтра не появляются при тапе на иконки.
-    // #NOTIF-FEED-FILTER (19-B): subBar с чипами больше не существует
-    // (фильтр = bottom-sheet, рендерится ниже независимо от TopBar),
-    // но ключ showFilters всё ещё нужен — от него зависит tint иконки-триггера.
+    // Fix #260: showSearch в ключе DisposableEffect — иначе configure()
+    // вызывается один раз с showSearch=false → titleOverride=null навсегда;
+    // TextField поиска не появляется при тапе на иконку.
+    // #NOTIFSHOW: showFilters и кнопка фильтра-типов удалены (вход в
+    // bottom-sheet был только у иконки-триггера) — ключа showFilters больше нет.
     // NOTIF-FIX-1 (Task 5): добавлен unreadCount в ключ — иначе бейдж не
     // перерисуется при изменении счётчика (configure() вызовется один раз
     // с unreadCount=0 и останется таким навсегда).
-    DisposableEffect(showSearch, showFilters, unreadCount) {
+    DisposableEffect(showSearch, unreadCount, serverCategory, showViewed) {
         val token = ScreenTopBar.configure(
             // Actions: mark-all-read, search toggle, filter toggle
             actions = {
@@ -768,7 +1024,6 @@ fun NotificationsScreen(
                 // Кнопка поиска
                 IconButton(onClick = {
                     showSearch = !showSearch
-                    if (showSearch) showFilters = false
                 }) {
                     Icon(
                         Icons.Outlined.Search,
@@ -777,17 +1032,21 @@ fun NotificationsScreen(
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                // Кнопка фильтров (N10)
-                IconToggleButton(
-                    checked = showFilters,
-                    onCheckedChange = { showFilters = it; if (it) showSearch = false },
-                ) {
-                    Icon(
-                        Icons.Outlined.FilterList,
-                        contentDescription = "Фильтры",
-                        tint = if (showFilters) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // Кнопка фильтров (N10) убрана (#NOTIFSHOW): фильтр по типам закрыт;
+                // шестерёнка настроек ниже остаётся.
+                // #NOTIF-NFDCAT: кнопка «Настройки» (шестерёнка) в шапке уведомлений.
+                // Переход к экрану настроек уведомлений (NotificationSettingsScreen).
+                // Если callback не передан (например, экран вне навигационного графа) — скрываем.
+                if (onOpenNotificationSettings != null) {
+                    IconButton(
+                        onClick = { onOpenNotificationSettings() },
+                    ) {
+                        Icon(
+                            Icons.Outlined.Settings,
+                            contentDescription = "Настройки уведомлений",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             },
             // titleOverride: НЕ-null ВСЕГДА (NOTIF-FIX-1, Task 5).
@@ -845,10 +1104,30 @@ fun NotificationsScreen(
                     }
                 }
             },
-            // #NOTIF-FEED-FILTER (19-B): subBar с FlowRow-чипами УДАЛЁН — фильтр
-            // переведён на ленточный паттерн (bottom-sheet «Фильтр» со списком
-            // категорий + чекмарк, см. NotificationFilterSheet ниже). subBar
-            // больше не передаётся (дефолт null в ScreenTopBar.configure).
+            // ─── #NOTIF-NFDCAT: категорийный сайдбар + переключатель Новые/Просмотренные ───
+            // Рендерим как subBar под глобальным TopAppBar (persistent, не скроллится вместе
+            // со списком — как FeedFilterBar в ленте). Выбор категории serverCategory
+            // перезагружает список через LaunchedEffect(serverCategory) → notificationsGetPage.
+            subBar = {
+                NotificationCategoryBar(
+                    categories = NOTIFICATION_CATEGORIES,
+                    selected = serverCategory,
+                    onSelect = { key ->
+                        if (key != serverCategory) {
+                            serverCategory = key
+                            activeFilter = "all"  // смена серверной категории сбрасывает локальный тип-фильтр
+                        }
+                    },
+                )
+                NewViewedToggle(
+                    showViewed = showViewed,
+                    onToggle = { showViewed = !showViewed },
+                )
+                // #NOTIF-NFDCAT: бейджи по категориям (п.7). notificationsGetUnreadCounters
+                // возвращает {mentions/…} — не маппятся напрямую на категории сайдбара
+                // (all/communities/…). TODO #NOTIF-NFDCAT: точный маппинг бейджей
+                // getUnreadCounters → getRedesign категории не подтверждён — не рисуем.
+            },
         )
         onDispose { ScreenTopBar.clear(token) }
     }
@@ -865,17 +1144,8 @@ fun NotificationsScreen(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
-        // ─── #NOTIF-FEED-FILTER (19-B): bottom-sheet «Фильтр» (ленточный паттерн) ───
-        // Размещён ДО loading/empty-ранних return'ов — чтобы шит открывался из
-        // любого состояния экрана (триггер-иконка живёт в глобальном TopBar и
-        // доступна и на skeleton, и на empty-state).
-        if (showFilters) {
-            NotificationFilterSheet(
-                currentFilter = activeFilter,
-                onSelect = { selected -> activeFilter = selected },
-                onDismiss = { showFilters = false },
-            )
-        }
+        // #NOTIFSHOW: bottom-sheet «Фильтр» по типам удалён вместе с кнопкой-триггером
+        // (единственный вход был у иконки в TopBar). activeFilter остаётся "all".
         // ─── Loading: Skeleton (N5) ───
         if (loading) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -970,8 +1240,14 @@ fun NotificationsScreen(
                                     },
                                     onPostClick = onPostClick,
                                     onUserClick = onUserClick,
+                                    onDeepLink = onDeepLink,
                                     onActionReply = onActionReply,
                                     onActionGiftReply = onActionGiftReply,
+                                    // #NOTIF-NFDCAT: dots_menu действия через helper'ы
+                                    // локал dismiss + undo + best-effort API (см. ниже).
+                                    onHideNotification = { hideNotificationWithUndo(it) },
+                                    onUnsubscribeNotification = { unsubscribeWithUndo(it) },
+                                    onOpenNotificationSettings = onOpenNotificationSettings,
                                 )
                                 HorizontalDivider(
                                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -1038,8 +1314,14 @@ private fun NotificationCardSwipeable(
     onDismiss: (VKApiClient.NotificationItem) -> Unit,
     onPostClick: ((ownerId: Long, postId: Long) -> Unit)? = null,
     onUserClick: ((userId: Long) -> Unit)? = null,
+    onDeepLink: ((VkUrlDeepLinker.DeepLinkAction) -> Unit)? = null,
     onActionReply: ((targetUserId: Long) -> Unit)? = null,
     onActionGiftReply: ((targetUserId: Long) -> Unit)? = null,
+    // #NOTIF-NFDCAT: действия «⋮» (dots_menu) — локальный dismiss + undo
+    // (hide/unsubscribe). Передаются из NotificationsScreen (см. helper'ы).
+    onHideNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
+    onUnsubscribeNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
+    onOpenNotificationSettings: (() -> Unit)? = null,
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = {
@@ -1074,8 +1356,12 @@ private fun NotificationCardSwipeable(
             item = item,
             onPostClick = onPostClick,
             onUserClick = onUserClick,
+            onDeepLink = onDeepLink,
             onActionReply = onActionReply,
             onActionGiftReply = onActionGiftReply,
+            onHideNotification = onHideNotification,
+            onUnsubscribeNotification = onUnsubscribeNotification,
+            onOpenNotificationSettings = onOpenNotificationSettings,
         )
     }
 }
@@ -1090,22 +1376,39 @@ private fun NotificationCard(
     item: VKApiClient.NotificationItem,
     onPostClick: ((ownerId: Long, postId: Long) -> Unit)? = null,
     onUserClick: ((userId: Long) -> Unit)? = null,
+    onDeepLink: ((VkUrlDeepLinker.DeepLinkAction) -> Unit)? = null,
     // #29: callbacks для notification-actions (§14.2)
     onActionReply: ((targetUserId: Long) -> Unit)? = null,
     onActionGiftReply: ((targetUserId: Long) -> Unit)? = null,
+    // #NOTIF-NFDCAT: действия «⋮» (dots_menu)
+    onHideNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
+    onUnsubscribeNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
+    onOpenNotificationSettings: (() -> Unit)? = null,
 ) {
     val typeIcon = getTypeIcon(item.type)
     var showContextMenu by remember { mutableStateOf(false) }
 
-    // Deep-link navigation on click (S6-5)
+    // #NOTIF-DEEPLINK (2026-10-02): клик по карточке → существующий движок
+    // VkUrlDeepLinker.deepLinkFor(item) строит точный target (пост с commentId,
+    // фото, видео, юзер, сообщество, уведомления). Раньше клик открывал пост
+    // без commentId (для ответа на комментарий не скроллил), а лайк на комментарий
+    // вёл на пост без параметров. Теперь всё аккуратное через DeepLinkAction.
+    // Если deepLink дал OpenNotifications (нет объекта) и тип — follow/подписка —
+    // оставляем прежний onUserClick фолбэк (открываем профиль отправителя).
     val navigate: () -> Unit = {
-        if (onUserClick != null && item.feedbackIds.isNotEmpty() &&
-            item.type in listOf("follow", "friend_accepted", "friend_requested")) {
+        val action = try {
+            VkUrlDeepLinker.deepLinkFor(item)
+        } catch (e: Exception) {
+            re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenNotifications
+        }
+        val handledByDeepLink =
+            action !is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenNotifications
+        if (handledByDeepLink && onDeepLink != null) {
+            onDeepLink(action)
+        } else if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
             onUserClick(item.feedbackIds.first())
         } else if (onPostClick != null && item.parentOwnerId != 0L && item.parentItemId != 0L) {
             onPostClick(item.parentOwnerId, item.parentItemId)
-        } else if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
-            onUserClick(item.feedbackIds.first())
         }
     }
 
@@ -1120,7 +1423,7 @@ private fun NotificationCard(
                 onClick = navigate,
                 onLongClick = { showContextMenu = true },
             )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = UiScale.scaled(12.dp), vertical = UiScale.scaled(10.dp)),
         verticalAlignment = Alignment.Top,
     ) {
         // ─── Аватар / Иконка типа (NOTIF-FIX-1, Task 2) ───
@@ -1246,6 +1549,96 @@ private fun NotificationCard(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
+                    }
+                }
+            }
+
+            // ─── #NOTIF-NFDCAT: attachment (entity_array / bubble / static_image) ───
+            // • entity_array → attachments_string («Видео/Фото/4 фото/3 вложения»);
+            // • bubble → текст комментария-пузыря (main_text);
+            // • static_image → превью-картинка (для одноэлементного — уже в правой
+            //   колонке compact-превью через attachments; здесь только заголовок есть,
+            //   если attachments_string задан).
+            if (item.attachmentType.equals("entity_array", ignoreCase = true) &&
+                item.attachmentsString.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = item.attachmentsString,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (item.bubbleText.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = item.bubbleText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            // #NOTIF-NFDCAT: пред-кнопки (buttons.primary/secondary) — рендер ПОД
+            // текстом уведомления (как VK web). Клик дефолтно открывает parent/
+            // профиль/ЛС/подарки по actionType. TODO #NOTIF-NFDCAT: url пред-кнопки
+            // (preButtonUrls[idx]) НЕ реализован как внешний открыватель — модель
+            // кнопки не несёт надёжного web-открывателя; при появлении точного
+            // маппинга (анкета → ссылка, ЛС → peerId) подключить url.
+            if (item.preButtons.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    item.preButtons.forEach { action ->
+                        val needPost = item.parentOwnerId != 0L && item.parentItemId != 0L
+                        val needUser = item.feedbackIds.isNotEmpty()
+                        val onClick: () -> Unit = {
+                            when (action.actionType) {
+                                VKApiClient.NotificationAction.ActionType.GIFT_REPLY ->
+                                    onActionGiftReply?.invoke(item.feedbackIds.firstOrNull() ?: 0L)
+                                VKApiClient.NotificationAction.ActionType.REPLY ->
+                                    if (needPost) onPostClick?.invoke(item.parentOwnerId, item.parentItemId)
+                                    else onActionReply?.invoke(item.feedbackIds.firstOrNull() ?: 0L)
+                                VKApiClient.NotificationAction.ActionType.OPEN_USER ->
+                                    if (needUser) onUserClick?.invoke(item.feedbackIds.first())
+                                VKApiClient.NotificationAction.ActionType.OPEN_POST ->
+                                    if (needPost) onPostClick?.invoke(item.parentOwnerId, item.parentItemId)
+                            }
+                        }
+                        when (action.style) {
+                            VKApiClient.NotificationAction.ActionStyle.SECONDARY -> {
+                                Button(
+                                    onClick = onClick,
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                        horizontal = 12.dp, vertical = 4.dp,
+                                    ),
+                                ) {
+                                    Text(action.label, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                            VKApiClient.NotificationAction.ActionStyle.TERTIARY -> {
+                                TextButton(
+                                    onClick = onClick,
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                        horizontal = 8.dp, vertical = 0.dp,
+                                    ),
+                                ) {
+                                    Text(action.label, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1513,6 +1906,41 @@ private fun NotificationCard(
                     },
                     leadingIcon = { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(20.dp)) },
                 )
+                // ─── #NOTIF-NFDCAT: dots_menu действия (VK web «⋮» меню) ───
+                // hide_notification → «Убрать из списка», unsubscribe → «Не уведомлять»,
+                // open_setting → «Настроить». hide/unsubscribe: локальный dismiss + undo
+                // (UX-приоритет) + best-effort API-вызов (см. NotificationsScreen helper'ы).
+                // open_setting: переход на экран настроек уведомлений.
+                if (onHideNotification != null && item.dotsMenu.any { it.isHide }) {
+                    DropdownMenuItem(
+                        text = { Text("Убрать из списка") },
+                        onClick = {
+                            showContextMenu = false
+                            onHideNotification(item)
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.Close, null, Modifier.size(20.dp)) },
+                    )
+                }
+                if (onUnsubscribeNotification != null && item.dotsMenu.any { it.isUnsubscribe }) {
+                    DropdownMenuItem(
+                        text = { Text("Не уведомлять") },
+                        onClick = {
+                            showContextMenu = false
+                            onUnsubscribeNotification(item)
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.NotificationsOff, null, Modifier.size(20.dp)) },
+                    )
+                }
+                if (onOpenNotificationSettings != null && item.dotsMenu.any { it.isOpenSetting }) {
+                    DropdownMenuItem(
+                        text = { Text("Настроить") },
+                        onClick = {
+                            showContextMenu = false
+                            onOpenNotificationSettings()
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.Settings, null, Modifier.size(20.dp)) },
+                    )
+                }
             }
         }
     }

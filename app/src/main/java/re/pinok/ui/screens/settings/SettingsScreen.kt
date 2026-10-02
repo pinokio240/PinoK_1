@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -1583,6 +1584,13 @@ private fun InterfaceTab(
         item { AccentPicker(s.themeAccentIndex) { idx -> scope.launch { app.prefs.setThemeAccentIndex(idx) } } }
 
         item { SectionHeader("Текст и анимации") }
+        item {
+            // Fix #UISCALE: масштаб всего интерфейса (кнопки/панели/текст).
+            UiScaleRow(
+                value = s.uiScale,
+                onChange = { scope.launch { app.prefs.setUiScale(it) } },
+            )
+        }
         item {
             FontScaleRow(
                 value = s.fontScale,
@@ -3620,16 +3628,216 @@ private val LOG_SECTION_TOGGLES: List<Pair<List<String>, String>> = listOf(
     listOf("#MSG") to "Сообщения: архив и поиск",
 )
 
+/**
+ * #LOG-CONFIG-STORAGE (2026-10-01): форматирование байт в МБ с одним знаком
+ * после запятой для инфо-строки секции «Хранение логов». 0 → «0».
+ */
+private fun mbFmt(bytes: Long): String {
+    val mb = bytes / 1024.0 / 1024.0
+    return if (mb >= 10.0) mb.toInt().toString() else String.format(java.util.Locale.ROOT, "%.1f", mb)
+}
+
 @Composable
 private fun LoggingTab(
     s: SovaPrefs.Snapshot,
     app: SovaApp,
     scope: CoroutineScope,
 ) {
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // ─── #LOG-CONFIG-STORAGE (2026-10-01): «Хранение логов» — размер файла,
+        // срок хранения (ротация по возрасту), размер in-memory буфера и ручная
+        // очистка. Первая секция вкладки. Сеттеры persist через prefs (suspend →
+        // scope.launch) и СРАЗУ применяются через AppLog.applyLogConfig — без
+        // перезапуска приложения. Потребитель — AppLog (persistMaxBytes /
+        // bufferCapacity / logRetentionDays / autoCleanEnabled).
+        item { SectionHeader("Хранение логов") }
+        item {
+            ToggleRow(
+                title = "Автоочистка логов",
+                subtitle = "Удалять старые файлы логов при старте приложения",
+                checked = s.logAutoClean,
+            ) { v ->
+                scope.launch {
+                    app.prefs.setLogAutoClean(v)
+                    AppLog.applyLogConfig(s.logMaxSizeBytes, s.logBufferCapacity, s.logRetentionDays, v)
+                }
+            }
+        }
+
+        // Максимальный размер persistent.log (ротация по размеру). Варианты в МБ:
+        // 0.5 / 1 / 2 / 5 / 10. Активный подсвечивается по s.logMaxSizeBytes.
+        item {
+            val sizeMbOptions = listOf(
+                0.5 to (512L * 1024L),
+                1.0 to (1L * 1024L * 1024L),
+                2.0 to (2L * 1024L * 1024L),
+                5.0 to (5L * 1024L * 1024L),
+                10.0 to (10L * 1024L * 1024L),
+            )
+            val current = s.logMaxSizeBytes
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Максимальный размер файла логов",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "После достижения предела активный файл ротируется в резервный (.old)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        sizeMbOptions.forEach { (mb, bytes) ->
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        app.prefs.setLogMaxSizeBytes(bytes)
+                                        AppLog.applyLogConfig(bytes, s.logBufferCapacity, s.logRetentionDays, s.logAutoClean)
+                                    }
+                                },
+                            ) {
+                                Text(
+                                    if (mb == 0.5) "0.5 МБ" else "${mb.toInt()} МБ",
+                                    color = if (current == bytes) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Срок хранения (ротация по возрасту): off / 1 / 3 / 7 / 14 / 30 дней.
+        // 0 = off (не удалять по возрасту). applyLogConfig при retentionDays > 0
+        // сам запускает cleanupByRetention — отдельный вызов не нужен.
+        item {
+            val retentionOptions = listOf(0 to "off", 1 to "1", 3 to "3", 7 to "7", 14 to "14", 30 to "30")
+            val current = s.logRetentionDays
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Хранить логи не дольше",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Файлы логов старше указанного срока удаляются. Off — не удалять по возрасту",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        retentionOptions.forEach { (days, label) ->
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        app.prefs.setLogRetentionDays(days)
+                                        AppLog.applyLogConfig(s.logMaxSizeBytes, s.logBufferCapacity, days, s.logAutoClean)
+                                    }
+                                },
+                            ) {
+                                Text(
+                                    when {
+                                        days == 0 -> "Off"
+                                        days == 1 -> "1 день"
+                                        days in 2..4 -> "$days дня"
+                                        else -> "$days дней"
+                                    },
+                                    color = if (current == days) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Размер in-memory буфера логов (записей). При уменьшении лишние
+        // записи триммятся (applyLogConfig). Активный подсвечивается.
+        item {
+            val bufferOptions = listOf(1000, 4000, 10000)
+            val current = s.logBufferCapacity
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Размер буфера логов",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Сколько записей держать в памяти для встроенного просмотрщика",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        bufferOptions.forEach { cap ->
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        app.prefs.setLogBufferCapacity(cap)
+                                        AppLog.applyLogConfig(s.logMaxSizeBytes, cap, s.logRetentionDays, s.logAutoClean)
+                                    }
+                                },
+                            ) {
+                                Text(
+                                    when {
+                                        cap >= 1000 && cap % 1000 == 0 -> "${cap / 1000}K"
+                                        else -> cap.toString()
+                                    },
+                                    color = if (current == cap) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Инфо-строка о фактическом размере файлов + кнопка ручной очистки.
+        item {
+            var sizes by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+            LaunchedEffect(Unit) { sizes = AppLog.logFilesStatus() }
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    val sz = sizes
+                    Text(
+                        if (sz == null) "Размер файла логов: …"
+                        else "Размер файла логов: ${mbFmt(sz.first)} МБ / резервный: ${mbFmt(sz.second)} МБ",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                AppLog.clear()
+                                // Обновляем размер после очистки.
+                                sizes = AppLog.logFilesStatus()
+                                android.widget.Toast.makeText(context, "Логи очищены", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Очистить логи сейчас") }
+                }
+            }
+        }
+
         item { SectionHeader("Плавающий значок логов") }
         // Fix #237: показ плавающего значка логирования (DraggableLogFab).
         // Default = BuildConfig.DEBUG (виден в debug-сборке, скрыт в release).
@@ -4320,6 +4528,66 @@ private fun FontScaleRow(value: Int, onChange: (Int) -> Unit) {
 
 private const val FONT_SCALE_MIN = 70
 private const val FONT_SCALE_MAX = 150
+
+/**
+ * Fix #UISCALE (2026-10-02): выбор масштаба ВСЕГО интерфейса (кнопки/панели/текст).
+ * Дискретные варианты 75 / 85 / 100 / 115 / 130 %. Значение хранится как Float
+ * (SovaPrefs.ui_scale), база по умолчанию 0.85 (−15%). Применяется глобально
+ * ко всем sp-текстам (через LocalDensity.fontScale) и к dp-панелям/кнопкам
+ * ключевых экранов (через LocalUiScale / UiScale.scaled()).
+ */
+@Composable
+private fun UiScaleRow(value: Float, onChange: (Float) -> Unit) {
+    val options = listOf(
+        0.75f to "75%",
+        0.85f to "85%",
+        1.00f to "100%",
+        1.15f to "115%",
+        1.30f to "130%",
+    )
+    val selectedLabel = options.firstOrNull { it.first == value }?.second
+        ?: "%.0f%%".format(value * 100f)
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Масштаб интерфейса", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Кнопки, панели и текст. База −15% (85%), растёт с настройкой.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 12.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            options.forEach { (factor, label) ->
+                val selected = factor == value
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onChange(factor) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = selected, onClick = { onChange(factor) })
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
 
 /**
  * Fix #224: слайдер скорости анимаций интерфейса.

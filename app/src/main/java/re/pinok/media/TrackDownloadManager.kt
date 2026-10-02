@@ -35,6 +35,7 @@ import re.pinok.util.VkUserAgent
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import java.io.File
 import java.io.FileOutputStream
@@ -74,6 +75,16 @@ object TrackDownloadManager {
 
     private const val TAG = "TrackDownloadManager"
     private const val DOWNLOAD_DIR = "downloads/music"
+
+    // #AUDIO-INTEGRITY (2026-10-02): гарантированная загрузка прямого (non-HLS) аудио.
+    // После скачивания проверяем целостность содержимого; если файл «битый»
+    // (играется, но обрезан/повреждён) — выполняем повтор со СВЕЖИМ url через
+    // audioGetById, с жёстким лимитом попыток. Валидация — СИГНАЛ для retry,
+    // а не жёсткий отказ: локальный файл пользователя НЕ удаляется.
+    private const val MIN_DIRECT_AUDIO_BYTES = 10_000L          // размер-порог «не мусор»
+    private const val MAX_CONTENT_RETRY_ATTEMPTS = 2            // лимит повторов со свежим url
+    private const val DIRECT_HEAD_PROBE_BYTES = 4096            // сколько байт читаем для проверки
+    private const val DIRECT_MPEG_SYNC_SCAN_BYTES = 4096        // окно поиска MPEG frame sync
 
     // #DL-DISPATCH-PERSIST (Fix #382): файл персистентной очереди загрузок.
     // Живёт по ФИКСИРОВАННОМУ пути appContext.filesDir/downloads/music/ (рядом
@@ -130,6 +141,12 @@ object TrackDownloadManager {
         val subDir: String? = null,
         val index: Int? = null,
         val total: Int? = null,
+        // #AUDIO-INTEGRITY: счётчик повторов «битого» содержимого со свежим url.
+        // НЕ персистится в .pending_queue.json (persistQueueSnapshot копирует поля
+        // явно, а restore создаёт DownloadRequest с attempts = 0) — главное retry
+        // в текущей сессии. Жёсткий лимит [MAX_CONTENT_RETRY_ATTEMPTS] не даёт
+        // уйти в бесконечный цикл даже при постоянном повреждении.
+        val attempts: Int = 0,
     )
 
     private val pendingQueue = ConcurrentLinkedQueue<DownloadRequest>()
@@ -137,6 +154,14 @@ object TrackDownloadManager {
     @Volatile
     private var queueWorkerStarted = false
     private val queueLock = Any()  // guard для startQueueWorkerIfNeeded()
+
+    // #OFFQ (2026-10-02): мягкая пауза очереди загрузок.
+    // Если paused == true — worker НЕ берёт следующий трек из очереди, но текущий
+    // (уже скачиваемый) трек дочитывается до конца. Пауза наступает только в момент,
+    // когда текущий трек завершён и нужно взять следующий (soft stop «по завершении
+    // трека, не на полуслове»). setPaused(false) будит worker через queueSignal.
+    @Volatile
+    private var paused: Boolean = false
 
     // #DL-DISPATCH-PERSIST (Fix #382): сериализация очереди на диск.
     // persistMutex сериализует записи файла: несколько быстрых enqueue/удалений
@@ -539,9 +564,15 @@ object TrackDownloadManager {
                     } else {
                         refreshFromDisk()
                     }
-                } catch (ce: kotlinx.coroutines.CancellationException) {
-                    throw ce
-                } catch (e: Exception) {
+} catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (inv: InvalidDownloadedFileException) {
+                // #AUDIO-INTEGRITY: контент «битый» — повтор с тем же url бесполезен
+                // (сервер отдал целый, но невалидный ответ). НЕ делаем внутренний
+                // 3×backoff, сразу пробрасываем наверх — processTrackFromQueue возьмёт
+                // СВЕЖИЙ url через audioGetById и повторит с нуля.
+                throw inv
+            } catch (e: Exception) {
                     AppLog.e(TAG, "init: background init failed — app stays on internal dir", e)
                     runCatching { refreshFromDisk() }
                 }
@@ -711,6 +742,15 @@ object TrackDownloadManager {
                     queueSignal.receive()
                     // Обрабатываем все накопленные треки последовательно.
                     while (true) {
+                        // #OFFQ: мягкая пауза. Проверка СТОИТ ЗДЕСЬ (между обработкой
+                        // треков), а не перед poll() внутри тело-цикла внизу без неё:
+                        // processTrackFromQueue() ждёт завершения текущего трека (job.join())
+                        // ДО возврата — поэтому текущий скачиваемый трек успевает дочитаться
+                        // до конца, а приостановка применяется прежде чем взять следующий.
+                        // delay()-loop дешёвый (200мс) и suspend-friendly.
+                        while (paused) {
+                            delay(200)
+                        }
                         val request = pendingQueue.poll() ?: break
                         // #DL-DISPATCH-PERSIST (Fix #382): трек взят воркером —
                         // перезаписываем остаток очереди на диск ДО начала скачивания.
@@ -786,7 +826,64 @@ object TrackDownloadManager {
         AppLog.i(TAG, "queue: start #${track.id} (${track.artist} — ${track.title}), queueRemaining=${pendingQueue.size}")
         val job = scope.launch(Dispatchers.IO) {
             try {
-                downloadTrack(track.id, url, track, request.subDir, request.index, request.total)
+                // #AUDIO-INTEGRITY: повтор со СВЕЖИМ url при «битом» direct-контенте.
+                // Обычные сетевые сбои обрабатываются ВНУТРИ downloadTrack/downloadDirectTrack
+                // (их retry loop с backoff). Сюда попадает только InvalidDownloadedFileException —
+                // когда файл докачался по Content-Length, но содержимое невалидно/повреждено.
+                var currentTrack = track
+                var currentUrl = url
+                var retryCount = request.attempts // счётчик; в сессии, не персистится (см. DownloadRequest)
+                while (true) {
+                    try {
+                        downloadTrack(currentTrack.id, currentUrl, currentTrack,
+                            request.subDir, request.index, request.total)
+                        break
+                    } catch (inv: InvalidDownloadedFileException) {
+                        if (retryCount >= MAX_CONTENT_RETRY_ATTEMPTS) {
+                            AppLog.w(TAG, "queue: #${currentTrack.id} — direct-контент «битый», " +
+                                "исчерпан лимит $MAX_CONTENT_RETRY_ATTEMPTS повторов со свежим url → FAILED")
+                            if (_downloads.value[currentTrack.id]?.isInProgress == true) {
+                                updateState(currentTrack.id, DownloadState(currentTrack.id,
+                                    DownloadStatus.FAILED, 0,
+                                    reason = "Файл повреждён (не проходит валидацию после $retryCount повторов)",
+                                    failReason = re.pinok.data.model.FailReason.UNKNOWN))
+                            }
+                            break
+                        }
+                        val nextAttempt = retryCount + 1
+                        // Чистим .tmp частичный/накопленный — чтобы Range-resume со следующей
+                        // попытки не склеил битый хвост с новой закачкой.
+                        try {
+                            File(downloadDir, "${currentTrack.id}.mp3.tmp").delete()
+                        } catch (_: Exception) { /* non-fatal */ }
+                        AppLog.w(TAG, "queue: #${currentTrack.id} — битый direct-контент, retry " +
+                            "$nextAttempt/$MAX_CONTENT_RETRY_ATTEMPTS: получаю СВЕЖИЙ url через audioGetById")
+                        val fresh: Track? = try {
+                            SovaApp.get().apiClient.audioGetById(currentTrack)
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            AppLog.w(TAG, "queue: #${currentTrack.id} — audioGetById (fresh url) failed: ${e.message}")
+                            null
+                        }
+                        val freshUrl = fresh?.url
+                        if (freshUrl == null) {
+                            AppLog.w(TAG, "queue: #${currentTrack.id} — не удалось получить свежий url → FAILED(NETWORK)")
+                            if (_downloads.value[currentTrack.id]?.isInProgress == true) {
+                                updateState(currentTrack.id, DownloadState(currentTrack.id,
+                                    DownloadStatus.FAILED, 0,
+                                    reason = "Не удалось пере-получить ссылку для повтора (контент повреждён)",
+                                    failReason = re.pinok.data.model.FailReason.NETWORK))
+                            }
+                            break
+                        }
+                        retryCount = nextAttempt
+                        currentTrack = fresh
+                        currentUrl = freshUrl
+                        // Recommended D: downloadTrack сам отправит свежий url в HLS-ветку,
+                        // если VK вернул m3u8-вариант — второй fallback почти бесплатно.
+                    }
+                }
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 throw ce  // CancellationException НЕ ловим — coroutine cancellation
             } catch (t: Throwable) {
@@ -978,6 +1075,71 @@ object TrackDownloadManager {
     fun getQueueSize(): Int = pendingQueue.size
 
     /**
+     * #OFFQ (2026-10-02): Признак того, что очередь загрузок стоит на паузе.
+     * Мягкая пауза: текущий скачиваемый трек не прерывается (дочитывается до конца),
+     * следующий трек из очереди не берётся, пока paused == true.
+     * Для UI toggle «Пауза» ⇄ «Продолжить».
+     */
+    fun isPaused(): Boolean = paused
+
+    /**
+     * #OFFQ (2026-10-02): Включить/снять мягкую паузу очереди загрузок.
+     *
+     * @param p true — приостановить очередь (текущий трек дочитывается, следующий
+     *          не начнётся до снятия паузы); false — снять паузу и продолжить.
+     *
+     * Снятие паузы будит worker через queueSignal: если worker застрял либо в
+     * delay-цикле ожидания паузы, либо на queueSignal.receive() (очередь пуста),
+     * сигнал разбудит его, delay-цикл выйдет и цикл продолжит брать треки.
+     */
+    fun setPaused(p: Boolean) {
+        if (paused == p) return
+        paused = p
+        AppLog.i(TAG, "OFFQ: queue ${if (p) "paused" else "resumed"} (queueSize=${pendingQueue.size})")
+        if (!p) {
+            // Разбудить worker, если он ждёт сигнала или в delay-цикле паузы.
+            queueSignal.trySend(Unit)
+        }
+    }
+
+    /**
+     * #OFFQ (2026-10-02): Очистить очередь ожидающих загрузок.
+     *
+     * НЕ трогает уже скачанные треки (COMPLETED сохраняются) и НЕ прерывает текущий
+     * скачиваемый трек (DOWNLOADING дочитывается до конца). Удаляются только треки,
+     * стоящие в очереди и ожидающие (QUEUED) — их статусы снимаются из _downloads.
+     *
+     * Персистентная очередь обновляется (schedulePersistQueue), чтобы очищенные треки
+     * НЕ resurrectились при следующем старте приложения (#DL-DISPATCH-RESTORE).
+     * Родительская корутина на том же public вызове обновляет persist следом.
+     */
+    fun clearPendingQueue() {
+        ensureInitialized()
+        val cleared = pendingQueue.size
+        pendingQueue.clear()
+        if (cleared > 0) {
+            AppLog.i(TAG, "OFFQ: clearPendingQueue — removed $cleared queued tracks")
+        }
+        // Снять статусы ожидающих (QUEUED) треков из _downloads. Активный трек
+        // (DOWNLOADING) и завершённые (COMPLETED/FAILED) — сохраняем.
+        val queuedIds = _downloads.value.values
+            .filter { it.status == DownloadStatus.QUEUED }
+            .map { it.trackId }
+            .toSet()
+        if (queuedIds.isNotEmpty()) {
+            _downloads.update { current -> current - queuedIds }
+        }
+        // #DL-DISPATCH-PERSIST: файл очереди перезаписываем — очищенные треки
+        // не должны восстановиться при следующем старте.
+        schedulePersistQueue("clearPendingQueue x$cleared")
+        // Если после очистки не осталось активных загрузок — foreground-сервис
+        // остановится (maybeStopForegroundService сам решит: текущий DOWNLOADING
+        // ещё активен — сервис останется до его завершения).
+        maybeStopForegroundService()
+        AppLog.i(TAG, "OFFQ: clearPendingQueue done (cleared=$cleared, queueSize=${pendingQueue.size})")
+    }
+
+    /**
      * Fix #265: Позиция трека в очереди (1-based), или 0 если не в очереди.
      * Для UI "В очереди: 3" на карточке трека.
      */
@@ -1143,11 +1305,14 @@ object TrackDownloadManager {
      * pendingQueue. Sequential queue-worker (Fix #265) обрабатывает их по одному
      * — в любой момент активна максимум одна HLS-загрузка.
      *
-     * Треки с пустым URL пропускаются (VK иногда отдаёт track без url —
-     * нужно audioUnmaskSource, но если URL отсутствует физически — нечего качать).
+     * Треки с пустым URL НЕ пропускаются: VK периодически отдаёт track без url.
+     * Такие треки тоже ставятся в очередь — свежая ссылка перезапрашивается
+     * через audioGetById в processTrackFromQueue (#DL-DISPATCH-RESTORE) ровно в
+     * момент взятия трека из очереди. Это чинит «Загрузить всё», когда часть
+     * списка приходит без url (раньше они выпадали → кнопка выглядела мёртвой).
      *
      * @return количество треков, фактически добавленных в очередь
-     *   (excludes already-downloaded / already-queued / in-progress / no-url).
+     *   (excludes already-downloaded / already-queued / in-progress).
      */
     fun enqueueAll(tracks: List<Track>): Int {
         ensureInitialized()
@@ -1169,14 +1334,8 @@ object TrackDownloadManager {
         }
 
         var enqueued = 0
-        var skippedNoUrl = 0
         var skippedExisting = 0
         for (t in tracks) {
-            val url = t.url
-            if (url.isNullOrBlank()) {
-                skippedNoUrl++
-                continue
-            }
             if (skipIds.contains(t.id)) {
                 skippedExisting++
                 continue
@@ -1201,8 +1360,8 @@ object TrackDownloadManager {
             // перезапись файла на весь список (полный текущий остаток).
             schedulePersistQueue("enqueueAll x$enqueued")
         }
-        AppLog.i(TAG, "enqueueAll: enqueued=$enqueued, skippedNoUrl=$skippedNoUrl, " +
-            "skippedExisting=$skippedExisting (input=${tracks.size}, alreadyKnown=${skipIds.size - enqueued})")
+        AppLog.i(TAG, "enqueueAll: enqueued=$enqueued, skippedExisting=$skippedExisting " +
+            "(input=${tracks.size}, alreadyKnown=${skipIds.size - enqueued})")
         return enqueued
     }
 
@@ -1595,6 +1754,19 @@ object TrackDownloadManager {
             attempt++
             try {
                 downloadDirectWithResume(trackId, url, tempFile)
+                // #AUDIO-INTEGRITY: валидация содержимого ПЕРЕД rename→COMPLETED.
+                // downloadDirectWithResume деревортит только Content-Length обрыв;
+                // но сервер может отдать ПОЛНЫЙ ответ с «битым» контентом (HTML-ошибка,
+                // m3u8-текст, головной контейнер+мусор). Если валидация не прошла —
+                // кидаем InvalidDownloadedFileException: processTrackFromQueue подхватит
+                // и повторит со СВЕЖИМ url (битый файл НЕ помечается COMPLETED).
+                if (!isValidDownloadedDirectAudio(trackId, tempFile)) {
+                    AppLog.w(TAG, "direct #$trackId: downloaded file не прошёл валидацию содержимого " +
+                        "(${tempFile.length()}B) → повтор со свежим url (InvalidDownloadedFileException)")
+                    throw InvalidDownloadedFileException(
+                        "downloaded direct audio for #$trackId is invalid/corrupt (${tempFile.length()}B)"
+                    )
+                }
                 if (!tempFile.renameTo(targetFile)) {
                     tempFile.copyTo(targetFile, overwrite = true)
                     tempFile.delete()
@@ -1704,6 +1876,185 @@ object TrackDownloadManager {
                     "(${(bytesRead.toFloat() / totalBytes.toFloat() * 100f).toInt()}%)"
                 )
             }
+        }
+    }
+
+    /**
+     * #AUDIO-INTEGRITY: маркер «скачанный direct-файл невалиден/повреждён».
+     *
+     * Отдельный тип (а не IOException), чтобы downloadDirectTrack НЕ делал
+     * внутренний 3×backoff с тем же url (это бесполезно — сервер отдал целый,
+     * но невалидный ответ), а мгновенно пробросил наверх. processTrackFromQueue
+     * ловит его, берет СВЕЖИЙ url через audioGetById и повторяет с нуля
+     * (с жёстким лимитом [MAX_CONTENT_RETRY_ATTEMPTS]).
+     */
+    private class InvalidDownloadedFileException(message: String) : Exception(message)
+
+    /**
+     * #AUDIO-INTEGRITY: проверка целостности скачанного direct-аудио (НЕ HLS).
+     *
+     * Валидация — СИГНАЛ для retry, а не жёсткий отказ: локальный файл
+     * пользователя НЕ удаляется (getLocalFile/refreshFromDisk не трогаем).
+     *
+     * Отсеиваем заведомо «битые» файлы, которые проскочили Content-Length-проверку
+     * (сервер отдал полный ответ по длине, но содержимое — мусор):
+     *   - размер < [MIN_DIRECT_AUDIO_BYTES] → точно не аудио;
+     *   - начинается с '#' (m3u8-текст) или '<'/'<!DOCTYPE'/'<?xml' (HTML-ошибка);
+     *   - нет ни ID3-tag'а (0x49 0x44 0x33), ни MPEG frame sync (0xFF + байт 111xxxxx)
+     *     в начале, ни siren-заголовка (0x25), И MediaMetadataRetriever не смог
+     *     вытащить длительность (плюс MediaExtractor не дал первого звукового sample).
+     *
+     * MPEG-probe намеренно НЕ строгий (риск Fix #186 — строгая валидация ломала
+     * валидные файлы, особенно varbit/siren): если какой-то из сигналов есть —
+     * принимаем. Отвергаем только явный мусор.
+     */
+    private fun isValidDownloadedDirectAudio(trackId: Long, file: File): Boolean {
+        return try {
+            val size = file.length()
+            if (size < MIN_DIRECT_AUDIO_BYTES) {
+                AppLog.w(TAG, "directValidate #$trackId: size=${size}B < $MIN_DIRECT_AUDIO_BYTES → INVALID")
+                return false
+            }
+            val readLen = minOf(size, DIRECT_HEAD_PROBE_BYTES.toLong()).toInt()
+            if (readLen <= 0) {
+                AppLog.w(TAG, "directValidate #$trackId: empty file → INVALID")
+                return false
+            }
+            val head = ByteArray(readLen)
+            java.io.DataInputStream(file.inputStream()).use { stream -> stream.readFully(head) }
+
+            // 1) HTML / m3u8-текст — определённо не аудио.
+            val b0 = head[0].toInt() and 0xFF
+            if (b0 == 0x3C /* '<' */ || b0 == 0x23 /* '#' */) {
+                AppLog.w(TAG, "directValidate #$trackId: first byte=0x%02X (HTML/m3u8-text) → INVALID".format(b0))
+                return false
+            }
+            if (startsWithAscii(head, "<!DOCTYPE") || startsWithAscii(head, "<?xml") ||
+                startsWithAscii(head, "<html")) {
+                AppLog.w(TAG, "directValidate #$trackId: похоже на HTML-страницу ошибки → INVALID")
+                return false
+            }
+
+            // 2) ID3-tag в начале — классический MP3.
+            if (head.size >= 3 && head[0] == 0x49.toByte() && head[1] == 0x44.toByte() &&
+                head[2] == 0x33.toByte()) {
+                AppLog.v(TAG, "directValidate #$trackId: ID3-tag OK → VALID")
+                return true
+            }
+
+            // 3) siren/raw (0x25) в начале — принимаем (Fix #186: не ломать siren).
+            if (b0 == 0x25) {
+                AppLog.v(TAG, "directValidate #$trackId: siren-magic OK → VALID")
+                return true
+            }
+
+            // 4) MPEG frame sync где-то в начале (0xFF + следующий байт с 111xxxxx).
+            val syncFound = findMpegFrameSync(head)
+            if (syncFound) {
+                AppLog.v(TAG, "directValidate #$trackId: MPEG frame sync OK → VALID")
+                return true
+            }
+
+            // 5) Мягкий probe декодируемости: длительность из MediaMetadataRetriever
+            //    или первый аудио-sample из MediaExtractor. Намеренно НЕ строгий —
+            //    если у нас уже есть хоть один сигнал выше, до этого не доходим.
+            val probeOk = probeDirectDecodability(trackId, file)
+            if (probeOk) {
+                AppLog.v(TAG, "directValidate #$trackId: decode-probe OK → VALID")
+                return true
+            }
+
+            // Ни одного сигнала — считаем «битым».
+            AppLog.w(TAG, "directValidate #$trackId: нет ID3/MPEG-sync/siren и probe не дал аудио → INVALID")
+            false
+        } catch (e: Exception) {
+            AppLog.w(TAG, "directValidate #$trackId: exception ${e.message} → INVALID (не рискуем COMPLETED)")
+            false
+        }
+    }
+
+    /** Проверить, что буфер начинается с заданной ASCII-последовательности. */
+    private fun startsWithAscii(buf: ByteArray, prefix: String): Boolean {
+        if (buf.size < prefix.length) return false
+        for (i in prefix.indices) {
+            if ((buf[i].toInt() and 0xFF) != prefix[i].code) return false
+        }
+        return true
+    }
+
+    /**
+     * Ищем MPEG audio frame sync в первых байтах: байт 0xFF, за которым следует
+     * байт с 3 старшими битами = 1 (0xE0..0xFF — sync 111 + layer-биты). Это
+     * стандартный индикатор MPEG audio (MP3). Сканируем небольшое окно — реальный
+     * MP3 без ID3 имеет sync почти сразу, с ID3 обрабатывается выше.
+     */
+    private fun findMpegFrameSync(head: ByteArray): Boolean {
+        val scanEnd = minOf(head.size - 1, DIRECT_MPEG_SYNC_SCAN_BYTES)
+        var i = 0
+        while (i < scanEnd) {
+            if ((head[i].toInt() and 0xFF) == 0xFF) {
+                val next = head[i + 1].toInt() and 0xFF
+                // 111xxxxx → next >= 0xE0 (11 бит единиц + 2 бита layer/bits).
+                if (next >= 0xE0) return true
+            }
+            i++
+        }
+        return false
+    }
+
+    /**
+     * #AUDIO-INTEGRITY: мягкий probe декодируемости. Возвращает true, если
+     * MediaMetadataRetriever смог вытащить положительную длительность, ЛИБО
+     * MediaExtractor выдал первый аудио-sample (значит есть реальные данные,
+     * а не «головной контейнер и дальше мусор»).
+     *
+     * Запускается из downloadDirectTrack (Dispatchers.IO), MediaMetadataRetriever
+     * требует non-main thread — ок. Оба вызова обёрнуты в try/catch и возвращают
+     * false при любом сбое — probe никогда не бросает наружу и не убивает валидные
+     * файлы: он лишь окончательный fallback-сигнал.
+     */
+    private fun probeDirectDecodability(trackId: Long, file: File): Boolean {
+        // 1) MediaMetadataRetriever: наличие длительности.
+        val mmr = MediaMetadataRetriever()
+        try {
+            mmr.setDataSource(file.absolutePath)
+            val durationStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            if (durationStr != null) {
+                val durationMs = durationStr.toLongOrNull() ?: 0L
+                if (durationMs > 0L) {
+                    AppLog.v(TAG, "directProbe #$trackId: duration=${durationMs}ms → decodable")
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.v(TAG, "directProbe #$trackId: MMR failed (${e.message}) — не жёсткий отказ")
+        } finally {
+            try { mmr.release() } catch (_: Exception) { /* non-fatal */ }
+        }
+
+        // 2) MediaExtractor: первый аудио-sample.
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(file.absolutePath)
+            for (m in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(m)
+                val mime = format.getString(MediaFormat.KEY_MIME)
+                if (mime != null && mime.startsWith("audio/")) {
+                    extractor.selectTrack(m)
+                    val buf = java.nio.ByteBuffer.allocate(65536)
+                    val read = extractor.readSampleData(buf, 0)
+                    if (read > 0) {
+                        AppLog.v(TAG, "directProbe #$trackId: первый аудио-sample ${read}B → decodable")
+                        return true
+                    }
+                }
+            }
+            return false
+        } catch (e: Exception) {
+            AppLog.v(TAG, "directProbe #$trackId: MediaExtractor failed (${e.message}) — не жёсткий отказ")
+            return false
+        } finally {
+            try { extractor.release() } catch (_: Exception) { /* non-fatal */ }
         }
     }
 

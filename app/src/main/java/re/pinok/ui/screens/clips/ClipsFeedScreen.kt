@@ -80,6 +80,7 @@ import re.pinok.api.VKApiClient
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.media.ClipVideoDownloadManager
+import re.pinok.media.VideoPlayerConfig
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
 
@@ -341,6 +342,10 @@ private fun ClipPlayerItem(
             }
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                // #VIDEO-NET (2026-10-02): увеличенный буфер под сеть (клипы
+                // часто играют на мобильном интернете) — реже обрывы, быстрее
+                // возобновление после ребуферинга.
+                .setLoadControl(VideoPlayerConfig.defaultLoadControl())
                 .build().apply {
                     setMediaItem(mediaItemBuilder.build())
                     repeatMode = Player.REPEAT_MODE_ONE

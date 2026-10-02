@@ -107,6 +107,8 @@ data class Attachment(
     // audio_message (НЕ как doc с audio_msg). Без этого поля voice-сообщения
     // из messages.getHistory десериализуются в пустой Attachment и не рендерятся.
     @SerializedName("audio_message") val audioMessage: Doc.AudioMsg? = null,
+    // Видео-сообщение «кружок» (type="video_message").
+    @SerializedName("video_message") val videoMessage: VideoMessage? = null,
     // Fix #99: wall-вложение в сообщениях (репост поста в ЛС).
     @SerializedName("wall")   val wall: Post? = null,
     // Sprint 3 #13: стикеры в сообщениях.
@@ -178,6 +180,33 @@ data class Attachment(
 
         val isVoiceMessage: Boolean get() = audioMsg != null
     }
+}
+
+/**
+ * Видео-сообщение «кружок» (VK message attachment type="video_message").
+ *
+ * Приходит во вложениях сообщений (messages.getHistory) как отдельный тип
+ * вложения. Структура по HAR VK (web m.vk.ru, video.getVideoMessageUploadInfo +
+ * messages.send): files.mp4_480 (плюс failover-host), image[] — превью-кадры,
+ * shape_id — выбранная пользователем форма кружка, duration — длительность.
+ */
+data class VideoMessage(
+    @SerializedName("shape_id")   val shapeId: Int = 1,
+    // files: { "mp4_480": url, "failover_host": host }. Указываем в деталях.
+    @SerializedName("files")      val files: Map<String, String>? = null,
+    @SerializedName("direct_url") val directUrl: String? = null,
+    @SerializedName("share_url")  val shareUrl: String? = null,
+    @SerializedName("access_key") val accessKey: String? = null,
+    @SerializedName("duration")   val duration: Int = 0,
+    @SerializedName("image")      val image: List<Video.Thumb>? = null,
+    @SerializedName("date")       val date: Long = 0,
+) {
+    /** Наибольший превью-кадр (по площади) для постера кружка. */
+    val previewUrl: String?
+        get() = image?.maxByOrNull { (it.width) * (it.height) }?.url
+
+    /** Адрес проигрывания в формате mp4_480. */
+    val playbackUrl: String? get() = files?.get("mp4_480")
 }
 
 /**

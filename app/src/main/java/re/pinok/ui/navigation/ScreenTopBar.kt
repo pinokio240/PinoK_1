@@ -117,3 +117,19 @@ object ScreenTopBar {
         subBar = null
     }
 }
+
+/**
+ * Глобальное состояние правой панели ленты (#FEED-RIGHTPANEL).
+ *
+ * Кнопка меню ленты живёт в ГЛОБАЛЬНОМ TopAppBar (SovaNavHost), а сама панель —
+ * внутри FeedScreen — это РАЗНЫЕ композиции. Локальный `remember`-state в
+ * FeedScreen захватывался closure кнопки: при пересоздании экрана closure писал
+ * в «мёртвый» state и клик по ⋮ переставал открывать панель.
+ *
+ * Выносим флаг в общий объект: closure кнопки и панель читают/пишут ОДИН и тот же
+ * реактивный state независимо от инстанса FeedScreen. Панель не «теряется в
+ * никуда» при пересоздании экрана.
+ */
+object FeedPanelState {
+    var visible: Boolean by mutableStateOf(false)
+}

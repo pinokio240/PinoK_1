@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import re.pinok.ui.anim.LocalAnimScale
+import re.pinok.ui.anim.tweenScaled
 
 /**
  * Fix #234 (multi-photo preview): переиспользуемый горизонтальный бар
@@ -89,8 +91,10 @@ fun PendingPhotosBar(
 ) {
     AnimatedVisibility(
         visible = photos.isNotEmpty(),
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically(),
+        enter = fadeIn(tweenScaled<Float>(LocalAnimScale.current, 300)) +
+            expandVertically(tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)),
+        exit = fadeOut(tweenScaled<Float>(LocalAnimScale.current, 300)) +
+            shrinkVertically(tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)),
         modifier = modifier,
     ) {
         Surface(

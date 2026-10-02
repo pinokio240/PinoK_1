@@ -257,7 +257,8 @@ object VkNotificationsNotifier {
             type == "copy" -> "Новый репост"
             type == "wall" -> "Новая запись на стене"
             type == "gift" -> "Новый подарок"
-            type == "invite_group" -> "Приглашение в сообщество"
+            type == "invite_group" || type == "group_invites" -> "Приглашение в сообщество"
+            type == "new_posts" || type == "new_post" || type == "post" -> "Новый пост"
             else -> "Новое уведомление"
         }
         return if (count > 1) "$singular ($count)" else singular
@@ -278,7 +279,8 @@ object VkNotificationsNotifier {
             type == "copy" -> pluralize(count, "репост", "репоста", "репостов")
             type == "wall" -> pluralize(count, "запись", "записи", "записей")
             type == "gift" -> pluralize(count, "подарок", "подарка", "подарков")
-            type == "invite_group" -> pluralize(count, "приглашение", "приглашения", "приглашений")
+            type == "invite_group" || type == "group_invites" -> pluralize(count, "приглашение", "приглашения", "приглашений")
+            type == "new_posts" || type == "new_post" || type == "post" -> pluralize(count, "новый пост", "новых поста", "новых постов")
             else -> pluralize(count, "уведомление", "уведомления", "уведомлений")
         }
         return "$count новых $word"
@@ -353,20 +355,27 @@ object VkNotificationsNotifier {
             // 3b. Source filter (§42.3): сообщества vs пользователи.
             // parentOwnerId < 0 = сообщество, > 0 = пользователь, 0 = неизвестно.
             val owner = item.parentOwnerId
-            if (owner < 0 && !snap.pushFromCommunities) {
+            // #NOTIFY-LEAK (2026-10-01) + #NOTIFY-LEAK2 (2026-10-02): владелец сообщества
+            // часто приходит как 0 (action.entity.owner_id отсутствует у новостных
+            // уведомлений), поэтому классификация «сообщество» вынесена в единый
+            // предикат [NotificationItem.isCommunityNotif] (см. NotificationSource.kt),
+            // используемый И это гейтом, И sn_groups-фильтром — один источник истины.
+            val fromCommunity = item.isCommunityNotif()
+            if (fromCommunity && !snap.pushFromCommunities) {
                 AppLog.d(TAG, "showBatch: fromCommunities=false — skip owner=$owner type=${item.type}")
                 return@filter false
             }
-            if (owner > 0 && !snap.pushFromUsers) {
+            if (!fromCommunity && !snap.pushFromUsers) {
                 AppLog.d(TAG, "showBatch: fromUsers=false — skip owner=$owner type=${item.type}")
                 return@filter false
             }
             // Fix #390 #NOTIFY-MODES: гейт новостных по режиму уведомлений.
-            // Сообщество = parentOwnerId < 0 (§42.3 источник). Режимы:
+            // Сообщество = parentOwnerId < 0 либо «community-стиль» при owner==0
+            // (см. fromCommunity выше). Режимы:
             //   0 MESSAGES_ONLY и 3 SILENT — новостные от сообществ НЕ показывать
             //     (0 и 3 показывают только «Сообщения»); новостные от ЮЗЕРОВ
-            //     (parentOwnerId > 0) показываются — юзер разделяет лишь
-            //     Сообщения/Сообщества, а лайки/комменты людей — «от людей».
+            //     (parentOwnerId > 0 или несообщество) показываются — юзер разделяет
+            //     лишь Сообщения/Сообщества, а лайки/комменты людей — «от людей».
             //   2 COMMUNITIES_ONLY — новостные от юзеров НЕ показывать.
             //   1 ALL — показывать всё (прежнее поведение).
             // showSingle — единственный путь показа идёт через showBatch
@@ -374,7 +383,6 @@ object VkNotificationsNotifier {
             // отдельный гейт там не нужен. Канал vk_security_alerts (SecurityAlertsPoller,
             // подозрительные входы) через showBatch НЕ проходит — гейт его не касается.
             val notifyMode = snap.notifyMode
-            val fromCommunity = owner < 0
             if (fromCommunity &&
                 (notifyMode == SovaPrefs.NOTIFY_MODE_MESSAGES_ONLY || notifyMode == SovaPrefs.NOTIFY_MODE_SILENT)
             ) {
@@ -394,6 +402,17 @@ object VkNotificationsNotifier {
             if (actorId != null && actorId in mutedUsers) {
                 AppLog.d(TAG, "showBatch: user $actorId muted — skip")
                 return@filter false
+            }
+            // #NOTIFY-LEAK diagnostics: прошло уведомление с owner==0, но community-первым
+            // feedback (было бы пропущено при старой классификации по owner<0).
+            if (owner == 0L && item.feedbackIds.firstOrNull()?.let { it < 0 } == true) {
+                AppLog.d(TAG, "showBatch: PASSED owner==0 but community-style fb=" + item.feedbackIds + " type=" + item.type)
+            }
+            // #NOTIFY-LEAK2 diagnostics: прошло «бродкаст-сообщество» (owner==0, пустой
+            // feedback, тип в community-broadcast set). Подтверждает, что такие типы
+            // при owner==0 трактуются сообществом (не показываются в MESSAGES_ONLY/SILENT).
+            if (owner == 0L && item.feedbackIds.isEmpty() && item.type in COMMUNITY_BROADCAST_TYPES) {
+                AppLog.d(TAG, "showBatch: PASSED broadcast community owner==0 fb=<empty> type=" + item.type)
             }
             true
         }
@@ -942,10 +961,10 @@ object VkNotificationsNotifier {
                 if (plural) "опубликовали на стене ($count)" else "опубликовал(а) на стене"
             type == "gift" ->
                 if (plural) "отправили подарки ($count)" else "отправил(а) подарок"
-            type == "invite_group" ->
+            type == "invite_group" || type == "group_invites" ->
                 if (plural) "пригласили в сообщества ($count)" else "пригласил(а) в сообщество"
-            // §45: post / new_post — пост от сообщества/пользователя (референс).
-            type == "post" || type == "new_post" ->
+            // §45: post / new_post / new_posts — пост от сообщества/пользователя (референс).
+            type == "post" || type == "new_post" || type == "new_posts" ->
                 if (plural) "опубликовали новые посты ($count)" else "опубликовал(а) новый пост"
             else ->
                 if (plural) "новые действия ($count)" else "новое действие"
@@ -1010,7 +1029,7 @@ object VkNotificationsNotifier {
             type.startsWith("like_") || type == "like" -> false
             type == "follow" || type == "friend_accepted" -> false
             type == "gift" -> false
-            type == "invite_group" -> false
+            type == "invite_group" || type == "group_invites" -> false
             // comment_*, reply_comment, reply_to_comment, mention*, copy, wall,
             // post, new_post — все имеют parent object для ответа.
             else -> true

@@ -89,6 +89,8 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
 // W30-1 #IM-UNREAD-MENU: иконка «непрочитанным/прочитанным» — та же, что в
@@ -154,10 +156,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -183,12 +207,15 @@ import re.pinok.data.model.MessageReaction
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.data.model.VideoMessage
 import re.pinok.feature.audio.AudioInlineRenderer
 import re.pinok.feature.photos.InlinePhotoItem
 import re.pinok.feature.photos.PhotosInlineRenderer
 import re.pinok.ui.anim.LocalAnimScale
 import re.pinok.ui.anim.LocalStickerPhotoScale
 import re.pinok.ui.anim.springScaled
+import re.pinok.ui.anim.tweenScaled
+import re.pinok.ui.theme.UiScale
 import re.pinok.media.VoiceRecorder
 import java.text.DecimalFormat
 import re.pinok.realtime.LongPollEvent
@@ -196,6 +223,7 @@ import re.pinok.ui.components.ForwardDialog
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.UnifiedAttachMenu
+import re.pinok.ui.components.VideoMessageShapes
 import re.pinok.util.AppLog
 import re.pinok.util.toChatDate
 import re.pinok.util.toDayKey
@@ -537,6 +565,10 @@ fun ChatDetailScreen(
     // отмена) — process death уже не должен возвращать в чат. Очищаем только
     // при реальном process death во время камеры (callback не успел вызваться).
     onCameraReturnConsumed: () -> Unit = {},
+    // #VM-3 волна 3: видео-сообщение («кружок») — открыть рекордер
+    // VideoMessageCreateScreen для текущего чата. Хост (SovaNavHost) передаёт
+    // навигацию с peerId; дефолт — no-op (пункт не появляется в старых вызовах).
+    onVideoMessage: (peerId: Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     // Fix #133: peerTitle/peerPhoto приходят из nav arguments (передаются из
@@ -573,6 +605,18 @@ fun ChatDetailScreen(
     var showReactionPicker by remember { mutableStateOf<Long?>(null) }
     // Sprint 3: режим редактирования.
     var editingMsgId by remember { mutableStateOf<Long?>(null) }
+    // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01): вложения
+    // редактируемого сообщения. Хранится отдельно от editingMsgId, чтобы:
+    //  - при правке только текста передать на сервер полный список и СОХРАНИТЬ
+    //    вложения (messages.edit переписывает attachment целиком);
+    //  - при удалении файла (×) — убрать его из списка → снять на сервере;
+    //  - при удалении ВСЕХ (список стал пустым) — не шлём attachment → VK снимает.
+    var editingAttachments by remember { mutableStateOf<List<Attachment>?>(null) }
+    // #IM-EDIT-ATTACH: attachment-токены ВНОВЬ добавленных при редактировании файлов
+    // (uploadDocForMessage). Объединяются с существующими в editMessage.
+    var editingAddedAttach by remember { mutableStateOf<List<String>>(emptyList()) }
+    // #IM-EDIT-ATTACH: флаг «идёт загрузка добавленного файла» — show spinner в кнопке.
+    var editingAddingFile by remember { mutableStateOf(false) }
 
     // 18-θ (#TYPING-SEND): исходящий «печатает» — messages.setActivity(type=typing,
     // peer_id) через VKA setActivity (преадд оркестратора волны 19). Паттерн VK web:
@@ -1323,6 +1367,45 @@ fun ChatDetailScreen(
             AppLog.i("ChatDetailScreen", "filePicker: added ${newFiles.size} files, total pending=${pendingFiles.size}")
         }
     }
+    // #IM-EDIT-ATTACH: выбор ОДНОГО файла для добавления при редактировании сообщения.
+    // URI копируется в temp-файл (uploadDocForMessage требует File) и загружается как
+    // документ → токен добавляется в editingAddedAttach. Паттерн = multiFilePickerLauncher,
+    // но для одного файла (GetContent) и загрузка сразу (не в pendingFiles).
+    val editFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        val u = uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            if (editingAddingFile) return@launch
+            editingAddingFile = true
+            var inFile: java.io.File? = null
+            try {
+                inFile = kotlin.io.path.createTempFile(
+                    prefix = "edit_attach_",
+                    suffix = ".bin",
+                    directory = ctx.cacheDir.toPath(),
+                ).toFile()
+                val ins = ctx.contentResolver.openInputStream(u)
+                if (ins == null) {
+                    AppLog.w("ChatDetailScreen", "editFilePicker: cannot open stream for $u")
+                    return@launch
+                }
+                ins.use { i -> inFile.outputStream().use { out -> i.copyTo(out) } }
+                val mime = ctx.contentResolver.getType(u)
+                val token = app.apiClient.uploadDocForMessage(inFile, mime)
+                if (token != null) {
+                    editingAddedAttach = editingAddedAttach + token
+                    AppLog.i("ChatDetailScreen", "editFilePicker: uploaded $token")
+                } else {
+                    AppLog.w("ChatDetailScreen", "editFilePicker: upload failed for $u")
+                }
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "editFilePicker: upload error", e)
+            } finally {
+                inFile?.delete()
+            }
+        }
+    }
     var showAttachMenu by remember { mutableStateOf(false) }
     // Fix #200: единый триггер ➕ справа от поля — выпадающее меню вверх
     // (Смайлы / Стикеры / Прикрепить). Заменяет 3 отдельные кнопки 📎😀😐,
@@ -1545,6 +1628,63 @@ fun ChatDetailScreen(
     // (cmid, параметр сверен по бандлу снапшота: {cmid, peer_id, message,
     // keep_forward_messages}); по message_id современный gateway может отказывать
     // (класс Fix #207). Для старых записей без cmid — фолбэк на message_id.
+    //
+    // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01): веб-VK правит текст и
+    // вложения одним messages.edit, где attachment ПОЛНОСТЬЮ переписывает список.
+    // Поэтому чтобы НЕ снять вложения при правке текста, их нужно передать заново.
+    // Логика (по [editingAttachments]):
+    //   - null           → берём текущие вложения сообщения (фолбэк, сохраняем);
+    //   - непустой список → передаём строку (сохраняем/заменяем/учитываем удалённые ×);
+    //   - пустой список   → attachment не пишем (VK снимает все вложения).
+    //
+    // Локальная функция-помощник (должна быть объявлена ДО использования в
+    // editMessage — в local scope Kotlin не разрешает forward reference).
+    // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01): собрать attachment-строку
+    // (для messages.edit/messages.send) из списка вложений сообщения.
+    // Формат (VK web): список через запятую, каждый = {type}{owner}_{id}[_{accessKey}],
+    // ссылка = сырой URL. Поддерживаемые типы: doc, photo, video, audio, link
+    // (+ audio_message как doc-ссылка). Встретился НЕподдерживаемый тип
+    // (sticker/poll/gift…) → возвращаем null, чтобы НЕ снести вложения, которые
+    // не умеем перечислить (консервативно).
+    fun buildAttachmentString(atts: List<Attachment>): String? {
+        val tokens = mutableListOf<String>()
+        for (a in atts) {
+            val t = when (a.type) {
+                "doc" -> {
+                    val d = a.doc ?: return null
+                    buildString {
+                        append("doc").append(d.ownerId).append('_').append(d.id)
+                        if (!d.accessKey.isNullOrEmpty()) append('_').append(d.accessKey)
+                    }
+                }
+                "audio" -> {
+                    val t0 = a.audio ?: return null
+                    buildString {
+                        append("audio").append(t0.ownerId).append('_').append(t0.id)
+                        if (!t0.accessKey.isNullOrEmpty()) append('_').append(t0.accessKey)
+                    }
+                }
+                "photo" -> {
+                    val p = a.photo ?: return null
+                    "photo${p.ownerId}_${p.id}"
+                }
+                "video" -> {
+                    val v = a.video ?: return null
+                    buildString {
+                        append("video").append(v.ownerId).append('_').append(v.id)
+                        if (!v.accessKey.isNullOrEmpty()) append('_').append(v.accessKey)
+                    }
+                }
+                "link" -> a.link?.url ?: return null
+                // Голосовое — это doc с audio_msg; для сохранения опираемся на doc.
+                "audio_message" -> a.doc?.let { "doc${it.ownerId}_${it.id}" } ?: return null
+                else -> return null   // неподдерживаемый тип — не трогаем список
+            }
+            tokens += t
+        }
+        return if (tokens.isEmpty()) null else tokens.joinToString(",")
+    }
+
     fun editMessage(messageId: Long, newText: String) {
         scope.launch {
             try {
@@ -1554,7 +1694,35 @@ fun ChatDetailScreen(
                 if (msgCmid == null || msgCmid <= 0) {
                     AppLog.w("ChatDetailScreen", "editMessage: cmid missing for msg id=$messageId, fallback to message_id")
                 }
-                val ok = app.apiClient.messagesEdit(peerId, editRef, newText)
+                // Список вложений, который уйдёт на сервер (null = не передавать).
+                val atts = editingAttachments ?: msg?.attachments
+                val base = if (atts.isNullOrEmpty()) null else buildAttachmentString(atts)
+                val tokens = mutableListOf<String>()
+                base?.split(",")?.filter { it.isNotBlank() }?.let { tokens.addAll(it) }
+                tokens.addAll(editingAddedAttach)
+                // #IM-EDIT-ATTACH-FIX: пустой итоговый список ≠ «не трогать». Различаем:
+                //  - список непустой        → отправляем полный новый список (VK переписывает
+                //                            attachment целиком → удалённый × файл уходит);
+                //  - пользователь убрал ВСЕ (editingAttachments = emptyList) и ничего не добавил
+                //                            → шлём ПУСТУЮ строку "": иначе VK, не получив
+                //                            attachment, ОСТАВЛЯЕТ старые вложения (баг: файл
+                //                            не откреплялся);
+                //  - иначе (null / остались только неподдерживаемые buildAttachmentString типы,
+                //    напр. стикер)         → консервативно НЕ трогаем список (не сносим то,
+                //                            что не умеем перечислить).
+                val distinctTokens = tokens.distinct()
+                val attachStr: String? = when {
+                    distinctTokens.isNotEmpty() -> distinctTokens.joinToString(",")
+                    editingAttachments != null && editingAttachments.orEmpty().isEmpty() &&
+                        editingAddedAttach.isEmpty() -> ""
+                    else -> null
+                }
+                val ok = app.apiClient.messagesEdit(
+                    peerId = peerId,
+                    cmid = editRef,
+                    message = newText,
+                    attachment = attachStr,
+                )
                 if (ok) reloadMessages()
                 else AppLog.w("ChatDetailScreen", "edit failed for $messageId")
             } catch (e: Exception) {
@@ -1567,6 +1735,9 @@ fun ChatDetailScreen(
     fun cancelEdit() {
         editingMsgId = null
         inputText = ""
+        editingAttachments = null
+        editingAddedAttach = emptyList()
+        editingAddingFile = false
     }
 
     // #IM-IMPORTANT (волна 32): «Отметить как важное» — messages.markAsImportant
@@ -3586,6 +3757,114 @@ fun ChatDetailScreen(
                             Text("Отмена", color = MaterialTheme.colorScheme.onTertiaryContainer)
                         }
                     }
+                    // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01):
+                    // чипы документов редактируемого сообщения с кнопкой × —
+                    // удаление файла из editingAttachments (при сохранении
+                    // messages.edit перепишет attachment заново → файл снимется).
+                    val docAtts = editingAttachments.orEmpty().filter { it.type == "doc" && it.doc != null }
+                    if (docAtts.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.tertiaryContainer)
+                                .horizontalScroll(rememberScrollState())
+                                .padding(start = 16.dp, end = 12.dp, top = 0.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            docAtts.forEach { att ->
+                                val d = att.doc ?: return@forEach
+                                val label = if (d.title.isNullOrBlank()) d.ext.ifBlank { "Файл" } else d.title
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Description,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            editingAttachments = editingAttachments.orEmpty().filterNot {
+                                                it.type == "doc" && it.doc?.id == d.id && it.doc?.ownerId == d.ownerId
+                                            }
+                                        },
+                                        modifier = Modifier.size(24.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Close,
+                                            contentDescription = "Удалить файл",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            TextButton(onClick = { editingAttachments = emptyList() }) {
+                                Text("Удалить файлы", color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                        }
+                    } else if (editingAttachments != null && editingAttachments.orEmpty().isEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.tertiaryContainer)
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Все вложения будут удалены",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            )
+                        }
+                    }
+                    // #IM-EDIT-ATTACH: прикрепить НОВЫЙ файл к редактируемому сообщению.
+                    // Видна всегда в панели редактирования (и когда docAtts пуст). Клик —
+                    // выбор одного файла → uploadDocForMessage → токен в editingAddedAttach
+                    // (уйдёт на сервер в editMessage). editingAddingFile — spinner во время загрузки.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.tertiaryContainer)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = { editFilePickerLauncher.launch("*/*") },
+                            enabled = !editingAddingFile,
+                        ) {
+                            if (editingAddingFile) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Загрузка…")
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Outlined.AttachFile,
+                                    contentDescription = "Прикрепить файл",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("Прикрепить файл", color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                        }
+                    }
                 }
                 // Fix #200/#201: единая панель эмодзи+стикеров — ВНИЗУ, над
                 // панелью ввода (внутри Column bottomBar). Раньше рисовалась
@@ -3676,7 +3955,7 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp))
                             .windowInsetsPadding(WindowInsets.navigationBars)
                             .imePadding(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -3818,6 +4097,20 @@ fun ChatDetailScreen(
                                 },
                                 // Подарки только в личных диалогах.
                                 showGift = peerId > 0 && peerId < 2_000_000_000L,
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // #VM-3 волна 3: ПРЯМАЯ кнопка видео-сообщения («кружок»)
+                        // рядом с микрофоном — открывает рекордер VideoMessageCreateScreen.
+                        // Видима всегда (не только в режиме mic), следует флагу enabled
+                        // кнопок ввода (same как mic: !sending && !uploading).
+                        IconButton(
+                            onClick = { onVideoMessage(peerId) },
+                            enabled = !sending && !uploading,
+                        ) {
+                            Icon(
+                                Icons.Outlined.VideoFile,
+                                contentDescription = "Видеосообщение (кружок)",
                             )
                         }
                         Spacer(modifier = Modifier.width(4.dp))
@@ -4243,6 +4536,10 @@ fun ChatDetailScreen(
                                         contextMsgId = null
                                         editingMsgId = msg.id
                                         inputText = msg.text
+                                        // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01):
+                                        // запоминаем вложения, чтобы правка текста их не сняла
+                                        // (messages.edit переписывает attachment целиком).
+                                        editingAttachments = msg.attachments
                                     },
                                     onDelete = {
                                         contextMsgId = null
@@ -5672,6 +5969,19 @@ private fun MessageBubble(
                         }
                     }
                 }
+                // Видео-сообщения («кружок», type="video_message") — бабл по форме.
+                val vmAttachments = message.attachments
+                    ?.filter { it.type == "video_message" && it.videoMessage != null }
+                if (!vmAttachments.isNullOrEmpty()) {
+                    for (vmAtt in vmAttachments) {
+                        vmAtt.videoMessage?.let { vm ->
+                            VideoMessageBubble(
+                                videoMessage = vm,
+                                isOutgoing = message.isOut,
+                            )
+                        }
+                    }
+                }
                 // Ссылки.
                 val linkAttachments = message.attachments
                     ?.filter { it.type == "link" && it.link != null }
@@ -6327,6 +6637,260 @@ private fun VideoAttachmentCard(
                     .padding(horizontal = 4.dp, vertical = 2.dp),
             ) {
                 Text(durationStr, color = Color.White, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/**
+ * Вшивает SVG-контур формы (viewBox 216×216) в Path, масштабируя/сдвигая путь ТАК,
+ * чтобы он точно занимал контейнер sizePx. Трансформация вшивается в сам путь
+ * (p.transform), поэтому НЕ зависит от pivot DrawTransform (нет pivot-бага) и
+ * безопасна при применении как clip на любом контейнере.
+ */
+private fun fitShapePath(d: String, sizePx: Size): Path {
+    val s = minOf(sizePx.width, sizePx.height) / 216f
+    val tx = (sizePx.width - 216f * s) / 2f
+    val ty = (sizePx.height - 216f * s) / 2f
+    val p = PathParser().parsePathString(VideoMessageShapes.normalizeSvgPath(d)).toPath()
+    p.fillType = PathFillType.EvenOdd
+    p.transform(Matrix().apply {
+        scale(s, s)
+        translate(tx / s, ty / s)
+    })
+    return p
+}
+
+/**
+ * Shape из SVG-контура формы: обрезает контейнер (Box) по выбранной маске кружка.
+ * Через Modifier.clip(Shape) клип применяется на уровне отрисовки контейнера,
+ * поэтому и превью, и ExoPlayer (AndroidView), и все оверлеи обрезаются формой
+ * и не вылезают за неё.
+ */
+private class VideoMessageShape(private val d: String?) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline {
+        val path = d?.let { runCatching { fitShapePath(it, size) }.getOrNull() }
+        return if (path != null) Outline.Generic(path)
+        else Outline.Rectangle(Rect(Offset.Zero, size))
+    }
+}
+
+/**
+ * Базовое видео-сообщение («кружок» type="video_message"): квадратный бабл 216dp
+ * по выбранной форме (VideoMessageShapes). Контейнер клипится формой (превью и
+ * оверлеи обрезаются маской). При наличии playbackUrl воспроизводится INLINE в
+ * бабле через ExoPlayer (Media3): loop + muted по умолчанию, кнопка play/pause,
+ * лоадер, датчик громкости и плашка длительности. Без URL — статичное превью и Toast.
+ */
+@Composable
+private fun VideoMessageBubble(
+    videoMessage: VideoMessage,
+    isOutgoing: Boolean,
+) {
+    // Fix #244: состояние выбора для вложения.
+    val sel = LocalAttachmentSelection.current
+    val context = LocalContext.current
+
+    val d = VideoMessageShapes.PATHS.getOrNull(videoMessage.shapeId - VideoMessageShapes.SHAPE_ID_BASE)
+        ?: VideoMessageShapes.PATHS.firstOrNull()
+    // Форма контейнера: Shape из вшитого пути (без pivot-бага DrawTransform).
+    val clipShape = remember(d) { d?.let { VideoMessageShape(it) } }
+
+    val previewUrl = videoMessage.previewUrl
+    val playbackUrl = videoMessage.playbackUrl
+    val durationSec = videoMessage.duration
+
+    // Состояние inline-воспроизведения.
+    var isPlaying by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(playbackUrl != null) }
+    var isMuted by remember { mutableStateOf(true) }
+    // Счётчик retry при PlaybackException (не зацикливаемся): до 2 попыток.
+    var retryCount by remember(playbackUrl) { mutableStateOf(0) }
+
+    // ExoPlayer: создаётся только при наличии playbackUrl, loop + muted по умолчанию.
+    val player = playbackUrl?.let { url ->
+        remember(url) {
+            ExoPlayer.Builder(context)
+                .setLoadControl(re.pinok.media.VideoPlayerConfig.defaultLoadControl())
+                .build().apply {
+                setMediaItem(MediaItem.fromUri(url))
+                repeatMode = Player.REPEAT_MODE_ALL
+                volume = 0f
+                prepare()
+            }
+        }
+    }
+
+    // Подписка на состояние плеера (play/pause + loading/error).
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isLoading = when (playbackState) {
+                    Player.STATE_READY, Player.STATE_ENDED -> false
+                    else -> true
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                isLoading = false
+                isPlaying = false
+                // Guarded retry: переподготовка до 2 раз при сетевой/ошибке
+                // воспроизведения, чтобы не зацикливаться на постоянном сбое.
+                val p = player
+                if (p != null && retryCount < 2) {
+                    retryCount++
+                    isLoading = true
+                    try {
+                        p.prepare()
+                        p.playWhenReady = true
+                    } catch (_: Exception) {
+                        isLoading = false
+                    }
+                }
+            }
+        }
+        player?.addListener(listener)
+        onDispose { player?.removeListener(listener) }
+    }
+
+    // Освобождение плеера (без утечек).
+    DisposableEffect(player) {
+        onDispose { try { player?.release() } catch (_: Exception) {} }
+    }
+
+    fun togglePlayPause() {
+        val p = player ?: return
+        if (p.isPlaying) p.pause() else p.play()
+    }
+
+    fun toggleMute() {
+        val p = player ?: return
+        isMuted = !isMuted
+        p.volume = if (isMuted) 0f else 1f
+    }
+
+    Box(
+        modifier = Modifier
+            .size(216.dp)
+            .aspectRatio(1f)
+            .then(if (clipShape != null) Modifier.clip(clipShape) else Modifier)
+            .background(
+                if (isOutgoing) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+            )
+            .combinedClickable(
+                onClick = {
+                    if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                    else {
+                        if (playbackUrl == null) {
+                            Toast.makeText(context, "Видео недоступно", Toast.LENGTH_SHORT).show()
+                        } else {
+                            togglePlayPause()
+                        }
+                    }
+                },
+                onLongClick = { sel?.onLongPress?.invoke() },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Превью-кадр с лёгким blur как подложка (веб-blur до загрузки видео).
+        if (previewUrl != null) {
+            AsyncImage(
+                model = previewUrl,
+                contentDescription = "Видео-сообщение",
+                modifier = Modifier
+                    .matchParentSize()
+                    .blur(12.dp),
+                contentScale = ContentScale.Crop,
+            )
+        }
+
+        // Инлайн-видео: рендерится поверх превью, когда активное воспроизведение.
+        if (isPlaying && player != null) {
+            AndroidView(
+                modifier = Modifier.matchParentSize(),
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        this.player = player
+                    }
+                },
+                update = { it.player = player },
+            )
+        }
+
+        // Кнопка-центр: play ⟷ pause (toggle).
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable(enabled = playbackUrl != null) { togglePlayPause() },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(26.dp),
+                    strokeWidth = 3.dp,
+                    color = if (isOutgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
+                    tint = if (isOutgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        }
+
+        // Датчик громкости (внизу-по-центру): toggle mute.
+        if (playbackUrl != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp)
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f))
+                    .clickable { toggleMute() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = if (isMuted) "Включить звук" else "Выключить звук",
+                    tint = if (isOutgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+
+        // Плашка длительности (слева-внизу).
+        if (durationSec > 0) {
+            val min = durationSec / 60
+            val sec = durationSec % 60
+            val durStr = "%d:%02d".format(min, sec)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    durStr,
+                    color = if (isOutgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    fontSize = 11.sp,
+                )
             }
         }
     }
@@ -8627,10 +9191,10 @@ private fun PendingFilesBar(
 ) {
     androidx.compose.animation.AnimatedVisibility(
         visible = files.isNotEmpty(),
-        enter = androidx.compose.animation.fadeIn() +
-            androidx.compose.animation.expandVertically(),
-        exit = androidx.compose.animation.fadeOut() +
-            androidx.compose.animation.shrinkVertically(),
+        enter = androidx.compose.animation.fadeIn(re.pinok.ui.anim.tweenScaled<Float>(LocalAnimScale.current, 300)) +
+            androidx.compose.animation.expandVertically(re.pinok.ui.anim.tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)),
+        exit = androidx.compose.animation.fadeOut(re.pinok.ui.anim.tweenScaled<Float>(LocalAnimScale.current, 300)) +
+            androidx.compose.animation.shrinkVertically(re.pinok.ui.anim.tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)),
         modifier = modifier,
     ) {
         Surface(

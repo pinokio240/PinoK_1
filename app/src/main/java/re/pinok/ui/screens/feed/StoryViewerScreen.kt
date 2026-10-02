@@ -72,6 +72,7 @@ import re.pinok.data.model.Story
 import re.pinok.data.model.StoryGroup
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
+import re.pinok.media.VideoPlayerConfig
 import re.pinok.media.StoryVideoDownloadManager
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -272,6 +273,9 @@ fun StoryViewerScreen(
             val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                // #VIDEO-NET (2026-10-02): истории-видео играют часто на
+                // мобильном — увеличенный буфер под сеть (реже обрывы).
+                .setLoadControl(VideoPlayerConfig.defaultLoadControl())
                 .build().apply {
                     val mi = if (videoUrl.contains("m3u8", ignoreCase = true)) {
                         MediaItem.Builder().setUri(videoUrl)

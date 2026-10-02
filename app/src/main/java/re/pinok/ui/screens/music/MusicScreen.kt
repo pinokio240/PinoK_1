@@ -98,6 +98,7 @@ import re.pinok.data.model.DownloadStatus
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
+import re.pinok.ui.components.shareTrack
 import re.pinok.util.AppLog
 import kotlin.math.abs
 
@@ -966,25 +967,9 @@ fun MusicScreen(
                     },
                     onShare = {
                         // #SHARE-AUDIO (2026-08-03): реализован Android ACTION_SEND
-                        // chooser с текстом "Title — Artist\nhttps://vk.com/audio...":
-                        val t = track
-                        scope.launch {
-                            try {
-                                val shareText = "${t.title} — ${t.artist}\nhttps://vk.com/audio${t.ownerId}_${t.id}"
-                                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(android.content.Intent.EXTRA_TEXT, shareText)
-                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                val ctx = app.applicationContext
-                                ctx.startActivity(
-                                    android.content.Intent.createChooser(intent, "Поделиться")
-                                        .apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
-                                )
-                            } catch (e: Exception) {
-                                AppLog.e("MusicScreen", "share audio failed", e)
-                            }
-                        }
+                        // chooser с текстом "Title — Artist\nhttps://vk.com/audio...".
+                        // Волна 46: заменено на общий helper re.pinok.ui.components.shareTrack.
+                        shareTrack(app.applicationContext, track)
                     },
                     // #FAVE-AUDIO (2026-08-03): fave.add(type="audio") НЕ существует —
                     // у fave.* нет аудио-раздела. #BOOKMARKS-FIX (2026-09-12) сводил

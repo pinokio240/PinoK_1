@@ -958,6 +958,18 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 AppLog.setDisabledSections(parseLogSectionsOff(snap.logSectionsOff))
                 // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR logged.
                 AppLog.setErrorsOnly(snap.logErrorsOnly)
+                // #LOG-CONFIG (2026-10-01): применение сохранённых настроек хранения
+                // логов при старте приложения. Читаем snapshot prefs (уже получен
+                // выше как `snap` в этом же runBlocking) и применяем ротацию/буфер/
+                // retention/автоочистку через AppLog.applyLogConfig. При
+                // retentionDays>0 это сразу запускает cleanupByRetention() —
+                // синхронно, как все остальные первичные настройки в этом блоке.
+                AppLog.applyLogConfig(
+                    maxBytes = snap.logMaxSizeBytes,
+                    bufferCapacity = snap.logBufferCapacity,
+                    retentionDays = snap.logRetentionDays,
+                    autoClean = snap.logAutoClean,
+                )
             }.onFailure { e ->
                 android.util.Log.w("PinoK/SovaApp",
                     "loadLogCategories failed: ${e.message} — default (critical only: AUTH+SYSTEM+NETWORK) used")
@@ -990,6 +1002,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         runBlocking {
             val migrated = prefs.migratePanelDefaultsV2()
             if (migrated) AppLog.i("SovaApp", "Panel defaults v2 migration: applied (4-button bottom bar)")
+            // #PANELEDIT (2026-10-02): миграция под НОВЫЙ набор пунктов панелей
+            // (PanelItems.key вместо Screen.route) — сбрасывает обе панели на
+            // канонический список пользователя (дубли «мессенджер»/«сообщения»,
+            // спец-пункт «реакции»).
+            val panelV3 = prefs.migratePanelDefaultsV3()
+            if (panelV3) AppLog.i("SovaApp", "Panel defaults v3 migration: applied (PanelItems canonical set)")
             // §42.6 #PUSH-NO-GROUP-DEFAULT: сброс pushGroupingMode "category"→"none".
             // Старый default сворачивал пуш-группы — пользователь не видел отдельные
             // посты без pinch-out. Новый default = каждое уведомление отдельно.
@@ -1491,6 +1509,17 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         // дешёвое; смена режима применяется без перезапуска).
                         val snap = prefs.data.first()
                         val mode = snap.notifyMode
+
+                        // P3 #NOTIFY-PUSH-GATE (волна 56-f): согласуем глобальный
+                        // pushEnabled с пайплайном сообщений. PushEnabled — client-side
+                        // master toggle (Настройки → Уведомления → «Включить push»).
+                        // Poller уже паузится при pushEnabled=false (#NOTIFY-POLLER);
+                        // здесь НЕ выпускаем notification сообщения, но остальную
+                        // логику (входящее в открытый чат, счётчики) не трогаем.
+                        if (!snap.pushEnabled) {
+                            AppLog.d("SovaApp", "#NOTIFY pushEnabled=false: skip message notification peer=${event.peerId}")
+                            return@collect
+                        }
 
                         // Fix #390 #NOTIFY-MODES: сообщество = fromId<0 (сообщение
                         // отправлено от имени группы) или peerId<0 (канал/диалог

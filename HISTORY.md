@@ -13679,3 +13679,296 @@ Agent: assistant (deepseek-pp)
 Прочее: список бесед читается через execute (внутри — groups/chats + count/items), плюс statEvents.addVKUI/stats.trackEvents (аналитика VKUI, игнорируем).
 
 Вывод: для интеграции бесед в PinoK достаточно groups.addChat/editChat/deleteChat (+ execute для списка). Для редактирования сообщений/вложений нужен ДРУГОЙ HAR (messages.edit, docs.getMessagesUploadServer+docs.save, удаление вложений).
+
+
+---
+
+Task ID: CHAT-EDIT-ATTACH-HAR-2026-10-01
+Agent: assistant (MultiTool / deepseek-flash), 3 суб-агента параллельно
+Источник (3 файла, результат согласован по всем):
+- C:\Users\Pinokio240\Desktop\Ссылки\админка\беседа вк.har (59 МБ)
+- C:\Users\Pinokio240\Desktop\Ссылки\админка\бесеседа_чат.har (67 МБ)
+- C:\Users\Pinokio240\Desktop\Ссылки\админка\бесеседа_чат_процессы_вк_веб.har (70 МБ)
+ТЕМА: редактирование сообщений и прикрепление/удаление файла (docs) при редактировании.
+
+НАЙДЕННЫЕ ПАТТЕРНЫ (веб-VK, современный REST):
+- Всё идёт через POST https://web.api.vk.ru/method/<метод>?v=5.289&client_id=6287487
+  (form-urlencoded), access_token=vk1.a... в теле. Старый longpoll
+  im.php?act=a_send / al_im НЕ используется (0 совпадений).
+- Метода messages.editAttachments НЕТ — правка текста и вложений делается
+  ОДНИМ и тем же messages.edit.
+- Идентификация правки/удаления: cmid (conversation_message_id) + peer_id,
+  НЕ глобальный message_id.
+- attachment в messages.edit ПОЛНОСТЬЮ ЗАМЕНЯЕТ список вложений сообщения:
+  * прикрепить файл   → attachment=doc{owner}_{id}
+  * убрать один файл  → attachment=<оставшийся список через запятую>
+  * убрать ВСЕ        → параметр attachment просто ОПУСТИТЬ.
+- Прикрепление файла к существующему сообщению = загрузка →
+  messages.edit с новым attachment:
+  docs.getUploadServer → POST pu.vk.ru/...upload_doc.php (multipart) →
+  docs.save → doc{owner}_{id} → messages.edit attachment=doc{owner}_{id}.
+- Обязательно keep_snippets=0 (иначе отваливается превью ссылки);
+  keep_forward_messages=1 только при правке сообщения с реплаем.
+- После правки клиент всегда делает messages.getDiffContent (перечитывает
+  изменённое содержимое). В PinoK аналог — reloadMessages().
+
+ЧТО УЖЕ ЕСТЬ В PinoK (пробел ровно один):
+- messagesSend c attachment        — VKApiClient.kt:5755 ✅
+- messagesEdit ТОЛЬКО текст (БЕЗ attachment) — VKApiClient.kt:6151 ⛔ ПРОБЕЛ
+- messagesDeleteByCmid             — VKApiClient.kt:5970 ✅
+- docs pipeline (getUploadServer→upload→docs.save) — VKApiClient.kt:9416/9433/9492 ✅
+- editMessage в чате              — ChatDetailScreen.kt:1548
+- UI вложений: AttachmentPickerSheet / UnifiedAttachMenu ✅
+
+ПЛАН ПЕРЕНОСА (5 шагов, не внедрялся):
+1) VKApiClient.kt messagesEdit (6151): добавить attachment: String = "".
+   if notEmpty → args["attachment"]; «удалить все» → НЕ писать параметр.
+2) ChatDetailScreen.kt editMessage (1548): attachments: String? = null;
+   различать null(не трогать) / ""(удалить все) / список(задать).
+3) UI режима редактирования: показать текущие вложения сообщения, удалить
+   файл (пересчёт списка), удалить все (""), добавить файл
+   (переиспользовать AttachmentPickerSheet + docs pipeline).
+4) Формат attachment: список через запятую, файл = doc{owner}_{id}_{accessKey}.
+5) Валидация: не убирать keep_snippets=0 (в PinoK:6168 уже стоит);
+   keep_forward_messages=1 только для реплаев.
+
+Файлов изменено: 0 (research/analysis + план, без внедрения кода).
+Дополнены журналы: worklog.md, HISTORY.md (запись CHAT-EDIT-ATTACH-HAR-2026-10-01).
+
+
+---
+
+Task ID: IM-EDIT-ATTACH-IMPLEMENT-2026-10-01
+Agent: assistant (MultiTool / deepseek-flash) + 2 суб-агента (general) на UI-слой
+Предмет: РЕАЛИЗАЦИЯ плана CHAT-EDIT-ATTACH-HAR-2026-10-01 (перенос механики
+редактирования вложений VK web в Pinok).
+Файлов изменено: 2 (VKApiClient.kt, ChatDetailScreen.kt). Бэкапы: *.bak-20261001-editatt.
+Сборку не выполнял (собирает пользователь).
+
+СДЕЛАНО:
+1. VKApiClient.kt — messagesEdit(..., attachment: String? = null):
+   - attachment непустой → args["attachment"]; null/пусто → параметр не пишется (VK снимает все вложения).
+2. ChatDetailScreen.kt:
+   - state editingAttachments: List<Attachment>?;
+   - cancelEdit() сбрасывает; 
+   - editMessage() = существующие (editingAttachments ?: msg.attachments) + добавленные (editingAddedAttach), distinct(), пусто → null;
+   - helper buildAttachmentString(...): String? (doc/photo/video/audio/link/audio_message; неподдерж. тип → null);
+   - onEdit запоминает msg.attachments;
+   - UI: чипы doc-вложений с ×, кнопка «Удалить файлы» (emptyList), подпись «Все вложения будут удалены»;
+   - добавление НОВОГО файла: editingAddedAttach/editingAddingFile, launcher editFilePickerLauncher (GetContent) → temp → uploadDocForMessage (VKApiClient.kt:9528) → токен; кнопка «Прикрепить файл».
+ПРОВЕРКА:
+- Кодировка обоих файлов: UTF-8, strict decode OK, без BOM, без mojibake.
+- buildAttachmentString сверен с Models.kt. Импорты присутствуют.
+ОТКРЫТО: добавление по одному файлу за раз; компиляцию не выполнял (пользователь собирает сам).
+
+FIX-2026-10-01 (по ошибкам :app:compileDebugKotlin):
+- e: ChatDetailScreen.kt:1618 Unresolved 'buildAttachmentString' + :1647 private на local function.
+- Причина: buildAttachmentString — локальная функция внутри композабла, объявлена ПОСЛЕ
+  вызова в editMessage (forward reference запрещён), private недопустим для local.
+- Фикс: убрал private, перенёс функцию перед editMessage. Кодировка UTF-8 OK (без BOM).
+
+
+---
+
+Task ID: IM-EDIT-ATTACH-DETACH-FIX-2026-10-01
+Agent: subagent (general), проверка — assistant
+Предмет: БАГ «вложение при редактировании не открепляется». Работал субагент.
+Бэкапы: ChatDetailScreen.kt.bak-20261001-124336, VKApiClient.kt.bak-20261001-124336.
+
+ПРИЧИНА: семантика messages.edit — attachment отсутствует = сохранить старые;
+attachment="" = снять все; непустой = перезапись. В messagesEdit было
+`if (!attachment.isNullOrEmpty())` → "" и null неразличимы → при удалении × всех
+файлов параметр не уходил, VK оставлял файлы.
+
+ИСПРАВЛЕНИЯ:
+1. VKApiClient.kt messagesEdit (6181): `if (attachment != null)` (null=не трогать, ""=снять все).
+2. ChatDetailScreen.kt editMessage (1682): attachStr различает перезапись/""/null.
+Кодировка UTF-8 без BOM, без mojibake.
+ОГРАНИЧЕНИЕ: при наличии вложений типа, не токенизируемых buildAttachmentString
+(стикер/подарок/опрос/wall), удалить файл консервативно нельзя (null). Кейс
+«только файлы» закрыт.
+
+
+---
+
+Task ID: PARSE-REACTIONS-FIX-2026-10-01
+Agent: subagent (general), проверка — assistant
+Предмет: логкат HOTWAV-Cyber-15-Android-13_2026-10-01_130448.logcat (тест фичи правки вложений).
+FATAL нет. ERROR 2 шт + 5 «parse failed — skipped» = одна причина.
+ПРИЧИНА: parseMessageReactions (VKApiClient.kt:10570) o.getAsJsonObject("reactions") —
+при reactions=JsonArray (после messages.edit) → ClassCastException, рвал перезагрузку истории.
+ИСПРАВЛЕНИЕ: типобезопасное чтение `o.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null` (10574), recent_reactions через isJsonArray (10579).
+Бэкап: VKApiClient.kt.bak-20261001-reax. Кодировка UTF-8 без BOM.
+
+
+---
+
+Task ID: LOG-WHITELIST-FIX-2026-10-01
+Agent: subagent (general), проверка — assistant
+Предмет: файл лога (.log) в диалоге не прикреплялся/не отправлялся.
+Причина: VK_DOC_ALLOWED_EXTENSIONS (VKApiClient.kt:12133-12150) без "log" →
+uploadDocForMessage:9541-9551 отклонял ".log" → return null → «upload failed skip».
+"md" уже был. Фикс: добавлен "log" (VKApiClient.kt:12145). Бэкап: VKApiClient.kt.bak-20261001-logwhitelist. Кодировка UTF-8 без BOM.
+
+
+---
+
+Task ID: LOG-SETTINGS-2026-10-01
+Agent: subagent (general, 4 шт.), проверка — assistant
+Предмет: настройки логирования (срок/размер/автоочистка) — код + UI (вкладка «Логирование»).
+1. AppLog.kt: PERSIST_MAX_BYTES/BUFFER_CAPACITY → изменяемые @Volatile; добавлены logRetentionDays/autoCleanEnabled;
+   методы applyLogConfig, cleanupByRetention, logFilesStatus (+ currentLog*).
+2. SovaPrefs.kt: ключи LOG_MAX_SIZE_BYTES/LOG_RETENTION_DAYS/LOG_AUTO_CLEAN/LOG_BUFFER_CAPACITY + Snapshot + сеттеры.
+3. SettingsScreen.kt (LoggingTab): в НАЧАЛО вкладки секция «Хранение логов» — автоочистка, макс.размер (0.5..10МБ),
+   срок (off/1/3/7/14/30дн), буфер (1000/4000/10000), инфо размера, «Очистить логи сейчас».
+4. SovaApp.kt: на старте AppLog.applyLogConfig из сохранённых pref (retentionDays>0 → cleanupByRetention).
+Бэкапы *.bak-20261001-logcfg. Кодировка UTF-8 без BOM.
+
+
+---
+
+Task ID: SHARE-TRACK-AND-OFFLINE-ENQUEUE-2026-10-01
+Agent: subagent (general, 2 шт.), проверка — assistant
+Пункт 3 (Поделиться в плеере): создан TrackShare.kt (shareTrack helper); иконка Share в
+AudioPlayerScreen (ряд контролов, ~545-554) + меню ⋮; MusicScreen перешёл на helper.
+Пункт 2 (Загрузить всё): enqueueAll перестал пропускать треки без url (в очередь, резолв
+в processTrackFromQueue); VKApiClient.audioGetCatalogFallback убрал фильтр no-URL;
+докачка после сбоя/рестарта/фона уже работала (restorePersistedQueue).
+Бэкапы: *.bak-20261001-sharetrack, *.bak-20261001-enqueueurl. Кодировка UTF-8 без BOM.
+Значок логирования — ЗАКРЫТО (отображается; проблема была в среде/сборке).
+
+
+---
+
+Task ID: VIDEO-MESSAGE-PLAN-2026-10-01
+Agent: subagent (general), проверка — assistant
+ПЛАН реализации видео-сообщения «кружок» (согласован, старт):
+- API: video.getVideoMessageUploadInfo {shape_id=1} → upload ovu.mycdn.me (video_file, WebM VP8/Opus) → messages.send attachment=video_message{owner}_{id}.
+- Модель VideoMessage + ветка parseAttachments; UI: триггер в чате + VideoMessageCreateScreen (CameraX, fullscreen, 10 форм из HAR, 180с) + VideoMessageBubble.
+- Риск кодека MP4 vs WebM — проверить на аккаунте; первая версия — MP4 как есть.
+- Формы пикера из HAR (в JS-бандлах их нет).
+
+
+---
+
+Task ID: VIDEO-MESSAGE-IMPLEMENT-2026-10-01
+Agent: subagent (general, по волнам), проверка — assistant
+Реализация «кружка» (волны 1-4):
+- В1: Models VideoMessage + Attachment.videoMessage; VideoMessageShapes.kt (10 форм, из HTML).
+- В2: VKApiClient videoGetVideoMessageUploadInfo + sendVideoMessage (video_file на ovu.mycdn.me,
+  attachment video_message{owner}_{id}, без save) + ветка parseAttachments.
+- В3: Screen.VideoMessageCreate + SovaNavHost composable + VideoMessageCreateScreen (CameraX, таймер
+  180c, 10 форм) + триггер «Кружок» в UnifiedAttachMenu/ChatDetailScreen.
+- В4: VideoMessageBubble в рендере чата (квадрат 216dp, форма-маска, ▶, Toast по клику).
+Бэкапы *.bak-20261001-videomsg*. Кодировка UTF-8 без BOM. Сборка не выполнялась.
+Открыто: проверка кодека MP4 vs WebM, интеграция клика с VideoPlayer, превью-маска.
+
+FIX-2026-10-01 (compileDebugKotlin ошибки кружка): TrackShare import
+ActivityNotFoundException; VideoMessageCreateScreen — android.net.Uri + parsePathString(d).toPath();
+ChatDetailScreen PathParser parsePathString + MaterialTheme.colorScheme поднят из DrawScope (fillColor).
+Причина: в Compose BOM 2025.06 нет addPathNodes(String) → нужен parsePathString. Кодировка UTF-8 без BOM.
+
+
+---
+
+Task ID: VIDEO-MESSAGE-RENDER-SEND-FIXES-2026-10-01
+Agent: subagent (general, 3 шт.), проверка — assistant
+3 проблемы кружка по веб-эталону:
+A. VideoMessageBubble: клип контейнера 216dp формой (fitShapePath + VideoMessageShape/Modifier.clip);
+   inline ExoPlayer loop muted, кнопка play/pause, лоадер, volume, плашка длительности.
+B. VideoMessageShapes helper shapePath/shapePathByShapeId; сдвиг эскизов убран (без pivot-бага);
+   клип формы применён к превью камеры и PlayerView ревью.
+C. sendVideoMessage: retry (getUploadInfo 1, upload 2 + перезапрос url), валидация ownerId/videoId,
+   логи этапов; экран — флаг sending, при ошибке остаётся REVIEW, файл не теряется.
+Бэкапы *.bak-20261001-fixrender/fixshape/fixsend. Кодировка UTF-8 без BOM. Сборка не выполнялась.
+
+
+---
+
+Task ID: NORMALIZE-SVG-PATH-FIX-2026-10-01
+Agent: subagent (general), проверка — assistant
+Формы кружка 1/2/3 (сердце/зверёк/цветок) не применялись: Compose PathParser не понимает
+`.N`/`-.N`/склейку `.N.N` → NumberFormatException → runCatching null → форма не клипилась.
+Фикс: normalizeSvgPath(d) в VideoMessageShapes.kт (`.N`→`0.N`, `-.N`→`-0.N`, `.N.N`→разделитель)
+применён в shapePath (36) + ChatDetailScreen.fitShapePath (6652); добавлен fillType EvenOdd.
+Бэкапы *.bak-20261001-normshape. Кодировка UTF-8 без BOM.
+
+
+---
+
+Task ID: CIRCLE-UI-OFFLINE-PERMS-VIDEONET-2026-10-01
+Agent: subagent (general, 4 шт.), проверка — assistant
+A1: только «кружок» — пункт убран из «Прикрепить файл», прямая кнопка VideoFile у микрофона,
+   в рекордере только круг (пикер форм убран).
+A2: офлайн — пауза/продолжить, очистить очередь (с подтверждением), мягкая остановка по
+   завершении текущего трека (paused в worker-цикле, job.join).
+A3: разрешения — uses-feature (camera/mic/bt required=false), BLUETOOTH_CONNECT (31+) добавлен в
+   runtime-запрос; остальные уже были.
+B: VideoPlayerConfig (re.pinok.media) — единый буфер для всех видео (Wi-Fi 15/60/2.5/10,
+   моб. 30/120/2.5/10, backBuffer 30s, prioritize на мобили); применён в VideoPlayerScreen,
+   ClipsFeedScreen, VideoMessageBubble (с retry ≤2), StoryViewerScreen, VideoPipActivity;
+   setWakeMode(NETWORK) для фона.
+Бэкапы *.bak-20261001-vmcircle/offq/perms/vidnet. Кодировка UTF-8 без BOM. Сборка не выполнялась.
+
+
+---
+
+Task ID: RIGHT-PANEL-FIX-AUDIO-INTEGRITY-PLAN-2026-10-01
+A) Меню «Лента»: state панели вынесен в FeedPanelState (ScreenTopBar), кнопка/панель читают его;
+safety-net clear условный. Бэкапы *.bak-20261001-rightpanel.
+B) Аудио (план): direct-MP3 после загрузки не валидируется → битый «играется». Рекомендация —
+валидация (размер/ID3/MPEG/probe) + retry со свежим URL (audioGetById) лимит 2-3 + предпочтение
+HLS при повторе. HLS уже защищён. Реализация на рассмотрении.
+
+AUDIO-INTEGRITY-2026-10-01: реализован (TrackDownloadManager.kt): isValidDownloadedDirectAudio
+(размер/ID3/siren/MPEG-frame/проbe) + InvalidDownloadedFileException + retry со свежим url
+(audioGetById) лимит 2 (attempts в DownloadRequest), удаление *.tmp перед повтором, иначе FAILED.
+Бэкап *.bak-20261001-audiointegrity. Кодировка UTF-8 без BOM.
+
+NOTIFY-MODE-P3P5-2026-10-01: P5 setNotifyMode coerceIn(0,3); P3 startMessageNotifier —
+return@collect при !pushEnabled (глушит уведомления сообщений при выкл. push). P2 отложен
+(нужна правка MessageNotifier). Бэкапы *.bak-20261001-notifymode. Кодировка UTF-8 без BOM.
+
+NOTIFY-MODE-DRAWER-2026-10-01: «режим уведомлений» перенесён в глобальный drawer
+(NotifyModeSelector.kt → NotifyModeItem в шапке ModalNavigationDrawer, вне прокрутки;
+из FeedRightPanel убран, call-site обновлён). Бэкапы *.bak-20261001-notifydrawer.
+Кодировка UTF-8 без BOM.
+
+NOTIFY-COMMUNITY-LEAK-FIX-2026-10-01: при MESSAGES_ONLY/SILENT «новые действия» от сообществ
+проходили из-за owner==0 (fromCommunity=owner<0). Фикс: fromCommunity по 3 сигналам
+(owner<0 | owner==0 && feedbackIds<0 | type new_posts/group_invites) + подписи new_posts/
+group_invites в buildActionVerb/titleForType/pluralTitle; диагностический лог.
+Бэкап VkNotificationsNotifier.kt.bak-20261001-notifyleak. Кодировка UTF-8 без BOM.
+
+NOTIFY-LEAK2-U1U2-2026-10-01: новый NotificationSource.isCommunityNotif() (единый предикат;
+owner<0|owner==0&&fb<0|new_posts/group_invites|owner==0&&fb пусто&&тип in broadcast set);
+используется в showBatch.fromCommunity и SnNotifyFilter.sn_groups. Диагност лог owner==0.
+Бэкапы *.bak-20261001-notifyleak2. Кодировка UTF-8 без BOM. «Снапшоты уведомлений» — отложено.
+
+FEED-MENU-AB-2026-10-01: надпись «меню ленты» у кнопки ленты (FeedScreen actions);
+FeedRightPanel расширен разделами (Уведомления/Мессенджер/Сообщества/Видео/Клипы/Музыка/
+Сервисы/Закладки/Файлы → Screen.*; Игры/Маркет скрыты; бейдж у Мессенджера);
+новый колбэк onNavigate(Screen). Бэкапы *.bak-20261001-feedmenu. Кодировка UTF-8 без BOM.
+
+UISCALE-STAGE-C-2026-10-01: SovaPrefs.ui_scale (дефолт 0.85=−15%, варианты 75-130%); Theme
+fontScale*uiScale + LocalUiScale/UiScale.scaled; применено к нижней панели, вводу чата,
+панели фильтра ленты, карточкам уведомлений; UiScaleRow в Настройках («Текст и анимации»).
+Бэкапы *.bak-20261001-uiscale. Кодировка UTF-8 без BOM.
+
+NOTIF-NFDCAT-2026-10-01: категорийный сайдбар getRedesign; Новые/Просмотренные (last_viewed);
+действия ⋮ (hide/unsubscribe локальн+undo, Настроить→NotificationSettings); пред-кнопки;
+рендер вложений (entity_array/bubble/static_image); шестерёнка Настроек. TODO: бейджи по
+категориям, точный endpoint hide/unsubscribe, URL анкеты. Бэкапы *.bak-20261001-nfdcat.
+Кодировка UTF-8 без BOM.
+
+FEED-MENU-NOTIF-CATEGORIES-2026-10-01: меню ленты = 7 категорий уведомлений getRedesign
+(Уведомления профиля/Сообщества/Обратная связь/Друзья/Сервисы/Общение/Аккаунт), клик →
+NotificationsScreen(category) через Screen.Notifications("notifications/{category}").
+Локальные фильтры ленты сохранены; sanitizedInitialRoute для legacy-маршрута.
+Бэкапы *.bak-20261001-feedmenu-notif. Кодировка UTF-8 без BOM.
+
+W1-W2-2026-10-02: Реакции (LIKES) — refresh через reactionsReloadKey + 2 пустых состояния;
+остальные разделы ленты ok. Скорость анимации расширена на 5 панелей (tweenScaled). Панели:
+новый PanelItems.kt (14 канонических пунктов); боковая панель и нижняя читают конфиг из prefs;
+редактор PanelEditorTab (скрытие/порядок); «Реакции» — спец-пункт FeedFilter(LIKES); миграция
+V3. Бэкапы *.bak-20261001-feenkreac/animspeed/paneledit. Кодировка UTF-8 без BOM.

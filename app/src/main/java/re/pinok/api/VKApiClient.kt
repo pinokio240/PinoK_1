@@ -45,6 +45,7 @@ import re.pinok.data.model.Track
 import re.pinok.data.model.TrackArtist
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.data.model.VideoMessage
 import re.pinok.data.model.VideoPlatform
 import re.pinok.data.model.Album
 import re.pinok.data.model.Bookmark
@@ -131,6 +132,14 @@ class VKApiClient(
     @Volatile
     private var lastAnonymUid: Long = 0L
     override fun lastAnonymUid(): Long = lastAnonymUid
+
+    // #NOTIF-NFDCAT: последний прочитанный timestamp (response.last_viewed) из
+    // notifications.getRedesign. Сбрасывается на 0 при каждом вызове и заполняется
+    // из ответа. Экран использует его для переключателя «Новые/Просмотренные».
+    @Volatile
+    private var lastNotifViewedAt: Long = 0L
+    /** #NOTIF-NFDCAT: last_viewed из последнего notifications.getRedesign (0, если нет). */
+    fun lastNotifViewedAt(): Long = lastNotifViewedAt
 
     private val randomIdCounter = java.util.concurrent.atomic.AtomicLong(0)
 
@@ -4706,7 +4715,6 @@ class VKApiClient(
                     val trackOwnerId = o.get("owner_id")?.asLong ?: continue
                     if (!seenKeys.add(trackOwnerId to trackId)) continue
                     val url = extractAudioUrl(o)  // #AUDIO-UNMASK
-                    if (url.isNullOrBlank()) continue  // пропускаем треки без URL
                     result.add(
                         Track(
                             id = trackId,
@@ -6146,6 +6154,11 @@ class VKApiClient(
      * @param cmid   conversation_message_id сообщения (фолбэк — message_id).
      * @param message Новый текст.
      * @param keepForwardMessages Сохранить пересылаемые сообщения (web: keep_forward_messages).
+     * @param attachment Новый список вложений через запятую (doc{owner}_{id}, photo…).
+     *        НЕ null → замещает вложения сообщения целиком (VK web: messages.edit
+     *        переписывает attachment, см. HAR CHAT-EDIT-ATTACH-HAR-2026-10-01).
+     *        ПУСТАЯ строка "" → VK СНИМАЕТ все вложения (#IM-EDIT-ATTACH-FIX).
+     *        null → параметр НЕ передаётся (VK сохраняет вложения как были).
      * @return true если успешно.
      */
     suspend fun messagesEdit(
@@ -6155,6 +6168,7 @@ class VKApiClient(
         keepForwardMessages: Boolean = true,
         groupId: Long? = null,
         forceWebGateway: Boolean = false,
+        attachment: String? = null,
     ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
@@ -6166,6 +6180,13 @@ class VKApiClient(
         // #IM-EDIT-WEB (HAR vk.ru_чат_редактирование, 2026-09-26): веб всегда
         // шлёт keep_snippets=0 (сниппеты-превью не сохраняются при правке).
         args["keep_snippets"] = "0"
+        // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01): правка текста и
+        // вложений — единый messages.edit. attachment переписывает список целиком.
+        // #IM-EDIT-ATTACH-FIX: null → параметр НЕ шлём (VK сохраняет вложения как
+        // были — правка текста без сноса). ПУСТАЯ строка "" → шлём и просим VK
+        // СНЯТЬ ВСЕ вложения (иначе, не получив параметр, VK оставит старые и
+        // удалённый × файл «не откреплялся»). Непустая строка → перезапись списка.
+        if (attachment != null) args["attachment"] = attachment
         if (groupId != null) args["group_id"] = groupId.toString()
         val json = call("messages.edit", args, forceWebGateway = forceWebGateway) ?: return false
         return json.has("response")
@@ -8056,6 +8077,42 @@ class VKApiClient(
         }
     }
 
+    /**
+     * #NOTIF-NFDCAT: страница уведомлений с серверной категорией (categories из
+     * сайдбара getRedesign): all/communities/feedback/friends/services/communication/
+     * account. Для web-токенов маршрутизируется в notifications.getRedesign(category=...),
+     * для не-web — в notifications.get (категория не передаётся — legacy не поддерживает).
+     *
+     * Возвращает список, next_from и last_viewed (для «Новые/Просмотренные»).
+     * last_viewed читается из [lastNotifViewedAt] — он заполняется парсером
+     * notificationsGetRedesign на каждый вызов.
+     */
+    suspend fun notificationsGetPage(
+        count: Int = 30,
+        startFrom: String? = null,
+        category: String? = null,
+    ): NotificationsPage {
+        if (isOffline()) return NotificationsPage(emptyList(), null, 0L)
+        val isWeb = VkSigner.isWebToken(token())
+        val (list, nextFrom) = if (isWeb) {
+            notificationsGetRedesign(count = count, startFrom = startFrom, category = category)
+        } else {
+            notificationsGet(count = count, startFrom = startFrom)
+        }
+        return NotificationsPage(
+            items = list,
+            nextFrom = nextFrom,
+            lastViewed = if (isWeb) lastNotifViewedAt else 0L,
+        )
+    }
+
+    /** #NOTIF-NFDCAT: результат страницы уведомлений (без категории в модели). */
+    data class NotificationsPage(
+        val items: List<NotificationItem>,
+        val nextFrom: String?,
+        val lastViewed: Long?,
+    )
+
     /** Отметить все уведомления как прочитанные. */
     suspend fun notificationsMarkAsRead(): Boolean {
         if (isOffline()) return false
@@ -8076,6 +8133,70 @@ class VKApiClient(
         if (groupId != null) args["group_id"] = groupId.toString()
         val json = call("notifications.markAsViewed", args) ?: return false
         return json.has("response")
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // #NOTIF-NFDCAT: действия «⋮» (dots_menu) — hide / unsubscribe.
+    //
+    // Точный web-endpoint VK для hide_notification/unsubscribe в архиве НЕ
+    // зафиксирован (метод web-бандла не снят). Реализуем best-effort через
+    // стандартный FAQ-метод notifications.hideNotification (#NOTIF-HELPERS:
+    // VK официально документирует notifications.hideNotification с аргументами
+    // item_id / owner_id / rating). Точные параметры из dots_menu.query могут
+    // отличаться — шлём query как есть (если непустой), иначе пустой вызов.
+    // УБЕДИТЕЛЬНАЯ оговорка: серверный эффект этих вызовов НЕ гарантирован
+    // для web-токенов; на экране под каждым пунктом выполняется ЛОКАЛЬНЫЙ
+    // dismiss с undo (UX-приоритет), а метод лишь пробует уведомить сервер.
+    //
+    // TODO #NOTIF-NFDCAT: подтвердить реальный endpoint (hide/unsubscribe)
+    // через анализ web-bundle уведомлений и заменить вызов на фактический.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /** #NOTIF-NFDCAT: best-effort «Убрать из списка» (hide_notification). */
+    suspend fun notificationsHideItem(name: String?, query: String?): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf<String, String>()
+        // Если у dots_menu пункта есть query — передаём его параметры как есть.
+        if (!query.isNullOrBlank()) args["query"] = query
+        if (!name.isNullOrBlank()) args["name"] = name
+        return try {
+            val json = call("notifications.hideNotification", args)
+            if (json == null) {
+                AppLog.w("VKApiClient", "notificationsHideItem: hideNotification returned null (name=$name query=$query)")
+                false
+            } else {
+                if (json.has("error")) AppLog.w("VKApiClient", "notificationsHideItem: API error=${json.getAsJsonObject("error").get("error_msg")?.asString}")
+                true
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "notificationsHideItem failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * #NOTIF-NFDCAT: best-effort «Не уведомлять» (unsubscribe dots_menu-пункт).
+     * Отписка от категории уведомлений. web-endpoint не подтверждён; шлём
+     * notificationSettings.set? — не используем: VK API не документирует прямого
+     * метода отписки уведомлений по категории. Пробуем notifications.unsubscribe
+     * (не-документированный, best-effort). Локальный dismiss-эффект на экране
+     * гарантирован независимо от результата.
+     */
+    suspend fun notificationsUnsubscribe(name: String?, query: String?): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf<String, String>()
+        if (!query.isNullOrBlank()) args["query"] = query
+        if (!name.isNullOrBlank()) args["name"] = name
+        return try {
+            val json = call("notifications.unsubscribe", args)
+            if (json == null) {
+                AppLog.w("VKApiClient", "notificationsUnsubscribe: returned null (name=$name query=$query)")
+                false
+            } else true
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "notificationsUnsubscribe failed: ${e.message}")
+            false
+        }
     }
 
     /** Парсинг одного элемента уведомления из JSON. */
@@ -8374,6 +8495,48 @@ class VKApiClient(
          * совпадают (например, два уведомления о лайках одного поста).
          */
         val rawId: String = "",
+        /**
+         * #NOTIF-NFDCAT: пункты «⋮» (dots_menu) из notifications.getRedesign.
+         * VK web: hide_notification («Убрать из списка»), unsubscribe («Не уведомлять»),
+         * open_setting («Настроить», name=тип уведомления), каждый несёт `name`
+         * (категория настроек) и `query` (параметры для соответствующего метода).
+         * Парсится из одиночного массива dots_menu.
+         */
+        val dotsMenu: List<NotificationDotAction> = emptyList(),
+        /**
+         * #NOTIF-NFDCAT: пред-кнопки карточки (buttons.primary/secondary) из
+         * notifications.getRedesign. VK web рендерит их ПОД текстом уведомления:
+         * например «Подарить в ответ»+«Ответить» (подарки), «Заполнить анкету»
+         * (сервисы). Каждая кнопка = label + url (deep-link) или категория.
+         */
+        val preButtons: List<NotificationAction> = emptyList(),
+        /**
+         * #NOTIF-NFDCAT: URL пред-кнопок (параллельно [preButtons], тот же размер).
+         * Модель [NotificationAction] не несёт url, поэтому храним URL отдельно
+         * для клик-обработки (переход в ЛС, анкета, /gifts?act=send...).
+         */
+        val preButtonUrls: List<String?> = emptyList(),
+        /**
+         * #NOTIF-NFDCAT: тип вложения redesign (`attachment.type`) для рендера
+         * вспомогательного блока под текстом:
+         *  - "entity_array"  → attachments_string («Видео/Фото/4 фото/3 вложения»)
+         *  - "bubble"        → текст комментария-пузыря (main_text + reply)
+         *  - "static_image"  → превью-картинка (подарок) по URL
+         * Значение — СЫРОЙ type из ответа (непустой только для redesign-формата).
+         */
+        val attachmentType: String = "",
+        /**
+         * #NOTIF-NFDCAT: строка вложений redesign (attachment.items[].attachments_string
+         * или attachment.attachments_string): «Видео», «Фото», «4 фото», «3 вложения».
+         * Отображается как компактная подпись под текстом уведомления.
+         */
+        val attachmentsString: String = "",
+        /**
+         * #NOTIF-NFDCAT: текст bubble-вложения (attachment.bubble) — тело
+         * комментария/пузыря. Для gift-уведомлений VK рендерит это как подпись.
+         * (пусто, если вложения нет или оно не bubble).
+         */
+        val bubbleText: String = "",
     ) {
         /**
          * Уникальный ключ для key={} и distinctBy.
@@ -8429,6 +8592,31 @@ class VKApiClient(
     ) {
         enum class ActionStyle { SECONDARY, TERTIARY }
         enum class ActionType { GIFT_REPLY, REPLY, OPEN_POST, OPEN_USER }
+    }
+
+    /**
+     * #NOTIF-NFDCAT: один пункт меню «⋮» (dots_menu) redesign-уведомления.
+     *
+     * VK web (снапшоты Уведомления, dots_menu):
+     *  - {"type":"hide_notification", "name":"<category>", "query":"..."} → «Убрать из списка»
+     *  - {"type":"unsubscribe",       "name":"<category>", "query":"..."} → «Не уведомлять»
+     *  - {"type":"open_setting",      "name":"<category>", "query":"..."} → «Настроить»
+     *
+     * `name` — машинно-читаемая категория настроек уведомлений VK (используется
+     * также для фильтров, см. resolveRedesignNotificationType).
+     * `query` — параметры вызова для соответствующего notifications.* метода
+     * (hide/unsubscribe). Реальный endpoint web-клиента VK для hide/unsubscribe
+     * НЕ подтверждён в проекте (metodRaa не зафиксирован) → по умолчанию на
+     * экране выполняется ЛОКАЛЬНЫЙ dismiss с undo + TODO на серверный вызов.
+     */
+    data class NotificationDotAction(
+        val type: String,        // "hide_notification" | "unsubscribe" | "open_setting"
+        val name: String,        // категория настроек (например "new_posts")
+        val query: String?,      // параметры вызова (может быть null)
+    ) {
+        val isHide: Boolean get() = type == "hide_notification"
+        val isUnsubscribe: Boolean get() = type == "unsubscribe"
+        val isOpenSetting: Boolean get() = type == "open_setting"
     }
 
     /**
@@ -9771,6 +9959,183 @@ class VKApiClient(
         }
     }
 
+    // Видео-сообщение «кружок» (video_message).
+
+    /** Upload-инфо для видео-сообщения «кружок» (video.getVideoMessageUploadInfo). */
+    data class VideoMessageUploadInfo(
+        val ownerId: Long,
+        val uploadUrl: String,
+        val videoId: Long,
+    )
+
+    /**
+     * video.getVideoMessageUploadInfo — получить upload_url/owner_id/video_id
+     * для загрузки видео-сообщения «кружок». shape_id=1 — круглый кадр.
+     */
+    suspend fun videoGetVideoMessageUploadInfo(): VideoMessageUploadInfo? {
+        if (isOffline()) return null
+        val json = call("video.getVideoMessageUploadInfo", mapOf("shape_id" to "1")) ?: return null
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return null
+            val ownerId = safeLong(resp.get("owner_id")).takeIf { it != 0L } ?: return null
+            val uploadUrl = safeString(resp.get("upload_url")) ?: return null
+            val videoId = safeLong(resp.get("video_id")).takeIf { it != 0L } ?: return null
+            AppLog.i("VKApiClient", "videoGetVideoMessageUploadInfo ok owner=$ownerId video=$videoId url=${uploadUrl.take(60)}…")
+            VideoMessageUploadInfo(ownerId = ownerId, uploadUrl = uploadUrl, videoId = videoId)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "videoGetVideoMessageUploadInfo error", e)
+            null
+        }
+    }
+
+    /**
+     * Полный pipeline отправки видео-сообщения «кружок»:
+     * video.getVideoMessageUploadInfo → multipart upload на ovu.mycdn.me →
+     * messages.send с attachment `video_message{ownerId}_{videoId}` (БЕЗ video.save —
+     * сервер сам транскодит MP4 и регистрирует видео).
+     *
+     * Надёжность: шаг1 и шаг2 имеют по 1 повтору (retry). Если upload_url
+     * «протух» после спада upload'а — заново берём upload-инфо. Каждый этап
+     * логируется (AppLog.i на успех, AppLog.w на под-шаг ошибки), чтобы по дампу
+     * можно было понять, на каком именно этапе упало.
+     *
+     * @param onProgress доля загруженного 0..1 (сообщается локально на этапе upload).
+     * @return id отправленного сообщения или -1 при ошибке.
+     */
+    suspend fun sendVideoMessage(peerId: Long, file: java.io.File, onProgress: (Float) -> Unit = {}): Long {
+        if (isOffline()) return -1L
+        AppLog.i("VKApiClient", "sendVideoMessage: peer=$peerId file=${file.name} (${file.length()} B)")
+
+        // ---------- 1. Upload-инфо: owner_id / upload_url / video_id (+1 retry) ----------
+        var info = videoGetVideoMessageUploadInfo()
+        if (info == null) {
+            AppLog.w("VKApiClient", "sendVideoMessage: step1 upload-info попытка #1 не удалась, повтор…")
+            info = videoGetVideoMessageUploadInfo()
+        }
+        if (info == null) {
+            AppLog.e("VKApiClient", "sendVideoMessage ✗ step1 video.getVideoMessageUploadInfo failed после 2 попыток")
+            return -1L
+        }
+        AppLog.i("VKApiClient", "sendVideoMessage: uploadInfo ok (videoId=${info.videoId})")
+
+        // ---------- 2. Multipart POST файла на upload_url (+1 retry, re-validity) ----------
+        // Origin/Referer для ovu.mycdn.me — m.vk.ru (видео-сообщения это web-фича).
+        var currentInfo = info
+        var ownerId: Long
+        var videoId: Long
+        var attempts = 0
+        while (true) {
+            attempts++
+            val cur = currentInfo
+            if (cur == null) {
+                AppLog.e("VKApiClient", "sendVideoMessage ✗ currentInfo is null")
+                return -1L
+            }
+            val raw = doVideoMessageUpload(cur.uploadUrl, file, onProgress)
+            if (raw != null) {
+                // Если upload ответил СВОИМИ id — берём их; иначе из getUploadInfo.
+                val rOwner = raw.first.takeIf { it != 0L } ?: cur.ownerId
+                val rVideo = raw.second.takeIf { it != 0L } ?: cur.videoId
+                val jsonOk = raw.first != 0L || raw.second != 0L
+                if (rOwner != 0L && rVideo != 0L) {
+                    ownerId = rOwner
+                    videoId = rVideo
+                    AppLog.i("VKApiClient", "sendVideoMessage: upload ok (owner=$ownerId, video=$videoId, size=${file.length()} B, attempt=$attempts, jsonIds=$jsonOk)")
+                    break
+                }
+                AppLog.w("VKApiClient", "sendVideoMessage: upload attempt #$attempts вернул пустые id (owner=${raw.first}, video=${raw.second})")
+            } else {
+                AppLog.w("VKApiClient", "sendVideoMessage: upload attempt #$attempts завершился ошибкой/невалидным ответом")
+            }
+            // Retry счётчик исчерпан → заново берём upload-инфо (url мог протухнуть) и пробуем ещё раз.
+            if (attempts >= 2) {
+                AppLog.w("VKApiClient", "sendVideoMessage: обновляю upload-инфо (протух url после 2 попыток)…")
+                val fresh = videoGetVideoMessageUploadInfo()
+                if (fresh == null) {
+                    AppLog.e("VKApiClient", "sendVideoMessage ✗ step2 upload failed после всех попыток (re-fetch uploadInfo тоже failed)")
+                    return -1L
+                }
+                currentInfo = fresh
+                val r2 = doVideoMessageUpload(fresh.uploadUrl, file, onProgress)
+                if (r2 != null) {
+                    val o2 = r2.first.takeIf { it != 0L } ?: fresh.ownerId
+                    val v2 = r2.second.takeIf { it != 0L } ?: fresh.videoId
+                    if (o2 != 0L && v2 != 0L) {
+                        ownerId = o2
+                        videoId = v2
+                        AppLog.i("VKApiClient", "sendVideoMessage: upload ok после обновления url (owner=$ownerId, video=$videoId)")
+                        break
+                    }
+                }
+                AppLog.e("VKApiClient", "sendVideoMessage ✗ step2 upload failed после обновления upload_url → ${fresh.uploadUrl}")
+                return -1L
+            }
+        }
+
+        // ---------- 3. Без video.save → messages.send с attachment video_message{owner}_{id} ----------
+        // ownerId/videoId гарантированно != 0 (выведены из upload'а или upload-info).
+        val attachment = "video_message${ownerId}_$videoId"
+        AppLog.i("VKApiClient", "sendVideoMessage: messagesSend → attachment=$attachment")
+        val msgId = messagesSend(peerId, "", attachment = attachment)
+        AppLog.i("VKApiClient", "sendVideoMessage: messagesSend → msgId=$msgId")
+        return msgId
+    }
+
+    /**
+     * Один multipart-upload видео-файла на заданный uploadUrl.
+     * @return Pair(ownerId, videoId) или null при ошибке/невалидном JSON.
+     */
+    private suspend fun doVideoMessageUpload(
+        uploadUrl: String,
+        file: java.io.File,
+        onProgress: (Float) -> Unit,
+    ): Pair<Long, Long>? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val mime = "video/mp4"
+                val baseBody = file.asRequestBody(mime.toMediaType())
+                val progressBody = ProgressRequestBody(baseBody) { _, _, fraction ->
+                    onProgress(fraction.coerceIn(0f, 1f))
+                }
+                val multipart = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("video_file", "video_message", progressBody)
+                    .build()
+                val req = Request.Builder()
+                    .url(uploadUrl)
+                    .header("Origin", "https://m.vk.ru")
+                    .header("Referer", "https://m.vk.ru")
+                    .header("User-Agent", VKEndpoints.WEB_BROWSER_UA)
+                    .post(multipart)
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string() ?: return@use null
+                    if (!resp.isSuccessful) {
+                        AppLog.w("VKApiClient", "sendVideoMessage ✗ step2 upload HTTP ${resp.code}: ${body.take(200)}")
+                        return@use null
+                    }
+                    if (!body.trimStart().startsWith("{")) {
+                        AppLog.w("VKApiClient", "sendVideoMessage ✗ step2 non-JSON response: ${body.take(200)}")
+                        return@use null
+                    }
+                    val json = try {
+                        JsonParser.parseString(body).asJsonObject
+                    } catch (e: Exception) {
+                        AppLog.w("VKApiClient", "sendVideoMessage ✗ step2 upload bad JSON: ${body.take(200)}", e)
+                        return@use null
+                    }
+                    // Невалидный owner_id/video_id → возвращаем 0, чтобы вызванющий не слал messagesSend.
+                    val ownerId = safeLong(json.get("owner_id"))
+                    val videoId = safeLong(json.get("video_id"))
+                    ownerId to videoId
+                }
+            } catch (e: Exception) {
+                AppLog.w("VKApiClient", "sendVideoMessage ✗ step2 upload exception: ${e.message}")
+                null
+            }
+        }
+    }
+
     // Sprint 3 #13: Стикеры.
 
     /** store.getProducts — доступные наборы стикеров (содержит сами стикеры).
@@ -10554,13 +10919,16 @@ class VKApiClient(
      * (ChatDetailScreen, 1=❤️ 2=🔥 3=😂 4=👍 5=💩 6=❓ 7=😭).
      */
     private fun parseMessageReactions(o: JsonObject): MessageReaction? {
-        val r = o.getAsJsonObject("reactions")
-        if (r == null) return null
+        // Fix: reactions может прийти МАССИВОМ (JsonArray), а не объектом —
+        // getAsJsonObject("reactions") кидал ClassCastException и ронял историю
+        // (messagesGetHistory parse error после messages.edit). Неподходящий
+        // тип узла (массив/null/примитив) → реакций нет, исключение не бросаем.
+        val r = o.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
         val countEl = r.get("count")
         val count = if (countEl != null && !countEl.isJsonNull) countEl.asInt else 0
         val userEl = r.get("user_reaction")
         val userReaction = if (userEl != null && !userEl.isJsonNull) userEl.asInt else null
-        val recentArr = r.getAsJsonArray("recent_reactions")
+        val recentArr = r.get("recent_reactions")?.takeIf { it.isJsonArray }?.asJsonArray
         var recent: List<RecentReaction> = emptyList()
         if (recentArr != null) {
             val list = ArrayList<RecentReaction>()
@@ -10911,6 +11279,15 @@ class VKApiClient(
                             ),
                         )
                     }
+                    // Видео-сообщение «кружок» — приходит как type="video_message".
+                    // РАНЬШЕ ветки НЕ было → fall-through в else → пустой Attachment →
+                    // кружок не рендерился (VideoAttachmentCard ждёт it.type=="video").
+                    // Парсим в VideoMessage; если объект отсутствует — не падаем, отдаём
+                    // Attachment с пустым videoMessage.
+                    "video_message" -> {
+                        val vm = aObj.getAsJsonObject("video_message")
+                        Attachment(type = type, videoMessage = parseVideoMessage(vm))
+                    }
                     // Fix #219: парсинг type=sticker (входящие стикеры в messages.getHistory).
                     // РАНЬШЕ ветки НЕ было → fall-through в else → Attachment(type="sticker",
                     // sticker=null). Рендер в MessageBubble (ChatDetailScreen.kt:3434-3448)
@@ -11245,6 +11622,34 @@ class VKApiClient(
         val legacyUrl = listOf("photo_1280", "photo_800", "photo_640", "photo_320", "photo_130")
             .firstNotNullOfOrNull { safeString(o.get(it)) }
         return legacyUrl?.let { listOf(Video.Thumb(url = it, width = 0, height = 0)) }
+    }
+
+    /** Распарсить объект video_message «кружка». null при отсутствии/битом объекте. */
+    private fun parseVideoMessage(o: JsonObject?): VideoMessage? {
+        if (o == null) return null
+        return try {
+            val files = getObj(o, "files")?.let { filesObj ->
+                val m = mutableMapOf<String, String>()
+                for ((k, v) in filesObj.entrySet()) {
+                    if (v.isJsonPrimitive && v.asString.isNotBlank()) m[k] = v.asString
+                }
+                m.takeIf { it.isNotEmpty() }
+            }
+            val image = parseVideoThumbs(o)
+            VideoMessage(
+                shapeId = safeInt(o.get("shape_id"), 1),
+                files = files,
+                directUrl = safeString(o.get("direct_url")),
+                shareUrl = safeString(o.get("share_url")),
+                accessKey = safeString(o.get("access_key")),
+                duration = safeInt(o.get("duration")),
+                image = image,
+                date = safeLong(o.get("date")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "parseVideoMessage error", e)
+            null
+        }
     }
 
     @Volatile
@@ -12126,7 +12531,7 @@ class VKApiClient(
             // Код/данные
             "json", "xml", "sql", "js", "css", "java", "kt", "py", "go", "rs",
             "c", "cpp", "h", "hpp", "cs", "rb", "php", "swift", "yml", "yaml",
-            "toml", "ini", "cfg", "conf", "sh", "bat", "ps1",
+            "toml", "ini", "cfg", "conf", "sh", "bat", "ps1", "log",
             // Ключи/сертификаты
             "crt", "cer", "pem", "key", "der", "p12", "pfx",
             // Прочее
@@ -14976,6 +15381,8 @@ class VKApiClient(
      */
     suspend fun notificationsGetRedesign(count: Int = 30, startFrom: String? = null, groupId: Long? = null, category: String? = null): Pair<List<NotificationItem>, String?> {
         if (isOffline()) return emptyList<NotificationItem>() to null
+        // #NOTIF-NFDCAT: сбрасываем last_viewed на старте вызова (см. парсер ниже).
+        lastNotifViewedAt = 0L
         val args = mutableMapOf(
             "count" to count.toString(),
             "extended" to "1",
@@ -14994,6 +15401,12 @@ class VKApiClient(
                 return emptyList<NotificationItem>() to null
             }
             val resp = respEl.asJsonObject
+
+            // #NOTIF-NFDCAT: фиксируем last_viewed для переключателя Новые/Просмотренные.
+            // Сброс в 0 на старте каждого вызова + заполнение — чтобы экран не читал
+            // устаревшее значение после пагинации/смены категории.
+            lastNotifViewedAt = resp.get("last_viewed")?.takeIf { it.isJsonPrimitive && !it.isJsonNull }
+                ?.asLong ?: 0L
 
             // Fix #254: items лежат в response.notifications (массив напрямую).
             // НЕ response.items (как в notifications.get) и НЕ response.notifications.items
@@ -16023,30 +16436,129 @@ class VKApiClient(
         //   4. пустой entity.type → "new_posts" (прежний fallback, ЧАСТЬ 34:
         //      типичный случай redesign).
         var settingsName: String? = null
+        val dotsMenu = mutableListOf<NotificationDotAction>()
         val dotsEl = o.get("dots_menu")
         if (dotsEl != null && dotsEl.isJsonArray) {
             for (d in dotsEl.asJsonArray) {
                 if (!d.isJsonObject) continue
                 val dobj = d.asJsonObject
                 val dType = dobj.get("type")?.takeIf { !it.isJsonNull }?.asString // NULL-ЯВНО
+                if (dType.isNullOrBlank()) continue
                 if (dType == "open_setting" || dType == "unsubscribe") {
                     val n = dobj.get("name")?.takeIf { !it.isJsonNull }?.asString // NULL-ЯВНО
-                    if (!n.isNullOrBlank()) {
+                    if (!n.isNullOrBlank() && settingsName == null) {
                         settingsName = n
-                        break
                     }
                 }
+                // #NOTIF-NFDCAT: сохраняем ВСЕ пункты для меню «⋮» (+ query для
+                // hide/unsubscribe — параметры соответствующего вызова).
+                dotsMenu.add(
+                    NotificationDotAction(
+                        type = dType,
+                        name = dobj.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                        query = dobj.get("query")?.takeIf { it.isJsonPrimitive }?.asString,
+                    )
+                )
             }
         }
         val type = resolveRedesignNotificationType(settingsName, actionText, parentType)
 
-        // --- dots_menu → settingsName (разобран ВЫШЕ) + actions ---
-        // dots_menu теперь РАЗБИРАЕТСЯ (#NOTIF-FILTER-ACTION): name пунктов
-        // open_setting/unsubscribe — машинно-читаемая категория уведомления.
-        // Это контекстное меню (настройки уведомлений, отписка, скрыть).
-        // Кнопки действий (Ответить, Подарить в ответ) в redesign-формате отсутствуют —
-        // их нет в redesigned items. Если в будущем понадобится — добавим.
-        // Пока оставляем actions пустым.
+        // --- #NOTIF-NFDCAT: пред-кнопки (buttons.primary / buttons.secondary) ---
+        // VK web рендерит их ПОД текстом уведомления («Подарить в ответ»+«Ответить»
+        // у подарков, «Заполнить анкету» у сервисов). Парсим мягко: label обязателен,
+        // url опционален. Модель [NotificationAction] не несёт url, поэтому URL
+        // кнопок храним отдельным параллельным списком [preButtonUrls] для клик-обработки.
+        val preButtons = mutableListOf<NotificationAction>()
+        val preButtonUrls = mutableListOf<String?>()
+        val buttonsEl = o.get("buttons")
+        if (buttonsEl != null && buttonsEl.isJsonObject) {
+            val bObj = buttonsEl.asJsonObject
+            val primaryEl = bObj.get("primary")?.takeIf { it.isJsonObject }?.asJsonObject
+            val secondaryEl = bObj.get("secondary")?.takeIf { it.isJsonObject }?.asJsonObject
+            // Порядок как на VK web: сначала secondary (левая), потом primary (правая) —
+            // но понять точный порядок сложно; берём primary+secondary подряд.
+            buildList {
+                secondaryEl?.let { add(it) }
+                primaryEl?.let { add(it) }
+            }.forEach { b ->
+                val label = b.get("label")?.takeIf { !it.isJsonNull }?.asString
+                    ?: b.get("title")?.takeIf { !it.isJsonNull }?.asString ?: return@forEach
+                val url = b.get("url")?.takeIf { !it.isJsonNull }?.asString
+                val style = if (b === primaryEl)
+                    NotificationAction.ActionStyle.SECONDARY
+                else NotificationAction.ActionStyle.TERTIARY
+                // actionType-эвристика без выдумок: url/wall → открыть запись;
+                // «анкет…» → открыть профиль; дефолт — открыть parent.
+                val actionType = when {
+                    url?.contains("wall", ignoreCase = true) == true -> NotificationAction.ActionType.OPEN_POST
+                    label.contains("анкет", ignoreCase = true) -> NotificationAction.ActionType.OPEN_USER
+                    label.contains("подари", ignoreCase = true) -> NotificationAction.ActionType.GIFT_REPLY
+                    label.contains("ответи", ignoreCase = true) -> NotificationAction.ActionType.REPLY
+                    else -> NotificationAction.ActionType.OPEN_POST
+                }
+                preButtons.add(
+                    NotificationAction(
+                        label = label,
+                        style = style,
+                        actionType = actionType,
+                        targetUserId = 0L,
+                    )
+                )
+                preButtonUrls.add(url)
+            }
+        }
+
+        // --- #NOTIF-NFDCAT: расширение attachment (type / attachments_string / bubble) ---
+        // attachment может быть {type:"entity_array", items:[...]} (вложения разобраны
+        // выше), {type:"bubble"} (комментарий-пузырь), {type:"static_image"} (подарок-
+        // картинка). Читаем СЫРОЙ type, агрегирующую attachments_string и текст пузыря.
+        var attachmentType = ""
+        var attachmentsString = ""
+        var bubbleText = ""
+        val attachmentMain = o.get("attachment")
+        if (attachmentMain != null && attachmentMain.isJsonObject) {
+            val am = attachmentMain.asJsonObject
+            attachmentType = am.get("type")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            attachmentsString = am.get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            val bubbleEl = am.get("bubble")
+            if (bubbleEl != null && bubbleEl.isJsonObject) {
+                bubbleText = bubbleEl.asJsonObject
+                    .get("main_text")?.takeIf { !it.isJsonNull }?.asString
+                    ?: bubbleEl.asJsonObject.get("text")?.takeIf { !it.isJsonNull }?.asString
+                    ?: ""
+            }
+        }
+        // entity_array: attachments_string живёт внутри первого item'а.
+        if (attachmentsString.isBlank()) {
+            val am = o.get("attachment")
+            if (am != null && am.isJsonObject) {
+                val arr = am.asJsonObject.getAsJsonArray("items")
+                if (arr != null && arr.size() > 0) {
+                    val f = arr[0]
+                    if (f.isJsonObject) {
+                        attachmentsString = f.asJsonObject
+                            .get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                    }
+                }
+            }
+        }
+        // static_image: если attachments пуст и есть url — добавим превью (подарок).
+        if (attachmentType == "static_image" && attachments.isEmpty()) {
+            val am = o.get("attachment")
+            if (am != null && am.isJsonObject) {
+                val url = am.asJsonObject.get("url")?.takeIf { !it.isJsonNull }?.asString
+                    ?: am.asJsonObject.get("photo")?.takeIf { !it.isJsonNull }?.asString
+                if (!url.isNullOrBlank()) {
+                    attachments.add(NotificationAttachment(
+                        type = "gift",
+                        thumbUrl = url,
+                        ownerId = parentOwnerId,
+                        itemId = 0L,
+                        accessKey = null,
+                    ))
+                }
+            }
+        }
 
         return NotificationItem(
             type = type,
@@ -16072,6 +16584,13 @@ class VKApiClient(
             parentId = parentItemId,
             parentOwnerIdLegacy = parentOwnerId,
             rawId = redesignId,
+            // #NOTIF-NFDCAT: новые поля
+            dotsMenu = dotsMenu,
+            preButtons = preButtons,
+            preButtonUrls = preButtonUrls,
+            attachmentType = attachmentType,
+            attachmentsString = attachmentsString,
+            bubbleText = bubbleText,
         )
     }
 

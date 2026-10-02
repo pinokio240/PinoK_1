@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 // #AUTH-FIRST-OPEN-GUEST: иконка меню для guest-режима (открывает guest-drawer).
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.CloudOff
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -48,6 +50,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -68,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,6 +84,7 @@ import re.pinok.media.VideoDownloadManager
 import re.pinok.media.StoryVideoDownloadManager
 import re.pinok.util.AppLog
 import java.io.File
+import android.widget.Toast
 
 private const val TAG = "OfflineManagerScreen"
 
@@ -317,6 +322,15 @@ fun OfflineManagerScreen(
     var deepScanProgress by remember { mutableStateOf("" to 0) } // (text, done count)
     val scope = rememberCoroutineScope()
 
+    // #OFFQ (2026-10-02): управление очередью офлайн-загрузок.
+    // queuePaused — зеркалит TrackDownloadManager.isPaused() (toggle «Пауза» ⇄ «Продолжить»).
+    // showClearQueueDialog — confirm-dialog перед очисткой очереди.
+    val context = LocalContext.current
+    var queuePaused by remember { mutableStateOf(TrackDownloadManager.isPaused()) }
+    var showClearQueueDialog by remember { mutableStateOf(false) }
+    val queuePendingCount = TrackDownloadManager.getQueueSize()
+    val queueActive = audioDownloads.values.any { it.isInProgress }
+
     // Fix #147: при открытии экрана проверяем соответствие сохранённого пути
     // загрузки текущему downloadDir. Если SD card отмонтирована или SAF
     // permission revoked после перезапуска — покажем banner (см. ниже).
@@ -474,6 +488,113 @@ fun OfflineManagerScreen(
                     }
                 }
             }
+        }
+
+        // #OFFQ (2026-10-02): панель управления очередью офлайн-загрузок.
+        // Показывается, когда есть хоть что-то в очереди / идёт активная загрузка /
+        // очередь стоит на паузе. Кнопки: «Пауза» ⇄ «Продолжить» и «Очистить очередь»
+        // (с подтверждением). Рядом — счётчик ожидающих треков.
+        if (queueActive || queuePendingCount > 0 || queuePaused) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = buildString {
+                                append("Очередь загрузок")
+                                if (queueActive) append(" · идёт загрузка")
+                                if (queuePendingCount > 0) {
+                                    append(" · в очереди: $queuePendingCount")
+                                }
+                                if (queuePaused) append(" · на паузе")
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = {
+                                val newPaused = !TrackDownloadManager.isPaused()
+                                TrackDownloadManager.setPaused(newPaused)
+                                queuePaused = newPaused
+                                Toast.makeText(
+                                    context,
+                                    if (newPaused) "Очередь на паузе: текущий трек доскачается" else "Продолжаю загрузку",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(
+                                imageVector = if (queuePaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (queuePaused) "Продолжить" else "Пауза")
+                        }
+                        OutlinedButton(
+                            onClick = { showClearQueueDialog = true },
+                            modifier = Modifier.weight(1f),
+                            enabled = queuePendingCount > 0,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Очистить очередь")
+                        }
+                    }
+                }
+            }
+        }
+
+        // #OFFQ (2026-10-02): подтверждение очистки очереди.
+        if (showClearQueueDialog) {
+            AlertDialog(
+                onDismissRequest = { showClearQueueDialog = false },
+                title = { Text("Очистить очередь?") },
+                text = {
+                    Text(
+                        buildString {
+                            append("Из очереди будут убраны $queuePendingCount ожидающих трек(ов). ")
+                            append("Текущая загрузка не прервётся, уже скачанное сохранится.")
+                        },
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showClearQueueDialog = false
+                        val cleared = TrackDownloadManager.getQueueSize()
+                        TrackDownloadManager.clearPendingQueue()
+                        queuePaused = TrackDownloadManager.isPaused()
+                        Toast.makeText(
+                            context,
+                            if (cleared > 0) "Очередь очищена: $cleared трек(ов)" else "Очередь уже пуста",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }) { Text("Очистить") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearQueueDialog = false }) { Text("Отмена") }
+                },
+            )
         }
 
         TabRow(selectedTabIndex = selectedTab) {

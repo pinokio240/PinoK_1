@@ -10,16 +10,57 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 
 private val LocalSovaAccent = compositionLocalOf { SovaColors.Black }
+
+/**
+ * Fix #UISCALE (2026-10-02): масштаб ВСЕГО интерфейса (кнопки/панели/текст).
+ *
+ * Локальный CompositionLocal-коэффициент. Base-дефолт 0.85 (−15%) при стандартной
+ * настройке. Значение поставляется из SOVATheme (параметр uiScale, источник —
+ * SovaPrefs.uiScale, варианты 0.75/0.85/1.0/1.15/1.3) и растёт вместе с настройкой —
+ * интерфейс не «замерзает» на −15%.
+ *
+ * Рычаги применения:
+ *  - ТЕКСТ (sp): SOVATheme умножает LocalDensity.fontScale на uiScale (и на
+ *    существующий fontScale-параметр) — все sp-значения масштабируются глобально.
+ *  - ПАНЕЛИ/КНОПКИ (dp): явно через helper [UiScale.scaled] (Dp.scaled()), который
+ *    умножает размер на LocalUiScale и применяется в ключевых панелях (TopAppBar,
+ *    панель ввода чата, лента, уведомления) и в компонентах, где нужен масштаб dp.
+ *
+ * Почему NOT глобальный Density.density: умножение density умножает ВСЕ dp-литералы
+ * (включая внутренние отступы Material-компонентов, border'ы, псевдотачи) и может
+ * ломать клик-зоны/выравнивание. Поэтому dp-масштаб сделан явным — безопасный
+ * скелет: охвачены ключевые панели, остальное остается номинальных размеров.
+ */
+val LocalUiScale = compositionLocalOf { 1f }
+
+/** Доступ к текущему масштабу интерфейса из любой composable. */
+object UiScale {
+    /** Текущий коэффициент масштаба (0.75..1.3). 1f = без масштаба. */
+    val current: Float
+        @ReadOnlyComposable @Composable get() = LocalUiScale.current
+
+    /** Масштабировать Dp-размер текущим коэффициентом интерфейса. */
+    @ReadOnlyComposable @Composable
+    fun scaled(value: Dp): Dp = value * current
+}
+
+/** Modifier-хелпер: применяет LocalUiScale к dp-размеру (высоте/ширине/отступу). */
+@ReadOnlyComposable @Composable
+fun Modifier.scaled(size: Dp): Modifier = this.then(Modifier.requiredSize(size * LocalUiScale.current))
 
 /**
  * SOVA 2.0 theme — B&W minimalist base, swappable accent color,
@@ -32,6 +73,11 @@ private val LocalSovaAccent = compositionLocalOf { SovaColors.Black }
  *   100 = системный размер, <100 = мельче, >100 = крупнее.
  *   Реализован через переопределение LocalDensity (fontScale множитель)
  *   И scaled-копию SovaTypography (на случай прямых .sp без MaterialTheme).
+ *
+ * uiScale (Fix #UISCALE): масштаб ВСЕГО интерфейса (0.75..1.3, дефолт 0.85 = −15%).
+ *   Умножает fontScale (текст масштабируется глобально через LocalDensity) и
+ *   поставляется в LocalUiScale — key-панели/кнопки масштабируют dp-размеры
+ *   через UiScale.scaled(). Растёт с настройкой (интерфейс не замерзает на −15%).
  *
  * #MONET-DYNAMIC-COLOR: Material You / Monet — адаптивная цветовая тема,
  * доступна ТОЛЬКО на Android 12+ (API 31, S). На более старых версиях
@@ -56,6 +102,7 @@ fun SOVATheme(
     monetHybrid: Boolean = false,
     accentIndex: Int = 0,
     fontScale: Int = 100,
+    uiScale: Float = 0.85f,
     content: @Composable () -> Unit,
 ) {
     val accent = SovaColors.accents.getOrElse(accentIndex) { SovaColors.Black }
@@ -137,20 +184,30 @@ fun SOVATheme(
     // Масштаб шрифта: переопределяем LocalDensity, чтобы fontScale применился
     // ко всем sp-значениям глобально (включая явные .sp вне MaterialTheme.typography).
     // Важно: сохраняем исходный density (x dpi), меняем только fontScale.
+    // Fix #UISCALE: дополнительно умножаем fontScale НА uiScale — так текст
+    // масштабируется и «Размером текста» (fontScale, отдельный), и «Масштабом
+    // интерфейса» (uiScale, −15% база + рост с настройкой).
     val original = LocalDensity.current
-    val scaledDensity = if (fontScale == 100) {
+    val effectiveTextScale = (fontScale / 100f) * uiScale
+    val scaledDensity = if (effectiveTextScale == 1f) {
         original
     } else {
         Density(
             density = original.density,
-            fontScale = original.fontScale * (fontScale / 100f),
+            fontScale = original.fontScale * effectiveTextScale,
         )
     }
-    val scaledTypography = if (fontScale == 100) SovaTypography else scaleTypography(SovaTypography, fontScale)
+    val scaledTypography = if (effectiveTextScale == 1f) SovaTypography
+        else scaleTypography(SovaTypography, (effectiveTextScale * 100f).toInt())
+
+    // Fix #UISCALE: прокидываем коэффициент масштаба в LocalUiScale, чтобы
+    // key-панели/кнопки могли явно масштабировать dp-размеры через UiScale.scaled().
+    val uiScaleValue = uiScale.coerceIn(0.75f, 1.3f)
 
     CompositionLocalProvider(
         LocalSovaAccent provides accent,
         LocalDensity provides scaledDensity,
+        LocalUiScale provides uiScaleValue,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

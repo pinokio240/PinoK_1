@@ -446,9 +446,36 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     /** §37.12 Phase 5: запись и публикация нового клипа. */
     object ClipCreate    : Screen("clip_create",   "Новый клип",   Icons.Filled.Videocam)
 
+    /**
+     * #VM-3 волна 3: запись видео-сообщения («кружка») и отправка в чат.
+     * Полноэкранный рекордер (CameraX фронтальная камера + форма-маска из
+     * VideoMessageShapes). Принимает peerId куда отправить как path-параметр.
+     * Маршрут в hasOwnTopBar (SovaNavHost): собственный fullscreen UI без
+     * глобального TopAppBar (паттерн экранов записи/плееров).
+     */
+    object VideoMessageCreate : Screen("video_message_create/{peerId}", "Кружок", null) {
+        const val ARG_PEER_ID = "peerId"
+        fun buildRoute(peerId: Long): String = "video_message_create/$peerId"
+    }
+
     // Drawer — системные разделы
     object Services      : Screen("services",      "Сервисы",      Icons.Default.Apps)
-    object Notifications : Screen("notifications", "Уведомления",  Icons.Default.AlternateEmail)
+    /**
+     * #FEED-MENU-NOTIF (2026-10-01): Экран уведомлений с категорийным сайдбаром.
+     * КАТЕГОРИИ уведомлений VK web (notifications.getRedesign) передаются как
+     * path-аргумент: notifications/{category} (all/communities/feedback/friends/
+     * services/communication/account). дефолт "all" — «Уведомления профиля».
+     * Маршрут записывается паттерном; при каждой навигации используется
+     * [buildRoute], чтобы подставить реальную категорию.
+     * Note: параметризованный маршрут НЕ сохраняется в lastRoute (см. SovaNavHost
+     * mainRoutes) — иначе холодный старт получил бы литеральный паттерн "{category}".
+     */
+    object Notifications : Screen("notifications/{category}", "Уведомления", Icons.Default.AlternateEmail) {
+        const val ARG_CATEGORY = "category"
+        const val DEFAULT_CATEGORY = "all"
+        fun buildRoute(category: String = DEFAULT_CATEGORY): String =
+            "notifications/${android.net.Uri.encode(category)}"
+    }
     object Settings      : Screen("settings",      "Настройки",    Icons.Default.Settings)
     object NotificationSettings : Screen("notification_settings", "Настройки уведомлений", Icons.Default.Notifications)
 

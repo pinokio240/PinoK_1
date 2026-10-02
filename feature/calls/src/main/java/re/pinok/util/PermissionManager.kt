@@ -53,6 +53,16 @@ object PermissionManager {
         // RECORD_AUDIO — все API (голосовые сообщения)
         perms.add(Manifest.permission.RECORD_AUDIO)
 
+        // BLUETOOTH_CONNECT — API 31+ (dangerous).
+        // Нужен для: диагностики BT-кодека (AudioRouteLogger), BT-маршрутизации
+        // звонков (CallsContainer) и reattach эквалайзера при переключении BT
+        // (PlayerService). Объявлен в манифесте, но без runtime-запроса он никогда
+        // не выдаётся → кодек всегда "perm_denied", а звонки не могут выбрать
+        // BT-гарнитуру. Запрашиваем пакетно на старте (не блокирует вход).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // API 33+: POST_NOTIFICATIONS — критическое для foreground-сервисов
             perms.add(Manifest.permission.POST_NOTIFICATIONS)

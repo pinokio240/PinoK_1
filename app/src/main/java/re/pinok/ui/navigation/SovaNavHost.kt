@@ -72,6 +72,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import re.pinok.ui.theme.UiScale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -168,6 +169,8 @@ import re.pinok.ui.components.NetworkSwitchPopup
 import re.pinok.ui.components.OfflineBanner
 import re.pinok.ui.components.GlobalMiniPlayer
 import re.pinok.ui.components.UpdateBanner
+import re.pinok.ui.components.NotifyModeItem
+import re.pinok.data.local.SovaPrefs
 import re.pinok.util.AppLog
 
 // ── Fix #337: редактор панелей — JSON-парсинг порядка/скрытых пунктов ──
@@ -186,25 +189,26 @@ private fun parseRoutesJson(json: String?): List<String> {
 }
 
 /**
- * Нормализует order под canonical-список: убирает неизвестные route,
- * добавляет недостающие (новые пункты после обновления) в конец canonical.
- * Гарантирует, что в результате есть ВСЕ пункты из [canonical] ровно по разу.
+ * #PANELEDIT: нормализует order-список KEY пунктов панели под canonical-набор
+ * [PanelItem]: убирает неизвестные keys, убирает дубли, добавляет недостающие
+ * (новые пункты после обновления) в конец canonical. Гарантирует, что в
+ * результате есть ВСЕ пункты из [canonical] ровно по разу.
  */
-private fun normalizeRouteOrder(order: List<String>, canonical: List<Screen>): List<Screen> {
-    val byRoute = canonical.associateBy { it.route }
+private fun normalizePanelKeys(order: List<String>, canonical: List<PanelItem>): List<PanelItem> {
+    val byKey = canonical.associateBy { it.key }
     val seen = mutableSetOf<String>()
-    val result = mutableListOf<Screen>()
-    for (r in order) {
-        val scr = byRoute[r]
-        if (scr != null && r !in seen) {
-            result.add(scr)
-            seen.add(r)
+    val result = mutableListOf<PanelItem>()
+    for (k in order) {
+        val item = byKey[k]
+        if (item != null && k !in seen) {
+            result.add(item)
+            seen.add(k)
         }
     }
-    for (scr in canonical) {
-        if (scr.route !in seen) {
-            result.add(scr)
-            seen.add(scr.route)
+    for (item in canonical) {
+        if (item.key !in seen) {
+            result.add(item)
+            seen.add(item.key)
         }
     }
     return result
@@ -249,6 +253,46 @@ private fun hostIconForKey(iconKey: String): ImageVector = when (iconKey) {
 }
 
 /**
+ * #FEED-MENU-NOTIF (2026-10-01): маршрут для НАВИГАЦИИ на top-level экран.
+ * Используется в drawer/sidebar/bottom-bar вместо голого [Screen.route].
+ * Причина: Screen.Notifications — параметризованный маршрут "notifications/{category}",
+ * и `nav.navigate("notifications/{category}")` с литеральными скобками не совпал бы
+ * с графом. Для Notifications навигируем через buildRoute(DEFAULT_CATEGORY);
+ * остальные top-level экраны — как раньше по route. Сверка backstack (currentRoute)
+ * НЕ затронута: destination.route == паттерн маршрута в обоих случаях.
+ */
+private fun Screen.navRoute(): String =
+    if (this === Screen.Notifications) {
+        Screen.Notifications.buildRoute(Screen.Notifications.DEFAULT_CATEGORY)
+    } else {
+        route
+    }
+
+// ── #PANELEDIT: навигация по пункту панели (PanelItem) ─────────────────
+// Обычные пункты — навигация на Screen; спец-пункт «Реакции» (FeedFilter) —
+// запрос на открытие Ленты на разделе LIKES (см. FeedOpenRequest).
+
+/** Общие NavOptions для пунктов панелей (как у dock/drawer-кнопок). */
+private fun NavHostController.panelItemNavOptions(): androidx.navigation.NavOptions =
+    androidx.navigation.navOptions {
+        popUpTo(graph.startDestinationId) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+
+/** Навигировать на экран, соответствующий пункту панели [item]. */
+private fun NavHostController.navigatePanelItem(item: PanelItem) {
+    when (val a = item.action) {
+        is PanelAction.Route -> navigate(a.screen.navRoute(), panelItemNavOptions())
+        is PanelAction.FeedFilter -> {
+            // «Реакции» — открыть Ленту на разделе LIKES (in-memory seed).
+            FeedOpenRequest.request(a.filterName)
+            navigate(Screen.Feed.navRoute(), panelItemNavOptions())
+        }
+    }
+}
+
+/**
  * #ARCH-CONTAINERS (Этап 1.4): мета исходящего звонка — имя/фото собеседника
  * из места вызова (шапка диалога, карточка друга). Контракт CallStarter
  * (startCall(peerId, video)) title/photo не передаёт — их знает только
@@ -285,13 +329,13 @@ private object OutgoingCallMeta {
  */
 @Composable
 private fun BottomNavScrollButton(
-    screen: Screen,
+    item: PanelItem,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val navIcon = screen.icon
-    val unreadCount = if (screen.route == Screen.Messages.route) {
+    val navIcon = item.icon
+    val unreadCount = if (item.destinationRoute == Screen.Messages.route) {
         re.pinok.realtime.UnreadMessagesCounter.unreadCount.collectAsState().value
     } else {
         0
@@ -300,26 +344,26 @@ private fun BottomNavScrollButton(
                else MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         modifier = modifier
-            .height(80.dp)
+            .height(UiScale.scaled(80.dp))
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         if (navIcon != null) {
-            if (screen.route == Screen.Messages.route && unreadCount > 0) {
+            if (item.destinationRoute == Screen.Messages.route && unreadCount > 0) {
                 BadgedBox(
                     badge = {
                         Badge { Text(if (unreadCount > 99) "99+" else unreadCount.toString()) }
                     },
                 ) {
-                    Icon(navIcon, contentDescription = screen.title, tint = tint)
+                    Icon(navIcon, contentDescription = item.title, tint = tint)
                 }
             } else {
-                Icon(navIcon, contentDescription = screen.title, tint = tint)
+                Icon(navIcon, contentDescription = item.title, tint = tint)
             }
         }
         Text(
-            text = screen.title,
+            text = item.title,
             style = MaterialTheme.typography.labelSmall,
             color = tint,
             maxLines = 1,
@@ -343,6 +387,19 @@ fun SovaNavHost(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val app = remember { SovaApp.get(nav.context) }
+
+    // #FEED-MENU-NOTIF (2026-10-01): sanitize lastRoute/startDestination.
+    // Маршрут Notifications стал параметризованным "notifications/{category}".
+    //  - старая сохранённая lastRoute="notifications" (формат до апгрейда) больше
+    //    НЕ матчит "notifications/{category}" как startDestination — он бы уронил
+    //    NavHost. Мапим её в buildRoute(DEFAULT_CATEGORY) = "notifications/all".
+    //  - параметризованный паттерн "notifications/{category}" тоже не должен
+    //    попадать в startDestination (литеральные скобки не матчатся) — откат на feed.
+    val sanitizedInitialRoute = when (initialRoute) {
+        "notifications" -> Screen.Notifications.buildRoute(Screen.Notifications.DEFAULT_CATEGORY)
+        Screen.Notifications.route -> Screen.Feed.route
+        else -> initialRoute
+    }
 
     // #ARCH-CONTAINERS (Этап 1.4): хост строит панель/кнопки звонка из реестра
     // контейнеров. Реестр не реактивен — UI перечитывает его при следующем
@@ -471,25 +528,28 @@ fun SovaNavHost(
         }
     }
 
-    // §42 #PUSH-NOTIFICATIONS: навигация при тапе на VK-уведомление
-    // (лайк/комментарий/репост/ответ/подписка/упоминание/подарок/запись на стене).
-    // MainActivity.handleDeepLinkIntent устанавливает pendingDeepLink,
-    // здесь подхватываем и навигируем на нужный Screen. После навигации
-    // сбрасываем state через onDeepLinkConsumed.
-    LaunchedEffect(pendingDeepLink) {
-        val link = pendingDeepLink ?: return@LaunchedEffect
+    // §42 #PUSH-NOTIFICATIONS: единый обработчик DeepLinkAction — что открыть
+    // при тапе на уведомление (лайк/комментарий/репост/ответ/подписка/
+    // упоминание/подарок/запись на стене). Используется И для системы
+    // (pendingDeepLink из push-intent, MainActivity.handleDeepLinkIntent), И для
+    // тапа по карточке внутри экрана уведомлений (NotificationsScreen.onDeepLink,
+    // #NOTIF-DEEPLINK 2026-10-02) — без дублирования логики.
+    fun handleDeepLink(
+        link: re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction,
+        navHostController: NavHostController,
+    ) {
         try {
             when (link) {
                 is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenPost -> {
                     // §42.4 #PUSH-DEEPLINK: если есть commentId — пробрасываем его
                     // в PostDetailScreen через holder, чтобы экран проскроллил к
                     // комментарию после загрузки (ответ на комментарий / новый
-                    // комментарий на посте).
+                    // комментарий на посте). Нулевой commentId = просто открыть пост.
                     if (link.commentId != 0L) {
                         PostDetailTarget.commentId = link.commentId
                     }
                     AppLog.i("SovaNavHost", "DEEP_LINK: navigating to PostDetail owner=${link.ownerId} post=${link.postId} commentId=${link.commentId}")
-                    nav.navigate(Screen.PostDetail.buildRoute(link.ownerId, link.postId)) {
+                    navHostController.navigate(Screen.PostDetail.buildRoute(link.ownerId, link.postId)) {
                         launchSingleTop = true
                     }
                 }
@@ -512,13 +572,13 @@ fun SovaNavHost(
                 }
                 is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenUser -> {
                     AppLog.i("SovaNavHost", "DEEP_LINK: navigating to UserProfile user=${link.userId}")
-                    nav.navigate(Screen.UserProfile.buildRoute(link.userId)) {
+                    navHostController.navigate(Screen.UserProfile.buildRoute(link.userId)) {
                         launchSingleTop = true
                     }
                 }
                 is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenCommunity -> {
                     AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Community group=${link.groupId}")
-                    nav.navigate(Screen.Community.buildRoute(link.groupId)) {
+                    navHostController.navigate(Screen.Community.buildRoute(link.groupId)) {
                         launchSingleTop = true
                     }
                 }
@@ -535,23 +595,23 @@ fun SovaNavHost(
                     } else {
                         val webUrl = re.pinok.realtime.VkUrlDeepLinker.webUrlFor(link)
                         AppLog.i("SovaNavHost", "DEEP_LINK: no photoUrl, fallback to InternalBrowser url=$webUrl")
-                        nav.navigate(Screen.InternalBrowser.buildRoute(webUrl)) {
+                        navHostController.navigate(Screen.InternalBrowser.buildRoute(webUrl)) {
                             launchSingleTop = true
                         }
                     }
                 }
                 re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenNotifications -> {
-                    // Открываем вкладку Уведомления. В текущей навигации это
-                    // NotificationsScreen — проверим, есть ли route.
-                    AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Notifications")
-                    nav.navigate("notifications") {
+                    // Открываем вкладку Уведомления (#FEED-MENU-NOTIF: маршрут стал
+                    // параметризованным — notifications/{category}, дефолт "all").
+                    AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Notifications (category=all)")
+                    navHostController.navigate(Screen.Notifications.buildRoute(Screen.Notifications.DEFAULT_CATEGORY)) {
                         launchSingleTop = true
                     }
                 }
                 re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenDevices -> {
                     // §49.6 Sprint VK-ID-1.6: deep-link из security-alert notification.
                     AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Devices")
-                    nav.navigate("devices") {
+                    navHostController.navigate("devices") {
                         launchSingleTop = true
                     }
                 }
@@ -559,6 +619,15 @@ fun SovaNavHost(
         } catch (e: Exception) {
             AppLog.w("SovaNavHost", "DEEP_LINK navigation failed: ${e.message}")
         }
+    }
+
+    // §42 #PUSH-NOTIFICATIONS: навигация при тапе на системное VK-уведомление.
+    // MainActivity.handleDeepLinkIntent устанавливает pendingDeepLink,
+    // здесь подхватываем и навигируем на нужный Screen через handleDeepLink.
+    // После навигации сбрасываем state через onDeepLinkConsumed.
+    LaunchedEffect(pendingDeepLink) {
+        val link = pendingDeepLink ?: return@LaunchedEffect
+        handleDeepLink(link, nav)
         onDeepLinkConsumed()
     }
 
@@ -642,7 +711,7 @@ fun SovaNavHost(
             Screen.Video.route, Screen.Profile.route, Screen.Friends.route,
             Screen.Groups.route, Screen.Photos.route, Screen.Search.route,
             Screen.Bookmarks.route, Screen.Documents.route, Screen.Services.route,
-            Screen.Notifications.route, Screen.Settings.route, Screen.Clips.route,
+            Screen.Settings.route, Screen.Clips.route,
         )
     }
     // Fix #226: множество роутов основных разделов для O(1)-проверки в
@@ -670,7 +739,7 @@ fun SovaNavHost(
     // prefs). currentRoute больше никогда не становится "feed" фиктивно.
     var lastKnownRoute by remember { mutableStateOf<String?>(null) }
     if (rawRoute != null) lastKnownRoute = rawRoute
-    val currentRoute = lastKnownRoute ?: initialRoute
+    val currentRoute = lastKnownRoute ?: sanitizedInitialRoute
 
     // Сохраняем текущий основной роут при каждой навигации.
     // Fix #226: ключ — rawRoute (а не currentRoute), и пишем ТОЛЬКО когда
@@ -775,67 +844,34 @@ fun SovaNavHost(
         // остаётся доступен из плеера (onOpenFullEqualizer) — destination ниже.
     )
 
-    // ── Fix #337: редактор панелей ──────────────────────────────────────
-    // Canonical-списки редактируемых пунктов (без фикс. хвоста для sidebar).
-    // Drawer: dynamic-пункты (Офлайн/Настройки/Выйти — фикс. хвост, не тут).
-    val sidebarEditableScreens: List<Screen> = remember {
-        // #OFFLINE-DUPLICATE-FIX (2026-08-01): OfflineManager убран из
-        //   sidebarEditableScreens — он рендерится в фикс. хвосте drawer
-        //   вместе с Settings. Раньше был дубль: и в скролл-списке, и в хвосте.
-        // #ARCH-CONTAINERS (Этап 1.4/1.5-а/1.5-б): Screen.CallsHistory,
-        //   Screen.Photos и Screen.Equalizer убраны — контейнерные пункты
-        //   панели (NavEntry) НЕ редактируются панель-редактором (их нет без
-        //   контейнера; порядок задаёт capability.order). Сохранённые в prefs
-        //   order-строки "calls_history"/"photos"/"equalizer" отбрасываются
-        //   normalizeRouteOrder как неизвестные.
-listOf(
-            Screen.Friends, Screen.Groups, Screen.Search,
-            Screen.Bookmarks, Screen.Documents, Screen.Clips,
-            Screen.Services, Screen.Notifications, Screen.Logs,
-        )
-    }
-    // #SIDEBAR-BOTTOM-UNION (2026-08-01): пользователь просил, чтобы кнопки
-    //   боковой панели были доступны и для нижней. Раньше в редакторе нижней
-    //   панели было только 5 dock-кнопок. Теперь добавлены все sidebar-пункты
-    //   (включая OfflineManager) — пользователь может поставить любую кнопку
-    //   на нижнюю панель (Логи, Офлайн, Поиск и т.д.).
-    val bottomBarEditableScreens: List<Screen> = remember {
-        // #ARCH-CONTAINERS (Этап 1.5-а): Screen.Photos здесь ОСТАВЛЕН — Dock/
-        //   нижняя панель — ядерная собственность хоста (Правило владения UI);
-        //   «Фото» на нижней панели — кнопка-ярлык на destination "photos"
-        //   (работает независимо от контейнера, destination в NavHost хоста).
-        // #ARCH-CONTAINERS (Этап 1.5-б): Screen.Equalizer здесь ОСТАВЛЕН —
-        //   та же логика: ярлык «Эквалайзер» на нижней панели навигирует на
-        //   destination "equalizer" и работает независимо от контейнера.
-        dockScreens + listOf(
-            Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
-            Screen.Bookmarks, Screen.Documents, Screen.Clips,
-            Screen.Services, Screen.Notifications, Screen.Logs,
-            Screen.OfflineManager, Screen.Equalizer,
-        )
-    }
+    // ── Fix #337 / #PANELEDIT: редактор панелей ─────────────────────────
+    // Канонический набор пунктов обеих панелей — PanelItems.all (см.
+    // PanelItems.kt). Боковая: dynamic-пункты без фикс. хвоста drawer
+    // (Офлайн/Настройки/Выйти — рендерятся отдельно и не редактируются).
+    // Нижняя: тот же список (требование пользователя).
 
     // Парсим order/hidden из prefsSnap (null-safe для холодного старта).
-    val sidebarOrderRoutes: List<String> = remember(prefsSnap?.sidebarItemsOrder) {
+    // #PANELEDIT: keys — это PanelItems.key (НЕ Screen.route), см. PanelItems.kt.
+    val sidebarOrderKeys: List<String> = remember(prefsSnap?.sidebarItemsOrder) {
         parseRoutesJson(prefsSnap?.sidebarItemsOrder)
     }
-    val sidebarHiddenRoutes: Set<String> = remember(prefsSnap?.sidebarItemsHidden) {
+    val sidebarHiddenKeys: Set<String> = remember(prefsSnap?.sidebarItemsHidden) {
         parseRoutesJson(prefsSnap?.sidebarItemsHidden).toSet()
     }
-    val bottomOrderRoutes: List<String> = remember(prefsSnap?.bottomBarItemsOrder) {
+    val bottomOrderKeys: List<String> = remember(prefsSnap?.bottomBarItemsOrder) {
         parseRoutesJson(prefsSnap?.bottomBarItemsOrder)
     }
-    val bottomHiddenRoutes: Set<String> = remember(prefsSnap?.bottomBarItemsHidden) {
+    val bottomHiddenKeys: Set<String> = remember(prefsSnap?.bottomBarItemsHidden) {
         parseRoutesJson(prefsSnap?.bottomBarItemsHidden).toSet()
     }
-    // Нормализованные списки Screen для рендера: порядок из prefs, скрытые убраны.
-    val visibleSidebarScreens: List<Screen> = remember(sidebarOrderRoutes, sidebarEditableScreens, sidebarHiddenRoutes) {
-        normalizeRouteOrder(sidebarOrderRoutes, sidebarEditableScreens)
-            .filter { it.route !in sidebarHiddenRoutes }
+    // Нормализованные списки PanelItem для рендера: порядок из prefs, скрытые убраны.
+    val visibleSidebarItems: List<PanelItem> = remember(sidebarOrderKeys, sidebarHiddenKeys) {
+        normalizePanelKeys(sidebarOrderKeys, PanelItems.all)
+            .filter { it.key !in sidebarHiddenKeys }
     }
-    val visibleBottomScreens: List<Screen> = remember(bottomOrderRoutes, bottomBarEditableScreens, bottomHiddenRoutes) {
-        normalizeRouteOrder(bottomOrderRoutes, bottomBarEditableScreens)
-            .filter { it.route !in bottomHiddenRoutes }
+    val visibleBottomItems: List<PanelItem> = remember(bottomOrderKeys, bottomHiddenKeys) {
+        normalizePanelKeys(bottomOrderKeys, PanelItems.all)
+            .filter { it.key !in bottomHiddenKeys }
     }
     var showLogoutDialog by remember { mutableStateOf(false) }
     // Fix #370 #LOGOUT-HOLDER-CLEAR: обёртка над onLogout — ПЕРЕД сменой аккаунта
@@ -886,6 +922,10 @@ listOf(
         // #90: VideoPlayer убран — теперь overlay, не маршрут NavHost.
         Screen.UserProfile.route,
         Screen.PostDetail.route, Screen.ChatDetail.route,
+        // #VM-3 волна 3: видео-сообщение «кружок» — полноэкранный рекордер
+        // со своим UI (камера + маска формы + кнопки), собственный TopAppBar
+        // не нужен — по паттерну экранов записи (ClipCreate не показывает бар).
+        Screen.VideoMessageCreate.route,
         Screen.Logs.route, Screen.StoryViewer.route,
         Screen.OfflineManager.route,
         // Fix #111: у офлайн-плеера историй собственный TopAppBar + back button.
@@ -984,9 +1024,17 @@ listOf(
     // TopBar через DisposableEffect, но если экран не имеет DisposableEffect (или
     // если hasOwnTopBar=true и глобальный TopAppBar скрыт), старая конфигурация
     // может остаться. Этот LaunchedEffect — safety net.
+    //
+    // #FEED-RIGHTPANEL (2026-10-02): НЕЛЬЗЯ делать безусловный clear() — он сносит
+    // actions активного экрана, использующего глобальный TopAppBar (лента Feed:
+    // кнопка ⋮ → FeedRightPanel регистрируется через ScreenTopBar.configure и не
+    // имеет hasOwnTopBar). Guard ниже срабатывает ТОЛЬКО для экранов со своим
+    // TopAppBar / скрывающих глобальный — они НЕ владеют global actions, поэтому
+    // clear() (force, без токена) безопасен и не затирает конфиг ленты.
     LaunchedEffect(currentRoute, hasOwnTopBar) {
         if (hasOwnTopBar || hidesGlobalTopBarOnly) {
             // На экранах со своим TopAppBar ИЛИ скрывающих глобальный — очищаем.
+            // Это force-clear, но только для экранов БЕЗ global actions (лента тронута не будет).
             ScreenTopBar.clear()
         }
     }
@@ -1101,48 +1149,63 @@ listOf(
                             )
                         }
                     }
+                    // Fix #390 #NOTIFY-MODES: закреплённый блок «Режим уведомлений» в
+                    // шапке ГЛОБАЛЬНОГО drawer (доступен из любого раздела). Стоит
+                    // ВНЕ прокрутки — виден всегда; тап открывает диалог выбора режима.
+                    // Текущий режим — из реактивного снапшота prefs (prefsSnap.notifyMode),
+                    // выбор пишется в SovaPrefs.setNotifyMode (перезапуск не нужен:
+                    // SovaApp/VkNotificationsNotifier читают АКТУАЛЬНЫЙ снапшот).
+                    NotifyModeItem(
+                        notifyMode = prefsSnap?.notifyMode ?: SovaPrefs.NOTIFY_MODE_ALL,
+                        onNotifyModeSelected = { mode ->
+                            AppLog.i("SovaNavHost", "notify mode set: $mode")
+                            scope.launch { app.prefs.setNotifyMode(mode) }
+                        },
+                    )
                     // Fix #337: dynamic-пункты в скроллящемся Column.
                     // Если пунктов много (или крупный шрифт) — скролл работает.
-                    // visibleSidebarScreens уже отфильтрован от hidden и
-                    // упорядочен по prefs пользователя.
+                    // #PANELEDIT: visibleSidebarItems — List<PanelItem> (уже
+                    // отфильтрован от hidden, упорядочен по prefs пользователя).
                     Column(
                         modifier = Modifier
                             .weight(1f)
                             .verticalScroll(rememberScrollState()),
                     ) {
-                        visibleSidebarScreens.forEach { screen ->
+                        // Destinations, уже покрытые каноническими пунктами.
+                        // #PANELEDIT: «Фотографии» теперь ядерный пункт канона
+                        // (route "photos") — контейнерный NavEntry "photos"
+                        // ниже не дублируем (паттерн, см. containerNavEntries).
+                        val panelDestRoutes = visibleSidebarItems.map { it.destinationRoute }.toSet()
+                        visibleSidebarItems.forEach { item ->
+                            val itemDest = item.destinationRoute
                             // §37.12 Phase 7: badge с кол-вом новых clips на пункте «Клипы».
-                            val clipsBadge = if (screen.route == Screen.Clips.route) {
+                            val clipsBadge = if (itemDest == Screen.Clips.route) {
                                 re.pinok.realtime.ClipsCounter.count.collectAsState().value
                             } else 0
                             NavigationDrawerItem(
-                                label = { Text(screen.title) },
-                                selected = currentRoute == screen.route,
+                                label = { Text(item.title) },
+                                selected = currentRoute == itemDest,
                                 onClick = {
                                     // #30 (nav fix): popUpTo + saveState — как в dock items.
-                                    if (screen.route == Screen.Clips.route && clipsBadge > 0) {
+                                    if (itemDest == Screen.Clips.route && clipsBadge > 0) {
                                         // Сбрасываем счётчик при открытии clips-экрана.
                                         re.pinok.realtime.ClipsCounter.reset()
                                     }
-                                    nav.navigate(screen.route) {
-                                        popUpTo(nav.graph.startDestinationId) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
+                                    nav.navigatePanelItem(item)
                                     scope.launch { drawerState.close() }
                                 },
                                 icon = {
-                                    if (screen.icon != null) {
+                                    if (item.icon != null) {
                                         if (clipsBadge > 0) {
                                             BadgedBox(
                                                 badge = {
                                                     Badge { Text(if (clipsBadge > 99) "99+" else clipsBadge.toString()) }
                                                 },
                                             ) {
-                                                Icon(screen.icon, contentDescription = null)
+                                                Icon(item.icon, contentDescription = null)
                                             }
                                         } else {
-                                            Icon(screen.icon, contentDescription = null)
+                                            Icon(item.icon, contentDescription = null)
                                         }
                                     }
                                 },
@@ -1153,6 +1216,8 @@ listOf(
                         // по order, см. containerNavEntries). Нет контейнера →
                         // пунктов нет (graceful); неизвестный хосту route →
                         // предупреждение в лог и пропуск (не падаем).
+                        // #PANELEDIT: контейнерный пункт, чей destination уже
+                        // покрыт каноническим пунктом панели ("photos"), пропускаем.
                         containerNavEntries.forEach { entry ->
                             val dest = hostDestinationForRoute(entry.route)
                             if (dest == null) {
@@ -1162,12 +1227,19 @@ listOf(
                                         "CONTAINERS: NavEntry route '${entry.route}' не зарегистрирован в хосте — пункт «${entry.title}» скрыт",
                                     )
                                 }
+                            } else if (dest.route in panelDestRoutes) {
+                                // Дубликат канонического пункта — не рисуем.
+                                LaunchedEffect(entry.route) {
+                                    AppLog.i(
+                                        "SovaNavHost",
+                                        "CONTAINERS: NavEntry '${entry.route}' продублирован каноническим пунктом панели — пропуск",
+                                    )
+                                }
                             } else {
                                 NavigationDrawerItem(
                                     label = { Text(entry.title) },
                                     selected = currentRoute == dest.route,
                                     onClick = {
-                                        // Те же опции, что у ядерных пунктов (popUpTo+saveState).
                                         nav.navigate(dest.route) {
                                             popUpTo(nav.graph.startDestinationId) { saveState = true }
                                             launchSingleTop = true
@@ -1342,7 +1414,7 @@ listOf(
                             onOpenPlayer = { nav.navigate(Screen.AudioPlayer.route) },
                         )
                     }
-                    if (!hasOwnTopBar && visibleBottomScreens.isNotEmpty()) {
+                    if (!hasOwnTopBar && visibleBottomItems.isNotEmpty()) {
                         // Fix #337: если все кнопки нижней панели скрыты —
                         // NavigationBar не показываем (рамка осталась бы).
                         // Hide-on-scroll (#299): AnimatedVisibility с shrinkVertically
@@ -1355,11 +1427,11 @@ listOf(
                             visible = bottomBarVisible,
                             enter = androidx.compose.animation.expandVertically(
                                 expandFrom = Alignment.Bottom,
-                                animationSpec = androidx.compose.animation.core.tween(220),
+                                animationSpec = re.pinok.ui.anim.tweenScaled(animScale, 220),
                             ),
                             exit = androidx.compose.animation.shrinkVertically(
                                 shrinkTowards = Alignment.Bottom,
-                                animationSpec = androidx.compose.animation.core.tween(200),
+                                animationSpec = re.pinok.ui.anim.tweenScaled(animScale, 200),
                             ),
                         ) {
                             // #BOTTOM-SCROLL (2026-08-01): если на нижней панели
@@ -1370,7 +1442,7 @@ listOf(
                             // NavigationBarItem при 5 элементах), Row скроллится.
                             // При ≤5 кнопок — обычный NavigationBar (кнопки
                             // распределяются по всей ширине через weight).
-                            if (visibleBottomScreens.size <= 5) {
+                            if (visibleBottomItems.size <= 5) {
                                 // Fix #COMPILE: NavigationBarItem вызывается INLINE
                                 // внутри NavigationBar{ } content-scope (как в старом
                                 // коде до #BOTTOM-SCROLL). В M3 BOM 2025.06 вызов
@@ -1378,38 +1450,35 @@ listOf(
                                 // давал 'Unresolved reference' — внутри NavigationBar{}
                                 // scope резолвится корректно.
                                 NavigationBar {
-                                    visibleBottomScreens.forEach { screen ->
-                                        val navIcon = screen.icon
-                                        val unreadCount = if (screen.route == Screen.Messages.route) {
+                                    visibleBottomItems.forEach { item ->
+                                        val itemDest = item.destinationRoute
+                                        val navIcon = item.icon
+                                        val unreadCount = if (itemDest == Screen.Messages.route) {
                                             re.pinok.realtime.UnreadMessagesCounter.unreadCount.collectAsState().value
                                         } else {
                                             0
                                         }
                                         NavigationBarItem(
-                                            selected = currentRoute == screen.route,
+                                            selected = currentRoute == itemDest,
                                             onClick = {
-                                                nav.navigate(screen.route) {
-                                                    popUpTo(nav.graph.startDestinationId) { saveState = true }
-                                                    launchSingleTop = true
-                                                    restoreState = true
-                                                }
+                                                nav.navigatePanelItem(item)
                                             },
                                             icon = {
                                                 if (navIcon != null) {
-                                                    if (screen.route == Screen.Messages.route && unreadCount > 0) {
+                                                    if (itemDest == Screen.Messages.route && unreadCount > 0) {
                                                         BadgedBox(
                                                             badge = {
                                                                 Badge { Text(if (unreadCount > 99) "99+" else unreadCount.toString()) }
                                                             },
                                                         ) {
-                                                            Icon(navIcon, contentDescription = screen.title)
+                                                            Icon(navIcon, contentDescription = item.title)
                                                         }
                                                     } else {
-                                                        Icon(navIcon, contentDescription = screen.title)
+                                                        Icon(navIcon, contentDescription = item.title)
                                                     }
                                                 }
                                             },
-                                            label = { Text(screen.title) },
+                                            label = { Text(item.title) },
                                         )
                                     }
                                 }
@@ -1428,21 +1497,17 @@ listOf(
                                             .fillMaxWidth()
                                             .horizontalScroll(bottomScrollState)
                                             .windowInsetsPadding(NavigationBarDefaults.windowInsets)
-                                            .height(80.dp)
+                                            .height(UiScale.scaled(80.dp))
                                             .padding(horizontal = 4.dp),
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        visibleBottomScreens.forEach { screen ->
+                                        visibleBottomItems.forEach { item ->
                                             BottomNavScrollButton(
-                                                screen = screen,
-                                                selected = currentRoute == screen.route,
+                                                item = item,
+                                                selected = currentRoute == item.destinationRoute,
                                                 onClick = {
-                                                    nav.navigate(screen.route) {
-                                                        popUpTo(nav.graph.startDestinationId) { saveState = true }
-                                                        launchSingleTop = true
-                                                        restoreState = true
-                                                    }
+                                                    nav.navigatePanelItem(item)
                                                 },
                                                 modifier = Modifier.width(80.dp),
                                             )
@@ -1467,7 +1532,7 @@ listOf(
             ) {
             NavHost(
                 navController = nav,
-                startDestination = initialRoute,
+                startDestination = sanitizedInitialRoute,
                 modifier = Modifier.padding(padding).imePadding(),
                 // Fix #224: масштабируемые fade-переходы между экранами.
                 // animScale=0 → tweenScaled возвращает snap() → мгновенный переход.
@@ -1535,6 +1600,28 @@ listOf(
                         // callback-паттерн навигации, что и в SettingsScreen (:1975).
                         onOpenHiddenSources = {
                             nav.navigate(Screen.FeedHidden.route)
+                        },
+                        // #FEED-MENU-VKWEB-2: из правого меню ленты на другие разделы
+                        // (Уведомления/Мессенджер/Сообщества/Видео/Клипы/Музыка/
+                        // Сервисы/Закладки/Файлы). Drawer-паттерн (popUpTo+restoreState),
+                        // чтобы табы нижней панели/разделы открывались бэкстек-корректно.
+                        onFeedPanelNavigate = { screen ->
+                            nav.navigate(screen.navRoute()) {
+                                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        // #FEED-MENU-NOTIF: категория уведомлений из правого меню ленты →
+                        // NotificationsScreen с этой категорией. Route — параметризованный
+                        // path-аргумент, поэтому навигация идёт через buildRoute(category).
+                        onFeedPanelOpenNotifications = { category ->
+                            AppLog.i("SovaNavHost", "FEED_MENU_NOTIF: open notifications category='$category'")
+                            nav.navigate(Screen.Notifications.buildRoute(category)) {
+                                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
                         },
                         // #ARCH-CONTAINERS (Этап 1.4): запуск звонка — только через
                         // реестр (CallStarter). callClick == null → кнопка звонка
@@ -2060,11 +2147,49 @@ composable(Screen.CallsHistory.route) {
                 // раньше ВСЕ плитки были заглушками с тостом.
                 composable(Screen.Services.route)      {
                     ServicesScreen(onOpenSection = { screen ->
-                        nav.navigate(screen.route)
+                        nav.navigate(screen.navRoute())
                     })
                 }
-                composable(Screen.Notifications.route) { NotificationsScreen(
-                        onPostClick = { ownerId, postId ->
+                // #VM-3 волна 3: видео-сообщение («кружок») — рекордер с выбором
+                // формы-маски и отправкой в чат (peerId из path-параметра).
+                composable(
+                    route = Screen.VideoMessageCreate.route,
+                    arguments = listOf(
+                        navArgument(Screen.VideoMessageCreate.ARG_PEER_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val peerId = entry.arguments?.getLong(Screen.VideoMessageCreate.ARG_PEER_ID) ?: 0L
+                    re.pinok.ui.screens.clips.VideoMessageCreateScreen(
+                        peerId = peerId,
+                        onBack = {
+                            if (!nav.popBackStack()) {
+                                nav.navigate(Screen.Messages.route) {
+                                    popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        },
+                    )
+                }
+                composable(
+                route = Screen.Notifications.route,
+                // #FEED-MENU-NOTIF: категория уведомлений — path-аргумент с дефолтом
+                // "all" («Уведомления профиля»). Прочитана из entry.arguments и
+                // передана как начальный serverCategory в NotificationsScreen.
+                arguments = listOf(
+                    navArgument(Screen.Notifications.ARG_CATEGORY) {
+                        type = NavType.StringType
+                        defaultValue = Screen.Notifications.DEFAULT_CATEGORY
+                    },
+                ),
+            ) { entry ->
+                NotificationsScreen(
+                    initialCategory = entry.arguments
+                        ?.getString(Screen.Notifications.ARG_CATEGORY)
+                        ?.takeIf { it.isNotBlank() }
+                        ?: Screen.Notifications.DEFAULT_CATEGORY,
+                    onPostClick = { ownerId, postId ->
                             PostHolder.last = re.pinok.data.model.Post(
                                 ownerId = ownerId, fromId = ownerId, id = postId, date = 0, text = "",
                             )
@@ -2073,10 +2198,20 @@ composable(Screen.CallsHistory.route) {
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
+                        // #NOTIF-DEEPLINK (2026-10-02): клик по уведомлению → точный
+                        // target (пост с commentId, фото, видео, юзер, сообщество).
+                        onDeepLink = { action ->
+                            handleDeepLink(action, nav)
+                        },
                         // Audit #40: wired onActionReply — открывает чат с пользователем.
                         // onActionGiftReply остаётся null — экран подарков не реализован.
                         onActionReply = { targetUserId ->
                             nav.navigate(Screen.ChatDetail.buildRoute(targetUserId, "", null))
+                        },
+                        // #NOTIF-NFDCAT: кнопка «Настройки» в шапке уведомлений →
+                        // экран настроек уведомлений (NotificationSettingsScreen).
+                        onOpenNotificationSettings = {
+                            nav.navigate(Screen.NotificationSettings.route)
                         },
                     ) }
                 composable(Screen.Settings.route) {
@@ -2796,6 +2931,11 @@ composable(Screen.CallsHistory.route) {
                         // кнопка не рендерится (см. ChatDetailScreen). title/photo
                         // чата — в OutgoingCallMeta (контракт их не передаёт).
                         onCallClick = callClick,
+                        // #VM-3 волна 3: «Кружок» из меню «Прикрепить» → рекордер
+                        // видео-сообщения для этого пира. Открываем поверх диалога.
+                        onVideoMessage = { pid ->
+                            nav.navigate(Screen.VideoMessageCreate.buildRoute(pid))
+                        },
                     )
                 }
                 // P3.1: ChatInfoScreen — информация о чате (members / shared media / actions).

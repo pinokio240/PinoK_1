@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -104,6 +105,7 @@ import re.pinok.media.CustomPreset
 import re.pinok.media.CustomPresetStore
 import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
+import re.pinok.ui.components.shareTrack
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 import kotlin.math.abs
@@ -281,43 +283,9 @@ fun AudioPlayerScreen(
                                 }
                                 return@DropdownMenuItem
                             }
-                            // Fix #258: defensively share — показываем snackbar
-                            // при ошибке вместо тихого логирования (прежний код
-                            // мог крашить на некоторых устройствах).
-                            scope.launch {
-                                try {
-                                    val shareText = "${t.title} — ${t.artist}\nhttps://vk.com/audio${t.ownerId}_${t.id}"
-                                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(android.content.Intent.EXTRA_TEXT, shareText)
-                                    }
-                                    val chooser = android.content.Intent.createChooser(intent, "Поделиться").apply {
-                                        // FLAG_ACTIVITY_NEW_TASK нужен только для non-Activity context.
-                                        if (localContext !is android.app.Activity) {
-                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        }
-                                    }
-                                    localContext.startActivity(chooser)
-                                } catch (e: android.content.ActivityNotFoundException) {
-                                    AppLog.w("AudioPlayerScreen", "share: no app to handle intent", e)
-                                    snackbarHostState.showSnackbar("Нет приложений для передачи")
-                                } catch (e: Exception) {
-                                    AppLog.e("AudioPlayerScreen", "share failed", e)
-                                    // Fallback на Application context.
-                                    try {
-                                        val shareText = "${t.title} — ${t.artist}\nhttps://vk.com/audio${t.ownerId}_${t.id}"
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(android.content.Intent.EXTRA_TEXT, shareText)
-                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        }
-                                        app.startActivity(android.content.Intent.createChooser(intent, "Поделиться"))
-                                    } catch (e2: Exception) {
-                                        AppLog.e("AudioPlayerScreen", "share fallback failed", e2)
-                                        snackbarHostState.showSnackbar("Не удалось поделиться: ${e2.message}")
-                                    }
-                                }
-                            }
+                            // Вызов общего helper: shareTrack(context, track) — единая
+                            // логика ACTION_SEND + chooser + обработка ошибок.
+                            shareTrack(localContext, t)
                         },
                     )
                 }
@@ -573,6 +541,15 @@ fun AudioPlayerScreen(
                     dl.isCompleted -> Icon(Icons.Filled.DownloadDone, "Скачано", tint = vkAccent, modifier = Modifier.size(24.dp))
                     else -> Icon(Icons.Filled.Download, "Скачивание", tint = vkTextSecondary, modifier = Modifier.size(24.dp))
                 }
+            }
+            // Поделиться (заметная кнопка) — переиспользует общий helper.
+            IconButton(onClick = {
+                shareTrack(localContext, track)
+            }) {
+                Icon(
+                    Icons.Filled.Share, "Поделиться",
+                    tint = vkTextSecondary, modifier = Modifier.size(24.dp),
+                )
             }
             // Fix #388 #AUDIO-TOGGLE-OWNING: тумблер «В моей музыке» — паритет
             // веб-VK (data-testid=MusicAudio_ToggleOwning: иконка add, при

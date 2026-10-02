@@ -35,11 +35,29 @@ object AppLog {
 
     private const val PREFIX = "PinoK"
 
-    /** In-memory буфер (most-recent first). Увеличен с 2000 до 4000 для deep debugging. */
-    private const val BUFFER_CAPACITY = 4000
+    /**
+     * #LOG-CONFIG (2026-10-01): настраиваемые параметры хранения логов.
+     * Жёсткие константы BUFFER_CAPACITY / PERSIST_MAX_BYTES заменены на
+     * изменяемые [@Volatile] поля — их можно менять в рантайме через
+     * [applyLogConfig] (из Настроек → Логирование). Вместимость in-memory
+     * буфера и лимит ротации файла больше не фиксированы на этапе компиляции.
+     */
 
-    /** Максимум размера файла логов перед rotation (2 MB — было 512 KB). */
-    private const val PERSIST_MAX_BYTES = 2 * 1024 * 1024L
+    /** In-memory буфер (most-recent first). Вместимость настраивается в рантайме ([applyLogConfig]). */
+    @Volatile
+    var bufferCapacity: Int = 4000
+
+    /** Максимум размера файла логов перед rotation (по умолчанию 2 MB — было 512 KB). */
+    @Volatile
+    var persistMaxBytes: Long = 2 * 1024 * 1024L
+
+    /** Срок хранения файлов логов в днях (0 = очистка по сроку выключена). */
+    @Volatile
+    var logRetentionDays: Int = 0
+
+    /** Автоочистка логов по сроку хранения (используется вместе с [logRetentionDays]). */
+    @Volatile
+    var autoCleanEnabled: Boolean = false
 
     /** Имя файла персистентного лога в cacheDir/logs/. */
     private const val PERSIST_FILE = "persistent.log"
@@ -792,7 +810,7 @@ object AppLog {
         // In-memory buffer (most-recent first)
         synchronized(bufferLock) {
             buffer.addFirst(entry)
-            while (buffer.size > BUFFER_CAPACITY) buffer.removeLast()
+            while (buffer.size > bufferCapacity) buffer.removeLast()
         }
 
         // File persistence (chronological order, с расширенными полями)
@@ -883,7 +901,7 @@ object AppLog {
                 // вызывающими потоками больше нет).
                 try {
                     val file = persistFile
-                    if (file != null && file.length() > PERSIST_MAX_BYTES) {
+                    if (file != null && file.length() > persistMaxBytes) {
                         w.close()
                         val old = File(file.parentFile, "$PERSIST_FILE.old")
                         old.delete()
@@ -1031,7 +1049,7 @@ object AppLog {
             var file = File(dir, PERSIST_FILE)
 
             // Rotation: если файл больше лимита — переименовываем в .old и начинаем новый.
-            if (file.exists() && file.length() > PERSIST_MAX_BYTES) {
+            if (file.exists() && file.length() > persistMaxBytes) {
                 val old = File(dir, "$PERSIST_FILE.old")
                 old.delete()
                 file.renameTo(old)
@@ -1062,6 +1080,107 @@ object AppLog {
      * Может быть null если [init] не вызывался.
      */
     fun persistFile(): File? = persistFile
+
+    // ─── #LOG-CONFIG (2026-10-01): настройка хранения + очистка по сроку ──
+
+    /**
+     * Применить настраиваемые параметры хранения логов.
+     *
+     * Вызывается из Settings → Логирование (LoggingTab). Каждый параметр
+     * применяется только если передан корректное значение:
+     *  - [maxBytes] > 0 → обновляет [persistMaxBytes] (лимит ротации файла);
+     *  - bufferCapacity > 0 → обновляет [bufferCapacity] и триммит in-memory
+     *    буфер до нового размера (защита от перерасхода памяти при уменьшении);
+     *  - [retentionDays] → обновляет [logRetentionDays];
+     *  - [autoClean] → обновляет [autoCleanEnabled];
+     *  - если [retentionDays] > 0 — сразу запускает [cleanupByRetention].
+     *
+     * @throws IllegalArgumentException если и [maxBytes] ≤ 0, и bufferCapacity ≤ 0
+     *         одновременно без валидного значения (иначе конфиг был бы пустым).
+     */
+    fun applyLogConfig(
+        maxBytes: Long,
+        bufferCapacity: Int,
+        retentionDays: Int,
+        autoClean: Boolean,
+    ) {
+        if (maxBytes > 0) {
+            persistMaxBytes = maxBytes
+        }
+        if (bufferCapacity > 0) {
+            this.bufferCapacity = bufferCapacity
+            // Тримм буфер до нового размера — убираем лишние записи при
+            // уменьшении вместимости, чтобы не держать лишнюю память.
+            synchronized(bufferLock) {
+                while (buffer.size > this.bufferCapacity) buffer.removeLast()
+            }
+        }
+        logRetentionDays = retentionDays
+        autoCleanEnabled = autoClean
+        if (retentionDays > 0) {
+            cleanupByRetention()
+        }
+    }
+
+    /**
+     * Очистить файлы логов старше [logRetentionDays] дней.
+     *
+     * Проходит по всем файлам в папке логов (cacheDir/logs/) и удаляет те,
+     * чей [File.lastModified] старше порога `now - logRetentionDays * 86_400_000L`.
+     * Обрабатываются только валидные имена ([PERSIST_FILE] и `[PERSIST_FILE].old`);
+     * сам [persistFile] удаляется только если это файл `.old` (иначе writer
+     * продолжил бы писать в несуществующий файл, и все записи потерялись бы).
+     *
+     * Безопасен: если [logRetentionDays] ≤ 0 — делает ничего, любые исключения
+     * глотаются (очистка — фоновый сервис, не должен падать).
+     *
+     * @param now текущее время мс (по умолчанию [System.currentTimeMillis]).
+     */
+    fun cleanupByRetention(now: Long = System.currentTimeMillis()) {
+        if (logRetentionDays <= 0) return
+        val f = persistFile ?: return
+        val dir = f.parentFile ?: return
+        if (!dir.exists()) return
+        val cutoff = now - logRetentionDays * 24L * 60L * 60L * 1000L
+        val validNames = setOf(PERSIST_FILE, "$PERSIST_FILE.old")
+        synchronized(persistLock) {
+            for (file in dir.listFiles() ?: emptyArray()) {
+                if (file.name !in validNames) continue
+                if (file.lastModified() < cutoff) {
+                    try {
+                        // Сам активный файл не удаляем (в него активно пишется) —
+                        // старые .old удаляются, иначе можно потерять текущие записи.
+                        if (file == persistFile) continue
+                        file.delete()
+                    } catch (_: Exception) { /* ignore — одиночный сбой не роняет очистку */ }
+                }
+            }
+        }
+    }
+
+    /**
+     * Размер активного файла логов в байтах (0 если [init] не вызывался
+     * или файл отсутствует). Для UI (Settings → Логирование).
+     */
+    fun currentLogSizeBytes(): Long = persistFile()?.length() ?: 0L
+
+    /**
+     * Размер архивного файла логов (`persistent.log.old`) в байтах (0 если нет).
+     * Для UI (Settings → Логирование) — показывает занятость после ротации.
+     */
+    fun currentBackupSizeBytes(): Long {
+        val f = persistFile ?: return 0L
+        val dir = f.parentFile ?: return 0L
+        val old = File(dir, "$PERSIST_FILE.old")
+        return if (old.exists()) old.length() else 0L
+    }
+
+    /**
+     * Статус файлов логов: пара (текущий размер, размер бэкапа `.old`).
+     * Для UI — один вызов вместо двух при построении экрана настроек.
+     */
+    fun logFilesStatus(): Pair<Long, Long> =
+        currentLogSizeBytes() to currentBackupSizeBytes()
 
     fun clear() {
         synchronized(bufferLock) { buffer.clear() }

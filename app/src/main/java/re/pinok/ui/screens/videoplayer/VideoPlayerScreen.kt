@@ -168,6 +168,7 @@ import re.pinok.data.model.VideoQuality
 import re.pinok.data.model.UserProfile
 import re.pinok.media.PlayerConnection
 import re.pinok.media.VideoDownloadManager
+import re.pinok.media.VideoPlayerConfig
 // W30-2 #VIDEO-BACKGROUND (контракт §2.4 плана W30): хуки контроллера фон-режима
 // (создаёт W30-3: MediaSessionService + MediaStyle-уведомление без видео).
 import re.pinok.service.VideoPlaybackBus
@@ -776,6 +777,9 @@ fun VideoPlayerScreen(
             val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                // #VIDEO-NET (2026-10-02): увеличенный буфер под сеть — реже
+                // обрывы и быстрее возобновление (на мобильной — щадящий 30s/120s).
+                .setLoadControl(VideoPlayerConfig.defaultLoadControl())
                 .build().apply {
                     val self = this // non-null ref for lambdas inside apply
                     setAudioAttributes(
@@ -785,6 +789,12 @@ fun VideoPlayerScreen(
                             .build(),
                         true
                     )
+                    // #VIDEO-BG (2026-10-02): фоновое видео (lock-screen через
+                    // VideoPlaybackService) не должно останавливаться из-за
+                    // смены audio-роутинга, а при погашенном экране нужно не дать
+                    // CPU уснуть для докачки сетевого потока.
+                    setHandleAudioBecomingNoisy(false)
+                    setWakeMode(VideoPlayerConfig.WAKE_MODE_NETWORK)
                     setMediaItem(mediaItemBuilder.build())
                     prepare()
                     // #VIDEO-AUTOPLAY: по умолчанию true (автостарт при открытии).

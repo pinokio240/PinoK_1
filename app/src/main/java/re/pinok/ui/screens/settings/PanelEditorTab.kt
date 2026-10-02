@@ -41,6 +41,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import re.pinok.SovaApp
 import re.pinok.data.local.SovaPrefs
+import re.pinok.ui.navigation.PanelItem
+import re.pinok.ui.navigation.PanelItems
 import re.pinok.ui.navigation.Screen
 
 // ══════════════════════════════════════════════════════════════════════
@@ -61,42 +63,14 @@ import re.pinok.ui.navigation.Screen
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Все редактируемые пункты боковой панели (dynamic-пункты, без фикс. хвоста).
- * Порядок в этом списке = canonical-порядок для initial/reset.
- * #OFFLINE-DUPLICATE-FIX: OfflineManager убран — он в фикс. хвосте drawer.
- * #ARCH-CONTAINERS (Этап 1.4/1.5-а/1.5-б): CallsHistory, Photos и Equalizer
- * убраны — контейнерные пункты панели (NavEntry) редактором не редактируются
- * (список зеркалит sidebarEditableScreens в SovaNavHost).
+ * Все редактируемые пункты боковой и нижней панелей.
+ * #PANELEDIT (2026-10-02): единый канонический набор — PanelItems.all
+ * (см. ui/navigation/PanelItems.kt). Раньше были два разнесённых Screen-списка
+ * (SIDEBAR_EDITABLE_SCREENS / BOTTOMBAR_EDITABLE_SCREENS); теперь обе панели
+ * используют ОДИН список из 14 пунктов по требованию пользователя, а фикси-
+ * рованный хвост drawer (Офлайн/Настройки/Выйти) по-прежнему не редактируется.
  */
-private val SIDEBAR_EDITABLE_SCREENS: List<Screen> = listOf(
-    Screen.Friends, Screen.Groups, Screen.Search,
-    Screen.Bookmarks, Screen.Documents, Screen.Clips,
-    Screen.Services, Screen.Notifications, Screen.Logs,
-)
-
-/**
- * Все пункты нижней панели.
- * #SIDEBAR-BOTTOM-UNION (2026-08-01): раньше только 5 dock-кнопок. Теперь
- * добавлены все sidebar-пункты (включая OfflineManager) — пользователь может
- * поместить любую кнопку на нижнюю панель.
- * #BOTTOM-DEFAULT-4 (2026-08-01): по умолчанию visible только 4 (Профиль,
- * Сообщения, Музыка, Видео), остальные скрыты. Если включить >5 — панель
- * становится горизонтально прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).
- * #ARCH-CONTAINERS (Этап 1.5-а): Photos здесь ОСТАВЛЕН — Dock/нижняя панель —
- * ядерная собственность хоста (Правило владения UI); ярлык «Фото» навигирует
- * на destination "photos" и работает независимо от контейнера.
- * #ARCH-CONTAINERS (Этап 1.5-б): Equalizer здесь ОСТАВЛЕН — та же логика:
- * ярлык «Эквалайзер» навигирует на destination "equalizer" независимо от
- * контейнера :feature:audio.
- */
-private val BOTTOMBAR_EDITABLE_SCREENS: List<Screen> = listOf(
-    Screen.Profile, Screen.Messages, Screen.Music, Screen.Video,
-    Screen.Feed,
-    Screen.Friends, Screen.Groups, Screen.Photos, Screen.Search,
-    Screen.Bookmarks, Screen.Documents, Screen.Clips,
-    Screen.Services, Screen.Notifications, Screen.Logs,
-    Screen.OfflineManager, Screen.Equalizer,
-)
+private val CANONICAL_PANEL_ITEMS: List<PanelItem> = PanelItems.all
 
 /**
  * Фиксированный «хвост» боковой панели (сверху-вниз): Офлайн → Настройки → Выйти.
@@ -128,26 +102,26 @@ private fun List<String>.toJson(): String {
 }
 
 /**
- * Нормализует order под canonical-список: убирает неизвестные route,
+ * Нормализует order под canonical-список: убирает неизвестные keys,
  * добавляет недостающие (новые пункты после обновления) в конец.
  * Гарантирует, что в order есть ВСЕ пункты из [canonical] ровно по разу.
  */
-private fun normalizeOrder(order: List<String>, canonical: List<Screen>): List<String> {
-    val canonicalRoutes = canonical.map { it.route }
+private fun normalizeOrder(order: List<String>, canonical: List<PanelItem>): List<String> {
+    val canonicalKeys = canonical.map { it.key }
     val seen = mutableSetOf<String>()
     val result = mutableListOf<String>()
     // Сохраняем порядок пользователя, фильтруя неизвестные/дубли.
-    for (r in order) {
-        if (r in canonicalRoutes && r !in seen) {
-            result.add(r)
-            seen.add(r)
+    for (k in order) {
+        if (k in canonicalKeys && k !in seen) {
+            result.add(k)
+            seen.add(k)
         }
     }
     // Добавляем новые пункты (которых не было в сохранённом order).
-    for (s in canonical) {
-        if (s.route !in seen) {
-            result.add(s.route)
-            seen.add(s.route)
+    for (item in canonical) {
+        if (item.key !in seen) {
+            result.add(item.key)
+            seen.add(item.key)
         }
     }
     return result
@@ -163,13 +137,13 @@ fun PanelEditorTab(
 ) {
     // Локальный редактируемый state — коммитим в prefs при каждом изменении.
     var sidebarOrder by remember(s.sidebarItemsOrder) {
-        mutableStateOf(normalizeOrder(parseRoutes(s.sidebarItemsOrder), SIDEBAR_EDITABLE_SCREENS))
+        mutableStateOf(normalizeOrder(parseRoutes(s.sidebarItemsOrder), CANONICAL_PANEL_ITEMS))
     }
     var sidebarHidden by remember(s.sidebarItemsHidden) {
         mutableStateOf(parseRoutes(s.sidebarItemsHidden).toSet())
     }
     var bottomOrder by remember(s.bottomBarItemsOrder) {
-        mutableStateOf(normalizeOrder(parseRoutes(s.bottomBarItemsOrder), BOTTOMBAR_EDITABLE_SCREENS))
+        mutableStateOf(normalizeOrder(parseRoutes(s.bottomBarItemsOrder), CANONICAL_PANEL_ITEMS))
     }
     var bottomHidden by remember(s.bottomBarItemsHidden) {
         mutableStateOf(parseRoutes(s.bottomBarItemsHidden).toSet())
@@ -206,9 +180,9 @@ fun PanelEditorTab(
         item {
             ReorderableListCard(
                 title = "Кнопки панели",
-                orderedRoutes = sidebarOrder,
-                hiddenRoutes = sidebarHidden,
-                screenByRoute = SIDEBAR_EDITABLE_SCREENS.associateBy { it.route },
+                orderedKeys = sidebarOrder,
+                hiddenKeys = sidebarHidden,
+                itemByKey = PanelItems.byKey,
                 onMoveUp = { idx ->
                     if (idx > 0) {
                         sidebarOrder = sidebarOrder.toMutableList().apply {
@@ -225,11 +199,11 @@ fun PanelEditorTab(
                         commitSidebar()
                     }
                 },
-                onToggleVisible = { route ->
-                    sidebarHidden = if (route in sidebarHidden) {
-                        sidebarHidden - route
+                onToggleVisible = { key ->
+                    sidebarHidden = if (key in sidebarHidden) {
+                        sidebarHidden - key
                     } else {
-                        sidebarHidden + route
+                        sidebarHidden + key
                     }
                     commitSidebar()
                 },
@@ -255,19 +229,14 @@ fun PanelEditorTab(
             ) {
                 TextButton(onClick = {
                     // #BOTTOM-DEFAULT-4: сброс к дефолту (4 кнопки:
-                    // Профиль, Сообщения, Музыка, Видео).
-                    val defaultOrder = listOf(
-                        Screen.Profile.route, Screen.Messages.route,
-                        Screen.Music.route, Screen.Video.route,
-                    ) + BOTTOMBAR_EDITABLE_SCREENS.filter { it.route !in listOf(
-                        Screen.Profile.route, Screen.Messages.route,
-                        Screen.Music.route, Screen.Video.route,
-                    ) }.map { it.route }
-                    val defaultHidden = BOTTOMBAR_EDITABLE_SCREENS
-                        .filter { it.route !in listOf(
-                            Screen.Profile.route, Screen.Messages.route,
-                            Screen.Music.route, Screen.Video.route,
-                        ) }.map { it.route }.toSet()
+                    // Уведомления, Мессенджер, Сообщества, Фотографии).
+                    val defaultVisible = listOf(
+                        "notifications", "messenger", "groups", "photos",
+                    )
+                    val defaultOrder = defaultVisible +
+                        CANONICAL_PANEL_ITEMS.filter { it.key !in defaultVisible }.map { it.key }
+                    val defaultHidden = CANONICAL_PANEL_ITEMS
+                        .filter { it.key !in defaultVisible }.map { it.key }.toSet()
                     bottomOrder = defaultOrder
                     bottomHidden = defaultHidden
                     commitBottom()
@@ -279,9 +248,9 @@ fun PanelEditorTab(
         item {
             ReorderableListCard(
                 title = "Кнопки панели",
-                orderedRoutes = bottomOrder,
-                hiddenRoutes = bottomHidden,
-                screenByRoute = BOTTOMBAR_EDITABLE_SCREENS.associateBy { it.route },
+                orderedKeys = bottomOrder,
+                hiddenKeys = bottomHidden,
+                itemByKey = PanelItems.byKey,
                 onMoveUp = { idx ->
                     if (idx > 0) {
                         bottomOrder = bottomOrder.toMutableList().apply {
@@ -298,11 +267,11 @@ fun PanelEditorTab(
                         commitBottom()
                     }
                 },
-                onToggleVisible = { route ->
-                    bottomHidden = if (route in bottomHidden) {
-                        bottomHidden - route
+                onToggleVisible = { key ->
+                    bottomHidden = if (key in bottomHidden) {
+                        bottomHidden - key
                     } else {
-                        bottomHidden + route
+                        bottomHidden + key
                     }
                     commitBottom()
                 },
@@ -328,9 +297,9 @@ private fun SectionHeader(title: String) {
 @Composable
 private fun ReorderableListCard(
     title: String,
-    orderedRoutes: List<String>,
-    hiddenRoutes: Set<String>,
-    screenByRoute: Map<String, Screen>,
+    orderedKeys: List<String>,
+    hiddenKeys: Set<String>,
+    itemByKey: Map<String, PanelItem>,
     onMoveUp: (Int) -> Unit,
     onMoveDown: (Int) -> Unit,
     onToggleVisible: (String) -> Unit,
@@ -342,9 +311,9 @@ private fun ReorderableListCard(
         ) {
             Text(title, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
-            orderedRoutes.forEachIndexed { idx, route ->
-                val screen = screenByRoute[route] ?: return@forEachIndexed
-                val visible = route !in hiddenRoutes
+            orderedKeys.forEachIndexed { idx, key ->
+                val item = itemByKey[key] ?: return@forEachIndexed
+                val visible = key !in hiddenKeys
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -363,9 +332,9 @@ private fun ReorderableListCard(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp),
                     )
-                    if (screen.icon != null) {
+                    if (item.icon != null) {
                         Icon(
-                            screen.icon,
+                            item.icon,
                             contentDescription = null,
                             tint = if (visible) MaterialTheme.colorScheme.onSurface
                             else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -373,7 +342,7 @@ private fun ReorderableListCard(
                         )
                     }
                     Text(
-                        screen.title,
+                        item.title,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (visible) FontWeight.Medium else FontWeight.Normal,
                         color = if (visible) MaterialTheme.colorScheme.onSurface
@@ -382,7 +351,7 @@ private fun ReorderableListCard(
                     )
                     // Visibility toggle
                     IconButton(
-                        onClick = { onToggleVisible(route) },
+                        onClick = { onToggleVisible(key) },
                         modifier = Modifier.size(40.dp),
                     ) {
                         Icon(
@@ -407,13 +376,13 @@ private fun ReorderableListCard(
                     // Move down
                     IconButton(
                         onClick = { onMoveDown(idx) },
-                        enabled = idx < orderedRoutes.lastIndex,
+                        enabled = idx < orderedKeys.lastIndex,
                         modifier = Modifier.size(40.dp),
                     ) {
                         Icon(
                             Icons.Filled.KeyboardArrowDown,
                             contentDescription = "Вниз",
-                            tint = if (idx < orderedRoutes.lastIndex) MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (idx < orderedKeys.lastIndex) MaterialTheme.colorScheme.onSurfaceVariant
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                         )
                     }

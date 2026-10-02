@@ -949,6 +949,7 @@ class MainActivity : ComponentActivity() {
                 monetHybrid = snap?.themeMonetHybrid ?: true,
                 accentIndex = snap?.themeAccentIndex ?: 6,
                 fontScale = snap?.fontScale ?: 100,
+                uiScale = snap?.uiScale ?: re.pinok.data.local.SovaPrefs.UI_SCALE_DEFAULT,
             ) {
                 // LaunchedEffect'ы ниже срабатывают только когда snap уже загружен.
                 // На этапе snap==null они пропускаются (return) — boot/LongPoll/auth

@@ -42,7 +42,7 @@ import re.pinok.util.AppLog
  *   sn_gifts         → type == "gift"                  (default: true)
  *   sn_group_invites → type == "invite_group"          (default: true)
  *   sn_app_invites   → type == "invite_app"            (default: false!)
- *   sn_groups        → parentOwnerId < 0 (сообщество)  (default: true)
+ *   sn_groups        → isCommunityNotif() (сообщество, единый предикат с showBatch)  (default: true)
  *   sn_new_posts     → type == "wall" && parentOwnerId > 0  (default: false!)
  *   sn_stories       → type.startsWith("story")        (default: true)
  *   sn_photo_tags    → type == "tag_photo"             (default: true)
@@ -170,8 +170,11 @@ object SnNotifyFilter {
         "sn_stories" to { it.type.startsWith("story") },
         "sn_photo_tags" to { it.type == "tag_photo" },
         "sn_polls" to { it.type.startsWith("poll_") },
-        // Источник: сообщества
-        "sn_groups" to { it.parentOwnerId < 0 },
+        // Источник: сообщества. #NOTIFY-LEAK2: используем ТОТ ЖЕ предикат, что и
+        // showBatch.fromCommunity (NotificationSource.isCommunityNotif), чтобы sn_groups
+        // фильтровал всё, что гейт notifyMode считает сообществом (new_posts/group_invites
+        // с owner==0, broadcast-трансляции market/clip/story/podcast/video/photo и т.д.).
+        "sn_groups" to { it.isCommunityNotif() },
     )
 
     /**

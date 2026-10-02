@@ -29,6 +29,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import re.pinok.SovaApp
+import re.pinok.ui.anim.LocalAnimScale
+import re.pinok.ui.anim.tweenScaled
 import re.pinok.util.NetworkSwitchState
 
 /**
@@ -102,8 +104,10 @@ fun OfflineBanner(
 
     AnimatedVisibility(
         visible = content != null,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
+        enter = expandVertically(tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)) +
+            fadeIn(tweenScaled<Float>(LocalAnimScale.current, 300)),
+        exit = shrinkVertically(tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)) +
+            fadeOut(tweenScaled<Float>(LocalAnimScale.current, 300)),
     ) {
         if (content == null) return@AnimatedVisibility
 

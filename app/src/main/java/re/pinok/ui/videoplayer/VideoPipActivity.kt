@@ -47,6 +47,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import re.pinok.media.PlaybackPositionStore
 import re.pinok.media.PlayerConnection
+import re.pinok.media.VideoPlayerConfig
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
 
@@ -317,6 +318,9 @@ class VideoPipActivity : ComponentActivity() {
         }
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            // #VIDEO-NET (2026-10-02): PiP-видео играет на слабой сети (часто с
+            // оверлеем других приложений в трее) — увеличенный буфер под сеть.
+            .setLoadControl(VideoPlayerConfig.defaultLoadControl())
             .build()
         exo.setMediaItem(mediaItemBuilder.build())
         exo.prepare()

@@ -44,7 +44,7 @@ android {
         // to this single endpoint with different grant_type values.
         buildConfigField("String", "VK_CLIENT_ID", "\"2274003\"")
         buildConfigField("String", "VK_CLIENT_SECRET", "\"hHbZxrka2uZ6jB1inYsH\"")
-        buildConfigField("String", "VK_API_VERSION", "\"5.269\"")
+        buildConfigField("String", "VK_API_VERSION", "\"5.289\"")
         buildConfigField("String", "VK_API_HOST", "\"https://api.vk.com\"")
         // VK OAuth endpoint (oauth.vk.com) — Implicit Grant flow, password auth, 2FA.
         // НЕ id.vk.com — id.vk.com это VK ID endpoint (только exchange_token refresh).

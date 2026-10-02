@@ -104,6 +104,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -130,6 +131,7 @@ import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.media.PlayerConnection
 import re.pinok.ui.navigation.PostHolder
+import re.pinok.ui.navigation.Screen
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
@@ -146,9 +148,11 @@ import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.navigation.FeedDataHolder
 import re.pinok.ui.navigation.FeedScrollHolder
-// Fix #363: регистрация кнопки «меню ленты» на глобальном TopAppBar.
+import re.pinok.ui.navigation.FeedOpenRequest
+import re.pinok.ui.navigation.FeedPanelState
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.ui.navigation.ScrollPosition
+import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
 import re.pinok.util.toCountString
 import re.pinok.util.toDurationString
@@ -217,6 +221,14 @@ fun FeedScreen(
     // «Скрытые источники» (Screen.FeedHidden, newsfeed.getBanned + unban,
     // IMP-FEED-2). Эквивалент web-акта al_settings.php?act=a_edit_owners_list.
     onOpenHiddenSources: () -> Unit = {},
+    // #FEED-MENU-VKWEB-2: навигация из правого меню ленты на другие разделы
+    // (Уведомления/Мессенджер/Сообщества/Видео/Клипы/Музыка/Сервисы/Закладки/
+    // Файлы). Хост (SovaNavHost) передаёт drawer-паттерн navigate на Screen.*.
+    onFeedPanelNavigate: (Screen) -> Unit = {},
+    // #FEED-MENU-NOTIF (2026-10-01): выбор КАТЕГОРИИ уведомлений в правом меню
+    // ленты → NotificationsScreen с этой категорией (Screen.Notifications
+    // buildRoute(category)). Хост (SovaNavHost) навигирует по этому маршруту.
+    onFeedPanelOpenNotifications: (String) -> Unit = {},
     // #CALLS: кнопка «Позвонить» на карточке друга.
     // #ARCH-CONTAINERS (Этап 1.4): nullable — хост передаёт колбэк ТОЛЬКО если
     // в реестре есть CallStarter (контейнер звонков). null → кнопка НЕ рендерится
@@ -514,6 +526,10 @@ fun FeedScreen(
             // initial-конструкция обязана передавать его (тот же класс бага, что
             // Fix #100 / #110 / #189 / #monet-hybrid). Default true — как в SovaPrefs.
             callsEchoCancel = true,
+            // #UISCALE: uiScale добавлен в Snapshot — initial-конструкция
+            // обязана передавать его (тот же класс бага, что Fix #100/#110/#189).
+            // Default 0.85f — как в SovaPrefs.
+            uiScale = re.pinok.data.local.SovaPrefs.UI_SCALE_DEFAULT,
             audioQuality = re.pinok.data.local.AudioQuality.Q192,
         )
     )
@@ -539,8 +555,21 @@ fun FeedScreen(
 
     // #FEED-FILTER: активный раздел ленты (VK rightmenu). Храним имя enum-а в
     // rememberSaveable — переживает навигацию (VideoPlayer/PostDetail) и поворот.
-    var feedFilterName by rememberSaveable { mutableStateOf(FeedFilter.ALL.name) }
+    var feedFilterName by rememberSaveable {
+        // #PANELEDIT: «Реакции» из панели навигации → старт Ленты на разделе LIKES.
+        mutableStateOf(FeedOpenRequest.consume()?.takeIf { it.isNotEmpty() } ?: FeedFilter.ALL.name)
+    }
     val feedFilter = runCatching { FeedFilter.valueOf(feedFilterName) }.getOrDefault(FeedFilter.ALL)
+    // #PANELEDIT: если Лента УЖЕ на экране (навигация launchSingleTop/restoreState
+    // не создаёт новую композицию), version-инкремент FeedOpenRequest заставляет
+    // перечитать запрос и переключить раздел прямо на месте; раздел LIKES к тому же
+    // сам перезапускает свой загрузчик (LaunchedEffect(feedFilterName, ...) ниже).
+    LaunchedEffect(FeedOpenRequest.version) {
+        val requested = FeedOpenRequest.consume()?.takeIf { it.isNotEmpty() }
+        if (requested != null && requested != feedFilterName) {
+            feedFilterName = requested
+        }
+    }
 
     // #FEED-FILTER-SEARCH: поисковый запрос для вкладки «Поиск».
     var feedSearchQuery by remember { mutableStateOf("") }
@@ -672,106 +701,133 @@ fun FeedScreen(
         }
     }
 
-    // Загрузка реакций (likes.getList) при переключении на вкладку «Реакции».
+    // #FEED-REACTIONS-REFRESH (2026-10-02): счётчик-перезапуск загрузки реакций.
+    // Проблема: refreshFeed()/reloadFeed() идут через fetchFeedPage (пусто для
+    // LIKES) и НЕ перезапускали отдельный загрузчик реакций (LaunchedEffect был
+    // завязан только на feedFilterName/likesFilterName) → pull-to-refresh и кнопка
+    // «Обновить» в разделе «Реакции» ничего не делали. Инкремент этого ключа
+    // перезапускает LaunchedEffect(feedFilterName, likesFilterName, reactionsReloadKey)
+    // → loadReactions() выполняется заново без смены раздела/подтаба.
+    // #FEED-REACTIONS-COUNTS: empty-состояния используют likesTotalCount, чтобы
+    // отличать «лайкнутых нет вовсе» (count==0) от «нагрузка есть, но разрешить
+    // объекты не удалось» (count>0, но items пустые).
+    var reactionsReloadKey by remember { mutableIntStateOf(0) }
+
+    // Загрузка реакций (likes.getList). Выделена из LaunchedEffect в отдельную
+    // suspend-функцию с собственным likesLoading-гардом, чтобы её можно было
+    // перезапускать при pull-to-refresh (reactionsReloadKey++), не полагаясь на
+    // смену раздела/подтаба.
     // IMP-FEED-1: подтаб «Комментарии» (WALL_REPLY) → type="comment" возвращает
     // ПОЛНЫЕ объекты комментариев (id/from_id/text/date/likes.count) — рендерим
     // CommentCard (см. ниже), а не wallGetById-посты.
-    LaunchedEffect(feedFilterName, likesFilterName) {
-        if (feedFilterName == FeedFilter.LIKES.name && !likesLoading) {
-            likesLoading = true
-            try {
-                if (likesFilter == LikesFilter.WALL_REPLY) {
-                    // #FEED-LIKES-COMMENTS: сырые JsonObject → LikedComment
-                    // patient-парсинг (parseLikedComment). Профили: likesGetList
-                    // запрашивает extended=1, НО VKA-сигнатура возвращает только
-                    // items (Pair<Int, List<JsonObject>>) — profiles[] ответа
-                    // теряются; VKA в IMP-FEED-1 заморожен, поэтому авторы
-                    // обогащаются отдельным usersGetByIds по from_id; не найден →
-                    // дефолт-карточка (буква-фоллбэк, см. KDoc CommentCard).
-                    likedComments = emptyList()
-                    likedCommentAuthors = emptyMap()
-                    val (totalCount, items) = app.apiClient.likesGetList(type = "comment", count = 30)
-                    likesTotalCount = totalCount
-                    val parsed = items.mapNotNull { parseLikedComment(it) }
-                    likedComments = parsed
-                    val fromIds = parsed.map { it.fromId }.filter { it > 0 }.distinct()
-                    likedCommentAuthors = if (fromIds.isEmpty()) emptyMap() else app.apiClient.usersGetByIds(fromIds)
-                    AppLog.i("FeedScreen", "likesGetList(comment): $totalCount total, ${parsed.size} parsed")
-                } else if (likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO) {
-                    // Fix #364 #FEED-REACTIONS-VIDEO: подтабы «Клипы»/«Видео».
-                    // Раньше owner_id/item_id видео прогонялись через wallGetById
-                    // (ожидает ПОСТЫ) → вкладки были пустыми/мусорными. Теперь:
-                    // likes.getList(type="video") → список «ownerId_itemId» →
-                    // video.get(videos=…) → полные Video (превью/длительность).
-                    // Моб. API клипы/видео не различает (LikesFilter выше) — обе
-                    // вкладки показывают одно и то же, соответствие эталону по
-                    // возможностям API (снапшот §3.3/§5.7).
-                    // Сброс всех состояний подтабов: ветка постов ниже НЕ гейтится
-                    // по likesFilter (else-цепочка рендера) — не убрав likesItems,
-                    // получили бы посты прошлой вкладки на «Клипах».
-                    likesItems = emptyList()
-                    likesGroups = emptyMap()
-                    likedComments = emptyList()
-                    likedCommentAuthors = emptyMap()
-                    likesVideos = emptyList()
-                    val (totalCount, items) = app.apiClient.likesGetList(type = "video", count = 30)
-                    likesTotalCount = totalCount
-                    // NULL-ЯВНО: элементы likes.getList могут не иметь owner_id/item_id
-                    // (или JsonNull) — явные проверки вместо ?./?:.
-                    val videoIds = items.mapNotNull { raw ->
-                        val ownerIdEl = raw.get("owner_id")
-                        if (ownerIdEl == null || ownerIdEl.isJsonNull) return@mapNotNull null
-                        val itemIdEl = raw.get("item_id")
-                        if (itemIdEl == null || itemIdEl.isJsonNull) return@mapNotNull null
-                        "${ownerIdEl.asLong}_${itemIdEl.asLong}"
-                    }.distinct()
-                    // video.get возвращает только ДОСТУПНЫЕ видео (удалённые/приватные
-                    // VK молча пропускает) — результат может быть меньше videoIds.
-                    likesVideos = if (videoIds.isEmpty()) emptyList()
-                    else app.apiClient.videoGet(videoIds).distinctBy { "${it.ownerId}_${it.id}" }
-                    AppLog.i("FeedScreen", "likesGetList(video): $totalCount total, ${likesVideos.size} videos loaded")
-                } else {
-                    val (totalCount, items) = app.apiClient.likesGetList(
-                        type = likesFilter.apiType,
-                        count = 30,
-                    )
-                    likesTotalCount = totalCount
-                    // Преобразуем items в посты через wall.getById
-                    if (items.isNotEmpty()) {
-                        val postIds = items.mapNotNull { it ->
-                            val ownerId = it.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
-                            val itemId = it.get("item_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
-                            ownerId to itemId
-                        }
-                        if (postIds.isNotEmpty()) {
-                            val result = app.apiClient.wallGetById(postIds)
-                            likesItems = result.posts
-                            likesGroups = result.groups
-                            AppLog.i("FeedScreen", "likesGetList: $totalCount total, ${likesItems.size} posts loaded")
-                        } else {
-                            likesItems = emptyList()
-                            likesGroups = emptyMap()
-                        }
+    suspend fun loadReactions() {
+        if (likesLoading) return
+        likesLoading = true
+        try {
+            if (likesFilter == LikesFilter.WALL_REPLY) {
+                // #FEED-LIKES-COMMENTS: сырые JsonObject → LikedComment
+                // patient-парсинг (parseLikedComment). Профили: likesGetList
+                // запрашивает extended=1, НО VKA-сигнатура возвращает только
+                // items (Pair<Int, List<JsonObject>>) — profiles[] ответа
+                // теряются; VKA в IMP-FEED-1 заморожен, поэтому авторы
+                // обогащаются отдельным usersGetByIds по from_id; не найден →
+                // дефолт-карточка (буква-фоллбэк, см. KDoc CommentCard).
+                likedComments = emptyList()
+                likedCommentAuthors = emptyMap()
+                val (totalCount, items) = app.apiClient.likesGetList(type = "comment", count = 30)
+                likesTotalCount = totalCount
+                val parsed = items.mapNotNull { parseLikedComment(it) }
+                likedComments = parsed
+                val fromIds = parsed.map { it.fromId }.filter { it > 0 }.distinct()
+                likedCommentAuthors = if (fromIds.isEmpty()) emptyMap() else app.apiClient.usersGetByIds(fromIds)
+                AppLog.i("FeedScreen", "likesGetList(comment): $totalCount total, ${parsed.size} parsed")
+            } else if (likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO) {
+                // Fix #364 #FEED-REACTIONS-VIDEO: подтабы «Клипы»/«Видео».
+                // Раньше owner_id/item_id видео прогонялись через wallGetById
+                // (ожидает ПОСТЫ) → вкладки были пустыми/мусорными. Теперь:
+                // likes.getList(type="video") → список «ownerId_itemId» →
+                // video.get(videos=…) → полные Video (превью/длительность).
+                // Моб. API клипы/видео не различает (LikesFilter выше) — обе
+                // вкладки показывают одно и то же, соответствие эталону по
+                // возможностям API (снапшот §3.3/§5.7).
+                // Сброс всех состояний подтабов: ветка постов ниже НЕ гейтится
+                // по likesFilter (else-цепочка рендера) — не убрав likesItems,
+                // получили бы посты прошлой вкладки на «Клипах».
+                likesItems = emptyList()
+                likesGroups = emptyMap()
+                likedComments = emptyList()
+                likedCommentAuthors = emptyMap()
+                likesVideos = emptyList()
+                val (totalCount, items) = app.apiClient.likesGetList(type = "video", count = 30)
+                likesTotalCount = totalCount
+                // NULL-ЯВНО: элементы likes.getList могут не иметь owner_id/item_id
+                // (или JsonNull) — явные проверки вместо ?./?:.
+                val videoIds = items.mapNotNull { raw ->
+                    val ownerIdEl = raw.get("owner_id")
+                    if (ownerIdEl == null || ownerIdEl.isJsonNull) return@mapNotNull null
+                    val itemIdEl = raw.get("item_id")
+                    if (itemIdEl == null || itemIdEl.isJsonNull) return@mapNotNull null
+                    "${ownerIdEl.asLong}_${itemIdEl.asLong}"
+                }.distinct()
+                // video.get возвращает только ДОСТУПНЫЕ видео (удалённые/приватные
+                // VK молча пропускает) — результат может быть меньше videoIds.
+                likesVideos = if (videoIds.isEmpty()) emptyList()
+                else app.apiClient.videoGet(videoIds).distinctBy { "${it.ownerId}_${it.id}" }
+                AppLog.i("FeedScreen", "likesGetList(video): $totalCount total, ${likesVideos.size} videos loaded")
+            } else {
+                val (totalCount, items) = app.apiClient.likesGetList(
+                    type = likesFilter.apiType,
+                    count = 30,
+                )
+                likesTotalCount = totalCount
+                // Преобразуем items в посты через wall.getById
+                if (items.isNotEmpty()) {
+                    val postIds = items.mapNotNull { it ->
+                        val ownerId = it.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
+                        val itemId = it.get("item_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
+                        ownerId to itemId
+                    }
+                    if (postIds.isNotEmpty()) {
+                        val result = app.apiClient.wallGetById(postIds)
+                        likesItems = result.posts
+                        likesGroups = result.groups
+                        AppLog.i("FeedScreen", "likesGetList: $totalCount total, ${likesItems.size} posts loaded")
                     } else {
                         likesItems = emptyList()
                         likesGroups = emptyMap()
                     }
+                } else {
+                    likesItems = emptyList()
+                    likesGroups = emptyMap()
                 }
-            } catch (e: Exception) {
-                AppLog.e("FeedScreen", "likesGetList error", e)
-            } finally {
-                likesLoading = false
             }
+        } catch (e: Exception) {
+            AppLog.e("FeedScreen", "likesGetList error", e)
+        } finally {
+            likesLoading = false
+        }
+    }
+
+    // Запуск загрузки реакций при входе в раздел «Реакции», смене подтаба ИЛИ
+    // перезапуске через reactionsReloadKey++ (refresh/reload).
+    LaunchedEffect(feedFilterName, likesFilterName, reactionsReloadKey) {
+        if (feedFilterName == FeedFilter.LIKES.name) {
+            loadReactions()
         }
     }
 
     // #FEED-LIKES-PHOTOS (IMP-FEED-1): первая страница лайкнутых фото —
     // только на подтабе «Все» (снапшот §1.5: feed_likes_tabs_photo — НЕ таб,
     // а блок «Фотографии | Показать все» внутри вкладки «Все»).
-    LaunchedEffect(feedFilterName, likesFilterName) {
+    // reactionsReloadKey в ключах: pull-to-refresh (refreshFeed) инкрементирует
+    // ключ → блок «Понравившиеся фото» тоже перезагружается с первой страницы
+    // (раньше guard likedPhotos.isEmpty() блокировал повторную загрузку уже
+    // заполненного блока). LikesFilterChangeReset guard остаётся от параллельных
+    // запусков.
+    LaunchedEffect(feedFilterName, likesFilterName, reactionsReloadKey) {
         if (feedFilterName == FeedFilter.LIKES.name &&
             likesFilterName == LikesFilter.ALL.name &&
-            likedPhotos.isEmpty() && !likedPhotosLoadingMore
+            !likedPhotosLoadingMore
         ) {
             loadLikedPhotos(reset = true)
         }
@@ -882,7 +938,10 @@ fun FeedScreen(
     // Sprint 2, P1-3 → ShareSheet: расширенный диалог «Поделиться».
     val sharePost = remember { mutableStateOf<Post?>(null) }
     // #FEED-RIGHTPANEL (19-A): правое боковое меню ленты открыто.
-    var showRightPanel by remember { mutableStateOf(false) }
+    // Вместо локального remember — глобальный FeedPanelState.visible (см.
+    // ScreenTopBar.kt): кнопка ⋮ живёт в глобальном TopAppBar (другая композиция),
+    // и closure кнопки должен писать в тот же state, что читает панель, независимо
+    // от инстанса FeedScreen. Иначе при пересоздании экрана клик «теряется в никуда».
 
     // Fix #363 #FEED-MENU-TOPBAR-2: кнопка «меню ленты» на ГЛОБАЛЬНОЙ верхней
     // панели. SovaNavHost рендерит TopAppBar вне зоны FeedScreen и подставляет
@@ -896,19 +955,40 @@ fun FeedScreen(
     // при навигации Feed → X: X.configure() → Feed.onDispose.clear(tokenFeed)
     // = no-op, конфиг X не затирается.
     //
-    // Ключ DisposableEffect(Unit): лямбда actions только ПИШЕТ showRightPanel
-    // (захват state-делегата), изменчивых читаемых значений нет —
-    // переконфигурация при рекомпозиции не нужна (в отличие от
-    // NotificationsScreen, где ключ = showSearch/showFilters/unreadCount).
+    // Ключ DisposableEffect(Unit): лямбда actions только ПИШЕТ FeedPanelState.visible
+    // (глобальный state — захват не зависит от инстанса экрана), изменчивых
+    // читаемых значений нет — переконфигурация при рекомпозиции не нужна (в
+    // отличие от NotificationsScreen, где ключ = showSearch/showFilters/unreadCount).
+    //
+    // #FEED-MENU-TOPBAR-2 (Fix #366): надпись «меню ленты» рядом со значком ⋮.
+    // Подпись рисуется ВНУТРИ actions-слота (ScreenTopBar.actions): гейт по
+    // «активен ли экран ленты» обеспечивается автоматически — actions
+    // конфигурируются только FeedScreen'ом (при уходе clear(). сбрасывает).
+    // При ограниченном месте (узкий экран/сплит-экран, screenWidthDp < 320) —
+    // показываем только иконку.
     DisposableEffect(Unit) {
         val token = ScreenTopBar.configure(
             actions = {
-                IconButton(onClick = { showRightPanel = true }) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.MenuOpen,
-                        contentDescription = "Меню ленты",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                val screenWidthDp = LocalConfiguration.current.screenWidthDp
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (screenWidthDp >= 320) {
+                        Text(
+                            text = "меню ленты",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 4.dp),
+                        )
+                    }
+                    IconButton(onClick = {
+                        AppLog.i("FeedScreen", "⋮ menu clicked → FeedPanelState.visible = true")
+                        FeedPanelState.visible = true
+                    }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.MenuOpen,
+                            contentDescription = "Меню ленты",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             },
         )
@@ -957,6 +1037,14 @@ fun FeedScreen(
         // Fix #52-B: сбрасываем кэш историй при reload/refresh — dirtyKey++
         // триггерит перезагрузку в StoriesRow (LaunchedEffect(dirtyKey)).
         re.pinok.ui.navigation.StoriesHolder.clear()
+        // #FEED-REACTIONS-REFRESH: см. refreshFeed — в разделе «Реакции» reload
+        // тоже должен перезапускать отдельный загрузчик реакций (не только
+        // fetchFeedPage, который для LIKES возвращает пусто). Перезапуск даже
+        // когда смена раздела уже дёрнула LaunchedEffect — безвреден: у
+        // loadReactions собственный likesLoading-гард от параллельных запусков.
+        if (feedFilterName == FeedFilter.LIKES.name) {
+            reactionsReloadKey++
+        }
         scope.launch {
             loading = true
             endReached = false
@@ -1067,6 +1155,15 @@ fun FeedScreen(
         // Fix #52-B: сбрасываем кэш историй при reload/refresh — dirtyKey++
         // триггерит перезагрузку в StoriesRow (LaunchedEffect(dirtyKey)).
         re.pinok.ui.navigation.StoriesHolder.clear()
+        // #FEED-REACTIONS-REFRESH: в разделе «Реакции» fetchFeedPage возвращает
+        // пусто (раздел грузит отдельным загрузчиком loadReactions). Инкремент
+        // reactionsReloadKey перезапускает LaunchedEffect(feedFilterName,
+        // likesFilterName, reactionsReloadKey) → реакций/фото перезагружаются
+        // при pull-to-refresh, иначе обновление ничего не делало (сам класс
+        // бага, что Fix #358: раздел «застревал» на старых данных).
+        if (feedFilterName == FeedFilter.LIKES.name) {
+            reactionsReloadKey++
+        }
         scope.launch {
             isRefreshing = true
             try {
@@ -1382,7 +1479,7 @@ fun FeedScreen(
     // ─── #FEED-MENU-VKWEB (Fix #353) → Fix #368: правое боковое меню ленты ───
     // Размещён ДО loading/error-ранних return'ов — панель меню открывается из
     // любого состояния экрана (триггер в глобальном TopBar). Раньше вызов стоял
-    // после return'ов: на скелетоне/ошибке showRightPanel=true записывался
+    // после return'ов: на скелетоне/ошибке FeedPanelState.visible=true записывался
     // «в пустоту» (панель вне композиции) и «сама выскакивала» после загрузки.
     // Прецедент: NotificationsScreen (bottom-sheet «Фильтр» до return'ов).
     //
@@ -1394,33 +1491,31 @@ fun FeedScreen(
     // Навигация РАЗДЕЛОВ ленты («Список ленты» VK web, rightmenu §1.0.2
     // снапшота): Лента/Фотографии/Друзья/Поиск/Реакции переключают
     // feedFilterName с перезагрузкой (см. onSelect у FeedFilterBar),
-    // «Редактировать» уводит на «Скрытые источники» (Screen.FeedHidden).
-    // Прежние секции 19-A (друзья онлайн/возможные друзья/сообщества/закладки)
-    // удалены по требованию юзера — в VK web rightmenu их нет.
+    // навигационные разделы (Уведомления/Мессенджер/...) уводят на Screen.*
+    // через onFeedPanelNavigate, «Редактировать» уводит на «Скрытые
+    // источники» (Screen.FeedHidden).
     Box(modifier = Modifier.zIndex(1f)) {
         FeedRightPanel(
-            visible = showRightPanel,
-            currentFilterName = feedFilterName,
-            onDismiss = { showRightPanel = false },
-            onSectionSelected = { filterName ->
-                showRightPanel = false
-                if (filterName != feedFilterName) {
-                    feedFilterName = filterName
-                    reloadFeed()
-                }
+            visible = FeedPanelState.visible,
+            onDismiss = {
+                AppLog.i("FeedScreen", "FeedRightPanel dismiss → FeedPanelState.visible = false")
+                FeedPanelState.visible = false
+            },
+            // #FEED-MENU-NOTIF: категория уведомлений → NotificationsScreen с категорией.
+            onNavigateCategory = { category ->
+                AppLog.i("FeedScreen", "FeedRightPanel notif category → '$category', FeedPanelState.visible = false")
+                FeedPanelState.visible = false
+                onFeedPanelOpenNotifications(category)
+            },
+            onNavigate = { screen ->
+                AppLog.i("FeedScreen", "FeedRightPanel navigate → ${screen.route}, FeedPanelState.visible = false")
+                FeedPanelState.visible = false
+                onFeedPanelNavigate(screen)
             },
             onOpenHiddenSources = {
-                showRightPanel = false
+                AppLog.i("FeedScreen", "FeedRightPanel hidden sources → FeedPanelState.visible = false")
+                FeedPanelState.visible = false
                 onOpenHiddenSources()
-            },
-            // Fix #390 #NOTIFY-MODES: текущий режим — из реактивного снапшота prefs
-            // (feedPrefs.notifyMode), выбор режима в диалоге панели → SovaPrefs.
-            // Смена применяется без перезапуска: SovaApp.startMessageNotifier и
-            // VkNotificationsNotifier.showBatch читают АКТУАЛЬНЫЙ снапшот на каждое
-            // событие/батч.
-            notifyMode = feedPrefs.notifyMode,
-            onNotifyModeSelected = { mode ->
-                scope.launch { app.prefs.setNotifyMode(mode) }
             },
         )
     }
@@ -1620,10 +1715,17 @@ fun FeedScreen(
                     // на коммент НЕ добавлен — моб. wire отсутствует (reports.php
                     // legacy web; wall.markAsSpam работает только с постами),
                     // отклонение задокументировано в KDoc CommentCard.
+                    // #FEED-REACTIONS-COUNTS: различаем «лайкнутых комментариев нет вовсе»
+                    // (likesTotalCount==0) от «объекты есть, но получить/разрешить
+                    // не удалось» (count>0, а likedComments пусто).
                     if (likedComments.isEmpty()) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text("Нет лайкнутых комментариев", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    if (likesTotalCount == 0) "Нет лайкнутых комментариев"
+                                    else "Не удалось загрузить комментарии",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
                     } else {
@@ -1645,12 +1747,17 @@ fun FeedScreen(
                     // Рендер — VideoThumbnail (тот же компонент, что у видео-вложений
                     // постов), onClick → onVideoClickSavePos → VideoHolder.open
                     // (overlay-плеер, позиция ленты сохраняется перед уходом — Fix #100).
-                    // Пустая вкладка → честное «Нет реакций» (лайкнутых видео нет
-                    // ИЛИ VK не вернул недоступные).
+                    // Пустая вкладка → честное состояние: «лайкнутых видео нет» (count==0)
+                    // VS «загрузка есть, но VK не вернул доступные видео»
+                    // (count>0, likesVideos пусто — удалённые/приватные).
                     if (likesVideos.isEmpty()) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text("Нет реакций", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    if (likesTotalCount == 0) "Нет лайкнутых видео"
+                                    else "Не удалось загрузить видео",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
                     } else {
@@ -1659,9 +1766,16 @@ fun FeedScreen(
                         }
                     }
                 } else if (likesItems.isEmpty()) {
+                    // #FEED-REACTIONS-COUNTS: «вы никого не лайкали» (count==0) VS
+                    // «лайки есть, но wallGetById не вернул целостные посты
+                    // (удалённые/приватные/недоступные)».
                     item {
                         Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("Нет реакций", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                if (likesTotalCount == 0) "Вы ещё никого не лайкали"
+                                else "Не удалось загрузить реакции",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 } else {
@@ -1993,13 +2107,13 @@ private fun FeedFilterBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 2.dp),
+            .padding(horizontal = UiScale.scaled(12.dp), vertical = UiScale.scaled(2.dp)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {
             TextButton(
                 onClick = { expanded = true },
-                modifier = Modifier.height(36.dp),
+                modifier = Modifier.height(UiScale.scaled(36.dp)),
             ) {
                 Text(
                     text = currentFilter.label,
@@ -2009,7 +2123,7 @@ private fun FeedFilterBar(
                 Icon(
                     Icons.Filled.KeyboardArrowDown,
                     contentDescription = "Разделы ленты",
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(UiScale.scaled(18.dp)),
                 )
             }
             DropdownMenu(

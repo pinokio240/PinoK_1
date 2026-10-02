@@ -3,6 +3,7 @@ package re.pinok.data.local
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -94,6 +95,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             //   Без этого Monet полностью перекрашивает accent-роли под обои.
             themeMonetHybrid   = p[Keys.THEME_MONET_HYBRID]     ?: true,
             fontScale          = p[Keys.FONT_SCALE]            ?: 100,
+            // Fix #UISCALE (2026-10-02): масштаб всего интерфейса (кнопки/панели/
+            // текст). Базовый дефолт 0.85 (−15%) — интерфейс «мельче» при стандартной
+            // настройке. Используется в Theme/SOVATheme через LocalUiScale + Density,
+            // где применяется ко ВСЕМ sp-текстам и к явным dp-размерам ключевых панелей
+            // (TopAppBar, панель ввода чата, лента, уведомления). Варианты:
+            // 0.75 / 0.85 / 1.0 / 1.15 / 1.3. Растёт с настройкой (не «замерзает»).
+            uiScale           = p[Keys.UI_SCALE]            ?: UI_SCALE_DEFAULT,
             // Fix #224: скорость анимаций интерфейса (0..100%). 100 — норма,
             // 50 — вдвое быстрее, 0 — анимации выключены (мгновенные переходы).
             // Применяется к NavHost-переходам, swipe-reply spring, AnimatedVisibility.
@@ -127,6 +135,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Исключение NULL-ЯВНО — DataStore-дефолт-маппинг (соседи выше).
             logSectionsOff = p[Keys.LOG_SECTIONS_OFF] ?: "",
             logErrorsOnly = p[Keys.LOG_ERRORS_ONLY] ?: true,
+            // #LOG-CONFIG (2026-10-01): конфигурация хранения логов.
+            logMaxSizeBytes     = p[Keys.LOG_MAX_SIZE_BYTES] ?: (2L * 1024 * 1024),
+            logRetentionDays    = p[Keys.LOG_RETENTION_DAYS] ?: 0,
+            logAutoClean        = p[Keys.LOG_AUTO_CLEAN] ?: false,
+            logBufferCapacity   = p[Keys.LOG_BUFFER_CAPACITY] ?: 4000,
             // #238: показ FAB «подняться в верх ленты» при прокрутке вниз.
             // Default = true — FAB виден по умолчанию, пользователь может скрыть
             // в настройках (SettingsScreen → Интерфейс → «Кнопка наверх в ленте»).
@@ -566,6 +579,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** #MONET-HYBRID: гибридный режим Material You (dynamic surface + accent primary). */
     suspend fun setThemeMonetHybrid(v: Boolean)          = put(Keys.THEME_MONET_HYBRID, v)
     suspend fun setFontScale(v: Int)                     = put(Keys.FONT_SCALE, v)
+    /** Fix #UISCALE: масштаб всего интерфейса (кнопки/панели/текст), 0.75..1.3. */
+    suspend fun setUiScale(v: Float)                     = put(Keys.UI_SCALE, v)
     /** Fix #224: скорость анимаций интерфейса (0..100). 0 = выключены. */
     suspend fun setInterfaceAnimSpeed(v: Int)            = put(Keys.INTERFACE_ANIM_SPEED, v)
     /** Fix #228: масштаб стикер-фото (0..40, % увеличения от оригинала). */
@@ -594,6 +609,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setLogSectionsOff(v: String) = put(Keys.LOG_SECTIONS_OFF, v)
     /** #LOG-ERRORS-ONLY: quiet mode - only ERROR is recorded. */
     suspend fun setLogErrorsOnly(v: Boolean) = put(Keys.LOG_ERRORS_ONLY, v)
+    /** #LOG-CONFIG (2026-10-01): max размер файла лога в байтах (default 2 MiB). */
+    suspend fun setLogMaxSizeBytes(v: Long) = put(Keys.LOG_MAX_SIZE_BYTES, v)
+    /** #LOG-CONFIG (2026-10-01): срок хранения логов в днях (0 = выкл). */
+    suspend fun setLogRetentionDays(v: Int) = put(Keys.LOG_RETENTION_DAYS, v)
+    /** #LOG-CONFIG (2026-10-01): автоочистка логов (default false). */
+    suspend fun setLogAutoClean(v: Boolean) = put(Keys.LOG_AUTO_CLEAN, v)
+    /** #LOG-CONFIG (2026-10-01): ёмкость буфера логов (default 4000). */
+    suspend fun setLogBufferCapacity(v: Int) = put(Keys.LOG_BUFFER_CAPACITY, v)
     /** #238: показ FAB «подняться в верх ленты» в FeedScreen. */
     suspend fun setFeedShowScrollFab(v: Boolean)         = put(Keys.FEED_SHOW_SCROLL_FAB, v)
     /** #FEED-FILTER-TOGGLE: показывать панель разделов ленты. */
@@ -848,6 +871,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setBottomBarItemsHidden(v: String)        = put(Keys.BOTTOMBAR_ITEMS_HIDDEN, v)
     // #BOTTOM-DEFAULT-4: миграция на новый дефолт нижней панели.
     suspend fun setPanelDefaultsV2(v: Int)                = put(Keys.PANEL_DEFAULTS_V2, v)
+    suspend fun setPanelDefaultsV3(v: Int)                = put(Keys.PANEL_DEFAULTS_V3, v)
 
     /**
      * #BOTTOM-DEFAULT-4: одноразовая миграция дефолта нижней панели.
@@ -884,6 +908,37 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             p[Keys.PANEL_DEFAULTS_V2] = 1
         }
         return !userTouched
+    }
+
+    /**
+     * #PANELEDIT (2026-10-02): одноразовая миграция панелей под НОВЫЙ набор
+     * пунктов (PanelItems.key вместо Screen.route).
+     *
+     * Старый набор хранил route-строки ("feed","messages","friends","photos",
+     * "calls_history",...) — они не входят в новый канон PanelItems. Без
+     * миграции normalize добавил бы ВСЕ новые ключи (включая спец-пункт
+     * «реакции» и дубли «мессенджер»), и нижняя панель стала бы 14-кнопочной.
+     *
+     * Миграция ВСЕГДА перезаписывает order/hidden НОВЫМИ дефолтами: старые
+     * route-значения не входят в канон PanelItems, иначе bottom-панель стала бы
+     * 14-кнопочной. Применяется однократно (PANEL_DEFAULTS_V3=1).
+     *
+     * @return true если миграция применила новые дефолты.
+     */
+    suspend fun migratePanelDefaultsV3(): Boolean {
+        val snap = ds.data.first()
+        val cur = snap[Keys.PANEL_DEFAULTS_V3] ?: 0
+        if (cur >= 1) return false
+        ds.edit { p ->
+            // Перезаписываем оба набора панелей новыми дефолтами в любом случае:
+            // старые route-значения не имеют смысла в новой системе иначе.
+            p[Keys.SIDEBAR_ITEMS_ORDER] = SIDEBAR_DEFAULT_ORDER
+            p[Keys.SIDEBAR_ITEMS_HIDDEN] = "[]"
+            p[Keys.BOTTOMBAR_ITEMS_ORDER] = BOTTOMBAR_DEFAULT_ORDER
+            p[Keys.BOTTOMBAR_ITEMS_HIDDEN] = BOTTOMBAR_DEFAULT_HIDDEN
+            p[Keys.PANEL_DEFAULTS_V3] = 1
+        }
+        return true
     }
 
     /**
@@ -1126,7 +1181,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setPushSafetyNetAlerts(v: Boolean)      = put(Keys.PUSH_SAFETY_NET_ALERTS, v)
     suspend fun setSafetyNetPollIntervalMin(v: Int)    = put(Keys.SAFETY_NET_POLL_INTERVAL, v)
     // Fix #390 #NOTIFY-MODES: setters режима уведомлений и звука/вибрации сообществ.
-    suspend fun setNotifyMode(v: Int)                   = put(Keys.NOTIFY_MODE, v)
+    // P5 #NOTIFY-MODE-VALIDATE: coerceIn(0,3) обрезает мусор/легаси-ключ из другой
+    // версии (NOTIFY_MODE_MESSAGES_ONLY..SILENT), чтобы в снапшот не попало
+    // значение, которое ломает ветки выбора канала.
+    suspend fun setNotifyMode(v: Int) = put(Keys.NOTIFY_MODE, v.coerceIn(
+        NOTIFY_MODE_MESSAGES_ONLY, NOTIFY_MODE_SILENT
+    ))
     suspend fun setNotifyCommunitiesSound(v: Boolean)   = put(Keys.NOTIFY_COMMUNITIES_SOUND, v)
     suspend fun setNotifyCommunitiesVibration(v: Boolean) = put(Keys.NOTIFY_COMMUNITIES_VIBRATION, v)
 
@@ -1333,6 +1393,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         /** #MONET-HYBRID: при true и включённом Material You — accent перекрывает primary/secondary/tertiary. */
         val themeMonetHybrid: Boolean,
         val fontScale: Int,
+        /** Fix #UISCALE: масштаб всего интерфейса (0.75..1.3, дефолт 0.85 = −15%). */
+        val uiScale: Float,
         /** Fix #224: скорость анимаций интерфейса (0..100%). 0 = выключены (snap). */
         val interfaceAnimSpeed: Int,
         /** Fix #228: масштаб стикер-фото (0..40, % увеличения от оригинала). */
@@ -1722,6 +1784,27 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          */
         val logErrorsOnly: Boolean = true,
         /**
+         * #LOG-CONFIG (2026-10-01): max размер файла лога в байтах.
+         * Default = 2 MiB (2L * 1024 * 1024). Дефолт задан явно — прецедент
+         * logSectionsOff выше.
+         */
+        val logMaxSizeBytes: Long = 2L * 1024 * 1024,
+        /**
+         * #LOG-CONFIG (2026-10-01): срок хранения логов в днях.
+         * Default = 0 (выкл). Дефолт задан явно — прецедент logSectionsOff выше.
+         */
+        val logRetentionDays: Int = 0,
+        /**
+         * #LOG-CONFIG (2026-10-01): автоочистка логов. Default = false.
+         * Дефолт задан явно — прецедент logSectionsOff выше.
+         */
+        val logAutoClean: Boolean = false,
+        /**
+         * #LOG-CONFIG (2026-10-01): ёмкость буфера логов. Default = 4000.
+         * Дефолт задан явно — прецедент logSectionsOff выше.
+         */
+        val logBufferCapacity: Int = 4000,
+        /**
          * Волна 45-д #SETTINGS-CRYPTO: шифровать файл экспорта настроек.
          * Дефолт false задан явно — прецедент logSectionsOff выше: именованные
          * конструкторы Snapshot в чужих файлах собираются без правок.
@@ -1742,6 +1825,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val THEME_DYNAMIC       = booleanPreferencesKey("theme_dynamic")
         val THEME_MONET_HYBRID  = booleanPreferencesKey("theme_monet_hybrid")
         val FONT_SCALE          = intPreferencesKey("font_scale")
+        // Fix #UISCALE: масштаб всего интерфейса (float, дефолт 0.85 = −15%).
+        val UI_SCALE             = floatPreferencesKey("ui_scale")
         val INTERFACE_ANIM_SPEED= intPreferencesKey("interface_anim_speed")
         val STICKER_PHOTO_SCALE = intPreferencesKey("sticker_photo_scale")
         // Fix #237: показ плавающего значка логирования.
@@ -1757,6 +1842,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val LOG_SECTIONS_OFF = stringPreferencesKey("log_sections_off")
         // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR recorded.
         val LOG_ERRORS_ONLY = booleanPreferencesKey("log_errors_only")
+        // #LOG-CONFIG (2026-10-01): конфигурация хранения логов.
+        val LOG_MAX_SIZE_BYTES = longPreferencesKey("log_max_size_bytes")
+        val LOG_RETENTION_DAYS = intPreferencesKey("log_retention_days")
+        val LOG_AUTO_CLEAN = booleanPreferencesKey("log_auto_clean")
+        val LOG_BUFFER_CAPACITY = intPreferencesKey("log_buffer_capacity")
         // #238: показ FAB «подняться в верх ленты» в FeedScreen.
         val FEED_SHOW_SCROLL_FAB = booleanPreferencesKey("feed_show_scroll_fab")
         // #FEED-FILTER-TOGGLE: показывать панель разделов ленты.
@@ -1866,6 +1956,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // #BOTTOM-DEFAULT-4: миграция на новый дефолт (4 кнопки: Профиль,
         // Сообщения, Музыка, Видео). 0 = не применена, 1 = применена.
         val PANEL_DEFAULTS_V2 = intPreferencesKey("panel_defaults_v2")
+        val PANEL_DEFAULTS_V3 = intPreferencesKey("panel_defaults_v3")
 
         // Stories (Fix #100)
         val AUTO_CACHE_STORIES   = booleanPreferencesKey("auto_cache_stories")
@@ -1996,6 +2087,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     // Fix #189: defaults для Auth Domains Config.
     // Вынесены в companion чтобы быть доступными из AuthDomainsConfig без ссылки на Snapshot.
     companion object {
+        // Fix #UISCALE: базовый масштаб интерфейса по умолчанию — 0.85 (−15%).
+        // Кнопки/панели/текст уменьшаются при стандартной настройке. Рост
+        // предложения задаётся пользователем: 0.75 / 0.85 / 1.0 / 1.15 / 1.3.
+        const val UI_SCALE_DEFAULT = 0.85f
         const val AUTH_OAUTH_HOST_DEFAULT      = "oauth.vk.com"
         const val AUTH_ID_HOST_DEFAULT         = "id.vk.com"
         const val AUTH_LOGIN_HOST_DEFAULT      = "login.vk.com"
@@ -2003,21 +2098,24 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         const val AUTH_API_HOST_DEFAULT        = "api.vk.com"
         const val AUTH_WEB_CLIENT_ID_DEFAULT   = "6287487"  // vk.com desktop web
 
-        // Fix #337: дефолтный порядок пунктов панелей (JSON-массивы route).
-        // Совпадает с текущими dockScreens / drawerScreens в SovaNavHost —
-        // пользователь не видит изменений до первого входа в «Редактор панелей».
-        // Sidebar: только dynamic-пункты (без фикс. Офлайн/Настройки/Выйти).
+        // Fix #337 / #PANELEDIT (2026-10-02): дефолтный порядок пунктов панелей
+        // (JSON-массивы KEY пунктов — PanelItems.key, а НЕ Screen.route, т.к.
+        // требуются соседние экраны «мессенджер»/«сообщества» и спец-пункт «реакции»).
+        // Боковая и нижняя панели используют ОДИН набор (PanelItems.all).
+        // Боковая: только dynamic-пункты (без фикс. хвоста Outlined/Настройки/Выйти).
+        // Список пользователя: Уведомления, Мессенджер, Сообщества, Фотографии,
+        // Друзья, Видео, Клипы, Музыка, Закладки, Файлы, Поиск, Реакции, Сервисы, Логи.
         const val SIDEBAR_DEFAULT_ORDER =
-            """["friends","groups","photos","search","bookmarks","documents","calls_history","clips","services","notifications","logs"]"""
-        // #BOTTOM-DEFAULT-4: по умолчанию на нижней панели 4 кнопки в порядке:
-        // Профиль → Сообщения → Музыка → Видео (как просил пользователь).
+            """["notifications","messenger","groups","photos","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+        // Нижняя панель по умолчанию: те же пункты, но visible только первые 4
+        // (Уведомления, Мессенджер, Сообщества, Фотографии) — остальные скрыты.
         const val BOTTOMBAR_DEFAULT_ORDER =
-            """["profile","messages","music","video"]"""
-        // #BOTTOM-DEFAULT-4: все остальные пункты скрыты по умолчанию.
+            """["notifications","messenger","groups","photos","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+        // #BOTTOM-DEFAULT-4: все, кроме первых 4, скрыты по умолчанию.
         // Пользователь может включить их через «Редактор панелей» — тогда
         // нижняя панель станет прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).
         const val BOTTOMBAR_DEFAULT_HIDDEN =
-            """["feed","friends","groups","photos","search","bookmarks","documents","clips","services","notifications","logs","offline_manager","equalizer"]"""
+            """["friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
 
         // Fix #390 #NOTIFY-MODES: константы режима уведомлений.
         // 0 — «Уведомления Сообщений»: всплывающие только от Сообщений (звук+вибрация
