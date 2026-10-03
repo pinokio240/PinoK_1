@@ -55,6 +55,7 @@ import re.pinok.data.model.Friend
 import re.pinok.data.model.GiftItem
 import re.pinok.data.model.Group
 import re.pinok.data.model.PhotoItem
+import re.pinok.data.model.PhotosFeedResult
 import re.pinok.data.model.SearchHint
 import re.pinok.mods.messages.MessageMods
 import re.pinok.mods.privacy.PrivacyMods
@@ -420,6 +421,14 @@ class VKApiClient(
                 // → VK возвращал мусорные audio-promo items → parsePostMini падал на них.
                 if (itemType != null && itemType !in listOf("post", "photo", "video")) {
                     AppLog.d("VKApiClient", "newsfeedGet: skip item type=$itemType")
+                    return@mapNotNull null
+                }
+                // ADBLOCK: promoted/ad post маркеры, которые VK присылает ИМЕННО как type=post,
+                // но они — реклама (mark_as_ads / ads_id1). Отсекаем аддитивно, не трогая обычные посты.
+                if (el.asJsonObject.get("mark_as_ads")?.takeIf { !it.isJsonNull }?.asInt == 1
+                    || o.get("ads_id1")?.takeIf { !it.isJsonNull } != null
+                    || el.asJsonObject.get("is_promoted")?.takeIf { !it.isJsonNull }?.asInt == 1) {
+                    AppLog.d("VKApiClient", "newsfeedGet: skip promoted/ad post ownerId=${o.get("owner_id") ?: "-"} id=${o.get("id") ?: "-"}")
                     return@mapNotNull null
                 }
                 val postId = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
@@ -7501,6 +7510,9 @@ class VKApiClient(
         channelId: Long,
         count: Int = 30,
         startCmid: Long? = null,
+        // #CHANNELS-FILTER (П2): параметр channels.getHistory filter — «donut»,
+        // «photo», «video», «audio», «doc». null = без фильтра (весь поток).
+        filter: String? = null,
     ): ChannelsHistoryResult {
         // ── Шаг 1: свежий last_cmid канала (getById.last_message). ──
         // БЕЗ кэша: новый пост канала сдвигает last_cmid — закэшированное
@@ -7530,15 +7542,18 @@ class VKApiClient(
             return ChannelsHistoryResult(emptyList(), emptyMap())
         }
         // ── Шаг 2: страница истории (старше start_cmid). ──
+        val args = HashMap<String, String>()
+        args["channel_id"] = channelId.toString()
+        args["start_cmid"] = start.toString()
+        args["count"] = count.toString()
+        args["offset"] = "-1"
+        args["extended"] = "1"
+        // #CHANNELS-FILTER (П2): добавлен только при не-null фильтре (иначе —
+        // прежний контракт без filter, веб-шлюз не меняет поведение).
+        if (filter != null && filter.isNotBlank()) args["filter"] = filter
         val json = call(
             "channels.getHistory",
-            mapOf(
-                "channel_id" to channelId.toString(),
-                "start_cmid" to start.toString(),
-                "count" to count.toString(),
-                "offset" to "-1",
-                "extended" to "1",
-            ),
+            args,
             forceWebGateway = true,
         )
         if (json == null) {
@@ -7613,6 +7628,424 @@ class VKApiClient(
         return ChannelsHistoryResult(messages, profiles, oldestCmid = oldestCmid, newestCmid = newestCmid)
     }
 
+    // #CHANNELS-API: представление канала в рекомендациях (channels.getRecommendations).
+    data class ChannelRecommendation(
+        val channelId: Long,
+        val title: String,
+        val photoUrl: String?,
+        val description: String?,
+        val membersCount: Int,
+        val subscribed: Boolean,
+        val lastMessage: Message? = null,
+        val reactionCost: Int? = null,
+        val subscriptionButton: String? = null,
+    )
+
+    // #CHANNELS-API: per-post счётчики (channels.getChannelMessagesCounters).
+    data class ChannelPostCounters(
+        val views: Int?,
+        val comments: Int?,
+        val reactions: Int?,
+    )
+
+    /**
+     * #CHANNELS-API: channels.getRecommendations — канальные рекомендации.
+     * response.items[] = {channel:{...}, last_message:{...}}; группы с описанием
+     * — из response.groups[] по id == -channel.parent_id. last_message парсится
+     * через parseChannelHistoryItem → получаем views/comments/donut бесплатно.
+     */
+    suspend fun channelsGetRecommendations(count: Int = 20): List<ChannelRecommendation> {
+        if (isOffline()) return emptyList()
+        val json = call(
+            "channels.getRecommendations",
+            mapOf("extended" to "1", "count" to count.toString(), "offset" to "0"),
+            forceWebGateway = true,
+        ) ?: return emptyList()
+        return try {
+            val resp = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+            val items = resp?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?: return emptyList()
+            val groups = HashMap<Long, JsonObject>()
+            resp.getAsJsonArray("groups")?.forEach { el ->
+                if (el.isJsonObject) {
+                    val o = el.asJsonObject
+                    val gid = o.get("id")?.asLong
+                    if (gid != null) groups[gid] = o
+                }
+            }
+            val result = ArrayList<ChannelRecommendation>(items.size())
+            for (el in items) {
+                if (!el.isJsonObject) continue
+                val entry = el.asJsonObject
+                val ch = entry.get("channel")?.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                val channelId = ch.get("channel_id")?.asLong ?: continue
+                val userData = ch.get("user_data")?.takeIf { it.isJsonObject }?.asJsonObject
+                val isMember = userData?.get("is_member")?.takeIf { it.isJsonPrimitive }
+                    ?.asJsonPrimitive?.let { p -> if (p.isBoolean) p.asBoolean else p.asInt != 0 } ?: false
+                val donutSettings = ch.get("donut_settings")?.takeIf { it.isJsonObject }?.asJsonObject
+                val reactionCost = donutSettings?.get("paid_reactions_config")
+                    ?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.get("reaction_cost")?.takeIf { !it.isJsonNull }?.asInt
+                val subscriptionButton = donutSettings?.get("subscription_button")
+                    ?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.get("title")?.takeIf { !it.isJsonNull }?.asString
+                val parentId = ch.get("parent_id")?.asLong
+                val description = if (parentId != null) {
+                    groups[Math.abs(parentId)]?.get("description")
+                        ?.takeIf { !it.isJsonNull }?.asString
+                } else null
+                val lastMessage = entry.get("last_message")?.takeIf { it.isJsonObject }
+                    ?.let { parseChannelHistoryItem(it.asJsonObject, channelId) }
+                result.add(
+                    ChannelRecommendation(
+                        channelId = channelId,
+                        title = ch.get("title")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                        photoUrl = ch.get("photo_base")?.takeIf { !it.isJsonNull }?.asString,
+                        description = description,
+                        membersCount = ch.get("members_count")?.asInt ?: 0,
+                        subscribed = isMember,
+                        lastMessage = lastMessage,
+                        reactionCost = reactionCost,
+                        subscriptionButton = subscriptionButton,
+                    )
+                )
+            }
+            result
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNELS-RECOM parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #CHANNELS-API: channels.join — подписка на канал (донат/обычный).
+     * Успех = response содержит ключ "channel" (ответ отдаёт вложенный
+     * response.channel.channel) или примитив, отличный от нуля.
+     */
+    suspend fun channelsJoin(channelId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.join",
+            mapOf("channel_id" to channelId.toString(), "extended" to "0", "source" to "suggest"),
+            forceWebGateway = true,
+        ) ?: return false
+        return try {
+            val resp = json.get("response")
+            if (resp != null && !resp.isJsonNull) {
+                if (resp.isJsonObject) {
+                    resp.asJsonObject.has("channel")
+                } else {
+                    resp.asInt != 0
+                }
+            } else false
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "channelsJoin parse error", e)
+            false
+        }
+    }
+
+    /** #CHANNELS-API: channels.leave — отписка от канала ({"response":1}). */
+    suspend fun channelsLeave(channelId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.leave",
+            mapOf("channel_id" to channelId.toString()),
+            forceWebGateway = true,
+        ) ?: return false
+        return tolerantSuccess(json, "channelsLeave")
+    }
+
+    /** #CHANNELS-API: channels.setNotificationMode — уведомления канала. */
+    suspend fun channelsSetNotificationMode(channelId: Long, enabled: Boolean): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.setNotificationMode",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "mode" to if (enabled) "enabled" else "disabled",
+            ),
+            forceWebGateway = true,
+        ) ?: return false
+        return tolerantSuccess(json, "channelsSetNotificationMode")
+    }
+
+    /**
+     * #CHANNELS-API: channels.getChannelMessagesCounters — батч views/comments/
+     * reactions по cmid (для постов, попавших в историю). response.items[].
+     */
+    suspend fun channelsGetChannelMessagesCounters(
+        channelId: Long,
+        cmids: List<Long>,
+    ): Map<Long, ChannelPostCounters> {
+        if (isOffline() || cmids.isEmpty()) return emptyMap()
+        val json = call(
+            "channels.getChannelMessagesCounters",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "cmids" to cmids.joinToString(","),
+            ),
+            forceWebGateway = true,
+        ) ?: return emptyMap()
+        return try {
+            val resp = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+            val items = resp?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?: return emptyMap()
+            val map = HashMap<Long, ChannelPostCounters>(items.size())
+            for (el in items) {
+                if (!el.isJsonObject) continue
+                val o = el.asJsonObject
+                val msgId = o.get("message_id")?.asLong ?: continue
+                val counters = ChannelPostCounters(
+                    views = o.get("views")?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.get("count")?.takeIf { !it.isJsonNull }?.asInt,
+                    comments = o.get("comments")?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.get("count")?.takeIf { !it.isJsonNull }?.asInt,
+                    reactions = o.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.get("count")?.takeIf { !it.isJsonNull }?.asInt,
+                )
+                map[msgId] = counters
+            }
+            map
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNELS-COUNTERS parse error", e)
+            emptyMap()
+        }
+    }
+
+    // #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS): модель комментария канального
+    // поста (channels.getComments item). Из HAR #CHAN-COMMENTS-2026-10-01:
+    // item = {id, channel_id, from_id, date, text, can_edit, can_delete,
+    // parents_stack[], ...}. Лайков в ответе нет (подтверждено HAR).
+    data class ChannelComment(
+        val id: Long,
+        val channelId: Long,
+        val fromId: Long,
+        val date: Long,
+        val text: String,
+        val canEdit: Boolean,
+    )
+
+    // #CHANNELS-COMMENTS: результат channels.getComments — список комментариев
+    // плюс авторы (profiles — пользователи, groups — сообщества), чтобы UI не
+    // делал отдельных запросов. Автор комментария: fromId > 0 → profile[fromId],
+    // fromId < 0 → group[-fromId] (паритет wall.getComments/web-снапшоту).
+    data class ChannelCommentsData(
+        val comments: List<ChannelComment>,
+        val profiles: Map<Long, UserProfile>,
+        val groups: Map<Long, Group>,
+    ) {
+        val isEmpty: Boolean get() = comments.isEmpty()
+    }
+
+    /**
+     * #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS): channels.getComments —
+     * список комментариев к посту канала. params {channel_id, cmid, count,
+     * need_likes, extended, sort} (HAR #CHAN-COMMENTS-2026-10-01). Авторы —
+     * из response.profiles[]/groups[]. Безопасно: при ошибке/пустоте — пустой
+     * результат (не бросает исключений, без `!!`).
+     */
+    suspend fun channelsGetComments(
+        channelId: Long,
+        cmid: Long,
+        count: Int = 50,
+        sort: String = "asc",
+    ): ChannelCommentsData {
+        if (isOffline()) return ChannelCommentsData(emptyList(), emptyMap(), emptyMap())
+        val json = call(
+            "channels.getComments",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "cmid" to cmid.toString(),
+                "count" to count.toString(),
+                "need_likes" to "0",
+                "extended" to "1",
+                "sort" to sort,
+            ),
+            forceWebGateway = true,
+        ) ?: return ChannelCommentsData(emptyList(), emptyMap(), emptyMap())
+        return try {
+            val resp = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+            val items = resp?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?: return ChannelCommentsData(emptyList(), emptyMap(), emptyMap())
+            val profiles = HashMap<Long, UserProfile>()
+            resp.getAsJsonArray("profiles")?.forEach { el ->
+                if (el.isJsonObject) {
+                    val o = el.asJsonObject
+                    val uid = o.get("id")?.asLong
+                    if (uid != null) profiles[uid] = parseUserProfileMini(o)
+                }
+            }
+            val groups = HashMap<Long, Group>()
+            resp.getAsJsonArray("groups")?.forEach { el ->
+                if (el.isJsonObject) {
+                    val o = el.asJsonObject
+                    val gid = o.get("id")?.asLong
+                    if (gid != null) groups[gid] = parseGroupMini(o)
+                }
+            }
+            val list = ArrayList<ChannelComment>(items.size())
+            for (el in items) {
+                if (!el.isJsonObject) continue
+                val o = el.asJsonObject
+                val id = o.get("id")?.takeIf { x -> !x.isJsonNull }?.asLong ?: continue
+                list.add(
+                    ChannelComment(
+                        id = id,
+                        channelId = o.get("channel_id")?.takeIf { x -> !x.isJsonNull }?.asLong
+                            ?: channelId,
+                        fromId = o.get("from_id")?.takeIf { x -> !x.isJsonNull }?.asLong ?: 0L,
+                        date = o.get("date")?.takeIf { x -> !x.isJsonNull }?.asLong ?: 0L,
+                        text = o.get("text")?.takeIf { x -> !x.isJsonNull }?.asString ?: "",
+                        canEdit = safeBool(o.get("can_edit")),
+                    )
+                )
+            }
+            ChannelCommentsData(list, profiles, groups)
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNELS-COMMENTS get parse error", e)
+            ChannelCommentsData(emptyList(), emptyMap(), emptyMap())
+        }
+    }
+
+    /**
+     * #CHANNELS-COMMENTS: channels.createComment — добавить комментарий к посту
+     * канала. params {channel_id, cmid, text, reply_to_comment?}. Возвращает
+     * true при успехе (response содержит созданный comment или примитив ≠ 0).
+     */
+    suspend fun channelsCreateComment(
+        channelId: Long,
+        cmid: Long,
+        text: String,
+        replyToComment: Long? = null,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = HashMap<String, String>()
+        args["channel_id"] = channelId.toString()
+        args["cmid"] = cmid.toString()
+        args["text"] = text
+        if (replyToComment != null) args["reply_to_comment"] = replyToComment.toString()
+        val json = call("channels.createComment", args, forceWebGateway = true) ?: return false
+        return tolerantSuccess(json, "channelsCreateComment")
+    }
+
+    /**
+     * #CHANNELS-COMMENTS: channels.editComment — редактирование своего
+     * комментария к посту канала. params {channel_id, comment_id, text}.
+     * Возвращает true при успехе.
+     */
+    suspend fun channelsEditComment(
+        channelId: Long,
+        commentId: Long,
+        newText: String,
+    ): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.editComment",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "comment_id" to commentId.toString(),
+                "text" to newText,
+            ),
+            forceWebGateway = true,
+        ) ?: return false
+        return tolerantSuccess(json, "channelsEditComment")
+    }
+
+    /**
+     * #CHANNELS-API (аддитивно): channels.getMessagesById — получить конкретные
+     * посты канала по cmid (для донат-постов с paywall и точных счётчиков).
+     * response.items[] парсится в тот же тип поста, что и parseChannelHistoryItem.
+     * Возвращает список (пустой при ошибке/пустоте; без исключений).
+     */
+    suspend fun channelsGetMessagesById(
+        channelId: Long,
+        cmids: List<Long>,
+    ): List<Message> {
+        if (isOffline() || cmids.isEmpty()) return emptyList()
+        val json = call(
+            "channels.getMessagesById",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "cmids" to cmids.joinToString(","),
+                "extended" to "1",
+            ),
+            forceWebGateway = true,
+        ) ?: return emptyList()
+        return try {
+            val resp = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+            val items = resp?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?: return emptyList()
+            val parsed = ArrayList<Message>(items.size())
+            for (el in items) {
+                if (!el.isJsonObject) continue
+                parseChannelHistoryItem(el.asJsonObject, channelId)?.let { parsed.add(it) }
+            }
+            parsed
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNELS-GETBYID parse error", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * #CHANNELS-API: channels.markAsRead — пометить канал прочитанным до cmid.
+     * (Дублирует messagesMarkAsRead, но с канальным last_read_cmid.)
+     */
+    suspend fun channelsMarkAsRead(channelId: Long, lastReadCmid: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.markAsRead",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "last_read_cmid" to lastReadCmid.toString(),
+            ),
+            forceWebGateway = true,
+        ) ?: return false
+        return tolerantSuccess(json, "channelsMarkAsRead")
+    }
+
+    /** #CHANNELS-API: channels.pin — закрепить канал в списке. */
+    suspend fun channelsPin(channelId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.pin",
+            mapOf("channel_id" to channelId.toString()),
+            forceWebGateway = true,
+        ) ?: return false
+        return tolerantSuccess(json, "channelsPin")
+    }
+
+    /** #CHANNELS-API: channels.unpin — открепить канал из списка. */
+    suspend fun channelsUnpin(channelId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.unpin",
+            mapOf("channel_id" to channelId.toString()),
+            forceWebGateway = true,
+        ) ?: return false
+        return tolerantSuccess(json, "channelsUnpin")
+    }
+
+    /**
+     * #CHANNELS-API: толерантный разбор {"response":1} / {"response":{"success":1}}
+     * для канальных мутаций (паттерн groupsLeave, Fix #350).
+     */
+    private fun tolerantSuccess(json: JsonObject, tag: String): Boolean {
+        return try {
+            val resp = json.get("response")
+            if (resp != null && !resp.isJsonNull) {
+                if (resp.isJsonObject) {
+                    resp.asJsonObject.get("success")?.asInt == 1
+                } else {
+                    resp.asInt != 0
+                }
+            } else false
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "$tag parse error", e)
+            false
+        }
+    }
+
     /**
      * Task 67: парсинг ОДНОГО канального сообщения (channels.getHistory items[]
      * или getById.last_message) в общий Message. Толерантен к двум шейпам:
@@ -7633,13 +8066,36 @@ class VKApiClient(
         // Автор канального поста — само сообщество; без явного from/author
         // используем пира (отрицательный id), аватар придёт из groups[].
         val fromId = lng("from_id") ?: lng("author_id") ?: channelId
+        // #CHANNELS-API: per-post счётчики (cm_payload.counters.views/comments).
+        val counters = payload?.get("counters")?.takeIf { it.isJsonObject }?.asJsonObject
+        val viewsCount = counters?.get("views")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
+        val commentsCount = counters?.get("comments")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
         // Реакции: message-шейп (reactions.count) или draft (cm_payload.counters.reactions).
-        val reactions = parseMessageReactions(o) ?: run {
-            val rc = payload?.get("counters")?.takeIf { it.isJsonObject }?.asJsonObject
-                ?.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject
-                ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
-            if (rc != null && rc > 0) MessageReaction(count = rc) else null
-        }
+        val reactions = parseMessageReactions(o) ?: counters?.get("reactions")
+            ?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
+            ?.takeIf { it > 0 }?.let { MessageReaction(count = it) }
+        // #CHANNELS-API: donut/VK Донат paywall (cm_payload.donut).
+        val donut = payload?.get("donut")?.takeIf { it.isJsonObject }?.asJsonObject
+        val isDonut = donut?.get("is_donut")?.takeIf { it.isJsonPrimitive }
+            ?.asJsonPrimitive?.let { el -> if (el.isBoolean) el.asBoolean else el.asInt != 0 } ?: false
+        val paywallSnippet = donut?.get("paywall")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("snippet")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("title")?.takeIf { !it.isJsonNull }?.asString
+        val paywallPlaceholder = donut?.get("placeholder")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("text")?.takeIf { !it.isJsonNull }?.asString
+        val paywallButton = donut?.get("paywall")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("snippet")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("button")?.takeIf { it.isJsonObject }?.asJsonObject
+            ?.get("title")?.takeIf { !it.isJsonNull }?.asString
+        // #CHANNELS-API (аддитивно): мета-поля поста — закреп (top-level
+        // is_pinned), приглушённые уведомления (mute_notifications) и
+        // cm_payload.is_donut_photos. safeBool толерантен к 0/1 и true/false.
+        val isPinned = safeBool(o.get("is_pinned"))
+        val muteNotifications = safeBool(o.get("mute_notifications"))
+        val isDonutPhotos = payload?.let { safeBool(it.get("is_donut_photos")) } ?: false
         return Message(
             id = cmid,
             peerId = channelId,
@@ -7656,6 +8112,15 @@ class VKApiClient(
                 if (fm.isJsonObject) parseMessage(fm.asJsonObject) else null
             }?.takeIf { it.isNotEmpty() },
             reactions = reactions,
+            viewsCount = viewsCount,
+            commentsCount = commentsCount,
+            isDonut = isDonut,
+            paywallSnippet = paywallSnippet,
+            paywallPlaceholder = paywallPlaceholder,
+            paywallButton = paywallButton,
+            isPinned = isPinned,
+            muteNotifications = muteNotifications,
+            isDonutPhotos = isDonutPhotos,
         )
     }
 
@@ -11096,6 +11561,7 @@ class VKApiClient(
             id = o.get("id")?.asLong ?: return null,
             ownerId = o.get("owner_id")?.asLong ?: 0L,
             albumId = o.get("album_id")?.asLong ?: 0L,
+            postId = o.get("post_id")?.takeIf { !it.isJsonNull }?.asLong,
             date = o.get("date")?.asLong ?: 0L,
             text = o.get("text")?.takeIf { !it.isJsonNull }?.asString,
             sizes = sizes,
@@ -15517,6 +15983,9 @@ class VKApiClient(
                     ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                    // #NOTIF-PHOTO-THUMB: getRedesign отдаёт фото в новом формате
+                    // sizes[] (скаляров photo_* нет) — fallback на sizes.
+                    ?: firstPhotoSizeUrl(o)
                 putThumb("photo", oid, pid, url)
             }
             // videos: photo_320 → fallback photo_130 → first_frame/image/covers.
@@ -15608,6 +16077,9 @@ class VKApiClient(
                             ?: ph.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
                             ?: ph.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                             ?: ph.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                            // #NOTIF-PHOTO-THUMB: getRedesign отдаёт фото в новом
+                            // формате sizes[] (скаляров photo_* нет) — fallback на sizes.
+                            ?: firstPhotoSizeUrl(ph)
                         if (url.isNullOrBlank()) continue
                         putThumb("post", oid, pid, url)
                         val phOwner = ph.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
@@ -16258,23 +16730,44 @@ class VKApiClient(
         // id — строка в redesign-формате (base64-подобная). Используется для uniqueKey.
         val redesignId = o.get("id")?.takeIf { !it.isJsonNull }?.asString ?: ""
 
-        // --- image.owner → feedbackProfiles (кто совершил действие) ---
-        // image: {type: "single_owner", owner: {type: "group"|"user", id: <id>}}
-        // image.type может быть "single_owner" (один аватар) или другие варианты
-        // (много аватаров — "multiple_owners"?) — пока обрабатываем только single.
+        // ─── #NOTIF-MULTI-LIKERS: image → feedbackProfiles (кто совершил действие) ───
+        // image: {type: "single_owner"|"multiple_owners", owner: {...} | owners: [ {...}, ... ]}
+        // Кейс «N человек поставили лайк одному вашему комментарию» (обратная связь):
+        // image.type == "multiple_owners", действующие лица лежат в image.owners[] —
+        // каждый элемент {type: "user"|"group", id: N}. Раньше парсер читал ТОЛЬКО
+        // одиночный image.owner, поэтому для нескольких лайкеров feedbackIds заполнялся
+        // одним id → feedbackProfiles.size==1 → UI не показывал ряд аватаров (баг #FEEDBACK-MULTILIKE).
+        // Теперь: если есть image.owners[] — берём ВСЕ id; иначе fallback на image.owner.
         val feedbackIds = mutableListOf<Long>()
         val imageEl = o.get("image")
         if (imageEl != null && imageEl.isJsonObject) {
-            val ownerEl = imageEl.asJsonObject.get("owner")
-            if (ownerEl != null && ownerEl.isJsonObject) {
-                val owner = ownerEl.asJsonObject
-                val ownerId = owner.get("id")?.asLong ?: 0L
-                val ownerType = owner.get("type")?.asString ?: "user"
-                if (ownerId != 0L) {
-                    // Для groups в profilesMap ключ — отрицательный id.
-                    // Для users — положительный.
-                    val mapKey = if (ownerType == "group") -ownerId else ownerId
-                    feedbackIds.add(mapKey)
+            val img = imageEl.asJsonObject
+            val ownersArr = img.get("owners")?.takeIf { it.isJsonArray }?.asJsonArray
+            if (ownersArr != null && ownersArr.size() > 0) {
+                for (ow in ownersArr) {
+                    if (!ow.isJsonObject) continue
+                    val owner = ow.asJsonObject
+                    val ownerId = owner.get("id")?.asLong ?: 0L
+                    val ownerType = owner.get("type")?.asString ?: "user"
+                    if (ownerId != 0L) {
+                        // Для groups в profilesMap ключ — отрицательный id.
+                        // Для users — положительный.
+                        val mapKey = if (ownerType == "group") -ownerId else ownerId
+                        feedbackIds.add(mapKey)
+                    }
+                }
+            } else {
+                val ownerEl = img.get("owner")
+                if (ownerEl != null && ownerEl.isJsonObject) {
+                    val owner = ownerEl.asJsonObject
+                    val ownerId = owner.get("id")?.asLong ?: 0L
+                    val ownerType = owner.get("type")?.asString ?: "user"
+                    if (ownerId != 0L) {
+                        // Для groups в profilesMap ключ — отрицательный id.
+                        // Для users — положительный.
+                        val mapKey = if (ownerType == "group") -ownerId else ownerId
+                        feedbackIds.add(mapKey)
+                    }
                 }
             }
         }
@@ -16370,6 +16863,11 @@ class VKApiClient(
                         ?: a.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                        // #NOTIF-PHOTO-THUMB: getRedesign отдаёт фото в новом формате
+                        // sizes[] (photo_* скаляров нет) — fallback на sizes[] самого
+                        // attachment-элемента или вложенного фото-объекта.
+                        ?: firstPhotoSizeUrl(a)
+                        ?: a.get("photo")?.takeIf { it.isJsonObject }?.asJsonObject?.let { firstPhotoSizeUrl(it) }
                         // #NOTIF-VIDEO-THUMB: для видео/клипов VK иногда кладёт в сам
                         // attachment-элемент массивы превью image[]/covers[]/first_frame[],
                         // где url — прямой getVideoPreview-URL (iv.okcdn.ru). Читаем первый
@@ -16672,6 +17170,41 @@ class VKApiClient(
             if (!u.isNullOrBlank()) return u
         }
         return null
+    }
+
+    /**
+     * #NOTIF-PHOTO-THUMB: превью-URL фото из нового формата `sizes[]` =
+     * [{type:"s"/"m"/"x", width, height, url}, …]. VK getRedesign отдаёт фото
+     * БЕЗ скалярных photo_* — только sizes[]. Порядок: сначала предпочитаем
+     * запись с type=="s", затем "m", потом первую пригодную; fallback на
+     * скаляры photo_* если sizes отсутствует. NULL-явно (без !!) — возвращает
+     * null, если нет ни одного пригодного url.
+     */
+    private fun firstPhotoSizeUrl(o: JsonObject): String? {
+        val sizes = o.get("sizes")?.takeIf { it.isJsonArray }?.asJsonArray
+        if (sizes != null) {
+            fun pick(type: String?): String? {
+                for (el in sizes) {
+                    if (!el.isJsonObject) continue
+                    val e = el.asJsonObject
+                    val t = e.get("type")?.takeIf { !it.isJsonNull }?.asString
+                    if (type != null && t != type) continue
+                    val u = e.get("url")?.takeIf { !it.isJsonNull }?.asString
+                    if (!u.isNullOrBlank()) return u
+                }
+                return null
+            }
+            pick("s")?.let { return it }
+            pick("m")?.let { return it }
+            pick(null)?.let { return it }
+        }
+        return o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_604")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_807")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
     }
 
     /**
@@ -20115,6 +20648,51 @@ class VKApiClient(
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "photosPhotoFeedGet parse error", e)
             null
+        }
+    }
+
+    /**
+     * Личная фотолента владельца (photos.photoFeedGet) — типизированная обёртка
+     * (#PHOTO-FEED 2026-10-03, Этап 1).
+     *
+     * Пагинация КУРСОРНАЯ: [startFrom] (VK start_from, напр. "40_457240414")
+     * из [PhotosFeedResult.nextFrom] предыдущей страницы; null — первая страница.
+     * ownerId == 0 → текущий пользователь (как photosGetAlbums).
+     */
+    // PhotosApi: дефолты count — в интерфейсе (:feature:photos).
+    override suspend fun photosPhotoFeedList(
+        ownerId: Long,
+        count: Int,
+        startFrom: String?,
+    ): PhotosFeedResult {
+        if (isOffline()) return PhotosFeedResult()
+        val effectiveOwnerId = if (ownerId != 0L) ownerId else (exchangeAuthRepository?.userId() ?: 0L)
+        val args = mutableMapOf(
+            "owner_id" to effectiveOwnerId.toString(),
+            "extended" to "1",
+            "photo_sizes" to "1",
+            "count" to count.toString(),
+        )
+        // Ключ параметра — именно start_from (отчёт HAR «фото и альбомы»),
+        // а не next_from (поле ответа).
+        if (startFrom != null && startFrom.isNotBlank()) args["start_from"] = startFrom
+        val json = call("photos.photoFeedGet", args) ?: return PhotosFeedResult()
+        return try {
+            val resp = getObj(json, "response") ?: return PhotosFeedResult()
+            val items = getArr(resp, "items")
+                ?.mapNotNull { parsePhotoItem(it) }
+                ?.filter { it.id > 0 && it.ownerId != 0L }
+                ?: emptyList()
+            val next = resp.get("next_from")?.takeIf { it.isJsonPrimitive && !it.isJsonNull }
+                ?.asString
+            PhotosFeedResult(
+                items = items,
+                count = safeInt(resp.get("count")),
+                nextFrom = next?.takeIf { it.isNotBlank() },
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosPhotoFeedList parse error", e)
+            PhotosFeedResult()
         }
     }
 

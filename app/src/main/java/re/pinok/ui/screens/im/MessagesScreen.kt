@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Unarchive
@@ -40,9 +43,12 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -85,6 +91,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -123,6 +130,9 @@ fun MessagesScreen(
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
+    // #CHANNEL-REC: контекст для Toast в toggleChannelSubscription (захват в
+    // композиции — LocalContext.current в click-корутине ненадёжен).
+    val screenContext = LocalContext.current
     val snap by app.prefs.data.collectAsState(initial = null)
     val s = snap ?: return
     // #FAVE-SELF-CHAT: «Избранное» — постоянный self-чат (peer_id = myUserId).
@@ -270,6 +280,56 @@ fun MessagesScreen(
     LaunchedEffect(folders.size, foldersEnabled) {
         if (foldersEnabled && activeTab > folders.size + 1) {
             activeTab = 0
+        }
+    }
+
+    // #CHANNEL-REC: рекомендации каналов (channels.getRecommendations; веб —
+    // блок channels_list_recommended). Состояние: список рекомендаций, флаги
+    // loading/error, текущий count (кнопка «Показать ещё» увеличивает и
+    // перезагружает). Грузим один раз при первом открытии вкладки «Каналы».
+    var channelRecs by remember {
+        mutableStateOf<List<VKApiClient.ChannelRecommendation>>(emptyList())
+    }
+    var channelRecsLoading by remember { mutableStateOf(false) }
+    var channelRecsError by remember { mutableStateOf<String?>(null) }
+    var channelRecsCount by remember { mutableIntStateOf(20) }
+    var channelRecsLoaded by remember { mutableStateOf(false) }
+
+    // #CHANNEL-REC: загрузка рекомендаций. Повторный вызов с большим count —
+    // «Показать ещё». НЕ переиспользует аппендинг — просто запрашивает больше.
+    suspend fun loadChannelRecs(count: Int) {
+        channelRecsLoading = true
+        channelRecsError = null
+        try {
+            channelRecs = app.apiClient.channelsGetRecommendations(count = count)
+            channelRecsCount = count
+            channelRecsLoaded = true
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            channelRecsError = e.message ?: "Не удалось загрузить рекомендации"
+            AppLog.w("MessagesScreen", "#CHANNEL-REC: load failed: ${e.message}")
+        } finally {
+            channelRecsLoading = false
+        }
+    }
+
+    // #CHANNEL-REC: id канала, для которого сейчас крутится подписка/отписка
+    // (спиннер в кнопке карточки рекомендации).
+    var subscribingChannelId by remember { mutableStateOf<Long?>(null) }
+
+    // #CHANNEL-UI2 (Секции/Скрыть/Ссылка): локально скрытые каналы из
+    // рекомендаций («Скрыть / Не интересует») — remember-множество id в
+    // текущей композиции. Dismiss только на время жизни вкладки; перезагрузка
+    // («Показать ещё»/pull-to-refresh) не возвращает скрытые (remember не
+    // сбрасывается), а пересоздание экрана — возвращает.
+    var channelHiddenIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+
+    // Первое открытие вкладки «Каналы» → тянем рекомендации (если ещё не грузили).
+    // CHAN-PREFS: грузим, только если включён показ «Рекомендаций в каналах».
+    LaunchedEffect(activeTab, s.channelRecEnabled) {
+        if (activeTab == 1 && s.channelRecEnabled && !channelRecsLoaded && channelRecs.isEmpty()) {
+            scope.launch { loadChannelRecs(channelRecsCount) }
         }
     }
 
@@ -591,6 +651,55 @@ fun MessagesScreen(
         }
     }
 
+    // #CHANNEL-REC: подписка/отписка на рекомендуемый канал.
+    // Успех → оптимистично обновляем subscribed-флаг в карточке, перезагружаем
+    // рекомендации (актуальный флаг/счётчики) и список каналов (channelsJoin →
+    // канал появляется в «Каналах»). best-effort перезагрузка списка — non-fatal.
+    // Определена ПОСЛЕ refreshChats (выше), т.к. вызывает её (Kotlin: локальные
+    // функции не поддерживают опережающий вызов).
+    fun toggleChannelSubscription(rec: VKApiClient.ChannelRecommendation) {
+        if (subscribingChannelId != null) return
+        subscribingChannelId = rec.channelId
+        scope.launch {
+            try {
+                val ok = if (rec.subscribed) {
+                    app.apiClient.channelsLeave(rec.channelId)
+                } else {
+                    app.apiClient.channelsJoin(rec.channelId)
+                }
+                if (ok) {
+                    // Оптимистично переворачиваем флаг в текущей карточке.
+                    channelRecs = channelRecs.map { r ->
+                        if (r.channelId == rec.channelId) r.copy(subscribed = !rec.subscribed) else r
+                    }
+                    AppLog.i("MessagesScreen",
+                        "#CHANNEL-REC: ${if (rec.subscribed) "unsubscribed" else "subscribed"} ${rec.channelId}")
+                    // Обновляем список каналов (подписка появится/исчезнет в «Каналах»).
+                    try {
+                        refreshChats()
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        AppLog.w("MessagesScreen", "#CHANNEL-REC: refresh after sub failed: ${e.message}")
+                    }
+                } else {
+                    Toast.makeText(
+                        screenContext,
+                        if (rec.subscribed) "Не удалось отписаться" else "Не удалось подписаться",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.w("MessagesScreen", "#CHANNEL-REC: toggle sub error: ${e.message}")
+                Toast.makeText(screenContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                subscribingChannelId = null
+            }
+        }
+    }
+
     // Real-time обновление списка диалогов через LongPoll.
     // #CHANNEL-NET: single-flight — один активный re-fetch; новое событие ОТМЕНЯЕТ
     // предыдущий запрос (раньше каждый event запускал СВОЙ getConversations: во
@@ -869,7 +978,6 @@ fun MessagesScreen(
     // Из `chats` архивный чат НЕ удаляется — он скрывается фильтром filteredChats
     // (peer.id in localArchivedIds) и мгновенно возвращается при разархивации
     // без перезагрузки списка.
-    val screenContext = LocalContext.current
     fun onArchiveConversationLocal(peerId: Long) {
         scope.launch {
             try {
@@ -1293,6 +1401,181 @@ fun MessagesScreen(
                         }
                     }
                 } else {
+                    // #CHANNEL-ONBOARDING: приветственный блок «Встречайте каналы».
+                    // Показываем во вкладке «Каналы», когда нет ни одной подписки
+                    // (filteredChats для activeTab==1 пуст) И блок рекомендаций не
+                    // показывает контент (настройка выключена, либо ещё грузится,
+                    // либо после загрузки пуст — «рекомендации выключены/приходят
+                    // пусты» из плана). Кнопка «Найти канал» грузит/перегружает
+                    // рекомендации и при необходимости включает настройку
+                    // «Рекомендации в каналах» (channelRecEnabled). Уважает тумблер
+                    // channelFindEnabled: при выключенном поиске каналов вместо
+                    // кнопки показываем подсказку зайти в настройки.
+                    val recipeContentVisible =
+                        s.channelRecEnabled &&
+                            (channelRecsLoading || channelRecsError != null || channelRecs.isNotEmpty())
+                    if (activeTab == 1 && searchQuery.isBlank() && !recipeContentVisible && filteredChats.isEmpty()) {
+                        item(key = "chanrec_onboarding") {
+                            ChannelOnboardingBlock(
+                                findEnabled = s.channelFindEnabled,
+                                onFindChannel = {
+                                    scope.launch {
+                                        if (!s.channelRecEnabled) app.prefs.setChannelRecEnabled(true)
+                                        channelRecsLoaded = false
+                                        loadChannelRecs(channelRecsCount)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    // #CHANNEL-REC: блок рекомендаций каналов — верхний блок вкладки
+                    // «Каналы» (над списком подписок; веб-аналог channels_list_recommended).
+                    // Показываем только на вкладке каналов (activeTab == 1), вне поиска и
+                    // при включённой настройке «Рекомендации в каналах» (CHAN-PREFS),
+                    // и только когда есть что показать (загрузка/ошибка/контент) — при
+                    // пустом после загрузки списке его место занимает онбординг выше.
+                    // #CHANNEL-ONBOARDING: условие дополнено recipeContentVisible, чтобы
+                    // пустой заголовок «Рекомендации» не дублировал приветственный блок.
+                    if (activeTab == 1 && searchQuery.isBlank() && s.channelRecEnabled && recipeContentVisible) {
+                        // Заголовок «Рекомендации» + кнопка «Найти канал» (перезагрузка /
+                        // переход к блоку при пустом списке подписок). Кнопка «Найти канал»
+                        // показывается только при включённой настройке channelFindEnabled.
+                        item(key = "chanrec_header") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Рекомендации",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                if (s.channelFindEnabled) {
+                                    TextButton(onClick = {
+                                        scope.launch {
+                                            channelRecsLoaded = false
+                                            loadChannelRecs(channelRecsCount)
+                                        }
+                                    }) { Text("Найти канал") }
+                                }
+                            }
+                        }
+                        when {
+                            channelRecsLoading && channelRecs.isEmpty() -> {
+                                item(key = "chanrec_loading") {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                    }
+                                }
+                            }
+                            channelRecsError != null && channelRecs.isEmpty() -> {
+                                item(key = "chanrec_error") {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        Text(
+                                            text = channelRecsError ?: "",  // NULL-ЯВНО
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        TextButton(onClick = {
+                                            scope.launch { loadChannelRecs(channelRecsCount) }
+                                        }) { Text("Повторить") }
+                                    }
+                                }
+                            }
+                            channelRecs.isNotEmpty() -> {
+                                // #CHANNEL-UI2 (Task 1): секции рекомендаций —
+                                // «Новые каналы» (не подписаны) и «Мои подписки»
+                                // (subscribed), сгруппированы по признаку subscribed.
+                                // Скрытые (channelHiddenIds) исключаем из обеих.
+                                // Cards рендерятся горизонтальным LazyRow (как было),
+                                // но теперь двумя блоками с подзаголовками.
+                                val visibleRecs = channelRecs
+                                    .filter { rec -> rec.channelId !in channelHiddenIds }
+                                val newRecs = visibleRecs.filter { rec -> !rec.subscribed }
+                                val myRecs = visibleRecs.filter { rec -> rec.subscribed }
+                                if (newRecs.isNotEmpty()) {
+                                    item(key = "chanrec_section_new") {
+                                        Text(
+                                            text = "Новые каналы",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
+                                        )
+                                    }
+                                    item(key = "chanrec_row_new") {
+                                        LazyRow(
+                                            contentPadding = PaddingValues(horizontal = 16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        ) {
+                                            items(newRecs, key = { "rec_new_${it.channelId}" }) { rec ->
+                                                ChannelRecommendationCard(
+                                                    rec = rec,
+                                                    loading = subscribingChannelId == rec.channelId,
+                                                    onToggleSubscribe = { toggleChannelSubscription(rec) },
+                                                    onHideChannel = {
+                                                        channelHiddenIds = channelHiddenIds + rec.channelId
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (myRecs.isNotEmpty()) {
+                                    item(key = "chanrec_section_mine") {
+                                        Text(
+                                            text = "Мои подписки",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                                        )
+                                    }
+                                    item(key = "chanrec_row_mine") {
+                                        LazyRow(
+                                            contentPadding = PaddingValues(horizontal = 16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        ) {
+                                            items(myRecs, key = { "rec_mine_${it.channelId}" }) { rec ->
+                                                ChannelRecommendationCard(
+                                                    rec = rec,
+                                                    loading = subscribingChannelId == rec.channelId,
+                                                    onToggleSubscribe = { toggleChannelSubscription(rec) },
+                                                    onHideChannel = {
+                                                        channelHiddenIds = channelHiddenIds + rec.channelId
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                // «Показать ещё» — увеличиваем count и перезагружаем.
+                                item(key = "chanrec_more") {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        TextButton(
+                                            onClick = {
+                                                scope.launch { loadChannelRecs(channelRecsCount + 20) }
+                                            },
+                                            enabled = !channelRecsLoading,
+                                        ) {
+                                            Text(if (channelRecsLoading) "Загрузка…" else "Показать ещё")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // #FAVE-SELF-CHAT: «Избранное» (self-chat) — всегда в начале
                     // вкладки «Диалоги» (activeTab == 0), когда нет поиска.
                     val favoritesChat: Chat? = if (myUserId > 0L && activeTab == 0 && searchQuery.isBlank() && s.msgShowFavorites) {
@@ -1350,6 +1633,7 @@ fun MessagesScreen(
                                 onMarkAsRead = { _, _ -> },
                                 onToggleMute = { _, _ -> },
                                 onTogglePin = { _, _ -> },
+                                onToggleChannelPin = { _, _ -> },
                                 onToggleUnread = { _, _ -> },
                                 onDeleteConversation = { _ -> },
                                 onDragSwap = { _, _ -> },
@@ -1554,6 +1838,52 @@ fun MessagesScreen(
                                 ).show()
                                 AppLog.i("MessagesScreen", "pin toggled locally: peer=$peerId pin=$pin")
                             },
+                            // #CHANNELS-PIN (П3): закрепить/открепить канал через
+                            // channels.pin/channels.unpin (серверное закрепление, без
+                            // локального im_pinned_dialogs — это отдельная фича вкладки
+                            // каналов). После успеха — refresh списка (fetchConversationsMerged
+                            // перечитает sort_id) → pinned-статус в меню обновится.
+                            // Локального оптимистичного стейта нет: sort_id приходит только
+                            // с сервера, поэтому результатом правды служит refresh.
+                            onToggleChannelPin = { channelPeerId, pin ->
+                                scope.launch {
+                                    try {
+                                        val ok = if (pin) {
+                                            app.apiClient.channelsPin(channelPeerId)
+                                        } else {
+                                            app.apiClient.channelsUnpin(channelPeerId)
+                                        }
+                                        if (ok) {
+                                            AppLog.i("MessagesScreen",
+                                                "#CHANNELS-PIN: ${if (pin) "pin" else "unpin"} channel $channelPeerId ok")
+                                            Toast.makeText(
+                                                ctx,
+                                                if (pin) "Канал закреплён" else "Канал откреплён",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                            refreshChats()
+                                        } else {
+                                            AppLog.w("MessagesScreen",
+                                                "#CHANNELS-PIN: API rejected pin=$pin channel=$channelPeerId (err=${app.apiClient.lastApiError})")
+                                            Toast.makeText(
+                                                ctx,
+                                                "Не удалось ${if (pin) "закрепить" else "открепить"} канал",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                                        throw ce
+                                    } catch (e: Exception) {
+                                        AppLog.w("MessagesScreen",
+                                            "#CHANNELS-PIN: channels.pin/unpin error: ${e.message}")
+                                        Toast.makeText(
+                                            ctx,
+                                            "Ошибка: ${e.message ?: "network error"}",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            },
                             // Fix #274: отметить непрочитанным / прочитанным.
                             onToggleUnread = { peerId, unread ->
                                 val oldUnread = chat.unreadCount
@@ -1740,6 +2070,10 @@ private fun ChatCard(
     onToggleMute: (peerId: Long, mute: Boolean) -> Unit = { _, _ -> },
     // Fix #274: новые callback-и для закрепления, отметки непрочитанным, drag&drop.
     onTogglePin: (peerId: Long, pin: Boolean) -> Unit = { _, _ -> },
+    // #CHANNELS-PIN (П3): закрепить/открепить КАНАЛ в списке каналов через
+    // channels.pin/channels.unpin (серверное закрепление). Отдельный callback —
+    // не путать с onTogglePin диалогов (локальный im_pinned_dialogs).
+    onToggleChannelPin: (peerId: Long, pin: Boolean) -> Unit = { _, _ -> },
     onToggleUnread: (peerId: Long, unread: Boolean) -> Unit = { _, _ -> },
     // Fix #281: удалить диалог (messages.deleteConversation) — с confirm-диалогом.
     onDeleteConversation: (peerId: Long) -> Unit = { _ -> },
@@ -1764,6 +2098,10 @@ private fun ChatCard(
     val photo = chat.peer.photo
     val lastMsgId = chat.lastMessage?.id ?: 0L
     val hasUnread = chat.unreadCount > 0
+    // #CHANNELS-PIN (П3): канальное закрепление читается из серверного sort_id
+    // (major_id > 0, парсится parseChannelItem) — оно НЕ зависит от локального
+    // im_pinned_dialogs диалоговой вкладки, поэтому отдельный флаг для меню.
+    val channelIsPinned = chat.isChannel && chat.sortId?.isPinned() == true
     // Fix #282: preview последнего сообщения — «Вы: » префикс для исходящих,
     // label типа вложения когда текст пуст, action-текст для service-сообщений.
     val lastMessage = chat.lastMessage
@@ -2074,6 +2412,26 @@ private fun ChatCard(
                     },
                 )
                 }
+                // #CHANNELS-PIN (П3): закрепить/открепить канал (channels.pin/
+                // channels.unpin — серверное закрепление в списке каналов).
+                // Каналы не участвуют в локальном закрепе диалогов — отдельный пункт.
+                if (showListActions && chat.isChannel) {
+                DropdownMenuItem(
+                    text = { Text(if (channelIsPinned) "Открепить канал" else "Закрепить канал") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (channelIsPinned) Icons.Outlined.PushPin else Icons.Filled.PushPin,
+                            contentDescription = null,
+                            tint = if (channelIsPinned) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                        )
+                    },
+                    onClick = {
+                        showContextMenu = false
+                        onToggleChannelPin(chat.peer.id, !channelIsPinned)
+                    },
+                )
+                }
                 // Fix #122: Заглушить/Включить уведомления (см. showListActions).
                 if (showListActions) {
                 DropdownMenuItem(
@@ -2179,6 +2537,205 @@ private fun ChatCard(
             }
         }
     }
+}
+
+// #CHANNEL-REC: карточка канала в блоке «Рекомендации» вкладки «Каналы».
+// Аватар (Coil AsyncImage, photoUrl), title, подписчики (membersCount, компакт-
+// формат «40,6K»), описание/последний пост (description ?: lastMessage текст) и
+// кнопка «Подписаться»/«Подписан» (channelsJoin/channelsLeave → toggle).
+// #CHANNEL-UI2 (аддитивно): меню «⋮» («Копировать ссылку»/«Поделиться» — Task 3)
+// и кнопка «Скрыть (не интересует)» (Task 2, локальный dismiss через onHideChannel).
+@Composable
+private fun ChannelRecommendationCard(
+    rec: VKApiClient.ChannelRecommendation,
+    loading: Boolean,
+    onToggleSubscribe: () -> Unit,
+    onHideChannel: () -> Unit = {},
+) {
+    // #CHANNEL-UI2 (Task 3): копирование/шеринг ссылки канала. Локальный захват
+    // контекста (NULL-EXPLICIT паттерн) + канонический club-URL (как в
+    // ChatDetailScreen: vk.ru/club<абс-id канала>). Карточка — только для
+    // рекомендаций (положительный channel_id из channels.getRecommendations),
+    // abs() на всякий случай для единообразия с peerId<0 подписок.
+    val cardContext = LocalContext.current
+    val channelLink = "https://vk.ru/club${kotlin.math.abs(rec.channelId)}"
+    // Меню карточки («⋮») — state для DropdownMenu.
+    var showCardMenu by remember { mutableStateOf(false) }
+
+    // #CHANNEL-UI2 (Task 3): копирование ссылки канала в буфер (паттерн
+    // ShareSheet doCopyLink — ClipboardManager).
+    fun copyChannelLink() {
+        val cm = cardContext.getSystemService(android.content.ClipboardManager::class.java)
+        if (cm != null) {
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("VK", channelLink))
+            Toast.makeText(cardContext, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+            AppLog.i("MessagesScreen", "#CHANNEL-UI2: copied channel link $channelLink")
+        } else {
+            Toast.makeText(cardContext, "Не удалось получить буфер обмена", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // #CHANNEL-UI2 (Task 3): системный шаринг ссылки через ACTION_SEND
+    // chooser (паттерн TrackShare.shareTrack).
+    fun shareChannelLink() {
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_TEXT, channelLink)
+        }
+        val chooser = android.content.Intent.createChooser(intent, "Поделиться").apply {
+            if (cardContext !is android.app.Activity) {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+        try {
+            cardContext.startActivity(chooser)
+        } catch (e: Exception) {
+            AppLog.w("MessagesScreen", "#CHANNEL-UI2: share channel failed: ${e.message}")
+            Toast.makeText(cardContext, "Не удалось поделиться", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .width(240.dp)
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val photo = rec.photoUrl
+                if (photo != null) {
+                    AsyncImage(
+                        model = photo,
+                        contentDescription = null,
+                        modifier = Modifier.size(44.dp).clip(CircleShape),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.size(44.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = rec.title.take(1).uppercase(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = rec.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (rec.membersCount > 0) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${formatChannelRecCount(rec.membersCount)} подписчиков",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                // #CHANNEL-UI2 (Task 3): «⋮» — контекстное меню карточки
+                // («Копировать ссылку» / «Поделиться»).
+                Box {
+                    IconButton(onClick = { showCardMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = "Действия канала",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showCardMenu,
+                        onDismissRequest = { showCardMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Копировать ссылку") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Link,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            onClick = {
+                                showCardMenu = false
+                                copyChannelLink()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Поделиться") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            onClick = {
+                                showCardMenu = false
+                                shareChannelLink()
+                            },
+                        )
+                    }
+                }
+            }
+            val preview = rec.description?.takeIf { it.isNotBlank() }
+                ?: rec.lastMessage?.text?.takeIf { it.isNotBlank() }
+            if (preview != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = onToggleSubscribe,
+                enabled = !loading,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(if (rec.subscribed) "Отписаться" else "Подписаться")
+                }
+            }
+            // #CHANNEL-UI2 (Task 2): «Скрыть / Не интересует» — локальный dismiss
+            // карточки из текущего списка рекомендаций (до перезагрузки экрана).
+            // Не трогает кнопку «Подписаться».
+            TextButton(
+                onClick = onHideChannel,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Скрыть (не интересует)")
+            }
+        }
+    }
+}
+
+// #CHANNEL-REC: компактный формат подписчиков (как в вебе): 40 600 → «40,6K»,
+// 1 200 → «1,2K», 999 → «999», 1 200 000 → «1,2M».
+private fun formatChannelRecCount(n: Int): String {
+    if (n < 1000) return n.toString()
+    if (n < 1_000_000) {
+        val k = n / 1000.0
+        return if (k >= 100) "${k.toInt()}K" else String.format("%.1fK", k)
+    }
+    val m = n / 1_000_000.0
+    return if (m >= 100) "${m.toInt()}M" else String.format("%.1fM", m)
 }
 
 /**
@@ -2382,6 +2939,79 @@ private fun MessageSearchResultRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+}
+
+// #CHANNEL-ONBOARDING: приветственный блок во вкладке «Каналы» для случая, когда
+// у пользователя ещё нет ни одной подписки (пустой список) и рекомендации
+// выключены/приходят пустыми. Заголовок «Встречайте каналы», короткое описание,
+// иконка-мегафон (Icons.Outlined.Campaign) и кнопка «Найти канал» — включает
+// блок рекомендаций (устанавливает channelRecEnabled, если выключен) или
+// перезагружает существующие. Кнопка показывается только при findEnabled
+// (тумблер channelFindEnabled); иначе — подсказка зайти в настройки.
+@Composable
+private fun ChannelOnboardingBlock(
+    findEnabled: Boolean,
+    onFindChannel: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.Campaign,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Встречайте каналы",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Подпишитесь на каналы, чтобы читать новости, блоги и обновления прямо здесь.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                if (findEnabled) {
+                    Button(onClick = onFindChannel) { Text("Найти канал") }
+                } else {
+                    Text(
+                        text = "Включите «Рекомендации в каналах» или «Найти канал» в настройках, чтобы находить каналы.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
         }
     }
 }

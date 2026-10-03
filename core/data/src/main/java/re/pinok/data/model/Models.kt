@@ -846,6 +846,19 @@ data class Message(
     @SerializedName("original_text") val originalText: String? = null,
     @SerializedName("attachments") val attachments: List<Attachment>? = null,
     @SerializedName("reactions")  val reactions: MessageReaction? = null,
+    // #CHANNELS-API: счётчики канального поста (cm_payload.counters).
+    @SerializedName("views_count") val viewsCount: Int? = null,
+    @SerializedName("comments_count") val commentsCount: Int? = null,
+    // Donut / VK Донат paywall канального поста (см. parseChannelHistoryItem).
+    @SerializedName("is_donut") val isDonut: Boolean = false,
+    @SerializedName("paywall_snippet") val paywallSnippet: String? = null,
+    @SerializedName("paywall_placeholder") val paywallPlaceholder: String? = null,
+    @SerializedName("paywall_button") val paywallButton: String? = null,
+    @SerializedName("reaction_cost") val reactionCost: Int? = null,
+    // #CHANNELS-API (аддитивно): мета-поля канального поста (см. parseChannelHistoryItem).
+    @SerializedName("is_pinned") val isPinned: Boolean = false,
+    @SerializedName("mute_notifications") val muteNotifications: Boolean = false,
+    @SerializedName("is_donut_photos") val isDonutPhotos: Boolean = false,
     // #60: reply + forwarded messages
     @SerializedName("reply_message") val replyMessage: Message? = null,
     @SerializedName("fwd_messages") val fwdMessages: List<Message>? = null,
@@ -1188,6 +1201,7 @@ data class PhotoItem(
     @SerializedName("id")              val id: Long,
     @SerializedName("owner_id")        val ownerId: Long,
     @SerializedName("album_id")        val albumId: Long,
+    @SerializedName("post_id")         val postId: Long? = null,
     @SerializedName("date")            val date: Long,
     @SerializedName("text")            val text: String? = null,
     @SerializedName("sizes")           val sizes: List<Attachment.Photo.Size>? = null,
@@ -1200,6 +1214,17 @@ data class PhotoItem(
     val mediumUrl: String? get() = sizes?.filter { it.width >= 300 && it.width <= 600 }
         ?.minByOrNull { it.width }?.url ?: largestUrl
 }
+
+/**
+ * Результат photos.photoFeedGet — личная фотолента владельца.
+ * Пагинация КУРСОРНАЯ: [nextFrom] (VK поле next_from) передаётся дальше как
+ * start_from; null значит, что лента закончилась.
+ */
+data class PhotosFeedResult(
+    val items: List<PhotoItem> = emptyList(),
+    val count: Int = 0,
+    val nextFrom: String? = null,
+)
 
 /**
  * Закладка ВК (fave.get). Может быть любого типа: пользователь, сообщество,

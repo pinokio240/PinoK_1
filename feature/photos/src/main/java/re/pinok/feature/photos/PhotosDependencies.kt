@@ -3,6 +3,7 @@ package re.pinok.feature.photos
 import androidx.compose.runtime.staticCompositionLocalOf
 import re.pinok.data.model.Album
 import re.pinok.data.model.PhotoItem
+import re.pinok.data.model.PhotosFeedResult
 
 /**
  * #ARCH-CONTAINERS Этап 3.7-1 (2026-09-03): DI-контракт контейнера фото
@@ -43,6 +44,17 @@ interface PhotosApi {
         count: Int = 50,
         offset: Int = 0,
     ): List<PhotoItem>
+
+    /**
+     * Личная фотолента владельца (photos.photoFeedGet, #PHOTO-FEED 2026-10-03,
+     * Этап 1). Пагинация КУРСОРНАЯ: [PhotosFeedResult.nextFrom] → startFrom.
+     * ownerId = 0 → текущий пользователь. Дефолты count — здесь, в интерфейсе.
+     */
+    suspend fun photosPhotoFeedList(
+        ownerId: Long,
+        count: Int = 40,
+        startFrom: String? = null,
+    ): PhotosFeedResult
 
     /**
      * VK likes.add (Sprint 2, P1-2 #89: лайк фото type="photo").

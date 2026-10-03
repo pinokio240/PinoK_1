@@ -1789,6 +1789,18 @@ private fun MessagesTab(
             subtitle = "Скрывает поле ввода для каналов (где нельзя писать)",
             checked = s.msgChannelMode,
         ) { scope.launch { app.prefs.setMsgChannelMode(it) } } }
+        // CHAN-PREFS: блок «Рекомендации в каналах» в разделе каналов.
+        item { ToggleRow(
+            title = "Рекомендации в каналах",
+            subtitle = "Показывать блок «Рекомендации» во вкладке «Каналы»",
+            checked = s.channelRecEnabled,
+        ) { scope.launch { app.prefs.setChannelRecEnabled(it) } } }
+        // CHAN-PREFS: кнопка «Найти канал» в разделе каналов.
+        item { ToggleRow(
+            title = "Найти канал",
+            subtitle = "Показывать кнопку поиска канала во вкладке «Каналы»",
+            checked = s.channelFindEnabled,
+        ) { scope.launch { app.prefs.setChannelFindEnabled(it) } } }
 
         item { SectionHeader("Действия с сообщениями") }
         // P2.5: multi-select mode — выделение нескольких сообщений.

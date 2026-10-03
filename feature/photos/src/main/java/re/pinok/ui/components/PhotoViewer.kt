@@ -41,7 +41,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
+import re.pinok.data.model.PhotoItem
 import re.pinok.media.ImageSaver
+import re.pinok.util.toRelativeTime
 
 /**
  * Sprint 2, P1-1 (#88): Полноэкранный просмотрщик фото с pinch-to-zoom и swipe.
@@ -68,6 +70,59 @@ import re.pinok.media.ImageSaver
 fun PhotoViewer(
     photos: List<String>,
     initial: Int = 0,
+    onDismiss: () -> Unit,
+) {
+    PhotoViewerIntern(
+        photos = photos,
+        captions = null,
+        initial = initial,
+        onDismiss = onDismiss,
+    )
+}
+
+/**
+ * Перегрузка просмотрщика по списку [PhotoItem] (#PHOTO-FEED 2026-10-03, Этап 3):
+ * под каждым фото показываются подпись (text) и дата (date → toRelativeTime)
+ * при controlsVisible. Обратно совместим с базовым [PhotoViewer] по [List]<String>.
+ */
+@Composable
+fun PhotoViewerPhotoItems(
+    photos: List<PhotoItem>,
+    initial: Int = 0,
+    onDismiss: () -> Unit,
+) {
+    val urls = photos.mapNotNull { it.largestUrl }
+    // Подписи по индексу URL (не по индексу PhotoItem — допускаем null-URL):
+    // для каждого непустого URL берём text/дату объединённой строкой.
+    val captions = urls.map { url ->
+        photos.firstOrNull { it.largestUrl == url }
+            ?.let { photo ->
+                buildString {
+                    val text = photo.text
+                    if (!text.isNullOrBlank()) append(text)
+                    if (photo.date > 0) {
+                        if (text.isNullOrBlank()) append(photo.date.toRelativeTime())
+                        else {
+                            if (isNotEmpty()) append("\n")
+                            append(photo.date.toRelativeTime())
+                        }
+                    }
+                }.takeIf { it.isNotBlank() }
+            }
+    }
+    PhotoViewerIntern(
+        photos = urls,
+        captions = captions,
+        initial = initial,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun PhotoViewerIntern(
+    photos: List<String>,
+    captions: List<String?>?,
+    initial: Int,
     onDismiss: () -> Unit,
 ) {
     if (photos.isEmpty()) {
@@ -161,6 +216,31 @@ fun PhotoViewer(
                             Icons.Filled.Download,
                             contentDescription = "Сохранить",
                             tint = Color.White,
+                        )
+                    }
+                }
+            }
+
+            // #PHOTO-FEED Этап 3: подпись + дата внизу при controlsVisible.
+            val caption = captions?.getOrNull(pagerState.currentPage)
+            if (!caption.isNullOrBlank()) {
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.4f)),
+                    ) {
+                        Text(
+                            text = caption,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
                         )
                     }
                 }

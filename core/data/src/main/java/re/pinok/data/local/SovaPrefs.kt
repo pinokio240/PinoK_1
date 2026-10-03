@@ -120,6 +120,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // тестерам). Включается в настройках (SettingsScreen → Логирование →
             // «Показывать значок»); у тех, кто тумблер уже трогал, выбор сохранён.
             showLogFab         = p[Keys.SHOW_LOG_FAB]           ?: debugDefault,
+            // CHAN-PREFS: показ блока «Рекомендации в каналах» в разделе каналов.
+            channelRecEnabled  = p[Keys.CHANNEL_REC_ENABLED]      ?: false,
+            // CHAN-PREFS: показ кнопки «Найти канал» в разделе каналов.
+            channelFindEnabled = p[Keys.CHANNEL_FIND_ENABLED]     ?: false,
             // #LOG-CATEGORIES: множество имён отключенных категорий логов.
             // #LOG-CATEGORIES-DEFAULT-CRITICAL (2026-08-05): default =
             // NON_CRITICAL_CATEGORY_NAMES — включены только AUTH+SYSTEM+NETWORK,
@@ -587,6 +591,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setStickerPhotoScale(v: Int)             = put(Keys.STICKER_PHOTO_SCALE, v)
     /** Fix #237: показ плавающего значка логирования. */
     suspend fun setShowLogFab(v: Boolean)                = put(Keys.SHOW_LOG_FAB, v)
+    /** CHAN-PREFS: показ блока «Рекомендации в каналах» в разделе каналов. */
+    suspend fun setChannelRecEnabled(v: Boolean)         = put(Keys.CHANNEL_REC_ENABLED, v)
+    /** CHAN-PREFS: показ кнопки «Найти канал» в разделе каналов. */
+    suspend fun setChannelFindEnabled(v: Boolean)        = put(Keys.CHANNEL_FIND_ENABLED, v)
     /**
      * #LOG-CATEGORIES (2026-08-04): множество имён ОТКЛЮЧЕННЫХ категорий логов.
      * Каждое имя — это LogCategory.name (enum).
@@ -1401,6 +1409,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val stickerPhotoScale: Int,
         /** Fix #237: показ плавающего значка логирования (DraggableLogFab). */
         val showLogFab: Boolean,
+        /** CHAN-PREFS: показ блока «Рекомендации в каналах» в разделе каналов. */
+        val channelRecEnabled: Boolean = false,
+        /** CHAN-PREFS: показ кнопки «Найти канал» в разделе каналов. */
+        val channelFindEnabled: Boolean = false,
         /**
          * #LOG-CATEGORIES (2026-08-04): множество имён ОТКЛЮЧЕННЫХ категорий
          * логов (LogCategory.name).
@@ -1831,6 +1843,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val STICKER_PHOTO_SCALE = intPreferencesKey("sticker_photo_scale")
         // Fix #237: показ плавающего значка логирования.
         val SHOW_LOG_FAB        = booleanPreferencesKey("show_log_fab")
+        // CHAN-PREFS: блок «Рекомендации в каналах» в разделе каналов (default false).
+        val CHANNEL_REC_ENABLED = booleanPreferencesKey("channel_rec_enabled")
+        // CHAN-PREFS: кнопка «Найти канал» в разделе каналов (default false).
+        val CHANNEL_FIND_ENABLED = booleanPreferencesKey("channel_find_enabled")
         // #LOG-CATEGORIES (2026-08-04): множество имён категорий логов
         // (LogCategory.name), которые пользователь ОТКЛЮЧИЛ в Settings → Log.
         // #LOG-CATEGORIES-DEFAULT-CRITICAL (2026-08-05): default =

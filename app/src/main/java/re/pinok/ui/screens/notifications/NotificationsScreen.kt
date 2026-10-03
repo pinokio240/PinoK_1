@@ -687,10 +687,10 @@ fun NotificationsScreen(
     var serverCategory by remember { mutableStateOf(initialCategory.ifBlank { CATEGORY_ALL }) }
     // last_viewed из последнего ответа getRedesign (переключатель Новые/Просмотренные).
     var lastViewed by remember { mutableStateOf<Long?>(null) }
-    // По умолчанию = «Просмотренные»: true = показываем все/просмотренные.
-    // false = только «Новые» (моложе last_viewed). Переключатель работает
-    // (юзер может переключить на «Новые»).
-    var showViewed by remember { mutableStateOf(true) }
+    // По умолчанию = «Новые»: false = только «Новые» (моложе last_viewed).
+    // true = показываем все/просмотренные. Переключатель работает
+    // (юзер может переключить на «Просмотренные»).
+    var showViewed by remember { mutableStateOf(false) }
 
     // Скрытые уведомления (для undo)
     val hiddenKeys = remember { mutableStateListOf<String>() }
@@ -1807,6 +1807,32 @@ private fun NotificationCard(
                         }
                     }
                 }
+            }
+
+            // #NOTIF-MULTILK-NAMES: компактная сводка имён для случая «несколько
+            // человек поставили лайк/реакцию» («Имя1, Имя2 и ещё N»). Показываем
+            // когда profiles > 1 — тогда выше рисуется ряд аватаров, а здесь
+            // короткая подпись, КТО именно отреагировал (требование фичи
+            // #FEEDBACK-MULTILIKE: карточка должна показывать кто лайкнул).
+            // До 2 имён из списка feedbackProfiles (порядок как вернул VK),
+            // при большем числе — «и ещё N».
+            if (item.feedbackProfiles.size > 1) {
+                val names = buildString {
+                    item.feedbackProfiles.take(2).forEachIndexed { i, p ->
+                        if (i > 0) append(", ")
+                        append(if (p.name.isNotBlank()) p.name else "id${p.id}")
+                    }
+                    val rest = item.feedbackProfiles.size - 2
+                    if (rest > 0) append(" и ещё $rest")
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = names,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
 

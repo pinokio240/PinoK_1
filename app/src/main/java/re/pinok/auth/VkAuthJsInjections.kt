@@ -99,7 +99,14 @@ internal const val VK_INPUT_HARDENING_JS = """
                 '.feed_right_add, .wall_add_row, .WallCard--ad,',
                 '[class*="ad-"], [class*="ads-"], [class*="AdCard"],',
                 '[class*="PromoBlock"], [class*="ReklamaBlock"],',
-                '[data-testid="ad"], [data-testid="ads"]',
+                '[data-testid="ad"], [data-testid="ads"],',
+                '[class~="_ads_promoted_post"], .post_marked_as_ads,',
+                '.ads_top, .ads_middle, .sidebar_ads_right, .sidebar_adsense,',
+                '.apps_feedRightAppsBlock_single_app--promo,',
+                '.promoted-post, .outbrainbox, .promoted-outbrain,',
+                '.video-info a[rel="sponsored"],',
+                '#ads_textlinks, #ads_title, #ads_top2, #ads_banner,',
+                '#apps_ads_wrap, #aside-promotion,',
                 '{ display: none !important; visibility: hidden !important; }'
             ].join(' ');
             (document.head || document.documentElement).appendChild(adStyle);
