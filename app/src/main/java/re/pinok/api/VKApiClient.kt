@@ -9492,14 +9492,14 @@ class VKApiClient(
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
-                val type = o.get("type")?.asString ?: return@mapNotNull null
+                val type = safeString(o.get("type")) ?: return@mapNotNull null
                 val seen = o.get("seen")?.takeIf { !it.isJsonNull }?.let {
                     if (it.isJsonPrimitive) {
                         val p = it.asJsonPrimitive
                         if (p.isBoolean) p.asBoolean else p.asInt != 0
                     } else false
                 }
-                val addedDate = o.get("added_date")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                val addedDate = safeLong(o.get("added_date"))
                 var user: UserProfile? = null
                 var group: Group? = null
                 var post: Post? = null
@@ -9523,30 +9523,30 @@ class VKApiClient(
                             // NULL-ЯВНО: JsonNull.asString кидал бы исключение →
                             // ВЕСЬ fave.get падал в emptyList (молчаливая «пустота»);
                             // оборачиваем каждый примитив в takeIf.
-                            url = entity.get("url")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString ?: "",
-                            title = entity.get("title")?.takeIf { !it.isJsonNull }?.asString,
-                            description = entity.get("description")?.takeIf { !it.isJsonNull }?.asString,
+                            url = safeString(entity.get("url")) ?: "",
+                            title = safeString(entity.get("title")),
+                            description = safeString(entity.get("description")),
                         )
                         // Волна 40 #BOOKMARKS-REMOVE-ALL: link_id нужен для
                         // fave.removeLink — раньше не парсился → удаление ссылок
                         // было заглушкой «пока не поддерживается».
-                        linkId = entity.get("id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                        linkId = safeLongNullable(entity.get("id"))
                     }
                     // Волна 40 #BOOKMARKS-REMOVE-ALL: статья/товар — минимум полей
                     // (id/owner_id/title), чтобы строка имела заголовок и УДАЛЯЛАСЬ
                     // (fave.removeArticle/fave.removeProduct).
                     "article", "product" -> {
-                        objectId = entity.get("id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
-                        objectOwnerId = entity.get("owner_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
-                        objectTitle = entity.get("title")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString
+                        objectId = safeLongNullable(entity.get("id"))
+                        objectOwnerId = safeLongNullable(entity.get("owner_id"))
+                        objectTitle = safeString(entity.get("title"))
                     }
                     "page" -> {
                         // Волна 40: страницы (клипы-авторы через fave.addPage) — VK
                         // отдаёт сущность под ключом page; эвристика user_id/group_id
                         // → профиль/сообщество, чтобы работало открытие и удаление
                         // (fave.removePage требует user_id или group_id).
-                        val pageUserId = entity.get("user_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
-                        val pageGroupId = entity.get("group_id")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong
+                        val pageUserId = safeLongNullable(entity.get("user_id"))
+                        val pageGroupId = safeLongNullable(entity.get("group_id"))
                         when {
                             pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(entity)
                             pageGroupId != null && pageGroupId > 0L -> group = parseGroupMini(entity)
@@ -11040,7 +11040,7 @@ class VKApiClient(
     }
 
     private fun parseUserProfileMini(o: JsonObject): UserProfile {
-        val countersObj = o.getAsJsonObject("counters")
+        val countersObj = o.get("counters")?.takeIf { obj -> obj.isJsonObject }?.asJsonObject
         return UserProfile(
             id = o.get("id")?.asLong ?: 0L,
             firstName = o.get("first_name")?.asString ?: "",
