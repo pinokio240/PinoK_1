@@ -15519,7 +15519,14 @@ class VKApiClient(
                     ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
                 putThumb("photo", oid, pid, url)
             }
-            // videos: photo_320 → fallback photo_130
+            // videos: photo_320 → fallback photo_130 → first_frame/image/covers.
+            // #NOTIF-VIDEO-THUMB (getVideoPreview): VK web (ХАР: notifications.getRedesign)
+            // не кладёт scalar photo_320/130 в top-level videos[] для ряда видео
+            // (live, новые посты сообществ) — вместо этого В КАЖДОМ видео-объекте
+            // есть массивы first_frame[]/image[]/covers[] с ПОЛНЫМ превью-URL
+            // (включая подписанный tkn): https://iv.okcdn.ru/getVideoPreview?id=…&tkn=…&fn=vid_f.
+            // Дочитываем первый непустой url по этим массивам (как firstArrayUrl для
+            // attachment.items), чтобы video-миниатюры не оставались пустыми.
             resp.getAsJsonArray("videos")?.forEach { el ->
                 if (!el.isJsonObject) return@forEach
                 val o = el.asJsonObject
@@ -15531,9 +15538,13 @@ class VKApiClient(
                     ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                    ?: firstArrayUrl(o, "image")
+                    ?: firstArrayUrl(o, "covers")
+                    ?: firstArrayUrl(o, "first_frame")
+                    ?: firstArrayUrl(o, "first_frames")
                 putThumb("video", oid, vid, url)
             }
-            // clips: photo_320 → fallback photo_130
+            // clips: photo_320 → fallback photo_130 → first_frame/image/covers
             resp.getAsJsonArray("clips")?.forEach { el ->
                 if (!el.isJsonObject) return@forEach
                 val o = el.asJsonObject
@@ -15545,6 +15556,10 @@ class VKApiClient(
                     ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                     ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                    ?: firstArrayUrl(o, "image")
+                    ?: firstArrayUrl(o, "covers")
+                    ?: firstArrayUrl(o, "first_frame")
+                    ?: firstArrayUrl(o, "first_frames")
                 putThumb("clip", oid, cid, url)
             }
             // market_items: thumb_photo → fallback photo_130
@@ -15564,9 +15579,17 @@ class VKApiClient(
             // 2026-09-13: thumb NULL … owner=-235808131 item=43905), а photos[]
             // пуст — lookup по photo:owner_postId НЕ МАТЧИТСЯ никогда.
             // VK кладёт сами посты в response.posts — достаём из каждого первое
-            // фото-вложение и регистрируем ДВА ключа: "post:owner_postId" (для
-            // attachment-lookup через post:-fallback) и "photo:photoOwner_photoId"
-            // (для attachment-entries с настоящими id фото).
+            // превью-вложение и регистрируем: "post:owner_postId" (для
+            // attachment-lookup через post:-fallback) + типовой ключ
+            // ("photo:owner_photoId"/"video:owner_videoId"/"clip:owner_cid").
+            //
+            // #NOTIF-VIDEO-THUMB (getVideoPreview): ранее брали ТОЛЬКО первое ФОТО.
+            // Но посты сообществ часто содержат ВИДЕО (live-трансляции, клипы) — у таких
+            // постов нет фото, только video/clip-вложение с first_frame[]/image[]/covers[],
+            // где первым url лежит ПОЛНЫЙ превью-URL iv.okcdn.ru/getVideoPreview (с tkn).
+            // Без учёта video/clip-вложений миниатюра таких уведомлений оставалась
+            // пустой (серый плейсхолдер с иконкой). Теперь берём ПЕРВОЕ вложение
+            // поста (фото ИЛИ видео ИЛИ клип), для которого находится превью.
             resp.getAsJsonArray("posts")?.forEach { el ->
                 if (!el.isJsonObject) return@forEach
                 val o = el.asJsonObject
@@ -15575,20 +15598,44 @@ class VKApiClient(
                 val atts = o.getAsJsonArray("attachments") ?: return@forEach
                 for (att in atts) {
                     if (!att.isJsonObject) continue
-                    val ph = att.asJsonObject.getAsJsonObject("photo") ?: continue
-                    val url = ph.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
-                        ?: ph.get("photo_604")?.takeIf { !it.isJsonNull }?.asString
-                        ?: ph.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
-                        ?: ph.get("photo_807")?.takeIf { !it.isJsonNull }?.asString
-                        ?: ph.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
-                        ?: ph.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
-                        ?: ph.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
-                    if (url.isNullOrBlank()) continue
-                    putThumb("post", oid, pid, url)
-                    val phOwner = ph.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
-                    val phId = ph.get("id")?.takeIf { !it.isJsonNull }?.asLong
-                    if (phId != null) putThumb("photo", phOwner, phId, url)
-                    break // первая фото-миниатюра поста
+                    val a = att.asJsonObject
+                    val ph = getObj(a, "photo")
+                    if (ph != null) {
+                        val url = ph.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
+                            ?: ph.get("photo_604")?.takeIf { !it.isJsonNull }?.asString
+                            ?: ph.get("photo_75")?.takeIf { !it.isJsonNull }?.asString
+                            ?: ph.get("photo_807")?.takeIf { !it.isJsonNull }?.asString
+                            ?: ph.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+                            ?: ph.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+                            ?: ph.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                        if (url.isNullOrBlank()) continue
+                        putThumb("post", oid, pid, url)
+                        val phOwner = ph.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
+                        val phId = ph.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                        if (phId != null) putThumb("photo", phOwner, phId, url)
+                        break // первое превью-вложение поста
+                    }
+                    // Вложение поста — видео: превью берём из first_frame/image/covers
+                    // (getVideoPreview-URL) или scalar photo_*.
+                    val vd = getObj(a, "video")
+                    if (vd != null) {
+                        val url = videoPreviewUrl(vd) ?: continue
+                        putThumb("post", oid, pid, url)
+                        val vOwner = vd.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
+                        val vId = vd.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                        if (vId != null) putThumb("video", vOwner, vId, url)
+                        break // первое превью-вложение поста
+                    }
+                    // Вложение поста — клип: превью из first_frame/image/covers или photo_*.
+                    val cl = getObj(a, "clip")
+                    if (cl != null) {
+                        val url = videoPreviewUrl(cl) ?: continue
+                        putThumb("post", oid, pid, url)
+                        val cOwner = cl.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: oid
+                        val cId = cl.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                        if (cId != null) putThumb("clip", cOwner, cId, url)
+                        break // первое превью-вложение поста
+                    }
                 }
             }
             if (mediaThumbs.isNotEmpty()) {
@@ -16323,6 +16370,16 @@ class VKApiClient(
                         ?: a.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
                         ?: a.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+                        // #NOTIF-VIDEO-THUMB: для видео/клипов VK иногда кладёт в сам
+                        // attachment-элемент массивы превью image[]/covers[]/first_frame[],
+                        // где url — прямой getVideoPreview-URL (iv.okcdn.ru). Читаем первый
+                        // непустой url по аналогии с parseVideoThumbs (используется для
+                        // клипов из ленты). До этого парсер смотрел только photo_*, и для
+                        // видео-уведомлений превью не заполнялись.
+                        ?: firstArrayUrl(a, "image")
+                        ?: firstArrayUrl(a, "covers")
+                        ?: firstArrayUrl(a, "first_frame")
+                        ?: firstArrayUrl(a, "first_frames")
                         ?: a.get("url")?.takeIf { !it.isJsonNull }?.asString?.let { u ->
                             // NOTIF-THUMB-FIX (#352): поле url обычно это permalink
                             // (vk.com/wall-123_456), но для некоторых типов (market_item,
@@ -16351,6 +16408,13 @@ class VKApiClient(
                         firstPhotoThumb = thumb
                     }
                     if (firstVideoThumb == null && thumb != null && (mappedType == "video" || mappedType == "clip")) {
+                        firstVideoThumb = thumb
+                    }
+                    // #NOTIF-VIDEO-THUMB (getVideoPreview): пост-вложение мапится в "photo",
+                    // но если его превью — видео-фрейм с CDN (iv.okcdn.ru/getVideoPreview, tkn
+                    // приходит в ответе), значит реальное содержимое — ВИДЕО. Помечаем и
+                    // firstVideoThumb, чтобы компактный блок рисовал play-иконку и превью.
+                    if (firstVideoThumb == null && thumb != null && mappedType == "photo" && isVideoPreviewUrl(thumb)) {
                         firstVideoThumb = thumb
                     }
                     // NOTIF-THUMB-FIX (#352): diagnostic log — если thumb null после всех
@@ -16592,6 +16656,57 @@ class VKApiClient(
             attachmentsString = attachmentsString,
             bubbleText = bubbleText,
         )
+    }
+
+    /**
+     * #NOTIF-VIDEO-THUMB: первый непустой `url` из массива объектов (image/covers/
+     * first_frame/first_frames) в видео-элементе вложения. VK кладёт сюда прямые
+     * превью-URL (включая iv.okcdn.ru/getVideoPreview). Возвращает null, если поле
+     * отсутствует/не массив/все url пустые — безопасно для фото-вложений.
+     */
+    private fun firstArrayUrl(o: JsonObject, field: String): String? {
+        val arr = o.get(field)?.takeIf { it.isJsonArray }?.asJsonArray ?: return null
+        for (el in arr) {
+            if (!el.isJsonObject) continue
+            val u = el.asJsonObject.get("url")?.takeIf { !it.isJsonNull }?.asString
+            if (!u.isNullOrBlank()) return u
+        }
+        return null
+    }
+
+    /**
+     * #NOTIF-VIDEO-THUMB (getVideoPreview): превью-URL для видео/клип-объекта
+     * (вложение поста или top-level video/clip). Порядок источников:
+     *   1. scalar photo_* (photo_320/130/800/200/100/50) — компактные миниатюры;
+     *   2. image[]/covers[]/first_frame[]/first_frames[] — массивы с ПОЛНЫМ
+     *      превью-URL, включая подписанный iv.okcdn.ru/getVideoPreview?id=…&tkn=…
+     *      (tkn приходит в самом ответе getRedesign — отдельная подпись не нужна).
+     * NULL-явно (без !!): возвращает null, если нет ни одного пригодного url —
+     * безопасно для вложений без превью.
+     */
+    private fun videoPreviewUrl(o: JsonObject): String? {
+        return o.get("photo_320")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_130")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_800")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString
+            ?: o.get("photo_50")?.takeIf { !it.isJsonNull }?.asString
+            ?: firstArrayUrl(o, "image")
+            ?: firstArrayUrl(o, "covers")
+            ?: firstArrayUrl(o, "first_frame")
+            ?: firstArrayUrl(o, "first_frames")
+    }
+
+    /**
+     * #NOTIF-VIDEO-THUMB: true если [url] — прямой превью видео с CDN
+     * (iv.okcdn.ru/mycdn.me/okcdn.ru/getVideoPreview, vkvideo/player-кэш).
+     * Используется чтобы отличить видео-миниатюру от обычного фото в постах,
+     * которые мапятся в "photo" и рисуют play-иконку. NULL-безопасно: пустой
+     * не-CDN url → false.
+     */
+    private fun isVideoPreviewUrl(url: String): Boolean {
+        return url.contains("getVideoPreview", ignoreCase = true) ||
+            url.contains("okcdn", ignoreCase = true)
     }
 
     /**

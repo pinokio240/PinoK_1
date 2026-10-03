@@ -120,6 +120,15 @@ object UpdaterManager {
     /** #UPDATER-AUTOCHECK: автопроверка (запуск приложения) не чаще раза в 6 часов. */
     private const val AUTO_MIN_INTERVAL_MS = 6L * 60L * 60L * 1000L
 
+    /**
+     * Проверка при каждом выходе приложения на передний план (старт процесса +
+     * возврат из свёрнутого): не чаще раза в минуту. Raw-манифест меняется только
+     * git push'ем, чаще дёргать бессмысленно; зато каждый возврат на передний
+     * план даёт свежую проверку в течение минуты. runCheck дополнительно гасит
+     * параллельные вызовы (Checking/Downloading), офлайн-гейт — в Offline-пути.
+     */
+    private const val FOREGROUND_CHECK_THROTTLE_MS = 60_000L
+
     /** Подкаталог external-files (совпадает с FileProvider external-files-path). */
     private const val UPDATES_DIR = "updates"
 
@@ -144,6 +153,12 @@ object UpdaterManager {
     /** #UPDATER-AUTOCHECK M2: авто-проверка при входе во вкладку — раз за процесс. */
     @Volatile
     private var tabAutoCheckDone = false
+
+    /** #CHECK-ON-FOREGROUND: timestamp последней проверки при выходе на передний
+     *  план (троттлинг FOREGROUND_CHECK_THROTTLE_MS). In-memory — перезапуск
+     *  процесса = чистый старт, ровно то, что нужно для «проверка при старте». */
+    @Volatile
+    private var lastForegroundCheckMs = 0L
 
     private val _manifest = MutableStateFlow<UpdateManifest?>(null)
 
@@ -264,6 +279,31 @@ object UpdaterManager {
     }
 
     /**
+     * #CHECK-ON-FOREGROUND: единая точка проверки при каждом выходе приложения
+     * на передний план — (а) старт процесса и (б) возврат из свёрнутого состояния.
+     * Вызывается из MainActivity.onCreate (после короткой задержки) и из
+     * ProcessLifecycleOwner ON_RESUME (сразу при foreground). Троттлинг не чаще
+     * раза в минуту гасит дубль холодного старта (оба пути попадают в окно 60с)
+     * и не дёргает raw-источник. Тихая (manual=false): при ошибке сети / HTTP /
+     * подписи / разбора state уходит в Idle и ничего не показывает; при
+     * «обновлений нет» — в UpToDate, баннер не рисуется. UI появляется ТОЛЬКО
+     * когда есть реальное обновление (Available → UpdateBanner). Аналог
+     * maybeAutoCheckOnStart, но БЕЗ тумблера и БЕЗ бэкоффа от сбоев прежних
+     * автопроверок — каждая foreground-проверка честная и самостоятельная.
+     */
+    fun triggerUpdateCheck() {
+        val now = System.currentTimeMillis()
+        if (lastForegroundCheckMs > 0L && now - lastForegroundCheckMs < FOREGROUND_CHECK_THROTTLE_MS) {
+            AppLog.d(TAG, "foregroundCheck: недавно проверялись — skip (throttle)")
+            return
+        }
+        lastForegroundCheckMs = now
+        // runCheck(manual=false) сам гасит параллельные вызовы (Checking/Downloading)
+        // и офлайн-гейт (Offline → Idle молча). Ни тостов, ни диалогов при сбое.
+        runCheck(manual = false)
+    }
+
+    /**
      * Общий ход проверки. manual=true — кнопка (ошибки показываются как есть);
      * manual=false — тихая (ошибки тоже честно пишутся в состояние — их увидит
      * только открывший вкладку, НО авто-счётчик неудач растёт → бэкофф).
@@ -274,6 +314,20 @@ object UpdaterManager {
         // перезаписывать Checking'ом, иначе прогресс скачивания молча исчезнет.
         if (current is UpdaterUiState.Checking) return
         if (current is UpdaterUiState.Downloading) return
+        // #UPDATER-DOWNLOADED-GUARD: если APK уже скачан и ждёт установки (Downloaded),
+        // тихие проверки (foreground ON_RESUME #CHECK-ON-FOREGROUND, автопроверка при
+        // старте, вход во вкладку) НЕ должны затирать это состояние — иначе кнопка
+        // «Установить APK» молча исчезает: установщик (ACTION_VIEW) уводит приложение
+        // в фон, а возврат триггерит ON_RESUME → decideLatest() перезаписывает
+        // Downloaded на Available/UpToDate. Ручную кнопку «Проверить обновления»
+        // (manual=true) не блокируем — это явное действие пользователя.
+        if (!manual && current is UpdaterUiState.Downloaded) {
+            AppLog.i(
+                TAG,
+                "autoCheck: APK скачан и готов к установке — тихую проверку пропускаю (состояние Downloaded сохраняется)",
+            )
+            return
+        }
         // ETag-условный GET имеет смысл только когда манифест уже в памяти:
         // после перезапуска процесса 304 без тела оставил бы вкладку пустой.
         val etag = if (_manifest.value == null) "" else savedEtag()

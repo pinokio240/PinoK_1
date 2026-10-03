@@ -1815,7 +1815,13 @@ private fun NotificationCard(
         // не хватает места). Compact-превью — для одного фото/видео.
         if (item.attachments.size <= 1) {
             val thumbUrl = item.parentPhotoUrl ?: item.parentVideoThumb
-            if (thumbUrl != null) {
+            // NOTIF-VIDEO-THUMB: если для одиночного видео-вложения превью не пришло
+            // (getRedesign не отдаёт URL видео-превью), не оставляем карточку «голой» —
+            // рисуем компактный плейсхолдер с видео-иконкой (как в AttachmentThumb).
+            val singleType = item.attachments.firstOrNull()?.type
+            val isVideoFallback = thumbUrl == null &&
+                (singleType == "video" || singleType == "clip")
+            if (thumbUrl != null || isVideoFallback) {
                 Spacer(modifier = Modifier.width(10.dp))
                 Box(
                     modifier = Modifier
@@ -1824,13 +1830,22 @@ private fun NotificationCard(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center,
                 ) {
-                    AsyncImage(
-                        model = thumbUrl,
-                        contentDescription = "Превью",
-                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
-                    )
+                    if (thumbUrl != null) {
+                        AsyncImage(
+                            model = thumbUrl,
+                            contentDescription = "Превью",
+                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
+                        )
+                    } else {
+                        Icon(
+                            Icons.Outlined.VideoCameraBack,
+                            contentDescription = "Видео",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
                     // Play-иконка для видео
-                    if (item.parentVideoThumb != null) {
+                    if (thumbUrl != null && (item.parentVideoThumb != null || singleType == "clip")) {
                         Box(
                             modifier = Modifier
                                 .size(24.dp)

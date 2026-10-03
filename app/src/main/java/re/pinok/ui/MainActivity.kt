@@ -188,6 +188,17 @@ class MainActivity : ComponentActivity() {
          */
         @Volatile
         private var wasStopped: Boolean = false
+
+        /**
+         * #CHECK-ON-FOREGROUND: ProcessLifecycleOwner-наблюдатель проверки обновлений
+         * регистрируется РОВНО один раз за ЖИЗНЬ ПРОЦЕССА. MainActivity пересоздаётся
+         * (поворот/тема/убийство activity в фоне), а ProcessLifecycleOwner — процессный
+         * синглтон: повторный addObserver только множил бы вызовы triggerUpdateCheck
+         * (троттлинг 60с развёл бы их по окну, но лишние регистрации не нужны).
+         * Static переживает recreate — как lockerBootCheckDone/wasStopped выше.
+         */
+        @Volatile
+        private var updaterForegroundObserverRegistered: Boolean = false
     }
 
     /**
@@ -903,15 +914,39 @@ class MainActivity : ComponentActivity() {
         handleOpenChatIntent(intent)
         handleDeepLinkIntent(intent)
 
-        // Волна 43 #UPDATER-AUTOCHECK (M3): тихая проверка обновлений при запуске.
-        // Тумблер Настройки→Обновления→«Проверять при запуске» (default ВЫКЛ —
-        // ноль фонового трафика без ведома юзера); внутри: троттлинг 6ч, бэкофф
-        // при сбоях, офлайн-гейт. Задержка 12 с — не конкурировать со стартом UI.
+        // #CHECK-ON-FOREGROUND: проверка обновлений при каждом старте процесса +
+        // каждом возврате из свёрнутого (foreground). Тихая: ошибки/«нет обновления»
+        // ничего не показывают — баннер рисуется только при Available (UpdateBanner).
+        // Hooks: (1) здесь — холодный старт через ~12 с (не конкурировать со стартом
+        // UI), проверка отложенной, чтобы не мешать первым экранам; (2) ниже —
+        // ProcessLifecycleOwner ON_RESUME, мгновенно при foreground. Троттлинг 60с
+        // в UpdaterManager.triggerUpdateCheck() гасит дубль холодного старта.
         val appForUpdateCheck = SovaApp.getOrNull()
         if (appForUpdateCheck != null) {
             appForUpdateCheck.appScope.launch {
                 kotlinx.coroutines.delay(12_000L)
-                UpdaterManager.ensureInit(applicationContext).maybeAutoCheckOnStart()
+                UpdaterManager.ensureInit(applicationContext).triggerUpdateCheck()
+            }
+        }
+
+        // #CHECK-ON-FOREGROUND: процессный наблюдатель — покрывает и холодный старт
+        // (ON_RESUME при создании процесса), и возврат из свёрнутого (onPause→onResume).
+        // Регистрируем один раз за процесс (companion-флаг). TriggerUpdateCheck сам
+        // троттлит: на холодном старте первый сработавший путь берёт проверку на себя.
+        if (!updaterForegroundObserverRegistered) {
+            updaterForegroundObserverRegistered = true
+            try {
+                androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
+                    object : androidx.lifecycle.DefaultLifecycleObserver {
+                        override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
+                            UpdaterManager.ensureInit(applicationContext).triggerUpdateCheck()
+                        }
+                    },
+                )
+                AppLog.i("MainActivity", "#CHECK-ON-FOREGROUND: ProcessLifecycleOwner updater hook registered")
+            } catch (e: Exception) {
+                updaterForegroundObserverRegistered = false
+                AppLog.w("MainActivity", "#CHECK-ON-FOREGROUND: ProcessLifecycleOwner hook failed (non-fatal): ${e.message}")
             }
         }
 

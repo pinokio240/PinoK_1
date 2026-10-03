@@ -4877,6 +4877,15 @@ private fun UpdateTab(
                                 fontWeight = FontWeight.Medium,
                                 color = MaterialTheme.colorScheme.primary,
                             )
+                            // «Скачать APK» прямо в карточке статуса — раньше кнопка была
+                            // только в списке «Версии из манифеста» ниже; юзер, не доскролливший
+                            // до списка, не понимал, как начать загрузку.
+                            Button(
+                                onClick = { updater.downloadApk(st.latest) },
+                                modifier = Modifier.padding(top = 8.dp),
+                            ) {
+                                Text("Скачать APK")
+                            }
                             // Волна 43: «Пропустить эту версию» — баннер перестанет
                             // показывать этот релиз (до выхода следующего).
                             TextButton(
@@ -4893,6 +4902,41 @@ private fun UpdateTab(
                                 modifier = Modifier.padding(top = 4.dp),
                             ) {
                                 Text("Пропустить эту версию")
+                            }
+                        }
+                        is UpdaterUiState.Downloading -> Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    if (st.progress > 0) "Скачиваю APK… " + st.progress + "%" else "Скачиваю APK…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { st.progress / 100f },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            )
+                        }
+                        is UpdaterUiState.Downloaded -> Column {
+                            Text(
+                                "Обновление скачано: " + st.info.versionName.orEmpty() +
+                                    " (versionCode " + st.info.versionCode + ")",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            val dlFile = st.file
+                            Text(
+                                "Файл: " + dlFile.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = { updater.installApk(dlFile) },
+                                modifier = Modifier.padding(top = 8.dp),
+                            ) {
+                                Text("Установить APK")
                             }
                         }
                         is UpdaterUiState.Error -> Text(
