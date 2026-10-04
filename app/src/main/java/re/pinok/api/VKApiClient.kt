@@ -1058,7 +1058,7 @@ class VKApiClient(
                 isClosed = o.get("is_closed")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                 isMember = o.get("is_member")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                 verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                membersCount = safeInt(o.get("members_count")),
                 description = o.get("description")?.takeIf { !it.isJsonNull }?.asString,
                 status = o.get("status")?.takeIf { !it.isJsonNull }?.asString,
                 type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
@@ -1239,7 +1239,7 @@ class VKApiClient(
                     ?: ph.get("photo_100")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }
                     ?: ph.get("photo_50")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }
             }
-            val count = resp.get("members_count")?.takeIf { !it.isJsonNull }?.asInt
+            val count = safeIntNullable(resp.get("members_count"))
             Triple(title, photo, count)
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "messagesGetChat error: ${e.message}")
@@ -7706,7 +7706,7 @@ class VKApiClient(
                         title = ch.get("title")?.takeIf { !it.isJsonNull }?.asString ?: "",
                         photoUrl = ch.get("photo_base")?.takeIf { !it.isJsonNull }?.asString,
                         description = description,
-                        membersCount = ch.get("members_count")?.asInt ?: 0,
+                        membersCount = safeInt(ch.get("members_count")),
                         subscribed = isMember,
                         lastMessage = lastMessage,
                         reactionCost = reactionCost,
@@ -9707,7 +9707,7 @@ class VKApiClient(
                     type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
                     photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                    membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    membersCount = safeInt(o.get("members_count")),
                     description = o.get("description")?.takeIf { !it.isJsonNull }?.asString,
                     status = o.get("status")?.takeIf { !it.isJsonNull }?.asString,
                     verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
@@ -9796,7 +9796,7 @@ class VKApiClient(
                     isClosed = o.get("is_closed")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     isMember = o.get("is_member")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    membersCount = safeInt(o.get("members_count")),
                     description = o.get("description")?.takeIf { !it.isJsonNull }?.asString,
                     status = o.get("status")?.takeIf { !it.isJsonNull }?.asString,
                     type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
@@ -9972,7 +9972,7 @@ class VKApiClient(
                     type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
                     photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                    membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    membersCount = safeInt(o.get("members_count")),
                     verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     isMember = o.get("is_member")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                 )
@@ -11619,7 +11619,7 @@ class VKApiClient(
             type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
             photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
             photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-            membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+            membersCount = safeInt(o.get("members_count")),
             verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
             isMember = o.get("is_member")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
         )
@@ -15863,7 +15863,7 @@ class VKApiClient(
                     name = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
                     screenName = o.get("screen_name")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                    membersCount = o.get("members_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    membersCount = safeInt(o.get("members_count")),
                     type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
                 )
             }
