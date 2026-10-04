@@ -446,6 +446,21 @@ data class Video(
                 // Fix #142: Instagram — до generic EXTERNAL_IFRAME, иначе
                 // instagram.com/reel/... уйдёт в EXTERNAL_IFRAME и embed не сработает.
                 INSTAGRAM_ID_REGEX.containsMatchIn(lower) -> return VideoPlatform.INSTAGRAM
+                // P0.1 #VIDEO-IN-CHANNELS: VK-native видео с embed-player URL
+                // (video_ext.php / vkvideo.ru / vk.com/video / vk.ru/video).
+                // wall.get / messages.getHistory / channels.getHistory возвращают
+                // видео-аттачменты именно в таком виде: player=embed URL, files=null.
+                // Направляем на нативный VideoPlayerScreen (UNKNOWN → videoGetById
+                // fallback в LaunchedEffect), а НЕ на OkWebViewPlayer — последний
+                // грузит video_ext.php как ГЛАВНУЮ страницу вне iframe-контекста,
+                // что даёт чёрный экран / «Видео недоступно».
+                // С прямыми files (mp4_*/hls/dash) — VK path (ExoPlayer нативно).
+                lower.contains("video_ext.php") ||
+                lower.contains("vkvideo.ru/") ||
+                lower.contains("vk.com/video") ||
+                lower.contains("vk.ru/video") -> {
+                    return if (hasPlayableFiles()) VideoPlatform.VK else VideoPlatform.UNKNOWN
+                }
                 p.startsWith("http://") || p.startsWith("https://") -> {
                     // #OK-NATIVE-FIX: OK-crosspost теперь имеет player=vk.ru/video_ext.php
                     // (НЕ ok.ru/videoembed). Если VK при этом отдал РЕАЛЬНЫЕ прямые URL

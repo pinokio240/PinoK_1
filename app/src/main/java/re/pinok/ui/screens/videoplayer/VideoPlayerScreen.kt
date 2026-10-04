@@ -502,10 +502,38 @@ fun VideoPlayerScreen(
         fetchError = null
         sessionExpired = false
         try {
-            val fresh = app.apiClient.videoGetById(resolvedVideo.ownerId, resolvedVideo.id, resolvedVideo.accessKey)
-            if (fresh != null && (fresh.files?.isNotEmpty() == true || !fresh.player.isNullOrBlank())) {
-                AppLog.i(TAG, "video.get вернул видео: files=${fresh.files?.keys}, platform=${fresh.videoPlatform}, externalId=${fresh.externalId}, player=${fresh.player?.take(60)}")
-                resolvedVideo = fresh  // перезапускает LaunchedEffect(resolvedVideo)
+            // P0.3 #VIDEO-IN-CHANNELS: fallback-chain для VK-native видео из
+            // каналов/wall.get. Шаг 1 — текущий videoGetById(ownerId, videoId,
+            // accessKey). accessKey мог быть извлечён из player URL (parseVideoFull,
+            // P0.2) — тогда VK вернёт полные files. Шаг 2 (ниже) — если шаг 1
+            // вернул null И accessKey был пуст (нет hash в player URL — публичное
+            // видео) → перегрузка videoGet(listOf("ownerId_videoId")) (без
+            // access_key в идентификаторе). Шаг 3 (UI) — если и это не помогло →
+            // кнопка «Открыть в браузере» в error-state (см. ниже в when-блоке).
+            val hadAccessKey = !resolvedVideo.accessKey.isNullOrBlank()
+            val fresh = app.apiClient.videoGetById(
+                resolvedVideo.ownerId,
+                resolvedVideo.id,
+                resolvedVideo.accessKey,
+            )
+            // P0.3 шаг 2: videoGetById вернул null/пустое И accessKey был пуст →
+            // пробуем перегрузку videoGet(List<String>) — VK может вернуть полные
+            // files для публичных видео, даже без явного access_key.
+            val finalVideo = if (fresh != null && (fresh.files?.isNotEmpty() == true || !fresh.player.isNullOrBlank())) {
+                fresh
+            } else if (!hadAccessKey) {
+                AppLog.i(TAG, "videoGetById null и accessKey пустой — fallback на videoGet(listOf(\"ownerId_videoId\"))")
+                val list = app.apiClient.videoGet(listOf("${resolvedVideo.ownerId}_${resolvedVideo.id}"))
+                list.firstOrNull {
+                    it.id == resolvedVideo.id &&
+                        (it.files?.isNotEmpty() == true || !it.player.isNullOrBlank())
+                }
+            } else {
+                null
+            }
+            if (finalVideo != null) {
+                AppLog.i(TAG, "video.get вернул видео: files=${finalVideo.files?.keys}, platform=${finalVideo.videoPlatform}, externalId=${finalVideo.externalId}, player=${finalVideo.player?.take(60)}")
+                resolvedVideo = finalVideo  // перезапускает LaunchedEffect(resolvedVideo)
             } else {
                 fetchError = "Видео недоступно (нет прямых ссылок)"
                 // P2 #VIDEO-SESSION-HOLD: null + невалидный токен = сессия истекла
@@ -1625,9 +1653,22 @@ fun VideoPlayerScreen(
                             // OK-IMPL-1 (Stage 3b): OK-видео недоступно нативно
                             // (metadata fetch failed) — даём пользователю кнопку
                             // «Открыть в браузере» (откроет ok.ru/videoembed/...).
-                            if (video.videoPlatform == VideoPlatform.OK && !video.player.isNullOrBlank()) {
+                            //
+                            // P0.3 #VIDEO-IN-CHANNELS: кнопку теперь показываем ТАКЖЕ
+                            // для VK/UNKNOWN — это last-resort для канальных видео, где
+                            // videoGetById + videoGet fallback-chain (см. LaunchedEffect
+                            // выше) ничего не дали. Не блокирует навигацию (кнопка «Назад»
+                            // в top-bar остаётся), но даёт юзеру выход — открыть видео
+                            // в системном браузере по player URL (video_ext.php умеет
+                            // играть как главная страница, в отличие от iframe-встраивания
+                            // в OkWebViewPlayer, которое и было причиной чёрного экрана).
+                            val openInBrowserUrl = video.player?.takeIf { it.isNotBlank() }
+                            if (openInBrowserUrl != null) {
                                 Text(
-                                    "OK-видео не удалось разобрать. Попробуйте открыть в браузере.",
+                                    if (video.videoPlatform == VideoPlatform.OK)
+                                        "OK-видео не удалось разобрать. Попробуйте открыть в браузере."
+                                    else
+                                        "Видео не удалось загрузить. Попробуйте открыть в браузере.",
                                     color = VK_TEXT_SECONDARY, fontSize = 12.sp,
                                     textAlign = TextAlign.Center,
                                 )
@@ -1638,7 +1679,7 @@ fun VideoPlayerScreen(
                                         .clickable {
                                             val intent = android.content.Intent(
                                                 android.content.Intent.ACTION_VIEW,
-                                                android.net.Uri.parse(video.player),
+                                                android.net.Uri.parse(openInBrowserUrl),
                                             )
                                             intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                                             try {

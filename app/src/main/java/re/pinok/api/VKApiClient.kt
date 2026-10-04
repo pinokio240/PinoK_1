@@ -12066,6 +12066,13 @@ class VKApiClient(
         val accessCanRepost = access?.get("can_repost")?.let { if (safeBool(it)) 1 else 0 }
         val accessCanComment = access?.get("can_comment")?.let { if (safeBool(it)) 1 else 0 }
         val accessCanSubscribe = access?.get("can_subscribe")?.let { if (safeBool(it)) 1 else 0 }
+        // P0.2 #VIDEO-IN-CHANNELS: VK кладёт access_key для приватных/канальных
+        // видео в player URL как &hash=XXX (embed-формат). wall.get и
+        // messages.getHistory возвращают video-аттачменты БЕЗ явного access_key
+        // поля, но с player=...&hash=ZZZ — извлекаем, чтобы videoGetById мог
+        // запросить полные files (иначе VK возвращает error 5/15 «access denied»).
+        val playerUrl = safeString(o.get("player"))
+        val accessKey = safeString(o.get("access_key")) ?: extractHashFromPlayerUrl(playerUrl)
         return Video(
             id = idVal,
             ownerId = safeLong(o.get("owner_id")),
@@ -12074,9 +12081,9 @@ class VKApiClient(
             duration = durationVal,
             date = dateVal,
             views = viewsVal,
-            player = safeString(o.get("player")),
+            player = playerUrl,
             files = parseVideoFiles(o),
-            accessKey = safeString(o.get("access_key")),
+            accessKey = accessKey,
             image = imageThumbs,
             firstFrames = firstFrames,
             // #WALL-CLIPS: размеры кадра — для детекции вертикальных клипов на стене.
@@ -12142,6 +12149,29 @@ class VKApiClient(
             if (str.isNotBlank()) map[key] = str
         }
         return if (map.isEmpty()) null else map
+    }
+
+    /**
+     * P0.2 #VIDEO-IN-CHANNELS: извлекает access_key из `hash`-параметра player URL.
+     *
+     * VK кладёт access_key для приватных/канальных видео в embed-player URL как
+     * `?hash=XXX` или `&hash=XXX` (например,
+     * `https://vk.com/video_ext.php?oid=-XXX&id=YYY&hash=ZZZ`). wall.get /
+     * messages.getHistory / channels.getHistory возвращают video-аттачменты
+     * именно в таком формате — без явного `access_key` поля в JSON, но с `hash`
+     * в `player`. video.get по `ownerId_videoId_accessKey` возвращает полные
+     * `files` (mp4_*/hls/dash), без access_key — VK отвечает error 5/15
+     * «access denied» для приватных видео.
+     *
+     * @param playerUrl player URL (например, video_ext.php?...&hash=abc123).
+     * @return значение `hash` параметра или null, если URL пустой или без hash.
+     */
+    private fun extractHashFromPlayerUrl(playerUrl: String?): String? {
+        if (playerUrl.isNullOrBlank()) return null
+        // Ловим ?hash=XXX или &hash=XXX (case-insensitive). Hash VK — это
+        // hex-подобная строка [a-zA-Z0-9]+ (длина типично 8–16 символов).
+        val regex = Regex("""[?&]hash=([a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
+        return regex.find(playerUrl)?.groupValues?.getOrNull(1)
     }
 
     // Fix #69: общий helper для парсинга image[] (превью видео).

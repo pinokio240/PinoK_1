@@ -919,6 +919,17 @@ fun ChatDetailScreen(
     // GroupInfo сообщества-канала — для PostHolder.lastGroups (имя сообщества
     // в PostDetailScreen, паритет CommunityScreen).
     var channelGroup by remember { mutableStateOf<re.pinok.api.VKApiClient.GroupInfo?>(null) }
+    // P0.7 (2026-10-04): админ канала имеет canWrite.allowed=true → Chat.isChannel
+    // (Models.kt:758) = false → UI-панели канала (peerId<0 && isChannel) не
+    // открывались, клик по шапке — no-op без else. Локально расширяем: канал
+    // для UI = peerId<0 И (isChannel ИЛИ channelGroup != null). channelGroup
+    // != null означает, что это group-чат с известной GroupInfo — то ли это
+    // настоящий канал-подписчик (isChannel=true), то ли админ канала (isChannel=false,
+    // но channelGroup загружена). Для обоих показываем панель канала. Все gated
+    // UI-условия используют isChannelUi вместо isChannel (см. ChatDetailScreen.kt:
+    // 3618, 5731, 5798, 5813, 5823, 5832, 5833). Логику send/block (channelWriteDenied,
+    // 2541/2858) НЕ трогаем — там isChannel/peerId<0 корректны.
+    val isChannelUi = isChannel || (peerId < 0 && channelGroup != null)
     // Optimistic-состояния лайков постов канала (паттерн ProfileScreen:
     // key "ownerId_id" → (isLiked, count) + in-flight guard).
     val channelLikeStates = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
@@ -950,6 +961,11 @@ fun ChatDetailScreen(
     var showChannelVideo by remember { mutableStateOf(false) }
     var showChannelAudio by remember { mutableStateOf(false) }
     var showChannelFiles by remember { mutableStateOf(false) }
+    // #CHANNEL-CLIPS (P0.5, 2026-10-04): панель «Клипы» канала —
+    // shortVideo.getOwnerVideos(ownerId=-abs(peerId)). Открывается из панели
+    // канала по разделу «Клипы»; только канал. Аддитивно: обычные диалоги не
+    // затрагиваются.
+    var showChannelClips by remember { mutableStateOf(false) }
     // ══════════════════════════════════════════════════════════════════════
 
     // P3.7: bubble-less дизайн — flat layout (без Card/bubble), как m.vk.ru.
@@ -3615,10 +3631,19 @@ fun ChatDetailScreen(
                             // #CHANNEL-INFO-PANEL (2026-10-03): тап по шапке канала
                             // (peerId<0) открывает панель канала. Обычные диалоги
                             // (позитивный peerId) — по-прежнему профиль собеседника.
-                            if (peerId < 0 && isChannel) {
+                            // P0.7 (2026-10-04): isChannelUi (а не isChannel) — чтобы
+                            // панель открывалась и для АДМИНА канала (canWrite.allowed=true
+                            // → Chat.isChannel=false, но channelGroup != null → isChannelUi=true).
+                            // else if (peerId<0) — fallback если channelGroup ещё не
+                            // загружена (открываем панель, она подгрузится позже).
+                            if (peerId < 0 && isChannelUi) {
                                 showChannelInfoPanel = true
                             } else if (peerId in 1..1_999_999_999L) {
                                 onUserClick(peerId)
+                            } else if (peerId < 0) {
+                                // Админ канала до загрузки channelGroup или обычная
+                                // группа/chat — открываем панель канала (контент сообщества).
+                                showChannelInfoPanel = true
                             }
                         },
                     ) {
@@ -5728,7 +5753,7 @@ fun ChatDetailScreen(
     // в корне CompositionLocalProvider, поэтому работает в любом суб-режиме
     // канала (wall/история). Аддитивно: обычные диалоги не затрагиваются,
     // разделы показывают Toast (групповых маршрутов Screen.* нет).
-    if (peerId < 0 && isChannel && showChannelInfoPanel) {
+    if (peerId < 0 && isChannelUi && showChannelInfoPanel) {
         ModalBottomSheet(
             onDismissRequest = { showChannelInfoPanel = false },
         ) {
@@ -5763,9 +5788,10 @@ fun ChatDetailScreen(
                 },
                 onSectionClick = { section ->
                     when (section) {
-                        // #CHANNEL-PHOTOS: «Фотографии» — фото-лента канала
-                        // (photosPhotoFeedList, ownerId=-abs(peerId)); альбомы —
-                        // вторичный уровень внутри ChannelPhotoFeedDialog.
+                        // #CHANNEL-PHOTOS: «Фотографии» — фото канала
+                        // (photosGet albumId="wall", ownerId=-abs(peerId)); P0.6
+                        // заменил photosPhotoFeedList (личная лента) на photosGet
+                        // (фото сообщества) — см. ChannelPhotoFeedDialog.
                         "Фотографии" -> {
                             showChannelInfoPanel = false
                             showChannelPhotos = true
@@ -5785,17 +5811,32 @@ fun ChatDetailScreen(
                             showChannelInfoPanel = false
                             showChannelFiles = true
                         }
+                        // #CHANNEL-CLIPS (P0.5, 2026-10-04): «Клипы» —
+                        // shortVideo.getOwnerVideos(ownerId=-abs(peerId)),
+                        // вертикальные 9:16 постеры в ChannelClipsDialog.
+                        "Клипы" -> {
+                            showChannelInfoPanel = false
+                            showChannelClips = true
+                        }
+                        // P0.9 (2026-10-04): defensive-else — если в
+                        // ChannelInfoSectionsGrid добавят новую кнопку без
+                        // обновления when, тап не молчит, а логируется
+                        // (раньше был silent no-op, см. Task 2 аудит).
+                        else -> {
+                            AppLog.w("ChannelPanel", "Unknown section: $section")
+                        }
                     }
                 },
             )
         }
     }
-    // #CHANNEL-PHOTOS (2026-10-04): панель «Фотографии» канала — фото-лента
-    // сообщества (photosPhotoFeedList, ownerId=-abs(peerId)) с пагинацией;
-    // альбомы — вторичный уровень внутри ChannelPhotoFeedDialog. Открывается по
-    // клику на раздел «Фотографии» панели канала. Тап по фото → PhotoViewer.
+    // #CHANNEL-PHOTOS (P0.6, 2026-10-04): панель «Фотографии» канала — фото
+    // сообщества (photosGet albumId="wall", ownerId=-abs(peerId)) с
+    // offset-пагинацией; P0.6 заменил photosPhotoFeedList (личная фотолента
+    // photos.photoFeedGet, работала только для owner_id>0) на photosGet
+    // (фото сообщества, как в CommunityScreen.kt:363). Тап по фото → PhotoViewer.
     // Аддитивно: только канальный режим.
-    if (peerId < 0 && isChannel && showChannelPhotos) {
+    if (peerId < 0 && isChannelUi && showChannelPhotos) {
         ChannelPhotoFeedDialog(
             apiClient = app.apiClient,
             ownerId = -abs(peerId),
@@ -5810,7 +5851,7 @@ fun ChatDetailScreen(
     }
     // #CHANNEL-SECTIONS (2026-10-04): панель «Видео» канала (videoGet с
     // ownerId=-abs(peerId)); тап по видео → onVideoClick (воспроизведение).
-    if (peerId < 0 && isChannel && showChannelVideo) {
+    if (peerId < 0 && isChannelUi && showChannelVideo) {
         ChannelVideoDialog(
             apiClient = app.apiClient,
             ownerId = -abs(peerId),
@@ -5820,7 +5861,7 @@ fun ChatDetailScreen(
     }
     // #CHANNEL-SECTIONS (2026-10-04): панель «Музыка» канала (audioGetWithCount
     // с ownerId=-abs(peerId)); рендер AudioAttachmentList (сам запускает плеер).
-    if (peerId < 0 && isChannel && showChannelAudio) {
+    if (peerId < 0 && isChannelUi && showChannelAudio) {
         ChannelAudioDialog(
             apiClient = app.apiClient,
             ownerId = -abs(peerId),
@@ -5829,11 +5870,23 @@ fun ChatDetailScreen(
     }
     // #CHANNEL-SECTIONS (2026-10-04): панель «Файлы» канала (docsGet с
     // ownerId=-abs(peerId)); тап/кнопка скачивает документ (DownloadManager).
-    if (peerId < 0 && isChannel && showChannelFiles) {
+    if (peerId < 0 && isChannelUi && showChannelFiles) {
         ChannelFilesDialog(
             apiClient = app.apiClient,
             ownerId = -abs(peerId),
             onDismiss = { showChannelFiles = false },
+        )
+    }
+    // #CHANNEL-CLIPS (P0.5, 2026-10-04): панель «Клипы» канала
+    // (shortVideo.getOwnerVideos, ownerId=-abs(peerId)); вертикальные 9:16
+    // постеры в ChannelClipsDialog. Тап → onVideoClick (воспроизведение клипа
+    // через VideoHolder.open, как в CommunityScreen). Аддитивно: только канал.
+    if (peerId < 0 && isChannelUi && showChannelClips) {
+        ChannelClipsDialog(
+            apiClient = app.apiClient,
+            ownerId = -abs(peerId),
+            onDismiss = { showChannelClips = false },
+            onVideoClick = onVideoClick,
         )
     }
     }  // Fix #228: closes CompositionLocalProvider(LocalStickerPhotoScale)
@@ -10209,7 +10262,11 @@ private fun ChannelInfoSectionItem(
     }
 }
 
-/** #CHANNEL-INFO-PANEL: сетка разделов канала 2×2 (Фото/Видео/Музыка/Файлы). */
+/** #CHANNEL-INFO-PANEL: сетка разделов канала 2×2 + третья строка «Клипы»
+ *  (Фото/Видео/Музыка/Файлы/Клипы). P0.4 (2026-10-04): добавлена кнопка
+ *  «Клипы» (Icons.Filled.PlayCircle) → onSectionClick("Клипы"), роутится в
+ *  ChannelClipsDialog через when(section) (P0.5).
+ */
 @Composable
 private fun ChannelInfoSectionsGrid(
     onSectionClick: (String) -> Unit,
@@ -10244,6 +10301,16 @@ private fun ChannelInfoSectionsGrid(
                 icon = Icons.Outlined.Description,
                 modifier = Modifier.weight(1f),
                 onClick = { onSectionClick("Файлы") },
+            )
+        }
+        // P0.4 (2026-10-04): «Клипы» — shortVideo.getOwnerVideos(ownerId=-groupId).
+        // Иконка PlayCircle — фрейм видео, как в CommunityScreen.ClipThumbnail.
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ChannelInfoSectionItem(
+                label = "Клипы",
+                icon = Icons.Filled.PlayCircle,
+                modifier = Modifier.weight(1f),
+                onClick = { onSectionClick("Клипы") },
             )
         }
     }
@@ -10590,12 +10657,19 @@ private fun channelPhotoCountLabel(count: Int): String {
     }
 }
 
-/** #CHANNEL-PHOTOS-FEED (2026-10-04): панель «Фотографии» канала — лента фото
- *  сообщества через photosPhotoFeedList (ownerId=-abs(peerId)), с курсорной
- *  пагинацией (start_from/next_from). Сетка 3 колонки, тап по фото →
- *  onPhotoClick(список URL, индекс) для PhotoViewer. ModalBottomSheet.
+/** #CHANNEL-PHOTOS-FEED (2026-10-04, P0.6): панель «Фотографии» канала —
+ *  фото сообщества через photosGet(albumId="wall", ownerId=-abs(peerId)),
+ *  offset-пагинация. Сетка 3 колонки, тап по фото → onPhotoClick(список URL,
+ *  индекс) для PhotoViewer. ModalBottomSheet.
  *
- * @param apiClient    VKApiClient (photosPhotoFeedList)
+ *  P0.6 (2026-10-04): БЫЛО photosPhotoFeedList (photos.photoFeedGet — ЛИЧНАЯ
+ *  фотолента пользователя, работает только для owner_id>0; для канала
+ *  ownerId<0 VK возвращал пусто → пользователь видел «В сообществе нет
+ *  фотографий» даже когда фото есть). СТАЛО photosGet(albumId="wall") — фото
+ *  сообщества (стена), как в CommunityScreen.kt:363 и мёртвом ChannelPhotosDialog
+ *  (теперь redundant). Источник: VKApiClient.photosGet (9865).
+ *
+ * @param apiClient    VKApiClient (photosGet)
  * @param ownerId      владелец фото (=-group_id, отрицательный id канала)
  * @param onDismiss    закрыть панель (кнопка «×» / системный back)
  * @param onPhotoClick тап по фото — [список URL, индекс] для PhotoViewer
@@ -10610,27 +10684,38 @@ private fun ChannelPhotoFeedDialog(
 ) {
     BackHandler { onDismiss() }
 
+    // P0.6: photosGet возвращает List<PhotoItem> (без cursor), пагинация offset'ом.
+    // hasMore=true пока VK отдаёт полную страницу (pageSize) — как только меньше,
+    // это последняя страница. offset сдвигается на размер полученной страницы.
     var photos by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
-    var nextFrom by remember { mutableStateOf<String?>(null) }
+    var offset by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // Счётчик для «Повторить»: переключение перезапускает начальный LaunchedEffect.
     var seq by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+    val pageSize = 40
 
     fun loadFirst() {
         scope.launch {
             loading = true
             error = null
             try {
-                val r = apiClient.photosPhotoFeedList(ownerId = ownerId, count = 40, startFrom = null)
-                photos = r.items.distinctBy { "${it.ownerId}_${it.id}" }
-                nextFrom = r.nextFrom
+                val page = apiClient.photosGet(
+                    ownerId = ownerId,
+                    albumId = "wall",
+                    count = pageSize,
+                    offset = 0,
+                )
+                photos = page.distinctBy { "${it.ownerId}_${it.id}" }
+                offset = page.size
+                hasMore = page.size == pageSize
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 throw ce
             } catch (e: Exception) {
-                AppLog.e("ChatDetailScreen", "#CHANNEL-PHOTOS-FEED photosPhotoFeedList failed", e)
+                AppLog.e("ChatDetailScreen", "#CHANNEL-PHOTOS-FEED photosGet failed", e)
                 error = apiClient.lastApiError ?: e.message
             } finally {
                 loading = false
@@ -10639,19 +10724,20 @@ private fun ChannelPhotoFeedDialog(
     }
 
     fun loadMore() {
-        val cursor = nextFrom
-        if (cursor == null || cursor.isBlank() || loadingMore) return
+        if (loadingMore || !hasMore) return
         loadingMore = true
         scope.launch {
             try {
-                val r = apiClient.photosPhotoFeedList(
+                val page = apiClient.photosGet(
                     ownerId = ownerId,
-                    count = 40,
-                    startFrom = cursor,
+                    albumId = "wall",
+                    count = pageSize,
+                    offset = offset,
                 )
-                val page = r.items.distinctBy { "${it.ownerId}_${it.id}" }
-                photos = (photos + page).distinctBy { "${it.ownerId}_${it.id}" }
-                nextFrom = r.nextFrom
+                val distinct = page.distinctBy { "${it.ownerId}_${it.id}" }
+                photos = (photos + distinct).distinctBy { "${it.ownerId}_${it.id}" }
+                offset += page.size
+                hasMore = page.size == pageSize
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 throw ce
             } catch (e: Exception) {
@@ -10735,9 +10821,9 @@ private fun ChannelPhotoFeedDialog(
                             }
                         }
                         // Футер-пагинация: автоматически тянет следующую страницу.
-                        if (nextFrom != null || loadingMore) {
+                        if (hasMore || loadingMore) {
                             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                                LaunchedEffect(nextFrom) {
+                                LaunchedEffect(hasMore, offset) {
                                     loadMore()
                                 }
                                 Box(
@@ -10846,6 +10932,185 @@ private fun ChannelVideoDialog(
                         // Reuse public ProfileScreen.VideoThumbnail (16:9 карточка).
                         VideoThumbnail(video = video, onClick = onVideoClick)
                     }
+                }
+            }
+        }
+    }
+}
+
+/** #CHANNEL-CLIPS (P0.5, 2026-10-04): панель «Клипы» канала — shortVideo.
+ *  getOwnerVideos(ownerId=-abs(peerId)), вертикальные 9:16 постеры в
+ *  горизонтальном LazyRow (как лента клипов). Тап → onVideoClick (воспроизведение
+ *  клипа через VideoHolder.open / VideoPlatformRouter — тот же путь, что для
+ *  обычного видео CommunityScreen). ModalBottomSheet, системный back закрывает.
+ *
+ *  Образец: ChannelVideoDialog (videoGet + VideoThumbnail 16:9). Здесь —
+ *  shortVideoGetOwnerVideos + ChannelClipThumbnail 9:16 (как CommunityScreen:
+ *  ClipThumbnail, но локально, т.к. CommunityScreen.ClipThumbnail private).
+ *
+ * @param apiClient   VKApiClient (shortVideoGetOwnerVideos, VKApiClient.kt:18093)
+ * @param ownerId     владелец клипов (=-group_id, отрицательный id канала)
+ * @param onDismiss   закрыть панель (кнопка «×» / системный back)
+ * @param onVideoClick тап по клипу → onVideoClick(Video)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChannelClipsDialog(
+    apiClient: re.pinok.api.VKApiClient,
+    ownerId: Long,
+    onDismiss: () -> Unit,
+    onVideoClick: (Video) -> Unit,
+) {
+    BackHandler { onDismiss() }
+
+    var clips by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // Счётчик для «Повторить»: переключение перезапускает LaunchedEffect.
+    var seq by remember { mutableStateOf(0) }
+
+    LaunchedEffect(ownerId, seq) {
+        loading = true
+        error = null
+        try {
+            clips = apiClient.shortVideoGetOwnerVideos(ownerId = ownerId, count = 30)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.e("ChatDetailScreen", "#CHANNEL-CLIPS shortVideoGetOwnerVideos failed", e)
+            error = apiClient.lastApiError ?: e.message
+        } finally {
+            loading = false
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            // Заголовок «Клипы» + «×» (закрыть).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Клипы",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть")
+                }
+            }
+            when {
+                loading -> Box(
+                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+                error != null -> Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Не удалось загрузить клипы", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = error.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { seq++ }) { Text("Повторить") }
+                }
+                clips.isEmpty() -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "В сообществе нет клипов",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                // Горизонтальная лента 9:16 постеров (как VK web/clips-app).
+                else -> LazyRow(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(clips, key = { "chclip_${it.ownerId}_${it.id}" }) { clip ->
+                        ChannelClipThumbnail(video = clip, onClick = onVideoClick)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** #CHANNEL-CLIPS: вертикальный 9:16 постер клипа (clipPosterUrl → thumbUrl
+ *  fallback), кнопка-play overlay + название клипа снизу. Тап → onClick(video)
+ *  → onVideoClick → VideoHolder.open (нативный плеер с fallback к videoGetById
+ *  при пустых files). Уменьшенная копия CommunityScreen.ClipThumbnail
+ *  (CommunityScreen.kt:1881, private там — копируем локально).
+ */
+@Composable
+private fun ChannelClipThumbnail(
+    video: Video,
+    onClick: (Video) -> Unit,
+) {
+    val thumbUrl = video.clipPosterUrl ?: video.thumbUrl
+    Card(
+        modifier = Modifier
+            .width(140.dp)
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick(video) },
+        elevation = CardDefaults.cardElevation(0.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(9f / 16f)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbUrl != null) {
+                AsyncImage(
+                    model = thumbUrl,
+                    contentDescription = video.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            // Play-button overlay.
+            Box(
+                modifier = Modifier.size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+            // Название клипа снизу (как в clips-сетке VK).
+            if (video.title.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = video.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
