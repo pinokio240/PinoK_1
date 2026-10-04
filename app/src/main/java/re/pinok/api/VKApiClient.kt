@@ -7933,7 +7933,7 @@ class VKApiClient(
         args["message"] = text
         if (replyToComment != null) args["reply_to_comment"] = replyToComment.toString()
         val json = call("channels.createComment", args, forceWebGateway = true) ?: return false
-        return if (json?.has("response") == true) true else { AppLog.w("VKApiClient", "channelsCreateComment no response"); false }
+        return if (json.has("response")) true else { AppLog.w("VKApiClient", "channelsCreateComment no response"); false }
     }
 
     /**
@@ -7956,7 +7956,7 @@ class VKApiClient(
             ),
             forceWebGateway = true,
         ) ?: return false
-        return if (json?.has("response") == true) true else { AppLog.w("VKApiClient", "channelsEditComment no response"); false }
+        return if (json.has("response")) true else { AppLog.w("VKApiClient", "channelsEditComment no response"); false }
     }
 
     /**
@@ -7981,7 +7981,7 @@ class VKApiClient(
             ),
             forceWebGateway = true,
         ) ?: return false
-        return if (json?.has("response") == true) true else { AppLog.w("VKApiClient", "channelsDeleteComment no response"); false }
+        return if (json.has("response")) true else { AppLog.w("VKApiClient", "channelsDeleteComment no response"); false }
     }
 
     /**

@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "versionCode": 219,
+      "versionName": "2.1.9",
+      "stamp": "calls-2.1.9-2026.10.04-1",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/V2.1.9/Pinok_0410261906.apk",
+      "sha256": "0d34c449cf930a2fe192c916bdd08a2db63fdae5ae4ff470c0f5f9385288c442",
+      "notes": "PinoK 2.1.9 (версия 219), штамп calls-2.1.9-2026.10.04-1:\n• Канальный пост — карточка поста сообщества.\n• Каналы: фиксы аватара канала и редактирования/удаления комментариев.\n• Разделы канала: Фото, Видео, Музыка, Файлы."
+    },
+    {
       "versionCode": 9,
       "versionName": "2.1.8",
       "stamp": "calls-2.1.8-2026.10.03-2",

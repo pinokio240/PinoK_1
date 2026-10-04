@@ -32,8 +32,9 @@ android {
         // сообщества». Двухфазный релиз: version.json 6/2.1.5 с пустыми
         // apkUrl/sha256 заполним после публикации APK на GitHub Releases
         // (docs/UPDATER.md §1 шаг 5).
-        versionCode = 9
-        versionName = "2.1.8"
+        versionCode = 219
+        versionName = "2.1.9"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-04T00:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
