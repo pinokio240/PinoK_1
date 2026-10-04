@@ -12091,3 +12091,66 @@ Task: Закрытие P1.1/P1.3/P2.1/P2.4 из аудита безопасно�
 - HISTORY.md (+запись SECURITY-AUDIT-FIX-2026-10-04)
 
 Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK в среде аудита — пользователь собирает сам).
+
+---
+Task ID: 9+10 (CHANNEL-FIX-P0-2026-10-04)
+Agent: orchestrator (main) + 2 general-purpose subagents (параллельно)
+Task: P0 — починить функциональные баги пользователя: видео в каналах не воспроизводится / кнопки контента не работают / нет кнопки Клипы.
+
+## Контекст
+Аудит (Tasks 1-6) выявил 3 симптома пользователя + неочевидные проблемы. Пользователь утвердил P0 к фиксу. Делегировано 2 агентам параллельно с эксклюзивным владением файлами (во избежание конфликтов): агент 9 — видео (Models.kt + VKApiClient.kt + VideoPlayerScreen.kt), агент 10 — канальная панель (ChatDetailScreen.kt).
+
+## Work Log
+
+### Task 9 (P0.1-3, video) — general-purpose subagent
+- P0.1 Models.kt:435-461 detectPlatform(): добавлена ветка ПЕРЕД generic http/https:
+  ```kotlin
+  lower.contains("video_ext.php") ||
+  lower.contains("vkvideo.ru/") ||
+  lower.contains("vk.com/video") ||
+  lower.contains("vk.ru/video") -> {
+      return if (hasPlayableFiles()) VideoPlatform.VK else VideoPlatform.UNKNOWN
+  }
+  ```
+  VideoPlatform.UNKNOWN существует в enum (Models.kt:224). VideoPlatformRouter.kt:118-119 уже маршрутизирует UNKNOWN → VideoPlayerScreen. EXTERNAL_IFRAME сохранён для не-VK embed.
+- P0.2 VKApiClient.kt parseVideoFull (~12069): val playerUrl + accessKey с fallback на extractHashFromPlayerUrl(playerUrl). Новый private-метод extractHashFromPlayerUrl (12169): Regex `[?&]hash=([a-zA-Z0-9]+)` извлекает hash из player URL. Чинит channels.getHistory (не возвращает access_key в JSON).
+- P0.3 VideoPlayerScreen.kt LaunchedEffect (~504-549): fallback-chain. hadAccessKey=!accessKey.isBlank. finalVideo = videoGetById → если null и !hadAccessKey → videoGet(listOf("ownerId_videoId")) → если null → UI-кнопка «Открыть в браузере» (Intent.ACTION_VIEW на video.player) для VK/UNKNOWN. Success-ветка не тронута.
+
+### Task 10 (P0.4-7,9, channels panel) — general-purpose subagent
+- P0.4 ChatDetailScreen.kt ChannelInfoSectionsGrid (~10308): добавлена 3-я Row с кнопкой «Клипы» (Icons.Filled.PlayCircle — Outlined нет в import'ах, Filled как fallback). onSectionClick("Клипы").
+- P0.5 showChannelClips state (968) + кейс "Клипы" в when (5817) + render (5884) + ChannelClipsDialog (10941-11118, по образцу ChannelVideoDialog): shortVideoGetOwnerVideos(ownerId, count=30), ModalBottomSheet, LazyRow 9:16 постеров (ChannelClipThumbnail: Card+Box aspectRatio 9f/16f + AsyncImage + play-overlay + title-overlay). Тап → onVideoClick → VideoHolder.open.
+- P0.6 ChannelPhotoFeedDialog (~10660-10842): photosPhotoFeedList (photos.photoFeedGet — ЛИЧНАЯ лента, для ownerId<0 пусто) → photosGet(albumId="wall", ownerId, count=40, offset=N) — фото сообщества (как CommunityScreen:363). Курсорная → offset-ная пагинация. Публичный API и UI не изменены.
+- P0.7 ChatDetailScreen.kt:932 — val isChannelUi = isChannel || (peerId<0 && channelGroup!=null). Заменено peerId<0&&isChannel → peerId<0&&isChannelUi в 6 gating-условиях (5756, 5839, 5854, 5864, 5873, 5884) + клик по шапке (3639). else-if(peerId<0) fallback (3643) — showChannelInfoPanel=true для админа до загрузки channelGroup. Send/block-логика НЕ тронута.
+- P0.9 ChatDetailScreen.kt:5826 — else -> { AppLog.w("ChannelPanel", "Unknown section: $section") } в onSectionClick when.
+
+## Проверки
+- git diff --stat: 4 файла, +394/−43.
+- P0.1: rg video_ext.php|vkvideo.ru|vk.com/video → найдено в detectPlatform (Models.kt:450-460).
+- P0.2: rg extractHashFromPlayerUrl → 2 совпадения (вызов 12075 + определение 12169).
+- P0.3: rg videoGet(listOf|hadAccessKey|finalVideo → найдено в VideoPlayerScreen.
+- P0.4: rg Клипы|showChannelClips|ChannelClipsDialog → 10+ совпадений в ChatDetailScreen.
+- P0.6: rg photosGet(|photosPhotoFeedList → photosGet вызывается (10379, 10706), photosPhotoFeedList только в KDoc.
+- P0.7: rg isChannelUi → 8 совпадений (определение 932 + 6 gating + клик шапки).
+- P0.9: rg Unknown section|ChannelPanel → найдено (5826).
+- Баланс скобок: Models 105/105, ChatDetailScreen 2322/2322 braces / 4830/4830 parens.
+
+## Stage Summary
+
+ВЫПОЛНЕНО (P0 — все 3 симптома пользователя):
+1. ВИДЕО В КАНАЛАХ: detectPlatform направляет VK-embed на UNKNOWN → VideoPlayerScreen → videoGetById (с accessKey из &hash=) → нативный ExoPlayer. Fallback-chain: videoGet(list) → «Открыть в браузере».
+2. КНОПКИ КОНТЕНТА: Фото канала теперь photosGet(albumId="wall") вместо личной photoFeedGet. isChannelUi открывает панели для админа канала. else в when логирует неизвестные секции.
+3. КНОПКА «КЛИПЫ»: добавлена в ChannelInfoSectionsGrid (3-я Row), открывает ChannelClipsDialog через shortVideoGetOwnerVideos.
+
+НЕ СДЕЛАНО (перенесено в backlog):
+- P1.1b: WebTokenAuth.kt:254,972 — redactAccessToken (та же утечка, что P1.1).
+- P0.8: CommunityScreen.kt:198 tabs — динамически из GroupSections + Файлы (не критично для каналов).
+- P3.* (9 MED): HiddenSessionRefresher race, EqualizerHelper getter, Folders/Pinned/Archived Repository TOCTOU, Queuev4Client секрет в URL, LongPollClient tight-loop failed=4, SovaApp.runBlocking onCreate, AudioEffectsEngine stale scoSuspended, VideoPipController lambda-утечка, VideoPipActivity exposed receiver.
+- P4.* (3 LOW): Music/VideoDownloadService ServiceCompat.startForeground, VkCookieJar skip-invalid-cookie, VkSigner hardcoded VK_CLIENT_SECRET.
+
+Файлы (4, +394/−43):
+- core/data/src/main/java/re/pinok/data/model/Models.kt (+15)
+- app/src/main/java/re/pinok/api/VKApiClient.kt (+34/−2)
+- app/src/main/java/re/pinok/ui/screens/videoplayer/VideoPlayerScreen.kt (+55/−9)
+- app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+299/−34)
+
+Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK в среде аудита — пользователь собирает сам).
