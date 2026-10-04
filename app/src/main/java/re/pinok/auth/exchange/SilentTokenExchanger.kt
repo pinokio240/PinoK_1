@@ -30,6 +30,17 @@ private inline fun formBody(builder: FormBody.Builder.() -> Unit): FormBody =
     FormBody.Builder().apply(builder).build()
 
 /**
+ * P2.1 #LOG-MASK: маска для логов sensitive-значений (silent_token,
+ * silent_token_uuid и т.п.). Возвращает `первые8…последние4` для длинных
+ * значений (>12 символов) и `***` для коротких (нечего показывать).
+ *
+ * Применяется только к строкам для логирования — на логику авторизации
+ * НЕ влияет.
+ */
+private fun maskTokenPrefix(v: String): String =
+    if (v.length > 12) "${v.take(8)}…${v.takeLast(4)}" else "***"
+
+/**
  * #VK-SILENT-TOKEN-EXCHANGE — обмен silent_token → access_token.
  *
  * ─────────────────────────────────────────────────────────────────────
@@ -126,7 +137,16 @@ class SilentTokenExchanger(
         providerAppId: String,
         deviceId: String,
     ): Result {
-        AppLog.i(TAG, "exchange: silent_token=${silentToken.take(12)}... uuid=$silentTokenUuid provider=$providerAppId")
+        // P2.1 #LOG-MASK: НЕ логируем silent_token_uuid полностью (UUID+token
+        // = полная credential для VK API auth.getAuthData). Показываем только
+        // префикс 8 символов + … . silent_token — только длину (take(12) было
+        // утечкой ~12 символов, оставляем маску префикса + длину).
+        AppLog.i(
+            TAG,
+            "exchange: silent_token=${maskTokenPrefix(silentToken)} (len=${silentToken.length}) " +
+                "uuid=${maskTokenPrefix(silentTokenUuid)} (len=${silentTokenUuid.length}) " +
+                "provider=$providerAppId",
+        )
 
         val errors = mutableListOf<String>()
 

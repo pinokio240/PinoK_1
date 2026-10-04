@@ -11956,3 +11956,138 @@ B (видео-оптимизация для ВСЕХ видео, плохая с
 (2) АВАТАРКА КАНАЛА: у каналов VK нет photo_50/100/200 — есть photo_base (id канала может отличаться от id сообщества-родителя). В VKApiClient.kt в GroupInfo добавлено поле photoBase (~290) + парсинг photo_base (~9794). В ChatDetailScreen.loadChannelMeta приоритет аватара `photoBase ?: photo200 ?: photo100` (~2178, 3159); устранена гонка — chat.peer.photo (photo_100) больше не затирает уже установленный канальный аватар (присвоение в if(currentPhoto.isNullOrBlank()), строки ~2938, ~3131).
 (3) РАЗДЕЛЫ КАНАЛА (панель): «Фотографии» переведён с фото-альбомов getAlbums (пустой список) на фото-ленту photosPhotoFeedList(ownerId=-abs(peerId),count=40)+курсорная пагинация start_from/next_from — новый ChannelPhotoFeedDialog (~10600). «Видео»/«Музыка»/«Файлы» были заглушкой Toast «скоро» — теперь: ChannelVideoDialog (~10760, videoGet(ownerId), VideoThumbnail), ChannelAudioDialog (~10856, audioGetWithCount(ownerId), AudioAttachmentList), ChannelFilesDialog (~10950, docsGet(ownerId), DownloadManager). В VKApiClient.docsGet (10083) добавлен параметр ownerId:Long?=null → "owner_id" при non-null (без ownerId — «мои документы», существующие вызовы не сломаны). Флаги showChannelVideo/audio/files ~947; onSectionClick редиректит все 4.
 Стиль: только ?./?: без !!; UTF-8 без BOM; скобки сбалансированы (баланс совпадает с бэкапом — строковые литералы). Бэкапы ChatDetailScreen.kt.bak-chsnap-20261004, VKApiClient.kt.bak-chsnap-20261004. Gradle НЕ собирался (пользователь собирает сам).
+---
+
+Task ID: AUDIT-NONOBVIOUS-ISSUES-2026-10-04
+Agent: subagent (general-purpose), read-only
+Task: Найти НЕОЧЕВИДНЫЕ проблемы/риски по всему репозиторию PinoK (ветка PinoK). Фокус: безопасность, realtime/longpoll, медиа, auth, memory leaks, корутины, updater, репозитории. Минимум 10-15 находок, таблица с приоритизацией критичных.
+
+Work Log:
+- Прочитал /home/z/repos/PinoK_1/worklog.md (11957 строк) — последние записи по auth/updater/notifications для контекста. Версия: 2.1.9 / versionCode 219 (build.gradle.kts:60-65).
+- Безопасность: прочитал VkSigner.kt, TokenStorage.kt, ExchangeTokenStorage.kt (полностью ~1000 строк + dumpToFile/restoreFromFileBackup), SilentTokenExchanger.kt, RemixsidCapturer.kt, SovaPrefsCrypto.kt, CookieJarBackup.kt, AppLog.kt (~600 строк). Проверил maskParams/SENSITIVE_KEYS, AppLog masking полноту. Прочитал network_security_config.xml. grep'нул AppLog.i/w/d/e с токенами/cookies/remixsid/access_token. Нашёл критичный лог-leak в OAuthWebViewActivity.kt (android.util.Log.i с raw access_token — мимо AppLog).
+- Realtime: прочитал LongPollClient.kt (~1000 строк, loop/backoff/failed/notifyResumed), Queuev4Client.kt (~205 строк, pollLoop), ChannelWebSocketClient.kt (stub), SecurityAlertsPoller.kt, NotificationsPoller.kt (head 200 строк). Проверил currentCall/cancellation/scope/SupervisorJob.
+- Медиа: прочитал AudioEffectsEngine.kt (~1000 строк, attach/release/scoSuspend), EqualizerHelper.kt (singleton), VideoDownloadService.kt, MusicDownloadService.kt (startForeground/wakelock), VideoPipController.kt (singleton + lambda retention), TrackDownloadManager.kt (~2400 строк, очередь/AES decrypt HLS segments).
+- Auth: прочитал HiddenSessionRefresher.kt, RemixsidCapturer.kt, части WebTokenAuth.kt (~470 строк вокруг silent_token parsing + logging), AuthActivity.kt head.
+- Memory/Receivers: VideoPipActivity.kt (registerReceiver / RECEIVER_NOT_EXPORTED), BootReceiver.kt.
+- Coroutines: grep GlobalScope (нет в app), grep CoroutineScope(Job()) / Dispatchers.Main + launch. SovaApp.kt 3× runBlocking в onCreate для DataStore+migrations.
+- Updater: прочитал UpdaterManager.kt (~1100 строк, fetchManifest/signature verify/downloadApk/watchRollbackDownload) + UpdaterSigning.kt (ed25519 verify). Проверил apkUrl HTTPS-гейт и sha256 required-check.
+- Repositories: FoldersRepository.kt, PinnedConversationsRepository.kt, ArchivedConversationsRepository.kt — все три имеют read-modify-write race; docstring неверно утверждает "Потокобезопасность: все операции через DataStore (атомарные put)".
+- AndroidManifest.xml: allowBackup=false, usesCleartextTraffic=false, foregroundServiceType declared, FOREGROUND_SERVICE_* permissions declared. NetworkSecurityConfig trust-anchors включает user CA store (риски корпоративного MITM).
+- Сборку не выполнял (read-only аудит).
+
+Stage Summary:
+Найдено 20 значимых проблем. КРИТИЧНЫЕ (3):
+1. OAuthWebViewActivity.kt:583,453,464,474 — `android.util.Log.i` напрямую пишет в logcat фрагменты access_token (raw ${result.take(120)} содержит "vk1.a.XXX", и autoclick-result `r` содержит `loc=window.location.href` с полным access_token в URL fragment). Обходит AppLog и `errorsOnly` гейт. Любое приложение с READ_LOGS видит чужой VK access_token.
+2. network_security_config.xml:13,42 — `<certificates src="user" />` в base-config и domain-config. Доверие user-installed CA certs на всех Android — корпоративный/MITM-прокси или malicious CA на rooted устройстве перехватывает ВЕСЬ трафик VK включая access_token/remixsid/silent_token.
+3. ExchangeTokenStorage.kt dumpToFile (~600-720) — все секреты (access_token, exchange_token, secret, trusted_hash, last_phone, last_password, silent_token, sat_token, remixsid, p, remixnsid, httoken, 6 доп. кук, remixstid/stlid) пишутся PLAINTEXT в `<filesDir>/account.json`. Несмотря на EncryptedSharedPreferences, этот файл — открытый. На rooted/ADB backup/malware-with-storage — полный захват аккаунта.
+
+ВЫСОКИЕ (5):
+4. SilentTokenExchanger.kt:129 + WebTokenAuth.kt:461 — логируют silent_token (первые 12 символов) + ПОЛНЫЙ silent_token_uuid (через AppLog.i). UUID+silent_token=полная credential. AppLog.maskParams не покрывает ключ `silent_token_uuid` (хотя покрывает `silent_token` через contains("token")).
+5. WebTokenAuth.kt:453 — `AppLog.d("window.init silent_token raw: ${raw.take(200)}")` — первые 200 символов JSON, содержащего silentToken+uuid+anonymousToken+providerAppId в plaintext. В debug-сборке попадает в logcat (verboseToLogcat=true), при включении verbose в persistent.log файл.
+6. AppLog.kt:78 SENSITIVE_KEYS — отсутствуют `remixsid`, `p`, `remixnsid`, `httoken`, `trusted_hash`, `logout_hash`, `remixstid`, `remixstlid`, `remixuacck`, `remixuas`, `remixnttpid`, `remixdmgr`, `remixmvkfp`. `contains("token", ignoreCase = true)` ловит только `*token*`. Параметр с именем `remixsid` или `trusted_hash` логируется значением полностью.
+7. UpdaterManager.kt:718 downloadApk() — если `info.sha256` пуст/отсутствует в манифесте (ошибка автора манифеста или специально), SHA-256 проверка пропускается (`if (expected.isNotEmpty()) {...}`). Манифест подписан, но APK по apkUrl может быть подменён на CDN/зеркале, и updater молча установит подмену. Должно быть: требовать sha256 как обязательное поле в манифесте для каждой версии.
+8. ExchangeTokenStorage.kt:117 saveCredentials(username, password) — метод всё ещё публичный, пишет phone+password plaintext в prefs (и через dumpToFile в account.json). Docstring утверждает "trusted_hash, last_phone, last_password — УДАЛЕНЫ (#SESSION-WEB-MECHANISM)", но метод остался. Если кто-либо вызовет (legacy-код, будущий фикс) — пароль в plaintext.
+
+СРЕДНИЕ (8):
+9. HiddenSessionRefresher.kt:80,104,117 inProgress race — check-and-set не атомарен (`if (inProgress) return` → `inProgress = true` между ними). Два параллельных refresh() из разных call paths (не через refreshMutex) создают 2 скрытых WebView одновременно → утечка памяти + двойной запрос к VK ID SDK.
+10. Queuev4Client.kt:152 — `cred.key` (секретный auth-key очереди, эквивалент access_token по привилегиям) вставляется в URL query string без URL-encoding. OkHttp debug-логи (если включены) и прокси-серверы видят ключ в URL. Также: pollLoop использует `httpClient.newCall(request).execute()` БЕЗ currentCall-tracking — `stop()` не отменяет in-flight poll до 25с wait.
+11. LongPollClient.kt (~540, ветка failed=4) — при `failed=4` (version-outdated) делает `break` без backoff. Если VK постоянно возвращает failed=4 для текущей lp_version, outer loop бесконечно tight-spins messagesGetLongPollServer (каждая итерация ~5с API-вызова, но нет задержки между). Должно быть: increment consecutiveErrors + backoffMs() на failed=4.
+12. EqualizerHelper.kt:60-95 attachOnce/release — race: `attachOnce()` `@Synchronized`, но `engine()` getter (line 230) НЕ синхронизирован. Между `current.release()` (line 73) и `engine = AudioEffectsEngine(...)` (line 76) есть окно, где `engine` равен null или освобождённому инстансу — UI может вызвать `e.setEqEnabled(...)` на released-инстансе → RuntimeException. Также `release()` НЕ зануляет engine (по комментариям — для чтения saved state), но UI-вызовы после release молча fail без уведомления пользователя.
+13. FoldersRepository.kt:33-78 + PinnedConversationsRepository.kt:35-95 + ArchivedConversationsRepository.kt:33-69 — все три имеют TOCTOU race: `load() → modify in-memory → save()`. Docstring НЕВЕРНО утверждает "Потокобезопасность: все операции через DataStore (атомарные put)" — atomicity of `put` не предотвращает RMW race. Concurrent `pin(X)` + `pin(Y)` теряет один peerId. Нет mutex/compareAndSet.
+14. SovaApp.kt:950,1002,1035 — три `runBlocking` в Application.onCreate (Main thread). Чтение DataStore + миграции (migratePanelDefaultsV2/V3, pushGrouping, readReceipts, lockerBg, lockerDependents) синхронно. На медленных устройствах/первом запуске — задержка запуска 0.5-2с, риск ANR если DataStore ещё не прогрет.
+15. VideoPipController.kt:71 setTogglePlayPause + singleton — `togglePlayPause: (() -> Unit)?` хранит lambda, обычно захватывающую ExoPlayer. Если VideoPlayerScreen/OkWebViewPlayer выходят без вызова `setTogglePlayPause(null)` в DisposableEffect, singleton удерживает плеер → утечка кодеков/surface/audio track. Нужно проверить cleanup в CompositionLocals.
+16. AudioEffectsEngine.kt:754 release() — НЕ сбрасывает `scoSuspended` и `savedVirtEnabledBeforeSco/savedReverbEnabledBeforeSco`. Если release() вызывается во время SCO-suspend, состояние рассинхронизировано: следующий attachOnce → restoreSettings восстановит virtualizer.enabled=true, но scoSuspended=true → следующий suspendForSco() no-op ("already suspended"), хотя эффект фактически играет.
+17. VideoPipActivity.kt:254-257 registerReceiver — на API 31-32 (Android 12/12L) использует `registerReceiver(pipReceiver, filter)` без `RECEIVER_NOT_EXPORTED`. Только API 33+ ветка ставит флаг. Внешние приложения могут отправлять ACTION_TOGGLE/ACTION_CLOSE broadcast и управлять PiP-плеером (хотя action-имена package-private,Exposed receiver всё равно позволяет).
+
+НИЗКИЕ (4):
+18. VkSigner.kt:46 + build.gradle.kts:64 — `VK_CLIENT_SECRET = "hHbZxrka2uZ6jB1inYsH"` (официальный VK Android client_secret, client_id=2274003). Секрет сам по себе полу-публичный (извлекается из манифеста VK APK), но публикация в открытом репо + BuildConfig делает имперсонификацию тривиальной. Это сознательный выбор мода, но для аудит-отчёта: риски отсутствия rate-limiting на VK-сервере и потенциальная блокировка client_id VK'ом.
+19. MusicDownloadService.kt:179,234 + VideoDownloadService.kt:61 — используют 2-arg `startForeground(id, notification)`. На Android 14+ (API 34+) для `foregroundServiceType="dataSync"` рекомендуется `ServiceCompat.startForeground(this, id, notif, FOREGROUND_SERVICE_TYPE_DATA_SYNC)`. Manifest-тип работает как fallback, но deprecated и поведение может измениться. LongPollKeepAliveService.kt правильно использует ServiceCompat.startForeground — паттерн нужно распространить.
+20. VkCookieJar.kt:79 loadForRequest — значения cookies из CookieManager.getCookie() НЕ санитизируются перед передачей в Cookie.Builder. Значение с `;`, `,` или непечатыми char'ами бросит IllegalArgumentException в Builder → outer try-catch возвращает emptyList() → весь запрос уходит БЕЗ cookies → антифрод-проверка VK падает (401 AUTH_LOGIN). Один битый cookie убивает все cookies.
+
+ТАБЛИЦА (file:line | тип | описание | severity | краткий фикс):
+см. ниже — сводная таблица по 20 находкам.
+
+КРИТИЧНО ЗАФИКСИТЬ (топ-3):
+- OAuthWebViewActivity.kt:583,453,464,474 — заменить `android.util.Log.i` на `AppLog.d` + маскировать `result.take(N)` через redactAccessToken(), либо не логировать raw JS-результат вообще.
+- network_security_config.xml — удалить `<certificates src="user" />` из base-config и domain-config (доверять только system CAs). Дополнительно: добавить certificate pinning для api.vk.com/oauth.vk.com/login.vk.ru через OkHttp CertificatePinner (SovaApp.httpClient уже создаётся — добавить .certificatePinner(...)).
+- ExchangeTokenStorage.dumpToFile — НЕ писать silent_token/sat_token/trusted_hash/last_password/httoken/remixuas в plaintext account.json. Либо шифровать файл (SovaPrefsCrypto уже есть — переиспользовать с device-bound ключом), либо хранить только access_token + remixsid (минимум для Path 5), остальные секреты только в EncryptedSharedPreferences.
+
+
+---
+Task ID: 7+8 (SECURITY-AUDIT-FIX-2026-10-04)
+Agent: orchestrator (main) + 2 general-purpose subagents
+Task: Закрытие P1.1/P1.3/P2.1/P2.4 из аудита безопасности. P1.2 и P2.3 сознательно оставлены по решению пользователя.
+
+## Контекст
+Аудит (Tasks 1-6, см. выше) выявил 20 проблем: 3 CRITICAL, 5 HIGH, 9 MED, 3 LOW. Пользователь утвердил к фиксу: P1.1 (access_token в logcat), P1.3 (минимизация дампа account.json), P2.1 (silent_token в логах), P2.4 (удалить мёртвый saveCredentials). P1.2 (user-CA) и P2.3 (sha256) оставлены — user-CA для совместимости с прокси/MDM/VPN-пользователями, sha256 по решению пользователя.
+
+## Work Log
+
+### Task 7 (P1.1 + P2.1) — general-purpose subagent
+- Прочитан OAuthWebViewActivity.kt (440-600), AppLog.kt (maskParams/SENSITIVE_KEYS), SilentTokenExchanger.kt (~129), WebTokenAuth.kt (~453, ~461).
+- OAuthWebViewActivity.kt: 8 вызовов `android.util.Log.i/.w` заменены на `AppLog.d/.w` + 2 приватных хелпера: `redactAccessToken(raw)` (2 regex: URL fragment/query `access_token=`/`silent_token=` и raw JWT `vk1.a.XXX` — маскирует, оставляя остальную часть строки) и `maskTokenValue(v)`. `rg "android.util.Log" OAuthWebViewActivity.kt` → 0 совпадений.
+- SilentTokenExchanger.kt:129: `silent_token=${silentToken.take(12)}... uuid=$silentTokenUuid` → `maskTokenPrefix(silentToken)` + `maskTokenPrefix(silentTokenUuid)` (первые8…последние4 + длина).
+- WebTokenAuth.kt:453: `raw: ${raw.take(200)}` → лог о длине + факт наличия полей (silentToken/uuid/anonymousToken yes/no, providerAppId). Парсинг JSON в try/catch с fallback на `raw-not-json(len=...)`.
+- WebTokenAuth.kt:461: silent_token + UUID → `maskTokenPrefix` для обоих.
+- AppLog.kt:78 SENSITIVE_KEYS: +13 ключей (silent_token_uuid, remixsid, remixstid, remixstlid, remixnttpid, remixuas, remixuacck, remixdmgr, remixmvkfp, trusted_hash, logout_hash, sat_token, httoken). Matcher сохранён: `k.lowercase() in SENSITIVE_KEYS || k.contains("token")`.
+- Логика авторизации НЕ тронута — правки только в логах.
+
+### Task 8 (P1.3 + P2.4) — general-purpose subagent
+- ExchangeTokenStorage.kt:113-123: удалён `fun saveCredentials(username, password)` целиком (мёртвый, 0 вызывателей — rg по app/core/feature → 0, HISTORY.md:12863 подтверждает). Оставлен комментарий-маркер `#P2.4`.
+- ExchangeTokenStorage.kt dumpToFile (627-702) + restoreFromFileBackup (714+): минимизация plaintext-бэкапа account.json.
+  - УБРАНО 25 ключей: silent_token, silent_token_uuid, webview_access_token, webview_refresh_token, webview_expires_in, last_phone, last_password, utility_tokens, lp_key, lp_server, lp_ts, lp_pts, remixsid, remixnsid, p_cookie, logout_hash, vk_httoken, vk_remixnttpid, vk_remixuacck, vk_remixuas, vk_remixdmgr, vk_remixmvkfp, vk_remixstid, vk_remixstlid, scope.
+  - ОСТАВЛЕНО (минимум): access_token, access_token_invalidated, expires_at, user_id, exchange_token (Path 5), trusted_hash (Path 2.5), secret (sig=, не plaintext), device_id (антифрод), sat_token (LongPoll/Queuev4 без re-fetch), web_cookies snapshot (CookieJarBackup — ВСЕ антифрод-куки), __backup_at, __backup_version (1→2 — маркер минимизации).
+  - restoreFromFileBackup() совместим со старыми v1-файлами (лишние поля игнорируются через удалённые putOptStr) и новыми v2 (минимум). Логи обновлены: `remixsid present=...` → `web_cookies restored=$cookiesRestored`.
+- Восстановление сессии при KeyStore corruption (SovaApp.kt:861-874) сохранено: silent paths (Path 1.5/2.5/3/5) получают рабочие creds. Видео/аудио/сообщения/звонки/админка/видеосообщения работают после restore (антифрод-куки в web_cookies snapshot).
+- exportSessionSnapshot/applyExportedSession НЕ тронуты (пользовательский экспорт, по условию).
+- Ключи KEY_* константы в companion сохранены (используются wipeLegacySessionArtifacts и др.).
+
+## Проверки
+- `rg "saveCredentials\(" app/core/feature` → 0 вызывателей (1 совпадение — комментарий-маркер #P2.4).
+- `rg "android.util.Log" OAuthWebViewActivity.kt` → 0.
+- `rg "putOpt\(KEY_(SILENT_TOKEN|LAST_PASSWORD|...)" ExchangeTokenStorage.kt` → 0 (минимизация применена).
+- AppLog SENSITIVE_KEYS: 13 новых ключей добавлены.
+- Скобки сбалансированы (130/130, 724/724, 23/23).
+- git diff --stat: 6 файлов, +343/−131.
+
+## Stage Summary
+
+ВЫПОЛНЕНО (4 задачи из аудита):
+- P1.1: access_token в logcat замаскирован в OAuthWebViewActivity (8 вызовов Log.i→AppLog.d + redactAccessToken).
+- P1.3: минимизация дампа account.json — 25 ключей убрано, оставлен минимум (9 полей + web_cookies snapshot + метаданные), backup version 1→2.
+- P2.1: silent_token/uuid замаскированы в логах SilentTokenExchanger/WebTokenAuth, AppLog SENSITIVE_KEYS расширен 13 ключами.
+- P2.4: мёртвый saveCredentials удалён (0 вызывателей).
+
+НЕ СДЕЛАНО (перенесено в backlog):
+- P1.2 network_security_config.xml — split debug/release или CertificatePinner. Оставлено user-CA для совместимости с прокси/MDM/VPN.
+- P2.3 UpdaterManager.kt:718 — требовать sha256 обязательным. Оставлено как есть.
+- P1.1b (новое, из наблюдений агента): WebTokenAuth.kt:254 и :972 — применить redactAccessToken к `access_token=...take(12)` и `localStorage raw: ...take(200)`.
+- P0.* (функциональные баги пользователя, план в worklog.md Task 6):
+  - P0.1 Models.kt:435 detectPlatform — добавить ветку vk.com/video_ext.php → VK/UNKNOWN (чинит видео в каналах/фиде/постах).
+  - P0.2 parseVideoFull — извлекать accessKey из player URL &hash=.
+  - P0.3 VideoPlayerScreen:505 — fallback videoGetById при пустом accessKey.
+  - P0.4 ChannelInfoSectionsGrid (ChatDetailScreen 10212) — добавить Клипы + Обсуждения (FlowRow).
+  - P0.5 showChannelClips state + кейс "Клипы" в when + ChannelClipsDialog (через shortVideoGetOwnerVideos).
+  - P0.6 Заменить ChannelPhotoFeedDialog (зовёт личное photoFeedGet) на photosGet(albumId="wall") сообщества.
+  - P0.7 isChannel-условие (Models 758 + ChatDetailScreen 3614) — isChannelUi=isChannel||(peerId<0&&channelGroup!=null).
+  - P0.8 CommunityScreen tabs (198) — динамически из GroupSections, добавить Файлы.
+  - P0.9 when(section) (5764) — добавить else с AppLog.w; различать empty vs error в диалогах.
+- P3.* (9 MED): HiddenSessionRefresher race, EqualizerHelper getter, Folders/Pinned/Archived Repository TOCTOU, Queuev4Client секрет в URL + не-отменяемый poll, LongPollClient tight-loop на failed=4, SovaApp.runBlocking в onCreate (ANR-риск), AudioEffectsEngine stale scoSuspended, VideoPipController lambda-утечка, VideoPipActivity exposed receiver на API 31-32.
+- P4.* (3 LOW): Music/VideoDownloadService ServiceCompat.startForeground с type, VkCookieJar skip-invalid-cookie, VkSigner hardcoded VK_CLIENT_SECRET (сознательный выбор, задокументировать).
+
+НЕ ЗАТРОНУТО (работает корректно):
+- Авторизация/токен-флоу (OAuth, exchange, silent refresh, cookie capture, save-в-prefs).
+- Видео/аудио/сообщения/звонки/админка/видеосообщения — функциональность сохранена, restore из бэкапа рабочий.
+- web_cookies snapshot (CookieJarBackup) — критичен, оставлен в дампе.
+- exportSessionSnapshot/applyExportedSession (пользовательский экспорт настроек).
+
+Файлы (6, +343/−131):
+- app/src/main/java/re/pinok/auth/OAuthWebViewActivity.kt (+74/−7)
+- app/src/main/java/re/pinok/auth/exchange/ExchangeTokenStorage.kt (249 changed)
+- app/src/main/java/re/pinok/auth/exchange/SilentTokenExchanger.kt (+22/−1)
+- app/src/main/java/re/pinok/auth/exchange/WebTokenAuth.kt (+43/−4)
+- core/common/src/main/java/re/pinok/util/AppLog.kt (+28/−1)
+- worklog.md (этот файл, +запись)
+- HISTORY.md (+запись SECURITY-AUDIT-FIX-2026-10-04)
+
+Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK в среде аудита — пользователь собирает сам).

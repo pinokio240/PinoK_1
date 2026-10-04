@@ -62,10 +62,36 @@ object AppLog {
     /** Имя файла персистентного лога в cacheDir/logs/. */
     private const val PERSIST_FILE = "persistent.log"
 
-    /** Ключи параметров, значения которых маскируются при логировании API. */
+    /**
+     * Ключи параметров, значения которых маскируются при логировании API.
+     *
+     * #LOG-MASK (P2.2, 2026-10): расширено VK-credentials множество.
+     * Кроме уже ловимых через `k.contains("token")` (access_token, silent_token,
+     * httoken, sat_token, exchange_token, anonymous_token, …), добавлены:
+     *   - silent_token_uuid — парный с silent_token, вместе = полная credential
+     *     для auth.getAuthData (contains "token" уже ловит, но добавлено явно
+     *     для документирования и защит от изменения matcher'а);
+     *   - remixsid, remixstid, remixstlid, remixnttpid — browser session cookies
+     *     VK (RemixsidCapturer.snapshotCookies);
+     *   - remixuas, remixuacck, remixdmgr, remixmvkfp — anti-CSRF/anti-fraud
+     *     VK cookies (SSO full cookie-set §55);
+     *   - trusted_hash, logout_hash — VK web_token derivatives.
+     *
+     * Matcher в [maskParams]: точное совпадение (lowercase) ИЛИ содержит
+     * подстроку "token". Существующее поведение сохранено — contains("token")
+     * по-прежнему ловит access_token/silent_token/exchange_token/httoken/sat_token/
+     * anonymous_token; новые explicit-entries ловят *_hash / remix* cookies.
+     */
     private val SENSITIVE_KEYS = setOf(
         "access_token", "token", "secret", "sig", "password",
         "captcha_key", "user_secret", "api_key", "client_secret",
+        // P2.2: VK ID silent_token pair
+        "silent_token_uuid",
+        // P2.2: VK browser session cookies (RemixsidCapturer)
+        "remixsid", "remixstid", "remixstlid", "remixnttpid",
+        "remixuas", "remixuacck", "remixdmgr", "remixmvkfp",
+        // P2.2: VK web_token derivatives
+        "trusted_hash", "logout_hash", "sat_token", "httoken",
     )
 
     /**

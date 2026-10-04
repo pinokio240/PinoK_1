@@ -25,11 +25,16 @@ import java.util.UUID
  *
  * Backed by [EncryptedSharedPreferences] (see [re.pinok.SovaApp]).
  *
- * **Файловый бэкап (VTosters pattern #3).** Дополнительно к prefs, все
- * токены дублируются в plaintext JSON `<filesDir>/account.json` через
- * [fileBackup]. Если prefs повреждаются (KeyStore corruption, Tink key
- * rotation failure, factory reset), [restoreFromFileBackup] читает файл
- * и восстанавливает сессию без полного re-login. См. [AccountFileBackup].
+ * **Файловый бэкап (VTosters pattern #3).** Дополнительно к prefs,
+ * МИНИМАЛЬНЫЙ набор критичных полей дублируется в plaintext JSON
+ * `<filesDir>/account.json` через [fileBackup] (#P1.3 #MIN-DUMP — раньше
+ * дампились все ключи, теперь только то, что нужно для restore после
+ * KeyStore corruption: access_token + invalidated + expires_at + user_id
+ * + exchange_token + secret + trusted_hash + device_id + sat_token
+ * + web_cookies snapshot). Если prefs повреждаются (KeyStore corruption,
+ * Tink key rotation failure, factory reset), [restoreFromFileBackup]
+ * читает файл и восстанавливает сессию без полного re-login.
+ * См. [AccountFileBackup] и docstring [dumpToFile] для точного списка.
  *
  * **Синхронные записи.** `saveAuthResult` и `updateAccessToken` (login
  * и refresh — самые критичные writes) используют `.commit()` вместо
@@ -110,17 +115,13 @@ class ExchangeTokenStorage(
     // Credentials (for re-login via trusted_hash or password)
     // =====================================================================
 
-    /**
-     * Save username + password — mirrors VkAuthCredentials stored by VK.
-     * VK stores these to enable grant_type=trusted_hash re-login.
-     */
-    fun saveCredentials(username: String, password: String) {
-        prefs.edit()
-            .putString(KEY_LAST_PHONE, username)
-            .putString(KEY_LAST_PASSWORD, password)
-            .apply()
-        dumpToFile()
-    }
+    // #P2.4 (2026-10): saveCredentials(username, password) УДАЛЕН — мёртвый
+    // метод, 0 вызывателей в коде (HISTORY.md:12863 подтверждает: "saveCredentials
+    // вызовы в signIn убраны" при #SESSION-WEB-MECHANISM). Path 2.5 (re-login по
+    // хранённому паролю) снят; пароль больше НЕ хранится plaintext в prefs и
+    // account.json. wipeLegacySessionArtifacts() стирает legacy-ключи
+    // last_phone/last_password при старте. Константы KEY_LAST_PHONE/
+    // KEY_LAST_PASSWORD оставлены в companion для миграции (см. wipeLegacy...).
 
     fun credentials(): VkAuthCredentials? {
         val u = prefs.getString(KEY_LAST_PHONE, null) ?: return null
@@ -617,18 +618,62 @@ class ExchangeTokenStorage(
     // =====================================================================
 
     /**
-     * Сериализовать все поля аккаунта в JSON и записать в
-     * `<filesDir>/account.json`. Вызывается после каждого успешного write
-     * (save*, update*, set*). Best-effort: сбой НЕ ломает основной flow.
+     * Сериализовать МИНИМАЛЬНЫЙ набор критичных полей аккаунта в JSON и
+     * записать в `<filesDir>/account.json`. Вызывается после каждого
+     * успешного write (save*, update*, set*). Best-effort: сбой НЕ ломает
+     * основной flow.
      *
-     * Формат — плоский JSON object с ключами = prefs keys. Совпадает с
-     * форматом VTosters `account.toJSONObject().toString()`.
+     * #P1.3 #MIN-DUMP (2026-10): дамп МИНИМИЗИРОВАН. В файл пишется ТОЛЬКО то,
+     * что критично для восстановления сессии после KeyStore corruption /
+     * factory reset / отката версии — без короткоживущих токенов и plaintext
+     * кред. Утверждённый минимум (см. Task 8 / P1.3):
+     *   - `access_token` + `access_token_invalidated` + `expires_at` — ядро
+     *     авторизации (Path 5 connect_exchange_token принимает даже протухший);
+     *   - `user_id` — идентификация пользователя;
+     *   - `exchange_token` — Path 5 connect_exchange_token silent re-login;
+     *   - `trusted_hash` — Path 2.5 (legacy, ~1 год; в штатном flow стирается
+     *     `wipeLegacySessionArtifacts`, но константа оставлена и в старых
+     *     файлах может присутствовать);
+     *   - `device_id` — стабильный per-install UUID, антифрод;
+     *   - `secret` — user secret для sig= подписи (НЕ plaintext-кред, а hash;
+     *     оставлен в минимуме для безопасности: нужен для подписи API вызовов
+     *     сразу после restore, до того как VK выдаст новый secret);
+     *   - `sat_token` — LongPoll/Queuev4 realtime после restore без re-fetch;
+     *   - `web_cookies` snapshot ([CookieJarBackup]) — ВСЕ антифрод-куки
+     *     (remixsid, remixstid, remixstlid, httoken, remixuacck, remixuas,
+     *     remixdmgr, remixnttpid, p, remixnsid) для звонков/админки/видео/
+     *     аудио/сообщений. Без него web-сессия умирает при первом refresh;
+     *   - `__backup_at`, `__backup_version` — метаданные (version=2 — формат
+     *     минимизированного дампа; v1 — legacy с полным набором полей).
+     *
+     * Что НЕ пишется (намеренно убрано из дампа #P1.3):
+     *   - `silent_token` / `silent_token_uuid` — VKID SDK, живут минуты;
+     *   - `webview_access_token` / `webview_refresh_token` / `webview_expires_in`
+     *     — short-lived, покрываются web_cookies snapshot;
+     *   - `last_phone` / `last_password` — plaintext креды, Path 2.5 по паролю
+     *     снят (#SESSION-WEB-MECHANISM), не нужны для restore;
+     *   - `utility_tokens` — short-lived serialized;
+     *   - `lp_key` / `lp_server` / `lp_ts` / `lp_pts` — получаются заново
+     *     через `messages.getLongPollServer` после restore;
+     *   - `remixsid` / `remixnsid` / `p` / `httoken` / `remixnttpid` /
+     *     `remixuacck` / `remixuas` / `remixdmgr` / `remixmvkfp` / `remixstid` /
+     *     `remixstlid` — уже в web_cookies snapshot (дубликат убран);
+     *   - `logout_hash` — не нужен для Path 5 (достаточно access_token +
+     *     exchange_token);
+     *   - `scope` — implicitly "all" после restore (методы API сами возвращают
+     *     scope при refresh).
+     *
+     * Формат — плоский JSON object с ключами = prefs keys.
+     * [restoreFromFileBackup] обратно совместим со старыми файлами v1 (где
+     * присутствовали все ключи): лишние поля просто игнорируются.
      */
     private fun dumpToFile() {
         val backup = fileBackup ?: return
         try {
             val json = JSONObject().apply {
-                // Core auth
+                // Core auth — access_token может быть null (если чистили через
+                // clearAccessToken() в ветке "нет токена вообще"); put с null
+                // удаляет ключ — это намеренно, дамп согласован с prefs.
                 put(KEY_ACCESS_TOKEN, accessToken())
                 // §50 #TOKEN-LIFECYCLE-FIX: сохраняем флаг invalidated в бэкап.
                 // При restoreFromFileBackup он снова применится — hasValidAccessToken()
@@ -636,64 +681,30 @@ class ExchangeTokenStorage(
                 put(KEY_ACCESS_TOKEN_INVALIDATED, prefs.getBoolean(KEY_ACCESS_TOKEN_INVALIDATED, false))
                 put(KEY_USER_ID, userId())
                 put(KEY_EXPIRES_AT, expiresAt())
-                putOpt(KEY_SCOPE, scope())
+
+                // Re-login credentials (Path 5 connect_exchange_token / Path 2.5 trusted_hash)
                 putOpt(KEY_EXCHANGE_TOKEN, exchangeToken())
                 putOpt(KEY_SECRET, secret())
                 putOpt(KEY_TRUSTED_HASH, trustedHash())
                 putOpt(KEY_DEVICE_ID, prefs.getString(KEY_DEVICE_ID, null))
 
-                // Credentials
-                putOpt(KEY_LAST_PHONE, prefs.getString(KEY_LAST_PHONE, null))
-                putOpt(KEY_LAST_PASSWORD, prefs.getString(KEY_LAST_PASSWORD, null))
-
-                // Webview tokens
-                putOpt(KEY_WEBVIEW_ACCESS_TOKEN, prefs.getString(KEY_WEBVIEW_ACCESS_TOKEN, null))
-                putOpt(KEY_WEBVIEW_REFRESH_TOKEN, prefs.getString(KEY_WEBVIEW_REFRESH_TOKEN, null))
-                put(KEY_WEBVIEW_EXPIRES_IN, prefs.getInt(KEY_WEBVIEW_EXPIRES_IN, 0))
-
-                // Utility tokens (raw serialized string)
-                putOpt(KEY_UTILITY_TOKENS, prefs.getString(KEY_UTILITY_TOKENS, null))
-
-                // silent_token (VKID SDK)
-                putOpt(KEY_SILENT_TOKEN, prefs.getString(KEY_SILENT_TOKEN, null))
-                putOpt(KEY_SILENT_TOKEN_UUID, prefs.getString(KEY_SILENT_TOKEN_UUID, null))
-
-                // LongPoll
-                putOpt(KEY_LP_KEY, prefs.getString(KEY_LP_KEY, null))
-                putOpt(KEY_LP_SERVER, prefs.getString(KEY_LP_SERVER, null))
-                put(KEY_LP_TS, prefs.getLong(KEY_LP_TS, 0L))
-                put(KEY_LP_PTS, prefs.getLong(KEY_LP_PTS, -1L))
-
-                // Web Token Exchange
+                // SAT token — LongPoll/Queuev4 realtime без re-fetch после restore.
                 putOpt(KEY_SAT_TOKEN, prefs.getString(KEY_SAT_TOKEN, null))
-                putOpt(KEY_REMIXSID, prefs.getString(KEY_REMIXSID, null))
-                putOpt(KEY_REMIXNSID, prefs.getString(KEY_REMIXNSID, null))
-                putOpt(KEY_P_COOKIE, prefs.getString(KEY_P_COOKIE, null))
-                putOpt(KEY_LOGOUT_HASH, prefs.getString(KEY_LOGOUT_HASH, null))
-                // §55 #SSO-FULL-COOKIE-SET: 6 кук браузерного набора в бэкапе.
-                putOpt(KEY_HTTP_TOKEN, prefs.getString(KEY_HTTP_TOKEN, null))
-                putOpt(KEY_REMIX_NTTPID, prefs.getString(KEY_REMIX_NTTPID, null))
-                putOpt(KEY_REMIX_UACCK, prefs.getString(KEY_REMIX_UACCK, null))
-                putOpt(KEY_REMIX_UAS, prefs.getString(KEY_REMIX_UAS, null))
-                putOpt(KEY_REMIX_DMGR, prefs.getString(KEY_REMIX_DMGR, null))
-                putOpt(KEY_REMIX_MVK_FP, prefs.getString(KEY_REMIX_MVK_FP, null))
-                // #CALLS-ANTIFRAUD: антифрод-токены в бэкапе.
-                putOpt(KEY_REMIX_STID, prefs.getString(KEY_REMIX_STID, null))
-                putOpt(KEY_REMIX_STLID, prefs.getString(KEY_REMIX_STLID, null))
 
                 // #SESSION-WEB-EXPORT: снимок cookie jar (CookieManager) —
-                // единственный источник web-сессии. Без него account.json
-                // восстанавливает токены, но web-сессия умирает при первом
-                // refresh (HiddenSessionRefresher увидит пустой jar → ре-логин).
+                // единственный источник web-сессии. Включает ВСЕ антифрод-куки
+                // (remixsid/p/remixnsid/httoken/remixstid/remixstlid/remixuacck/
+                // remixuas/remixdmgr/remixnttpid/remixmvkfp). Без него web-сессия
+                // умирает при первом refresh после KeyStore corruption.
                 try {
                     put(CookieJarBackup.BACKUP_FIELD, CookieJarBackup.snapshotJson())
                 } catch (e: Exception) {
                     AppLog.w("ExchangeTokenStorage", "dumpToFile: cookie snapshot failed: ${e.message}")
                 }
 
-                // Метка восстановления для диагностики
+                // Метка восстановления для диагностики (version=2 — минимальный дамп #P1.3).
                 put("__backup_at", System.currentTimeMillis())
-                put("__backup_version", 1)
+                put("__backup_version", 2)
             }
             backup.save(json)
         } catch (e: Exception) {
@@ -709,6 +720,19 @@ class ExchangeTokenStorage(
      * (т.е. prefs пусты или повреждены). Если файл существует и содержит
      * access_token, поля заливаются обратно в prefs (sync `.commit()`).
      *
+     * #P1.3 #MIN-DUMP (2026-10): восстанавливается только МИНИМУМ ключей,
+     * который [dumpToFile] пишет в новых файлах (`__backup_version`=2):
+     *   - access_token + access_token_invalidated + expires_at + user_id
+     *   - exchange_token, secret, trusted_hash, device_id (re-login creds)
+     *   - sat_token (LongPoll/Queuev4)
+     *   - web_cookies snapshot (через [CookieJarBackup.restoreJsonArray] —
+     *     все антифрод-куки remixsid/p/httoken/remixstid/remixstlid/...).
+     *
+     * Обратная совместимость со старым форматом v1 (где присутствовали все
+     * ключи): лишние поля просто игнорируем (putOptStr для них не вызываем).
+     * Это безопасно: silent_token/webview_tokens/lp_*/cookies-копии либо
+     * short-lived, либо уже покрыты web_cookies snapshot.
+     *
      * @return `true` если восстановление прошло и access_token валиден.
      */
     fun restoreFromFileBackup(): Boolean {
@@ -723,10 +747,11 @@ class ExchangeTokenStorage(
         // → Path 2.5 (trusted_hash) skipped → AuthActivity SILENT loop 60 сек.
         //
         // Фикс: разделить чтение бэкапа на два шага. Сначала восстанавливаем
-        // ВСЕ re-login credentials (независимо от access_token), потом если
-        // access_token валиден — заливаем и его. Возвращаем true ТОЛЬКО если
-        // access_token восстановлен и не протух (hasValidAccessToken=true),
-        // но поля credentials в любом случае залиты — silent paths получают
+        // ВСЕ re-login credentials из минимума (независимо от access_token),
+        // потом если access_token валиден — заливаем и его. Возвращаем true
+        // ТОЛЬКО если access_token восстановлен и не протух
+        // (hasValidAccessToken=true), но поля credentials в любом случае
+        // залиты — silent paths (Path 5 connect_exchange_token) получают
         // шанс отработать без полного re-login.
         val backup = fileBackup ?: run {
             AppLog.w("ExchangeTokenStorage", "restoreFromFileBackup: no fileBackup configured — skip")
@@ -738,28 +763,35 @@ class ExchangeTokenStorage(
         }
         return try {
             val at = json.optString(KEY_ACCESS_TOKEN, "").takeIf { it.isNotBlank() }
+            // #P1.3: web_cookies snapshot — единственный источник web-сессии
+            // (remixsid/p/httoken/remixstid/...). Старые backup v1 держали
+            // remixsid как отдельный prefs-ключ; новый формат v2 — только в
+            // web_cookies snapshot. Логируем наличие снапшота, а не prefs-ключа.
+            val webCookiesCount = try {
+                json.optJSONArray(CookieJarBackup.BACKUP_FIELD)?.length() ?: 0
+            } catch (_: Exception) { 0 }
             if (at == null) {
                 AppLog.w("ExchangeTokenStorage",
                     "restoreFromFileBackup: access_token absent in backup — restoring re-login " +
-                    "credentials only (remixsid present=${!json.optString(KEY_REMIXSID, "").isBlank()}, " +
-                    "exchange_token present=${!json.optString(KEY_EXCHANGE_TOKEN, "").isBlank()}, " +
-                    "trusted_hash present=${!json.optString(KEY_TRUSTED_HASH, "").isBlank()})")
+                    "credentials only (exchange_token present=${!json.optString(KEY_EXCHANGE_TOKEN, "").isBlank()}, " +
+                    "trusted_hash present=${!json.optString(KEY_TRUSTED_HASH, "").isBlank()}, " +
+                    "web_cookies snapshot entries=$webCookiesCount)")
             }
 
-            // Fix #176-auth-loop: НЕ восстанавливаем протухший access_token из бэкапа.
-            // Сценарий из лога 2026-08-04 12:35:49: процесс стартовал → keepAlive
-            // видит expires_at = now-12s → запускает refresh → Path 0 читает бэкап,
-            // восстанавливает ТОТ ЖЕ протухший токен в prefs → hasValidAccessToken()
-            // возвращает false → падает в Path 1.5/2.5/3 → все silent paths фейлятся
-            // (remixsid contract failure / no exchange_token) → re-login required →
-            // AuthActivity SILENT loop по tick 1,2,3,4,5...
+            // Fix #176-auth-loop: НЕ восстанавливаем протухший access_token из бэкапа
+            // как «валидный». Сценарий из лога 2026-08-04 12:35:49: процесс стартовал
+            // → keepAlive видит expires_at = now-12s → запускает refresh → Path 0
+            // читает бэкап, восстанавливает ТОТ ЖЕ протухший токен в prefs →
+            // hasValidAccessToken() возвращает false → падает в Path 1.5/2.5/3/5 →
+            // все silent paths фейлятся → re-login required → AuthActivity SILENT
+            // loop по tick 1,2,3,4,5...
             //
             // Фикс: проверяем expires_at из бэкапа ДО записи в prefs. Если протух —
-            // восстанавливаем ТОЛЬКО re-login credentials (remixsid, trusted_hash,
-            // last_phone, exchange_token, device_id, webview tokens, sat_token),
-            // но НЕ access_token. Это даёт Path 1.5/2.5/3 шанс работать, без засорения
-            // prefs мёртвым токеном. Возврат false корректен — hasValidAccessToken()
-            // после restore будет false (access_token не восстановлен).
+            // восстанавливаем ТОЛЬКО re-login credentials из минимума #P1.3
+            // (exchange_token, trusted_hash, device_id, sat_token, web_cookies
+            // snapshot), но НЕ access_token. Это даёт Path 5 (connect_exchange_token)
+            // шанс работать без засорения prefs мёртвым токеном. Возврат false
+            // корректен — hasValidAccessToken() после restore будет false.
             val backupExpiresAt = if (json.has(KEY_EXPIRES_AT)) json.getLong(KEY_EXPIRES_AT) else 0L
             val now = System.currentTimeMillis()
             val tokenExpired = backupExpiresAt != 0L && backupExpiresAt <= now
@@ -815,42 +847,23 @@ class ExchangeTokenStorage(
             // Локальный helper: optString возвращает non-null String (Java),
             // поэтому пишем через takeIf — избегаем передачи null в Java-метод
             // (иначе Kotlin infer Nothing? + unnecessary safe call warnings).
+            // #P1.3 #MIN-DUMP: заливаем ТОЛЬКО ключи из утверждённого минимума
+            // дампа (см. docstring dumpToFile). Ключи, которые больше не
+            // дампятся (silent_token/webview_tokens/lp_*/cookies-копии/
+            // last_phone/last_password/utility_tokens/scope/logout_hash),
+            // НЕ восстанавливаем — для старых файлов v1 они просто игнорируются
+            // (silent_token короткоживущий, cookies-копии покрыты web_cookies
+            // snapshot, lp_* получаются заново через messages.getLongPollServer).
             fun putOptStr(key: String) {
                 val v = json.optString(key, "")
                 if (v.isNotBlank()) editor.putString(key, v)
             }
-            putOptStr(KEY_SCOPE)
+            // Re-login credentials + sat_token (минимум #P1.3).
             putOptStr(KEY_EXCHANGE_TOKEN)
             putOptStr(KEY_SECRET)
             putOptStr(KEY_TRUSTED_HASH)
             putOptStr(KEY_DEVICE_ID)
-            putOptStr(KEY_LAST_PHONE)
-            putOptStr(KEY_LAST_PASSWORD)
-            putOptStr(KEY_WEBVIEW_ACCESS_TOKEN)
-            putOptStr(KEY_WEBVIEW_REFRESH_TOKEN)
-            if (json.has(KEY_WEBVIEW_EXPIRES_IN)) editor.putInt(KEY_WEBVIEW_EXPIRES_IN, json.getInt(KEY_WEBVIEW_EXPIRES_IN))
-            putOptStr(KEY_UTILITY_TOKENS)
-            putOptStr(KEY_SILENT_TOKEN)
-            putOptStr(KEY_SILENT_TOKEN_UUID)
-            putOptStr(KEY_LP_KEY)
-            putOptStr(KEY_LP_SERVER)
-            if (json.has(KEY_LP_TS)) editor.putLong(KEY_LP_TS, json.getLong(KEY_LP_TS))
-            if (json.has(KEY_LP_PTS)) editor.putLong(KEY_LP_PTS, json.getLong(KEY_LP_PTS))
             putOptStr(KEY_SAT_TOKEN)
-            putOptStr(KEY_REMIXSID)
-            putOptStr(KEY_REMIXNSID)
-            putOptStr(KEY_P_COOKIE)
-            putOptStr(KEY_LOGOUT_HASH)
-            // §55 #SSO-FULL-COOKIE-SET: восстанавливаем 6 кук браузерного набора.
-            putOptStr(KEY_HTTP_TOKEN)
-            putOptStr(KEY_REMIX_NTTPID)
-            putOptStr(KEY_REMIX_UACCK)
-            putOptStr(KEY_REMIX_UAS)
-            putOptStr(KEY_REMIX_DMGR)
-            putOptStr(KEY_REMIX_MVK_FP)
-            // #CALLS-ANTIFRAUD: восстанавливаем антифрод-токены.
-            putOptStr(KEY_REMIX_STID)
-            putOptStr(KEY_REMIX_STLID)
             // sync commit — восстановление должно зафиксироваться до того,
             // как любой другой код попытается читать prefs.
             editor.commit()
@@ -876,6 +889,9 @@ class ExchangeTokenStorage(
             // "when { at == null -> ... }" давал warning "Condition is always 'true'".
             // Убрали when, пишем причину напрямую: единственный случай здесь —
             // access_token отсутствует в бэкапе (tokenExpired бессмысленен без at).
+            // #P1.3: remixsid больше не читается из prefs (нет в минимуме дампа) —
+            // web-сессия проверяется через cookiesRestored выше, а не через
+            // storage.remixsid().
             if (at != null) {
                 AppLog.i("ExchangeTokenStorage",
                     "restoreFromFileBackup: OK — access_token restored " +
@@ -885,8 +901,8 @@ class ExchangeTokenStorage(
                 AppLog.i("ExchangeTokenStorage",
                     "restoreFromFileBackup: PARTIAL — re-login credentials restored " +
                     "(user_id=${userId()}, access_token skipped: absent in backup, " +
-                    "remixsid present=${!remixsid().isNullOrBlank()}, " +
-                    "exchange_token present=${!exchangeToken().isNullOrBlank()})")
+                    "exchange_token present=${!exchangeToken().isNullOrBlank()}, " +
+                    "web_cookies restored=$cookiesRestored)")
             }
             hasValidAccessToken()
         } catch (e: Exception) {
@@ -918,9 +934,10 @@ class ExchangeTokenStorage(
      * plaintext-файла с токенами уже есть). Секретность файла — зона
      * ответственности пользователя: UI предупреждает ДО экспорта.
      *
-     * device_id включён СОГЛАСОВАННО с dumpToFile (putOpt KEY_DEVICE_ID, :607)
-     * и restoreFromFileBackup — переиспользование UUID после переустановки
-     * повторяет поведение файлового бэкапа (VTosters pattern #3).
+     * device_id включён СОГЛАСОВАННО с dumpToFile (putOpt KEY_DEVICE_ID в
+     * минимизированном дампе #P1.3) и restoreFromFileBackup — переиспользование
+     * UUID после переустановки повторяет поведение файлового бэкапа
+     * (VTosters pattern #3).
      */
     fun exportSessionSnapshot(): Map<String, Any> {
         val out = HashMap<String, Any>()

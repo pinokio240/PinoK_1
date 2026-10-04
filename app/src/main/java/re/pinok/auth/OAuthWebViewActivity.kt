@@ -450,7 +450,10 @@ private fun OAuthWebViewScreen(
                                             })();
                                         """.trimIndent()
                                         view.evaluateJavascript(autoClickJs) { r ->
-                                            android.util.Log.i("OAuthWebViewActivity", "autoclick result: $r")
+                                            // P1.1 #LOG-MASK: r может содержать loc=window.location.href,
+                                            // а в нём — access_token в URL fragment (#access_token=vk1.a.XXX).
+                                            // Маскируем через redactAccessToken (префикс 8 + … + хвост 4).
+                                            AppLog.d(OAuthWebViewActivity.TAG, "autoclick result: ${redactAccessToken(r ?: "")}")
                                             val tok = extractAccessTokenFromJs(r)
                                             if (tok != null) {
                                                 AppLog.i(OAuthWebViewActivity.TAG, "токен извлечён (len=${tok.length})")
@@ -461,7 +464,8 @@ private fun OAuthWebViewScreen(
                                             } else {
                                                 view.postDelayed({
                                                     view.evaluateJavascript(autoClickJs) { r2 ->
-                                                        android.util.Log.i("OAuthWebViewActivity", "autoclick retry2: $r2")
+                                                        // P1.1 #LOG-MASK: см. выше — r2 может содержать access_token в loc=.
+                                                        AppLog.d(OAuthWebViewActivity.TAG, "autoclick retry2: ${redactAccessToken(r2 ?: "")}")
                                                         val tok2 = extractAccessTokenFromJs(r2)
                                                         if (tok2 != null) {
                                                             val uid = try {
@@ -471,7 +475,8 @@ private fun OAuthWebViewScreen(
                                                         } else {
                                                             view.postDelayed({
                                                                 view.evaluateJavascript(autoClickJs) { r3 ->
-                                                                    android.util.Log.i("OAuthWebViewActivity", "autoclick retry3: $r3")
+                                                                    // P1.1 #LOG-MASK: см. выше — r3 может содержать access_token в loc=.
+                                                                    AppLog.d(OAuthWebViewActivity.TAG, "autoclick retry3: ${redactAccessToken(r3 ?: "")}")
                                                                     val tok3 = extractAccessTokenFromJs(r3)
                                                                     if (tok3 != null) {
                                                                         val uid = try {
@@ -486,9 +491,9 @@ private fun OAuthWebViewScreen(
                                                 }, 3000)
                                             }
                                         }
-                                        android.util.Log.i("OAuthWebViewActivity", "autoclick injected on id.vk.ru/auth")
+                                        AppLog.d(OAuthWebViewActivity.TAG, "autoclick injected on id.vk.ru/auth")
                                     } catch (e: Exception) {
-                                        android.util.Log.w("OAuthWebViewActivity", "autoclick failed: ${e.message}")
+                                        AppLog.w(OAuthWebViewActivity.TAG, "autoclick failed: ${e.message}")
                                     }
                                 }
                             }
@@ -586,17 +591,68 @@ private fun parseTokenFromUrl(
  */
 private fun extractAccessTokenFromJs(result: String?): String? {
     if (result == null) return null
-    android.util.Log.i("OAuthWebViewActivity", "extract input len=${result.length}: ${result.take(120)}")
+    // P1.1 #LOG-MASK: result может содержать полный access_token
+    // (vk1.a.XXX — 200+ символов), в т.ч. в URL fragment `#access_token=...`.
+    // Логируем только длину + маску (первые 8 / … / последние 4), НЕ raw.
+    AppLog.d(
+        OAuthWebViewActivity.TAG,
+        "extract input len=${result.length}: ${redactAccessToken(result.take(120))}",
+    )
     // vk1.a.* — надёжный маркер web-токена; устойчив к HTML-сущностям.
     val m = Regex("vk1\\.a\\.[A-Za-z0-9_.\\-]{40,}").find(result)
     if (m != null) {
         val t = m.value.trim().trim('"')
-        android.util.Log.i("OAuthWebViewActivity", "extract found vk1.a len=${t.length}")
+        // Логируем только длину — сам токен уже извлечён и пойдёт в onTokenReceived.
+        AppLog.d(OAuthWebViewActivity.TAG, "extract found vk1.a len=${t.length}")
         return t.takeIf { it.length > 20 }
     }
     // fallback: access_token=XXX
     val m2 = Regex("access_token=([A-Za-z0-9_.\\-]+)").find(result)
     val r2 = m2?.groupValues?.get(1)
-    android.util.Log.i("OAuthWebViewActivity", "extract fallback: ${if (r2 != null) "found len=${r2.length}" else "null"}")
+    AppLog.d(OAuthWebViewActivity.TAG, "extract fallback: ${if (r2 != null) "found len=${r2.length}" else "null"}")
     return r2?.takeIf { it.length > 20 }
 }
+
+/**
+ * P1.1 #LOG-MASK: маскирует access_token / silent_token в произвольной строке
+ * (URL fragment, query, raw JWT `vk1.a.XXX`, JS-output из evaluateJavascript).
+ *
+ * Используется для логов в [OAuthWebViewActivity] — обходит AppLog.maskParams
+ * (он применяется только к Map<String,String> параметрам VK API, а не к
+ * произвольным строкам из WebView).
+ *
+ * Стратегия:
+ *  - `access_token=…` / `silent_token=…` в URL fragment/query — значение
+ *    маскируется (первые 8 + … + последние 4), остальная часть строки
+ *    сохраняется (нужна для диагностики: loc=URL, btn=...).
+ *  - Raw `vk1.a.XXX` JWT-маркер (без префикса `access_token=`) — маскируется
+ *    аналогично.
+ *  - Короткие значения (<=12 символов) → `***` (нечего показывать).
+ *
+ * НЕ трогает остальное содержимое строки (URL-путь, query-параметры без
+ * sensitive-ключей, button text, page body).
+ *
+ * Потокобезопасна (pure function, regex compile in-place). Логика авторизации
+ * не затронута — функция применяется ТОЛЬКО к строкам для логирования.
+ */
+private fun redactAccessToken(raw: String): String {
+    if (raw.isEmpty()) return raw
+    var masked = raw
+    // 1. URL fragment/query: `access_token=XXX` или `silent_token=XXX`.
+    //    Значение — набор [A-Za-z0-9_.\-], может быть URL-encoded (`%2E` и т.д.
+    //    мы не декодируем — VK шлёт в не-encoded форме в fragment).
+    masked = masked.replace(
+        Regex("((?:access_token|silent_token)=)([A-Za-z0-9_.\\-]+)"),
+    ) { mr ->
+        "${mr.groupValues[1]}${maskTokenValue(mr.groupValues[2])}"
+    }
+    // 2. Raw VK web JWT: `vk1.a.XXX` (40+ символов в payload) без префикса.
+    masked = masked.replace(
+        Regex("vk1\\.a\\.[A-Za-z0-9_.\\-]{8,}"),
+    ) { mr -> maskTokenValue(mr.value) }
+    return masked
+}
+
+/** Маска для отдельного значения токена: `первые8…последние4`, иначе `***`. */
+private fun maskTokenValue(v: String): String =
+    if (v.length > 12) "${v.take(8)}…${v.takeLast(4)}" else "***"

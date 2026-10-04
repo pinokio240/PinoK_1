@@ -450,7 +450,29 @@ object WebTokenAuth {
                     return@withContext null
                 }
 
-                AppLog.d(TAG, "window.init silent_token raw: ${raw.take(200)}")
+                // P2.1 #LOG-MASK: НЕ логируем raw JSON (содержит silentToken,
+                // silentTokenUuid, anonymousToken, providerAppId plaintext —
+                // первые 200 символов покрывали ВСЕ эти поля). Логируем только
+                // факт наличия полей и длину — достаточно для диагностики
+                // (если все поля пустые → JS не отдал VK ID SDK).
+                run {
+                    val fieldsPresent = try {
+                        val probe = JsonParser.parseString(raw).asJsonObject
+                        buildString {
+                            append("silentToken=")
+                            append(if (probe.get("silentToken")?.takeIf { !it.isJsonNull }?.asString?.isNotBlank() == true) "yes" else "no")
+                            append(" uuid=")
+                            append(if (probe.get("silentTokenUuid")?.takeIf { !it.isJsonNull }?.asString?.isNotBlank() == true) "yes" else "no")
+                            append(" anonymousToken=")
+                            append(if (probe.get("anonymousToken")?.takeIf { !it.isJsonNull }?.asString?.isNotBlank() == true) "yes" else "no")
+                            append(" providerAppId=")
+                            append(probe.get("providerAppId")?.takeIf { !it.isJsonNull }?.asString ?: "null")
+                        }
+                    } catch (_: Exception) {
+                        "raw-not-json(len=${raw.length})"
+                    }
+                    AppLog.d(TAG, "window.init silent_token raw: len=${raw.length} fields{$fieldsPresent}")
+                }
 
                 // Парсим JSON ответ от JS
                 val json = com.google.gson.JsonParser.parseString(raw).asJsonObject
@@ -465,8 +487,12 @@ object WebTokenAuth {
                 val providerAppId = json.get("providerAppId")?.takeIf { !it.isJsonNull }?.asString
                     ?: re.pinok.BuildConfig.VK_WEB_CLIENT_ID
 
+                // P2.1 #LOG-MASK: НЕ логируем silent_token_uuid полностью
+                // (UUID+silent_token = полная credential для auth.getAuthData).
+                // Показываем только префикс 8 символов + … .
                 AppLog.i(TAG, "tryReadSilentTokenFromWindowInit: OK " +
-                    "(silent_token=${silentToken.take(12)}... uuid=$silentTokenUuid " +
+                    "(silent_token=${maskTokenPrefix(silentToken)} (len=${silentToken.length}) " +
+                    "uuid=${maskTokenPrefix(silentTokenUuid)} (len=${silentTokenUuid.length}) " +
                     "anon=${if (anonymousToken != null) "yes" else "no"} provider=$providerAppId)")
 
                 SilentTokenData(
@@ -1604,3 +1630,14 @@ object WebTokenAuth {
         return sdf.format(java.util.Date(expiresSec * 1000L)) + " UTC"
     }
 }
+
+/**
+ * P2.1 #LOG-MASK: маска для логов sensitive-значений (silent_token,
+ * silent_token_uuid и т.п.). Возвращает `первые8…последние4` для длинных
+ * значений (>12 символов) и `***` для коротких (нечего показывать).
+ *
+ * Применяется только к строкам для логирования — на логику авторизации
+ * НЕ влияет.
+ */
+private fun maskTokenPrefix(v: String): String =
+    if (v.length > 12) "${v.take(8)}…${v.takeLast(4)}" else "***"
