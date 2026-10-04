@@ -855,6 +855,10 @@ data class Message(
     @SerializedName("paywall_placeholder") val paywallPlaceholder: String? = null,
     @SerializedName("paywall_button") val paywallButton: String? = null,
     @SerializedName("reaction_cost") val reactionCost: Int? = null,
+    // #CHANNEL-POST-UI: доступность комментариев канального поста
+    // (cm_payload.counters.comments.can_view). false → подпись
+    // «Комментарии недоступны» вместо кнопки-счётчика.
+    @SerializedName("can_view_comments") val canViewComments: Boolean = true,
     // #CHANNELS-API (аддитивно): мета-поля канального поста (см. parseChannelHistoryItem).
     @SerializedName("is_pinned") val isPinned: Boolean = false,
     @SerializedName("mute_notifications") val muteNotifications: Boolean = false,
@@ -879,18 +883,33 @@ data class Message(
 /**
  * Реакции на сообщение (messages.react, VK API 5.243).
  * Парсится из поля "reactions" в объекте сообщения.
+ *
+ * #CHANNEL-POST-UI: для канальных постов (cm_payload.counters.reactions)
+ * дополнительно парсится [items] — разбивка по эмодзи (id → count),
+ * как в снапшоте VK web (ReactionChip: эмодзи + счётчик). Если items
+ * пуст — UI рисует единый агрегированный чип (fallback).
  */
 data class MessageReaction(
     @SerializedName("count")          val count: Int = 0,
     @SerializedName("user_reaction")  val userReaction: Int? = null,
     @SerializedName("recent_reactions") val recentReactions: List<RecentReaction>? = null,
+    // #CHANNEL-POST-UI: разбивка реакций по эмодзи [{id, count}] для чипов.
+    @SerializedName("items")          val items: List<ReactionItem> = emptyList(),
 ) {
     val hasUserReaction: Boolean get() = userReaction != null && userReaction != 0
+    fun userReactionActive(id: Int): Boolean = userReaction != null && userReaction == id
 }
 
 data class RecentReaction(
     @SerializedName("user_id")     val userId: Long,
     @SerializedName("reaction_id") val reactionId: Int,
+)
+
+/** #CHANNEL-POST-UI: одна реакция канального поста с числом (эмодзи-чип VK).
+ *  id → эмодзи через web-карту REACTION_EMOJIS (1=❤️ 2=🔥 3=😂 4=👍 …). */
+data class ReactionItem(
+    @SerializedName("id")    val id: Int,
+    @SerializedName("count") val count: Int,
 )
 
 // ============================================================================

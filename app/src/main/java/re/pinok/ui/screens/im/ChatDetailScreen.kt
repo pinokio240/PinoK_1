@@ -106,7 +106,21 @@ import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.automirrored.outlined.Article
+// #CHANNEL-POST-UI (2026-10-04): иконки статуса канального поста — «глаз»
+// просмотров (снапшот web vkuiIcon view_12), иконка комментариев
+// (vkuiIcon comment_outline_16) и шеврон комментариев
+// (ChannelPostPrimaryComments__content: подпись + chevron_16).
+// Порядок футера канального поста «как в ВК» (снапшот ChannelPostPrimary__footer):
+// реакционные чипы (ReactionChip: эмодзи + число) → мета просмотров
+// (ChannelPostMeta__views: «глаз» + «1,3K») → строка комментариев
+// (ChannelPostPrimaryComments: comment_outline_16 + «N комментарий» + chevron_16).
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -208,6 +222,9 @@ import re.pinok.data.model.PhotoSizes
 // #CHANNEL-PHOTOS (2026-10-03): альбомы/фото канала (photos.getAlbums/photos.get).
 import re.pinok.data.model.Album
 import re.pinok.data.model.PhotoItem
+import re.pinok.data.model.PhotosFeedResult
+import re.pinok.data.model.DocFile
+import re.pinok.data.model.ReactionItem
 import re.pinok.data.model.MessageReaction
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
@@ -262,6 +279,8 @@ import kotlin.math.roundToInt
 // (public, второй вызов UserProfileScreen:768) вместо копипасты + PostHolder для
 // имени сообщества в PostDetailScreen.
 import re.pinok.ui.screens.profile.WallPostCard
+import re.pinok.ui.screens.profile.VideoThumbnail
+import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.navigation.PostHolder
 
 // VK reaction IDs → emoji.
@@ -926,6 +945,11 @@ fun ChatDetailScreen(
     // только в канальном режиме (peerId<0 && isChannel). Аддитивно: обычные
     // диалоги/чаты не затрагиваются.
     var showChannelPhotos by remember { mutableStateOf(false) }
+    // #CHANNEL-SECTIONS (2026-10-04): панели «Видео»/«Музыка»/«Файлы» канала.
+    // Открываются из панели канала по соответствующим разделам; только канал.
+    var showChannelVideo by remember { mutableStateOf(false) }
+    var showChannelAudio by remember { mutableStateOf(false) }
+    var showChannelFiles by remember { mutableStateOf(false) }
     // ══════════════════════════════════════════════════════════════════════
 
     // P3.7: bubble-less дизайн — flat layout (без Card/bubble), как m.vk.ru.
@@ -1578,23 +1602,48 @@ fun ChatDetailScreen(
         val myReaction = if (msgReactions != null) msgReactions.userReaction else null
         val isToggleOff = myReaction != null && myReaction != 0 && myReaction == reactionId
         // Оптимистичное обновление (лайк-паттерн: тап → сразу в списке).
+        // #CHANNEL-POST-UI: вместе с count/userReaction пересчитываем и
+        // разбивку items (эмодзи-чипы VK) — чипы не «мигают» назад при тоггле.
         messages = messages.map { m ->
             if (m.id != messageId) m else {
                 val old = m.reactions
                 val oldCount = if (old != null) old.count else 0
                 val oldUser = if (old != null) old.userReaction else null
                 val hadUser = oldUser != null && oldUser != 0
-                val newReaction = if (isToggleOff) {
-                    MessageReaction(
-                        count = if (oldCount > 0) oldCount - 1 else 0,
-                        userReaction = null,
-                    )
+                val currentItems = if (old != null) old.items else emptyList()
+                val newItems: List<ReactionItem> = if (isToggleOff) {
+                    // Снимаем: уменьшаем счётчик своего чипа, при 0 — убираем чип.
+                    currentItems.mapNotNull { item ->
+                        if (item.id == reactionId) {
+                            if (item.count > 1) item.copy(count = item.count - 1) else null
+                        } else item
+                    }
                 } else {
-                    MessageReaction(
-                        count = if (hadUser) oldCount else oldCount + 1,
-                        userReaction = reactionId,
-                    )
+                    // Ставим/меняем: при замене другой своей реакции снимаем её с
+                    // чипа, затем инкремент (или добавление) целевого чипа.
+                    val afterRemove = if (oldUser != null && oldUser != reactionId) {
+                        currentItems.mapNotNull { item ->
+                            if (item.id == oldUser) {
+                                if (item.count > 1) item.copy(count = item.count - 1) else null
+                            } else item
+                        }
+                    } else currentItems
+                    val found = afterRemove.any { it.id == reactionId }
+                    if (found) {
+                        afterRemove.map { if (it.id == reactionId) it.copy(count = it.count + 1) else it }
+                    } else {
+                        afterRemove + ReactionItem(id = reactionId, count = 1)
+                    }
                 }
+                val newReaction = MessageReaction(
+                    count = if (isToggleOff) {
+                        if (oldCount > 0) oldCount - 1 else 0
+                    } else {
+                        if (hadUser) oldCount else oldCount + 1
+                    },
+                    userReaction = if (isToggleOff) null else reactionId,
+                    items = newItems,
+                )
                 m.copy(reactions = newReaction)
             }
         }
@@ -2136,7 +2185,9 @@ fun ChatDetailScreen(
                     if (g.name.isNotBlank() && g.name != "DELETED" && g.name != currentTitle) currentTitle = g.name
                     // NULL-ЯВНО: photo200 может отсутствовать — фолбэк на
                     // photo100 (паттерн рендера аватарок всего проекта).
-                    val gPhoto = if (g.photo200 != null) g.photo200 else g.photo100
+                    // #CHANNEL-AVATAR: для КАНАЛА VK Web нет photo_200/100 —
+                    // только группы photo_base (ресайз-URL): приоритет на неё.
+                    val gPhoto = g.photoBase ?: g.photo200 ?: g.photo100
                     if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
                         currentPhoto = gPhoto
                     }
@@ -2897,7 +2948,11 @@ fun ChatDetailScreen(
                         currentTitle = t
                     }
                     val ph = chat.peer.photo
-                    if (ph != null && ph.isNotBlank() && ph != currentPhoto) {
+                    // #CHANNEL-AVATAR: chat.peer.photo — это photo_100, мелкий фолбэк.
+                    // Не даём ему перезаписать уже установленный аватар канала
+                    // (photo_base из loadChannelMeta groups.getById) — берём только
+                    // пока currentPhoto пуст.
+                    if (currentPhoto.isNullOrBlank() && ph != null && ph.isNotBlank() && ph != currentPhoto) {
                         currentPhoto = ph
                     }
                 } else {
@@ -3085,8 +3140,13 @@ fun ChatDetailScreen(
             chat?.peer?.title?.takeIf { it.isNotBlank() && it != "Диалог" }?.let {
                 if (it != currentTitle) currentTitle = it
             }
-            chat?.peer?.photo?.takeIf { it.isNotBlank() }?.let {
-                if (it != currentPhoto) currentPhoto = it
+            // #CHANNEL-AVATAR: chat.peer.photo = photo_100, мелкий фолбэк. Не даём
+            // перезаписать уже установленный канальный аватар (photo_base) —
+            // используем только пока currentPhoto пуст.
+            if (currentPhoto.isNullOrBlank()) {
+                chat?.peer?.photo?.takeIf { it.isNotBlank() }?.let {
+                    if (it != currentPhoto) currentPhoto = it
+                }
             }
             // #CHANNEL-DELETED-TITLE (2026-09-08): VK в messages.getConversationsById
             // для КАНАЛЬНЫх диалогов (peerId = -gid) иногда отдаёт peer.title =
@@ -3107,7 +3167,8 @@ fun ChatDetailScreen(
                             // NULL-ЯВНО: elvis на nullable-модели GroupInfo
                             // (photo200 может отсутствовать — фолбэк на photo100,
                             // паттерн рендера аватарок всего проекта).
-                            val gPhoto = g.photo200 ?: g.photo100
+                            // #CHANNEL-AVATAR: канальный приоритет photo_base → photo200 → photo100.
+                            val gPhoto = g.photoBase ?: g.photo200 ?: g.photo100
                             if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
                                 currentPhoto = gPhoto
                             }
@@ -4677,13 +4738,19 @@ fun ChatDetailScreen(
                 // P1.1: pre-compute chat list items (messages + date separators + unread divider).
                 val chatListItems by remember(
                     messages, groupingEnabled, dateSeparatorsEnabled, unreadDividerEnabled,
+                    channelHistoryMode,
                 ) {
                     derivedStateOf {
+                        // #CHANNEL-POST-CARD: в канальном history-режиме лента — это
+                        // посты-карточки, а не чат, поэтому дата-разделители и
+                        // unread-divider не показываем (обычные чаты не затрагиваются:
+                        // channelHistoryMode=false у них).
+                        val chan = channelHistoryMode
                         buildChatListItems(
                             messages = messages,
                             groupingEnabled = groupingEnabled,
-                            dateSeparatorsEnabled = dateSeparatorsEnabled,
-                            unreadDividerEnabled = unreadDividerEnabled,
+                            dateSeparatorsEnabled = dateSeparatorsEnabled && !chan,
+                            unreadDividerEnabled = unreadDividerEnabled && !chan,
                         )
                     }
                 }
@@ -4771,6 +4838,94 @@ fun ChatDetailScreen(
                             }
                             is ChatListItem.MessageRow -> {
                                 val msg = item.message
+                                if (peerId < 0 && channelHistoryMode) {
+                                    // #CHANNEL-POST-CARD: канальный пост в history-режиме
+                                    // рисуем карточкой поста сообщества VK (как в wall-режиме),
+                                    // а не IM-пузырём. Обычные чаты (peerId>0) не затрагиваются
+                                    // — они идут ниже через MessageBubble.
+                                    val channelPost = messageToChannelPost(msg)
+                                    val likeKey = "${channelPost.ownerId}_${channelPost.id}"
+                                    Column {
+                                        WallPostCard(
+                                            post = channelPost,
+                                            authorName = currentTitle,
+                                            authorPhoto = currentPhoto,
+                                            onVideoClick = onVideoClick,
+                                            onPostClick = { openChannelPost(it) },
+                                            onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
+                                            onRepostClick = { channelSharePost = it },
+                                            onCommentClick = {
+                                                channelCommentsTarget =
+                                                    channelPost.ownerId to channelPost.id
+                                            },
+                                            likesState = channelLikeStates,
+                                            likePending = channelLikeInFlight.containsKey(likeKey),
+                                            onLikeToggle = { toggleChannelPostLike(it) },
+                                        )
+                                        ChannelPostWallInfoRow(
+                                            post = channelPost,
+                                            onPaywallClick = {
+                                                val slugId = if (peerId < 0) -peerId else peerId
+                                                val payUrl = "https://vk.ru/club$slugId" +
+                                                    "?source=donut_post_channel&w=donut_payment-${channelPost.id}"
+                                                onUrlClick(payUrl)
+                                            },
+                                            onCommentsClick = {
+                                                channelCommentsTarget =
+                                                    channelPost.ownerId to channelPost.id
+                                            },
+                                        )
+                                        // #CHANNEL-POST-CARD: реакционные чипы VK (эмодзи + число)
+                                        // из message.reactions.items — логика та же, что в
+                                        // ChannelPostInfoRow. Непустые → рисуем под карточкой.
+                                        val chipItems = (msg.reactions?.items ?: emptyList())
+                                            .filter { it.count > 0 }
+                                            .sortedByDescending { it.count }
+                                            .take(6)
+                                        if (chipItems.isNotEmpty()) {
+                                            Row(
+                                                modifier = Modifier.padding(start = 16.dp, top = 2.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                for (chip in chipItems) {
+                                                    val active = msg.reactions?.userReactionActive(chip.id) == true
+                                                    val pillBg = if (active) {
+                                                        MaterialTheme.colorScheme.primaryContainer
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
+                                                    }
+                                                    val pillFg = if (active) {
+                                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                                                    }
+                                                    Surface(
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        color = pillBg,
+                                                        contentColor = pillFg,
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(12.dp))
+                                                            .clickable { reactToMessage(msg.id, chip.id) },
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                                        ) {
+                                                            Text(text = reactionEmoji(chip.id), fontSize = 12.sp)
+                                                            Text(
+                                                                text = channelCounterString(chip.count),
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontSize = 10.sp,
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
                                 MessageBubble(
                                     message = msg,
                                     profiles = chatProfiles,
@@ -4903,6 +5058,7 @@ fun ChatDetailScreen(
                                     onReplyBadgeClick = onReplyBadgeClick,
                                     highlighted = highlightedMsgId == msg.id,
                                 )
+                                }
                             }
                         }
                     }
@@ -5560,6 +5716,7 @@ fun ChatDetailScreen(
             apiClient = app.apiClient,
             channelId = targetPeer,
             cmid = targetCmid,
+            myUserId = myUserId,
             onDismiss = { channelCommentsTarget = null },
         )
     }
@@ -5605,47 +5762,78 @@ fun ChatDetailScreen(
                     }
                 },
                 onSectionClick = { section ->
-                    if (section == "Фотографии") {
-                        // #CHANNEL-PHOTOS: «Фотографии» открывает панель альбомов
-                        // канала (аддитивно) — собственный контент группы через
-                        // ChannelPhotosDialog (photosGetAlbums/photosGet ownerId=-abs(peerId)).
-                        showChannelInfoPanel = false
-                        showChannelPhotos = true
-                    } else {
-                        // #CHANNEL-SECTIONS-DEFERRED (2026-10-03): «Видео/Музыка/Файлы»
-                        // ОТЛОЖЕНЫ — направлены на глобальные экраны Screen.Video /
-                        // Screen.Music / Screen.Documents, которые НЕ принимают контекст
-                        // группы (ownerId): VideoScreen(videoGet для себя), MusicScreen
-                        // (AudioLibraryPager «Моя музыка»), DocumentsScreen(docsGet для себя)
-                        // показывают контент ТЕКУЩЕГО пользователя, а не канала. Открыть их
-                        // с -abs(peerId) семантически неверно (юзер увидит свою медиатеку, а
-                        // не видео/музыку/файлы сообщества), а добавление group-скоупа требует
-                        // отдельных channel-экранов по образцу ChannelPhotosDialog (вне
-                        // адаптивного скоупа). Поэтому оставляем честный Toast «скоро» и
-                        // помечаем разделы как нереализуемые существующими глобальными экранами.
-                        showChannelInfoPanel = false
-                        Toast.makeText(ctx, "Раздел «$section» скоро", Toast.LENGTH_SHORT).show()
+                    when (section) {
+                        // #CHANNEL-PHOTOS: «Фотографии» — фото-лента канала
+                        // (photosPhotoFeedList, ownerId=-abs(peerId)); альбомы —
+                        // вторичный уровень внутри ChannelPhotoFeedDialog.
+                        "Фотографии" -> {
+                            showChannelInfoPanel = false
+                            showChannelPhotos = true
+                        }
+                        // #CHANNEL-SECTIONS (2026-10-04): «Видео/Музыка/Файлы» —
+                        // собственные панели канала (videoGet/audioGetWithCount /
+                        // docsGet с ownerId=-abs(peerId)).
+                        "Видео" -> {
+                            showChannelInfoPanel = false
+                            showChannelVideo = true
+                        }
+                        "Музыка" -> {
+                            showChannelInfoPanel = false
+                            showChannelAudio = true
+                        }
+                        "Файлы" -> {
+                            showChannelInfoPanel = false
+                            showChannelFiles = true
+                        }
                     }
                 },
             )
         }
     }
-    // #CHANNEL-PHOTOS (2026-10-03): панель «Фотографии» канала — список альбомов
-    // группы и сетка фото выбранного альбома. Открывается по клику на раздел
-    // «Фотографии» панели канала. Начальный уровень — альбомы (photosGetAlbums),
-    // клик по альбому → сетка миниатюр (photosGet). Клик по фото открывает
-    // полноэкранный просмотр (PhotoViewer). Аддитивно: только канальный режим.
+    // #CHANNEL-PHOTOS (2026-10-04): панель «Фотографии» канала — фото-лента
+    // сообщества (photosPhotoFeedList, ownerId=-abs(peerId)) с пагинацией;
+    // альбомы — вторичный уровень внутри ChannelPhotoFeedDialog. Открывается по
+    // клику на раздел «Фотографии» панели канала. Тап по фото → PhotoViewer.
+    // Аддитивно: только канальный режим.
     if (peerId < 0 && isChannel && showChannelPhotos) {
-        ChannelPhotosDialog(
+        ChannelPhotoFeedDialog(
             apiClient = app.apiClient,
             ownerId = -abs(peerId),
             onDismiss = { showChannelPhotos = false },
             onPhotoClick = { urls, idx ->
-                // Закрываем панель альбомов и открываем существующий полноэкранный
+                // Закрываем панель и открываем существующий полноэкранный
                 // просмотрщик (photoViewerState) — верхнеуровневый PhotoViewer.
                 showChannelPhotos = false
                 photoViewerState = urls to idx
             },
+        )
+    }
+    // #CHANNEL-SECTIONS (2026-10-04): панель «Видео» канала (videoGet с
+    // ownerId=-abs(peerId)); тап по видео → onVideoClick (воспроизведение).
+    if (peerId < 0 && isChannel && showChannelVideo) {
+        ChannelVideoDialog(
+            apiClient = app.apiClient,
+            ownerId = -abs(peerId),
+            onDismiss = { showChannelVideo = false },
+            onVideoClick = onVideoClick,
+        )
+    }
+    // #CHANNEL-SECTIONS (2026-10-04): панель «Музыка» канала (audioGetWithCount
+    // с ownerId=-abs(peerId)); рендер AudioAttachmentList (сам запускает плеер).
+    if (peerId < 0 && isChannel && showChannelAudio) {
+        ChannelAudioDialog(
+            apiClient = app.apiClient,
+            ownerId = -abs(peerId),
+            onDismiss = { showChannelAudio = false },
+        )
+    }
+    // #CHANNEL-SECTIONS (2026-10-04): панель «Файлы» канала (docsGet с
+    // ownerId=-abs(peerId)); тап/кнопка скачивает документ (DownloadManager).
+    if (peerId < 0 && isChannel && showChannelFiles) {
+        ChannelFilesDialog(
+            apiClient = app.apiClient,
+            ownerId = -abs(peerId),
+            onDismiss = { showChannelFiles = false },
         )
     }
     }  // Fix #228: closes CompositionLocalProvider(LocalStickerPhotoScale)
@@ -6553,13 +6741,23 @@ private fun MessageBubble(
         }
         } // Fix #244: закрытие CompositionLocalProvider (LocalAttachmentSelection)
 
-        // ReactionBar — показ реакций под bubble.
-        ReactionBar(
-            reactions = message.reactions,
-            isOut = isOut,
-            onReact = onReact,
-            onTap = { onShowReactionPicker() },
-        )
+        // #CHANNEL-POST-UI: у канального поста с разбивкой реакций по эмодзи
+        // (items) чипы рисуются в футере ChannelPostInfoRow — отдельный
+        // ReactionBar под bubble НЕ дублируем (иначе реакции покажутся дважды:
+        // и чипами, и агрегированным баром). Для обычных сообщений и канальных
+        // постов без items (нет разбивки) ReactionBar остаётся (агрегированный
+        // счётчик + тап по picker). Чипы в футере сами кликабельны (toggle).
+        val channelChipsRender = message.peerId < 0 &&
+            (message.reactions?.items?.isNotEmpty() == true)
+        if (!channelChipsRender) {
+            // ReactionBar — показ реакций под bubble.
+            ReactionBar(
+                reactions = message.reactions,
+                isOut = isOut,
+                onReact = onReact,
+                onTap = { onShowReactionPicker() },
+            )
+        }
 
         // #CHANNEL-DONUT (Task 67 #CHANNELS-API/#CHANNEL-WALL-MODE): счётчики
         // просмотров/комментариев и донат-paywall показываем ТОЛЬКО для постов
@@ -6585,6 +6783,9 @@ private fun MessageBubble(
                 },
                 // #CHANNELS-COMMENTS: кнопка комментариев канального поста.
                 onCommentsClick = onCommentsClick,
+                // #CHANNEL-POST-UI: тап по реакционному чипу футера → toggle
+                // (та же отправка messages.sendReaction через onReact).
+                onReact = onReact,
             )
         }
 
@@ -6925,12 +7126,24 @@ private fun ChannelFeedFilterRow(
     }
 }
 
-/** #CHANNEL-DONUT: счётчики просмотров/комментариев и донат-paywall канального
- *  поста. Вызывается из MessageBubble только для канальных постов (peerId<0):
+/** #CHANNEL-DONUT / #CHANNEL-POST-UI: футер канального поста «как в ВК».
+ *  Вызывается из MessageBubble только для канальных постов (peerId<0):
  *  fields viewsCount/commentsCount/isDonut/paywall* заполнены
  *  parseChannelHistoryItem в VKApiClient. Обычные сообщения не затрагиваются.
+ *
+ *  Раскладка по снапшоту (ChannelPostPrimary__footer, Мессенджер_каналы_дилог):
+ *   1) ChannelPostPrimary__reactions — ряд чипов ReactionChip: эмодзи + счётчик
+ *      (ReactionChip__counter--numbers). Источник — message.reactions.items
+ *      (id → count); при пустом items чипы не рисуются (агрегированный
+ *      ReactionBar под bubble отдаёт их отдельным рядом — см. MessageBubble).
+ *   2) ChannelPostMeta__views — «глаз» (vkuiIcon view_12) + «1,3K».
+ *   3) ChannelPostPrimaryComments — comment_outline_16 + «N комментарий» +
+ *      chevron_16; тап → ChannelCommentsDialog (channels.getComments).
+ *
  *  #CHANNELS-UI (Task #CHANNELS-UI): кнопка paywall кликабельна — onPaywallClick
- *  открывает payment-ссылку (через onUrlClick вызывающего). */
+ *  открывает payment-ссылку (через onUrlClick вызывающего). #CHANNELS-COMMENTS:
+ *  строка комментариев рисуется для ЛЮБОГО канального поста (кнопка нужна даже
+ *  без счётчика). #CHANNEL-POST-UI: тап по чипу реакции — toggle (onReact). */
 @Composable
 private fun ChannelPostInfoRow(
     message: Message,
@@ -6939,15 +7152,20 @@ private fun ChannelPostInfoRow(
     onPaywallClick: (() -> Unit)? = null,
     // #CHANNELS-COMMENTS: тап по кнопке комментариев → открыть панель.
     onCommentsClick: () -> Unit = {},
+    // #CHANNEL-POST-UI: тап по реакционному чипу → toggle (messages.sendReaction).
+    onReact: (Int) -> Unit = {},
 ) {
     val captionColor = textColor.copy(alpha = 0.7f)
     val views = message.viewsCount?.takeIf { it > 0 }
     val comments = message.commentsCount?.takeIf { it > 0 }
     val reactionCost = message.reactionCost?.takeIf { it > 0 }
-    val showCounters = views != null || comments != null || reactionCost != null
+    // Строка счётчиков (просмотры/платная реакция) рисуется, только если есть
+    // сами данные; комментарии выводятся отдельной строкой ниже — всегда.
+    val showCounters = views != null || reactionCost != null
     val donutText = message.paywallPlaceholder
         ?: message.paywallSnippet
         ?: "Донат-контент"
+    val msgReactions = message.reactions
 
     Column(
         modifier = Modifier
@@ -6957,31 +7175,89 @@ private fun ChannelPostInfoRow(
                 end = if (isOut) 4.dp else 0.dp,
             ),
     ) {
-        // Строка счётчиков: просмотры + комментарии (компактный вид «80K · 12»).
+        // #CHANNEL-POST-UI: реакционные чипы VK (ReactionChip: эмодзи + число).
+        // Разбивка message.reactions.items (id → count), сортировка по убыванию
+        // счётчика (как в снапшоте — крупные реакции первыми), максимум 6 чипов.
+        val chipItems = (msgReactions?.items ?: emptyList())
+            .filter { it.count > 0 }
+            .sortedByDescending { it.count }
+            .take(6)
+        if (chipItems.isNotEmpty()) {
+            Row(
+                modifier = Modifier.padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (chip in chipItems) {
+                    val active = msgReactions?.userReactionActive(chip.id) == true
+                    val pillBg = if (active) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        textColor.copy(alpha = 0.1f)
+                    }
+                    val pillFg = if (active) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        textColor.copy(alpha = 0.85f)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = pillBg,
+                        contentColor = pillFg,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onReact(chip.id) },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(text = reactionEmoji(chip.id), fontSize = 12.sp)
+                            Text(
+                                text = channelCounterString(chip.count),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        // #CHANNEL-POST-UI: счётчики просмотров/комментариев и (если есть)
+        // цена платной реакции. Порядок и иконки «как в ВК»: «глаз» view_12
+        // перед числом просмотров; комментарии с comment_outline_16 и шевроном
+        // (ChannelPostPrimaryComments__content) в кликабельной строке ниже.
         if (showCounters) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (views != null) {
-                    Text(
-                        text = channelCounterString(views),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = captionColor,
-                        fontSize = 11.sp,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Visibility,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = captionColor,
+                        )
+                        Text(
+                            text = channelCounterString(views),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = captionColor,
+                            fontSize = 11.sp,
+                        )
+                    }
                 }
-                if (comments != null) {
-                    Text(
-                        text = channelCounterString(comments),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = captionColor,
-                        fontSize = 11.sp,
-                    )
-                }
+                // Счётчик комментариев в этой строке не дублируем — он выводится
+                // в отдельной кликабельной строке комментариев ниже («как в ВК»:
+                // ChannelPostPrimaryComments → comment_outline_16 + «N комментарий»).
                 // #CHANNELS-UI (Task #CHANNELS-UI): платные реакции — рядом с
                 // остальными счётчиками текст «Реакция · N ₽» (reactionCost).
-                if (reactionCost != null && (message.reactions?.count ?: 0) > 0) {
+                if (reactionCost != null && (msgReactions?.count ?: 0) > 0) {
                     Text(
                         text = "Реакция · $reactionCost ₽",
                         style = MaterialTheme.typography.labelSmall,
@@ -6991,11 +7267,12 @@ private fun ChannelPostInfoRow(
                 }
             }
         }
-        // #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS): кнопка «N комментариев»
-        // канального поста → открывает панель комментариев (channels.getComments).
-        // Рисуем для ЛЮБОГО канального поста (даже без счётчиков) — у постов
-        // канала комментарии почти всегда есть. Только действие; обычные диалоги
-        // не затрагиваются.
+        // #CHANNEL-POST-UI / #CHANNELS-COMMENTS: строка комментариев канального
+        // поста «как в ВК» (ChannelPostPrimaryComments: comment_outline_16 +
+        // «N комментарий» + chevron_16) → открывает панель комментариев
+        // (channels.getComments). Рисуем для ЛЮБОГО канального поста (даже без
+        // счётчика) — у постов канала комментарии почти всегда есть. Только
+        // действие; обычные диалоги не затрагиваются.
         Surface(
             shape = RoundedCornerShape(6.dp),
             color = Color.Transparent,
@@ -7004,15 +7281,32 @@ private fun ChannelPostInfoRow(
                 .padding(top = 4.dp)
                 .clickable { onCommentsClick() },
         ) {
-            Text(
-                // Счётчик в кнопке — при его отсутствии просто «Комментарии».
-                text = if (comments != null) "Комментарии · ${channelCounterString(comments)}"
-                else "Комментарии",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = captionColor,
+                )
+                Text(
+                    // Счётчик в строке — при его отсутствии просто «Комментарии».
+                    text = if (comments != null) "Комментарии · ${channelCounterString(comments)}"
+                    else "Комментарии",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = captionColor,
+                )
+            }
         }
         // Донат-paywall: заглушка «Поддержать автора / Открыть за N ₽/мес».
         // #CHANNELS-UI: кнопка кликабельна — onPaywallClick открывает
@@ -7055,14 +7349,17 @@ private fun ChannelPostInfoRow(
     }
 }
 
-/** #CHANNELS-UI2 (Task 1): счётчики просмотров/комментариев и донат-paywall
- *  для ПОСТА стены канала в wall-режиме (модель Post). Аналог
+/** #CHANNELS-UI2 (Task 1) / #CHANNEL-POST-UI: счётчики просмотров/комментариев
+ *  и донат-paywall для ПОСТА стены канала в wall-режиме (модель Post). Аналог
  *  ChannelPostInfoRow (история), но читает поля Post: views.count /
  *  comments.count / donut (вместо message.viewsCount/commentsCount/isDonut).
  *  Вызывается ТОЛЬКО в wall-режиме канала под карточкой WallPostCard —
  *  полностью аддитивно, обычные посты не затрагиваются. Платные реакции
  *  (reactionCost) в модели Post отсутствуют → строка «Реакция · N ₽» здесь
- *  не выводится (отложено, требует дозагрузки стоимости доната отдельно). */
+ *  не выводится (отложено, требует дозагрузки стоимости доната отдельно).
+ *  Реакционные чипы (ReactionChip) в wall-режиме НЕ выводятся: у модели Post
+ *  reactions — только count/userReacted, разбивки по эмодзи items нет
+ *  (в отличие от MessageReaction канальной истории) → отложено до дозагрузки. */
 @Composable
 private fun ChannelPostWallInfoRow(
     post: Post,
@@ -7073,40 +7370,38 @@ private fun ChannelPostWallInfoRow(
     val captionColor = MaterialTheme.colorScheme.onSurfaceVariant
     val views = post.views?.count?.takeIf { it > 0 }
     val comments = post.comments?.count?.takeIf { it > 0 }
-    val showCounters = views != null || comments != null
     val donutText = post.donut?.placeholder ?: "Донат-контент"
 
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
-        // Строка счётчиков: просмотры + комментарии (компактный вид «80K · 12»).
-        if (showCounters) {
+        // #CHANNEL-POST-UI: счётчик просмотров «как в ВК» (ChannelPostMeta__views:
+        // «глаз» view_12 + «1,3K»). Счётчик комментариев здесь не дублируем — он
+        // в отдельной кликабельной строке ниже.
+        if (views != null) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                if (views != null) {
-                    Text(
-                        text = channelCounterString(views),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = captionColor,
-                        fontSize = 11.sp,
-                    )
-                }
-                if (comments != null) {
-                    Text(
-                        text = channelCounterString(comments),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = captionColor,
-                        fontSize = 11.sp,
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Outlined.Visibility,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = captionColor,
+                )
+                Text(
+                    text = channelCounterString(views),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = captionColor,
+                    fontSize = 11.sp,
+                )
             }
         }
-        // #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS): кнопка «N комментариев»
-        // поста стены канала → открывает панель комментариев. У модели Post
-        // счётчик комментариев из post.comments.count (может быть пуст — тогда
-        // просто «Комментарии»). Аддитивно, действие только для канальных постов.
+        // #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS) / #CHANNEL-POST-UI: строка
+        // «N комментария» поста стены канала «как в ВК» (ChannelPostPrimaryComments:
+        // comment_outline_16 + подпись + chevron_16) → открывает панель комментариев.
+        // У модели Post счётчик комментариев из post.comments.count (может быть
+        // пуст — тогда просто «Комментарии»). Аддитивно, только для канальных постов.
         Surface(
             shape = RoundedCornerShape(6.dp),
             color = Color.Transparent,
@@ -7115,14 +7410,31 @@ private fun ChannelPostWallInfoRow(
                 .padding(top = 4.dp)
                 .clickable { onCommentsClick() },
         ) {
-            Text(
-                text = if (comments != null) "Комментарии · ${channelCounterString(comments)}"
-                else "Комментарии",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = captionColor,
+                )
+                Text(
+                    text = if (comments != null) "Комментарии · ${channelCounterString(comments)}"
+                    else "Комментарии",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = captionColor,
+                )
+            }
         }
         // Донат-paywall: плашка-заглушка «Поддержать автора / Открыть по подписке».
         // У модели Post нет paywallButton — кнопка фиксированная (для канала),
@@ -7163,6 +7475,36 @@ private fun ChannelPostWallInfoRow(
 }
 
 /**
+ * #CHANNEL-POST-CARD: конвертер канального Message (history-режим,
+ * channels.getHistory) в Post для переиспользования WallPostCard +
+ * ChannelPostWallInfoRow. У Message нет likes/reposts/Post.Reactions —
+ * эти поля остаются в дефолте/null (WallPostCard без лайк-счётчика сервера
+ * полагается на optimistic-состояние channelLikeStates). Только `?.`/`?:`.
+ */
+private fun messageToChannelPost(msg: Message): Post {
+    val ownerId = msg.peerId
+    val vc = msg.viewsCount
+    val cc = msg.commentsCount
+    return Post(
+        id = msg.id,
+        ownerId = ownerId,
+        fromId = if (msg.fromId != 0L) msg.fromId else ownerId,
+        date = msg.date,
+        text = msg.text,
+        attachments = msg.attachments,
+        views = if (vc != null) Post.Views(vc) else null,
+        comments = if (cc != null) Post.Comments(cc) else null,
+        donut = if (msg.isDonut) {
+            Post.Donut(
+                isDonut = true,
+                placeholder = msg.paywallPlaceholder ?: msg.paywallSnippet,
+                canPublishFreeCopy = false,
+            )
+        } else null,
+    )
+}
+
+/**
  * #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS): диалог комментариев к посту
  * канала. Загружает channels.getComments, показывает список (автор/текст/дата),
  * позволяет добавить комментарий (channels.createComment) и отредактировать
@@ -7176,6 +7518,7 @@ private fun ChannelCommentsDialog(
     channelId: Long,
     cmid: Long,
     onDismiss: () -> Unit,
+    myUserId: Long = 0L,
 ) {
     val scope = rememberCoroutineScope()
     var comments by remember { mutableStateOf<List<re.pinok.api.VKApiClient.ChannelComment>>(emptyList()) }
@@ -7189,6 +7532,10 @@ private fun ChannelCommentsDialog(
     var editingComment by remember { mutableStateOf<re.pinok.api.VKApiClient.ChannelComment?>(null) }
     var editText by remember { mutableStateOf("") }
     var savingEdit by remember { mutableStateOf(false) }
+    // Удаление своего комментария (canDelete): на подтверждение + стек вызова.
+    var deletingComment by remember { mutableStateOf<re.pinok.api.VKApiClient.ChannelComment?>(null) }
+    var deleting by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
 
     fun loadComments() {
         loading = true
@@ -7270,7 +7617,7 @@ private fun ChannelCommentsDialog(
                             modifier = Modifier.heightIn(min = 120.dp, max = 300.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            items(comments, key = { it.id }) { c ->
+items(comments, key = { it.id }) { c ->
                                 val canEdit = c.canEdit
                                 Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -7308,8 +7655,12 @@ private fun ChannelCommentsDialog(
                                             )
                                         }
                                         Spacer(modifier = Modifier.weight(1f))
-                                        // Редактирование своего комментария (canEdit).
-                                        if (canEdit) {
+                                        // Свои действия: редактирование (canEdit) и
+                                        // удаление (canDelete) — свой комментарий (fromId==myUserId)
+                                        // всегда редактируется/удаляется, даже если сервер не
+                                        // прислал can_edit/can_delete (channels.getComments).
+                                        val isOwn = c.fromId != 0L && c.fromId == myUserId
+                                        if (canEdit || isOwn) {
                                             IconButton(
                                                 onClick = {
                                                     editingComment = c
@@ -7324,6 +7675,19 @@ private fun ChannelCommentsDialog(
                                                 )
                                             }
                                         }
+                                        if (c.canDelete || isOwn) {
+                                            IconButton(
+                                                enabled = !deleting,
+                                                onClick = { deletingComment = c },
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.Delete,
+                                                    contentDescription = "Удалить",
+                                                    modifier = Modifier.size(18.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
                                     }
                                     Text(
                                         text = c.text,
@@ -7332,14 +7696,14 @@ private fun ChannelCommentsDialog(
                                         modifier = Modifier.padding(start = 36.dp, top = 2.dp),
                                     )
                                 }
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(top = 6.dp),
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                                )
+HorizontalDivider(
+                                        modifier = Modifier.padding(top = 6.dp),
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
                 HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
 
@@ -7446,6 +7810,51 @@ private fun ChannelCommentsDialog(
             TextButton(onClick = { onDismiss() }) { Text("Закрыть") }
         },
     )
+
+    // Подтверждение удаления своего комментария (canDelete).
+    val target = deletingComment
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!deleting) deletingComment = null
+            },
+            title = { Text("Удалить комментарий?") },
+            text = { Text("Комментарий будет удалён без возможности восстановления.") },
+            confirmButton = {
+                TextButton(
+                    enabled = !deleting,
+                    onClick = {
+                        deleting = true
+                        scope.launch {
+                            try {
+                                val ok = apiClient.channelsDeleteComment(channelId, target.id)
+                                if (ok) {
+                                    deletingComment = null
+                                    loadComments()
+                                } else {
+                                    deletingComment = null
+                                    Toast.makeText(ctx, "Не удалось удалить комментарий", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                deletingComment = null
+                                Toast.makeText(ctx, "Ошибка удаления: ${e.message}", Toast.LENGTH_SHORT).show()
+                            } finally {
+                                deleting = false
+                            }
+                        }
+                    },
+                ) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !deleting,
+                    onClick = { deletingComment = null },
+                ) { Text("Отмена") }
+            },
+        )
+    }
 }
 
 /** #CHANNEL-DONUT: компактный формат счётчика канального поста — как web-снапшот:
@@ -9638,15 +10047,12 @@ private fun channelCommunityUrl(group: re.pinok.api.VKApiClient.GroupInfo?, peer
  * подписчики, «Открыть сообщество»/«Написать», ссылка и разделы
  * Фото/Видео/Музыка/Файлы). Рендерится внутри ModalBottomSheet.
  *
- * Разделы: «Фотографии» реализован — открывает ChannelPhotosDialog с
- * контентом канала (см. #CHANNEL-PHOTOS). «Видео/Музыка/Файлы» ОТЛОЖЕНЫ
- * (#CHANNEL-SECTIONS-DEFERRED, 2026-10-03): глобальные Screen.Photos/Video/
- * Music/Documents в Screen.kt НЕ принимают ownerId группы — они показывают
- * контент ТЕКУЩЕГО пользователя (видео/музыку/документы самого юзера), а не
- * канала. Поэтому клик по ним вызывает onSectionClick, а вызывающая сторона
- * оставляет честный Toast «Раздел … скоро» (нереализуемо существующими
- * глобальными экранами; для group-скоупа нужны отдельные channel-экраны по
- * образцу ChannelPhotosDialog).
+ * Разделы: «Фотографии» — фото-лента канала (ChannelPhotoFeedDialog,
+ * photosPhotoFeedList, #CHANNEL-PHOTOS-FEED). «Видео» — ChannelVideoDialog
+ * (videoGet с ownerId), «Музыка» — ChannelAudioDialog (audioGetWithCount),
+ * «Файлы» — ChannelFilesDialog (docsGet с ownerId) — все #CHANNEL-SECTIONS
+ * (2026-10-04). Клик по разделу вызывает onSectionClick, а вызывающая
+ * сторона открывает соответствующую канальную панель (ownerId=-abs(peerId)).
  *
  * @param group         метаданные канала из loadChannelMeta (может быть null,
  *                      если groupsGetById ещё не ответил или не удался)
@@ -10181,6 +10587,538 @@ private fun channelPhotoCountLabel(count: Int): String {
         mod10 == 1 && mod100 != 11 -> "$count фотография"
         mod10 in 2..4 && (mod100 < 12 || mod100 > 14) -> "$count фотографии"
         else -> "$count фотографий"
+    }
+}
+
+/** #CHANNEL-PHOTOS-FEED (2026-10-04): панель «Фотографии» канала — лента фото
+ *  сообщества через photosPhotoFeedList (ownerId=-abs(peerId)), с курсорной
+ *  пагинацией (start_from/next_from). Сетка 3 колонки, тап по фото →
+ *  onPhotoClick(список URL, индекс) для PhotoViewer. ModalBottomSheet.
+ *
+ * @param apiClient    VKApiClient (photosPhotoFeedList)
+ * @param ownerId      владелец фото (=-group_id, отрицательный id канала)
+ * @param onDismiss    закрыть панель (кнопка «×» / системный back)
+ * @param onPhotoClick тап по фото — [список URL, индекс] для PhotoViewer
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun ChannelPhotoFeedDialog(
+    apiClient: re.pinok.api.VKApiClient,
+    ownerId: Long,
+    onDismiss: () -> Unit,
+    onPhotoClick: (List<String>, Int) -> Unit,
+) {
+    BackHandler { onDismiss() }
+
+    var photos by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
+    var nextFrom by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // Счётчик для «Повторить»: переключение перезапускает начальный LaunchedEffect.
+    var seq by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
+
+    fun loadFirst() {
+        scope.launch {
+            loading = true
+            error = null
+            try {
+                val r = apiClient.photosPhotoFeedList(ownerId = ownerId, count = 40, startFrom = null)
+                photos = r.items.distinctBy { "${it.ownerId}_${it.id}" }
+                nextFrom = r.nextFrom
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "#CHANNEL-PHOTOS-FEED photosPhotoFeedList failed", e)
+                error = apiClient.lastApiError ?: e.message
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    fun loadMore() {
+        val cursor = nextFrom
+        if (cursor == null || cursor.isBlank() || loadingMore) return
+        loadingMore = true
+        scope.launch {
+            try {
+                val r = apiClient.photosPhotoFeedList(
+                    ownerId = ownerId,
+                    count = 40,
+                    startFrom = cursor,
+                )
+                val page = r.items.distinctBy { "${it.ownerId}_${it.id}" }
+                photos = (photos + page).distinctBy { "${it.ownerId}_${it.id}" }
+                nextFrom = r.nextFrom
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.e("ChatDetailScreen", "#CHANNEL-PHOTOS-FEED load more failed", e)
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
+
+    LaunchedEffect(ownerId, seq) { loadFirst() }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            // Заголовок «Фотографии» + «×» (закрыть).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Фотографии",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть")
+                }
+            }
+            when {
+                loading -> Box(
+                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+                error != null -> Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Не удалось загрузить фотографии", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = error.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { seq++ }) { Text("Повторить") }
+                }
+                photos.isEmpty() -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "В сообществе нет фотографий",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                else -> {
+                    // Полный список URL для просмотрщика (PhotoViewer).
+                    val urls = photos.mapNotNull { it.largestUrl }
+                    LazyVerticalGrid(
+                        columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        gridItems(photos, key = { "chfeed_${it.ownerId}_${it.id}" }) { photo ->
+                            val url = photo.mediumUrl
+                            if (url != null) {
+                                ChannelPhotoGridItem(
+                                    url = url,
+                                    onClick = {
+                                        val idx = photos.indexOf(photo).coerceAtLeast(0)
+                                        onPhotoClick(urls, idx)
+                                    },
+                                )
+                            }
+                        }
+                        // Футер-пагинация: автоматически тянет следующую страницу.
+                        if (nextFrom != null || loadingMore) {
+                            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                                LaunchedEffect(nextFrom) {
+                                    loadMore()
+                                }
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(Modifier.size(28.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** #CHANNEL-VIDEO (2026-10-04): панель «Видео» канала — videoGet(ownerId),
+ *  вертикальный список VideoThumbnail (переиспользуется public-компонент
+ *  ProfileScreen.VideoThumbnail). Тап по видео → onVideoClick (воспроизведение).
+ *  ModalBottomSheet, системный back закрывает.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChannelVideoDialog(
+    apiClient: re.pinok.api.VKApiClient,
+    ownerId: Long,
+    onDismiss: () -> Unit,
+    onVideoClick: (Video) -> Unit,
+) {
+    BackHandler { onDismiss() }
+
+    var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var seq by remember { mutableStateOf(0) }
+
+    LaunchedEffect(ownerId, seq) {
+        loading = true
+        error = null
+        try {
+            videos = apiClient.videoGet(ownerId = ownerId, count = 30, offset = 0)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.e("ChatDetailScreen", "#CHANNEL-VIDEO videoGet failed", e)
+            error = apiClient.lastApiError ?: e.message
+        } finally {
+            loading = false
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            // Заголовок «Видео» + «×» (закрыть).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Видео",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть")
+                }
+            }
+            when {
+                loading -> Box(
+                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+                error != null -> Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Не удалось загрузить видео", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = error.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { seq++ }) { Text("Повторить") }
+                }
+                videos.isEmpty() -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "В сообществе нет видео",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
+                        // Reuse public ProfileScreen.VideoThumbnail (16:9 карточка).
+                        VideoThumbnail(video = video, onClick = onVideoClick)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** #CHANNEL-AUDIO (2026-10-04): панель «Музыка» канала — audioGetWithCount
+ *  (ownerId), рендер переиспользуемым AudioAttachmentList (сам запускает
+ *  PlayerConnection.playTrackList по тапу). ModalBottomSheet.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChannelAudioDialog(
+    apiClient: re.pinok.api.VKApiClient,
+    ownerId: Long,
+    onDismiss: () -> Unit,
+) {
+    BackHandler { onDismiss() }
+
+    var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var seq by remember { mutableStateOf(0) }
+
+    LaunchedEffect(ownerId, seq) {
+        loading = true
+        error = null
+        try {
+            val (_, list) = apiClient.audioGetWithCount(count = 100, offset = 0, ownerId = ownerId)
+            tracks = list
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.e("ChatDetailScreen", "#CHANNEL-AUDIO audioGetWithCount failed", e)
+            error = apiClient.lastApiError ?: e.message
+        } finally {
+            loading = false
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            // Заголовок «Музыка» + «×» (закрыть).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Музыка",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть")
+                }
+            }
+            when {
+                loading -> Box(
+                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+                error != null -> Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Не удалось загрузить музыку", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = error.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { seq++ }) { Text("Повторить") }
+                }
+                tracks.isEmpty() -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "В сообществе нет музыки",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                ) {
+                    // Reuse public AudioAttachmentList (список треков, тап → плеер).
+                    item { AudioAttachmentList(tracks = tracks) }
+                }
+            }
+        }
+    }
+}
+
+/** #CHANNEL-FILES (2026-10-04): панель «Файлы» канала — docsGet(ownerId),
+ *  список документов (заголовок / EXT • размер • тип), тап или кнопка →
+ *  скачивание через системный DownloadManager (как DocumentsScreen.DocRow).
+ *  ModalBottomSheet.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChannelFilesDialog(
+    apiClient: re.pinok.api.VKApiClient,
+    ownerId: Long,
+    onDismiss: () -> Unit,
+) {
+    BackHandler { onDismiss() }
+
+    var docs by remember { mutableStateOf<List<DocFile>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var seq by remember { mutableStateOf(0) }
+
+    LaunchedEffect(ownerId, seq) {
+        loading = true
+        error = null
+        try {
+            docs = apiClient.docsGet(count = 100, offset = 0, ownerId = ownerId)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AppLog.e("ChatDetailScreen", "#CHANNEL-FILES docsGet failed", e)
+            error = apiClient.lastApiError ?: e.message
+        } finally {
+            loading = false
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            // Заголовок «Файлы» + «×» (закрыть).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Файлы",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть")
+                }
+            }
+            when {
+                loading -> Box(
+                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+                error != null -> Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Не удалось загрузить документы", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = error.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { seq++ }) { Text("Повторить") }
+                }
+                docs.isEmpty() -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "В сообществе нет документов",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp),
+                ) {
+                    items(docs, key = { "chdoc_${it.ownerId}_${it.id}" }) { doc ->
+                        ChannelFileRow(doc = doc)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** #CHANNEL-FILES: строка документа (иконка по типу / заголовок / «EXT • размер» /
+ *  тап или кнопка → DownloadManager). Уменьшенная копия DocumentsScreen.DocRow —
+ *  маленький локальный ряд без большого дублирования.
+ */
+@Composable
+private fun ChannelFileRow(doc: DocFile) {
+    val context = LocalContext.current
+
+    fun downloadDoc() {
+        val url = doc.url
+        if (url.isBlank()) {
+            Toast.makeText(context, "Ссылка на файл недоступна — обновите список", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val safeTitle = doc.title.ifBlank { "vk_doc_${doc.id}" }
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            val fileName = "$safeTitle.${doc.ext}"
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                .setTitle(fileName)
+                .setDescription("Документы VK")
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "VK/$fileName")
+            val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
+            if (dm == null) {
+                Toast.makeText(context, "Загрузка недоступна на этом устройстве", Toast.LENGTH_SHORT).show()
+                return
+            }
+            dm.enqueue(request)
+            Toast.makeText(context, "Загрузка началась: $fileName", Toast.LENGTH_SHORT).show()
+            AppLog.i("ChatDetailScreen", "Channel doc download enqueued: $fileName (${doc.sizeLabel})")
+        } catch (e: Exception) {
+            AppLog.e("ChatDetailScreen", "Channel doc download failed", e)
+            Toast.makeText(context, "Не удалось скачать: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { downloadDoc() }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = when {
+                    doc.isImage -> Icons.Outlined.Image
+                    doc.isGif -> Icons.Outlined.Image
+                    doc.ext.lowercase() == "pdf" -> Icons.Outlined.PictureAsPdf
+                    doc.type == 6 -> Icons.Outlined.Movie
+                    else -> Icons.Outlined.Description
+                },
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = doc.title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${doc.ext.uppercase()} • ${doc.sizeLabel} • ${doc.typeLabel}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        IconButton(onClick = { downloadDoc() }) {
+            Icon(Icons.Outlined.Download, contentDescription = "Скачать")
+        }
     }
 }
 

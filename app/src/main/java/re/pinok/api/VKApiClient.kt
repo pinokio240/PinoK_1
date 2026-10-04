@@ -37,6 +37,7 @@ import re.pinok.data.model.Message
 // #REACTION-WEB-API (волна 32): парсинг reactions объекта сообщения
 // (см. parseMessageReactions) — до волны 32 поле НЕ парсилось.
 import re.pinok.data.model.MessageReaction
+import re.pinok.data.model.ReactionItem
 import re.pinok.data.model.RecentReaction
 import re.pinok.data.model.Post
 import re.pinok.data.model.CatalogPlaylist
@@ -284,6 +285,9 @@ class VKApiClient(
         val screenName: String? = null,
         val photo100: String? = null,
         val photo200: String? = null,
+        // #CHANNEL-AVATAR: photo_base для КАНАЛОВ VK Web (у них нет photo_100/200,
+        // только ресайз-URL channel.photo_base) — приоритетный источник аватара.
+        val photoBase: String? = null,
         val isClosed: Int = 0,
         val isMember: Int = 0,
         val verified: Int = 0,
@@ -7815,7 +7819,9 @@ class VKApiClient(
     // #CHANNELS-COMMENTS (Task #CHANNELS-COMMENTS): модель комментария канального
     // поста (channels.getComments item). Из HAR #CHAN-COMMENTS-2026-10-01:
     // item = {id, channel_id, from_id, date, text, can_edit, can_delete,
-    // parents_stack[], ...}. Лайков в ответе нет (подтверждено HAR).
+    // parents_stack[], ...}. can_edit → canEdit, can_delete → canDelete
+    // (оба действительны только для СВОЕГО комментария). Лайков в ответе нет
+    // (подтверждено HAR).
     data class ChannelComment(
         val id: Long,
         val channelId: Long,
@@ -7823,6 +7829,7 @@ class VKApiClient(
         val date: Long,
         val text: String,
         val canEdit: Boolean,
+        val canDelete: Boolean,
     )
 
     // #CHANNELS-COMMENTS: результат channels.getComments — список комментариев
@@ -7897,6 +7904,7 @@ class VKApiClient(
                         date = o.get("date")?.takeIf { x -> !x.isJsonNull }?.asLong ?: 0L,
                         text = o.get("text")?.takeIf { x -> !x.isJsonNull }?.asString ?: "",
                         canEdit = safeBool(o.get("can_edit")),
+                        canDelete = safeBool(o.get("can_delete")),
                     )
                 )
             }
@@ -7909,7 +7917,7 @@ class VKApiClient(
 
     /**
      * #CHANNELS-COMMENTS: channels.createComment — добавить комментарий к посту
-     * канала. params {channel_id, cmid, text, reply_to_comment?}. Возвращает
+     * канала. params {channel_id, cmid, message, reply_to_comment?}. Возвращает
      * true при успехе (response содержит созданный comment или примитив ≠ 0).
      */
     suspend fun channelsCreateComment(
@@ -7922,15 +7930,15 @@ class VKApiClient(
         val args = HashMap<String, String>()
         args["channel_id"] = channelId.toString()
         args["cmid"] = cmid.toString()
-        args["text"] = text
+        args["message"] = text
         if (replyToComment != null) args["reply_to_comment"] = replyToComment.toString()
         val json = call("channels.createComment", args, forceWebGateway = true) ?: return false
-        return tolerantSuccess(json, "channelsCreateComment")
+        return if (json?.has("response") == true) true else { AppLog.w("VKApiClient", "channelsCreateComment no response"); false }
     }
 
     /**
      * #CHANNELS-COMMENTS: channels.editComment — редактирование своего
-     * комментария к посту канала. params {channel_id, comment_id, text}.
+     * комментария к посту канала. params {channel_id, comment_id, message}.
      * Возвращает true при успехе.
      */
     suspend fun channelsEditComment(
@@ -7944,11 +7952,36 @@ class VKApiClient(
             mapOf(
                 "channel_id" to channelId.toString(),
                 "comment_id" to commentId.toString(),
-                "text" to newText,
+                "message" to newText,
             ),
             forceWebGateway = true,
         ) ?: return false
-        return tolerantSuccess(json, "channelsEditComment")
+        return if (json?.has("response") == true) true else { AppLog.w("VKApiClient", "channelsEditComment no response"); false }
+    }
+
+    /**
+     * #CHANNELS-COMMENTS: channels.deleteComment — удаление своего комментария
+     * к посту канала. params {channel_id, comment_id}. Возвращает true при
+     * успехе. Метод по стандартному имени channels.deleteComment (аналог
+     * wall.deleteComment / video.deleteComment); если web-gateway его не
+     * примет — tolerantSuccess вернёт false и UI покажет ошибку.
+     * TODO(cur): при неудаче на конкретных каналах проверить точное имя метода
+     * (возможен вариант channels.deleteComment → response{success:1}).
+     */
+    suspend fun channelsDeleteComment(
+        channelId: Long,
+        commentId: Long,
+    ): Boolean {
+        if (isOffline()) return false
+        val json = call(
+            "channels.deleteComment",
+            mapOf(
+                "channel_id" to channelId.toString(),
+                "comment_id" to commentId.toString(),
+            ),
+            forceWebGateway = true,
+        ) ?: return false
+        return if (json?.has("response") == true) true else { AppLog.w("VKApiClient", "channelsDeleteComment no response"); false }
     }
 
     /**
@@ -8070,13 +8103,23 @@ class VKApiClient(
         val counters = payload?.get("counters")?.takeIf { it.isJsonObject }?.asJsonObject
         val viewsCount = counters?.get("views")?.takeIf { it.isJsonObject }?.asJsonObject
             ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
-        val commentsCount = counters?.get("comments")?.takeIf { it.isJsonObject }?.asJsonObject
+        val commentsObj = counters?.get("comments")?.takeIf { it.isJsonObject }?.asJsonObject
+        val commentsCount = commentsObj
             ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
+        // #CHANNEL-POST-UI: доступность комментариев (counters.comments.can_view).
+        // Снапшот: {"can_post":1,"can_view":1,"count":N} — 0/1, толерантно к true/false.
+        // По умолчанию true (поведение не меняется для старых ответов без поля).
+        val canViewComments = commentsObj?.let { safeBool(it.get("can_view")) } ?: true
         // Реакции: message-шейп (reactions.count) или draft (cm_payload.counters.reactions).
-        val reactions = parseMessageReactions(o) ?: counters?.get("reactions")
-            ?.takeIf { it.isJsonObject }?.asJsonObject
-            ?.get("count")?.takeIf { !it.isJsonNull }?.asInt
-            ?.takeIf { it > 0 }?.let { MessageReaction(count = it) }
+        // #CHANNEL-POST-UI: counters.reactions.items[] ({id,count}) парсится в
+        // ReactionItem — из них UI рисует эмодзи-чипы VK (ReactionChip). Если
+        // counters-ветки нет — фолбэк на message-шейп (только агрегированный count).
+        val reactionsCounter = counters?.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject
+        val reactions = if (reactionsCounter != null) {
+            parseChannelReactionCounter(reactionsCounter)
+        } else {
+            parseMessageReactions(o)
+        }
         // #CHANNELS-API: donut/VK Донат paywall (cm_payload.donut).
         val donut = payload?.get("donut")?.takeIf { it.isJsonObject }?.asJsonObject
         val isDonut = donut?.get("is_donut")?.takeIf { it.isJsonPrimitive }
@@ -8114,6 +8157,7 @@ class VKApiClient(
             reactions = reactions,
             viewsCount = viewsCount,
             commentsCount = commentsCount,
+            canViewComments = canViewComments,
             isDonut = isDonut,
             paywallSnippet = paywallSnippet,
             paywallPlaceholder = paywallPlaceholder,
@@ -9746,6 +9790,9 @@ class VKApiClient(
                     screenName = o.get("screen_name")?.takeIf { !it.isJsonNull }?.asString,
                     photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
+                    // #CHANNEL-AVATAR: у каналов VK Web нет photo_100/200 — только
+                    // photo_base (ресайз-URL). Читаем его в GroupInfo (приоритет в loadChannelMeta).
+                    photoBase = o.get("photo_base")?.takeIf { !it.isJsonNull }?.asString,
                     isClosed = o.get("is_closed")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     isMember = o.get("is_member")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
@@ -10031,13 +10078,15 @@ class VKApiClient(
         }
     }
 
-    /** docs.get — документы пользователя. */
-    suspend fun docsGet(count: Int = 50, offset: Int = 0): List<DocFile> {
+    /** docs.get — документы пользователя; ownerId != null → docs.get owner_id
+     *  (документы сообщества/канала, ownerId=-abs(group_id)). */
+    suspend fun docsGet(count: Int = 50, offset: Int = 0, ownerId: Long? = null): List<DocFile> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf(
             "count" to count.toString(),
             "offset" to offset.toString(),
         )
+        if (ownerId != null) args["owner_id"] = ownerId.toString()
         val json = call("docs.get", args) ?: return emptyList()
         return try {
             val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
@@ -11412,6 +11461,38 @@ class VKApiClient(
             count = count,
             userReaction = userReaction,
             recentReactions = if (recent.isNotEmpty()) recent else null,
+        )
+    }
+
+    /**
+     * #CHANNEL-POST-UI: парсинг реакции канального поста из
+     * cm_payload.counters.reactions (HAR #CHAN-COMMENTS-2026-10-01):
+     *   {"count":N,"items":[{"id":1,"count":1},{"id":4,"count":18}]}
+     * Возвращает MessageReaction с разбивкой [items] (эмодзи-чипы VK) и общим
+     * count. Если count/items пусты (нет реакций) — null (нет и чипов).
+     * Толерантно: безопаснее вернуть null, чем бросать парс-исключение.
+     */
+    private fun parseChannelReactionCounter(rc: JsonObject): MessageReaction? {
+        val countEl = rc.get("count")
+        val count = if (countEl != null && !countEl.isJsonNull) countEl.asInt else 0
+        val itemsArr = rc.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+        val items = ArrayList<ReactionItem>()
+        if (itemsArr != null) {
+            for (el in itemsArr) {
+                if (!el.isJsonObject) continue
+                val io = el.asJsonObject
+                val idEl = io.get("id")
+                val cntEl = io.get("count")
+                val id = if (idEl != null && !idEl.isJsonNull) idEl.asInt else 0
+                val cnt = if (cntEl != null && !cntEl.isJsonNull) cntEl.asInt else 0
+                if (id > 0 && cnt > 0) items.add(ReactionItem(id = id, count = cnt))
+            }
+        }
+        if (count <= 0 && items.isEmpty()) return null
+        return MessageReaction(
+            count = count,
+            userReaction = null,
+            items = items,
         )
     }
 
