@@ -6,6 +6,8 @@ import android.view.ViewGroup
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,6 +44,8 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -372,6 +376,11 @@ fun StoryViewerScreen(
     val app = re.pinok.SovaApp.get()
     val prefsSnap by app.prefs.data.collectAsState(initial = null)
     val autoCacheStories = prefsSnap?.autoCacheStories ?: false
+    // P0.18 #STORY-SWIPE-HINTS: стрелки-подсказки свайпа. Default: true (из prefs).
+    // Исчезают после первого свайпа пользователя. Сохраняем в remember на сессию
+    // просмотра историй (не персистентно — при следующем открытии покажутся снова).
+    val swipeHintsPrefEnabled = prefsSnap?.storiesSwipeHints ?: true
+    var showSwipeHints by remember { mutableStateOf(true) }
     // Ссылка в сторис: настройка openLinksInInternalBrowser (как ChatDetailScreen:987).
     val openLinksInternal = prefsSnap?.openLinksInInternalBrowser ?: false
     val onUrlClick: (String) -> Unit = { url ->
@@ -622,6 +631,12 @@ fun StoryViewerScreen(
                         when {
                             totalDelta < -threshold -> goToNext()
                             totalDelta > threshold -> goToPrev()
+                        }
+                        // P0.18: первый свайп — прячем стрелки-подсказки навсегда
+                        // (на эту сессию просмотра историй). Если свайп не достиг
+                        // порога — НЕ прячем (пользователь только начал вести палец).
+                        if (showSwipeHints && (totalDelta < -threshold || totalDelta > threshold)) {
+                            showSwipeHints = false
                         }
                     },
                 )
@@ -939,6 +954,17 @@ fun StoryViewerScreen(
                     },
                 )
             }
+        }
+
+        // P0.18 #STORY-SWIPE-HINTS: стрелки-подсказки свайпа. Показываются когда:
+        //   - prefs.storiesSwipeHints == true (настройка, default true)
+        //   - showSwipeHints == true (session state, сбрасывается после первого свайпа)
+        //   - !isPaused && !isComposing && !showStickerPicker (не мешать другим overlay)
+        // Исчезают после первого успешного свайпа (onDragEnd порог достигнут).
+        if (swipeHintsPrefEnabled && showSwipeHints && !isPaused && !isComposing && !showStickerPicker) {
+            StorySwipeHintsOverlay(
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
 
         // P0.14 (Task 25): StoryPausedOverlay — показывается когда isPaused && !isComposing.
@@ -1282,6 +1308,68 @@ private fun pointInPolygon(x: Float, y: Float, area: List<Story.StoryClickableAr
 // не-clip-стикер-историй, но это путало — ссылка есть только у clip-историй.
 // Теперь: Профиль — всегда; Клипы — всегда; Фото — всегда; Видео — всегда;
 // Пост — только если в story.stickers есть type="post".
+
+// P0.18 #STORY-SWIPE-HINTS: стрелки-подсказки свайпа в StoryViewer.
+// Показываются в центре экрана: ← с левого края, → с правого. Анимированы —
+// пульсация (alpha 0.4..0.9) чтобы привлечь внимание, но не отвлекать.
+// Исчезают после первого успешного свайпа (showSwipeHints=false в onDragEnd).
+// Тумблер в настройках: prefs.storiesSwipeHints (default true).
+//
+// Не показывается когда: isPaused (есть StoryPausedOverlay), isComposing
+// (поле ввода активно), showStickerPicker (picker открыт).
+//
+// НЕ кликабельны — не перехватывают тап у родительского detectTapGestures.
+// pointerInput(detectTapGestures) всё ещё работает под overlay (стрелки
+// полупрозрачные, не blocking hit).
+@Composable
+private fun StorySwipeHintsOverlay(
+    modifier: Modifier = Modifier,
+) {
+    // Пульсация alpha — мягкая, не агрессивная.
+    val alphaAnim = remember { Animatable(0.5f) }
+    LaunchedEffect(Unit) {
+        alphaAnim.animateTo(
+            targetValue = 0.9f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(900, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+        )
+    }
+    val a = alphaAnim.value
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        // Левая стрелка — «свайп вправо для предыдущей».
+        Box(
+            modifier = Modifier.padding(start = 24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = a),
+                modifier = Modifier.size(56.dp),
+            )
+        }
+        // Правая стрелка — «свайп влево для следующей».
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = a),
+                modifier = Modifier.size(56.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun StoryPausedOverlay(
     story: Story,

@@ -1630,6 +1630,17 @@ private fun InterfaceTab(
                 checked = s.storiesShown,
             ) { scope.launch { app.prefs.setStoriesShown(it) } }
         }
+        // P0.18 #STORY-SWIPE-HINTS: стрелки-подсказки свайпа в StoryViewer.
+        // Default: true. Показываются при первом открытии историй, исчезают
+        // после первого свайпа. Пользователь может выключить если мешают.
+        item {
+            ToggleRow(
+                title = "Подсказки свайпа в историях",
+                subtitle = "Показывать стрелки ← → при просмотре историй. " +
+                    "Исчезают после первого свайпа. Выключите если мешают.",
+                checked = s.storiesSwipeHints,
+            ) { scope.launch { app.prefs.setStoriesSwipeHints(it) } }
+        }
         // #FEED-CAROUSEL (19-A, волна 18-γ) + #POST-CAROUSEL-EVERYWHERE (волна 22):
         // ОДИН флаг управляет каруселью фото на ВСЕХ поверхностях — лента,
         // сообщество, профиль, открытый пост. Default: true — как в VK web
