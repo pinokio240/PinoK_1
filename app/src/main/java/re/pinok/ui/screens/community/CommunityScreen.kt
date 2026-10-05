@@ -348,7 +348,7 @@ fun CommunityScreen(
             // Всегда показываем вкладку: даже выключенная стена у сообщества
             // без записей — это базовая информация (пустой state внутри).
             // Явная non-null локальная переменная (sn) — smart-cast на var из
-            // remember через lambda-захват не работает, !! избыточно (warning).
+            // remember через lambda-захват не работает, делаем явную копию.
             if (!has) {
                 add(0 to "Записи")
                 add(1 to "Фото")
@@ -357,7 +357,7 @@ fun CommunityScreen(
                 add(4 to "Музыка")
                 add(5 to "Обсуждения")
             } else {
-                val sn = s as VKApiClient.GroupSections
+                val sn = s
                 if (sn.wall != 0) add(0 to "Записи")
                 if (sn.photos > 0) add(1 to "Фото")
                 if (sn.video > 0) add(2 to "Видео")
