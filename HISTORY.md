@@ -14229,3 +14229,10 @@ WARNINGS-FIX2-2026-10-05: устранены 6 warnings компилятора (
 // AutoMirrored-иконки корректно зеркалятся в RTL-раскладках (арабский/иврит). Заменён usage + import
 // (androidx.compose.material.icons.filled.Send → androidx.compose.material.icons.automirrored.filled.Send).
 // 2 файла, +20/−11. Кодировка UTF-8 без BOM.
+
+WARNINGS-FIX3-2026-10-05: устранён warning 'No cast needed' (CommunityScreen.kt:360).
+// WARNINGS-FIX2 (коммит 73dbf1d) добавил `val sn = s as VKApiClient.GroupSections` в else-ветке.
+// Но после `val has = s != null` компилятор smart-cast'ит s в non-null GroupSections в else-ветке (has==true),
+// поэтому `as` cast избыточен (warning: No cast needed).
+// Фикс: `val sn = s` (smart-cast делает остальное; явная локальная val избегает !! и держит код без warnings).
+// 1 файл, +2/−2. Кодировка UTF-8 без BOM.

@@ -12532,3 +12532,26 @@ Task: устранить 6 warnings компилятора — 5 unnecessary !! 
 // app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+2/−2 — usage + import)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 23 (WARNINGS-FIX3-2026-10-05)
+Agent: orchestrator (main)
+Task: устранить warning 'No cast needed' на CommunityScreen.kt:360 (регрессия от WARNINGS-FIX2).
+
+## Контекст
+После WARNINGS-FIX2 (Task 22) пользователь собрал проект — остался 1 warning: CommunityScreen.kt:360:28 'No cast needed'. Я добавил `val sn = s as VKApiClient.GroupSections` в else-ветке, но компилятор умнее — после `val has = s != null` smart-cast уже делает s non-null в else-ветке (has==true), поэтому `as` cast избыточен.
+
+## Work Log
+// CommunityScreen.kt:360 — `val sn = s as VKApiClient.GroupSections` → `val sn = s`.
+// Smart-cast на val из remember через lambda-захват НЕ работает для `s` напрямую (mutably captured), но работает для локальной копии `sn` внутри buildList.
+// В else-ветке `s` уже non-null (через `has` smart-cast) → `as` избыточен, компилятор warning.
+// Обновлён комментарий выше: «smart-cast на var из remember через lambda-захват не работает, делаем явную копию».
+// Коммит 8fffdab, push прошёл: c247103..8fffdab PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// CommunityScreen.kt:360 — убран избыточный cast `as VKApiClient.GroupSections` (warning: No cast needed).
+// Проверка: rg 'as VKApiClient.GroupSections' CommunityScreen.kt → 0 совпадений.
+
+Файл (1, +2/−2): app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
