@@ -715,8 +715,17 @@ fun StoryViewerScreen(
                         }
 
                         // Ищем первый стикер, чья кликабельная область содержит точку тапа.
+                        // P0.14 (Task 31 fix): fullview clip-sticker покрывает ВЕСЬ экран
+                        // (1080x1920) — VK возвращает его для clip-историй как «кликабельный
+                        // overlay». Раньше любой тап попадал в него → мгновенный
+                        // onOpenAuthorClips, минуя паузу. Теперь: fullview-стикеры
+                        // (style=="fullview") НЕ считаем «явным тапом по стикеру» —
+                        // направляем в handleNoStickerTap (пауза + overlay со ссылками).
+                        // Только явные clip-sticker'ы (не fullview) → мгновенный переход.
                         val tappedSticker = currentStory.stickers.firstOrNull { s ->
-                            s.area.size >= 4 && pointInPolygon(origX, origY, s.area)
+                            s.area.size >= 4 &&
+                                s.style != "fullview" &&  // P0.14: fullview → пауза, не мгновенный переход
+                                pointInPolygon(origX, origY, s.area)
                         }
                         if (tappedSticker != null) {
                             when (tappedSticker.type) {
