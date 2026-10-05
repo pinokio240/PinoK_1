@@ -134,9 +134,10 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * Fix #67: Экран сообщества — стена + инфо. Принимает groupId как path-параметр.
      * Положительный ID (как в groups[].id). В wallGet передаётся как -groupId.
      */
-    object Community : Screen("community/{groupId}", "Сообщество", null) {
+    object Community : Screen("community/{groupId}?tab={tab}", "Сообщество", null) {
         const val ARG_GROUP_ID = "groupId"
-        fun buildRoute(groupId: Long): String = "community/$groupId"
+        const val ARG_TAB = "tab"
+        fun buildRoute(groupId: Long, tab: Int = 0): String = "community/$groupId?tab=$tab"
     }
 
     /**

@@ -115,6 +115,9 @@ import android.widget.Toast
 fun CommunityScreen(
     groupId: Long,
     onBack: () -> Unit,
+    // P0.18 (Task 30): начальная вкладка при открытии CommunityScreen из stories
+    // overlay (Фото автора → tab=1, Видео автора → tab=2). Default 0 (Записи).
+    initialTab: Int = 0,
     onVideoClick: (Video) -> Unit = {},
     onPostClick: (Post) -> Unit = {},
     onUserClick: (Long) -> Unit = {},
@@ -198,7 +201,7 @@ fun CommunityScreen(
     // S6-4: оптимистичное состояние лайков.
     val likesState = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
     // #30j (community tabs): активная вкладка контента сообщества.
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableStateOf(initialTab) }
     // P0.8 (Task 16): динамические вкладки на основе GroupSections.
     // GroupSections НЕ приходит в GroupInfo (поле отсутствует — VK API отдаёт
     // его только в groups.getSettings, который требует админ-прав). Грузим

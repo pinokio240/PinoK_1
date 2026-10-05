@@ -2367,22 +2367,31 @@ composable(Screen.CallsHistory.route) {
                                 nav.navigate(Screen.PostDetail.buildRoute(ownerId, postId))
                             }
                         },
-                        onOpenAuthorPhotos = { _ ->
-                            // Экран «Фото автора» пока не имеет маршрута с параметром
-                            // (Screen.Photos — глобальный раздел без ownerId). Временно Toast.
-                            android.widget.Toast
-                                .makeText(context, "Фото автора (скоро)", android.widget.Toast.LENGTH_SHORT)
-                                .show()
+                        onOpenAuthorPhotos = { ownerId ->
+                            // P0.18 (Task 30): Фото автора — открываем CommunityScreen
+                            // на вкладке Фото (tab=1), если ownerId<0 (сообщество).
+                            // Для ownerId>0 (пользователь) — Toast (UserProfile не имеет
+                            // отдельного фото-экрана с ownerId filter — backlog).
+                            if (ownerId < 0L) {
+                                val groupId = -ownerId
+                                nav.navigate(Screen.Community.buildRoute(groupId, tab = 1))
+                            } else if (ownerId > 0L) {
+                                android.widget.Toast
+                                    .makeText(context, "Фото автора (скоро)", android.widget.Toast.LENGTH_SHORT)
+                                    .show()
+                            }
                         },
-                        // P0.14 (Task 25): overlay-ссылка «Видео автора». Screen.Video —
-                        // глобальный раздел без ownerId (как Screen.Photos), поэтому
-                        // Toast-плейсхолдер (симметрично onOpenAuthorPhotos выше).
-                        // TODO: добавить Screen.VideosOwner("videos_owner/{ownerId}")
-                        // когда потребуется полный экран «Видео автора».
-                        onOpenAuthorVideos = { _ ->
-                            android.widget.Toast
-                                .makeText(context, "Видео автора (скоро)", android.widget.Toast.LENGTH_SHORT)
-                                .show()
+                        // P0.14 (Task 25): overlay-ссылка «Видео автора».
+                        // P0.18 (Task 30): для ownerId<0 — Community на вкладке Видео (tab=2).
+                        onOpenAuthorVideos = { ownerId ->
+                            if (ownerId < 0L) {
+                                val groupId = -ownerId
+                                nav.navigate(Screen.Community.buildRoute(groupId, tab = 2))
+                            } else if (ownerId > 0L) {
+                                android.widget.Toast
+                                    .makeText(context, "Видео автора (скоро)", android.widget.Toast.LENGTH_SHORT)
+                                    .show()
+                            }
                         },
                         // P0.15 (Task 25): тап по шапке (аватар + имя автора) → стена автора.
                         // ownerId > 0 → UserProfile (user_profile/{userId}).
@@ -2504,11 +2513,19 @@ composable(Screen.CallsHistory.route) {
                     route = Screen.Community.route,
                     arguments = listOf(
                         navArgument(Screen.Community.ARG_GROUP_ID) { type = NavType.LongType },
+                        navArgument(Screen.Community.ARG_TAB) {
+                            type = NavType.StringType
+                            defaultValue = "0"
+                            nullable = true
+                        },
                     ),
                 ) { entry ->
                     val groupId = entry.arguments?.getLong(Screen.Community.ARG_GROUP_ID) ?: 0L
+                    val initialTab = entry.arguments?.getString(Screen.Community.ARG_TAB)?.toIntOrNull()
+                        ?.coerceIn(0, 6) ?: 0
                     CommunityScreen(
                         groupId = groupId,
+                        initialTab = initialTab,
                         onBack = { nav.popBackStack() },
                         onVideoClick = { video ->
                             VideoHolder.open(video)
