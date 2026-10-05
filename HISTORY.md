@@ -14295,3 +14295,17 @@ COMPILE-FIX3-2026-10-05: 'Unresolved reference advanceToNext' — Kotlin local f
 // ради compile-clean + читаемости. Альтернатива lateinit var advance: () -> Unit — hack, ломает return-from-enclosing-function
 // для onBack(). Отклонена.
 // 1 файл, +49/−26. Кодировка UTF-8 без BOM.
+
+STORY-PAUSE-FIX-2026-10-05: фон overlay паузы поглощает тап (не пропускает к родителю).
+// Пользователь: «проверь почему пауза не везде работает, а сразу может отправить в сообщество».
+// Причина: StoryPausedOverlay рендерится как Box внутри родительского Box с pointerInput(detectTapGestures).
+// Тёмный фон overlay (стр.1420-1424) НЕ был clickable → тап по фону (мимо чипов) проходил сквозь к
+// родительскому detectTapGestures.onTap → handleNoStickerTap() → isPaused = !isPaused (снимал паузу).
+// Худший случай: overlay накрыл стикер-хитбокс → тап по фону overlay попадал в стикер → мгновенный
+// onOpenAuthorClips/onOpenAuthorPhotos/onOpenPost без явного выбора пользователя (отсюда «сразу в сообщество»).
+// Фикс: фон overlay clickable { onResume() }. Теперь:
+//   - Тап по чипу → действие чипа (Профиль/Клипы/Фото/Видео/Пост/Продолжить).
+//   - Тап по фону (мимо чипов) → onResume() (как чип «Продолжить»).
+//   - Тап НЕ проходит сквозь к родительскому detectTapGestures.
+// Пауза держится пока пользователь явно не продолжит — нет случайного unpaus'а или навигации.
+// 1 файл, +10/−6. Кодировка UTF-8 без BOM.

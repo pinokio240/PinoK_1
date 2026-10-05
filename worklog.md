@@ -12718,3 +12718,30 @@ Task: исправить 'Unresolved reference advanceToNext' — Kotlin local f
 
 Файл (1, +49/−26): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 29 (STORY-PAUSE-FIX-2026-10-05)
+Agent: orchestrator (main)
+Task: починить паузу stories — «не везде работает, сразу может отправить в сообщество».
+
+## Контекст
+Пользователь сообщил: пауза не везде работает, иногда сразу отправляет в сообщество. Изучил код StoryViewerScreen — StoryPausedOverlay рендерится как Box внутри родительского Box с pointerInput(detectTapGestures).
+
+## Root Cause
+// Тёмный фон overlay (стр.1420-1424) НЕ был clickable. Compose: child без clickable не потребляет тап → event проходит сквозь к родительскому pointerInput.
+// Тап по фону overlay (мимо чипов) → родительский detectTapGestures.onTap → handleNoStickerTap() → isPaused = !isPaused (снимал паузу — «не везде работает»).
+// Худший случай: overlay накрыл стикер-хитбокс (clip/post/link) → тап по фону overlay попадал в стикер через родительский detectTapGestures → мгновенный onOpenAuthorClips/onOpenAuthorPhotos/onOpenPost без явного выбора → «сразу в сообщество» (если ownerId<0 → onOpenAuthorProfile → Screen.Community).
+
+## Work Log
+// StoryViewerScreen.kt:1420-1424 — фон overlay clickable { onResume() }.
+// Теперь: тап по чипу → действие чипа; тап по фону → onResume (как «Продолжить»); тап НЕ проходит к родителю.
+// Пауза держится пока пользователь явно не продолжит.
+// Коммит 506a77b, push прошёл: ec8ec72..506a77b PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Фон StoryPausedOverlay clickable { onResume() } — поглощает тап, не пропускает к родительскому detectTapGestures.
+// Пауза больше не снимается случайно; нет мгновенных переходов без явного выбора чипа.
+
+Файл (1, +10/−6): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
