@@ -12372,3 +12372,58 @@ Task: устранить 5 warnings компилятора "Unnecessary safe cal
 
 Файл (1, +7/−5): app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt.
 Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам, warnings должны исчезнуть).
+
+---
+Task ID: 19 (SERVICES-DOCS-FIX-P4-2026-10-05)
+Agent: orchestrator (main)
+Task: закрыть P4.1b (Story/Clip download сервисы) + P4.3 (документация VkSigner). Финальная итерация по backlog аудита (P1-P4).
+
+## Контекст
+После WARNINGS-FIX (Task 18) пользователь подтвердил продолжение. Оставшийся backlog: P4.1b (StoryVideo/ClipDownloadService — 2-arg startForeground, не покрыты P4.1), P4.1c (PlayerService/VideoPlaybackService — но проверка показала что VideoPlaybackService:255 уже использует ServiceCompat, а PlayerService — mediaPlayback без 2-arg startForeground, пропускаю), P4.3 (VkSigner — только документация). Все foreground-сервисы: grep показал что 4/6 уже используют ServiceCompat (Music, Video, VideoPlayback, LongPollKeepAlive), осталось 2 (Story, Clip).
+
+## Work Log
+// P4.1b StoryVideoDownloadService.kt:67 + ClipDownloadService.kt:68 — 2-arg startForeground(NOTIFICATION_ID, buildNotification(0, 0)) → startForegroundCompat(NOTIFICATION_ID, buildNotification(0, 0)).
+// В оба файла добавлен private fun startForegroundCompat(id, notification) — копия из MusicDownloadService.kt:359-364 (образец P4.1): type = if (SDK_INT >= UPSIDE_DOWN_CAKE) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0; ServiceCompat.startForeground(this, id, notification, type).
+// Импорты добавлены: android.content.pm.ServiceInfo, androidx.core.app.ServiceCompat.
+// foregroundServiceType=DATA_SYNC совпадает с AndroidManifest.xml:415 (StoryVideo) и :426 (Clip). minSdk=24 — ServiceCompat диспатчит корректно (2-arg <29, 3-arg 29-33, required 3-arg 34+). Условная обёртка if(SDK_INT>=Q) НЕ нужна (ServiceCompat абстрагирует).
+// P4.3 VkSigner.kt:46 — добавлен line-comment (19 строк) над const val APP_SECRET = "hHbZxrka2uZ6jB1inYsH" с документацией рисков публикации hardcoded VK_CLIENT_SECRET в открытом репо:
+//   - Риск 1: VK может заблокировать client_id=2274003 при злоупотреблении (массовый спам/злоупотребление sig-методами). Блокировка client_id сломает sig= для всех пользователей мода.
+//   - Риск 2: Имперсонификация — любой может использовать client_id+secret для oauth.vk.com/access_token запросов от имени "VK Android app".
+//   - Риск 3: Rate-limit — VK может ввести более жёсткий rate-limit для client_id=2274003 при подозрительной активности.
+//   - Уточнение: secret НЕ используется для подписи пользовательских API-запросов (для sig нужен user_secret из AuthResult, только Direct Auth grant_type=password). APP_SECRET используется ТОЛЬКО сервером VK при token exchange. Утечка secret не даёт прямого доступа к пользовательским данным.
+//   - Сознательный выбор мода — оставлено как есть. Миграция: новый client_id (выданный VK для мода) или OAuth WebView flow (без sig, без secret).
+// Коммит b15ab2f, push прошёл: 89a4d7f..b15ab2f PinoK -> PinoK.
+
+## Проверки
+// git diff --stat: 3 файла, +51/−2.
+// ПРОВЕРКА новых KDoc-блоков в diff: 0 новых /** ... */ (grep по added-строкам git diff → пусто). Все новые комментарии — line-comments //.
+// ПРОВЕРКА новых проблемных */ в добавленных строках: 0 (grep '^\+.*\*/[a-zA-Z/]' → пусто).
+// ПРОВЕРКА что 2-arg startForeground убран из Story/Clip: rg 'startForeground\(NOTIFICATION_ID' по обоим файлам → 0 совпадений (теперь startForegroundCompat).
+
+## Stage Summary
+
+ВЫПОЛНЕНО (P4.1b + P4.3 — финал backlog):
+// P4.1b: StoryVideoDownloadService + ClipDownloadService — ServiceCompat.startForeground с FOREGROUND_SERVICE_TYPE_DATA_SYNC.
+// P4.3: VkSigner.kt — документация риска hardcoded VK_CLIENT_SECRET (line-comment, без правок кода).
+
+ВСЕ FOREGROUND-СЕРВИСЫ ТЕПЕРЬ ИСПОЛЬЗУЮТ ServiceCompat:
+// MusicDownloadService (P4.1, dataSync) ✓
+// VideoDownloadService (P4.1, dataSync) ✓
+// StoryVideoDownloadService (P4.1b, dataSync) ✓
+// ClipDownloadService (P4.1b, dataSync) ✓
+// VideoPlaybackService (mediaPlayback, уже ServiceCompat) ✓
+// LongPollKeepAliveService (remoteMessaging, уже ServiceCompat) ✓
+
+ПОЛНЫЙ СТАТУС АУДИТА (Tasks 1-19):
+// P0 (функциональные баги пользователя): P0.1-9 ВЫПОЛНЕНО (видео в каналах, кнопки контента, Клипы, фото канала, isChannel для админа, CommunityScreen tabs + Файлы).
+// P1 (security CRITICAL): P1.1 access_token logcat masking ВЫПОЛНЕНО. P1.2 user-CA ОСТАВЛЕНО (совместимость с прокси). P1.3 минимизация дампа account.json ВЫПОЛНЕНО.
+// P2 (security HIGH): P2.1 silent_token log masking ВЫПОЛНЕНО. P2.3 sha256 ОСТАВЛЕНО. P2.4 saveCredentials удалён ВЫПОЛНЕНО. P1.1b WebTokenAuth access_token masking ВЫПОЛНЕНО.
+// P3 (concurrency/stability, 9 MED): P3.1-10 ВЫПОЛНЕНО (HiddenSessionRefresher AtomicBoolean, 3 репозитория Mutex, EqualizerHelper @Synchronized, AudioEffectsEngine сброс scoSuspended, VideoPipController.clear(), VideoPipActivity RECEIVER_NOT_EXPORTED, Queuev4Client URLEncoder+currentCall, LongPollClient failed=4 backoff, SovaApp ANR monitoring).
+// P4 (LOW): P4.1 Music/Video ServiceCompat ВЫПОЛНЕНО. P4.1b Story/Clip ServiceCompat ВЫПОЛНЕНО. P4.2 VkCookieJar skip-invalid-cookie ВЫПОЛНЕНО. P4.3 VkSigner риск-документация ВЫПОЛНЕНО.
+
+Файлы (3, +51/−2):
+// app/src/main/java/re/pinok/api/VkSigner.kt (+19, P4.3)
+// app/src/main/java/re/pinok/media/StoryVideoDownloadService.kt (+17, P4.1b)
+// app/src/main/java/re/pinok/media/ClipDownloadService.kt (+17, P4.1b)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

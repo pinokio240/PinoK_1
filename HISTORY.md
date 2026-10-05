@@ -14175,3 +14175,25 @@ WARNINGS-FIX-2026-10-05: устранены 5 предупреждений ко�
 // Проверка: других паттернов `val has = X != null` с последующими избыточными safe-call в
 // изменённых файлах нет. Только CommunityScreen.kt имел этот паттерн.
 // 1 файл, +7/−5. Кодировка UTF-8 без BOM.
+
+SERVICES-DOCS-FIX-P4-2026-10-05: закрытие P4.1b (оставшиеся download-сервисы) + P4.3 (документация риска VkSigner). 3 файла, +51/−2.
+
+// P4.1b StoryVideoDownloadService.kt:67 + ClipDownloadService.kt:68 — 2-arg startForeground(id, notification) deprecated на Android 14+. Заменено на private startForegroundCompat(id, notif) с паттерном из Music/VideoDownloadService (P4.1 commit 7b9a7ad): ServiceCompat.startForeground(this, id, notif, type) с type = FOREGROUND_SERVICE_TYPE_DATA_SYNC (гейт Build.VERSION.SDK_INT >= UPSIDE_DOWN_CAKE).
+// foregroundServiceType=DATA_SYNC — совпадает с AndroidManifest.xml:415 (StoryVideo) и :426 (Clip). minSdk=24: ServiceCompat диспатчит в 2-arg на API<29 (type игнорируется), 3-arg на 29-33, 3-arg на 34+. Условная обёртка if(SDK_INT>=Q) НЕ нужна.
+// Импорты добавлены: android.content.pm.ServiceInfo, androidx.core.app.ServiceCompat (androidx.core 1.17.0).
+// Все foreground-сервисы теперь используют ServiceCompat.startForeground с type:
+//   - MusicDownloadService (P4.1, dataSync) ✓
+//   - VideoDownloadService (P4.1, dataSync) ✓
+//   - StoryVideoDownloadService (P4.1b, dataSync) ✓
+//   - ClipDownloadService (P4.1b, dataSync) ✓
+//   - VideoPlaybackService:255 (mediaPlayback, уже ServiceCompat) ✓
+//   - LongPollKeepAliveService:250 (remoteMessaging, уже ServiceCompat) ✓
+
+// P4.3 VkSigner.kt:46 — документация риска hardcoded VK_CLIENT_SECRET в открытом репо. Добавлен line-comment (НЕ KDoc /** */, согласно требованию пользователя) над const val APP_SECRET:
+//   1. VK может заблокировать client_id=2274003 при злоупотреблении (массовый спам/злоупотребление sig-методами с одного client_id) — блокировка сломает sig= для всех пользователей мода.
+//   2. Имперсонификация: любой может использовать client_id+secret для oauth.vk.com/access_token запросов от имени "VK Android app".
+//   3. Rate-limit: VK может ввести более жёсткий rate-limit для client_id=2274003 при подозрительной активности.
+// Уточнено: secret НЕ используется для подписи пользовательских API-запросов (для sig нужен user_secret из AuthResult, возвращается только при Direct Auth grant_type=password). APP_SECRET используется ТОЛЬКО сервером VK при token exchange. Утечка secret не даёт прямого доступа к пользовательским данным — только возможность имперсонифицировать VK Android app при token exchange.
+// Сознательный выбор мода — оставлено как есть. Миграция: новый client_id (выданный VK для мода) или полноценный OAuth WebView flow (без sig, без secret).
+
+// Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
