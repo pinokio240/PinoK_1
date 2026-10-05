@@ -14261,3 +14261,18 @@ STORIES-UX-P0.13-17-2026-10-05: 5 фич stories (пауза/тап-оверле
 // SovaNavHost: добавлены onOpenAuthorProfile (UserProfile/Community по знаку ownerId) и onOpenAuthorVideos (Toast-плейсхолдер, симметрично onOpenAuthorPhotos — TODO: реальный Video screen с ownerId filter).
 
 // Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Скобки сбалансированы (braces/parens/brackets delta=0 для обоих файлов). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+STORY-SWIPE-HINTS-P0.18-2026-10-05: стрелки-подсказки свайпа в StoryViewer + тумблер в настройках. 3 файла, +107.
+
+// SovaPrefs.kt — добавлен STORIES_SWIPE_HINTS key (booleanPreferencesKey, default true), snapshot field storiesSwipeHints, setter setStoriesSwipeHints. Размещён в секции Stories рядом с storiesShown.
+// SettingsScreen.kt:1633-1643 — новый ToggleRow «Подсказки свайпа в историях» в stories-секции (после тумблера «История»). Subtitle: «Показывать стрелки ← → при просмотре историй. Исчезают после первого свайпа. Выключите если мешают.»
+// StoryViewerScreen.kt:
+//   - swipeHintsPrefEnabled = prefsSnap?.storiesSwipeHints ?: true (читаем настройку).
+//   - showSwipeHints session state (remember, default true — сбрасывается при выходе из экрана, при следующем открытии покажутся снова).
+//   - onDragEnd: если showSwipeHints && свайп пересёк порог → showSwipeHints=false (прячем после первого успешного свайпа; если свайп не достиг порога — НЕ прячем, пользователь только начал вести палец).
+//   - StorySwipeHintsOverlay composable: Box fillMaxSize с двумя стрелками (Icons.AutoMirrored.Filled.KeyboardArrowLeft/Right, 56dp, white tint) у левого/правого краёв с padding 24dp. Alpha анимация 0.5..0.9 через Animatable + infiniteRepeatable(tween(900), RepeatMode.Reverse) — мягкая пульсация чтобы привлечь внимание, но не отвлекать.
+//   - Gating: показываются только когда swipeHintsPrefEnabled && showSwipeHints && !isPaused && !isComposing && !showStickerPicker (не мешать другим overlay).
+//   - НЕ кликабельны — не перехватывают тап у родительского detectTapGestures (стрелки полупрозрачные, не blocking hit).
+// Imports: androidx.compose.animation.core.RepeatMode, infiniteRepeatable; androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft/Right (AutoMirrored для RTL корректности — в арабском/иврите стрелки зеркалятся автоматически).
+
+// Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

@@ -12630,3 +12630,39 @@ Task: 5 фич stories UX — пауза при композинге, тап=п�
 // app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt (+23, new callbacks)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 26 (STORY-SWIPE-HINTS-P0.18-2026-10-05)
+Agent: orchestrator (main)
+Task: стрелки-подсказки свайпа в StoryViewer + тумблер в настройках.
+
+## Контекст
+Пользователь: «предлагаю еще сделать стрелки которые как справка говорят о свайпах в лево или в право и в настройках их можно было выключить».
+
+## Work Log
+// SovaPrefs.kt: добавлен STORIES_SWIPE_HINTS key (booleanPreferencesKey, default true) + snapshot field storiesSwipeHints + setter setStoriesSwipeHints. Размещён рядом с storiesShown в секции Stories.
+// SettingsScreen.kt:1633-1643 — ToggleRow «Подсказки свайпа в историях» в stories-секции (после тумблера «История»). Subtitle объясняет поведение.
+// StoryViewerScreen.kt:
+//   - swipeHintsPrefEnabled = prefsSnap?.storiesSwipeHints ?: true.
+//   - showSwipeHints session state (remember, default true).
+//   - onDragEnd: if showSwipeHints && порог достигнут → showSwipeHints=false.
+//   - StorySwipeHintsOverlay composable: Box fillMaxSize, две стрелки (KeyboardArrowLeft/Right 56dp, white tint) у краёв с padding 24dp. Alpha анимация 0.5..0.9 через Animatable + infiniteRepeatable(tween(900), RepeatMode.Reverse) — мягкая пульсация.
+//   - Gating: swipeHintsPrefEnabled && showSwipeHints && !isPaused && !isComposing && !showStickerPicker.
+//   - НЕ кликабельны — не перехватывают тап.
+// Imports: RepeatMode, infiniteRepeatable, KeyboardArrowLeft/Right (AutoMirrored).
+// Коммит 78c7fb8, push прошёл: 0ebcb5f..78c7fb8 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// SovaPrefs + SettingsScreen — тумблер «Подсказки свайпа в историях» (default true).
+// StoryViewerScreen — StorySwipeHintsOverlay с анимированными стрелками ← → у краёв.
+// Исчезают после первого успешного свайпа (showSwipeHints=false).
+// Не мешают другим overlay (isPaused/isComposing/showStickerPicker).
+// Не перехватывают тап (detectTapGestures работает под overlay).
+
+Файлы (3, +107):
+// core/data/src/main/java/re/pinok/data/local/SovaPrefs.kt (+8)
+// app/src/main/java/re/pinok/ui/screens/settings/SettingsScreen.kt (+11)
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+88)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
