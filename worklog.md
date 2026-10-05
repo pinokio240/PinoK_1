@@ -12154,3 +12154,41 @@ Task: P0 — починить функциональные баги пользо
 - app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+299/−34)
 
 Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK в среде аудита — пользователь собирает сам).
+
+---
+Task ID: 11 (KDOC-SYNTAX-FIX-2026-10-05)
+Agent: orchestrator (main)
+Task: Исправить ошибку компиляции `Syntax error: Expecting member declaration` в VKApiClient.kt:12163 и найти подобные.
+
+## Контекст
+После CHANNEL-FIX-P0 (коммит e95c925) пользователь собрал проект локально на Android Studio и получил ошибку `:app:compileDebugKotlin` на строке VKApiClient.kt:12163. Локальный clone в сандбоксе был утерян (перезапуск контейнера) — клонировал заново для анализа.
+
+## Work Log
+- Прочитан VKApiClient.kt:12130-12210. Строка 12163 — внутри KDoc-блока `/** ... */` метода extractHashFromPlayerUrl (добавлен P0.2 в Task 9): `* files (mp4_*/hls/dash), без access_key — VK отвечает error 5/15`. Последовательность `*/` после `mp4_` преждевременно закрывает KDoc-блок; оставшийся текст парсится как код → Syntax error.
+- Прочитан ExchangeTokenStorage.kt:725-737. Строка 733 — внутри KDoc restoreFromFileBackup (добавлен P1.3 в Task 8): `* Это безопасно: silent_token/webview_tokens/lp_*/cookies-копии либо`. Та же проблема — `*/` после `lp_` закрывает KDoc.
+- Python-свип по всем .kt файлам репозитория: regex поиска KDoc-блоков `/** ... */` с `*/` внутри (не закрывающим). Найдено 2 проблемных — оба выше. Других нет.
+- Проверены другие `*/` с текстом после (через ripgrep `\*/[a-zA-Z/]`): 7 совпадений всего. Разбор:
+  - VKApiClient.kt:14456 `// (safe*/getObj...` — line comment, безопасно
+  - VKApiClient.kt:19765 `// unwrapResponse (как owners.*/stats.*)` — line comment, безопасно
+  - Models.kt:457, 467 `// ...mp4_*/hls/dash...` — line comments внутри detectPlatform, безопасно
+  - CallMorePanel.kt:287 `"...video.*/photos.getCallBackgroundsPhotoUploadServer..."` — строковый литерал, безопасно
+  - VkNotificationsNotifier.kt:214 `// legacy like_*/comment_*` — line comment, безопасно
+  - ExchangeTokenStorage.kt:852 `// дампятся (silent_token/webview_tokens/lp_*/cookies-копии/` — line comment внутри restoreFromFileBackup, безопасно
+- Фикс: заменил `*/` в формулировке.
+  - VKApiClient.kt:12163: `(mp4_*/hls/dash)` → `(форматы mp4_*, hls, dash)`
+  - ExchangeTokenStorage.kt:733: `lp_*/cookies-копии` → `lp_* и cookies-копии`
+- Коммит `70421e7`, push прошёл: `14d0ada..70421e7 PinoK -> PinoK`.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+- 2 бага преждевременного закрытия KDoc исправлены (VKApiClient:12163 + ExchangeTokenStorage:733).
+- Python-свип подтвердил: других преждевременных `*/` в KDoc-блоках по всему репо нет.
+- Остальные 7 `*/`-вхождений — в line-comments или строковых литералах, безопасны, не тронуты.
+
+Корневая причина для будущих KDoc: wildcard-шаблоны `mp4_*/hls/dash` и `lp_*/cookies` содержат `*/` — компилятор Kotlin не различает это как часть слова vs закрывающий токен. В KDoc следует избегать `*/` внутри текста — использовать `, ` или `|` вместо `/`.
+
+Файлы (2, +2/−2):
+- app/src/main/java/re/pinok/api/VKApiClient.kt (+1/−1)
+- app/src/main/java/re/pinok/auth/exchange/ExchangeTokenStorage.kt (+1/−1)
+
+Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK в среде — пользователь собрал сам, ошибка воспроизвелась и устранена).

@@ -14021,3 +14021,14 @@ CHANNEL-FIX-P0-2026-10-04: закрытие P0 (функциональные б�
 - P4.* (3 LOW): Music/VideoDownloadService ServiceCompat.startForeground с type, VkCookieJar skip-invalid-cookie, VkSigner hardcoded VK_CLIENT_SECRET (сознательный выбор).
 
 Кодировка UTF-8 без BOM. Скобки сбалансированы. Gradle НЕ собирался (нет Android SDK в среде аудита — пользователь собирает сам). Бэкапы не делались (изменения точечные, +394/−43 в 4 файлах).
+
+KDOC-SYNTAX-FIX-2026-10-05: фикс преждевременного закрытия KDoc-комментариев последовательностью `*/` внутри текста. Компилятор Kotlin `/** ... */` блок закрывается на первом `*/`, даже если это часть слова (wildcard `mp4_*/hls`, `lp_*/cookies`).
+
+- VKApiClient.kt:12163 — KDoc метода extractHashFromPlayerUrl (P0.2 добавлен в CHANNEL-FIX-P0): текст `(mp4_*/hls/dash)` содержал `*/` после `mp4_` → KDoc закрылся, оставшийся текст `hls/dash), без access_key — VK отвечает error 5/15` парсился как код → `Syntax error: Expecting member declaration` в `:app:compileDebugKotlin`. Фикс: `(форматы mp4_*, hls, dash)`.
+- ExchangeTokenStorage.kt:733 — KDoc restoreFromFileBackup (P1.3 добавлен в SECURITY-AUDIT-FIX): текст `silent_token/webview_tokens/lp_*/cookies-копии` содержал `*/` после `lp_` → та же проблема. Фикс: `silent_token/webview_tokens/lp_* и cookies-копии`.
+
+Проверка: Python-свип по всем `.kt` файлам репозитория (поиск `*/` внутри `/** ... */` блоков, не являющегося закрывающим) → 0 других преждевременных закрытий. Остальные `*/` в коде — внутри line-comments `// ...` (безопасно, всё после `//` игнорируется) или строковых литералов `"..."` (безопасно, компилируется как String) — не тронуты.
+
+Корневая причина: при написании KDoc для P0.2/P1.3 использовался wildcard-шаблон `mp4_*/hls/dash` (перечисление форматов VK) и `lp_*/cookies` (перечисление категорий ключей), где `*` — метасимвол «любое окончание». Компилятор Kotlin не различает `*/` как часть слова vs закрывающий токен KDoc. В будущих KDoc следует избегать буквосочетания `*/` внутри текста — использовать `, ` или `|` вместо `/`, либо переформулировать.
+
+2 файла, +2/−2. Кодировка UTF-8 без BOM.
