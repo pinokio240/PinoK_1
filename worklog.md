@@ -12427,3 +12427,78 @@ Task: закрыть P4.1b (Story/Clip download сервисы) + P4.3 (доку
 // app/src/main/java/re/pinok/media/ClipDownloadService.kt (+17, P4.1b)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 20+21 (VIDEO-CDN-COOKIES-FIX-2026-10-05)
+Agent: orchestrator (main) + 1 general-purpose subagent (Task 20)
+Task: починить HTTP 400 на видео в канале. Найдено через анализ лога пользователя (Pasted Content_1791188862530.txt).
+
+## Контекст
+Пользователь прислал лог (165KB, 802 entries). Симптом: видео в сообществе работает, в канале — нет (превью показывается, но не воспроизводится). Лог показал:
+// 11:26:42 channels.getHistory OK для канала -236041950 (49 сообщений)
+// 11:26:46.879 onPlayerReady: видео v_-235808131_456245747 (репост из другого канала -235808131)
+// 11:26:50.189 E/VideoPlayerScreen: ExoPlayer error ERROR_CODE_IO_BAD_HTTP_STATUS
+//   Caused by: HttpDataSource$InvalidResponseCodeException: Response code: 400
+// 11:26:50.238 call(video.get) — это fallback P0.3 после ошибки (не основной путь)
+// Видео загрузилось (files были в video-объекте), но URL mp4 вернул 400.
+
+## Анализ
+// Видео открывается с files напрямую (onPlayerReady через 4 сек — без video.get fallback в основном пути). Значит detectPlatform (P0.1) и parseVideoFull (P0.2) работают.
+// ExoPlayer падает на HTTP 400 — это проблема с самим запросом URL, а не с доступом к видео.
+// VideoPlayerScreen.kt:802 использует DefaultHttpDataSource.Factory() с VK UA + Referer, но БЕЗ cookies. VK CDN требует remixsid/remixstid для приватных видео.
+// PlayerService.kt:371-400 уже использует правильный OkHttpDataSource.Factory(SovaApp.httpClient) — SovaApp.httpClient включает VkCookieJar.
+// VkCookieJar.kt:66 фильтрует только vk.ru/vk.com — НЕ покрывает userapi.com (куда указывают VK video CDN URLs https://sun9-XX.userapi.com/...).
+// CookieManager.getCookie(cdn_url) вернёт null для userapi.com — cookies установлены на .vk.com/.vk.ru, не применяются к CDN.
+
+## Work Log
+
+### Task 20 (P0.10, OkHttpDataSource) — general-purpose subagent
+// VideoPlayerScreen.kt:802 + ClipsFeedScreen.kt:337 + VideoPipActivity.kt:324 (buildPlayer) + StoryViewerScreen.kt:272 — замена DefaultHttpDataSource.Factory() на OkHttpDataSource.Factory(app.httpClient) с VK UA + Referer.
+// Fallback на DefaultHttpDataSource если SovaApp null или httpClient lateinit не инициализирован (UninitializedPropertyAccessException → catch).
+// Паттерн из PlayerService.kt:371-400 (audio-плеер — образец).
+// ClipsFeedScreen + StoryViewerScreen получили Referer (раньше отсутствовал).
+// Импорты: androidx.media3.datasource.okhttp.OkHttpDataSource (dep в build.gradle.kts:203, использовался PlayerService).
+// 4 файла, +116/−8.
+
+### Task 21 (P0.11, VkCookieJar CDN) — orchestrator inline
+// VkCookieJar.kt:63-139 — расширение домен-фильтра + storage-fallback для CDN доменов.
+// isVkMain = host.endsWith("vk.ru") || host.endsWith("vk.com") — как раньше.
+// isVkCdn = host.endsWith("userapi.com") || host.endsWith("mycdn.me") || host.endsWith("vk-cdn.net") || host.endsWith("vkvideo.ru") || host.endsWith("vk.me") — НОВОЕ.
+// Для isVkMain: CookieManager.getCookie(url) как раньше (cookies на этом домене).
+// Для isVkCdn: CookieManager.getCookie("https://vk.ru/") — берёт cookies для базового VK домена (remixsid/remixstid/etc), применяет к CDN host.
+// Storage-fallback для CDN: 6 ключевых cookies из ExchangeTokenStorage (remixsid, p via pCookie(), remixnsid, httoken, remixstid, remixstlid) — добавляются если их ещё нет в cookies (dedup по имени). Storage — персистентный источник, переживает очистку CookieManager.
+// Индивидуальный try-catch per Cookie.Builder (паттерн P4.2 сохранён). Старый remixstid/remixstlid fallback для vk.ru/vk.com сохранён ниже — для CDN мой новый блок добавляет их первым, старый пропустит через `in names` проверку.
+// 1 файл, +48/−2 (VkCookieJar.kt).
+// Коммит c2d504d, push прошёл: a6db402..c2d504d PinoK -> PinoK.
+
+## Проверки
+// git diff --stat: 5 файлов, +164/−10.
+// ПРОВЕРКА новых KDoc: 0 новых /** ... */ (grep по added-строкам → пусто). Все новые комментарии — line-comments //.
+// ПРОВЕРКА проблемных */: 0 (grep '^\+.*\*/[a-zA-Z/]' → пусто).
+// ПРОВЕРКА storage.pCookie() vs storage.p(): метод называется pCookie() (ExchangeTokenStorage:489), исправил в P0.11.
+// ПРОВЕРКА OkHttpDataSource import: все 4 файла импортируют androidx.media3.datasource.okhttp.OkHttpDataSource.
+
+## Stage Summary
+
+ВЫПОЛНЕНО (P0.10 + P0.11):
+// P0.10: 4 видео-экрана (VideoPlayerScreen, ClipsFeedScreen, VideoPipActivity, StoryViewerScreen) — OkHttpDataSource с SovaApp.httpClient (включает VkCookieJar → cookies для VK доменов).
+// P0.11: VkCookieJar — расширен домен-фильтр (userapi.com/mycdn.me/vk-cdn.net/vkvideo.ru/vk.me) + storage-fallback для 6 cookies на CDN доменах.
+
+ДОЛЖНО ПОЧИНИТЬ:
+// Видео в каналах (приватные/репосты) — теперь ExoPlayer отправляет cookies на VK CDN URLs.
+// Клипы в ленте (ClipsFeedScreen) — та же проблема, теперь тоже с cookies.
+// Stories (StoryViewerScreen) — та же проблема, теперь с cookies + Referer.
+// VideoPipActivity — PiP видео, теперь с cookies.
+
+НЕ СДЕЛАНО (не связано с видео, из лога):
+// accountPersonal.getSecurityAlerts err=3 (Unknown method) — VK сменил имя метода; не критично (security alerts — информационная фича).
+// queue.subscribe failed — входящие звонки недоступны; отдельная проблема (возможно нет прав или подписка на очередь не прошла).
+
+Файлы (5, +164/−10):
+// app/src/main/java/re/pinok/ui/screens/videoplayer/VideoPlayerScreen.kt (+33, P0.10)
+// app/src/main/java/re/pinok/ui/screens/clips/ClipsFeedScreen.kt (+29, P0.10)
+// app/src/main/java/re/pinok/ui/videoplayer/VideoPipActivity.kt (+32, P0.10)
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+30, P0.10)
+// app/src/main/java/re/pinok/mods/network/VkCookieJar.kt (+50, P0.11)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

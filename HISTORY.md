@@ -14197,3 +14197,23 @@ SERVICES-DOCS-FIX-P4-2026-10-05: закрытие P4.1b (оставшиеся do
 // Сознательный выбор мода — оставлено как есть. Миграция: новый client_id (выданный VK для мода) или полноценный OAuth WebView flow (без sig, без secret).
 
 // Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+VIDEO-CDN-COOKIES-FIX-2026-10-05: P0.10 (OkHttpDataSource с cookies) + P0.11 (VkCookieJar CDN domain). Найдено через анализ лога пользователя: ExoPlayer error ERROR_CODE_IO_BAD_HTTP_STATUS Response code 400 на video URL v_-235808131_456245747 (репост в канале -236041950). Видео загружалось (onPlayerReady через 4 сек — files были), но сам URL mp4 возвращал 400. Превью показывалось.
+
+// КОРНЕВАЯ ПРИЧИНА: VideoPlayerScreen использовал DefaultHttpDataSource (нет cookies) вместо OkHttpDataSource. VK CDN для приватных/канальных видео требует cookies (remixsid/remixstid/remixstlid — антифрод). DefaultHttpDataSource не отправляет cookies автоматически. Также VkCookieJar.loadForRequest фильтровал только vk.ru/vk.com — НЕ покрывал userapi.com (куда указывают VK video CDN URLs вида https://sun9-XX.userapi.com/...). CookieManager.getCookie(cdn_url) возвращал null для userapi.com (cookies установлены на .vk.com/.vk.ru, не применяются к CDN).
+
+// P0.10 (Task 20, агент): VideoPlayerScreen.kt:802 + ClipsFeedScreen.kt:337 + VideoPipActivity.kt:324 + StoryViewerScreen.kt:272 — замена DefaultHttpDataSource.Factory() на OkHttpDataSource.Factory(SovaApp.httpClient). SovaApp.httpClient включает VkCookieJar → cookies автоматически прилагаются для VK доменов. Fallback на DefaultHttpDataSource если SovaApp null или httpClient lateinit не инициализирован (UninitializedPropertyAccessException → catch). Паттерн из PlayerService.kt:371-400 (audio-плеер — образец). VK UA + Referer https://m.vk.com/ сохранены. ClipsFeedScreen + StoryViewerScreen получили Referer (раньше отсутствовал). Импорты: androidx.media3.datasource.okhttp.OkHttpDataSource (dep в build.gradle.kts:203, использовался PlayerService).
+
+// P0.11 (orchestrator inline): VkCookieJar.kt:63-139 — расширение домен-фильтра + storage-fallback для CDN доменов.
+//   isVkMain = host.endsWith("vk.ru") || host.endsWith("vk.com") — как раньше.
+//   isVkCdn = host.endsWith("userapi.com") || host.endsWith("mycdn.me") || host.endsWith("vk-cdn.net") || host.endsWith("vkvideo.ru") || host.endsWith("vk.me") — НОВОЕ.
+//   Для isVkMain: CookieManager.getCookie(url) как раньше (cookies на этом домене).
+//   Для isVkCdn: CookieManager.getCookie("https://vk.ru/") — берёт cookies для базового VK домена (remixsid/remixstid/etc), применяет к CDN host.
+//   Storage-fallback для CDN: 6 ключевых cookies из ExchangeTokenStorage (remixsid, p, remixnsid, httoken, remixstid, remixstlid) — добавляются если их ещё нет в cookies (dedup по имени). Storage — персистентный источник, переживает очистку CookieManager. Индивидуальный try-catch per Cookie.Builder (паттерн P4.2 сохранён).
+//   Старый remixstid/remixstlid fallback (для vk.ru/vk.com) сохранён ниже — для CDN мой новый блок добавляет их первым, старый пропустит через `in names` проверку.
+
+// 5 файлов, +164/−10. Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+// НЕ СДЕЛАНО (мелочи из лога, не связаны с видео):
+//   accountPersonal.getSecurityAlerts err=3 (Unknown method) — VK сменил имя метода; не критично (security alerts — информационная фича, не блокирует UX).
+//   queue.subscribe failed — входящие звонки недоступны; не связано с видео, отдельная проблема (возможно нет прав или подписка на очередь не прошла).
