@@ -14125,3 +14125,13 @@ STABILITY-FIX-P3-2026-10-05: закрытие P1.1b (добивка security) + 
 // P4.* (3 LOW): Music/VideoDownloadService ServiceCompat.startForeground с type, VkCookieJar skip-invalid-cookie, VkSigner hardcoded VK_CLIENT_SECRET (сознательный выбор, задокументировать).
 
 // 12 файлов, +378/−121. Кодировка UTF-8 без BOM. Скобки сбалансированы. Gradle НЕ собирался (нет Android SDK в среде — пользователь собирает сам).
+
+COMPILE-FIX-2026-10-05: фикс ошибки компиляции от STABILITY-FIX-P3 (HiddenSessionRefresher @Volatile val).
+// P3.1 (коммит 76c2dc4) оставил @Volatile на val inProgress: Boolean get() = inProgressFlag.get()
+// — computed property без backing field. Kotlin error: '@Volatile' cannot be used on immutable
+// properties / not applicable to target 'member property without backing field or delegate'.
+// Фикс: убран @Volatile — не нужен, геттер делегирует в AtomicBoolean, который обеспечивает
+// memory-visibility через собственное внутреннее volatile-поле.
+// Проверка: поиск @Volatile val (без var) по всем .kt → 0 других случаев. Единственное совпадение
+// в VKApiClient.kt:12552 — текст внутри line-comment, не аннотация.
+// 1 файл, +0/-1. Кодировка UTF-8 без BOM.

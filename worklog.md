@@ -12264,3 +12264,27 @@ Task: P1.1b (добивка security) + P3 (9 MED concurrency/stability). Все
 // core/media/src/main/java/re/pinok/media/VideoPipController.kt (+21)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 15 (COMPILE-FIX-2026-10-05)
+Agent: orchestrator (main)
+Task: Исправить ошибку компиляции от P3.1: '@Volatile' cannot be used on immutable properties.
+
+## Контекст
+После STABILITY-FIX-P3 (коммит 76c2dc4) пользователь собрал проект — :app:compileDebugKotlin упал на HiddenSessionRefresher.kt:86:5 с двумя ошибками:
+1. '@Volatile' annotation cannot be used on immutable properties.
+2. This annotation is not applicable to target 'member property without backing field or delegate'. Applicable targets: field
+
+## Work Log
+- Прочитал HiddenSessionRefresher.kt:75-105. P3.1 (Task 12) заменил @Volatile var inProgress: Boolean = false; private set на AtomicBoolean + computed property val inProgress: Boolean get() = inProgressFlag.get(), но оставил @Volatile аннотацию на val — это computed property без backing field, @Volatile к нему не применим.
+- Фикс: убран @Volatile (1 строка). Не нужен — геттер делегирует чтение в AtomicBoolean.get(), который обеспечивает memory-visibility через собственное внутреннее volatile-поле (volatile boolean value в java.util.concurrent.atomic.AtomicBoolean).
+- Поиск подобных проблем: rg '@Volatile' по всем .kt + проверка что следующая строка — 'val' (не 'var'). 0 других @Volatile val без backing field в репо. Единственное текстовое совпадение @Volatile в VKApiClient.kt:12552 — внутри line-comment //, не аннотация.
+- Коммит 0045911, push прошёл: aaa1a4c..0045911 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+- HiddenSessionRefresher.kt:86 — убран @Volatile с val inProgress (computed property).
+- Проверка: 0 других @Volatile val без backing field в репо.
+
+Файл (1, +0/-1): app/src/main/java/re/pinok/auth/exchange/HiddenSessionRefresher.kt.
+Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собрал сам, ошибка воспроизвелась и устранена).
