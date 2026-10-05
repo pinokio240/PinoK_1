@@ -347,13 +347,15 @@ fun CommunityScreen(
             // «Записи» (wall): 0=выкл, 1=открытая, 2=ограниченная, 3=закрытая.
             // Всегда показываем вкладку: даже выключенная стена у сообщества
             // без записей — это базовая информация (пустой state внутри).
-            if (!has || (s?.wall ?: 1) != 0) add(0 to "Записи")
-            if (!has || (s?.photos ?: 0) > 0) add(1 to "Фото")
-            if (!has || (s?.video ?: 0) > 0) add(2 to "Видео")
+            // Smart-cast: после `val has = s != null` компилятор знает что
+            // в ветке has==true тип s — non-null GroupSections (поля Int).
+            if (!has || s!!.wall != 0) add(0 to "Записи")
+            if (!has || s!!.photos > 0) add(1 to "Фото")
+            if (!has || s!!.video > 0) add(2 to "Видео")
             // «Клипы» — нет отдельного флага в GroupSections (часть видео).
             add(3 to "Клипы")
-            if (!has || (s?.audio ?: 0) > 0) add(4 to "Музыка")
-            if (!has || (s?.topics ?: 0) > 0) add(5 to "Обсуждения")
+            if (!has || s!!.audio > 0) add(4 to "Музыка")
+            if (!has || s!!.topics > 0) add(5 to "Обсуждения")
             // «Файлы» (docs) — всегда: docs.get работает для любого сообщества
             // (не требует админ-прав), даже если админ выключил секцию docs=0.
             add(6 to "Файлы")
