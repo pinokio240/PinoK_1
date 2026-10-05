@@ -14032,3 +14032,96 @@ KDOC-SYNTAX-FIX-2026-10-05: фикс преждевременного закры
 Корневая причина: при написании KDoc для P0.2/P1.3 использовался wildcard-шаблон `mp4_*/hls/dash` (перечисление форматов VK) и `lp_*/cookies` (перечисление категорий ключей), где `*` — метасимвол «любое окончание». Компилятор Kotlin не различает `*/` как часть слова vs закрывающий токен KDoc. В будущих KDoc следует избегать буквосочетания `*/` внутри текста — использовать `, ` или `|` вместо `/`, либо переформулировать.
 
 2 файла, +2/−2. Кодировка UTF-8 без BOM.
+
+STABILITY-FIX-P3-2026-10-05: закрытие P1.1b (добивка security) + P3 (9 MED concurrency/stability). Агентский заход Tasks 12+13+14 параллельно (3 subagent'а, 12 файлов, +378/−121).
+
+// P1.1b WebTokenAuth.kt:254,972 — access_token замаскирован через maskTokenPrefix.
+// Было: silent_token-derived access_token (первые 12 символов) и localStorage raw
+// JSON (первые 200 символов) утекали в logcat — та же утечка, что P1.1 в
+// OAuthWebViewActivity. Стало: maskTokenPrefix(8 символов…4 последних) + длина.
+// Существующий private fun maskTokenPrefix переиспользован.
+
+// P3.1 HiddenSessionRefresher.kt:80,104,117 — race condition в inProgress guard.
+// Было: @Volatile var inProgress: Boolean = false; private set + check-then-set
+// (if (inProgress) return → inProgress = true). Два параллельных refresh() из
+// разных call paths создавали 2 скрытых WebView одновременно → утечка памяти +
+// двойной запрос к VK ID SDK. Стало: AtomicBoolean(false) + compareAndSet(false,
+// true) в начале refresh(); finally { set(false) }. Публичный read-only геттер
+// inProgress: Boolean сохранён (val get() = flag.get()).
+
+// P3.2 FoldersRepository.kt:33-78 — TOCTOU race (load→modify→save не атомарно).
+// Concurrent pin(X)+pin(Y) терял один peerId. Стало: Mutex.withLock вокруг
+// addFolder/editFolder/deleteFolder. Стиль по образцу TrackBookmarksRepository.kt:83.
+
+// P3.3 PinnedConversationsRepository.kt + ArchivedConversationsRepository.kt —
+// тот же Mutex.withLock подход для pin/unpin/reorder/archive/unarchive.
+// Ранние return в reorder заменены на return@withLock (labeled return для
+// expression-body). load/save/setOrder/isPinned/isArchived не тронуты.
+
+// P3.4 EqualizerHelper.kt:60-95,230 — getter race. engine() getter НЕ был
+// синхронизирован — между current.release() и engine = AudioEffectsEngine(...)
+// было окно где engine == null или released. UI мог вызвать setEqEnabled на
+// released-инстансе → RuntimeException. release() НЕ занулял engine (UI-вызовы
+// после release молча fail). Стало: @Synchronized на engine() getter; release()
+// @Synchronized + engine = null; UI-сеттеры (saveEnabled/setEnabled/applyPreset/
+// reattach/reattachFull/numberOfBands/bandLevelRange) логируют AppLog.w при
+// engine == null вместо silent no-op. Бонус: applyCustomPresetPersist теперь
+// персистит eq_enabled в null-engine path (раньше saveEnabled silent-no-op'ил).
+
+// P3.5 AudioEffectsEngine.kt:754 — stale scoSuspended. release() НЕ сбрасывал
+// scoSuspended и savedVirtEnabledBeforeSco/savedReverbEnabledBeforeSco. Если
+// release() во время SCO-suspend — состояние рассинхронизировано: следующий
+// attachOnce → restoreSettings восстанавливает virtualizer.enabled=true, но
+// scoSuspended=true → suspendForSco() no-op. Стало: releaseInternal() сбрасывает
+// scoSuspended=false, savedVirtEnabledBeforeSco=false, savedReverbEnabledBeforeSco=false.
+
+// P3.6 VideoPipController.kt:71 — lambda утечка. Singleton хранил
+// togglePlayPause: (() -> Unit)? которая захватывает ExoPlayer. Если экран
+// выходит без setTogglePlayPause(null) — singleton удерживает плеер (кодеки/
+// surface/audio track). Проверка вызывающих экранов: OkWebViewPlayer.kt:382-412
+// DisposableEffect содержит setTogglePlayPause(null) в onDispose — cleanup есть;
+// VideoPlayerScreen.kt не использует VideoPipController (PiP в отдельной
+// VideoPipActivity). Реальной утечки сейчас нет. Добавлен превентивный метод
+// clear() для будущих вызывателей.
+
+// P3.7 VideoPipActivity.kt:254-257 — exposed receiver на API 31-32. Использовал
+// registerReceiver(pipReceiver, filter) без RECEIVER_NOT_EXPORTED (только API 33+
+// ставил флаг). Внешние приложения могли слать ACTION_TOGGLE/ACTION_CLOSE.
+// Стало: ContextCompat.registerReceiver(this, pipReceiver, filter,
+// ContextCompat.RECEIVER_NOT_EXPORTED) — единая compat-версия с авто-флагом.
+
+// P3.8 Queuev4Client.kt:152 — секрет в URL + не-отменяемый poll. cred.key
+// (auth-key очереди, эквивалент access_token) вставлялся в URL query без
+// URL-encoding (виден в OkHttp debug-логах/прокси). httpClient.newCall(req).execute()
+// без currentCall-tracking — stop() не отменял in-flight poll 25с. Стало:
+// URLEncoder.encode(cred.key, "UTF-8") (как urlEncode в LongPollClient:826);
+// @Volatile var currentCall: Call? с try/finally cleanup; stop() вызывает
+// currentCall?.cancel() перед credential = null.
+
+// P3.9 LongPollClient.kt:540 (ветка failed=4) — tight-loop. При failed=4
+// (version-outdated) break без backoff → outer loop бесконечно tight-spins
+// messagesGetLongPollServer. Стало: 2,3 → break (transient, без backoff как было);
+// 4 → consecutiveErrors++ + interruptibleDelay(backoffMs()) + break. Переиспользует
+// существующие consecutiveErrors (сброс в 0 после успешного re-fetch:486),
+// backoffMs() (2с × 2^errors + jitter, макс 60с), interruptibleDelay (suspend,
+// прерывается при stop()).
+
+// P3.10 SovaApp.kt:950,1002,1035 — 3 runBlocking в Application.onCreate на Main
+// thread. DataStore.first() + миграции синхронно → риск ANR 0.5-2с на медленных
+// устройствах. Решение: логику НЕ менял (auth-flow invariants требуют sync:
+// #1 log-categories должен загрузиться до любого AppLog.log; #2 миграции должны
+// примениться до первого рендера UI; #3 prefsSnapshot критичен для AuthActivity/
+// ExternalBrowserLauncher). Добавлен мониторинг: import measureTimeMillis, каждый
+// runBlocking обёрнут в val xxxMs = measureTimeMillis { runBlocking { ... } } +
+// AppLog.d с указанием времени и порога ANR (>2000ms). Кандидат на рефакторинг
+// если время стабильно >2000ms.
+
+// Все новые комментарии — line-comments // (НЕ /** */) согласно требованию
+// пользователя избегать KDoc-блоков (предотвращение преждевременного закрытия
+// wildcard-последовательностью */ в тексте).
+
+НЕ СДЕЛАНО (перенесено в backlog):
+// P0.8 CommunityScreen.kt:198 tabs — динамически из GroupSections + Файлы (не критично для каналов).
+// P4.* (3 LOW): Music/VideoDownloadService ServiceCompat.startForeground с type, VkCookieJar skip-invalid-cookie, VkSigner hardcoded VK_CLIENT_SECRET (сознательный выбор, задокументировать).
+
+// 12 файлов, +378/−121. Кодировка UTF-8 без BOM. Скобки сбалансированы. Gradle НЕ собирался (нет Android SDK в среде — пользователь собирает сам).

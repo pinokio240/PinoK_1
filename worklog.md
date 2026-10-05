@@ -12192,3 +12192,75 @@ Task: Исправить ошибку компиляции `Syntax error: Expect
 - app/src/main/java/re/pinok/auth/exchange/ExchangeTokenStorage.kt (+1/−1)
 
 Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK в среде — пользователь собрал сам, ошибка воспроизвелась и устранена).
+
+---
+Task ID: 12+13+14 (STABILITY-FIX-P3-2026-10-05)
+Agent: orchestrator (main) + 3 general-purpose subagents (параллельно)
+Task: P1.1b (добивка security) + P3 (9 MED concurrency/stability). Все новые комментарии — только line-comments // (требование пользователя: избегать KDoc /** */ из-за преждевременного закрытия wildcard */).
+
+## Контекст
+Сборка прошла успешно после KDOC-SYNTAX-FIX (Task 11). Пользователь подтвердил продолжение. Backlog: P1.1b (2 правки в WebTokenAuth), P3.* (9 MED — race conditions, ANR-риски, утечки, exposed receiver). Поделено между 3 агентами параллельно с эксклюзивным владением файлами.
+
+## Work Log
+
+### P1.1b — orchestrator (inline, без агента)
+// WebTokenAuth.kt:254 — silent_token-derived access_token (первые 12 символов) → maskTokenPrefix(exchanged.accessToken) + длина.
+// WebTokenAuth.kt:972 — localStorage raw JSON (первые 200 символов, содержит access_token из localStorage web_token JSON) → maskTokenPrefix(raw.jsonStr) + len + expires.
+// Существующий private fun maskTokenPrefix (стр. 1642) переиспользован.
+
+### Task 12 (P3.1-3, auth/concurrency) — general-purpose subagent
+// P3.1 HiddenSessionRefresher.kt:80,104,117 — AtomicBoolean(false) + compareAndSet(false, true) в начале refresh(); finally { set(false) }. Публичный read-only геттер inProgress: Boolean сохранён (val get() = flag.get()).
+// P3.2 FoldersRepository.kt — Mutex.withLock вокруг addFolder/editFolder/deleteFolder. Импорты: kotlinx.coroutines.sync.Mutex, withLock. Стиль по образцу TrackBookmarksRepository.kt:83.
+// P3.3 PinnedConversationsRepository + ArchivedConversationsRepository — Mutex.withLock для pin/unpin/reorder/archive/unarchive. Ранние return в reorder → return@withLock (labeled return для expression-body). load/save/setOrder/isPinned/isArchived не тронуты.
+
+### Task 13 (P3.4-7, media/equalizer/pip) — general-purpose subagent
+// P3.4 EqualizerHelper.kt:60-95,230 — @Synchronized на engine() getter; release() @Synchronized + engine = null; UI-сеттеры (saveEnabled/setEnabled/applyPreset/reattach/reattachFull/numberOfBands/bandLevelRange) логируют AppLog.w при engine == null. Бонус: applyCustomPresetPersist персистит eq_enabled в null-engine path.
+// P3.5 AudioEffectsEngine.kt:754 — releaseInternal() сбрасывает scoSuspended=false, savedVirtEnabledBeforeSco=false, savedReverbEnabledBeforeSco=false.
+// P3.6 VideoPipController.kt — добавлен public метод clear() (превентивный; cleanup в OkWebViewPlayer:382-412 DisposableEffect уже есть, VideoPlayerScreen не использует VideoPipController — реальной утечки нет).
+// P3.7 VideoPipActivity.kt:254 — ContextCompat.registerReceiver(this, pipReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED). Импорт androidx.core.content.ContextCompat.
+
+### Task 14 (P3.8-10, realtime/blocking) — general-purpose subagent
+// P3.8 Queuev4Client.kt:152 — URLEncoder.encode(cred.key, "UTF-8") перед вставкой в URL query; @Volatile var currentCall: Call? с try/finally cleanup; stop() вызывает currentCall?.cancel() перед credential = null. Импорты: okhttp3.Call, java.net.URLEncoder.
+// P3.9 LongPollClient.kt:540 — ветка failed: 2,3 → break (transient, без backoff); 4 → consecutiveErrors++ + interruptibleDelay(backoffMs()) + break. Переиспользует существующие consecutiveErrors, backoffMs() (2с × 2^errors + jitter, макс 60с), interruptibleDelay (suspend, прерывается при stop()).
+// P3.10 SovaApp.kt:950,1002,1035 — 3 runBlocking обёрнуты в measureTimeMillis + AppLog.d для ANR-мониторинга. Логика НЕ менялась (auth-flow invariants требуют sync: log-categories до AppLog.log, миграции до UI render, prefsSnapshot для AuthActivity/ExternalBrowserLauncher). Добавлен import kotlin.system.measureTimeMillis.
+
+## Проверки
+// git diff --stat: 12 файлов, +378/−121.
+// ПРОВЕРКА новых KDoc-блоков в diff: 0 новых /** ... */ (rg по added-строкам git diff → пусто). Все новые комментарии — line-comments //.
+// ПРОВЕРКА новых проблемных */ в добавленных строках: 0 (rg '^\+.*\*/' → пусто).
+// Баланс скобок: все 4 файла Task 12 — braces/parens/brackets diff=0 (Python stripper). Task 13 — все 4 файла diff=0. Task 14 — when/try-catch/while/for закрыты.
+// Коммит 76c2dc4, push прошёл: f116294..76c2dc4 PinoK -> PinoK.
+
+## Stage Summary
+
+ВЫПОЛНЕНО (10 фиксов):
+// P1.1b: access_token замаскирован в WebTokenAuth (2 места).
+// P3.1: HiddenSessionRefresher inProgress race — AtomicBoolean CAS.
+// P3.2-3: 3 репозитория (Folders/Pinned/Archived) — Mutex.withLock.
+// P3.4: EqualizerHelper getter @Synchronized + release nulls engine + UI warn.
+// P3.5: AudioEffectsEngine releaseInternal сбрасывает scoSuspended/saved flags.
+// P3.6: VideoPipController.clear() (превентивный, cleanup уже есть).
+// P3.7: VideoPipActivity ContextCompat.registerReceiver RECEIVER_NOT_EXPORTED.
+// P3.8: Queuev4Client URLEncoder + currentCall cancel в stop().
+// P3.9: LongPollClient failed=4 backoff (consecutiveErrors + interruptibleDelay).
+// P3.10: SovaApp runBlocking мониторинг (measureTimeMillis + AppLog.d, логика не тронута).
+
+НЕ СДЕЛАНО (перенесено в backlog):
+// P0.8 CommunityScreen.kt:198 tabs — динамически из GroupSections + Файлы (не критично для каналов).
+// P4.* (3 LOW): Music/VideoDownloadService ServiceCompat.startForeground с type, VkCookieJar skip-invalid-cookie, VkSigner hardcoded VK_CLIENT_SECRET (сознательный выбор).
+
+Файлы (12, +378/−121):
+// app/src/main/java/re/pinok/SovaApp.kt (+147 changed)
+// app/src/main/java/re/pinok/auth/exchange/HiddenSessionRefresher.kt (+41)
+// app/src/main/java/re/pinok/auth/exchange/WebTokenAuth.kt (+6, P1.1b)
+// app/src/main/java/re/pinok/data/local/ArchivedConversationsRepository.kt (+18)
+// app/src/main/java/re/pinok/data/local/FoldersRepository.kt (+18)
+// app/src/main/java/re/pinok/data/local/PinnedConversationsRepository.kt (+28)
+// app/src/main/java/re/pinok/media/AudioEffectsEngine.kt (+14)
+// app/src/main/java/re/pinok/media/EqualizerHelper.kt (+129)
+// app/src/main/java/re/pinok/realtime/LongPollClient.kt (+25)
+// app/src/main/java/re/pinok/realtime/Queuev4Client.kt (+29)
+// app/src/main/java/re/pinok/ui/videoplayer/VideoPipActivity.kt (+23)
+// core/media/src/main/java/re/pinok/media/VideoPipController.kt (+21)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
