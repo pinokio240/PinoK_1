@@ -63,9 +63,28 @@ class VkCookieJar(
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
         return try {
             val host = url.host.lowercase()
-            if (!host.endsWith("vk.ru") && !host.endsWith("vk.com")) return emptyList()
+            // P0.11 #VIDEO-CDN-COOKIES (2026-10): расширение домен-фильтра для VK video CDN.
+            // Раньше только vk.ru/vk.com — ExoPlayer получал 400 на video URLs вида
+            // https://sun9-XX.userapi.com/... (приватные/канальные видео требуют remixsid/
+            // remixstid cookies, а CookieManager.getCookie(cdn_url) возвращает null для
+            // userapi.com — cookies установлены на .vk.com/.vk.ru, не применяются к CDN).
+            // Теперь: для CDN доменов cookies берём из storage (remixsid/p/remixnsid/
+            // httoken/remixstid/remixstlid — сохранены при логине) и применяем к CDN host.
+            val isVkMain = host.endsWith("vk.ru") || host.endsWith("vk.com")
+            val isVkCdn = host.endsWith("userapi.com") || host.endsWith("mycdn.me") ||
+                host.endsWith("vk-cdn.net") || host.endsWith("vkvideo.ru") || host.endsWith("vk.me")
+            if (!isVkMain && !isVkCdn) return emptyList()
 
-            val raw = CookieManager.getInstance().getCookie(url.toString())
+            val raw = if (isVkMain) {
+                // Для основных VK доменов — CookieManager отдаст cookies (они установлены
+                // на этот домен через Set-Cookie Domain=.vk.ru).
+                CookieManager.getInstance().getCookie(url.toString())
+            } else {
+                // P0.11: для CDN доменов CookieManager.getCookie(cdn_url) вернёт null
+                // (cookies на vk.ru, не на userapi.com). Спрашиваем cookies для базового
+                // vk.ru домена — они включают remixsid/remixstid/etc.
+                CookieManager.getInstance().getCookie("https://vk.ru/")
+            }
             val cookies = ArrayList<Cookie>()
             if (!raw.isNullOrBlank()) {
                 for (pair in raw.split(";")) {
@@ -88,6 +107,33 @@ class VkCookieJar(
                         )
                     } catch (e: IllegalArgumentException) {
                         AppLog.w(TAG, "skip invalid cookie (name=$n): ${e.message}")
+                    }
+                }
+            }
+
+            // P0.11: для CDN доменов — storage-fallback для всех ключевых cookies.
+            // CookieManager мог не отдать (cookies на .vk.ru применяются к vk.ru, но
+            // могли не сохраниться или протухнуть). Storage — персистентный источник.
+            // Добавляем только те, которых ещё нет в cookies (dedup по имени).
+            if (isVkCdn) {
+                val names = cookies.mapTo(HashSet()) { it.name }
+                val storageCookies = listOf(
+                    "remixsid" to storage.remixsid(),
+                    "p" to storage.pCookie(),
+                    "remixnsid" to storage.remixnsid(),
+                    "httoken" to storage.httoken(),
+                    "remixstid" to storage.remixstid(),
+                    "remixstlid" to storage.remixstlid(),
+                )
+                for ((name, value) in storageCookies) {
+                    if (name in names) continue
+                    if (value.isNullOrBlank()) continue
+                    try {
+                        cookies.add(
+                            Cookie.Builder().name(name).value(value).domain(host).path("/").build()
+                        )
+                    } catch (e: IllegalArgumentException) {
+                        AppLog.w(TAG, "skip invalid storage cookie ($name): ${e.message}")
                     }
                 }
             }

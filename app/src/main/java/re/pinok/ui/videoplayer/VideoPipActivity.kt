@@ -43,9 +43,11 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import re.pinok.SovaApp
 import re.pinok.media.PlaybackPositionStore
 import re.pinok.media.PlayerConnection
 import re.pinok.media.VideoPlayerConfig
@@ -321,9 +323,33 @@ class VideoPipActivity : ComponentActivity() {
 
     private fun buildPlayer(url: String, position: Long, playbackRate: Float = 1f): ExoPlayer {
         val ua = VkUserAgent.get(application)
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(ua)
-            .setDefaultRequestProperties(mapOf("Referer" to "https://m.vk.com/"))
+        // P0.10 (Task 20): DefaultHttpDataSource НЕ отправляет cookies автоматически —
+        // VK CDN для приватных/канальных видео требует remixsid/remixstid/remixstlid
+        // (антифрод-куки), без них mp4-URL возвращает HTTP 400. Перешли на
+        // OkHttpDataSource.Factory(SovaApp.httpClient) — OkHttpClient содержит
+        // VkCookieJar, подставляющий живой VK cookie-set в исходящие запросы.
+        // Образец: PlayerService.kt:371-400 (audio), VideoPlayerScreen.kt:802 (video).
+        // Fallback на DefaultHttpDataSource если SovaApp ещё не инициализирован.
+        // Referer https://m.vk.com/ — VK CDN игнорирует, но OK CDN требует (403 без него).
+        val refererProps = mapOf("Referer" to "https://m.vk.com/")
+        val app = applicationContext as? SovaApp
+        val httpFactory = if (app != null) {
+            try {
+                OkHttpDataSource.Factory(app.httpClient)
+                    .setUserAgent(ua)
+                    .setDefaultRequestProperties(refererProps)
+            } catch (e: Exception) {
+                AppLog.w(TAG, "OkHttpDataSource setup failed, fallback to DefaultHttpDataSource: ${e.message}")
+                DefaultHttpDataSource.Factory()
+                    .setUserAgent(ua)
+                    .setDefaultRequestProperties(refererProps)
+            }
+        } else {
+            AppLog.w(TAG, "SovaApp not initialized, fallback to DefaultHttpDataSource (no cookies)")
+            DefaultHttpDataSource.Factory()
+                .setUserAgent(ua)
+                .setDefaultRequestProperties(refererProps)
+        }
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(url))
         if (url.contains("m3u8", ignoreCase = true)) {
