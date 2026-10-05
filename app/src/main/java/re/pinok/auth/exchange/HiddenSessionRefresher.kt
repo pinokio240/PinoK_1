@@ -83,7 +83,6 @@ object HiddenSessionRefresher {
     // refresh() из разных call paths могли пройти проверку одновременно и
     // создать два скрытых WebView одновременно (утечка памяти + двойной
     // запрос к VK ID SDK). Публичный Boolean-геттер сохранён для совместимости.
-    @Volatile
     val inProgress: Boolean
         get() = inProgressFlag.get()
 
