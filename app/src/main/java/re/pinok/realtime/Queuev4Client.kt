@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import re.pinok.api.VKApiClient
@@ -20,6 +21,7 @@ import re.pinok.feature.calls.CallsQueue
 import re.pinok.data.model.QueueCredential
 import re.pinok.data.model.QueueEvent
 import re.pinok.util.AppLog
+import java.net.URLEncoder
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -65,6 +67,12 @@ class Queuev4Client(
     private var pollJob: Job? = null
     private var credential: QueueCredential? = null
 
+    // P3.8: ссылка на in-flight OkHttp-call — чтобы stop() мог отменить poll,
+    // не дожидаясь истечения wait=25с. @Volatile: stop() вызывается из другого
+    // потока, чем pollLoop (Dispatchers.IO). Зануляем в finally pollLoop'а.
+    @Volatile
+    private var currentCall: Call? = null
+
     private val _events = MutableSharedFlow<QueueEvent>(replay = 0, extraBufferCapacity = 64)
     override val events: SharedFlow<QueueEvent> = _events.asSharedFlow()
 
@@ -89,6 +97,10 @@ class Queuev4Client(
     fun stop() {
         pollJob?.cancel()
         pollJob = null
+        // P3.8: отменяем in-flight OkHttp-call — иначе execute() будет
+        // блокировать поток до истечения wait=25с даже после stop().
+        currentCall?.cancel()
+        currentCall = null
         credential = null
     }
 
@@ -149,9 +161,22 @@ class Queuev4Client(
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
             try {
                 // Формат a_check (mobile QueueManager): act/ts/key/id/wait — БЕЗ mode/version.
-                val url = "${cred.url}?act=a_check&key=${cred.key}&ts=$ts&id=${cred.userId}&wait=25"
+                // P3.8: URL-encode cred.key — auth-key может содержать символы, ломающие
+                // query (&, =, +, %, пробел). Без encoding VK вернёт ошибку/пустой ответ,
+                // а cred.key эквивалент access_token → утечка через логи/URL-replay.
+                val encodedKey = URLEncoder.encode(cred.key, "UTF-8")
+                val url = "${cred.url}?act=a_check&key=$encodedKey&ts=$ts&id=${cred.userId}&wait=25"
                 val request = Request.Builder().url(url).get().build()
-                val response = httpClient.newCall(request).execute()
+                // P3.8: сохраняем Call в currentCall, чтобы stop() мог cancel()'нуть
+                // in-flight poll. execute() блокирует до ответа VK (до wait=25с);
+                // без cancel() stop() не прерывает активный poll.
+                val call = httpClient.newCall(request)
+                currentCall = call
+                val response = try {
+                    call.execute()
+                } finally {
+                    currentCall = null
+                }
                 val body = response.body?.string() ?: ""
                 response.close()
                 if (body.isBlank()) {

@@ -3,6 +3,8 @@ package re.pinok.data.local
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import re.pinok.util.AppLog
 
 /**
@@ -19,7 +21,9 @@ import re.pinok.util.AppLog
  * (source of truth для UI). API-вызов делается best-effort в фоне —
  * если когда-нибудь VK разрешит нашему токену, сервер тоже подхватит.
  *
- * Потокобезопасность: все операции через DataStore (атомарные put).
+ * Потокобезопасность: load-modify-save секции (pin/unpin/reorder) защищены
+ * Mutex (P3.3 fix — был TOCTOU: concurrent pin(X)+pin(Y) терял один peerId);
+ * load/save/setOrder атомарны сами по себе (DataStore put + flow.first).
  *
  * Структура JSON: `[2000000062, 152094335, -123456]` (массив Long).
  */
@@ -27,6 +31,10 @@ class PinnedConversationsRepository(private val prefs: SovaPrefs) {
 
     private val gson = Gson()
     private val type = object : TypeToken<List<Long>>() {}.type
+
+    // P3.3: сериализует load→modify→save секции, чтобы параллельные
+    // pin/unpin/reorder не затирали изменения друг друга.
+    private val mutex = Mutex()
 
     /**
      * Загрузить список закреплённых peer_id (в порядке закрепления).
@@ -55,20 +63,20 @@ class PinnedConversationsRepository(private val prefs: SovaPrefs) {
      * наверх закреплённого блока — как в нативном VK).
      * Если уже закреплён — сначала убирает из старой позиции, потом в начало.
      */
-    suspend fun pin(peerId: Long): List<Long> {
+    suspend fun pin(peerId: Long): List<Long> = mutex.withLock {
         val current = load().toMutableList()
         current.remove(peerId)
         val updated = listOf(peerId) + current
         save(updated)
-        return updated
+        updated
     }
 
     /** Открепить диалог. Убирает peer_id из списка. No-op если не был закреплён. */
-    suspend fun unpin(peerId: Long): List<Long> {
+    suspend fun unpin(peerId: Long): List<Long> = mutex.withLock {
         val current = load().toMutableList()
         current.remove(peerId)
         save(current)
-        return current
+        current
     }
 
     /**
@@ -76,15 +84,15 @@ class PinnedConversationsRepository(private val prefs: SovaPrefs) {
      * Индексы — в рамках списка закреплённых. Возвращает новый порядок.
      * No-op если индексы невалидны.
      */
-    suspend fun reorder(fromIndex: Int, toIndex: Int): List<Long> {
+    suspend fun reorder(fromIndex: Int, toIndex: Int): List<Long> = mutex.withLock {
         val current = load().toMutableList()
-        if (fromIndex !in current.indices) return current
-        if (toIndex !in current.indices) return current
-        if (fromIndex == toIndex) return current
+        if (fromIndex !in current.indices) return@withLock current
+        if (toIndex !in current.indices) return@withLock current
+        if (fromIndex == toIndex) return@withLock current
         val item = current.removeAt(fromIndex)
         current.add(toIndex, item)
         save(current)
-        return current
+        current
     }
 
     /**

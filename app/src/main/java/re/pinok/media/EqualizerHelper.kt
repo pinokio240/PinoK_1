@@ -49,6 +49,14 @@ object EqualizerHelper {
 
     // ─── Engine lifecycle (вызывает PlayerService) ───────────────
 
+    // P3.4 (2026-10): attachOnce() и release() оба @Synchronized на этом
+    // singleton-объекте → запись engine и его обнуление атомарны относительно
+    // друг друга. engine() getter ниже также @Synchronized → UI никогда не
+    // увидит "engine == released instance" в окне между current.release()
+    // и engine = null/new. @Volatile оставлен для memory-visibility на случай
+    // не-синхронизированных внутренних читателей (engine? в saveEnabled и т.д.),
+    // но публичный доступ идёт через synchronized-геттер.
+
     /**
      * Создаёт или заменяет shared engine. Вызывается из [PlayerService]
      * при `onAudioSessionIdChanged` / после `player.build()`.
@@ -79,24 +87,68 @@ object EqualizerHelper {
 
     /** Lightweight re-bind без audio gap (Fix #334). */
     fun reattach() {
-        engine?.reattachLightweight()
+        val e = engine
+        if (e == null) {
+            // P3.4: после release() engine == null — UI-вызов бесполезен,
+            // логируем (раньше был silent no-op).
+            AppLog.w(TAG, "reattach: engine == null (released or not attached) — no-op")
+            return
+        }
+        e.reattachLightweight()
     }
 
     /** Полный release+recreate (если lightweight не помог). */
     fun reattachFull() {
-        engine?.reattachFull()
+        val e = engine
+        if (e == null) {
+            // P3.4: после release() engine == null — UI-вызов бесполезен,
+            // логируем (раньше был silent no-op).
+            AppLog.w(TAG, "reattachFull: engine == null (released or not attached) — no-op")
+            return
+        }
+        e.reattachFull()
     }
 
-    /** Освобождает shared engine. Безопасно вызывать несколько раз. */
+    // P3.4 (2026-10): теперь зануляет engine = null после release().
+    // Раньше engine оставался non-null чтобы UI мог читать saved-state
+    // через engine?.getSavedPresetName() и т.д. — но AudioEffectsEngine
+    // после releaseInternal() всё равно читает saved-state из prefs
+    // (loadEqEnabled/loadEqPreset/loadEqBands и т.д. не требуют живых
+    // эффектов), поэтому зануление безопасно. EqualizerHelper же имеет
+    // prefs-fallback в getSavedPresetName()/getSavedBands()/isSavedEnabled()
+    // — UI продолжит получать корректные сохранённые значения из prefs
+    // даже с engine == null. Бонус: UI-сеттеры (saveEnabled/setEnabled/
+    // applyPreset) будут явно логировать warning вместо silent no-op
+    // на released-синглтоне, что упрощает отладку «почему ползунок
+    // не применён».
+    @Synchronized
     fun release() {
-        engine?.release()
-        // НЕ зануляем engine — он ещё может пригодиться для чтения saved state.
-        // PlayerService пересоздаст при следующем attachOnce.
+        val current = engine ?: return
+        current.release()
+        engine = null
     }
 
     // ─── Equalizer (legacy) API — delegate to engine ─────────────
 
-    fun saveEnabled(enabled: Boolean) = engine?.setEqEnabled(enabled) ?: Unit
+    // P3.4: saveEnabled/setEnabled/applyPreset — UI-сеттеры, которые раньше
+    // silent no-op'или при engine == null (после release() / до attachOnce).
+    // Теперь логируем warning, чтобы в logcat было видно «сеттер вызван без
+    // живого engine». Сам вызов остаётся no-op (нечего применять) — но без
+    // engine?.setEqEnabled() настройки НЕ пишутся в prefs намеренно: эти
+    // три метода — чисто «применить к устройству сейчас», без persist.
+    // Persist включения делается внутри AudioEffectsEngine.setEqEnabled
+    // (saveEqEnabled). Для persist-без-engine есть loadEnabled/saveEnabled
+    // prefs-fallback в EqualizerHelper.loadEnabled(), но НЕ в saveEnabled().
+
+    fun saveEnabled(enabled: Boolean) {
+        val e = engine
+        if (e == null) {
+            AppLog.w(TAG, "saveEnabled($enabled): engine == null — no-op (call after release or before attach)")
+            return
+        }
+        e.setEqEnabled(enabled)
+    }
+
     fun loadEnabled(): Boolean = engine?.isEqSavedEnabled() ?: run {
         try { SovaApp.get().getSharedPreferences("equalizer", 0).getBoolean("eq_enabled", false) }
         catch (_: Exception) { false }
@@ -130,7 +182,15 @@ object EqualizerHelper {
     }
 
     fun applyPreset(preset: EqualizerPreset) {
-        engine?.applyPreset(preset)
+        val e = engine
+        if (e == null) {
+            // P3.4: без engine — silent no-op был раньше; теперь логируем.
+            // Persist пресета доступен через EqualizerHelper.savePreset() /
+            // applyCustomPresetPersist() — они пишут в prefs без движка.
+            AppLog.w(TAG, "applyPreset(${preset.name}): engine == null — no-op (call after release or before attach)")
+            return
+        }
+        e.applyPreset(preset)
     }
 
     /**
@@ -170,20 +230,24 @@ object EqualizerHelper {
         )
     }
 
-    /**
-     * #EQ-SAVE-NULL-ENGINE: применить custom-пресет без живого engine —
-     * все значения пишутся в prefs, restoreSettings подхватит при attach.
-     */
+    // #EQ-SAVE-NULL-ENGINE: применить custom-пресет без живого engine —
+    // все значения пишутся в prefs, restoreSettings подхватит при attach.
+    //
+    // P3.4 (2026-10): сохранение eq_enabled тоже перенесено в единый
+    // prefs-editor chain (раньше звало saveEnabled(), который без engine
+    // silent-no-op'ил → eq_enabled не персистился в null-engine path).
     fun applyCustomPresetPersist(preset: CustomPreset) {
         val e = engine
         if (e != null) {
             e.applyCustomPreset(preset)
             return
         }
-        saveEnabled(preset.eqEnabled)
+        // engine == null: пишем всё в prefs напрямую (restoreSettings
+        // в AudioEffectsEngine.attachOnce() подхватит при первом attach).
         saveBands(preset.eqBands)
         savePreset(preset.name)
         prefs()?.edit()
+            ?.putBoolean(AudioEffectsEngine.PREF_EQ_ENABLED, preset.eqEnabled)
             ?.putBoolean(AudioEffectsEngine.PREF_BASS_ENABLED, preset.bassEnabled)
             ?.putInt(AudioEffectsEngine.PREF_BASS_STRENGTH, preset.bassStrength)
             ?.putBoolean(AudioEffectsEngine.PREF_VIRT_ENABLED, preset.virtEnabled)
@@ -216,7 +280,18 @@ object EqualizerHelper {
 
     fun getBands(): List<Short> = engine?.getBands() ?: emptyList()
 
-    fun setEnabled(enabled: Boolean) = engine?.setEqEnabled(enabled) ?: Unit
+    fun setEnabled(enabled: Boolean) {
+        // P3.4: UI-сеттер. Без engine — silent no-op был раньше; теперь логируем
+        // warning. Persist-флаг в AudioEffectsEngine.setEqEnabled не пишется
+        // без engine — но UI обычно вызывает setEnabled для мгновенного эффекта,
+        // а persist включения делает EqualizerHelper.saveEnabled()/applyCustomPresetPersist().
+        val e = engine
+        if (e == null) {
+            AppLog.w(TAG, "setEnabled($enabled): engine == null — no-op (call after release or before attach)")
+            return
+        }
+        e.setEqEnabled(enabled)
+    }
 
     fun isEnabled(): Boolean = engine?.isEqEnabled() ?: false
 
@@ -226,7 +301,13 @@ object EqualizerHelper {
 
     fun getSavedBands(): List<Short> = engine?.getSavedBands() ?: loadBands()
 
-    /** Доступ к shared engine для UI (новые эффекты: bass/virt/loud/reverb). */
+    // P3.4 (2026-10): getter теперь @Synchronized. attachOnce()/release()
+    // тоже @Synchronized → UI никогда не получит ссылку на released-инстанс
+    // в окне между current.release() и engine = null/new. UI-код должен
+    // использовать safe-call `engine()?.setVirtualizerEnabled(on) ?: ...`
+    // — даже после synchronized-чтения engine может быть null (ещё не
+    // attach'ен / уже released), и это нормальная ситуация.
+    @Synchronized
     fun engine(): AudioEffectsEngine? = engine
 
     // ─── Backward-compat: старый API Equalizer-объекта ───────────
@@ -234,8 +315,22 @@ object EqualizerHelper {
     // Делегируем в engine, при null — no-op с логом.
 
     /** @deprecated используйте [engine] напрямую. */
-    fun numberOfBands(): Short = engine?.getNumberOfBands() ?: 0
+    fun numberOfBands(): Short {
+        val e = engine
+        if (e == null) {
+            AppLog.w(TAG, "numberOfBands: engine == null — return 0")
+            return 0
+        }
+        return e.getNumberOfBands()
+    }
 
     /** @deprecated используйте [engine] напрямую. */
-    fun bandLevelRange(): ShortArray = engine?.getBandLevelRange() ?: shortArrayOf(-1500, 1500)
+    fun bandLevelRange(): ShortArray {
+        val e = engine
+        if (e == null) {
+            AppLog.w(TAG, "bandLevelRange: engine == null — return default [-1500, 1500]")
+            return shortArrayOf(-1500, 1500)
+        }
+        return e.getBandLevelRange()
+    }
 }

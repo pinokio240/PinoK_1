@@ -3,6 +3,8 @@ package re.pinok.data.local
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import re.pinok.data.model.ChatFolder
 import re.pinok.util.AppLog
 
@@ -18,13 +20,19 @@ import re.pinok.util.AppLog
  * [{"id":1700000000000,"title":"Работа","peerIds":[123,456],"iconEmoji":null}]
  * ```
  *
- * Потокобезопасность: все операции через DataStore (атомарные put).
+ * Потокобезопасность: load-modify-save секции (addFolder/editFolder/deleteFolder)
+ * защищены Mutex (P3.2 fix — был TOCTOU: concurrent pin(X)+pin(Y) терял один peerId);
+ * saveFolders/loadFolders атомарны сами по себе (DataStore put + flow.first).
  * ID папок = System.currentTimeMillis() (локально-уникальный).
  */
 class FoldersRepository(private val prefs: SovaPrefs) {
 
     private val gson = Gson()
     private val type = object : TypeToken<List<ChatFolder>>() {}.type
+
+    // P3.2: сериализует load→modify→save секции, чтобы параллельные
+    // addFolder/editFolder/deleteFolder не затирали изменения друг друга.
+    private val mutex = Mutex()
 
     /**
      * Загрузить папки из SovaPrefs. Пустая строка → пустой список.
@@ -49,7 +57,7 @@ class FoldersRepository(private val prefs: SovaPrefs) {
     }
 
     /** Добавить новую папку. ID = текущее время (локально-уникальный). */
-    suspend fun addFolder(title: String, peerIds: Set<Long>, iconEmoji: String? = null): ChatFolder {
+    suspend fun addFolder(title: String, peerIds: Set<Long>, iconEmoji: String? = null): ChatFolder = mutex.withLock {
         val current = loadFolders()
         val folder = ChatFolder(
             id = System.currentTimeMillis(),
@@ -58,11 +66,11 @@ class FoldersRepository(private val prefs: SovaPrefs) {
             iconEmoji = iconEmoji,
         )
         saveFolders(current + folder)
-        return folder
+        folder
     }
 
     /** Редактировать существующую папку (по id). Если не найдена — no-op. */
-    suspend fun editFolder(id: Long, title: String, peerIds: Set<Long>, iconEmoji: String? = null) {
+    suspend fun editFolder(id: Long, title: String, peerIds: Set<Long>, iconEmoji: String? = null) = mutex.withLock {
         val current = loadFolders()
         val updated = current.map { f ->
             if (f.id == id) f.copy(title = title.trim(), peerIds = peerIds, iconEmoji = iconEmoji)
@@ -72,7 +80,7 @@ class FoldersRepository(private val prefs: SovaPrefs) {
     }
 
     /** Удалить папку по id. */
-    suspend fun deleteFolder(id: Long) {
+    suspend fun deleteFolder(id: Long) = mutex.withLock {
         val current = loadFolders()
         saveFolders(current.filter { it.id != id })
     }

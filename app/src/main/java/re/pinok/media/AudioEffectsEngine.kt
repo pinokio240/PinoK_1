@@ -774,6 +774,20 @@ class AudioEffectsEngine(private val sessionId: Int) {
         releaseEffect(loudness, "LoudnessEnhancer"); loudness = null
         attached = false
         attachedSessionId = 0
+        // P3.5 (2026-10): сброс SCO-suspend state. Если release() вызвался
+        // во время активного SCO-suspend (звонок/Bluetooth-микрофон),
+        // scoSuspended оставался true, а savedVirtEnabledBeforeSco /
+        // savedReverbEnabledBeforeSco хранили «виртуалайзер/реверб были
+        // включены до SCO». При следующем attachOnce() → restoreSettings
+        // восстановит virtualizer.enabled=true (из prefs), но scoSuspended=true
+        // → следующий suspendForSco() no-op («already suspended»), хотя
+        // эффект фактически играет на SCO-маршруте → артефакты звука.
+        // Сброс в release() делает состояние детерминированным: новый engine
+        // всегда стартует с scoSuspended=false (suspendForSco() сработает
+        // при первом AudioDeviceCallback.onRouteChanged, если маршрут SCO).
+        scoSuspended = false
+        savedVirtEnabledBeforeSco = false
+        savedReverbEnabledBeforeSco = false
     }
 
     private fun releaseEffect(effect: android.media.audiofx.AudioEffect?, name: String) {

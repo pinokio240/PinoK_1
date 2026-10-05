@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import re.pinok.util.AppLog
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * #SESSION-WEB-MECHANISM (2026-09-24, СЕССИЯ-ВЕБ-ПОРТ.md): единственный путь
@@ -76,9 +77,18 @@ object HiddenSessionRefresher {
      * (WebTokenAuth.trySsoHttpRefreshViaRemixsid → ensureFreshToken → скрытый
      * refresh → fullAuthFlow → ...) повиснет НАВСЕГДА на non-reentrant Mutex.
      */
+    // P3.1 (2026-10): реализован через AtomicBoolean (inProgressFlag) +
+    // compareAndSet(false, true). Раньше был @Volatile Boolean с check-then-set
+    // (`if (inProgress) return` + `inProgress = true`) — два параллельных
+    // refresh() из разных call paths могли пройти проверку одновременно и
+    // создать два скрытых WebView одновременно (утечка памяти + двойной
+    // запрос к VK ID SDK). Публичный Boolean-геттер сохранён для совместимости.
     @Volatile
-    var inProgress: Boolean = false
-        private set
+    val inProgress: Boolean
+        get() = inProgressFlag.get()
+
+    // P3.1: внутренний атомарный флаг для CAS-guard'а в refresh().
+    private val inProgressFlag = AtomicBoolean(false)
 
     /**
      * Результат последней попытки: true = web-сессия ДОКАЗАННО мертва
@@ -102,27 +112,30 @@ object HiddenSessionRefresher {
      *         (кулдаун, reentrancy, сеть, мёртвая сессия).
      */
     suspend fun refresh(context: Context): WebTokenAuth.WebTokenResult? {
-        if (inProgress) {
+        // P3.1: CAS-guard — атомарная проверка+захват. Если CAS неудачен —
+        // значит другой refresh уже идёт, return null (раньше check-then-set
+        // `if (inProgress) return` + `inProgress = true` не был атомарным и
+        // пропускал два параллельных refresh()).
+        if (!inProgressFlag.compareAndSet(false, true)) {
             AppLog.w(TAG, "refresh: already in progress — skip (reentrancy guard)")
             return null
         }
-        val now = System.currentTimeMillis()
-        if (lastFailMs != 0L && now - lastFailMs < FAIL_COOLDOWN_MS) {
-            AppLog.i(
-                TAG,
-                "refresh: cooldown active (${FAIL_COOLDOWN_MS - (now - lastFailMs)}ms left) — skip"
-            )
-            return null
-        }
-        inProgress = true
-        lastAttemptDefinitivelyDead = false
         try {
+            val now = System.currentTimeMillis()
+            if (lastFailMs != 0L && now - lastFailMs < FAIL_COOLDOWN_MS) {
+                AppLog.i(
+                    TAG,
+                    "refresh: cooldown active (${FAIL_COOLDOWN_MS - (now - lastFailMs)}ms left) — skip"
+                )
+                return null
+            }
+            lastAttemptDefinitivelyDead = false
             return withTimeoutOrNull(TOTAL_TIMEOUT_MS) { doRefresh(context) }
         } catch (e: Exception) {
             AppLog.w(TAG, "refresh: exception — ${e.message}")
             return null
         } finally {
-            inProgress = false
+            inProgressFlag.set(false)
         }
     }
 

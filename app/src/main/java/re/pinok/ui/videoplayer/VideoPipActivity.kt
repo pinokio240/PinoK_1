@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -250,11 +251,23 @@ class VideoPipActivity : ComponentActivity() {
                 addAction(ACTION_TOGGLE)
                 addAction(ACTION_CLOSE)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(pipReceiver, filter, RECEIVER_NOT_EXPORTED)
-            } else {
-                registerReceiver(pipReceiver, filter)
-            }
+            // P3.7 (2026-10): ContextCompat.registerReceiver с RECEIVER_NOT_EXPORTED.
+            // Раньше на API 31-32 (S/S_V2) вызывался 2-arg registerReceiver(pipReceiver,
+            // filter) — на этих API receiver по умолчанию EXPORTED, т.е. внешние
+            // приложения могли слать ACTION_TOGGLE/ACTION_CLOSE broadcast и управлять
+            // PiP-плеером. Только API 33+ (TIRAMISU) явно ставил RECEIVER_NOT_EXPORTED.
+            // ContextCompat.registerReceiver одинакового использует флаг на всех API:
+            // на 33+ передаёт как есть, на 26+ эмулирует (registerReceiver с флагом
+            // появился в API 26, но требует Context.RECEIVER_NOT_EXPORTED который
+            // compile-time доступен через androidx.core). Action'ы ACTION_TOGGLE /
+            // ACTION_CLOSE — package-private (PendingIntent.getBroadcast с
+            // setPackage(packageName)), но receiver-registry всё равно явно not-exported.
+            ContextCompat.registerReceiver(
+                this,
+                pipReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
         }
 
         val p = player

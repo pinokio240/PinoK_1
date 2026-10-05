@@ -632,18 +632,39 @@ class LongPollClient(
                                 break
                             }
                         }
-                        2, 3, 4 -> {
+                        2, 3 -> {
                             AppLog.lp(phase = "failed", level = android.util.Log.WARN, fields = mapOf(
                                 "failedCode" to failed,
                                 "reason" to when (failed) {
                                     2 -> "key-outdated"
                                     3 -> "ts-outdated"
-                                    4 -> "version-outdated"
                                     else -> "unknown"
                                 },
                                 "version" to lpVersion,
                                 "action" to "re-fetch-server",
                             ))
+                            break
+                        }
+                        4 -> {
+                            // P3.9: version-outdated. Раньше ветка 2,3,4 делала break
+                            // без backoff — если VK постоянно возвращает failed=4
+                            // (например, lp_version не поддерживается сервером),
+                            // outer loop бесконечно хаммерит messagesGetLongPollServer:
+                            // каждая итерация ~5с API, но без задержки между ними.
+                            // Теперь — exponential backoff через consecutiveErrors +
+                            // interruptibleDelay(backoffMs()) (как для сетевых ошибок).
+                            // После успешного re-fetch'а сервера consecutiveErrors
+                            // сбросится в 0 (выше, строка ~486). interruptibleDelay
+                            // прерывается немедленно при stop()/notifyResumed().
+                            AppLog.lp(phase = "failed", level = android.util.Log.WARN, fields = mapOf(
+                                "failedCode" to 4,
+                                "reason" to "version-outdated",
+                                "version" to lpVersion,
+                                "action" to "re-fetch-server-with-backoff",
+                                "consecutiveErrors" to (consecutiveErrors + 1),
+                            ))
+                            consecutiveErrors++
+                            interruptibleDelay(backoffMs())
                             break
                         }
                         else -> {

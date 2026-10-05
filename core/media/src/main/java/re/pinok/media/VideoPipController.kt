@@ -72,6 +72,27 @@ object VideoPipController {
         togglePlayPause = action
     }
 
+    // P3.6 (2026-10): защитный cleanup-метод. Зануляет lambda-ссылку на
+    // плеер (ExoPlayer для нативного / JS-bridge для WebView). Вызывать
+    // из DisposableEffect.onDispose в VideoPlayerScreen / OkWebViewPlayer
+    // ПЕРЕД освобождением самого плеера, чтобы singleton VideoPipController
+    // не удерживал плеер (кодеки/surface/audio track) после выхода с экрана.
+    //
+    // На данный момент вызыватели OkWebViewPlayer уже зовут
+    // setTogglePlayPause(null) напрямую в onDispose (OkWebViewPlayer.kt:410).
+    // VideoPlayerScreen НЕ использует VideoPipController — см. HISTORY.md
+    // (commit «PiP для VideoPlayerScreen перенесён в VideoPipActivity»).
+    // Этот clear() — точка расширения: будущие вызыватели (или cleanup-флаги
+    // в тестах) могут вызывать один метод вместо 4 set*(null).
+    //
+    // НЕ вызывается из самого VideoPipController — только внешний API.
+    fun clear() {
+        togglePlayPause = null
+        pipEnabled = false
+        isPlaying = false
+        AppLog.d(TAG, "clear: togglePlayPause/pipEnabled/isPlaying занулены")
+    }
+
     /**
      * Запросить переход в PiP-режим (явный, по тапу на кнопку PiP в плеере).
      *

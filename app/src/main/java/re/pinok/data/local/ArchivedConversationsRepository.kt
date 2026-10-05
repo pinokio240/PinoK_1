@@ -3,6 +3,8 @@ package re.pinok.data.local
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import re.pinok.util.AppLog
 
 /**
@@ -17,7 +19,9 @@ import re.pinok.util.AppLog
  * source of truth для UI, API-вызов делается best-effort в фоне — если
  * когда-нибудь VK разрешит нашему токену, сервер тоже подхватит.
  *
- * Потокобезопасность: все операции через DataStore (атомарные put).
+ * Потокобезопасность: load-modify-save секции (archive/unarchive) защищены
+ * Mutex (P3.3 fix — был TOCTOU: concurrent archive(X)+archive(Y) терял один
+ * peerId); load/save атомарны сами по себе (DataStore put + flow.first).
  *
  * Структура JSON: `[2000000062, 152094335, -123456]` (массив Long).
  */
@@ -25,6 +29,10 @@ class ArchivedConversationsRepository(private val prefs: SovaPrefs) {
 
     private val gson = Gson()
     private val type = object : TypeToken<List<Long>>() {}.type
+
+    // P3.3: сериализует load→modify→save секции, чтобы параллельные
+    // archive/unarchive не затирали изменения друг друга.
+    private val mutex = Mutex()
 
     /**
      * Загрузить список архивных peer_id.
@@ -49,20 +57,20 @@ class ArchivedConversationsRepository(private val prefs: SovaPrefs) {
     }
 
     /** Архивировать диалог: добавляет peer_id в начало списка (no-op если уже там — dedup). */
-    suspend fun archive(peerId: Long): List<Long> {
+    suspend fun archive(peerId: Long): List<Long> = mutex.withLock {
         val current = load().toMutableList()
         current.remove(peerId) // dedup — не плодим дубли при повторном архиве
         current.add(0, peerId)
         save(current)
-        return current
+        current
     }
 
     /** Разархивировать диалог. Убирает peer_id из списка. No-op если не был там. */
-    suspend fun unarchive(peerId: Long): List<Long> {
+    suspend fun unarchive(peerId: Long): List<Long> = mutex.withLock {
         val current = load().toMutableList()
         current.remove(peerId)
         save(current)
-        return current
+        current
     }
 
     /** Проверить, в архиве ли диалог (без загрузки всего списка в UI). */

@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlin.system.measureTimeMillis
 import java.util.concurrent.TimeUnit
 
 /**
@@ -947,34 +948,42 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // UI (SettingsScreen LoggingTab) обновляет множество через
         // prefs.setLogCategoriesDisabled() + AppLog.setCategoryEnabled() —
         // изменения применяются мгновенно (без перезапуска приложения).
-        runBlocking {
-            runCatching {
-                val snap = prefs.data.first()
-                AppLog.applyDisabledCategories(snap.logCategoriesDisabled)
-                // #LOG-SECTIONS (волна 31-f): CSV выключенных секций → гейты
-                // AppLog (префикс тега/сообщения). Пустой CSV = все секции
-                // логируются (дефолт). Изменение из SettingsScreen применяется
-                // немедленно (AppLog.setDisabledSections сразу после записи префа).
-                AppLog.setDisabledSections(parseLogSectionsOff(snap.logSectionsOff))
-                // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR logged.
-                AppLog.setErrorsOnly(snap.logErrorsOnly)
-                // #LOG-CONFIG (2026-10-01): применение сохранённых настроек хранения
-                // логов при старте приложения. Читаем snapshot prefs (уже получен
-                // выше как `snap` в этом же runBlocking) и применяем ротацию/буфер/
-                // retention/автоочистку через AppLog.applyLogConfig. При
-                // retentionDays>0 это сразу запускает cleanupByRetention() —
-                // синхронно, как все остальные первичные настройки в этом блоке.
-                AppLog.applyLogConfig(
-                    maxBytes = snap.logMaxSizeBytes,
-                    bufferCapacity = snap.logBufferCapacity,
-                    retentionDays = snap.logRetentionDays,
-                    autoClean = snap.logAutoClean,
-                )
-            }.onFailure { e ->
-                android.util.Log.w("PinoK/SovaApp",
-                    "loadLogCategories failed: ${e.message} — default (critical only: AUTH+SYSTEM+NETWORK) used")
+        // P3.10: ANR-риск — runBlocking на Main thread (DataStore.first() + применение
+        // настроек логирования). На медленных устройствах ~0.5-2с. НЕ выношу в
+        // coroutine: блок-комментарий выше явно требует загрузки ДО любого другого
+        // логирования (AppLog.log проверяет enabledCategories перед записью).
+        // Безопасный минимум — measureTimeMillis + AppLog.d для мониторинга регрессий.
+        val logCfgMs = measureTimeMillis {
+            runBlocking {
+                runCatching {
+                    val snap = prefs.data.first()
+                    AppLog.applyDisabledCategories(snap.logCategoriesDisabled)
+                    // #LOG-SECTIONS (волна 31-f): CSV выключенных секций → гейты
+                    // AppLog (префикс тега/сообщения). Пустой CSV = все секции
+                    // логируются (дефолт). Изменение из SettingsScreen применяется
+                    // немедленно (AppLog.setDisabledSections сразу после записи префа).
+                    AppLog.setDisabledSections(parseLogSectionsOff(snap.logSectionsOff))
+                    // #LOG-ERRORS-ONLY (2026-09-30): quiet mode - only ERROR logged.
+                    AppLog.setErrorsOnly(snap.logErrorsOnly)
+                    // #LOG-CONFIG (2026-10-01): применение сохранённых настроек хранения
+                    // логов при старте приложения. Читаем snapshot prefs (уже получен
+                    // выше как `snap` в этом же runBlocking) и применяем ротацию/буфер/
+                    // retention/автоочистку через AppLog.applyLogConfig. При
+                    // retentionDays>0 это сразу запускает cleanupByRetention() —
+                    // синхронно, как все остальные первичные настройки в этом блоке.
+                    AppLog.applyLogConfig(
+                        maxBytes = snap.logMaxSizeBytes,
+                        bufferCapacity = snap.logBufferCapacity,
+                        retentionDays = snap.logRetentionDays,
+                        autoClean = snap.logAutoClean,
+                    )
+                }.onFailure { e ->
+                    android.util.Log.w("PinoK/SovaApp",
+                        "loadLogCategories failed: ${e.message} — default (critical only: AUTH+SYSTEM+NETWORK) used")
+                }
             }
         }
+        AppLog.d("SovaApp", "P3.10: log-config runBlocking took ${logCfgMs}ms (Main thread, ANR risk if >2000ms)")
 
         // 1b. Прогрев CookieManager для обнаружения сессии VK из внешнего браузера.
         //     CookieManager лениво загружает cookies из хранилища — без прогрева
@@ -999,41 +1008,61 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         AppLog.i("SovaApp", "User-Agent: $ua")
         // #BOTTOM-DEFAULT-4: миграция дефолта нижней панели (5→4 кнопки).
         // Применяется только если пользователь не настраивал панель сам.
-        runBlocking {
-            val migrated = prefs.migratePanelDefaultsV2()
-            if (migrated) AppLog.i("SovaApp", "Panel defaults v2 migration: applied (4-button bottom bar)")
-            // #PANELEDIT (2026-10-02): миграция под НОВЫЙ набор пунктов панелей
-            // (PanelItems.key вместо Screen.route) — сбрасывает обе панели на
-            // канонический список пользователя (дубли «мессенджер»/«сообщения»,
-            // спец-пункт «реакции»).
-            val panelV3 = prefs.migratePanelDefaultsV3()
-            if (panelV3) AppLog.i("SovaApp", "Panel defaults v3 migration: applied (PanelItems canonical set)")
-            // §42.6 #PUSH-NO-GROUP-DEFAULT: сброс pushGroupingMode "category"→"none".
-            // Старый default сворачивал пуш-группы — пользователь не видел отдельные
-            // посты без pinch-out. Новый default = каждое уведомление отдельно.
-            val pushMigrated = prefs.migratePushGroupingDefault()
-            if (pushMigrated) AppLog.i("SovaApp", "Push grouping migration: reset 'category'→'none' (individual notifications)")
-            // #READ-RECEIPTS-DEFAULT (волна 34): одноразовый откат «Статус прочтения
-            // (✓/✓✓)» к default ON — на устройствах, где тумблер отключали в тестах,
-            // в DataStore persistился false (единственный писатель — сам тумблер).
-            val readReceiptsMigrated = prefs.migrateReadReceiptsDefaultOn()
-            if (readReceiptsMigrated) AppLog.i("SovaApp", "Read receipts migration: msg_read_receipts false→true (default ON per user request)")
-            // #LOCKER-BG-MIGRATION (волна 36): одноразовое включение «Блокировки
-            // при возврате из фона» на устройствах с PIN, заданным ДО #LOCKER-UX
-            // (auto-enable) — там персистился lockerOnBackground=false и PIN
-            // срабатывал только на холодном старте, фича выглядела мёртвой.
-            val lockerBgMigrated = prefs.migrateLockerOnBackgroundOn()
-            if (lockerBgMigrated) AppLog.i("SovaApp", "Locker bg migration: locker_on_background false→true (PIN was set before #LOCKER-UX auto-enable)")
-            // #LOCKER-UX-3 (волна 36): одноразовый сброс зависимых пунктов
-            // локера — биометрия off всегда (тумблер удалён из UI по запросу
-            // пользователя), onBackground off при незаданном PIN (каскадная
-            // семантика «выключение PIN гасит зависимые пункты»; чистит
-            // сломанное состояние onBackground=true + пустой хэш).
-            val lockerDepMigrated = prefs.migrateLockerDependentsOff()
-            if (lockerDepMigrated) AppLog.i("SovaApp", "Locker dependents migration: biometric→false, onBackground→false without PIN (#LOCKER-UX-3)")
+        // P3.10: ANR-риск — runBlocking на Main thread (последовательные миграции
+        // DataStore). На медленных устройствах ~0.5-1.5с. НЕ выношу в coroutine:
+        // миграции должны примениться ДО первого рендера UI, иначе пользователь
+        // увидит старые дефолты панелей/пушей/локера на первом кадре. Безопасный
+        // минимум — measureTimeMillis + AppLog.d для мониторинга регрессий.
+        val migrationsMs = measureTimeMillis {
+            runBlocking {
+                val migrated = prefs.migratePanelDefaultsV2()
+                if (migrated) AppLog.i("SovaApp", "Panel defaults v2 migration: applied (4-button bottom bar)")
+                // #PANELEDIT (2026-10-02): миграция под НОВЫЙ набор пунктов панелей
+                // (PanelItems.key вместо Screen.route) — сбрасывает обе панели на
+                // канонический список пользователя (дубли «мессенджер»/«сообщения»,
+                // спец-пункт «реакции»).
+                val panelV3 = prefs.migratePanelDefaultsV3()
+                if (panelV3) AppLog.i("SovaApp", "Panel defaults v3 migration: applied (PanelItems canonical set)")
+                // §42.6 #PUSH-NO-GROUP-DEFAULT: сброс pushGroupingMode "category"→"none".
+                // Старый default сворачивал пуш-группы — пользователь не видел отдельные
+                // посты без pinch-out. Новый default = каждое уведомление отдельно.
+                val pushMigrated = prefs.migratePushGroupingDefault()
+                if (pushMigrated) AppLog.i("SovaApp", "Push grouping migration: reset 'category'→'none' (individual notifications)")
+                // #READ-RECEIPTS-DEFAULT (волна 34): одноразовый откат «Статус прочтения
+                // (✓/✓✓)» к default ON — на устройствах, где тумблер отключали в тестах,
+                // в DataStore persistился false (единственный писатель — сам тумблер).
+                val readReceiptsMigrated = prefs.migrateReadReceiptsDefaultOn()
+                if (readReceiptsMigrated) AppLog.i("SovaApp", "Read receipts migration: msg_read_receipts false→true (default ON per user request)")
+                // #LOCKER-BG-MIGRATION (волна 36): одноразовое включение «Блокировки
+                // при возврате из фона» на устройствах с PIN, заданным ДО #LOCKER-UX
+                // (auto-enable) — там персистился lockerOnBackground=false и PIN
+                // срабатывал только на холодном старте, фича выглядела мёртвой.
+                val lockerBgMigrated = prefs.migrateLockerOnBackgroundOn()
+                if (lockerBgMigrated) AppLog.i("SovaApp", "Locker bg migration: locker_on_background false→true (PIN was set before #LOCKER-UX auto-enable)")
+                // #LOCKER-UX-3 (волна 36): одноразовый сброс зависимых пунктов
+                // локера — биометрия off всегда (тумблер удалён из UI по запросу
+                // пользователя), onBackground off при незаданном PIN (каскадная
+                // семантика «выключение PIN гасит зависимые пункты»; чистит
+                // сломанное состояние onBackground=true + пустой хэш).
+                val lockerDepMigrated = prefs.migrateLockerDependentsOff()
+                if (lockerDepMigrated) AppLog.i("SovaApp", "Locker dependents migration: biometric→false, onBackground→false without PIN (#LOCKER-UX-3)")
+            }
         }
-        val initialSnap = runBlocking { prefs.data.first() }
+        AppLog.d("SovaApp", "P3.10: migrations runBlocking took ${migrationsMs}ms (Main thread, ANR risk if >2000ms)")
+        // P3.10: ANR-риск — третий runBlocking (prefsSnapshot seed). КРИТИЧЕН для
+        // auth-flow: prefsSnapshot и AuthDomainsConfig.update(initialSnap) читаются
+        // ниже в onCreate и в auth flow (AuthActivity/ExternalBrowserLauncher).
+        // НЕ выношу в coroutine — синхронный snapshot обязателен. Мониторинг через
+        // measureTimeMillis + AppLog.d; при регрессии >2с — кандидат на рефакторинг
+        // (seed дефолтом + async-обновление, но требует полного теста auth-flow).
+        // lateinit: measureTimeMillis лямбда присваивает значение синхронно →
+        // после блока initialSnap гарантированно инициализирован (non-null).
+        lateinit var initialSnap: SovaPrefs.Snapshot
+        val snapSeedMs = measureTimeMillis {
+            initialSnap = runBlocking { prefs.data.first() }
+        }
         prefsSnapshot = initialSnap   // Fix #336: seed synchronous cache
+        AppLog.d("SovaApp", "P3.10: prefsSnapshot seed runBlocking took ${snapSeedMs}ms (Main thread, ANR risk if >2000ms)")
         // Fix #189: инициализируем AuthDomainsConfig из prefs ДО того, как
         // любой auth flow (AuthActivity, ExternalBrowserLauncher, WebTokenAuth)
         // попытается прочитать домены. initialSnap уже загружен синхронно выше.

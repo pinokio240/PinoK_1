@@ -251,7 +251,7 @@ object WebTokenAuth {
                 val exchanged = exchangeSilentToken(silentTokenResult)
                 if (exchanged != null) {
                     AppLog.i(TAG, "Step 0: silent_token exchange УСПЕШЕН — " +
-                        "user_id=${exchanged.userId}, access_token=${exchanged.accessToken.take(12)}...")
+                        "user_id=${exchanged.userId}, access_token=${maskTokenPrefix(exchanged.accessToken)} (len=${exchanged.accessToken.length})")
                     return@runCatching exchanged
                 }
                 AppLog.w(TAG, "Step 0: silent_token exchange failed — " +
@@ -969,7 +969,9 @@ object WebTokenAuth {
                     return@withContext null
                 }
 
-                AppLog.d(TAG, "localStorage raw: ${raw.jsonStr.take(200)}")
+                AppLog.d(TAG, "localStorage raw: len=${raw.jsonStr.length}, " +
+                    "access_token=${maskTokenPrefix(raw.jsonStr)}, " +
+                    "expires=${formatExpiresUtc(raw.expires)}")
 
                 // Fix #103: НЕ возвращаем истёкший токен. Раньше WebTokenAuth
                 // сохранял мёртвый токен → hasValidToken()=false → белый экран.
