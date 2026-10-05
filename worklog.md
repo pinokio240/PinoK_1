@@ -12341,3 +12341,34 @@ Task: P0.8 (динамические вкладки CommunityScreen + Файлы
 // app/src/main/java/re/pinok/mods/network/VkCookieJar.kt (+35, P4.2)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 18 (WARNINGS-FIX-2026-10-05)
+Agent: orchestrator (main)
+Task: устранить 5 warnings компилятора "Unnecessary safe call on a non-null receiver of type 'VKApiClient.GroupSections'" в CommunityScreen.kt.
+
+## Контекст
+После COMMUNITY-FEATURE-P0.8-P4 (коммит 7b9a7ad) пользователь собрал проект — :app:compileDebugKotlin выдал 5 warnings на CommunityScreen.kt:350-356 (5 строк: 350,351,352,355,356). Не ошибка — warnings, но пользователь попросил устранить.
+
+## Work Log
+- Прочитал CommunityScreen.kt:340-364 (tabs builder). Паттерн: `val s = groupSections; val has = s != null; buildList { if (!has || (s?.wall ?: 1) != 0) ... }`. GroupSections — non-null тип, поля Int (non-nullable). После `val has = s != null` Kotlin smart-cast'ит s к non-null GroupSections в ветке `has==true`. `s?.wall` и `?: 1` избыточны.
+- Прочитал VKApiClient.kt:18541 — data class GroupSections(val wall: Int = 0, val topics: Int = 0, ...) — все поля Int (non-null). Подтверждено.
+- Прочитал CommunityScreen.kt:211 — `var groupSections by remember { mutableStateOf<VKApiClient.GroupSections?>(null) }` — state nullable, но локальная val s после проверки has становится non-null.
+- Фикс: заменил 5 safe-call+elvis на `s!!.field` (assertion вместо safe-call):
+  - (s?.wall ?: 1) != 0 → s!!.wall != 0
+  - (s?.photos ?: 0) > 0 → s!!.photos > 0
+  - (s?.video ?: 0) > 0 → s!!.video > 0
+  - (s?.audio ?: 0) > 0 → s!!.audio > 0
+  - (s?.topics ?: 0) > 0 → s!!.topics > 0
+- Добавил line-comment объясняющий smart-cast и почему s!! безопасно.
+- Поиск подобных паттернов: rg 'val has = .* != null' по всем моим изменённым файлам (24 файла) → только CommunityScreen.kt имеет этот паттерн. Других warnings от P0.8/P4 не ожидается.
+- Коммит 8155652, push прошёл: 1df2626..8155652 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+- 5 warnings устранены (CommunityScreen.kt:350-356) — s?.field ?: default → s!!.field.
+- Поведение идентично (has==false short-circuit, s!! не вычисляется; has==true s non-null, s!! no-op).
+- Проверка: 0 других подобных паттернов в изменённых файлах.
+
+Файл (1, +7/−5): app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt.
+Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам, warnings должны исчезнуть).

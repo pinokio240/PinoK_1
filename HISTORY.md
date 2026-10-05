@@ -14162,3 +14162,16 @@ COMMUNITY-FEATURE-P0.8-P4-2026-10-05: закрытие P0.8 (динамичес�
 // P4.3: VkSigner.kt:46 + build.gradle.kts:64 hardcoded VK_CLIENT_SECRET — сознательный выбор мода, только задокументировать риск (VK может заблокировать client_id при злоупотреблении).
 
 // 4 файла, +432/−21. Кодировка UTF-8 без BOM. Скобки сбалансированы (Python stripper: CommunityScreen 575/575 braces, 1012/1012 parens; Music/Video/VkCookieJar — diff=0). Gradle НЕ собирался (нет Android SDK в среде — пользователь собирает сам).
+
+WARNINGS-FIX-2026-10-05: устранены 5 предупреждений компилятора от P0.8 (CommunityScreen tabs).
+// P0.8 (коммит 7b9a7ad) использовал s?.wall / s?.photos / s?.video / s?.audio / s?.topics
+// с elvis-фолбэком внутри tabs builder. Но после `val has = s != null` Kotlin smart-cast'ит
+// s к non-null GroupSections в ветке has==true — поля Int (non-nullable). Safe-call + elvis
+// были избыточны, компилятор выдал 5 warnings: "Unnecessary safe call on a non-null receiver
+// of type 'VKApiClient.GroupSections'".
+// Фикс: (s?.field ?: default) → s!!.field (assertion в ветке !has||... где has==true гарантирует
+// s!=null). Поведение идентично: когда has==false || короткозит и s!! не вычисляется; когда
+// has==true s non-null и s!! — no-op assertion.
+// Проверка: других паттернов `val has = X != null` с последующими избыточными safe-call в
+// изменённых файлах нет. Только CommunityScreen.kt имел этот паттерн.
+// 1 файл, +7/−5. Кодировка UTF-8 без BOM.
