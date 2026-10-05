@@ -730,7 +730,7 @@ class ExchangeTokenStorage(
      *
      * Обратная совместимость со старым форматом v1 (где присутствовали все
      * ключи): лишние поля просто игнорируем (putOptStr для них не вызываем).
-     * Это безопасно: silent_token/webview_tokens/lp_*/cookies-копии либо
+     * Это безопасно: silent_token/webview_tokens/lp_* и cookies-копии либо
      * short-lived, либо уже покрыты web_cookies snapshot.
      *
      * @return `true` если восстановление прошло и access_token валиден.

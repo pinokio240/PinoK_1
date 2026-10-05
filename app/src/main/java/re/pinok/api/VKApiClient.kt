@@ -12160,7 +12160,7 @@ class VKApiClient(
      * messages.getHistory / channels.getHistory возвращают video-аттачменты
      * именно в таком формате — без явного `access_key` поля в JSON, но с `hash`
      * в `player`. video.get по `ownerId_videoId_accessKey` возвращает полные
-     * `files` (mp4_*/hls/dash), без access_key — VK отвечает error 5/15
+     * `files` (форматы mp4_*, hls, dash), без access_key — VK отвечает error 5/15
      * «access denied» для приватных видео.
      *
      * @param playerUrl player URL (например, video_ext.php?...&hash=abc123).
