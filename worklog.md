@@ -12555,3 +12555,33 @@ Task: устранить warning 'No cast needed' на CommunityScreen.kt:360 (�
 
 Файл (1, +2/−2): app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 24 (STORY-SWIPE-P0.12-2026-10-05)
+Agent: orchestrator (main)
+Task: paging между историями свайпом, не тапом по краю.
+
+## Контекст
+Пользователь: «между историями нужно не тапом, а смахиванием перемещаться». Раньше StoryViewerScreen.kt:450-522 использовал detectTapGestures с tap-zones: тап в левую треть → goToPrev, правую треть → goToNext, центр → стикеры/clip/photos.
+
+## Work Log
+// StoryViewerScreen.kt:12 — добавлен import androidx.compose.foundation.gestures.detectHorizontalDragGestures (detectTapGestures сохранён).
+// StoryViewerScreen.kt:447-548 — Box modifier重构:
+//   1. Добавлен pointerInput(groupIndex, storyIndex) с detectHorizontalDragGestures:
+//      - onDragStart: totalDelta=0f (локальная var в корутине pointerInput)
+//      - onHorizontalDrag: totalDelta += dragAmount
+//      - onDragEnd: threshold = size.width * 0.08f (8% экрана); если totalDelta < -threshold → goToNext, > threshold → goToPrev.
+//   2. detectTapGestures сохранён, но:
+//      - fallbackPaging() теперь no-op (раньше paging через tap-edge)
+//      - handleNoStickerTap(): левая/правая треть → Unit (no-op), центр — стикеры/clip/photos (как раньше).
+// Два pointerInput-модификатора (swipe + tap) сосуществуют — Compose dispatches events в оба. Tap срабатывает при отпускании без движения за touch slop, drag — при движении.
+// Коммит f935138, push прошёл: a82f3e6..f935138 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Paging историй теперь через свайп (горизонтальное перетаскивание).
+// Тап сохранён для стикеров и центра (clip/photos) — не сломал навигацию из историй (коммит 81fcf0b пользователя).
+// Порог 8% ширины экрана — осознанный свайп, не микро-дроги при тапе.
+
+Файл (1, +34/−8): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
+Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

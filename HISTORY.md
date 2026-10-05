@@ -14236,3 +14236,17 @@ WARNINGS-FIX3-2026-10-05: устранён warning 'No cast needed' (CommunitySc
 // поэтому `as` cast избыточен (warning: No cast needed).
 // Фикс: `val sn = s` (smart-cast делает остальное; явная локальная val избегает !! и держит код без warnings).
 // 1 файл, +2/−2. Кодировка UTF-8 без BOM.
+
+STORY-SWIPE-P0.12-2026-10-05: paging историй свайпом вместо тапа по краю.
+// Пользователь: «между историями нужно не тапом, а смахиванием перемещаться».
+// StoryViewerScreen.kt — добавлен pointerInput с detectHorizontalDragGestures:
+//   - onDragStart: totalDelta=0
+//   - onHorizontalDrag: копим dragAmount
+//   - onDragEnd: если |totalDelta| > 8% ширины экрана → свайп вправо goToPrev / влево goToNext
+// Порог 8% — осознанный свайп, не микро-дроги при тапе.
+// Tap-zones для paging убраны: тап в левую/правую треть теперь no-op (раньше goToPrev/goToNext).
+// Тап остаётся только для стикеров (clip/post/link) и центра (clip-story→onOpenAuthorClips, photo-story→onOpenAuthorPhotos, unknown→goToNext — старое поведение).
+// fallbackPaging() для стикеров с невалидным target — теперь no-op (раньше paging через tap-edge).
+// Зачем: тап по стикеру у края экрана промахивался → случайный переход на следующую историю. Свайп не конфликтует со стикерами — однозначный жест.
+// 2 pointerInput-модификатора (swipe + tap) сосуществуют: Compose dispatches events в оба; tap срабатывает при отпускании без движения, drag — при движении за touch slop.
+// 1 файл, +34/−8. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
