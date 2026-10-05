@@ -347,15 +347,24 @@ fun CommunityScreen(
             // «Записи» (wall): 0=выкл, 1=открытая, 2=ограниченная, 3=закрытая.
             // Всегда показываем вкладку: даже выключенная стена у сообщества
             // без записей — это базовая информация (пустой state внутри).
-            // Smart-cast: после `val has = s != null` компилятор знает что
-            // в ветке has==true тип s — non-null GroupSections (поля Int).
-            if (!has || s!!.wall != 0) add(0 to "Записи")
-            if (!has || s!!.photos > 0) add(1 to "Фото")
-            if (!has || s!!.video > 0) add(2 to "Видео")
-            // «Клипы» — нет отдельного флага в GroupSections (часть видео).
-            add(3 to "Клипы")
-            if (!has || s!!.audio > 0) add(4 to "Музыка")
-            if (!has || s!!.topics > 0) add(5 to "Обсуждения")
+            // Явная non-null локальная переменная (sn) — smart-cast на var из
+            // remember через lambda-захват не работает, !! избыточно (warning).
+            if (!has) {
+                add(0 to "Записи")
+                add(1 to "Фото")
+                add(2 to "Видео")
+                add(3 to "Клипы")
+                add(4 to "Музыка")
+                add(5 to "Обсуждения")
+            } else {
+                val sn = s as VKApiClient.GroupSections
+                if (sn.wall != 0) add(0 to "Записи")
+                if (sn.photos > 0) add(1 to "Фото")
+                if (sn.video > 0) add(2 to "Видео")
+                add(3 to "Клипы")
+                if (sn.audio > 0) add(4 to "Музыка")
+                if (sn.topics > 0) add(5 to "Обсуждения")
+            }
             // «Файлы» (docs) — всегда: docs.get работает для любого сообщества
             // (не требует админ-прав), даже если админ выключил секцию docs=0.
             add(6 to "Файлы")
