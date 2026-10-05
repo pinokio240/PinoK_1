@@ -12692,3 +12692,29 @@ Task: исправить 3 ошибки компиляции от STORIES-UX-P0.
 // app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+25/−20, перестановка advanceToNext + @OptIn)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 28 (COMPILE-FIX3-2026-10-05)
+Agent: orchestrator (main)
+Task: исправить 'Unresolved reference advanceToNext' — Kotlin local functions mutual recursion.
+
+## Контекст
+После COMPILE-FIX2 (Task 27, где переставил advanceToNext после startTimer) пользователь собрал проект — осталась ошибка StoryViewerScreen.kt:208 'Unresolved reference advanceToNext'. Task 27 починил advanceToNext→startTimer (advanceToNext второй, видит startTimer выше), но сломал startTimer→advanceToNext (startTimer первый, не видит advanceToNext ниже). Взаимная рекурсия — Kotlin local functions не дают этого через forward references.
+
+## Work Log
+// StoryViewerScreen.kt — inlined advanceToNext логику в 3 местах:
+//   1. startTimer: после animateTo end (стр. ~213-226) — inline блок advanceToNext.
+//   2. resumeTimer: ветка progress>=1f (стр. ~246-261) — inline блок.
+//   3. resumeTimer: после animateTo end (стр. ~274-288) — inline блок.
+// Отдельная функция advanceToNext() удалена (sed 230,251d + Edit для вызовов).
+// Проверка: rg advanceToNext → только в комментариях (4 совпадения в line-comments, 0 вызовов).
+// Коммит 886e529, push прошёл: c31d64d..886e529 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// advanceToNext inlined в 3 местах (startTimer + 2 в resumeTimer). Функция удалена.
+// Принято дублирование (~12 строк × 3) ради compile-clean + читаемости.
+// Альтернатива lateinit var (hack, ломает onBack return) — отклонена.
+
+Файл (1, +49/−26): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

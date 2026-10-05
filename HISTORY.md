@@ -14282,3 +14282,16 @@ COMPILE-FIX2-2026-10-05: 3 ошибки компиляции от STORIES-UX-P0.
 // 2. StoryViewerScreen.kt:198,203 — 'Unresolved reference startTimer'. advanceToNext() была объявлена ПЕРЕД startTimer() (Task 25 refactor вынес advanceToNext, но разместил выше startTimer). advanceToNext вызывает startTimer() напрямую в теле функции (не в lambda) → Kotlin local-function declaration-before-use rule нарушено. Фикс: переставил advanceToNext() ПОСЛЕ startTimer(). startTimer вызывает advanceToNext() только внутри scope.launch{} lambda (lazy call — работает). Взаимная рекурсия теперь корректна.
 // 3. StoryViewerScreen.kt:1496,1497,1499 — 'This material API is experimental'. ModalBottomSheet + rememberModalBottomSheetState помечены @ExperimentalMaterial3Api в material3. Добавлен @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class) на функцию StickerPickerSheet.
 // 2 файла, +28/−20. Кодировка UTF-8 без BOM.
+
+COMPILE-FIX3-2026-10-05: 'Unresolved reference advanceToNext' — Kotlin local functions не поддерживают mutual recursion.
+// StoryViewerScreen.kt:208 — Task 25 вынес логику «после анимации → следующая история» в advanceToNext() для DRY.
+// НО startTimer → advanceToNext (в конце animateTo), advanceToNext → startTimer (restart для следующей истории).
+// Взаимная рекурсия. Kotlin local functions НЕ поддерживают forward references — какая бы ни была объявлена первой,
+// другая на момент парсинга ещё не видна → Unresolved reference.
+// COMPILE-FIX2 (Task 27) переставил advanceToNext после startTimer — починило advanceToNext→startTimer, но сломало
+// startTimer→advanceToNext (теперь startTimer первый, не видит advanceToNext ниже).
+// Финальный фикс: inlined advanceToNext логику в 3 местах (startTimer animateTo end, resumeTimer progress>=1f branch,
+// resumeTimer animateTo end). Отдельная функция advanceToNext() удалена. Принято дублирование (~12 строк × 3 = 36 строк)
+// ради compile-clean + читаемости. Альтернатива lateinit var advance: () -> Unit — hack, ломает return-from-enclosing-function
+// для onBack(). Отклонена.
+// 1 файл, +49/−26. Кодировка UTF-8 без BOM.
