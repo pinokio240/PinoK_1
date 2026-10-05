@@ -12666,3 +12666,29 @@ Task: стрелки-подсказки свайпа в StoryViewer + тумбл
 // app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+88)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 27 (COMPILE-FIX2-2026-10-05)
+Agent: orchestrator (main)
+Task: исправить 3 ошибки компиляции от STORIES-UX-P0.13-18.
+
+## Контекст
+После P0.13-18 (Tasks 25-26, commits c41d8f9 + 78c7fb8) пользователь собрал проект — :app:compileDebugKotlin упал с 3 ошибками (6 строк в выводе, 3 уникальных проблемы).
+
+## Work Log
+// FeedScreen.kt:537 — P0.18 добавил storiesSwipeHints в Snapshot, но FeedScreen конструирует Snapshot вручную (initial state ~стр.537). Добавил storiesSwipeHints = true. Это единственное место manual init (rg audioQuality= показал только FeedScreen:537 + SovaPrefs.kt:318 который уже имел поле).
+// StoryViewerScreen.kt:198,203 — advanceToNext() объявлена ДО startTimer() (Task 25 refactor). advanceToNext вызывает startTimer() в теле (не в lambda) → Kotlin local-function declaration-before-use нарушено. Фикс: переставил advanceToNext() ПОСЛЕ startTimer(). startTimer вызывает advanceToNext() только в scope.launch{} (lazy — ok). Взаимная рекурсия корректна.
+// StoryViewerScreen.kt:1496,1497,1499 — ModalBottomSheet + rememberModalBottomSheetState experimental. Добавил @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class) на StickerPickerSheet.
+// Коммит 5543355, push прошёл: 691ab3a..5543355 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО (3 ошибки):
+// FeedScreen.kt:537 — storiesSwipeHints = true в manual Snapshot init.
+// StoryViewerScreen.kt — advanceToNext переставлена после startTimer.
+// StoryViewerScreen.kt:StickerPickerSheet — @OptIn(ExperimentalMaterial3Api::class).
+
+Файлы (2, +28/−20):
+// app/src/main/java/re/pinok/ui/screens/feed/FeedScreen.kt (+3)
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+25/−20, перестановка advanceToNext + @OptIn)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

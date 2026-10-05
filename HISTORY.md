@@ -14276,3 +14276,9 @@ STORY-SWIPE-HINTS-P0.18-2026-10-05: стрелки-подсказки свайп
 // Imports: androidx.compose.animation.core.RepeatMode, infiniteRepeatable; androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft/Right (AutoMirrored для RTL корректности — в арабском/иврите стрелки зеркалятся автоматически).
 
 // Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+COMPILE-FIX2-2026-10-05: 3 ошибки компиляции от STORIES-UX-P0.13-18 (commits c41d8f9 + 78c7fb8).
+// 1. FeedScreen.kt:537 — 'No value passed for parameter storiesSwipeHints'. P0.18 добавил поле в SovaPrefs.Snapshot, но FeedScreen конструирует Snapshot вручную (initial state, ~строка 537). Добавлен storiesSwipeHints = true (default, как в SovaPrefs). Это единственное место manual init кроме SovaPrefs.kt:318 (которое уже имело поле).
+// 2. StoryViewerScreen.kt:198,203 — 'Unresolved reference startTimer'. advanceToNext() была объявлена ПЕРЕД startTimer() (Task 25 refactor вынес advanceToNext, но разместил выше startTimer). advanceToNext вызывает startTimer() напрямую в теле функции (не в lambda) → Kotlin local-function declaration-before-use rule нарушено. Фикс: переставил advanceToNext() ПОСЛЕ startTimer(). startTimer вызывает advanceToNext() только внутри scope.launch{} lambda (lazy call — работает). Взаимная рекурсия теперь корректна.
+// 3. StoryViewerScreen.kt:1496,1497,1499 — 'This material API is experimental'. ModalBottomSheet + rememberModalBottomSheetState помечены @ExperimentalMaterial3Api в material3. Добавлен @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class) на функцию StickerPickerSheet.
+// 2 файла, +28/−20. Кодировка UTF-8 без BOM.
