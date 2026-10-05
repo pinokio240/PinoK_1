@@ -14320,3 +14320,10 @@ STORY-OWNER-CONTENT-P0.18-2026-10-05: Фото/Видео автора — ре�
 //   - onOpenAuthorVideos: ownerId<0 → Screen.Community.buildRoute(-ownerId, tab=2) (Видео tab). ownerId>0 → Toast (тот же backlog).
 // rawRoute (SovaNavHost:724) = destination.route (pattern с {groupId}{tab}), НЕ actual route — сравнение 'prev == Screen.Community.route' всё ещё работает (оба pattern). Без регрессии.
 // Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+STORY-CLIP-PAUSE-FIX-2026-10-05: тап по clip-story теперь ставит паузу (fullview стикер игнорируется).
+// Пользователь: «когда смотришь клип в истории и тапаешь по нему то сразу открывается окно с клипами пользователя а не становится на паузу».
+// Причина: clip-истории имеют fullview clip-sticker (style=="fullview") с area покрывающей ВЕСЬ экран (1080x1920) — VK возвращает его как кликабельный overlay. Любой тап попадал в tappedSticker.type=="clip" → мгновенный onOpenAuthorClips, минуя паузу + overlay.
+// Фикс: в поиске tappedSticker добавлен фильтр s.style != "fullview". Fullview-стикеры (clip-истории) НЕ считаются «явным тапом по стикеру» → направляются в handleNoStickerTap → пауза + StoryPausedOverlay с чипом «Клипы автора» (пользователь сам решает перейти). Только явные clip-sticker'ы (не fullview, маленький badge) → мгновенный переход.
+// StorySticker.style поле уже существует (Models.kt:1600, StorySticker data class). Новых полей не нужно.
+// 1 файл, +10/−1. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

@@ -12779,3 +12779,32 @@ Task: доделать Фото/Видео автора — реальная н�
 // app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt (+30/−19)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 31 (STORY-CLIP-PAUSE-FIX-2026-10-05)
+Agent: orchestrator (main)
+Task: тап по clip-story должен ставить паузу, а не сразу открывать клипы автора.
+
+## Контекст
+Пользователь: «есть момент когда смотришь клип в истории и тапаешь по нему то сразу открывается окно с клипами пользователя а не становится на паузу, а затем переходит уже через кнопки».
+
+## Root Cause
+// clip-истории имеют fullview clip-sticker (style=="fullview") с area покрывающей ВЕСЬ экран (1080x1920). VK возвращает его как кликабельный overlay для clip-историй.
+// Любой тап в любой точке экрана попадал в tappedSticker (pointInPolygon возвращал true для fullview area) → when type=="clip" → мгновенный onOpenAuthorClips.
+// Пауза (handleNoStickerTap) не срабатывала — пользователь хотел паузу, а получал мгновенный переход.
+
+## Work Log
+// StoryViewerScreen.kt:717-729 — в firstOrNull для tappedSticker добавлен фильтр `s.style != "fullview"`.
+// Теперь: fullview-стикеры (clip-истории) НЕ считаются «явным тапом по стикеру» → firstOrNull возвращает null → handleNoStickerTap → пауза + StoryPausedOverlay с чипом «Клипы автора».
+// Только явные clip-sticker'ы (style != "fullview", например маленький badge в углу) → мгновенный onOpenAuthorClips.
+// StorySticker.style поле уже существует (Models.kt:1600). Новых полей не нужно.
+// Коммит d761123, push прошёл: 0bbe169..d761123 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Тап по clip-story теперь ставит паузу + overlay со ссылками.
+// Пользователь явно выбирает «Клипы автора» в overlay для перехода.
+// Явные clip-sticker'ы (не fullview) по-прежнему мгновенно открывают.
+
+Файл (1, +10/−1): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
