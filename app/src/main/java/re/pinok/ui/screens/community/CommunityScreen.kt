@@ -29,8 +29,13 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.filled.CheckCircle
@@ -194,8 +199,17 @@ fun CommunityScreen(
     val likesState = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
     // #30j (community tabs): активная вкладка контента сообщества.
     var selectedTab by remember { mutableStateOf(0) }
-    // #GROUP-CLIPS: «Клипы» — отдельная вкладка (shortVideo.getOwnerVideos).
-    val tabs = listOf("Записи", "Фото", "Видео", "Клипы", "Музыка", "Обсуждения")
+    // P0.8 (Task 16): динамические вкладки на основе GroupSections.
+    // GroupSections НЕ приходит в GroupInfo (поле отсутствует — VK API отдаёт
+    // его только в groups.getSettings, который требует админ-прав). Грузим
+    // отдельно; для не-админов → null → fallback на полный набор + «Файлы».
+    // Логический индекс (0..6) ПОСТОЯНЕН — когда админ выключил секцию
+    // (например photos=0), соответствующая пара исключается из списка, но
+    // остальные индексы сохраняются → `when (selectedTab) 0/1/2/…` не нужно
+    // перенумеровывать, существующие LaunchedEffect'ы по selectedTab==N не
+    // ломаются (если вкладка не показана, по ней никогда не кликают).
+    var groupSections by remember { mutableStateOf<VKApiClient.GroupSections?>(null) }
+    var sectionsLoaded by remember { mutableStateOf(false) }
 
     // Шаг 1 (#32a): state для вкладки «Фото».
     // Ленивая загрузка при первом открытии вкладки; без пагинации (photosGet возвращает
@@ -242,6 +256,17 @@ fun CommunityScreen(
     var topicsError by remember { mutableStateOf<String?>(null) }
     var topicsLoaded by remember { mutableStateOf(false) }
 
+    // P0.8 (Task 16): state для вкладки «Файлы» (docs.get с ownerId=-groupId).
+    // С пагинацией (как у видео): 30 за раз, догрузка по скроллу до конца.
+    // docs.get работает для любого сообщества (в отличие от groups.getSettings,
+    // который требует админ-прав) → вкладка «Файлы» показывается ВСЕГДА.
+    var docs by remember { mutableStateOf<List<re.pinok.data.model.DocFile>>(emptyList()) }
+    var docsLoading by remember { mutableStateOf(false) }
+    var docsLoadingMore by remember { mutableStateOf(false) }
+    var docsError by remember { mutableStateOf<String?>(null) }
+    var docsLoaded by remember { mutableStateOf(false) }
+    var docsEndReached by remember { mutableStateOf(false) }
+
     LaunchedEffect(groupId) {
         scope.launch {
             loading = true
@@ -278,6 +303,67 @@ fun CommunityScreen(
     LaunchedEffect(groupInfo) {
         if (groupInfo != null) {
             app.prefs.setLastCommunityId(groupId)
+        }
+    }
+    // P0.8 (Task 16): подгрузка GroupSections (groups.getSettings) для
+    // динамических вкладок. Метод требует админ-прав — для не-менеджеров
+    // возвращает null → fallback на полный набор вкладок (+ «Файлы»).
+    // Гейтинг по groupInfo.isManager — чтобы не делать обречённый запрос
+    // для обычного участника. sectionsLoaded флаг защищает от повторов.
+    LaunchedEffect(groupId, groupInfo) {
+        if (sectionsLoaded) return@LaunchedEffect
+        val g0 = groupInfo
+        if (g0 == null) return@LaunchedEffect
+        if (!g0.isManager) {
+            // Не-админ → группы.getSettings вернёт access-denied; не делаем
+            // лишний сетевой запрос. Fallback: tabs без фильтрации.
+            sectionsLoaded = true
+            return@LaunchedEffect
+        }
+        scope.launch {
+            try {
+                val s = app.apiClient.groupsGetSettings(groupId)
+                groupSections = s
+                AppLog.i("CommunityScreen", "GroupSections loaded: " +
+                    "wall=${s?.wall} photos=${s?.photos} video=${s?.video} " +
+                    "audio=${s?.audio} docs=${s?.docs} topics=${s?.topics}")
+            } catch (e: Exception) {
+                AppLog.w("CommunityScreen", "GroupSections load failed: ${e.message}")
+            } finally {
+                sectionsLoaded = true
+            }
+        }
+    }
+    // P0.8 (Task 16): вычисление динамического списка вкладок.
+    // Pair(логическийИндекс, заголовок): индекс 0=Записи, 1=Фото, 2=Видео,
+    // 3=Клипы, 4=Музыка, 5=Обсуждения, 6=Файлы. Когда GroupSections явно
+    // выключает секцию (значение 0 — disabled), исключаем пару из списка;
+    // остальные индексы сохраняются. «Клипы» и «Файлы» — всегда (в VK API
+    // нет групповой настройки clips, а docs.get работает для любого сообщества).
+    val tabs: List<Pair<Int, String>> = remember(groupSections, sectionsLoaded) {
+        val s = groupSections
+        val has = s != null
+        buildList {
+            // «Записи» (wall): 0=выкл, 1=открытая, 2=ограниченная, 3=закрытая.
+            // Всегда показываем вкладку: даже выключенная стена у сообщества
+            // без записей — это базовая информация (пустой state внутри).
+            if (!has || (s?.wall ?: 1) != 0) add(0 to "Записи")
+            if (!has || (s?.photos ?: 0) > 0) add(1 to "Фото")
+            if (!has || (s?.video ?: 0) > 0) add(2 to "Видео")
+            // «Клипы» — нет отдельного флага в GroupSections (часть видео).
+            add(3 to "Клипы")
+            if (!has || (s?.audio ?: 0) > 0) add(4 to "Музыка")
+            if (!has || (s?.topics ?: 0) > 0) add(5 to "Обсуждения")
+            // «Файлы» (docs) — всегда: docs.get работает для любого сообщества
+            // (не требует админ-прав), даже если админ выключил секцию docs=0.
+            add(6 to "Файлы")
+        }
+    }
+    // P0.8 (Task 16): если текущий selectedTab больше не в списке вкладок
+    // (админ выключил секцию в другой сессии) — переключаемся на первую.
+    LaunchedEffect(tabs) {
+        if (tabs.isNotEmpty() && tabs.none { it.first == selectedTab }) {
+            selectedTab = tabs.first().first
         }
     }
     // #NAV-GROUP-VIDEO-RESTORE (Fix #344): однократная прокрутка стены к позиции
@@ -530,6 +616,68 @@ fun CommunityScreen(
                 topicsLoading = false
             }
         }
+    }
+
+    // P0.8 (Task 16): загрузка документов сообщества при переходе на вкладку 6.
+    // docs.get с ownerId=-groupId (VK convention для групп — отрицательный id).
+    // 30 за раз, догрузка по скроллу — см. loadMoreDocs ниже.
+    LaunchedEffect(selectedTab, groupId) {
+        if (selectedTab != 6 || docsLoaded || docsLoading) return@LaunchedEffect
+        scope.launch {
+            docsLoading = true
+            docsError = null
+            try {
+                docs = app.apiClient.docsGet(ownerId = -groupId, count = 30, offset = 0)
+                docsLoaded = true
+                docsEndReached = docs.size < 30
+                AppLog.i("CommunityScreen", "Loaded ${docs.size} docs for group $groupId")
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "docsGet failed", e)
+                docsError = "Ошибка: ${e.message}"
+            } finally {
+                docsLoading = false
+            }
+        }
+    }
+
+    // P0.8 (Task 16): пагинация документов (как у видео — по скроллу).
+    fun loadMoreDocs() {
+        if (docsLoadingMore || docsEndReached || docs.isEmpty()) return
+        scope.launch {
+            docsLoadingMore = true
+            try {
+                val more = app.apiClient.docsGet(
+                    ownerId = -groupId, count = 30, offset = docs.size)
+                val newOnes = more.filter { nd ->
+                    docs.none { it.id == nd.id && it.ownerId == nd.ownerId }
+                }
+                if (newOnes.isEmpty()) {
+                    docsEndReached = true
+                } else {
+                    docs = (docs + newOnes).distinctBy { "${it.ownerId}_${it.id}" }
+                    if (more.size < 30) docsEndReached = true
+                }
+                AppLog.i("CommunityScreen", "loadMoreDocs: +${newOnes.size} (total=${docs.size})")
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "loadMoreDocs failed", e)
+            } finally {
+                docsLoadingMore = false
+            }
+        }
+    }
+
+    // P0.8 (Task 16): триггер пагинации документов (только когда активна вкладка 6).
+    LaunchedEffect(listState, docs.size, selectedTab) {
+        if (selectedTab != 6) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = info.totalItemsCount
+            total > 0 && lastVisible >= total - 3
+        }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { loadMoreDocs() }
     }
 
     // Fix #85: триггер пагинации.
@@ -885,23 +1033,30 @@ fun CommunityScreen(
             )
         }
         item {
-            // #30j (community tabs): ScrollableTabRow с 5 вкладками.
+            // #30j (community tabs): ScrollableTabRow с динамическими вкладками.
             // Соответствует §9.8 VK_IMPORT_API.MD: group_tab_wall/photos/videos/audios/topics.
+            // P0.8 (Task 16): tabs — List<Pair<Int, String>> (логический индекс → заголовок);
+            // selectedTabIndex ищем через indexOfFirst, т.к. selectedTab хранит
+            // логический индекс (0..6), а не позицию в списке (м.б. меньше 7,
+            // если админ выключил часть секций).
+            val selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0)
             ScrollableTabRow(
-                selectedTabIndex = selectedTab,
+                selectedTabIndex = selectedTabIndex,
                 modifier = Modifier.fillMaxWidth(),
                 edgePadding = 0.dp,
                 indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    if (selectedTabIndex in tabPositions.indices) {
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 },
             ) {
-                tabs.forEachIndexed { index, title ->
+                tabs.forEach { (idx, title) ->
                     Tab(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
+                        selected = selectedTab == idx,
+                        onClick = { selectedTab = idx },
                         text = { Text(title, style = MaterialTheme.typography.labelLarge) },
                     )
                 }
@@ -1333,6 +1488,86 @@ fun CommunityScreen(
                             topic = topic,
                             onClick = { onTopicClick(groupId, topic.id, topic.title) },
                         )
+                    }
+                }
+            }
+            6 -> {
+                // P0.8 (Task 16): Файлы сообщества — docs.get(ownerId=-groupId).
+                // Список документов (иконка по типу / название / размер / дата),
+                // тап → DownloadManager (как ChannelFilesDialog в ChatDetailScreen).
+                // Пагинация по скроллу (loadMoreDocs триггерится выше).
+                if (docsLoading && docs.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        }
+                    }
+                } else if (docsError != null && docs.isEmpty()) {
+                    item {
+                        val errMsg = docsError
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = errMsg ?: "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                        }
+                    }
+                } else if (docs.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "В сообществе нет файлов",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                } else {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = "Файлы (${docs.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                    items(docs, key = { "doc_${it.ownerId}_${it.id}" }) { doc ->
+                        CommunityDocRow(doc = doc)
+                    }
+                    // Футер пагинации документов.
+                    item {
+                        when {
+                            docsLoadingMore -> {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                }
+                            }
+                            docsEndReached -> {
+                                Text(
+                                    text = "Это все файлы",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2124,6 +2359,92 @@ private fun CommunityPhotosTab(
                     }
                 }
             }
+        }
+    }
+}
+
+// P0.8 (Task 16): строка документа во вкладке «Файлы» сообщества.
+// Иконка по типу (image/gif/pdf/video/text) + название + ext/размер/тип/дата +
+// кнопка «скачать» (DownloadManager, как ChannelFilesDialog в ChatDetailScreen).
+// Тап по строке тоже запускает загрузку. Файлы с ext=gif/image показываются
+// иконкой Image (preview не отрисован — отдельный viewer не заведён, только
+// скачивание — паттерн ChannelFileRow).
+@Composable
+private fun CommunityDocRow(doc: re.pinok.data.model.DocFile) {
+    val context = LocalContext.current
+
+    fun downloadDoc() {
+        val url = doc.url
+        if (url.isBlank()) {
+            Toast.makeText(context, "Ссылка на файл недоступна — обновите список", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val safeTitle = doc.title.ifBlank { "vk_doc_${doc.id}" }
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            val fileName = "$safeTitle.${doc.ext}"
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                .setTitle(fileName)
+                .setDescription("Документы VK")
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "VK/$fileName")
+            val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
+            if (dm == null) {
+                Toast.makeText(context, "Загрузка недоступна на этом устройстве", Toast.LENGTH_SHORT).show()
+                return
+            }
+            dm.enqueue(request)
+            Toast.makeText(context, "Загрузка началась: $fileName", Toast.LENGTH_SHORT).show()
+            AppLog.i("CommunityScreen", "Doc download enqueued: $fileName (${doc.sizeLabel})")
+        } catch (e: Exception) {
+            AppLog.e("CommunityScreen", "Doc download failed", e)
+            Toast.makeText(context, "Не удалось скачать: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { downloadDoc() }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = when {
+                    doc.isImage -> Icons.Outlined.Image
+                    doc.isGif -> Icons.Outlined.Image
+                    doc.ext.lowercase() == "pdf" -> Icons.Outlined.PictureAsPdf
+                    doc.type == 6 -> Icons.Outlined.Movie
+                    else -> Icons.Outlined.Description
+                },
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = doc.title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // EXT • размер • тип • дата (как в ChannelFilesDialog, + дата).
+            val dateStr = if (doc.date > 0) " • " + doc.date.toAbsoluteTime() else ""
+            Text(
+                text = "${doc.ext.uppercase()} • ${doc.sizeLabel} • ${doc.typeLabel}$dateStr",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        IconButton(onClick = { downloadDoc() }) {
+            Icon(Icons.Outlined.Download, contentDescription = "Скачать")
         }
     }
 }

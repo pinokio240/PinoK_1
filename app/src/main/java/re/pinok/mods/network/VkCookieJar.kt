@@ -75,9 +75,20 @@ class VkCookieJar(
                     val v = parts[1].trim()
                     if (n.isBlank() || v.isBlank()) continue
                     // getCookie(url) уже отфильтровал по домену/пути — аттачим к хосту запроса.
-                    cookies.add(
-                        Cookie.Builder().name(n).value(v).domain(host).path("/").build()
-                    )
+                    // P4.2: индивидуальный try-catch на каждый Cookie.Builder — один битый
+                    // cookie (значение с `;`, `,` или непечатным char'ом бросает
+                    // IllegalArgumentException в Builder) НЕ должен валить остальные.
+                    // Раньше outer try-catch возвращал emptyList() → запрос уходил БЕЗ
+                    // cookies → VK антифрод падал (401 AUTH_LOGIN) на любой битой куке,
+                    // хотя остальные были валидны. Теперь битая кука логируется и
+                    // пропускается, остальные аттачатся как раньше.
+                    try {
+                        cookies.add(
+                            Cookie.Builder().name(n).value(v).domain(host).path("/").build()
+                        )
+                    } catch (e: IllegalArgumentException) {
+                        AppLog.w(TAG, "skip invalid cookie (name=$n): ${e.message}")
+                    }
                 }
             }
 
@@ -85,15 +96,25 @@ class VkCookieJar(
             // персистят в storage и переживают очистку webview-данных. Только
             // эти два имени — сессионные куки fallback'а НЕ имеют (источник
             // истины — живой CookieManager).
+            // P4.2: fallback-куки тоже в индивидуальном try-catch — битое
+            // storage-значение не должно валить остальной cookie-set.
             val names = cookies.mapTo(HashSet()) { it.name }
             if ("remixstid" !in names) {
-                storage.remixstid()?.takeIf { it.isNotBlank() }?.let {
-                    cookies.add(Cookie.Builder().name("remixstid").value(it).domain(host).path("/").build())
+                storage.remixstid()?.takeIf { it.isNotBlank() }?.let { value ->
+                    try {
+                        cookies.add(Cookie.Builder().name("remixstid").value(value).domain(host).path("/").build())
+                    } catch (e: IllegalArgumentException) {
+                        AppLog.w(TAG, "skip invalid fallback cookie (remixstid): ${e.message}")
+                    }
                 }
             }
             if ("remixstlid" !in names) {
-                storage.remixstlid()?.takeIf { it.isNotBlank() }?.let {
-                    cookies.add(Cookie.Builder().name("remixstlid").value(it).domain(host).path("/").build())
+                storage.remixstlid()?.takeIf { it.isNotBlank() }?.let { value ->
+                    try {
+                        cookies.add(Cookie.Builder().name("remixstlid").value(value).domain(host).path("/").build())
+                    } catch (e: IllegalArgumentException) {
+                        AppLog.w(TAG, "skip invalid fallback cookie (remixstlid): ${e.message}")
+                    }
                 }
             }
             cookies

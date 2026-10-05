@@ -8,11 +8,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import re.pinok.R
 import re.pinok.ui.MainActivity
 import re.pinok.util.AppLog
@@ -176,7 +178,10 @@ class MusicDownloadService : Service() {
         // If super.onCreate() does any work that throws, we still need the foreground
         // state to be committed so the system doesn't kill us.
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(0, 0))
+            // P4.1: ServiceCompat.startForeground с указанием типа — Android 14+
+            // (API 34+) требует type для foreground-сервиса с foregroundServiceType
+            // в манифесте (тут dataSync). helper ниже диспатчит корректно по API.
+            startForegroundCompat(NOTIFICATION_ID, buildNotification(0, 0))
             AppLog.i(TAG, "startForeground() called in onCreate() (Fix #141)")
         } catch (e: Exception) {
             // On Android 12+ startForeground can throw ForegroundServiceStartNotAllowedException
@@ -231,7 +236,8 @@ class MusicDownloadService : Service() {
         // a no-op (Android just updates the notification). If for some reason onCreate's
         // startForeground failed (e.g. exception caught above), this is a second chance.
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(0, 0))
+            // P4.1: тот же helper что в onCreate — ServiceCompat + type на API 34+.
+            startForegroundCompat(NOTIFICATION_ID, buildNotification(0, 0))
         } catch (e: Exception) {
             AppLog.e(TAG, "startForeground() failed in onStartCommand(): ${e.javaClass.simpleName}: ${e.message}", e)
         }
@@ -326,5 +332,34 @@ class MusicDownloadService : Service() {
                 nm.createNotificationChannel(channel)
             }
         }
+    }
+
+    // P4.1: ServiceCompat.startForeground с указанием foregroundServiceType.
+    //
+    // Зачем: 2-arg startForeground(id, notification) deprecated на Android 14+
+    // (API 34+) для сервисов с foregroundServiceType в манифесте. У нас
+    // android:foregroundServiceType="dataSync" (см. AndroidManifest.xml) —
+    // на API 34+ нужно явно передать type в 3-arg startForeground, иначе
+    // поведение не определено (manifest-тип работает как fallback, но
+    // гугл предупреждает о возможных изменениях).
+    //
+    // Как: ServiceCompat.startForeground сам диспатчит по API:
+    //   - API 34+: вызывает Service.startForeground(id, notif, type) (новый 3-arg).
+    //   - API 29-33: вызывает Service.startForeground(id, notif, type) (старый 3-arg).
+    //   - API < 29 (minSdk=24): вызывает Service.startForeground(id, notif) (2-arg,
+    //     type полностью игнорируется — foregroundServiceType в манифесте
+    //     учитывается системой автоматически).
+    //
+    // На API < 34 передаём type=0 — это эквивалентно 2-arg вызову (system берёт
+    // тип из манифеста). На API 34+ передаём FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+    // т.к. он обязателен и должен совпадать с одним из типов манифеста (dataSync).
+    //
+    // minSdk=24, поэтому НЕ обёрнуто в if (SDK_INT >= Q) — ServiceCompat сам
+    // выбирает нужный dispatch (см. внутр. Api29Impl/Api34Impl в androidx.core).
+    private fun startForegroundCompat(id: Int, notification: Notification) {
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        } else 0
+        ServiceCompat.startForeground(this, id, notification, type)
     }
 }
