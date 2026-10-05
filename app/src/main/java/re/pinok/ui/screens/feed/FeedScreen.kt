@@ -368,6 +368,10 @@ fun FeedScreen(
             // Fix #AUTOCACHE-STORIES-OFF (2026-08-04): default=false (см. SovaPrefs).
             autoCacheStories = false,
             storyCacheLimitMb = 200,
+            // #STORY-TOGGLE: storiesShown добавлен в Snapshot — FeedScreen
+            // тоже должен передавать initial-значение, иначе компилятор
+            // падает: «No value passed for parameter 'storiesShown'».
+            storiesShown = true,
             // Fix #110: autoCacheAudio добавлен в Snapshot — FeedScreen
             // тоже должен передавать initial-значение, иначе компилятор
             // падает: «No value passed for parameter 'autoCacheAudio'».
@@ -1669,18 +1673,24 @@ fun FeedScreen(
                             }
                         }
                     }
-                    StoriesRow(
-                        onStoryClick = { groups, index ->
-                            // Fix #113: сохраняем позицию скролла перед переходом
-                            // в StoryViewer — иначе при возврате лента скидывалась
-                            // в начало (onVideoClick/onPostClick это уже делали,
-                            // stories были пропущены).
-                            saveScrollPosition()
-                            StoryHolder.groups = groups
-                            StoryHolder.startGroupIndex = index
-                            onStoryViewerClick()
-                        },
-                    )
+                    // #STORY-TOGGLE: раздел «Истории» скрывается настройкой
+                    // (storiesShown == false). StoriesRow сам тянет данные через
+                    // LaunchedEffect → storiesGet — при скрытии ряда не вызываем
+                    // его вовсе (гейт на уровне FeedScreen), чтобы не дёргать API.
+                    if (feedPrefs.storiesShown) {
+                        StoriesRow(
+                            onStoryClick = { groups, index ->
+                                // Fix #113: сохраняем позицию скролла перед переходом
+                                // в StoryViewer — иначе при возврате лента скидывалась
+                                // в начало (onVideoClick/onPostClick это уже делали,
+                                // stories были пропущены).
+                                saveScrollPosition()
+                                StoryHolder.groups = groups
+                                StoryHolder.startGroupIndex = index
+                                onStoryViewerClick()
+                            },
+                        )
+                    }
                 }
             }
             // #FEED-REACTIONS: список реакций (likes.getList).

@@ -379,6 +379,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // (тратит трафик + место; вручную включается через Настройки→Видео).
             autoCacheStories   = p[Keys.AUTO_CACHE_STORIES]    ?: false,
             storyCacheLimitMb  = p[Keys.STORY_CACHE_LIMIT_MB]  ?: 200,
+            storiesShown       = p[Keys.STORIES_SHOWN]         ?: true,
 
             // Audio auto-cache (Fix #110)
             // Fix #AUTOCACHE-AUDIO-OFF (2026-08-05): default = false.
@@ -1107,6 +1108,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     // Fix #100: Stories settings
     suspend fun setAutoCacheStories(v: Boolean)          = put(Keys.AUTO_CACHE_STORIES, v)
     suspend fun setStoryCacheLimitMb(v: Int)             = put(Keys.STORY_CACHE_LIMIT_MB, v)
+    suspend fun setStoriesShown(v: Boolean)              = put(Keys.STORIES_SHOWN, v)
 
     // Fix #110: Audio auto-cache setting
     suspend fun setAutoCacheAudio(v: Boolean)            = put(Keys.AUTO_CACHE_AUDIO, v)
@@ -1563,6 +1565,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Stories (Fix #100)
         val autoCacheStories: Boolean,
         val storyCacheLimitMb: Int,
+        val storiesShown: Boolean,
         // Audio auto-cache (Fix #110)
         val autoCacheAudio: Boolean,
         // Network
@@ -1977,6 +1980,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Stories (Fix #100)
         val AUTO_CACHE_STORIES   = booleanPreferencesKey("auto_cache_stories")
         val STORY_CACHE_LIMIT_MB = intPreferencesKey("story_cache_limit_mb")
+        val STORIES_SHOWN        = booleanPreferencesKey("stories_shown")
         // Audio auto-cache (Fix #110)
         val AUTO_CACHE_AUDIO     = booleanPreferencesKey("auto_cache_audio")
         // Network

@@ -13276,6 +13276,17 @@ class VKApiClient(
                 try { p.asString.toLongOrNull() } catch (_: Exception) { null }
             }
         }
+
+        /** Безопасно извлекает Float из JsonElement (число или строка), иначе 0f. */
+        fun safeFloat(e: JsonElement?, default: Float = 0f): Float {
+            if (e == null || e.isJsonNull) return default
+            if (!e.isJsonPrimitive) return default
+            val p = e.asJsonPrimitive
+            if (p.isBoolean) return if (p.asBoolean) 1f else 0f
+            return try { p.asFloat } catch (_: Exception) {
+                try { p.asString.toFloatOrNull() ?: default } catch (_: Exception) { default }
+            }
+        }
     }
 
     /** Thread-safe list of recent request timestamps (millis). */
@@ -15406,14 +15417,21 @@ class VKApiClient(
             )
         } else null
 
-        // Replies (опционально).
+        // Replies (опционально). Реальный ответ VK: {count, new} — НЕ {count, can_reply}.
         val repliesEl = o.getAsJsonObject("replies")
         val replies: re.pinok.data.model.Story.StoryReplies? = if (repliesEl != null) {
             re.pinok.data.model.Story.StoryReplies(
                 count = safeInt(repliesEl.get("count")),
-                canReply = safeInt(repliesEl.get("can_reply")),
+                new = safeInt(repliesEl.get("new")),
             )
         } else null
+
+        // Top-level флаги: can_reply / can_comment (VK returns 0/1 или true/false).
+        val canReply = safeBool(o.get("can_reply"))
+        val canComment = safeBool(o.get("can_comment"))
+
+        // Кликабельные стикеры (clickable_stickers).
+        val stickers = parseStoryStickers(o)
 
         return re.pinok.data.model.Story(
             id = id,
@@ -15430,7 +15448,70 @@ class VKApiClient(
             link = link,
             views = 0,
             replies = replies,
+            canReply = canReply,
+            canComment = canComment,
+            stickers = stickers,
         )
+    }
+
+    /**
+     * Парсит кликабельные стикеры истории (clickable_stickers → {clickable_stickers: [...]}).
+     * Сохраняет только элементы, у которых есть хоть что-то полезное (type/поля).
+     */
+    private fun parseStoryStickers(o: com.google.gson.JsonObject): List<re.pinok.data.model.Story.StorySticker> {
+        val outer = o.getAsJsonObject("clickable_stickers") ?: return emptyList()
+        val arr = outer.getAsJsonArray("clickable_stickers") ?: return emptyList()
+        if (arr.size() == 0) return emptyList()
+
+        val out = ArrayList<re.pinok.data.model.Story.StorySticker>()
+        for (el in arr) {
+            if (el == null || !el.isJsonObject) continue
+            val s = el.asJsonObject
+
+            val area = s.getAsJsonArray("clickable_area")
+                ?.mapNotNull { a ->
+                    if (!a.isJsonObject) return@mapNotNull null
+                    val aso = a.asJsonObject
+                    re.pinok.data.model.Story.StoryClickableArea(
+                        x = safeFloat(aso.get("x")),
+                        y = safeFloat(aso.get("y")),
+                    )
+                } ?: emptyList()
+
+            // link: link_object → {url,title,description,caption}
+            val linkObj = s.getAsJsonObject("link_object")
+            // audio: audio → {owner_id, id}
+            val audioObj = s.getAsJsonObject("audio")
+            // market_item: market_item → {id, owner_id}
+            val marketObj = s.getAsJsonObject("market_item")
+
+            out.add(
+                re.pinok.data.model.Story.StorySticker(
+                    type = safeString(s.get("type")) ?: "",
+                    id = safeInt(s.get("id")),
+                    style = safeString(s.get("style")) ?: "",
+                    area = area,
+                    // post
+                    postId = safeLongNullable(s.get("post_id")),
+                    postOwnerId = safeLongNullable(s.get("post_owner_id")),
+                    // clip: owner_id — top-level поле стикера
+                    clipId = safeLongNullable(s.get("clip_id")),
+                    clipOwnerId = safeLongNullable(s.get("owner_id")),
+                    // link
+                    linkUrl = safeString(linkObj?.get("url")),
+                    linkTitle = safeString(linkObj?.get("title")),
+                    linkDescription = safeString(linkObj?.get("description")),
+                    linkCaption = safeString(linkObj?.get("caption")),
+                    // music/audio
+                    audioOwnerId = safeLongNullable(audioObj?.get("owner_id")),
+                    audioId = safeLongNullable(audioObj?.get("id")),
+                    // market
+                    marketItemId = safeLongNullable(marketObj?.get("id")),
+                    marketOwnerId = safeLongNullable(marketObj?.get("owner_id")),
+                )
+            )
+        }
+        return out
     }
 
     /**

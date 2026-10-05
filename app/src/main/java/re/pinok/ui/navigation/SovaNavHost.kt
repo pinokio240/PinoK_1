@@ -76,6 +76,7 @@ import re.pinok.ui.theme.UiScale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -932,6 +933,10 @@ fun SovaNavHost(
         Screen.StoryOfflinePlayer.route,
         // §37.12 #330: у офлайн-плеера клипов собственный fullscreen UI + back button.
         Screen.ClipOfflinePlayer.route,
+        // Клипы автора: собственный Scaffold+TopAppBar («Клипы…» + back) —
+        // та же схема hasOwnTopBar (иначе двойной AppBar — класс бага
+        // Fix #272/#NOTIF-SETTINGS-DUAL-BAR).
+        Screen.ClipsOwner.route,
         // Fix #50: у офлайн-плеера собственный TopAppBar + back button.
         Screen.OfflineAudioPlayer.route,
         // Этап 2 (#Equalizer): у EqualizerScreen собственный TopAppBar
@@ -2142,6 +2147,28 @@ composable(Screen.CallsHistory.route) {
                         },
                     )
                 }
+                composable(
+                    route = Screen.ClipsOwner.route,
+                    arguments = listOf(
+                        navArgument(Screen.ClipsOwner.ARG_OWNER_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val ownerId = entry.arguments?.getLong(Screen.ClipsOwner.ARG_OWNER_ID) ?: 0L
+                    re.pinok.ui.screens.clips.ClipsOwnerScreen(
+                        ownerId = ownerId,
+                        onBack = { nav.popBackStack() },
+                        // Эталон — как открывают клип из ленты (ClipsFeedScreen):
+                        // через оверлей-плеер VideoHolder (VideoPlayer рендерится как overlay).
+                        onVideoClick = { video -> VideoHolder.open(video) },
+                        onAuthorClick = { authorId ->
+                            if (authorId > 0) {
+                                nav.navigate(Screen.UserProfile.buildRoute(authorId))
+                            } else if (authorId < 0) {
+                                nav.navigate(Screen.Community.buildRoute(-authorId))
+                            }
+                        },
+                    )
+                }
                 // Волна 40 #SECTIONS-WIRE: плитки «Сервисов» открывают готовые
                 // разделы (Сообщества/Друзья/Закладки/Документы/Фото/Видео) —
                 // раньше ВСЕ плитки были заглушками с тостом.
@@ -2324,7 +2351,43 @@ composable(Screen.CallsHistory.route) {
                         }
                     })
                 }
-                composable(Screen.StoryViewer.route) { StoryViewerScreen(onBack = { nav.popBackStack() }) }
+                composable(Screen.StoryViewer.route) {
+                    val context = LocalContext.current
+                    StoryViewerScreen(
+                        onBack = { nav.popBackStack() },
+                        onOpenUrlInternal = { url ->
+                            nav.navigate(Screen.InternalBrowser.buildRoute(url))
+                        },
+                        // B3 (tap-zones): клик по стикерам сторис.
+                        onOpenAuthorClips = { ownerId ->
+                            nav.navigate(Screen.ClipsOwner.buildRoute(ownerId))
+                        },
+                        onOpenPost = { ownerId, postId ->
+                            if (postId > 0L && ownerId != 0L) {
+                                nav.navigate(Screen.PostDetail.buildRoute(ownerId, postId))
+                            }
+                        },
+                        onOpenAuthorPhotos = { _ ->
+                            // Экран «Фото автора» пока не имеет маршрута с параметром
+                            // (Screen.Photos — глобальный раздел без ownerId). Временно Toast.
+                            android.widget.Toast
+                                .makeText(context, "Фото автора (скоро)", android.widget.Toast.LENGTH_SHORT)
+                                .show()
+                        },
+                        // B5 (reply-author): ответ на сторис = DM автору. peerId = ownerId
+                        // (у групп owner_id уже отрицательный = peer_id сообщений; у юзера
+                        // owner_id положительный = user_id). Открываем диалог ChatDetail.
+                        onReplyToAuthor = { peerId, title, photo ->
+                            if (peerId != 0L) {
+                                nav.navigate(Screen.ChatDetail.buildRoute(peerId, title, photo)) {
+                                    // Убираем стэковый экран просмотра историй — возврат
+                                    // из диалога не должен снова открывать сторис.
+                                    popUpTo(Screen.StoryViewer.route) { inclusive = true }
+                                }
+                            }
+                        },
+                    )
+                }
                 composable(Screen.OfflineManager.route) {
                     OfflineManagerScreen(
                         onBack = { nav.popBackStack() },

@@ -443,6 +443,15 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     object Documents     : Screen("documents",     "Документы",    Icons.Outlined.Description)
     /** §37.12 Phase 6: VK Clips — короткие вертикальные видео. */
     object Clips         : Screen("clips",         "Клипы",        Icons.Outlined.VideoLibrary)
+    /**
+     * Клипы автора (лента клипов конкретного пользователя/сообщества).
+     * Принимает ownerId как path-параметр (положительный — пользователь,
+     * отрицательный — сообщество). Грузится через shortVideo.getOwnerVideos.
+     */
+    object ClipsOwner : Screen("clips_owner/{ownerId}", "Клипы", null) {
+        const val ARG_OWNER_ID = "ownerId"
+        fun buildRoute(ownerId: Long): String = "clips_owner/$ownerId"
+    }
     /** §37.12 Phase 5: запись и публикация нового клипа. */
     object ClipCreate    : Screen("clip_create",   "Новый клип",   Icons.Filled.Videocam)
 

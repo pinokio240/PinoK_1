@@ -1544,6 +1544,9 @@ data class Story(
     @SerializedName("link")            val link: StoryLink? = null,
     @SerializedName("views")           val views: Int = 0,
     @SerializedName("replies")         val replies: StoryReplies? = null,
+    @SerializedName("can_reply")       val canReply: Boolean = false,
+    @SerializedName("can_comment")     val canComment: Boolean = false,
+    val stickers: List<StorySticker> = emptyList(),
 ) {
     val isSeenBool: Boolean get() = isSeen == 1
     val thumbUrl: String? get() = PhotoSizes.bestStoryUrl(photo?.sizes)
@@ -1578,7 +1581,41 @@ data class Story(
 
     data class StoryReplies(
         @SerializedName("count")      val count: Int = 0,
-        @SerializedName("can_reply")  val canReply: Int = 0,
+        @SerializedName("new")        val new: Int = 0,
+    )
+
+    /** Точка кликабельной области стикера (clickable_area). */
+    data class StoryClickableArea(
+        @SerializedName("x") val x: Float = 0f,
+        @SerializedName("y") val y: Float = 0f,
+    )
+
+    /**
+     * Кликабельный стикер истории (clickable_stickers).
+     * type: "post"|"clip"|"link"|"channel_post"|"market_item"|"reaction"|"music".
+     */
+    data class StorySticker(
+        @SerializedName("type")               val type: String = "",
+        @SerializedName("id")                 val id: Int = 0,
+        @SerializedName("style")              val style: String = "",
+        val area: List<StoryClickableArea> = emptyList(),
+        // post
+        @SerializedName("post_id")            val postId: Long? = null,
+        @SerializedName("post_owner_id")      val postOwnerId: Long? = null,
+        // clip
+        @SerializedName("clip_id")            val clipId: Long? = null,
+        @SerializedName("owner_id")           val clipOwnerId: Long? = null,
+        // link
+        @SerializedName("link_url")           val linkUrl: String? = null,
+        @SerializedName("link_title")         val linkTitle: String? = null,
+        @SerializedName("link_description")   val linkDescription: String? = null,
+        @SerializedName("link_caption")       val linkCaption: String? = null,
+        // music/audio
+        @SerializedName("audio_owner_id")     val audioOwnerId: Long? = null,
+        @SerializedName("audio_id")           val audioId: Long? = null,
+        // market_item
+        @SerializedName("market_item_id")     val marketItemId: Long? = null,
+        @SerializedName("market_owner_id")    val marketOwnerId: Long? = null,
     )
 }
 

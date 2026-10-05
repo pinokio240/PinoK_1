@@ -1,5 +1,7 @@
 package re.pinok.ui.screens.feed
 
+import android.content.Intent
+import android.net.Uri
 import android.view.ViewGroup
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -25,14 +27,19 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -44,15 +51,19 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,6 +104,16 @@ import kotlin.math.min
 @Composable
 fun StoryViewerScreen(
     onBack: () -> Unit,
+    onOpenUrlInternal: (String) -> Unit = {},
+    // B3 (tap-zones): клик по стикерам сторис.
+    onOpenAuthorClips: (Long) -> Unit = {},    // ownerId клип-стикера/сторис
+    onOpenPost: (Long, Long) -> Unit = { _, _ -> },     // ownerId, postId
+    onOpenAuthorPhotos: (Long) -> Unit = {},   // ownerId сторис/фото
+    // B5 (reply-author): открыть диалог (DM) с автором истории. peerId = ownerId
+    // (группы уже задаются отрицательным owner_id — это же значение peer_id для
+    // messages API; у VK web ответ на сторис — это именно DM автору, а не публичный
+    // комментарий, и отдельного stories.reply-метода в проекте нет).
+    onReplyToAuthor: (Long, String, String?) -> Unit = { _, _, _ -> },  // peerId, title, photo
 ) {
     val groups = StoryHolder.groups
     val startIndex = StoryHolder.startGroupIndex
@@ -105,6 +126,15 @@ fun StoryViewerScreen(
     var groupIndex by remember { mutableIntStateOf(startIndex) }
     var storyIndex by remember { mutableIntStateOf(0) }
     var progress by remember { mutableFloatStateOf(0f) }
+
+    // B5 (reply-author): состояние поля ввода ответа автору сторис.
+    var replyText by remember { mutableStateOf("") }
+    var replyFocused by remember { mutableStateOf(false) }
+    // «Идёт набор» — пока в поле есть текст или оно в фокусе, тап по фону НЕ
+    // должен переключать историю (web-parity: focus в поле ввода).
+    val isComposing = replyText.isNotBlank() || replyFocused
+    val composingForTap by rememberUpdatedState(isComposing)
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     val scope = rememberCoroutineScope()
     var timerJob by remember { mutableStateOf<Job?>(null) }
@@ -265,6 +295,21 @@ fun StoryViewerScreen(
     val app = re.pinok.SovaApp.get()
     val prefsSnap by app.prefs.data.collectAsState(initial = null)
     val autoCacheStories = prefsSnap?.autoCacheStories ?: false
+    // Ссылка в сторис: настройка openLinksInInternalBrowser (как ChatDetailScreen:987).
+    val openLinksInternal = prefsSnap?.openLinksInInternalBrowser ?: false
+    val onUrlClick: (String) -> Unit = { url ->
+        if (openLinksInternal) {
+            onOpenUrlInternal(url)
+        } else {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                AppLog.e("StoryViewer", "open url failed: ${e.message}")
+            }
+        }
+    }
     // Fix #109: state для ручной кнопки скачивания истории (mirror VideoDownloadManager.downloads).
     val downloads by StoryVideoDownloadManager.downloads.collectAsState()
     val exoPlayer = remember(videoUrl) {
@@ -393,6 +438,11 @@ fun StoryViewerScreen(
         }
     }
 
+    // B3 (tap-zones): «клип-сторис» — либо type="clip", либо есть fullview clip-стикер.
+    // Используется для тапа в центр без стикеров (переход в клипы автора).
+    val isClipStory = currentStory.type == "clip" ||
+        currentStory.stickers.any { it.type == "clip" && it.style == "fullview" }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -400,11 +450,72 @@ fun StoryViewerScreen(
             .pointerInput(groupIndex, storyIndex) {
                 detectTapGestures(
                     onTap = { offset ->
+                        // B5 (reply-author): пока идёт набор ответа (текст или фокус
+                        // в поле ввода) тап по фону НЕ переключает историю — только
+                        // снимает фокус с поля.
+                        if (composingForTap) {
+                            // no-op: не переключаем историю, поле само потеряет
+                            // фокус при тапе вне него.
+                            return@detectTapGestures
+                        }
                         val screenWidth = size.width
-                        if (offset.x < screenWidth / 3f) {
-                            goToPrev()
+                        // Константы исходника сторис: VK возвращает clickable_area
+                        // в координатах исходника (1080x1920). Маппим точку тапа (px)
+                        // из размеров экрана в координаты исходника.
+                        val origW = 1080f
+                        val origH = 1920f
+                        val scaleX = if (screenWidth > 0f) origW / screenWidth else 1f
+                        val scaleY = if (size.height > 0f) origH / size.height else 1f
+                        val origX = offset.x * scaleX
+                        val origY = offset.y * scaleY
+
+                        fun fallbackPaging() {
+                            if (offset.x < screenWidth / 3f) {
+                                goToPrev()
+                            } else {
+                                goToNext()
+                            }
+                        }
+
+                        fun handleNoStickerTap() {
+                            val third = screenWidth / 3f
+                            when {
+                                offset.x < third -> goToPrev()
+                                offset.x > 2f * third -> goToNext()
+                                else -> {
+                                    // Тап в ЦЕНТР без покрывающих стикеров.
+                                    if (isClipStory) {
+                                        onOpenAuthorClips(currentStory.ownerId)
+                                    } else if (currentStory.type == "photo") {
+                                        onOpenAuthorPhotos(currentStory.ownerId)
+                                    } else {
+                                        // Неизвестный тип — сохраняем прежнее поведение.
+                                        goToNext()
+                                    }
+                                }
+                            }
+                        }
+
+                        // Ищем первый стикер, чья кликабельная область содержит точку тапа.
+                        val tappedSticker = currentStory.stickers.firstOrNull { s ->
+                            s.area.size >= 4 && pointInPolygon(origX, origY, s.area)
+                        }
+                        if (tappedSticker != null) {
+                            when (tappedSticker.type) {
+                                "clip" -> onOpenAuthorClips(tappedSticker.clipOwnerId ?: currentStory.ownerId)
+                                "post" -> {
+                                    val pid = tappedSticker.postId ?: 0L
+                                    val oid = tappedSticker.postOwnerId ?: 0L
+                                    if (pid > 0L && oid != 0L) onOpenPost(oid, pid) else fallbackPaging()
+                                }
+                                "link" -> {
+                                    val url = tappedSticker.linkUrl
+                                    if (!url.isNullOrBlank()) onUrlClick(url) else fallbackPaging()
+                                }
+                                else -> fallbackPaging()
+                            }
                         } else {
-                            goToNext()
+                            handleNoStickerTap()
                         }
                     },
                 )
@@ -562,6 +673,10 @@ fun StoryViewerScreen(
         // StoryVideoDownloadManager работает с video-only (photo stories нет CDN mp4).
         // clickable перехватывает тап у родительского pointerInput(detectTapGestures),
         // поэтому тап по кнопке НЕ переключает на следующую историю.
+        //
+        // B5 (reply-author): когда показано поле ответа, поднимаем кнопку выше,
+        // чтобы она не наезжала на поле ввода (web имеет скачивание + DM-поле).
+        val showReplyInput = currentStory.canReply || currentStory.canComment
         if (isVideoStory) {
             val key = StoryVideoDownloadManager.storyKey(currentStory.ownerId, currentStory.id)
             val dlState = downloads[key]
@@ -585,8 +700,55 @@ fun StoryViewerScreen(
                     .align(Alignment.BottomEnd)
                     // Fix #140: navigationBarsPadding — кнопка скачать не под nav bar
                     .navigationBarsPadding()
-                    .padding(end = 16.dp, bottom = 56.dp),
+                    .padding(
+                        end = 16.dp,
+                        // B5: при открытом поле ответа поднимаем кнопку над ним.
+                        bottom = if (showReplyInput) 148.dp else 56.dp,
+                    ),
             )
+        }
+
+        // Ссылка истории (story.link.url). Показываем компактной кликабельной
+        // поверхностью внизу. clickable перехватывает тап у родительского
+        // pointerInput(detectTapGestures) — переключение истории не срабатывает.
+        //
+        // B5 (reply-author): если разрешён ответ и стоит ссылка — ссылка
+        // остаётся вверху нижнего блока, а поле ответа — ниже (web-parity:
+        // ссылка над DM-полем). Если ссылки нет — только поле ответа.
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                // Fix #140: navigationBarsPadding — блок не уходит под nav bar
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            val storyUrl = currentStory.link?.url?.takeIf { it.isNotBlank() }
+            if (storyUrl != null) {
+                val linkText = currentStory.link?.text?.takeIf { it.isNotBlank() }
+                    ?: "Перейти по ссылке"
+                StoryLinkButton(
+                    text = linkText,
+                    onClick = { onUrlClick(storyUrl) },
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+            }
+            if (showReplyInput) {
+                Spacer(modifier = Modifier.height(4.dp))
+                StoryReplyField(
+                    text = replyText,
+                    onTextChange = { replyText = it },
+                    focused = replyFocused,
+                    onFocusChange = { replyFocused = it },
+                    onSubmit = {
+                        keyboardController?.hide()
+                        val title = currentGroup.name ?: ""
+                        val photo = currentGroup.photo100
+                        onReplyToAuthor(currentGroup.ownerId, title, photo)
+                    },
+                )
+            }
         }
     }
 }
@@ -719,6 +881,109 @@ private fun StoryDownloadButton(
     }
 }
 
+/**
+ * Компактная кликабельная кнопка-ссылка в сторис.
+ *
+ * Поверхность с текстом в нижней части экрана. clickable (не pointerInput) —
+ * даёт ripple + accessibility и перехватывает тап у родительского
+ * detectTapGestures, поэтому нажатие НЕ переключает историю.
+ */
+@Composable
+private fun StoryLinkButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * B5 (reply-author): компактное поле «Сообщение...» для ответа автору истории.
+ *
+ * В веб-VK ответ на сторис — это отправка личного сообщения (DM) автору, гейтится
+ * флагом can_reply, а НЕ публичный комментарий. Отдельного stories.reply-метода в
+ * VKApiClient нет, поэтому submit просто открывает диалог (DM) с автором через
+ * [onSubmit] (в SovaNavHost это Screen.ChatDetail.buildRoute(peerId=ownerId, ...)).
+ *
+ * Стиль: Material3 OutlinedTextField, округлые (20.dp), полупрозрачный фон как у
+ * StoryLinkButton, белый текст. Компактная высота (~48dp). Кнопка-стрелка Send —
+ * справа (trailing icon не используют — отдельный IconButton в Row проще и точнее
+ * по позиционированию). IME Send тоже отправляет. Тап по полю/кнопке не всплывает
+ * к родительскому detectTapGestures (clickable + фокус-флаг перехватывают историю).
+ */
+@Composable
+private fun StoryReplyField(
+    text: String,
+    onTextChange: (String) -> Unit,
+    focused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
+    onSubmit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = onTextChange,
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { onFocusChange(it.isFocused) },
+            placeholder = {
+                Text(
+                    text = "Сообщение…",
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 14.sp,
+                )
+            },
+            textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 15.sp),
+            maxLines = 1,
+            shape = RoundedCornerShape(20.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                cursorColor = Color.White,
+                focusedBorderColor = Color.White.copy(alpha = 0.7f),
+                unfocusedBorderColor = Color.Transparent,
+                focusedContainerColor = Color.Black.copy(alpha = 0.45f),
+                unfocusedContainerColor = Color.Black.copy(alpha = 0.45f),
+            ),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { onSubmit() }),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        IconButton(
+            onClick = onSubmit,
+            enabled = focused || text.isNotBlank(),
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f)),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Send,
+                contentDescription = "Написать автору",
+                tint = Color.White.copy(alpha = if (focused || text.isNotBlank()) 1f else 0.4f),
+            )
+        }
+    }
+}
+
 private fun formatStoryDate(timestamp: Long): String {
     if (timestamp == 0L) return ""
     val now = System.currentTimeMillis() / 1000
@@ -729,6 +994,30 @@ private fun formatStoryDate(timestamp: Long): String {
         diff < 86400 -> "${diff / 3600} ч назад"
         else -> "${diff / 86400} д назад"
     }
+}
+
+/**
+ * B3 (tap-zones): point-in-polygon (ray casting) — попадает ли точка (в координатах
+ * исходника 1080x1920) в кликабельную область стикера. Работает для выпуклых и
+ * вогнутых полигонов любой формы; у VK clickable_area всегда 4 точки (прямоугольник).
+ */
+private fun pointInPolygon(x: Float, y: Float, area: List<Story.StoryClickableArea>): Boolean {
+    var inside = false
+    val n = area.size
+    var j = n - 1
+    for (i in 0 until n) {
+        val xi = area[i].x
+        val yi = area[i].y
+        val xj = area[j].x
+        val yj = area[j].y
+        if ((yi > y) != (yj > y) &&
+            x < (xj - xi) * (y - yi) / (yj - yi) + xi
+        ) {
+            inside = !inside
+        }
+        j = i
+    }
+    return inside
 }
 
 /** In-memory holder для передачи данных в StoryViewerScreen (аналог PostHolder). */

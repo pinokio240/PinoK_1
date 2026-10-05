@@ -1622,6 +1622,14 @@ private fun InterfaceTab(
                 checked = s.feedShowScrollFab,
             ) { scope.launch { app.prefs.setFeedShowScrollFab(it) } }
         }
+        // #STORY-TOGGLE: показ раздела «Истории» в ленте. Default: true.
+        item {
+            ToggleRow(
+                title = "История",
+                subtitle = "Показывать истории в ленте",
+                checked = s.storiesShown,
+            ) { scope.launch { app.prefs.setStoriesShown(it) } }
+        }
         // #FEED-CAROUSEL (19-A, волна 18-γ) + #POST-CAROUSEL-EVERYWHERE (волна 22):
         // ОДИН флаг управляет каруселью фото на ВСЕХ поверхностях — лента,
         // сообщество, профиль, открытый пост. Default: true — как в VK web
