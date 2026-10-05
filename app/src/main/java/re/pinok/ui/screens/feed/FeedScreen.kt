@@ -535,6 +535,9 @@ fun FeedScreen(
             // Default 0.85f — как в SovaPrefs.
             uiScale = re.pinok.data.local.SovaPrefs.UI_SCALE_DEFAULT,
             audioQuality = re.pinok.data.local.AudioQuality.Q192,
+            // P0.18: storiesSwipeHints добавлен в Snapshot — initial-конструкция
+            // обязана передавать его (default true, как в SovaPrefs).
+            storiesSwipeHints = true,
         )
     )
 

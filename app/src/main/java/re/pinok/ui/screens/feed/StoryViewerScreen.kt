@@ -186,26 +186,6 @@ fun StoryViewerScreen(
         }
     }
 
-    // P0.13 (Task 25): логика «после завершения анимации → следующая история».
-    // Вынесена в отдельную функцию, чтобы переиспользовать между startTimer
-    // (с 0) и resumeTimer (с текущего progress). Раньше этот блок дублировался.
-    fun advanceToNext() {
-        val g = groups.getOrNull(groupIndex)
-        if (g == null) { onBack(); return }
-        if (storyIndex < g.stories.size - 1) {
-            storyIndex++
-            progress = 0f
-            startTimer()
-        } else if (groupIndex < groups.size - 1) {
-            groupIndex++
-            storyIndex = 0
-            progress = 0f
-            startTimer()
-        } else {
-            onBack()
-        }
-    }
-
     fun startTimer() {
         cancelTimer()
         // Fix #49-1: для видео-историй НЕ запускаем tween-таймер — длительность
@@ -226,6 +206,28 @@ fun StoryViewerScreen(
             }
             // Таймер истёк → следующая история.
             advanceToNext()
+        }
+    }
+
+    // P0.13 (Task 25): логика «после завершения анимации → следующая история».
+    // Вынесена в отдельную функцию, чтобы переиспользовать между startTimer
+    // (с 0) и resumeTimer (с текущего progress). Раньше этот блок дублировался.
+    // P0.18 (Task 26 fix): перенесена ПОСЛЕ startTimer — advanceToNext вызывает
+    // startTimer() в теле функции (не в lambda), нужно объявление-before-use.
+    fun advanceToNext() {
+        val g = groups.getOrNull(groupIndex)
+        if (g == null) { onBack(); return }
+        if (storyIndex < g.stories.size - 1) {
+            storyIndex++
+            progress = 0f
+            startTimer()
+        } else if (groupIndex < groups.size - 1) {
+            groupIndex++
+            storyIndex = 0
+            progress = 0f
+            startTimer()
+        } else {
+            onBack()
         }
     }
 
@@ -1484,6 +1486,9 @@ private fun StoryOverlayChip(
 // Locked-стикеры (purchased=false) — затемнённые + 🔒, тап → Toast «не куплен».
 // Купленные — тап → onStickerClick(stickerId). ModalBottomSheet сам закроется
 // колбэком onDismiss (вызывается в sendSticker после успешной отправки).
+// P0.18 (Task 26 fix): @OptIn для ExperimentalMaterial3Api — ModalBottomSheet
+// и rememberModalBottomSheetState помечены experimental в material3.
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun StickerPickerSheet(
     packs: List<StickerPack>,
