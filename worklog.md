@@ -12288,3 +12288,56 @@ Task: Исправить ошибку компиляции от P3.1: '@Volatile
 
 Файл (1, +0/-1): app/src/main/java/re/pinok/auth/exchange/HiddenSessionRefresher.kt.
 Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собрал сам, ошибка воспроизвелась и устранена).
+
+---
+Task ID: 16+17 (COMMUNITY-FEATURE-P0.8-P4-2026-10-05)
+Agent: orchestrator (main) + 2 general-purpose subagents (параллельно)
+Task: P0.8 (динамические вкладки CommunityScreen + Файлы) + P4.1 (ServiceCompat.startForeground) + P4.2 (cookie sanitize). Все новые комментарии — только line-comments // (требование пользователя: избегать KDoc /** */ из-за преждевременного закрытия wildcard */).
+
+## Контекст
+Сборка прошла успешно после COMPILE-FIX (Task 15). Пользователь подтвердил продолжение. Backlog: P0.8 (функционал сообществ), P4.1 (deprecated startForeground), P4.2 (cookie robustness), P4.3 (только документация). P4.3 — задокументирую в HISTORY без правок кода (сознательный выбор). Поделено между 2 агентами параллельно с эксклюзивным владением файлами.
+
+## Work Log
+
+### Task 16 (P0.8, CommunityScreen tabs) — general-purpose subagent
+// groupSections: VKApiClient.GroupSections? + sectionsLoaded: Boolean добавлены в state.
+// LaunchedEffect(groupId, groupInfo) подгружает groups.getSettings(groupId) с гейтингом по groupInfo.isManager (метод требует админ-прав; для не-менеджеров fallback на полный список без сетевого запроса).
+// tabs стал List<Pair<Int, String>> через remember(groupSections, sectionsLoaded) { buildList { ... } }. Логические индексы постоянны (0=Записи, 1=Фото, 2=Видео, 3=Клипы, 4=Музыка, 5=Обсуждения, 6=Файлы) — НЕ перенумеровывают when(selectedTab) 0..5 и не ломают LaunchedEffect'ы по selectedTab==1..5.
+// Секция показывается если !has(sections) OR section_count>0; Клипы и Файлы — всегда (clips нет в GroupSections, docs.get работает для любого сообщества).
+// ScrollableTabRow обновлён: selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0); indicator с защитой selectedTabIndex in tabPositions.indices; forEach { (idx, title) -> ... }. LaunchedEffect(tabs) переключает selectedTab на первую доступную вкладку если текущая выпала.
+// Новая вкладка Файлы (idx 6): apiClient.docsGet(ownerId=-groupId, count=30, offset=N). Загрузка: LaunchedEffect(selectedTab, groupId) с docsLoaded/docsLoading guard. Пагинация: loadMoreDocs() + LaunchedEffect(listState, docs.size, selectedTab) с snapshotFlow lastVisible>=total-3 (паттерн как у видео/музыки). UI: 4 ветки (loading/error/empty/loaded), items(docs) { CommunityDocRow(doc) } + футер пагинации.
+// CommunityDocRow: Row[Box 48dp с иконкой по типу (Image для image/gif, PictureAsPdf для pdf, Movie для type==6, Description иначе) + Column(title, "EXT • size • type • date") + IconButton(Download)]. Тап → DownloadManager.Request → setDestinationInExternalPublicDir(DIRECTORY_DOWNLOADS, "VK/$fileName") → dm.enqueue + Toast + AppLog.i. Безопасное имя файла через regex [\/:*?"<>|] → "_" (идентично ChannelFileRow).
+// Существующие вкладки 0..5 не тронуты — when(selectedTab) 0..5 без изменений, добавлен только кейс 6. LaunchedEffect'ы по selectedTab==1..5 сохранили числовые литералы. PullToRefresh + infinite scroll стены (Fix #85) не тронуты. Публичный API CommunityScreen (16 onXxx колбэков + groupId + onBack) сохранён 1:1.
+// НЕ добавлены Товары/Статьи/Материалы (Wiki) — market/wiki есть в GroupSections, но market-field отсутствует в groups.getSettings, wiki_get не реализован в VKApiClient.
+
+### Task 17 (P4.1+P4.2, services+cookie) — general-purpose subagent
+// P4.1 MusicDownloadService.kt:184,240 + VideoDownloadService.kt:66 — 2-arg startForeground(id, notification) → private startForegroundCompat(id, notif) с паттерном из LongPollKeepAliveService (образец): гейт Build.VERSION.SDK_INT >= UPSIDE_DOWN_CAKE → ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC или 0, далее ServiceCompat.startForeground(this, id, notif, type).
+// foregroundServiceType=DATA_SYNC — совпадает с AndroidManifest.xml:395,404 (проверено). mediaPlayback НЕ использован — сервисы скачивают. minSdk=24: ServiceCompat диспатчит в 2-arg на API<29, 3-arg на 29-33, 3-arg на 34+. Условная обёртка if(SDK_INT>=Q) НЕ нужна. Импорты: android.content.pm.ServiceInfo, androidx.core.app.ServiceCompat (androidx.core 1.17.0).
+// P4.2 VkCookieJar.kt:79 — skip-invalid-cookie. Каждый Cookie.Builder обёрнут в индивидуальный try-catch IllegalArgumentException. 3 сайта: главный raw.split(";") loop + 2 fallback remixstid/remixstlid. Битая кука логируется AppLog.w и пропускается. Outer try-catch(Exception) сохранён. Домен-маппинг и #CALLS-ANTIFRAUD F-3 fallback — без изменений. saveFromResponse не тронут.
+
+## Проверки
+// git diff --stat: 4 файла, +432/−21.
+// ПРОВЕРКА новых KDoc-блоков в diff: 0 новых /** ... */ (grep по added-строкам git diff → пусто). Все новые комментарии — line-comments //.
+// ПРОВЕРКА новых проблемных */ в добавленных строках: 0 (grep '^\+.*\*/[a-zA-Z/]' → пусто).
+// Баланс скобок (Python stripper): CommunityScreen 575/575 braces, 1012/1012 parens, 8/8 brackets — diff=0. Music/Video/VkCookieJar — diff=0.
+// Коммит 7b9a7ad, push прошёл: e89bc39..7b9a7ad PinoK -> PinoK.
+
+## Stage Summary
+
+ВЫПОЛНЕНО:
+// P0.8: CommunityScreen tabs динамические из GroupSections + новая вкладка Файлы (docsGet + DownloadManager). Логические индексы стабильны — существующие вкладки не сломаны.
+// P4.1: Music/VideoDownloadService — ServiceCompat.startForeground с FOREGROUND_SERVICE_TYPE_DATA_SYNC (deprecated 2-arg на API 34+).
+// P4.2: VkCookieJar — skip-invalid-cookie (один битый cookie больше не убивает все, individual try-catch).
+
+НЕ СДЕЛАНО (перенесено в backlog):
+// P4.1b: StoryVideoDownloadService + ClipDownloadService — тот же ServiceCompat.startForeground фикс (foregroundServiceType="dataSync", 2-arg startForeground).
+// P4.1c: PlayerService + VideoPlaybackService — ServiceCompat с FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK (если используют 2-arg startForeground).
+// P4.3: VkSigner.kt:46 + build.gradle.kts:64 hardcoded VK_CLIENT_SECRET — сознательный выбор мода, только задокументировать риск (VK может заблокировать client_id при злоупотреблении). Без правок кода.
+
+Файлы (4, +432/−21):
+// app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt (+343, P0.8)
+// app/src/main/java/re/pinok/media/MusicDownloadService.kt (+39, P4.1)
+// app/src/main/java/re/pinok/media/VideoDownloadService.kt (+36, P4.1)
+// app/src/main/java/re/pinok/mods/network/VkCookieJar.kt (+35, P4.2)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

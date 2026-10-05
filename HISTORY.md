@@ -14135,3 +14135,30 @@ COMPILE-FIX-2026-10-05: фикс ошибки компиляции от STABILIT
 // Проверка: поиск @Volatile val (без var) по всем .kt → 0 других случаев. Единственное совпадение
 // в VKApiClient.kt:12552 — текст внутри line-comment, не аннотация.
 // 1 файл, +0/-1. Кодировка UTF-8 без BOM.
+
+COMMUNITY-FEATURE-P0.8-P4-2026-10-05: закрытие P0.8 (динамические вкладки CommunityScreen + Файлы) + P4.1 (ServiceCompat.startForeground) + P4.2 (cookie sanitize). Агентский заход Tasks 16+17 параллельно (4 файла, +432/−21).
+
+// P0.8 CommunityScreen.kt:198 — tabs HARDCODED listOf("Записи","Фото","Видео","Клипы","Музыка","Обсуждения") → динамические из GroupSections + добавлена вкладка Файлы.
+// Реализация: groupSections: VKApiClient.GroupSections? загружается через groups.getSettings(groupId) с гейтингом по groupInfo.isManager (метод требует админ-прав; для не-менеджеров fallback на полный список без сетевого запроса). tabs = List<Pair<Int, String>> через remember(groupSections, sectionsLoaded) { buildList { ... } }.
+// КЛЮЧЕВОЕ: логические индексы постоянны (0=Записи, 1=Фото, 2=Видео, 3=Клипы, 4=Музыка, 5=Обсуждения, 6=Файлы) — это позволяет НЕ перенумеровывать when(selectedTab) 0..5 и не ломать существующие LaunchedEffect'ы по selectedTab==1..5. Секция показывается если !has(sections) OR section_count>0; Клипы и Файлы — всегда (clips нет в GroupSections, docs.get работает для любого сообщества).
+// ScrollableTabRow: selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0); indicator с защитой selectedTabIndex in tabPositions.indices. LaunchedEffect(tabs) переключает selectedTab на первую доступную вкладку если текущая выпала.
+// Новая вкладка Файлы (idx 6): apiClient.docsGet(ownerId=-groupId, count=30, offset=N) (VKApiClient:10083). Загрузка: LaunchedEffect(selectedTab, groupId) с docsLoaded/docsLoading guard. Пагинация: loadMoreDocs() + LaunchedEffect(listState, docs.size, selectedTab) с snapshotFlow lastVisible>=total-3. UI: 4 ветки (loading/error/empty/loaded), items(docs) { CommunityDocRow(doc) } + футер пагинации.
+// CommunityDocRow: Row[Box 48dp с иконкой по типу (Image для image/gif, PictureAsPdf для pdf, Movie для type==6, Description иначе) + Column(title, "EXT • size • type • date") + IconButton(Download)]. Тап → DownloadManager.Request → setDestinationInExternalPublicDir(DIRECTORY_DOWNLOADS, "VK/$fileName") → dm.enqueue + Toast + AppLog.i. Безопасное имя файла через regex [\/:*?\"<>|] → "_".
+// Существующие вкладки (0..5) не тронуты — when(selectedTab) 0..5 без изменений, добавлен только кейс 6. LaunchedEffect'ы по selectedTab==1..5 сохранили числовые литералы. PullToRefresh + infinite scroll стены (Fix #85) не тронуты. Публичный API CommunityScreen (16 onXxx колбэков + groupId + onBack) сохранён 1:1.
+// НЕ добавлены Товары/Статьи/Материалы (Wiki) — market/wiki есть в GroupSections, но market-field отсутствует в groups.getSettings, wiki_get не реализован в VKApiClient. Оставлено для будущих задач.
+
+// P4.1 MusicDownloadService.kt:184,240 + VideoDownloadService.kt:66 — 2-arg startForeground(id, notification) deprecated на Android 14+ для foregroundServiceType="dataSync". Заменено на private startForegroundCompat(id, notif) с паттерном из LongPollKeepAliveService (образец): гейт Build.VERSION.SDK_INT >= UPSIDE_DOWN_CAKE → ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC или 0, далее ServiceCompat.startForeground(this, id, notif, type).
+// foregroundServiceType=DATA_SYNC — совпадает с AndroidManifest.xml:395,404 (проверено). mediaPlayback НЕ использован — эти сервисы скачивают, не воспроизводят. minSdk=24: ServiceCompat диспатчит в 2-arg на API<29 (type игнорируется), 3-arg на 29-33 (type=0 эквивалент 2-arg), 3-arg на 34+ (type обязателен). Условная обёртка if(SDK_INT>=Q) НЕ нужна. Импорты: android.content.pm.ServiceInfo, androidx.core.app.ServiceCompat (androidx.core 1.17.0 — константа доступна).
+// Замечание (вне scope): StoryVideoDownloadService и ClipDownloadService тоже foregroundServiceType="dataSync" с 2-arg startForeground — не фиксил (не в списке эксклюзивных файлов). PlayerService/VideoPlaybackService — foregroundServiceType="mediaPlayback", если используют 2-arg startForeground — нужны FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK.
+
+// P4.2 VkCookieJar.kt:79 — skip-invalid-cookie. Раньше значения cookies из CookieManager.getCookie() НЕ санитизировались перед Cookie.Builder. Значение с ;, , или непечатыми char'ами бросало IllegalArgumentException в Builder → outer try-catch возвращал emptyList() → весь запрос БЕЗ cookies → антифрод-проверка VK падала (401 AUTH_LOGIN). Один битый cookie убивал все.
+// Фикс: каждый Cookie.Builder обёрнут в индивидуальный try-catch IllegalArgumentException. 3 сайта: главный raw.split(";") loop + 2 fallback remixstid/remixstlid. Битая кука логируется AppLog.w("skip invalid cookie (name=$n): ${e.message}") и пропускается. Outer try-catch(Exception) сохранён как safety net. Домен-маппинг (vk.ru/vk.com гейт + domain(host).path("/")) и #CALLS-ANTIFRAUD F-3 fallback (storage.remixstid/remixstlid) — без изменений. saveFromResponse не тронут (там уже runCatching { cm.setCookie(...) }.isSuccess).
+
+// Все новые комментарии — line-comments // (НЕ /** */) согласно требованию пользователя (предотвращение преждевременного закрытия wildcard */ в KDoc).
+
+// НЕ СДЕЛАНО (перенесено в backlog):
+// P4.1b: StoryVideoDownloadService + ClipDownloadService — тот же ServiceCompat.startForeground фикс (foregroundServiceType="dataSync").
+// P4.1c: PlayerService + VideoPlaybackService — ServiceCompat с FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK (если используют 2-arg startForeground).
+// P4.3: VkSigner.kt:46 + build.gradle.kts:64 hardcoded VK_CLIENT_SECRET — сознательный выбор мода, только задокументировать риск (VK может заблокировать client_id при злоупотреблении).
+
+// 4 файла, +432/−21. Кодировка UTF-8 без BOM. Скобки сбалансированы (Python stripper: CommunityScreen 575/575 braces, 1012/1012 parens; Music/Video/VkCookieJar — diff=0). Gradle НЕ собирался (нет Android SDK в среде — пользователь собирает сам).
