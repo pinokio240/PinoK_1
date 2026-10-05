@@ -14217,3 +14217,15 @@ VIDEO-CDN-COOKIES-FIX-2026-10-05: P0.10 (OkHttpDataSource с cookies) + P0.11 (V
 // НЕ СДЕЛАНО (мелочи из лога, не связаны с видео):
 //   accountPersonal.getSecurityAlerts err=3 (Unknown method) — VK сменил имя метода; не критично (security alerts — информационная фича, не блокирует UX).
 //   queue.subscribe failed — входящие звонки недоступны; не связано с видео, отдельная проблема (возможно нет прав или подписка на очередь не прошла).
+
+WARNINGS-FIX2-2026-10-05: устранены 6 warnings компилятора (5 unnecessary !! + 1 deprecated Icons.Filled.Send).
+// CommunityScreen.kt:352-358 — WARNINGS-FIX (коммит 89a4d7f) заменил s?.field ?: default на s!!.field, но после
+// `val has = s != null` smart-cast делает s non-null в ветке has==true — !! избыточен (5 warnings: 352,353,354,357,358).
+// Фикс: рефакторинг в явные if(!has)/else ветки с локальной `val sn = s as VKApiClient.GroupSections` (явный cast,
+// без smart-cast на var из remember через lambda-захват — Kotlin не делает smart-cast на mutably-captured vars).
+// Поведение идентично: ветка !has добавляет все 6 дефолтных табов; ветка else фильтрует по полям GroupSections.
+// (Оставшиеся `!!` в CommunityScreen.kt:1653,1686 — editingPost!!, чужой код, не моя правка.)
+// StoryViewerScreen.kt:979 — Icons.Filled.Send deprecated, заменить на Icons.AutoMirrored.Filled.Send.
+// AutoMirrored-иконки корректно зеркалятся в RTL-раскладках (арабский/иврит). Заменён usage + import
+// (androidx.compose.material.icons.filled.Send → androidx.compose.material.icons.automirrored.filled.Send).
+// 2 файла, +20/−11. Кодировка UTF-8 без BOM.

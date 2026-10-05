@@ -12502,3 +12502,33 @@ Task: починить HTTP 400 на видео в канале. Найдено 
 // app/src/main/java/re/pinok/mods/network/VkCookieJar.kt (+50, P0.11)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 22 (WARNINGS-FIX2-2026-10-05)
+Agent: orchestrator (main)
+Task: устранить 6 warnings компилятора — 5 unnecessary !! на smart-cast GroupSections + 1 deprecated Icons.Filled.Send в StoryViewerScreen.
+
+## Контекст
+После pull коммита 81fcf0b (feat(stories) от пользователя) и пересборки пользователь получил 6 warnings. 5 из них — regression от WARNINGS-FIX (Task 18, коммит 89a4d7f): тогда я заменил s?.field ?: default на s!!.field, но это тоже избыточно — после `val has = s != null` smart-cast делает s non-null в ветке has==true.
+
+## Work Log
+// CommunityScreen.kt:352-358 — рефакторинг. Вместо 5 `if (!has || s!!.field ...)` сделал явные if(!has)/else ветки:
+//   if (!has) { add all 6 default tabs } else { val sn = s as VKApiClient.GroupSections; filter by sn.field }
+// Явный cast `s as VKApiClient.GroupSections` — без smart-cast на lambda-captured var (Kotlin не smart-cast'ит mutably-captured vars из remember).
+// Поведение идентично: !has → все 6 дефолтных табов; else → фильтр по GroupSections полям.
+// Проверка: rg '!!' по CommunityScreen.kt → 2 оставшихся `editingPost!!` (1653, 1686) — чужой код (не моя правка P0.8), не трогал.
+// StoryViewerScreen.kt:979 — `Icons.Filled.Send` → `Icons.AutoMirrored.Filled.Send` (deprecated → AutoMirrored version). Заменён usage + import (androidx.compose.material.icons.filled.Send → androidx.compose.material.icons.automirrored.filled.Send).
+// Проверка: rg 'Icons.Filled.Send' по всем .kt → 0 совпадений (все устранены).
+// Коммит 73dbf1d, push прошёл: 81fcf0b..73dbf1d PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// CommunityScreen.kt — 5 warnings устранены (убраны !! на smart-cast GroupSections через явный if/else + cast).
+// StoryViewerScreen.kt — 1 warning устранён (Icons.Filled.Send → Icons.AutoMirrored.Filled.Send).
+// Проверка: 0 других Icons.Filled.Send в репо.
+
+Файлы (2, +20/−11):
+// app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt (+15/−10)
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+2/−2 — usage + import)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
