@@ -9,6 +9,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -447,6 +448,28 @@ fun StoryViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            // P0.12 #STORY-SWIPE (2026-10): paging историй — горизонтальным свайпом,
+            // не тапом по левому/правому краю. Тап остаётся только для стикеров и центра
+            // (открытие клипов автора / фото / поста / ссылки). Раньше тап в левую/правую
+            // треть экрана переключал историю — конфликтовало со стикерами у края и ломала
+            // UX (пользователь хотел тапнуть по стикеру, но промахивался → переходил на
+            // следующую историю). Теперь: свайп вправо → prev, свайп влево → next.
+            .pointerInput(groupIndex, storyIndex) {
+                var totalDelta = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDelta = 0f },
+                    onHorizontalDrag = { _, dragAmount -> totalDelta += dragAmount },
+                    onDragEnd = {
+                        // Порог: 8% ширины экрана (плотнее — случайные микро-дроги при
+                        // тапе не должны переключать; свайп должен быть осознанным).
+                        val threshold = size.width * 0.08f
+                        when {
+                            totalDelta < -threshold -> goToNext()
+                            totalDelta > threshold -> goToPrev()
+                        }
+                    },
+                )
+            }
             .pointerInput(groupIndex, storyIndex) {
                 detectTapGestures(
                     onTap = { offset ->
@@ -470,18 +493,20 @@ fun StoryViewerScreen(
                         val origY = offset.y * scaleY
 
                         fun fallbackPaging() {
-                            if (offset.x < screenWidth / 3f) {
-                                goToPrev()
-                            } else {
-                                goToNext()
-                            }
+                            // P0.12: тап больше НЕ переключает историю (только свайп).
+                            // Fallback для стикеров с невалидным target — no-op,
+                            // чтобы случайный тап по пустому фону не уводил с истории.
                         }
 
                         fun handleNoStickerTap() {
+                            // P0.12: тап без стикера — только центр для clip/photos.
+                            // Paging убран (теперь через свайп). Если тап пришёлся в
+                            // левую/правую треть — no-op (пользователь хотел свайп, но
+                            // палец не сдвинулся — считаем это «не жест»).
                             val third = screenWidth / 3f
                             when {
-                                offset.x < third -> goToPrev()
-                                offset.x > 2f * third -> goToNext()
+                                offset.x < third -> Unit  // no-op (раньше goToPrev)
+                                offset.x > 2f * third -> Unit  // no-op (раньше goToNext)
                                 else -> {
                                     // Тап в ЦЕНТР без покрывающих стикеров.
                                     if (isClipStory) {
@@ -489,7 +514,8 @@ fun StoryViewerScreen(
                                     } else if (currentStory.type == "photo") {
                                         onOpenAuthorPhotos(currentStory.ownerId)
                                     } else {
-                                        // Неизвестный тип — сохраняем прежнее поведение.
+                                        // Неизвестный тип — сохраняем прежнее поведение:
+                                        // тап в центр → goToNext (был до P0.12).
                                         goToNext()
                                     }
                                 }
