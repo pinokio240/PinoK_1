@@ -2374,6 +2374,29 @@ composable(Screen.CallsHistory.route) {
                                 .makeText(context, "Фото автора (скоро)", android.widget.Toast.LENGTH_SHORT)
                                 .show()
                         },
+                        // P0.14 (Task 25): overlay-ссылка «Видео автора». Screen.Video —
+                        // глобальный раздел без ownerId (как Screen.Photos), поэтому
+                        // Toast-плейсхолдер (симметрично onOpenAuthorPhotos выше).
+                        // TODO: добавить Screen.VideosOwner("videos_owner/{ownerId}")
+                        // когда потребуется полный экран «Видео автора».
+                        onOpenAuthorVideos = { _ ->
+                            android.widget.Toast
+                                .makeText(context, "Видео автора (скоро)", android.widget.Toast.LENGTH_SHORT)
+                                .show()
+                        },
+                        // P0.15 (Task 25): тап по шапке (аватар + имя автора) → стена автора.
+                        // ownerId > 0 → UserProfile (user_profile/{userId}).
+                        // ownerId < 0 → Community (community/{groupId}); groupId = abs(ownerId).
+                        // route-параметр Screen.Community — положительный id (без знака).
+                        onOpenAuthorProfile = { ownerId ->
+                            if (ownerId > 0L) {
+                                nav.navigate(Screen.UserProfile.buildRoute(ownerId))
+                            } else if (ownerId < 0L) {
+                                val groupId = -ownerId
+                                nav.navigate(Screen.Community.buildRoute(groupId))
+                            }
+                            // ownerId == 0 — no-op (некорректный owner, не должно случаться).
+                        },
                         // B5 (reply-author): ответ на сторис = DM автору. peerId = ownerId
                         // (у групп owner_id уже отрицательный = peer_id сообщений; у юзера
                         // owner_id положительный = user_id). Открываем диалог ChatDetail.

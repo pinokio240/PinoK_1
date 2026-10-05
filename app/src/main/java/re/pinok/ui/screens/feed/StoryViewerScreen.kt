@@ -11,17 +11,22 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.rememberScrollState
 // Fix #140 (2026-08-03): navigationBarsPadding — нижние оверлеи не перекрываются
 // navigation bar в edge-to-edge.
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -34,14 +39,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
@@ -59,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -77,9 +89,12 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.widget.Toast
 import re.pinok.data.model.DownloadState
 import re.pinok.data.model.DownloadStatus
 import re.pinok.data.model.PhotoSizes
+import re.pinok.data.model.StickerItem
+import re.pinok.data.model.StickerPack
 import re.pinok.data.model.Story
 import re.pinok.data.model.StoryGroup
 import re.pinok.SovaApp
@@ -110,6 +125,11 @@ fun StoryViewerScreen(
     onOpenAuthorClips: (Long) -> Unit = {},    // ownerId клип-стикера/сторис
     onOpenPost: (Long, Long) -> Unit = { _, _ -> },     // ownerId, postId
     onOpenAuthorPhotos: (Long) -> Unit = {},   // ownerId сторис/фото
+    // P0.14 (Task 25): overlay-ссылка «Видео автора» из paused-overlay.
+    onOpenAuthorVideos: (Long) -> Unit = {},
+    // P0.15 (Task 25): тап по шапке (аватар + имя) → стена автора.
+    //   ownerId > 0 → UserProfile; ownerId < 0 → Community (abs(ownerId)).
+    onOpenAuthorProfile: (Long) -> Unit = {},
     // B5 (reply-author): открыть диалог (DM) с автором истории. peerId = ownerId
     // (группы уже задаются отрицательным owner_id — это же значение peer_id для
     // messages API; у VK web ответ на сторис — это именно DM автору, а не публичный
@@ -137,6 +157,17 @@ fun StoryViewerScreen(
     val composingForTap by rememberUpdatedState(isComposing)
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // P0.14 (Task 25): ручная пауза — тап по центру экрана без стикера toggles
+    // pause. Отдельно от isComposing (набор ответа). Когда isPaused=true,
+    // показывается StoryPausedOverlay со ссылками (Профиль/Клипы/Фото/Видео/Пост).
+    var isPaused by remember { mutableStateOf(false) }
+
+    // P0.16 (Task 25): состояние стикер-пикера (полная интеграция VK store.getStickerPacks).
+    var showStickerPicker by remember { mutableStateOf(false) }
+    var stickerPacks by remember { mutableStateOf<List<StickerPack>>(emptyList()) }
+    var stickerLoading by remember { mutableStateOf(false) }
+    var selectedStickerPack by remember { mutableIntStateOf(0) }
+
     val scope = rememberCoroutineScope()
     var timerJob by remember { mutableStateOf<Job?>(null) }
 
@@ -148,6 +179,26 @@ fun StoryViewerScreen(
         if (prev != null) {
             prev.cancel()
             timerJob = null
+        }
+    }
+
+    // P0.13 (Task 25): логика «после завершения анимации → следующая история».
+    // Вынесена в отдельную функцию, чтобы переиспользовать между startTimer
+    // (с 0) и resumeTimer (с текущего progress). Раньше этот блок дублировался.
+    fun advanceToNext() {
+        val g = groups.getOrNull(groupIndex)
+        if (g == null) { onBack(); return }
+        if (storyIndex < g.stories.size - 1) {
+            storyIndex++
+            progress = 0f
+            startTimer()
+        } else if (groupIndex < groups.size - 1) {
+            groupIndex++
+            storyIndex = 0
+            progress = 0f
+            startTimer()
+        } else {
+            onBack()
         }
     }
 
@@ -170,20 +221,42 @@ fun StoryViewerScreen(
                 progress = value
             }
             // Таймер истёк → следующая история.
-            val g = groups.getOrNull(groupIndex)
-            if (g == null) { onBack(); return@launch }
-            if (storyIndex < g.stories.size - 1) {
-                storyIndex++
-                progress = 0f
-                startTimer()
-            } else if (groupIndex < groups.size - 1) {
-                groupIndex++
-                storyIndex = 0
-                progress = 0f
-                startTimer()
-            } else {
-                onBack()
+            advanceToNext()
+        }
+    }
+
+    // P0.13 (Task 25): возобновление таймера с текущего progress (НЕ с 0).
+    // Вызывается когда isComposing/isPaused стали false — анимация продолжается
+    // с того же progress, на котором остановилась. Время оставшейся анимации
+    // пропорционально (1 - progress) * storyDuration.
+    fun resumeTimer() {
+        cancelTimer()
+        // Для видео-историй таймер не нужен — паузу/возобновление обрабатывает
+        // ExoPlayer (см. LaunchedEffect(isComposing, isPaused) ниже).
+        val g0 = groups.getOrNull(groupIndex) ?: return
+        val s0 = g0.stories.getOrNull(storyIndex) ?: return
+        val v0 = s0.video
+        if (v0 != null && (!v0.files.isNullOrEmpty() || !v0.player.isNullOrBlank())) {
+            return
+        }
+        // Если прогресс уже 1f (история закончилась, но pause не сбросил progress),
+        // просто переходим к следующей.
+        if (progress >= 1f) {
+            advanceToNext()
+            return
+        }
+        timerJob = scope.launch {
+            val startProgress = progress
+            val anim = Animatable(startProgress)
+            val remainingMs = ((1f - startProgress) * storyDuration)
+                .toInt().coerceAtLeast(1)
+            anim.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(remainingMs, easing = LinearEasing),
+            ) {
+                progress = value
             }
+            advanceToNext()
         }
     }
 
@@ -217,8 +290,11 @@ fun StoryViewerScreen(
     }
 
     // Запуск таймера при смене истории.
+    // P0.14 (Task 25): при смене истории сбрасываем ручную паузу — каждая новая
+    // история должна играться с начала (без унаследованного pause от предыдущей).
     LaunchedEffect(groupIndex, storyIndex) {
         progress = 0f
+        isPaused = false
         startTimer()
     }
 
@@ -414,6 +490,25 @@ fun StoryViewerScreen(
         }
     }
 
+    // P0.13 + P0.17 (Task 25): пауза/возобновление и tween-таймера, и ExoPlayer.
+    // Когда isComposing (набор ответа) или isPaused (ручная пауза) — отменяем
+    // tween-таймер (progress сохраняется, НЕ сбрасывается в 0) и ставим ExoPlayer
+    // на паузу. Когда оба флага false — для фото-историй возобновляем таймер с
+    // текущего progress (resumeTimer), для видео-историй — player.play().
+    // safe-call `exoPlayer?.` — для фото-историй player == null (no-op).
+    LaunchedEffect(isComposing, isPaused, exoPlayer, isVideoStory) {
+        if (isComposing || isPaused) {
+            cancelTimer()
+            exoPlayer?.pause()
+        } else {
+            if (isVideoStory) {
+                exoPlayer?.play()
+            } else {
+                resumeTimer()
+            }
+        }
+    }
+
     // Для видео-историй синхронизируем progress-bar с позицией воспроизведения.
     // Капаем на 30 секунд max — на случай, если duration неизвестен или видео зависло.
     LaunchedEffect(exoPlayer, isVideoStory) {
@@ -443,6 +538,67 @@ fun StoryViewerScreen(
     // Используется для тапа в центр без стикеров (переход в клипы автора).
     val isClipStory = currentStory.type == "clip" ||
         currentStory.stickers.any { it.type == "clip" && it.style == "fullview" }
+
+    // P0.16 (Task 25): загрузка стикер-паков (mirror ChatDetailScreen:1183-1216).
+    // Купленные (filters=purchased) + каталог (featured — обычно пустой: VK web-токен
+    // возвращает err=100, см. storeGetStickerCatalog). Кэш в stickerPacks: повторные
+    // открытия пикера — no-op. scope.launch корутинный — UI не блокируется.
+    fun loadStickers() {
+        if (stickerPacks.isNotEmpty() || stickerLoading) return
+        stickerLoading = true
+        scope.launch {
+            try {
+                val purchased = app.apiClient.storeGetStickerPacks()
+                val purchasedIds = purchased.map { it.id }.toHashSet()
+                val catalog = app.apiClient.storeGetStickerCatalog()
+                val unpurchased = catalog.filter { it.id !in purchasedIds }
+                stickerPacks = purchased + unpurchased
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("StoryViewer", "loadStickers failed: ${e.message}")
+            } finally {
+                stickerLoading = false
+            }
+        }
+    }
+
+    // P0.16 (Task 25): отправка стикера через messagesSendSticker (peerId=ownerId).
+    // mirror ChatDetailScreen:1218-1270. purchased=false → Toast «не куплен», без
+    // отправки. Иначе messagesSendSticker(fallbackImageUrl=displayUrl) — VKApiClient
+    // сам перехватит err=100 "not available" и отправит как картинку (Fix #223).
+    // Toast «Стикер отправлен» + закрытие пикера после успешной отправки.
+    fun sendSticker(stickerId: Int, peerId: Long, packs: List<StickerPack>) {
+        var foundPack: StickerPack? = null
+        var foundSticker: StickerItem? = null
+        for (pack in packs) {
+            val s = pack.stickers?.firstOrNull { it.stickerId == stickerId }
+            if (s != null) { foundPack = pack; foundSticker = s; break }
+        }
+        val isPurchased = foundPack?.purchased != false
+        val fallbackUrl = foundSticker?.displayUrl
+        if (!isPurchased) {
+            Toast.makeText(context, "Стикер-пак не куплен", Toast.LENGTH_SHORT).show()
+            return
+        }
+        showStickerPicker = false
+        scope.launch {
+            try {
+                val msgId = app.apiClient.messagesSendSticker(
+                    peerId, stickerId, fallbackImageUrl = fallbackUrl,
+                )
+                if (msgId > 0) {
+                    Toast.makeText(context, "Стикер отправлен", Toast.LENGTH_SHORT).show()
+                } else {
+                    AppLog.w("StoryViewer", "sendSticker failed (msgId=$msgId) for stickerId=$stickerId")
+                    Toast.makeText(context, "Не удалось отправить стикер", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                AppLog.w("StoryViewer", "sendSticker exception: ${e.message}")
+                Toast.makeText(context, "Не удалось отправить стикер", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -499,25 +655,21 @@ fun StoryViewerScreen(
                         }
 
                         fun handleNoStickerTap() {
-                            // P0.12: тап без стикера — только центр для clip/photos.
-                            // Paging убран (теперь через свайп). Если тап пришёлся в
-                            // левую/правую треть — no-op (пользователь хотел свайп, но
-                            // палец не сдвинулся — считаем это «не жест»).
+                            // P0.14 (Task 25): тап в центр без стикера → toggle ручной
+                            // паузы. Раньше (P0.12) тап в центр сразу открывал клипы/фото
+                            // автора — это слишком агрессивно (промахнулся → ушёл с истории).
+                            // Теперь тап в центр = пауза + overlay со ссылками (Профиль/Клипы/
+                            // Фото/Видео/Пост). Пользователь сам решает, куда перейти.
+                            // Левая/правая треть — no-op (пользователь хотел свайп, но палец
+                            // не сдвинулся — считаем это «не жест»).
                             val third = screenWidth / 3f
                             when {
                                 offset.x < third -> Unit  // no-op (раньше goToPrev)
                                 offset.x > 2f * third -> Unit  // no-op (раньше goToNext)
                                 else -> {
-                                    // Тап в ЦЕНТР без покрывающих стикеров.
-                                    if (isClipStory) {
-                                        onOpenAuthorClips(currentStory.ownerId)
-                                    } else if (currentStory.type == "photo") {
-                                        onOpenAuthorPhotos(currentStory.ownerId)
-                                    } else {
-                                        // Неизвестный тип — сохраняем прежнее поведение:
-                                        // тап в центр → goToNext (был до P0.12).
-                                        goToNext()
-                                    }
+                                    // Тап в центр → toggle паузы. LaunchedEffect(isPaused)
+                                    // сам отменит/возобновит таймер и ExoPlayer.
+                                    isPaused = !isPaused
                                 }
                             }
                         }
@@ -611,9 +763,14 @@ fun StoryViewerScreen(
         )
 
         // --- Header (vkitStoriesViewerHeader) ---
+        // P0.15 (Task 25): тап по аватару/имени → стена автора. ownerId>0 →
+        // UserProfile; ownerId<0 → Community (abs(ownerId)). Закрывающая кнопка
+        // (IconButton) — отдельный child clickable, перехватывает свой тап, поэтому
+        // тап по «крестику» НЕ открывает профиль (родительский clickable не срабатывает).
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable { onOpenAuthorProfile(currentGroup.ownerId) }
                 .padding(horizontal = 12.dp, vertical = 4.dp)
                 .statusBarsPadding(),
             verticalAlignment = Alignment.CenterVertically,
@@ -773,8 +930,51 @@ fun StoryViewerScreen(
                         val photo = currentGroup.photo100
                         onReplyToAuthor(currentGroup.ownerId, title, photo)
                     },
+                    // P0.16 (Task 25): кнопка стикеров в поле ответа. loadStickers
+                    // кэширует packs (повторные клики — no-op), showStickerPicker=true
+                    // открывает StickerPickerSheet (ModalBottomSheet) поверх истории.
+                    onOpenStickerPicker = {
+                        loadStickers()
+                        showStickerPicker = true
+                    },
                 )
             }
+        }
+
+        // P0.14 (Task 25): StoryPausedOverlay — показывается когда isPaused && !isComposing.
+        // Полупрозрачный круг с иконкой Pause + вертикальная колонка ссылок-чипов
+        // (Профиль/Клипы/Фото/Видео/Пост). Тап по любой ссылке открывает соответствующий
+        // экран. clickable каждого чипа перехватывает тап у родительского detectTapGestures,
+        // поэтому тап по ссылке НЕ toggles паузу обратно.
+        if (isPaused && !isComposing) {
+            StoryPausedOverlay(
+                story = currentStory,
+                group = currentGroup,
+                onOpenAuthorProfile = onOpenAuthorProfile,
+                onOpenAuthorClips = onOpenAuthorClips,
+                onOpenAuthorPhotos = onOpenAuthorPhotos,
+                onOpenAuthorVideos = onOpenAuthorVideos,
+                onOpenPost = onOpenPost,
+                onResume = { isPaused = false },
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+
+        // P0.16 (Task 25): стикер-пикер поверх истории (ModalBottomSheet).
+        // Загружается через VK store.getProducts (purchased + catalog). Тап по
+        // купленному стикеру → messagesSendSticker(ownerId, ...) → Toast → закрытие.
+        // Locked-стикеры (purchased=false) — Toast «не куплен», без закрытия.
+        if (showStickerPicker) {
+            StickerPickerSheet(
+                packs = stickerPacks,
+                loading = stickerLoading,
+                selectedPack = selectedStickerPack,
+                onSelectPack = { selectedStickerPack = it },
+                onStickerClick = { stickerId ->
+                    sendSticker(stickerId, currentGroup.ownerId, stickerPacks)
+                },
+                onDismiss = { showStickerPicker = false },
+            )
         }
     }
 }
@@ -960,6 +1160,10 @@ private fun StoryReplyField(
     focused: Boolean,
     onFocusChange: (Boolean) -> Unit,
     onSubmit: () -> Unit,
+    // P0.16 (Task 25): кнопка-стикер (EmojiEmotions) внутри поля ответа. Тап →
+    // открывает StickerPickerSheet (ModalBottomSheet). leadingIcon Material3 —
+    // иконка внутри OutlinedTextField слева от текста.
+    onOpenStickerPicker: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -991,6 +1195,18 @@ private fun StoryReplyField(
             ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { onSubmit() }),
+            // P0.16 (Task 25): leadingIcon — кнопка стикеров. IconButton перехватывает
+            // тап у родительского detectTapGestures (clickable внутри IconButton), поэтому
+            // тап по стикер-кнопке НЕ toggles паузу истории и НЕ переключает на следующую.
+            leadingIcon = {
+                IconButton(onClick = onOpenStickerPicker) {
+                    Icon(
+                        imageVector = Icons.Filled.EmojiEmotions,
+                        contentDescription = "Стикеры",
+                        tint = Color.White.copy(alpha = 0.85f),
+                    )
+                }
+            },
         )
         Spacer(modifier = Modifier.width(6.dp))
         IconButton(
@@ -1044,6 +1260,326 @@ private fun pointInPolygon(x: Float, y: Float, area: List<Story.StoryClickableAr
         j = i
     }
     return inside
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// P0.14 (Task 25): StoryPausedOverlay
+// ═══════════════════════════════════════════════════════════════════
+// Overlay показывается когда история на паузе (тап в центр) И пользователь
+// НЕ набирает ответ. В центре — полупрозрачный круг с иконкой Pause, под ним —
+// вертикальная колонка чипов-ссылок: Профиль/Клипы/Фото/Видео/Пост автора.
+// Пользователь сам выбирает, куда перейти (раньше тап в центр сразу открывал
+// клипы/фото — это было слишком агрессивно: промахнулся → ушёл с истории).
+//
+// Тап по любой ссылке — отдельный child clickable, перехватывает тап у
+// родительского detectTapGestures → НЕ toggles паузу обратно. Ссылка открывает
+// соответствующий экран; история остаётся на паузе (после возврата пользователь
+// продолжит с того же прогресса — LaunchedEffect(isPaused) сам возобновит
+// таймер/ExoPlayer когда пауза снимется).
+//
+// Ссылки показываются ВСЕГДА (пользователь одобрил «всегда показывать ссылки»):
+// пусть пользователь сам решает, куда перейти. Раньше скрывали «Клипы» для
+// не-clip-стикер-историй, но это путало — ссылка есть только у clip-историй.
+// Теперь: Профиль — всегда; Клипы — всегда; Фото — всегда; Видео — всегда;
+// Пост — только если в story.stickers есть type="post".
+@Composable
+private fun StoryPausedOverlay(
+    story: Story,
+    group: StoryGroup,
+    onOpenAuthorProfile: (Long) -> Unit,
+    onOpenAuthorClips: (Long) -> Unit,
+    onOpenAuthorPhotos: (Long) -> Unit,
+    onOpenAuthorVideos: (Long) -> Unit,
+    onOpenPost: (Long, Long) -> Unit,
+    onResume: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Тёмный полупрозрачный фон затемняет сам story-кадр, чтобы overlay был
+        // визуально отделён. clickable на фоне — тап по пустой области = resume.
+        // ВАЖНО: clickable НЕ здесь — иначе тап по чипам тоже закроет overlay
+        // (child clickables всё равно перехватывают, но лишняя область ripple
+        // некрасива). Фон НЕ кликабельный; resume только через чип «Продолжить»
+        // или повторный тап в центр (через родительский detectTapGestures).
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f)),
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Иконка Pause в круге.
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Pause,
+                    contentDescription = "Пауза",
+                    tint = Color.White,
+                    modifier = Modifier.size(36.dp),
+                )
+            }
+            // Ссылки-чипы.
+            StoryOverlayChip(text = "Профиль автора") {
+                onOpenAuthorProfile(group.ownerId)
+            }
+            StoryOverlayChip(text = "Клипы автора") {
+                onOpenAuthorClips(story.ownerId)
+            }
+            StoryOverlayChip(text = "Фото автора") {
+                onOpenAuthorPhotos(story.ownerId)
+            }
+            StoryOverlayChip(text = "Видео автора") {
+                onOpenAuthorVideos(story.ownerId)
+            }
+            // Пост — только если в story.stickers есть type="post".
+            val postSticker = story.stickers.firstOrNull { it.type == "post" }
+            if (postSticker != null) {
+                val pid = postSticker.postId ?: 0L
+                val oid = postSticker.postOwnerId ?: 0L
+                if (pid > 0L && oid != 0L) {
+                    StoryOverlayChip(text = "Пост автора") {
+                        onOpenPost(oid, pid)
+                    }
+                }
+            }
+            StoryOverlayChip(text = "Продолжить", primary = true, onClick = onResume)
+        }
+    }
+}
+
+// Чип-ссылка для StoryPausedOverlay. Полупрозрачный фон, белый текст, ripple.
+// clickable (не pointerInput) — даёт accessibility + перехватывает тап у
+// родительского detectTapGestures.
+@Composable
+private fun StoryOverlayChip(
+    text: String,
+    primary: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val bg = if (primary) Color.White.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f)
+    val fg = if (primary) Color.Black else Color.White
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = fg,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// P0.16 (Task 25): StickerPickerSheet
+// ═══════════════════════════════════════════════════════════════════
+// ModalBottomSheet для выбора стикера. Образец: ChatDetailScreen:9626-9851
+// (EmojiStickerPanel). Здесь — упрощённая версия: только стикеры (без эмодзи-таб),
+// pack-tabs сверху (горизонтальный скролл) + сетка стикеров 5 колонок.
+// Locked-стикеры (purchased=false) — затемнённые + 🔒, тап → Toast «не куплен».
+// Купленные — тап → onStickerClick(stickerId). ModalBottomSheet сам закроется
+// колбэком onDismiss (вызывается в sendSticker после успешной отправки).
+@Composable
+private fun StickerPickerSheet(
+    packs: List<StickerPack>,
+    loading: Boolean,
+    selectedPack: Int,
+    onSelectPack: (Int) -> Unit,
+    onStickerClick: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(360.dp),
+        ) {
+            // Шапка: заголовок + «Закрыть».
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Стикеры",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Закрыть") }
+            }
+            // Pack-tabs (горизонтальный скролл). Иконка пака или первая буква title.
+            if (packs.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    packs.forEachIndexed { idx, pack ->
+                        val iconUrl = pack.icon?.url
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    if (idx == selectedPack)
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    else Color.Transparent
+                                )
+                                .clickable { onSelectPack(idx) }
+                                .padding(4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (iconUrl != null) {
+                                AsyncImage(
+                                    model = iconUrl,
+                                    contentDescription = pack.title,
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            } else {
+                                Text(
+                                    text = pack.title.take(1),
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            // Сетка стикеров (5 колонок) или Loading/Empty.
+            val currentStickers = packs.getOrNull(selectedPack)?.stickers ?: emptyList()
+            when {
+                loading -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 2.5.dp,
+                        )
+                    }
+                }
+                currentStickers.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Нет стикеров",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                else -> {
+                    val currentPack = packs.getOrNull(selectedPack)
+                    val isPurchased = currentPack?.purchased != false
+                    val isActive = currentPack?.active != false
+                    LazyVerticalGrid(
+                        columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(5),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        gridItems(currentStickers, key = { it.stickerId }) { sticker ->
+                            val url = sticker.displayUrl
+                            // Fix #229: animatedDisplayUrl фильтрует .json/.tgs (Lottie),
+                            // которые Coil не умеет декодировать — fallback на статичный url.
+                            val renderUrl = sticker.animatedDisplayUrl ?: url
+                            val dimAlpha = when {
+                                !isPurchased -> 0.4f
+                                !isActive -> 0.55f
+                                else -> 1f
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onStickerClick(sticker.stickerId) }
+                                    .padding(4.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (renderUrl != null) {
+                                    AsyncImage(
+                                        model = renderUrl,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .graphicsLayer(alpha = dimAlpha),
+                                    )
+                                }
+                                // Бейдж ▶ для анимированных стикеров (видно, что
+                                // стикер заиграет в чате).
+                                if (sticker.isAnimated && isPurchased && isActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .background(
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                                shape = RoundedCornerShape(50),
+                                            )
+                                            .padding(2.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.PlayArrow,
+                                            contentDescription = "Анимированный стикер",
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.size(12.dp),
+                                        )
+                                    }
+                                }
+                                // 🔒 для не купленных, 📷 для деактивированных.
+                                if (!isPurchased || !isActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .background(
+                                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                                shape = RoundedCornerShape(4.dp),
+                                            )
+                                            .padding(horizontal = 3.dp, vertical = 1.dp),
+                                    ) {
+                                        Text(
+                                            text = if (!isPurchased) "🔒" else "📷",
+                                            fontSize = 9.sp,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** In-memory holder для передачи данных в StoryViewerScreen (аналог PostHolder). */
