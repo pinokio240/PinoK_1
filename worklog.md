@@ -12585,3 +12585,48 @@ Task: paging между историями свайпом, не тапом по 
 
 Файл (1, +34/−8): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
 Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 25 (STORIES-UX-P0.13-17-2026-10-05)
+Agent: orchestrator (main) + 1 general-purpose subagent
+Task: 5 фич stories UX — пауза при композинге, тап=пауза+overlay, тап по имени автора → стена, полная интеграция стикеров.
+
+## Контекст
+Пользователь попросил 5 фич для StoryViewerScreen (после P0.12 swipe paging):
+1. Пауза времени перехода к следующей истории при вводе комментария.
+2. Тап по истории = пауза + значок паузы + контекстные ссылки (Клипы/Фото/Пост/подобное).
+3. Тап по имени пользователя → его стена.
+4. Кнопка вызова стикеров (без конфликта с паузой).
+Уточнения пользователя: (1) одобрено — всегда показывать ссылки; (2) P0.16 — «никаких компромиссов, полная реализация»; (3) проверить — если имя сообщества → Community, если профиля → UserProfile.
+
+## Work Log
+// P0.13 — cancelTimer()/resumeTimer(). resumeTimer: Animatable(progress) + tween((1-progress)*storyDuration). advanceToNext() вынесен в shared функцию. Прогресс НЕ сбрасывается в 0 при паузе.
+// P0.17 — единый LaunchedEffect(isComposing, isPaused, exoPlayer, isVideoStory): isComposing||isPaused → cancelTimer + exoPlayer?.pause(); иначе → exoPlayer?.play() (video) или resumeTimer() (photo). Safe-call для photo-историй.
+// P0.14 — isPaused state. handleNoStickerTap() = isPaused = !isPaused. StoryPausedOverlay composable: Pause icon + Column чипов (Профиль/Клипы/Фото/Видео/Пост/Продолжить). Ссылки ВСЕГДА (вариант 1). Стикеры-хитбоксы не тронуты.
+// P0.15 — Row шапки clickable → onOpenAuthorProfile(currentGroup.ownerId). SovaNavHost: ownerId>0 → Screen.UserProfile.buildRoute(ownerId); ownerId<0 → Screen.Community.buildRoute(-ownerId).
+// P0.16 — полная интеграция стикеров. State: showStickerPicker/stickerPacks/stickerLoading/selectedStickerPack. loadStickers() (mirror ChatDetailScreen:1184) — storeGetStickerPacks() + storeGetStickerCatalog(). sendSticker() — messagesSendSticker(peerId, stickerId, fallbackImageUrl). Кнопка Icons.Filled.EmojiEmotions в OutlinedTextField leadingIcon. StickerPickerSheet: ModalBottomSheet + pack-tabs + LazyVerticalGrid 5 cols + бейджи ▶/🔒/📷.
+// SovaNavHost: добавлены onOpenAuthorProfile и onOpenAuthorVideos (Toast-плейсхолдер — TODO реальный Video screen с ownerId filter).
+// Коммит c41d8f9, push прошёл: 7f9f4e3..c41d8f9 PinoK -> PinoK.
+
+## Проверки
+// git diff --stat: 2 файла, +586/−27.
+// ПРОВЕРКА новых KDoc: 0 новых /** ... */ (grep по added-строкам → пусто). Все новые комментарии — line-comments //.
+// ПРОВЕРКА ключевых элементов: isPaused (163), advanceToNext (188), resumeTimer (232), StoryPausedOverlay, StickerPickerSheet, EmojiEmotions import (42), onOpenAuthorProfile (SovaNavHost:2391), onOpenAuthorVideos (SovaNavHost:2382).
+// Баланс скобок: StoryViewerScreen.kt и SovaNavHost.kt — braces/parens/brackets delta=0 (по функциям проверено).
+
+## Stage Summary
+ВЫПОЛНЕНО (5 задач):
+// P0.13: pause при композинге + resumeTimer с продолжением от progress.
+// P0.14: тап = пауза + StoryPausedOverlay с чипами (Профиль/Клипы/Фото/Видео/Пост/Продолжить).
+// P0.15: тап по имени автора → Community (ownerId<0) / UserProfile (ownerId>0).
+// P0.16: полная интеграция стикеров — loadStickers (storeGetStickerPacks+Catalog), StickerPickerSheet (ModalBottomSheet+pack-tabs+grid), sendSticker (messagesSendSticker). Кнопка EmojiEmotions в leadingIcon — не конфликтует с паузой.
+// P0.17: видео-пауза через ExoPlayer (единый LaunchedEffect с isComposing/isPaused).
+
+НЕ СДЕЛАНО (TODO, не блокер):
+// onOpenAuthorVideos — Toast-плейсхолдер. Реальный Video screen с ownerId filter — backlog (нужно проверить есть ли Screen.Video с параметром ownerId, или создавать новый route).
+
+Файлы (2, +586/−27):
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+590/−27)
+// app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt (+23, new callbacks)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
