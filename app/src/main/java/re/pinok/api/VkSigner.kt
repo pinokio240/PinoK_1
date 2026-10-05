@@ -43,6 +43,25 @@ object VkSigner {
      * (см. [sign]). Оставлено как reference.
      */
     const val APP_ID: Int = 2274003
+    // P4.3 #RISK-DOC (2026-10): VK_CLIENT_SECRET — полу-публичный (извлекается
+    // из манифеста VK APK декомпиляцией; опубликован во многих VK-модах).
+    // Риски публикации в открытом репо:
+    //   1. VK может заблокировать client_id=2274003 при злоупотреблении
+    //      (массовый спам/злоупотребление sig-методами с одного client_id).
+    //      Блокировка client_id сломает sig= для всех пользователей мода.
+    //   2. Имперсонификация: любой может использовать client_id+secret для
+    //      oauth.vk.com/access_token запросов от имени "VK Android app".
+    //   3. Rate-limit: VK может ввести более жёсткий rate-limit для
+    //      client_id=2274003 при подозрительной активности.
+    // НО: secret НЕ используется для подписи пользовательских API-запросов
+    // (для sig нужен user_secret из AuthResult, возвращается только при
+    // Direct Auth grant_type=password). APP_SECRET используется ТОЛЬКО
+    // сервером VK при token exchange. Утечка secret не даёт прямого доступа
+    // к пользовательским данным — только возможность имперсонифицировать
+    // VK Android app при token exchange.
+    // Сознательный выбор мода — оставлено как есть. Если VK заблокирует
+    // client_id — миграция на новый client_id (выданный VK для мода) или
+    // полноценный OAuth WebView flow (без sig, без secret).
     const val APP_SECRET: String = "hHbZxrka2uZ6jB1inYsH"
 
     /**

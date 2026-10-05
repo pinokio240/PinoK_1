@@ -8,9 +8,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import re.pinok.R
 import re.pinok.ui.MainActivity
 import re.pinok.util.AppLog
@@ -65,12 +67,25 @@ class ClipDownloadService : Service() {
         // бросить ForegroundServiceStartNotAllowedException при bg-start. Без
         // catch сервис крашится (зеркалируем StoryVideoDownloadService).
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(0, 0))
+            startForegroundCompat(NOTIFICATION_ID, buildNotification(0, 0))
         } catch (e: Exception) {
             AppLog.e(TAG, "startForeground() failed: ${e.javaClass.simpleName}: ${e.message}", e)
             stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    // P4.1b: ServiceCompat.startForeground с указанием foregroundServiceType.
+    // 2-arg startForeground(id, notif) deprecated на Android 14+ для сервисов с
+    // foregroundServiceType в манифесте. У нас dataSync (AndroidManifest.xml:426).
+    // ServiceCompat сам диспатчит: API 34+ → Service.startForeground(id, notif, type);
+    // API 29-33 → 3-arg с type=0; API < 29 → 2-arg (type игнорируется).
+    // minSdk=24 — условная обёртка if(SDK_INT>=Q) не нужна.
+    private fun startForegroundCompat(id: Int, notification: Notification) {
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        } else 0
+        ServiceCompat.startForeground(this, id, notification, type)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
