@@ -1412,15 +1412,19 @@ private fun StoryPausedOverlay(
         contentAlignment = Alignment.Center,
     ) {
         // Тёмный полупрозрачный фон затемняет сам story-кадр, чтобы overlay был
-        // визуально отделён. clickable на фоне — тап по пустой области = resume.
-        // ВАЖНО: clickable НЕ здесь — иначе тап по чипам тоже закроет overlay
-        // (child clickables всё равно перехватывают, но лишняя область ripple
-        // некрасива). Фон НЕ кликабельный; resume только через чип «Продолжить»
-        // или повторный тап в центр (через родительский detectTapGestures).
+        // визуально отделён.
+        // P0.14 (Task 28 fix): фон clickable → consume тапа, чтобы он НЕ проходил
+        // сквозь к родительскому detectTapGestures. Раньше тап по фону overlay
+        // (мимо чипов) доходил до родительского onTap → handleNoStickerTap() →
+        // isPaused = !isPaused (снимал паузу). Или хуже — если overlay накрыл
+        // стикер-хитбокс, тап по фону мог попасть в стикер и сразу открыть
+        // сообщество/клипы/пост без явного выбора пользователя.
+        // Теперь: тап по фону = resume (как чип «Продолжить»).
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.35f)),
+                .background(Color.Black.copy(alpha = 0.35f))
+                .clickable { onResume() },
         )
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
