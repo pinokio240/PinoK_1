@@ -12745,3 +12745,37 @@ Task: починить паузу stories — «не везде работает
 
 Файл (1, +10/−6): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 30 (STORY-OWNER-CONTENT-P0.18-2026-10-05)
+Agent: orchestrator (main)
+Task: доделать Фото/Видео автора — реальная навигация вместо Toast-плейсхолдеров.
+
+## Контекст
+Пользователь: «доделывай до конца». Task 25 оставил onOpenAuthorPhotos/onOpenAuthorVideos как Toast-плейсхолдеры (TODO: реальный экран «Фото автора»/«Видео автора» с ownerId filter). Сейчас доделываю.
+
+## Work Log
+// Screen.kt:137 — Community route 'community/{groupId}' → 'community/{groupId}?tab={tab}' (optional query param, default '0'). Добавлен ARG_TAB const. buildRoute(groupId, tab=0) overload.
+// CommunityScreen.kt:120 — добавлен initialTab: Int = 0 параметр. selectedTab = remember { mutableStateOf(initialTab) } вместо hardcoded 0.
+// SovaNavHost.kt:
+//   - composable(Community.route): navArgument ARG_TAB (StringType, default '0', nullable) → read as Int, coerceIn(0,6) → initialTab передаётся в CommunityScreen.
+//   - onOpenAuthorPhotos: ownerId<0 → nav.navigate(Screen.Community.buildRoute(-ownerId, tab=1)) (Фото tab). ownerId>0 → Toast.
+//   - onOpenAuthorVideos: ownerId<0 → nav.navigate(Screen.Community.buildRoute(-ownerId, tab=2)) (Видео tab). ownerId>0 → Toast.
+// Проверка regression: rawRoute (SovaNavHost:724) = destination.route (pattern). Сравнение 'prev == Screen.Community.route' работает (оба pattern). Существующие callers Screen.Community.buildRoute без tab → default 0 → Записи как раньше. 10 вызовов buildRoute проверены — все работают с default.
+// Коммит 26d6af5, push прошёл: 88ad65e..26d6af5 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Фото автора (ownerId<0) → Community на вкладке Фото (tab=1).
+// Видео автора (ownerId<0) → Community на вкладке Видео (tab=2).
+// Фото/Видео автора (ownerId>0) → Toast (UserProfile без фото/видео экрана с ownerId — backlog, нужна новая Screen.UserPhotos/UserVideos).
+
+НЕ СДЕЛАНО (backlog, не блокер):
+// Screen.UserPhotos / Screen.UserVideos — отдельные экраны для пользователя (ownerId>0) с ownerId filter. Пока Toast. Нужно когда user захочет полный фото/видео-альбом автора из stories.
+
+Файлы (3, +40/−19):
+// app/src/main/java/re/pinok/ui/navigation/Screen.kt (+5)
+// app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt (+5)
+// app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt (+30/−19)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

@@ -14309,3 +14309,14 @@ STORY-PAUSE-FIX-2026-10-05: фон overlay паузы поглощает тап 
 //   - Тап НЕ проходит сквозь к родительскому detectTapGestures.
 // Пауза держится пока пользователь явно не продолжит — нет случайного unpaus'а или навигации.
 // 1 файл, +10/−6. Кодировка UTF-8 без BOM.
+
+STORY-OWNER-CONTENT-P0.18-2026-10-05: Фото/Видео автора — реальная навигация вместо Toast. 3 файла, +40/−19.
+// Пользователь: «доделывай до конца» — onOpenAuthorPhotos/onOpenAuthorVideos были Toast-плейсхолдеры (Task 25 TODO).
+// Screen.kt:137 — Community route изменён с 'community/{groupId}' на 'community/{groupId}?tab={tab}' (optional query param, default '0' = Записи). Добавлен ARG_TAB const. buildRoute(groupId, tab=0) overload — существующие callers без tab работают (default 0 → Записи как раньше).
+// CommunityScreen.kt:120 — добавлен initialTab: Int = 0 параметр. selectedTab = remember { mutableStateOf(initialTab) } вместо hardcoded 0.
+// SovaNavHost.kt:
+//   - composable(Community.route): добавлен navArgument ARG_TAB (StringType, default '0', nullable) → read as Int, coerceIn(0,6) → initialTab.
+//   - onOpenAuthorPhotos: ownerId<0 → Screen.Community.buildRoute(-ownerId, tab=1) (Фото tab). ownerId>0 → Toast (UserProfile не имеет отдельного фото-экрана с ownerId filter — backlog).
+//   - onOpenAuthorVideos: ownerId<0 → Screen.Community.buildRoute(-ownerId, tab=2) (Видео tab). ownerId>0 → Toast (тот же backlog).
+// rawRoute (SovaNavHost:724) = destination.route (pattern с {groupId}{tab}), НЕ actual route — сравнение 'prev == Screen.Community.route' всё ещё работает (оба pattern). Без регрессии.
+// Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
