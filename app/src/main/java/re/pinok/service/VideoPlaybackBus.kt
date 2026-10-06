@@ -119,7 +119,7 @@ object VideoPlaybackBus {
         if (videoKey == key) {
             playerRef?.release()
             playerRef = null
-            videoKey = null
+            videoKey = ""
         }
     }
 
