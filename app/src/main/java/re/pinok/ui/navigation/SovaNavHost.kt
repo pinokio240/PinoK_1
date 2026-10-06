@@ -325,8 +325,13 @@ private object OutgoingCallMeta {
  * #BOTTOM-SCROLL: кастомная кнопка для скроллируемой нижней панели (>5
  * кнопок). НЕ использует [NavigationBarItem] — т.к. в M3 BOM 2025.06
  * NavigationBarItem корректно резолвится только внутри [NavigationBar]
- * content-scope. Для скролл-Row делаем свою кнопку: Column(Icon+Text) с
+ * content-scope. Для скролл-Row делаем свою кнопку: Column(Icon) с
  * selected-state (цвет) и unread-badge для Сообщений.
+ *
+ * P0.23 #BOTTOM-ICON-ONLY (2026-10): убран Text(label) — пользователь хочет
+ * значки разделов БЕЗ текста (как в VK / Instagram). Иконка увеличена до 32dp
+ * (было ~24dp default). Высота кнопки уменьшена с 80dp до 64dp — без текста
+ * меньше места нужно.
  */
 @Composable
 private fun BottomNavScrollButton(
@@ -345,7 +350,7 @@ private fun BottomNavScrollButton(
                else MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         modifier = modifier
-            .height(UiScale.scaled(80.dp))
+            .height(UiScale.scaled(64.dp))
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -357,18 +362,16 @@ private fun BottomNavScrollButton(
                         Badge { Text(if (unreadCount > 99) "99+" else unreadCount.toString()) }
                     },
                 ) {
-                    Icon(navIcon, contentDescription = item.title, tint = tint)
+                    // P0.23: иконка 32dp (было default ~24dp).
+                    Icon(navIcon, contentDescription = item.title, tint = tint,
+                        modifier = Modifier.size(32.dp))
                 }
             } else {
-                Icon(navIcon, contentDescription = item.title, tint = tint)
+                Icon(navIcon, contentDescription = item.title, tint = tint,
+                    modifier = Modifier.size(32.dp))
             }
         }
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.labelSmall,
-            color = tint,
-            maxLines = 1,
-        )
+        // P0.23: убран Text(item.title) — значки без текста.
     }
 }
 
@@ -1476,14 +1479,22 @@ fun SovaNavHost(
                                                                 Badge { Text(if (unreadCount > 99) "99+" else unreadCount.toString()) }
                                                             },
                                                         ) {
-                                                            Icon(navIcon, contentDescription = item.title)
+                                                            // P0.23 #BOTTOM-ICON-ONLY: иконки без текста, крупнее (32dp было ~24dp).
+                                                            Icon(navIcon, contentDescription = item.title,
+                                                                tint = if (currentRoute == itemDest) MaterialTheme.colorScheme.onSurface
+                                                                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                modifier = Modifier.size(32.dp))
                                                         }
                                                     } else {
-                                                        Icon(navIcon, contentDescription = item.title)
+                                                        Icon(navIcon, contentDescription = item.title,
+                                                            tint = if (currentRoute == itemDest) MaterialTheme.colorScheme.onSurface
+                                                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.size(32.dp))
                                                     }
                                                 }
                                             },
-                                            label = { Text(item.title) },
+                                            // P0.23: убран label = { Text(item.title) } —
+                                            // пользователь хочет значки БЕЗ текста (как в VK / Instagram).
                                         )
                                     }
                                 }
