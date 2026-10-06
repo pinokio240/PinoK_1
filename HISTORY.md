@@ -14327,3 +14327,47 @@ STORY-CLIP-PAUSE-FIX-2026-10-05: тап по clip-story теперь стави�
 // Фикс: в поиске tappedSticker добавлен фильтр s.style != "fullview". Fullview-стикеры (clip-истории) НЕ считаются «явным тапом по стикеру» → направляются в handleNoStickerTap → пауза + StoryPausedOverlay с чипом «Клипы автора» (пользователь сам решает перейти). Только явные clip-sticker'ы (не fullview, маленький badge) → мгновенный переход.
 // StorySticker.style поле уже существует (Models.kt:1600, StorySticker data class). Новых полей не нужно.
 // 1 файл, +10/−1. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+DASH-2026-10-06: подключена DASH-поддержка (media3-exoplayer-dash) для видео, где VK отдаёт только .mpd / dash_ondemand / dash_sep (без mp4/hls).
+// ФИЧА. Причина: у части видео (4К, отдельные каналы/клипы) VK web не присылает прогрессивный mp4 или HLS — только DASH-манифесты (dash_ondemand / dash_sep / client.dash_webm). ExoPlayer без dash-модуля такие потоки грузить не мог.
+// gradle/libs.versions.toml:140 — androidx-media3-exoplayer-dash = { group="androidx.media3", name="media3-exoplayer-dash", version.ref="media3" }.
+// app/build.gradle.kts:207 — implementation(libs.androidx.media3.exoplayer.dash).
+// 2 файла. Кодировка UTF-8 без BOM. Gradle НЕ запускался (собирает пользователь).
+
+VIDEO-FIX-400-2026-10-06: чиним HTTP 400 / PARSING_MANIFEST_MALFORMED у видео и клипов VK (Origin vk.ru, mimeFor по ключу files, свежий video.get, HLS/DASH-перебор форматов).
+// ФИКС. Причины (из HAR): (1) CDN кодит по правильному Origin: https://vk.ru и Referer: https://m.vk.ru/ (раньше m.vk.com без Origin — отдавал HTTP 400 или HTML вместо медиа); (2) mp4/hls URL в files подписаны и истекают → HTTP 400; (3) у клипов VK не даёт рабочий прогрессивный mp4 (ProgressiveMediaPeriod → 400), рабочие потоки — dash_webm/hls_fmp4.
+// VideoPlayerScreen.kt:279 — mimeFor(key,url): по КЛЮЧУ files (hls_*/dash_*/dash_webm_av1) подбирает APPLICATION_M3U8/APPLICATION_MPD (URL клипа не содержит m3u8/mpd — всё в query). Используется при старте, switchQuality, switchToHls, DECODING_FAILED/400/malformed fallback.
+// VideoPlayerScreen.kt:313-359 — ADAPTIVE_FALLBACK_KEYS (hls_ondemand→hls→hls_fmp4→dash_sep→dash_webm→dash_webm_av1→dash_ondemand→dash) + firstAdaptiveUrl()/firstAdaptiveEntry()/formatFallbackUrls() (адаптивные затем низкие mp4_144-480, без дублей).
+// VideoPlayerScreen.kt:455 — FRESH-RESOLVE: свежий video.get ОДИН раз на открытие (флаг freshResolveAttempted, ключ `video`) даже когда files пришли — не доверяем подписанным/протухшим URL поста.
+// VideoPlayerScreen.kt:1091/1095 — отдельные ветки onPlayerError для ERROR_CODE_IO_BAD_HTTP_STATUS и ERROR_CODE_PARSING_MANIFEST_MALFORMED: сначала ретрай свежим videoGetById (http400FreshAttempts<1), затем перебор formatFallbackUrls (fallbackAttempt), guard от зацикливания "400→fresh→плеер пересоздан". Сброс обоих счётчиков на STATE_READY.
+// VideoPlayerScreen.kt:1026, StoryViewerScreen.kt:458, VideoPipActivity.kt:337, ClipsFeedScreen.kt:349 — CDN-заголовки Referer: https://m.vk.ru/ + Origin: https://vk.ru (было только Referer m.vk.com).
+// Клипы: qualityOptions для isClip = один пункт «Авто» с реальным ключом (dash_webm_av1…), showQualitySelector для клипа открывается и с 1 пунктом.
+// 4 файла (VideoPlayerScreen.kt ~+330). Кодировка UTF-8 без BOM. Gradle НЕ запускался.
+
+VIDEO-ADS-BLOCK-2026-10-06: блокировка рекламных видео (is_ad / is_promoted) в плеере.
+// ФИЧА. Причина: рекламные ролики VK (is_ad==1 / is_promoted==1) не должны молча воспроизводиться — пользователь просил тушить их.
+// SovaPrefs.kt:354/354 — новый флаг videoBlockAds (ключ video_block_ads, default true) + сеттер setVideoBlockAds + поле Snapshot + Keys.
+// VideoPlayerScreen.kt:808 — adBlocked = videoBlockAds && (resolvedVideo.isAd==1 || isPromoted==1); при true ExoPlayer НЕ создаётся (не грузим медиа).
+// VideoPlayerScreen.kt:807 (UI ~1982) — вместо плеера заглушка «Реклама заблокирована» + кнопка «Закрыть» (onBack).
+// SettingsScreen.kt:2955 — тумблер «Блокировать рекламные видео» в VideoTab. FeedScreen.kt:470 — Snapshot расширен, initial-значение videoBlockAds=true.
+// 4 файла. Кодировка UTF-8 без BOM. Gradle НЕ запускался.
+
+VIDEO-MOBILE-QUALITY-2026-10-06: предел качества видео на мобильной сети (экономия трафика).
+// ФИЧА. Причина: при воспроизведении по мобильной сети (не Wi-Fi/Ethernet) не тратить трафик на максимальное качество.
+// SovaPrefs.kt:345/345 — mobileVideoQualityLimit (ключ mobile_video_quality_limit, default "480") + сеттер + Snapshot + Keys.
+// VideoPlayerScreen.kt:782-795 — isMobileNetwork (app.networkObserver.connectionType(), тот же механизм что VideoPlayerConfig) → effectiveQuality = (mobile и лимит!="auto") ? лимит : videoPreferredQuality. Применяется только к НАЧАЛЬНОМУ выбору (selectIndex); ручное переключение качества пользователем не трогает.
+// SettingsScreen.kt:2938/4265 — новая карточка MobileVideoQualityCard «Качество на мобильной сети» (переиспользует VIDEO_QUALITY_OPTIONS) в VideoTab. FeedScreen.kt:547 — Snapshot расширен, initial "480".
+// 4 файла. Кодировка UTF-8 без BOM. Gradle НЕ запускался.
+
+STORY-REPLY-2026-10-06: поле ответа автору сторис (DM), поддержка ранее начатых сторис-фич.
+// ФИЧА. Причина: ответ на сторис — это DM автору (peer = ownerId), а не публичный комментарий.
+// StoryViewerScreen.kt — поле ответа автору открывается/отправляется (см. также PinoK память: peer_id = ownerId; флаг гейта Story.canReply || Story.canComment).
+// ВХОДИТ в общий пакет правок StoryViewerScreen (см. STORY-PAUSE-EVERYWHERE). Кодировка UTF-8 без BOM.
+
+STORY-PAUSE-EVERYWHERE-2026-10-06: пауза удержанием (long-press) в ЛЮБОМ месте экрана сторис — блокировка дочерних clickable зон.
+// ФИКС. Причина: собственные Modifier.clickable у дочерних зон (шапка автора, StoryLinkButton, StoryDownloadButton) перехватывали жест и НЕ давали поставить паузу удержанием / тап мимо стикеров срабатывал криво.
+// StoryViewerScreen.kt:177-186 — longPressPausedAt (подавление «тап-перехода» сразу после hold, окно 250мс) + геометрия headerBounds/linkBounds/downloadBounds (onGloballyPositioned → boundsInWindow).
+// StoryViewerScreen.kt:824 — onLongPress (кроме isComposing → не мешаем вводу в поле ответа): isPaused = !isPaused.
+// StoryViewerScreen.kt — убраны clickable на шапке/StoryLinkButton/StoryDownloadButton; их тап-зоны диспетчеризует корневой detectTapGestures.onTap по геометрии (шапка→стена автора, ссылка→onUrlClick, download→очередь/удаление).
+// SettingsScreen.kt:1639 — блок-инструкция «Как пользоваться историями» (жесты: удержание-пауза, тап-контент, свайп, тап-шапка).
+// StoryViewerScreen.kt (+107). Кодировка UTF-8 без BOM. Gradle НЕ запускался.

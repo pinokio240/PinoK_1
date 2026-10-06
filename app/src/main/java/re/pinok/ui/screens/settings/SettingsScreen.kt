@@ -1630,6 +1630,28 @@ private fun InterfaceTab(
                 checked = s.storiesShown,
             ) { scope.launch { app.prefs.setStoriesShown(it) } }
         }
+        // P0.18 #STORY-HELP: блок-инструкция по жестам в полноэкранном
+        // просмотрщике историй. Показывается всегда, не зависит от storiesShown.
+        item {
+            Card {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(
+                        "Как пользоваться историями",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "• Удерживайте палец — пауза/воспроизведение\n" +
+                            "• Короткий тап — открыть контент (клипы, фото, пост, ссылку)\n" +
+                            "• Свайп влево/вправо — следующая/предыдущая история\n" +
+                            "• Тап по шапке — страница автора",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         // P0.18 #STORY-SWIPE-HINTS: стрелки-подсказки свайпа в StoryViewer.
         // Default: true. Показываются при первом открытии историй, исчезают
         // после первого свайпа. Пользователь может выключить если мешают.
@@ -2912,6 +2934,8 @@ private fun VideoTab(
     ) {
         item { SectionHeader("Качество воспроизведения") }
         item { VideoQualityCard(s, app, scope) }
+        // Fix #387: предел качества на мобильной сети (экономия трафика).
+        item { MobileVideoQualityCard(s, app, scope) }
         // #VIDEO-AUTOPLAY: тумблер автовоспроизведения при открытии видео.
         // Default ON — пользователь запросил «по умолчанию включено».
         // При выключении ExoPlayer создаётся с playWhenReady=false и
@@ -2925,6 +2949,18 @@ private fun VideoTab(
                     "звучать звук при случайном тапе на видео в ленте.",
                 checked = s.videoAutoplay,
             ) { scope.launch { app.prefs.setVideoAutoplay(it) } }
+        }
+        // Fix #VIDEO-BLOCK-ADS: блокировка рекламных видео в плеере.
+        // Default ON — рекламные ролики (is_ad / is_promoted) не воспроизводятся,
+        // в плеере показывается заглушка «Реклама заблокирована».
+        item {
+            ToggleRow(
+                title = "Блокировать рекламные видео",
+                subtitle = "Не воспроизводить рекламные ролики (is_ad / is_promoted). " +
+                    "Выключили — при открытии такого видео в плеере вместо воспроизведения " +
+                    "показывается заглушка «Реклама заблокирована» и кнопка «Закрыть».",
+                checked = s.videoBlockAds,
+            ) { scope.launch { app.prefs.setVideoBlockAds(it) } }
         }
 
         // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера.
@@ -4178,6 +4214,67 @@ private fun VideoQualityCard(
                     RadioButton(
                         selected = selected,
                         onClick = { scope.launch { app.prefs.setVideoPreferredQuality(value) } },
+                    )
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Mobile video quality limit card
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Fix #387: предел качества видео на мобильной сети.
+ *
+ * При воспроизведении по мобильной сети (не Wi-Fi/Ethernet) плеер вместо
+ * [SovaPrefs.Snapshot.videoPreferredQuality] берёт этот лимит — трафик и расход
+ * батареи ниже. На Wi-Fi действует обычное «Предпочтительное качество».
+ * "auto" = без ограничения на мобильной (вести себя как preferred).
+ * Переиспользует VIDEO_QUALITY_OPTIONS (тот же список значений, что и
+ * VideoQualityCard).
+ */
+@Composable
+private fun MobileVideoQualityCard(
+    s: SovaPrefs.Snapshot,
+    app: SovaApp,
+    scope: CoroutineScope,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Качество на мобильной сети",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                "Ограничение качества при воспроизведении по мобильной сети для экономии трафика. На Wi-Fi применяется обычное «Предпочтительное качество».",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+            VIDEO_QUALITY_OPTIONS.forEach { (value, label) ->
+                val selected = s.mobileVideoQualityLimit == value
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { scope.launch { app.prefs.setMobileVideoQualityLimit(value) } }
+                        .padding(vertical = 6.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    RadioButton(
+                        selected = selected,
+                        onClick = { scope.launch { app.prefs.setMobileVideoQualityLimit(value) } },
                     )
                     Text(
                         label,

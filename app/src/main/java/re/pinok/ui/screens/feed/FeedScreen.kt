@@ -467,6 +467,12 @@ fun FeedScreen(
             // «No value passed for parameter 'videoAutoplay'».
             // (Тот же класс бага что Fix #100/#110/#189/#237/#302/#337/#monet-hybrid.)
             videoAutoplay = true,
+            // Fix #VIDEO-BLOCK-ADS: блокировка рекламных видео (default true).
+            // FeedScreen не использует это поле, но Snapshot расширился — нужно
+            // передать initial-значение, иначе компилятор падает:
+            // «No value passed for parameter 'videoBlockAds'».
+            // Реальное значение подгрузится из SovaPrefs при первом collect.
+            videoBlockAds = true,
             // §42 #PUSH-NOTIFICATIONS: 12 новых полей в Snapshot для локальных
             // push-уведомлений VK-событий (лайки/комментарии/репосты/ответы/
             // подписки/упоминания/подарки/стена). FeedScreen не использует эти
@@ -538,6 +544,12 @@ fun FeedScreen(
             // P0.18: storiesSwipeHints добавлен в Snapshot — initial-конструкция
             // обязана передавать его (default true, как в SovaPrefs).
             storiesSwipeHints = true,
+            // #VIDEO-QUALITY-MOBILE-LIMIT: mobileVideoQualityLimit добавлен в
+            // Snapshot — initial-конструкция обязана передавать его (тот же
+            // класс бага, что Fix #100 / #110 / #189 / #monet-hybrid).
+            // FeedScreen не использует это поле напрямую — реальное значение
+            // подгрузится из SovaPrefs при первом collect. Default "480".
+            mobileVideoQualityLimit = "480",
         )
     )
 

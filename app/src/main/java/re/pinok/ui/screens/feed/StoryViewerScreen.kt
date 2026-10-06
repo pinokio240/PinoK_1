@@ -64,6 +64,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,8 +76,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -165,6 +169,19 @@ fun StoryViewerScreen(
     // pause. Отдельно от isComposing (набор ответа). Когда isPaused=true,
     // показывается StoryPausedOverlay со ссылками (Профиль/Клипы/Фото/Видео/Пост).
     var isPaused by remember { mutableStateOf(false) }
+
+    // PAUSE-FIX (2026-10-05): пауза удержанием (long-press) в ЛЮБОМ месте экрана,
+    // включая зоны шапки/ссылки/download/стикеров. Таймстамп постановки паузы
+    // удержанием — для подавления «тап-перехода», который detectTapGestures в
+    // теории может отдать сразу после отпускания long-press (belt-and-suspenders).
+    var longPressPausedAt by remember { mutableLongStateOf(0L) }
+
+    // PAUSE-FIX: геометрия (оконные координаты) дочерних зон, у которых убран
+    // собственный Modifier.clickable — теперь их тап-зоны диспетчеризует корневой
+    // detectTapGestures (onTap) вручную. Заполняются через onGloballyPositioned.
+    var headerBounds by remember { mutableStateOf<Rect?>(null) }
+    var linkBounds by remember { mutableStateOf<Rect?>(null) }
+    var downloadBounds by remember { mutableStateOf<Rect?>(null) }
 
     // P0.16 (Task 25): состояние стикер-пикера (полная интеграция VK store.getStickerPacks).
     var showStickerPicker by remember { mutableStateOf(false) }
@@ -434,8 +451,11 @@ fun StoryViewerScreen(
             // VkCookieJar, подставляющий живой VK cookie-set в исходящие запросы.
             // Образец: PlayerService.kt:371-400 (audio), VideoPlayerScreen.kt:802 (video).
             // Fallback на DefaultHttpDataSource если SovaApp ещё не инициализирован.
-            // Referer https://m.vk.com/ — VK CDN игнорирует, но не вредит (OK CDN требует).
-            val refererProps = mapOf("Referer" to "https://m.vk.com/")
+            // Referer https://m.vk.ru/ — VK CDN требует (иначе 400): m.vk.com → m.vk.ru.
+            // CDN требует правильный Origin: https://vk.ru (см. HAR: access-control-allow-origin)
+            // и Referer: m.vk.ru — без Origin CDN отвечает HTTP 400 / HTML-страницей.
+            // OK CDN может принимать любой Referer.
+            val refererProps = mapOf("Referer" to "https://m.vk.ru/", "Origin" to "https://vk.ru")
             val appCtx = context.applicationContext as? SovaApp
             val httpFactory = if (appCtx != null) {
                 try {
@@ -677,6 +697,17 @@ fun StoryViewerScreen(
                             // фокус при тапе вне него.
                             return@detectTapGestures
                         }
+                        // PAUSE-FIX: если пауза только что поставлена удержанием
+                        // (long-press), подавляем «тап-переход» этого же жеста.
+                        // detectTapGestures обычно сам НЕ вызывает onTap после
+                        // onLongPress, но на случай если хоть одна дочерняя зона
+                        // передумает — гасим переход в коротком окне после hold.
+                        if (longPressPausedAt != 0L &&
+                            System.currentTimeMillis() - longPressPausedAt < 250L
+                        ) {
+                            longPressPausedAt = 0L
+                            return@detectTapGestures
+                        }
                         val screenWidth = size.width
                         // Константы исходника сторис: VK возвращает clickable_area
                         // в координатах исходника (1080x1920). Маппим точку тапа (px)
@@ -687,6 +718,45 @@ fun StoryViewerScreen(
                         val scaleY = if (size.height > 0f) origH / size.height else 1f
                         val origX = offset.x * scaleX
                         val origY = offset.y * scaleY
+
+                        // PAUSE-FIX: зоны, у которых раньше был собственный
+                        // Modifier.clickable (перехватывал жест и блокировал
+                        // long-press), теперь диспетчеризуются ВРУЧНУЮ из корневого
+                        // onTap по геометрии элементов (boundsInWindow). Проверяем их
+                        // ДО разбора стикеров — это визуально верхние/нижние наложения.
+                        // Шапка автора (аватар + имя) → стена автора.
+                        val hb = headerBounds
+                        if (hb != null && hb.contains(offset)) {
+                            onOpenAuthorProfile(currentGroup.ownerId)
+                            return@detectTapGestures
+                        }
+                        // Кнопка-ссылка внизу (StoryLinkButton) → открыть URL. Запускается
+                        // строго по области самой кнопки; тап вне неё — ниже (стикеры/пауза).
+                        val lb = linkBounds
+                        val storyUrl0 = currentStory.link?.url?.takeIf { it.isNotBlank() }
+                        if (lb != null && storyUrl0 != null && lb.contains(offset)) {
+                            onUrlClick(storyUrl0)
+                            return@detectTapGestures
+                        }
+                        // Кнопка скачивания видео (StoryDownloadButton, BottomEnd).
+                        // Отражаем старую логику onClick: в очереди/скачано → удалить,
+                        // иначе → поставить в очередь загрузки.
+                        val db = downloadBounds
+                        if (isVideoStory && db != null && db.contains(offset)) {
+                            val dk0 = StoryVideoDownloadManager.storyKey(currentStory.ownerId, currentStory.id)
+                            val ds0 = downloads[dk0]
+                            if (ds0 != null && ds0.status != DownloadStatus.FAILED) {
+                                StoryVideoDownloadManager.removeDownload(currentStory.ownerId, currentStory.id)
+                            } else {
+                                StoryVideoDownloadManager.enqueueDownload(
+                                    story = currentStory,
+                                    ownerName = currentGroup.name ?: "",
+                                    ownerPhoto100 = currentGroup.photo100,
+                                    silent = false,
+                                )
+                            }
+                            return@detectTapGestures
+                        }
 
                         fun fallbackPaging() {
                             // P0.12: тап больше НЕ переключает историю (только свайп).
@@ -743,6 +813,18 @@ fun StoryViewerScreen(
                             }
                         } else {
                             handleNoStickerTap()
+                        }
+                    },
+                    // PAUSE-FIX: пауза по УДЕРЖАНИЮ (long-press) в любом месте экрана.
+                    // detectTapGestures после срабатывания long-press сам потребляет
+                    // up-событие (consumeUntilUp) → onTap этого же жеста НЕ выполнится,
+                    // переход не произойдёт. Только не трогаем удержание, когда идёт
+                    // набор в поле ответа (isComposing) — иначе поле нельзя будет
+                    // держать/выделять текст.
+                    onLongPress = {
+                        if (!composingForTap) {
+                            isPaused = !isPaused
+                            longPressPausedAt = System.currentTimeMillis()
                         }
                     },
                 )
@@ -819,7 +901,10 @@ fun StoryViewerScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onOpenAuthorProfile(currentGroup.ownerId) }
+                // PAUSE-FIX: убран собственный clickable (блокировал long-press).
+                // Тап по шапке теперь диспетчеризует корневой onTap по геометрии
+                // headerBounds. Крестик (IconButton) остаётся кликабельным отдельно.
+                .onGloballyPositioned { headerBounds = it.boundsInWindow() }
                 .padding(horizontal = 12.dp, vertical = 4.dp)
                 .statusBarsPadding(),
             verticalAlignment = Alignment.CenterVertically,
@@ -936,7 +1021,10 @@ fun StoryViewerScreen(
                         end = 16.dp,
                         // B5: при открытом поле ответа поднимаем кнопку над ним.
                         bottom = if (showReplyInput) 148.dp else 56.dp,
-                    ),
+                    )
+                    // PAUSE-FIX: убран clickable из самой кнопки; её тап-зону теперь
+                    // диспетчеризует корневой onTap по геометрии (downloadBounds).
+                    .onGloballyPositioned { downloadBounds = it.boundsInWindow() },
             )
         }
 
@@ -963,7 +1051,12 @@ fun StoryViewerScreen(
                 StoryLinkButton(
                     text = linkText,
                     onClick = { onUrlClick(storyUrl) },
-                    modifier = Modifier.padding(vertical = 4.dp),
+                    modifier = Modifier
+                        .padding(vertical = 4.dp)
+                        // PAUSE-FIX: убран clickable из StoryLinkButton (блокировал
+                        // long-press); её тап-зону диспетчеризует корневой onTap по
+                        // геометрии linkBounds (клик по тексту-кнопке → onUrlClick).
+                        .onGloballyPositioned { linkBounds = it.boundsInWindow() },
                 )
             }
             if (showReplyInput) {
@@ -1117,8 +1210,7 @@ private fun StoryDownloadButton(
         modifier = modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(bgAlpha)
-            .clickable(onClick = onClick),
+            .background(bgAlpha),
         contentAlignment = Alignment.Center,
     ) {
         when {
@@ -1184,7 +1276,6 @@ private fun StoryLinkButton(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
             .background(Color.Black.copy(alpha = 0.45f))
-            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {

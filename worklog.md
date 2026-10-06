@@ -12808,3 +12808,37 @@ Task: тап по clip-story должен ставить паузу, а не с�
 
 Файл (1, +10/−1): app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 32 (DASH-VIDEO-400-ADS-MOBILE-STORIES-2026-10-06)
+Agent: orchestrator (main)
+Task: пакет видео-фиксов (DASH-поддержка, HTTP 400/PARSING_MANIFEST_MALFORMED у VK-видео и клипов, блокировка рекламы, лимит качества на мобильной сети) + доработки сторис (пауза удержанием в любом месте, ответ автору, инструкция). 9 файлов, +638/−34.
+
+## Контекст
+Незакоммиченные изменения (не защитить — просто зафиксировать работу до коммита). Пользователь просил НЕ коммитить и НЕ запускать Gradle — только обновить HISTORY.md и worklog.md.
+
+## Work Log
+// DASH: gradle/libs.versions.toml:140 + app/build.gradle.kts:207 — media3-exoplayer-dash (DASH-манифесты .mpd / dash_ondemand / dash_sep / dash_webm).
+// VIDEO-FIX-400: VideoPlayerScreen.kt — mimeFor(key,url):279 по КЛЮЧУ files выбирает M3U8/MPD (URL клипа без m3u8/mpd; всё в query); ADAPTIVE_FALLBACK_KEYS:313 + firstAdaptiveUrl:323 + firstAdaptiveEntry:345 + formatFallbackUrls:359; FRESH-RESOLVE свежий video.get 1 раз на открытие:455 (freshResolveAttempted, ключ `video`); ветки onPlayerError для ERROR_CODE_IO_BAD_HTTP_STATUS:1091 и PARSING_MANIFEST_MALFORMED:1095 (сначала свежий videoGetById при http400FreshAttempts<1, затем перебор formatFallbackUrls через fallbackAttempt; guard от зацикливания; сброс на STATE_READY). Клипы (isClip): qualityOptions = один пункт «Авто» с реальным ключом, showQualitySelector открывается и с 1 пунктом.
+// Origin/Referer: MapOf("Referer" to "https://m.vk.ru/", "Origin" to "https://vk.ru") — было только Referer m.vk.com. VideoPlayerScreen.kt:1026, StoryViewerScreen.kt:458, VideoPipActivity.kt:337, ClipsFeedScreen.kt:349.
+// ADS-BLOCK: SovaPrefs.kt:354 — videoBlockAds (video_block_ads, default true) + setter/Keys; VideoPlayerScreen.kt:808 adBlocked = videoBlockAds && (isAd==1 || isPromoted==1) — ExoPlayer НЕ создаётся при true; UI:807/1982 заглушка «Реклама заблокирована» + «Закрыть»; SettingsScreen.kt:2955 тумблер.
+// MOBILE-QUALITY: SovaPrefs.kt:345 — mobileVideoQualityLimit (mobile_video_quality_limit, default "480"); VideoPlayerScreen.kt:782-795 isMobileNetwork (networkObserver.connectionType) → effectiveQuality применяется только к начальному selectIndex; SettingsScreen.kt:2938/4265 MobileVideoQualityCard в VideoTab.
+// STORIES: StoryViewerScreen.kt — longPressPausedAt:177 + boundsInWindow headerBounds:182/linkBounds:183/downloadBounds:184; onLongPress:824 (пауза, кроме isComposing); убраны clickable с шапки/StoryLinkButton/StoryDownloadButton — тап-зоны диспетчеризует корневой onTap по геометрии (шапка→стена автора, ссылка→URL, download→очередь/удаление); поле ответа автору (STORY-REPLY). SettingsScreen.kt:1639 — инструкция «Как пользоваться историями».
+
+## Stage Summary
+ВЫПОЛНЕНО (работа зафиксирована, НЕ закоммичена, Gradle НЕ запускался):
+// VideoPlayerScreen.kt (+~330): DASH MIME по ключу, свежий video.get, HTTP 400/patch malformed fallback по форматам, блокировка рекламы, лимит качества на мобильной сети.
+// StoryViewerScreen.kt (+107): пауза удержанием в любом месте, зоны шапки/ссылки/download в корневом onTap, поле ответа автору.
+// SovaPrefs/SettingsScreen/FeedScreen: 2 новые настройки (videoBlockAds, mobileVideoQualityLimit) + инструкция по историям; Snapshot расширен (fallback-поля в initial-конструкцию FeedScreen).
+// 9 файлов, +638/−34. Документация: HISTORY + worklog (этот заход).
+
+Файлы (9, +638/−34):
+// app/build.gradle.kts (+2), gradle/libs.versions.toml (+2)
+// app/src/main/java/re/pinok/ui/screens/videoplayer/VideoPlayerScreen.kt (+~330)
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+107)
+// app/src/main/java/re/pinok/ui/screens/settings/SettingsScreen.kt (+97)
+// core/data/src/main/java/re/pinok/data/local/SovaPrefs.kt (+24)
+// app/src/main/java/re/pinok/ui/screens/feed/FeedScreen.kt (+12)
+// app/src/main/java/re/pinok/ui/videoplayer/VideoPipActivity.kt (+7), app/src/main/java/re/pinok/ui/screens/clips/ClipsFeedScreen.kt (+7)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments //. Gradle НЕ запускался (собирает пользователь). НИЧЕГО не закоммичено — коммит делает основной ассистент.

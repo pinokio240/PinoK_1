@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Check
 // W30-2 #VIDEO-MORE-MENU: иконка «Убрать из закладки»/«В закладки» меню «Ещё».
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 // W30-2 #VIDEO-MORE-MENU: иконки пунктов меню (удалить копию / жалоба).
@@ -263,6 +264,114 @@ private fun applyQualityPin(player: ExoPlayer, qualityKey: String?) {
     player.trackSelectionParameters = builder.build()
 }
 
+// #VIDEO-DASH-MIMEBYKEY: единый MIME-резолвер для адаптивных потоков. VK присылает
+// либо HLS (.m3u8), либо DASH (.mpd / dash_ondemand / dash_sep) без mp4/hls.
+// ExoPlayer определяет контейнер по MIME, поэтому для DASH нужно явно выставить
+// APPLICATION_MPD (иначе снайфер может не распознать манифест). Возвращает
+// APPLICATION_M3U8 / APPLICATION_MPD / null.
+//
+// Важно: у клипов VK даёт DASH-манифест с URL вида
+// «https://vkvd526.okcdn.ru/?…&pr=41&type=5&ct=6&id=…» — в самой строке НЕТ слов
+// m3u8/mpd/dash_webm (всё в query). Поэтому MIME определяется в первую очередь по
+// КЛЮЧУ files (dash_sep/dash_webm/dash_webm_av1/hls/hls_fmp4), а по URL — только
+// как fallback (key == null). Это чинит HTTP 400 у клипов при старте: ExoPlayer
+// теперь знает, что манифест — DASH, а не прогрессив.
+private fun mimeFor(key: String?, url: String?): String? {
+    if (key != null) {
+        return when {
+            key == "hls_ondemand" || key == "hls" || key == "hls_fmp4" ||
+                (url != null && url.contains("m3u8", ignoreCase = true)) ->
+                MimeTypes.APPLICATION_M3U8
+            key.startsWith("dash") ||
+                key == "dash_sep" || key == "dash_webm" || key == "dash_webm_av1" ||
+                key == "dash_ondemand" || key == "dash" ||
+                (url != null && (url.contains(".mpd", ignoreCase = true) ||
+                    url.contains("dash_webm", ignoreCase = true) ||
+                    url.contains("dash_ondemand", ignoreCase = true) ||
+                    url.contains("dash_sep", ignoreCase = true))) ->
+                MimeTypes.APPLICATION_MPD
+            else -> null
+        }
+    }
+    val u = url ?: return null
+    return when {
+        u.contains("m3u8", ignoreCase = true) -> MimeTypes.APPLICATION_M3U8
+        u.contains(".mpd", ignoreCase = true) ||
+            u.contains("dash_webm", ignoreCase = true) ||
+            u.contains("dash_ondemand", ignoreCase = true) ||
+            u.contains("dash_sep", ignoreCase = true) -> MimeTypes.APPLICATION_MPD
+        else -> null
+    }
+}
+
+// #CLIP-HLS-DASH-START: порядок адаптивных (HLS/DASH) ключей VK. У клипов
+// (shortVideo) VK обычно НЕ отдаёт рабочий прогрессивный mp4 (ProgressiveMediaPeriod
+// отвечает HTTP 400 / ERROR_CODE_IO_BAD_HTTP_STATUS), а рабочие потоки лежат в
+// dash_webm / dash_webm_av1 / hls_fmp4. Этот список задаёт порядок стартового
+// (и fallback-при-HLS/DASH) выбора: hls_ondemand → hls → hls_fmp4 → dash_sep →
+// dash_webm → dash_webm_av1 → dash_ondemand → dash.
+private val ADAPTIVE_FALLBACK_KEYS: List<String> = listOf(
+    "hls_ondemand", "hls", "hls_fmp4",
+    "dash_sep", "dash_webm", "dash_webm_av1", "dash_ondemand", "dash",
+)
+
+// #CLIP-HLS-DASH-START: первый доступный адаптивный (HLS/DASH) URL из files по
+// [ADAPTIVE_FALLBACK_KEYS]. СНАЧАЛА предпочитаем URL, похожие на настоящий манифест
+// (.m3u8 / .mpd / dash_webm) — VK "hls_ondemand" часто возвращает тот же raw URL
+// (не плейлист), который у клипов тоже даёт HTTP 400. Если явного манифеста нет —
+// берём первый доступный адаптивный ключ. null если адаптивных ключей нет вовсе.
+private fun firstAdaptiveUrl(files: Map<String, String>?): String? {
+    if (files == null) return null
+    for (key in ADAPTIVE_FALLBACK_KEYS) {
+        val url = files[key]
+        if (url != null && url.isNotBlank() &&
+            (url.contains("m3u8", ignoreCase = true) ||
+                url.contains(".mpd", ignoreCase = true) ||
+                url.contains("dash_webm", ignoreCase = true))) {
+            return url
+        }
+    }
+    for (key in ADAPTIVE_FALLBACK_KEYS) {
+        val url = files[key]
+        if (url != null && url.isNotBlank()) return url
+    }
+    return null
+}
+
+// #CLIP-HLS-DASH-MIMEBYKEY: как [firstAdaptiveUrl], но возвращает Pair(key, url)
+// (ключ реального files-ключа, напр. "dash_webm_av1"), а не один URL. Нужен, чтобы
+// стартовый MediaItem клипа мог вычислить точный MIME через [mimeFor] по КЛЮЧУ,
+// а не по URL (у клипов DASH-URL не содержит m3u8/mpd/dash_webm — всё в query).
+private fun firstAdaptiveEntry(files: Map<String, String>?): Pair<String, String>? {
+    if (files == null) return null
+    for (key in ADAPTIVE_FALLBACK_KEYS) {
+        val url = files[key]
+        if (url != null && url.isNotBlank()) return key to url
+    }
+    return null
+}
+
+// #CLIP-HLS-DASH-START: список форматов для fallback при HTTP 400 у клипов.
+// Приоритет: HLS/DASH-адаптивные (по [ADAPTIVE_FALLBACK_KEYS]), затем низкие mp4
+// (144→480, обычно AVC). Дубли URL отбрасываются. Пустой список — если files нет.
+// #VIDEO-DASH-MIMEBYKEY: возвращает Pair(key, url) — ключ нужен, чтобы fallback
+// вычислил точный MIME через [mimeFor] (у клипов DASH-URL не содержит m3u8/mpd).
+private fun formatFallbackUrls(files: Map<String, String>?): List<Pair<String, String>> {
+    if (files == null) return emptyList()
+    val result = mutableListOf<Pair<String, String>>()
+    val seen = mutableSetOf<String>()
+    for (key in ADAPTIVE_FALLBACK_KEYS) {
+        val url = files[key]
+        if (url != null && url.isNotBlank() && seen.add(url)) result.add(key to url)
+    }
+    val lowMp4 = arrayOf("mp4_144", "mp4_240", "mp4_360", "mp4_480")
+    for (key in lowMp4) {
+        val url = files[key]
+        if (url != null && url.isNotBlank() && seen.add(url)) result.add(key to url)
+    }
+    return result
+}
+
 private val PLAYBACK_RATES = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 // #VIDEO-QUALITY-TEMPLATE: порядок/метки качеств и логика выбора индекса вынесены
@@ -337,6 +446,13 @@ fun VideoPlayerScreen(
     // P2 #VIDEO-SESSION-HOLD: true когда video.get вернул null при НЕвалидном
     // токене (error 5/1117) — показываем inline «Перезайти» вместо мёртвого экрана.
     var sessionExpired by remember { mutableStateOf(false) }
+    // FRESH-RESOLVE (2026-10-05): свежий video.get делаем ОДИН раз на открытие видео.
+    // Ключ `video` (оригинальный параметр), а НЕ resolvedVideo — поэтому после
+    // `resolvedVideo = fresh` (когда эффект рестартует по ключу resolvedVideo) флаг
+    // остаётся true и повторный запрос НЕ происходит (иначе бесконечный цикл
+    // video.get → resolvedVideo=fresh → restart → video.get). Сбрасывается только
+    // при открытии нового видео (новый `video` → remember() заново).
+    var freshResolveAttempted by remember(video) { mutableStateOf(false) }
 
     // ── Fix #383 #COMMUNITY-VIDEO-PARITY ──
     // Состояние лайка поднято на уровень экрана: ОДИН источник правды для
@@ -450,7 +566,18 @@ fun VideoPlayerScreen(
         val extId = resolvedVideo.externalId
         val isOkVideo = extId != null && extId.isNotBlank() &&
                 resolvedVideo.videoPlatform == VideoPlatform.OK
-        if (localFile != null || (hasFiles && !isOkVideo)) return@LaunchedEffect
+        // FRESH-RESOLVE (2026-10-05): внешние embed-видео (YouTube/Instagram/
+        // EXTERNAL_IFRAME) — НЕ трогаем: у них свой WebView-путь (VideoPlatformRouter,
+        // OkWebViewPlayer), video.get тут не поможет и рискован. Офлайн тоже пропускаем.
+        val isExternalEmbed = resolvedVideo.videoPlatform == VideoPlatform.YOUTUBE ||
+                resolvedVideo.videoPlatform == VideoPlatform.EXTERNAL_IFRAME ||
+                resolvedVideo.videoPlatform == VideoPlatform.INSTAGRAM
+        // FRESH-RESOLVE (2026-10-05): заменили прежний ранний выход
+        // `hasFiles && !isOkVideo` (он пропускал видео с устаревшими/неподписанными
+        // files → HTTP 400 при старте). Теперь для VK/UNKNOWN свежие files
+        // ДОЗАПРАШИВАЕМ ВСЕГДА. Пропускаем только: офлайн, внешние embed и OK
+        // (у OK ниже свой fetchMetadata). Сам свежий video.get — ниже, за protected OK.
+        if (localFile != null || isExternalEmbed) return@LaunchedEffect
 
         // OK-IMPL-1 (Stage 3b): OK-crossposted видео — пробуем нативный ExoPlayer
         // через парсинг OK метаданных. Если удалось — qualityOptions строятся
@@ -493,12 +620,24 @@ fun VideoPlayerScreen(
             return@LaunchedEffect
         }
 
-        // UNKNOWN/VK path: нет files → video.get для получения прямых URL.
+        // UNKNOWN/VK path: свежий video.get для получения прямых URL.
         // VIDEO-FIX (#353): если fresh получает platform=OK (после withDetectedPlatform),
         // resolvedVideo обновляется → LaunchedEffect перезапускается → OK path выше
-        // вызовет fetchMetadata. Защита от зацикливания: обновляем resolvedVideo
-        // только если fresh имеет files ИЛИ player (иначе — ошибка, без перезапуска).
-        AppLog.i(TAG, "files==null, пробуем video.get для video #${resolvedVideo.id} (platform=${resolvedVideo.videoPlatform})")
+        // вызовет fetchMetadata. Флаг ниже переживает такой рестарт при смене
+        // платформы (OK path выше отрабатывает ДО проверки флага).
+        //
+        // FRESH-RESOLVE (2026-10-05): вызывается ВСЕГДА при открытии для VK/UNKNOWN
+        // (даже если `files` пришли) — mp4/hls URL в files подписаны и могут протухнуть
+        // (HTTP 400), особенно у канальных/приватных/4К видео. Свежий fetch даёт
+        // актуальные подписанные ссылки → видео играет сразу, без ручной смены качества.
+        //
+        // #LOOP-PREVENT: свежий запрос — ОДИН раз на открытие. После
+        // `resolvedVideo = fresh` эффект рестартует (ключ resolvedVideo), без флага
+        // это ушло бы в бесконечный цикл video.get. Флаг `freshResolveAttempted`
+        // сбросится только при открытии другого видео.
+        if (freshResolveAttempted) return@LaunchedEffect
+        freshResolveAttempted = true
+        AppLog.i(TAG, "video #${resolvedVideo.id} (platform=${resolvedVideo.videoPlatform}, files=${files?.keys}) — свежий video.get для актуальных files.")
         isLoadingVideo = true
         fetchError = null
         sessionExpired = false
@@ -583,6 +722,24 @@ fun VideoPlayerScreen(
             if (files == null) {
                 emptyList()
             } else {
+                // #CLIP-HLS-DASH-START: для КЛИПОВ (shortVideo, isClip) VK обычно
+                // НЕ отдаёт рабочий прогрессивный mp4 — ProgressiveMediaPeriod
+                // возвращает HTTP 400 (ERROR_CODE_IO_BAD_HTTP_STATUS), и видео не
+                // стартует с первого раза. Рабочие потоки — dash_webm/hls_fmp4.
+                // Строим qualityOptions из ОДНОГО адаптивного пункта «Авто» (первый
+                // доступный HLS/DASH-ключ по [ADAPTIVE_FALLBACK_KEYS]), чтобы
+                // авто-старт начинался сразу с манифеста, а не с битого mp4.
+                if (resolvedVideo.isClip) {
+                    // #CLIP-HLS-DASH-MIMEBYKEY: создаём пункт «Авто» с РЕАЛЬНЫМ
+                    // ключом files (напр. "dash_webm_av1"), а не фиксированным
+                    // "adaptive". Тогда стартовый MediaItem узнаёт точный MIME через
+                    // [mimeFor] по ключу и корректно воспроизводит DASH (HTTP 400
+                    // при прогрессивной интерпретации больше не возникает).
+                    val adaptiveEntry = firstAdaptiveEntry(files)
+                    if (adaptiveEntry != null) {
+                        return@remember listOf(QualityOption(adaptiveEntry.first, "Авто", adaptiveEntry.second))
+                    }
+                }
                 val allOptions = VideoQuality.ORDER.mapNotNull { (key, label) ->
                     val url = files[key]
                     if (url != null) QualityOption(key, label, url) else null
@@ -616,11 +773,41 @@ fun VideoPlayerScreen(
     val preferredQuality = remember(resolvedVideo) {
         app.prefsSnapshot?.videoPreferredQuality ?: "auto"
     }
+    // Fix #387: предел качества видео на МОБИЛЬНОЙ сети. При воспроизведении по
+    // мобильной сети (не Wi-Fi/Ethernet) вместо videoPreferredQuality используем
+    // этот лимит для экономии трафика. "auto" = без ограничения на мобильной
+    // (вести себя как preferred). Тот же механизм, что в VideoPlayerConfig:
+    // app.networkObserver.connectionType() ("Wi-Fi"/"Mobile"/"Ethernet"/"other").
+    val mobileQualityLimit = remember(resolvedVideo) {
+        app.prefsSnapshot?.mobileVideoQualityLimit ?: "480"
+    }
+    val isMobileNetwork = remember(resolvedVideo) {
+        val type = try {
+            app.networkObserver.connectionType()
+        } catch (_: Exception) {
+            null
+        }
+        type != null && type != "Wi-Fi" && type != "Ethernet"
+    }
+    // Effective quality: на мобильной сети применяем предел (если он не "auto"),
+    // иначе — обычное предпочтение. Ручное переключение качества пользователем
+    // этот выбор НЕ переопределяет (см. #VIDEO-PREFERRED-QUALITY ниже).
+    val effectiveQuality = remember(resolvedVideo) {
+        if (isMobileNetwork && mobileQualityLimit != "auto") mobileQualityLimit else preferredQuality
+    }
     // #VIDEO-AUTOPLAY: читаем синхронно из prefsSnapshot. Default true.
     // При false: ExoPlayer создаётся с playWhenReady=false и LifecycleStartEffect
     // не форсирует play — пользователь жмёт play сам.
     val autoplayEnabled = remember(resolvedVideo) {
         app.prefsSnapshot?.videoAutoplay ?: true
+    }
+    // Fix #VIDEO-BLOCK-ADS: блокировка рекламных видео. Реклама = is_ad==1
+    // ИЛИ is_promoted==1 (оба поля уже есть в Video-модели и парсятся).
+    // Default true (см. SovaPrefs) — рекламные ролики не воспроизводим,
+    // вместо плеера показываем заглушку «Реклама заблокирована».
+    val adBlocked = remember(resolvedVideo) {
+        (app.prefsSnapshot?.videoBlockAds ?: true) &&
+            (resolvedVideo.isAd == 1 || resolvedVideo.isPromoted == 1)
     }
     // #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео — синхронно
     // из prefsSnapshot (паттерн autoplayEnabled выше). Default true = прежнее
@@ -634,9 +821,14 @@ fun VideoPlayerScreen(
     // Ключ ТОЛЬКО resolvedVideo — ручной выбор пользователя не сбрасывается при
     // доезжании pref (преf теперь синхронный, гонки нет).
     var selectedQualityIndex by remember(resolvedVideo) {
-        mutableIntStateOf(VideoQuality.selectIndex(qualityOptions.map { it.key }, preferredQuality))
+        mutableIntStateOf(VideoQuality.selectIndex(qualityOptions.map { it.key }, effectiveQuality))
     }
-    val showQualitySelector = qualityOptions.size >= 2 && !isLocalPlayback
+    // #CLIP-HLS-DASH-START: у клипа qualityOptions — один адаптивный пункт «Авто»,
+    // но меню качества должно открываться, чтобы пользователь видел выбранный
+    // формат (и в теории мог вернуться к нему). Для обычных видео — как раньше
+    // (нужно ≥2 качества, иначе селектор бессмысленен).
+    val showQualitySelector =
+        (!isLocalPlayback) && (qualityOptions.size >= 2 || (resolvedVideo.isClip && qualityOptions.isNotEmpty()))
 
     // Fix #337: после DECODING_FAILED fallback selectedQualityIndex оставался на
     // упавшем (HEVC) качестве → меню качества подсвечивало нерабочий пункт, а
@@ -668,6 +860,16 @@ fun VideoPlayerScreen(
     }
     val hlsOption = hlsUrl?.let { QualityOption("hls", "Авто", it) }
     var selectedHls by remember(resolvedVideo) { mutableStateOf(false) }
+    // #CLIP-HLS-DASH-START: счётчик fallback-форматов при HTTP 400 у клипов.
+    // Нужен, чтобы при повторном 400 переходить к СЛЕДУЮЩЕМУ формату, а не
+    // бесконечно перезагружать один и тот же. Сбрасывается при STATE_READY.
+    var fallbackAttempt by remember(resolvedVideo) { mutableIntStateOf(0) }
+    // FRESH-RESOLVE (2026-10-05): сколько раз на ТЕКУЩЕЙ ошибке уже делали свежий
+    // video.get (retryWithFreshUrl) после HTTP 400. Ключ `video` (не resolvedVideo) —
+    // переживает пересоздание плеера после fresh и не сбрасывается на нём,
+    // предотвращая зацикливание "400 → fresh → resolvedVideo=fresh → плеер
+    // пересоздан → 400 → fresh…". Сбрасывается при STATE_READY.
+    var http400FreshAttempts by remember { mutableIntStateOf(0) }
 
     // FIX: player URL от VK — это HTML-страница (video_ext.php), а не прямой видеофайл.
     // ExoPlayer не может воспроизвести HTML. Используем player URL ТОЛЬКО как
@@ -700,7 +902,7 @@ fun VideoPlayerScreen(
             ?: okHlsForFallback
             ?: run {
                 val files = resolvedVideo.files
-                if (files != null) listOf("hls_ondemand", "hls", "dash_ondemand", "dash", "dash_sep").firstNotNullOfOrNull { files[it] } else null
+                firstAdaptiveUrl(files)
             }
             ?: playerUrlDirect
     }
@@ -748,6 +950,13 @@ fun VideoPlayerScreen(
     // качества идёт через switchQuality() (setMediaItem), а не через пересоздание
     // плеера — поэтому ключ только resolvedVideo.
     val exoPlayer = remember(resolvedVideo, okMetadata) {
+        // Fix #VIDEO-BLOCK-ADS: рекламное видео заблокировано — НЕ создаём плеер
+        // вовсе (не грузим медиа/не скачиваем). UI покажет заглушку вместо
+        // воспроизведения. `video` по-прежнему открыт — просто не играет.
+        if (adBlocked) {
+            AppLog.i(TAG, "#VIDEO-BLOCK-ADS: ad video #${resolvedVideo.id} blocked (isAd=${resolvedVideo.isAd}, isPromoted=${resolvedVideo.isPromoted})")
+            null
+        } else {
         // #PIP-PAUSE-ON-NEW-VIDEO: открываем новое видео — приостанавливаем
         // активный PiP-плеер, чтобы не шли два потока одновременно.
         re.pinok.ui.videoplayer.VideoPipActivity.pauseActivePip()
@@ -775,7 +984,7 @@ fun VideoPlayerScreen(
                 ?: okHlsForFallback
                 ?: run {
                     val files = resolvedVideo.files
-                    if (files != null) listOf("hls_ondemand", "hls", "dash_ondemand", "dash", "dash_sep").firstNotNullOfOrNull { files[it] } else null
+                    firstAdaptiveUrl(files)
                 }
                 // VIDEO-FIX (#351): расширенный фильтр [isHtmlEmbedUrl] — не даём
                 // ExoPlayer'у HTML-страницу (OK/YouTube/VK embed). Если прямых
@@ -789,17 +998,18 @@ fun VideoPlayerScreen(
         } else {
             val uri = Uri.parse(url)
             val mediaItemBuilder = MediaItem.Builder().setUri(uri)
-            if (url.contains("m3u8", ignoreCase = true)) {
-                mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-            }
+            // #VIDEO-DASH-MIMEBYKEY: MIME по КЛЮЧУ выбранной опции (клипы → точный
+            // DASH/HLS тип), а не только по URL. mp4_* → null (прогрессив без MIME).
+            mimeFor(qualityOptions.getOrNull(selectedQualityIndex)?.key, url)?.let { mediaItemBuilder.setMimeType(it) }
             val vkUa = VkUserAgent.get(context.applicationContext as android.app.Application)
             // #37: DefaultHttpDataSource.Factory() умеет ТОЛЬКО http:// и https://.
             // Для локальных file:// URI (скачанные видео) нужен DefaultDataSource.Factory
             // — он делегирует FileDataSource для file://, ContentDataSource для content://
             // и DefaultHttpDataSource для http(s)://. Без этого скачанные видео падали с
             // "FileURLConnection cannot be cast to java.net.HttpURLConnection".
-            // OK-IMPL-1 (Stage 3b): OK CDN (ok8-8.vkuser.net) требует Referer: https://m.vk.com/
-            // — иначе 403. VK CDN (vk.ru) Referer игнорирует, но не вредит.
+            // OK-IMPL-1 (Stage 3b): OK CDN (ok8-8.vkuser.net) может принимать любой Referer,
+            // а VK CDN (vk.ru) ТРЕБУЕТ Referer: https://m.vk.ru/ (иначе 400). m.vk.com →
+            // m.vk.ru (VK давно переехал на m.vk.ru; m.vk.com редиректит туда же).
             //
             // P0.10 (Task 20, 2026-10-XX): DefaultHttpDataSource НЕ отправляет cookies
             // автоматически — VK CDN для приватных/канальных видео требует remixsid/
@@ -810,7 +1020,10 @@ fun VideoPlayerScreen(
             // CookieManager) в исходящие запросы на vk.com/vk.ru. Образец:
             // PlayerService.kt:371-400 (audio-плеер). Fallback на DefaultHttpDataSource
             // если SovaApp ещё не инициализирован или OkHttp setup упал (ранние устройства).
-            val refererProps = mapOf("Referer" to "https://m.vk.com/")
+            // CDN требует правильный Origin: https://vk.ru (см. HAR:
+            // access-control-allow-origin) и Referer: m.vk.ru — без Origin CDN
+            // отвечает HTTP 400 / HTML-страницей вместо медиа.
+            val refererProps = mapOf("Referer" to "https://m.vk.ru/", "Origin" to "https://vk.ru")
             val app = context.applicationContext as? SovaApp
             val httpFactory = if (app != null) {
                 try {
@@ -872,6 +1085,15 @@ fun VideoPlayerScreen(
                         override fun onPlayerError(error: PlaybackException) {
                             AppLog.e(TAG, "ExoPlayer error: ${error.errorCodeName}", error)
                             val isDecodingFailed = error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED
+                            // #CLIP-HLS-DASH-START: HTTP 400 (ProgressiveMediaPeriod на mp4)
+                            // — типичная ошибка клипов VK. Обрабатываем отдельно от
+                            // DECODING_FAILED и прочих ошибок (см. ниже).
+                            val isHttpBadStatus = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+                            // #HLS-MALFORMED (2026-10-06): CDN отдал HLS/DASH-URL как НЕ-манифест
+                            // (HTML-страницу) — ExoPlayer: "Input does not start with #EXTM3U".
+                            // Обрабатываем как HTTP 400: свежий video.get → перебор formatFallbackUrls.
+                            val isMalformedManifest = error.errorCode ==
+                                PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED
                             if (retryCount >= 5) {
                                 playerError = "Не удалось воспроизвести видео (кодек не поддерживается)"
                             } else if (isDecodingFailed) {
@@ -894,17 +1116,23 @@ fun VideoPlayerScreen(
                                 // а не настоящий HLS-плейлист. Поэтому на DECODING_FAILED пробуем:
                                 // 1) Настоящий HLS (m3u8 URL)
                                 // 2) Самое низкое mp4_ качество (обычно AVC, не HEVC 10-bit)
-                                val realHlsUrl = files?.entries?.firstOrNull { (key, url) ->
+                                val realHlsEntry = files?.entries?.firstOrNull { (key, url) ->
                                     key in listOf("hls_ondemand", "hls") && url.contains("m3u8", ignoreCase = true)
-                                }?.value
+                                }
+                                val realHlsUrl = realHlsEntry?.value
                                 if (realHlsUrl != null) {
+                                    // MIME по ключу HLS-формата: URL содержит m3u8, но ключ точнее.
+                                    // Локальная переменная — kotlin smart-cast уже знает entry non-null здесь.
+                                    val hlsKey = realHlsEntry.key
                                     val savedPosition = self.currentPosition
                                     // W30-STABILITY: скорость читаем ДО перезагрузки
                                     // источника (инстанс тот же, но reapplied явно).
                                     val savedSpeed = self.playbackParameters.speed
                                     val mediaItem = MediaItem.Builder()
                                         .setUri(Uri.parse(realHlsUrl))
-                                        .setMimeType(MimeTypes.APPLICATION_M3U8)
+                                        // #VIDEO-DASH-MIMEBYKEY: MIME по ключу HLS-подобного
+                                        // формата (URL содержит m3u8, но ключ точнее).
+                                        .apply { mimeFor(hlsKey, realHlsUrl)?.let { setMimeType(it) } }
                                         .build()
                                     self.setMediaItem(mediaItem)
                                     self.prepare()
@@ -964,6 +1192,109 @@ fun VideoPlayerScreen(
                                         retryWithFreshUrl()
                                     }
                                 }
+                            } else if (isHttpBadStatus) {
+                                // FRESH-RESOLVE (2026-10-05): при ПЕРВОМ 400 идёт именно
+                                // videoGetById (retryWithFreshUrl) — mp4/hls URL подписаны
+                                // и истекают, свежий fetch даёт рабочие файлы. Раньше сразу
+                                // перебирали СТАРЫЕ форматы (formatFallbackUrls) — они тоже
+                                // протухшие, без толку. Вторая ступень (http400FreshAttempts>0):
+                                // если свежий fetch всё равно 400 → перебор форматов.
+                                // http400FreshAttempts ключён на `video` (не resolvedVideo),
+                                // поэтому переживает пересоздание плеера и не даёт
+                                // зациклиться "400 → fresh → плеер пересоздан → 400 → fresh…".
+                                if (http400FreshAttempts < 1) {
+                                    http400FreshAttempts += 1
+                                    playerError = "Ошибка сети (HTTP 400). Запрашиваю свежие ссылки…"
+                                    isSwitchingQuality = false
+                                    retryWithFreshUrl()
+                                } else {
+                                    // #CLIP-HLS-DASH-START: VK-клипы не отдают прогрессивный
+                                    // mp4 (ProgressiveMediaPeriod → HTTP 400) даже со свежими
+                                    // files. Переключаемся на следующий формат по приоритету
+                                    // HLS/DASH-адаптивные → низкий mp4 (formatFallbackUrls).
+                                    // fallbackAttempt двигает индекс, чтобы не перезагружать
+                                    // один и тот же URL в цикле; сбрасывается при STATE_READY.
+                                    playerError = "Ошибка сети (HTTP 400). Пробую другой формат…"
+                                    isSwitchingQuality = false
+                                    val candidates = formatFallbackUrls(resolvedVideo.files)
+                                    val failingUrl = self.currentMediaItem?.localConfiguration?.uri?.toString()
+                                    val remaining = candidates.filter { (_, url) -> url != failingUrl }
+                                    if (remaining.isNotEmpty()) {
+                                        val nextIdx = fallbackAttempt.coerceAtMost(remaining.lastIndex)
+                                        val nextEntry = remaining.getOrNull(nextIdx)
+                                        if (nextEntry != null) {
+                                            val (nextKey, nextUrl) = nextEntry
+                                            fallbackAttempt += 1
+                                            val savedPosition = self.currentPosition
+                                            val savedSpeed = self.playbackParameters.speed
+                                            val mediaItem = MediaItem.Builder()
+                                                .setUri(Uri.parse(nextUrl))
+                                                // #VIDEO-DASH-MIMEBYKEY: MIME по ключу формата.
+                                                .apply { mimeFor(nextKey, nextUrl)?.let { setMimeType(it) } }
+                                                .build()
+                                            self.setMediaItem(mediaItem)
+                                            self.prepare()
+                                            self.seekTo(savedPosition)
+                                            // W30-STABILITY: скорость выживает fallback по формату.
+                                            self.setPlaybackSpeed(savedSpeed)
+                                            // Качество пока не выбрано пользователем — ABR свободен.
+                                            applyQualityPin(self, null)
+                                            retryCount++
+                                            selectedHls = false
+                                            AppLog.i(TAG, "HTTP 400 → fallback format: ${nextUrl.take(80)}")
+                                        } else {
+                                            retryWithFreshUrl()
+                                        }
+                                    } else {
+                                        retryWithFreshUrl()
+                                    }
+                                }
+                            } else if (isMalformedManifest) {
+                                // #HLS-MALFORMED (2026-10-06): сервер отдал HLS/DASH-URL как
+                                // HTML/не-#EXTM3U. Как и при HTTP 400: сначала один свежий
+                                // video.get (URL подписаны и истекают), затем перебор
+                                // formatFallbackUrls — чтобы не висло на битом манифесте.
+                                // Переиспользуем http400FreshAttempts (сбрасывается на
+                                // STATE_READY), чтобы не зациклиться "malformed → fresh → плеер
+                                // пересоздан → malformed → fresh…".
+                                if (http400FreshAttempts < 1) {
+                                    http400FreshAttempts += 1
+                                    playerError = "Некорректный плейлист. Запрашиваю свежие ссылки…"
+                                    isSwitchingQuality = false
+                                    retryWithFreshUrl()
+                                } else {
+                                    playerError = "Некорректный плейлист. Пробую другой формат…"
+                                    isSwitchingQuality = false
+                                    val candidates = formatFallbackUrls(resolvedVideo.files)
+                                    val failingUrl = self.currentMediaItem?.localConfiguration?.uri?.toString()
+                                    val remaining = candidates.filter { (_, url) -> url != failingUrl }
+                                    if (remaining.isNotEmpty()) {
+                                        val nextIdx = fallbackAttempt.coerceAtMost(remaining.lastIndex)
+                                        val nextEntry = remaining.getOrNull(nextIdx)
+                                        if (nextEntry != null) {
+                                            val (nextKey, nextUrl) = nextEntry
+                                            fallbackAttempt += 1
+                                            val savedPosition = self.currentPosition
+                                            val savedSpeed = self.playbackParameters.speed
+                                            val mediaItem = MediaItem.Builder()
+                                                .setUri(Uri.parse(nextUrl))
+                                                .apply { mimeFor(nextKey, nextUrl)?.let { setMimeType(it) } }
+                                                .build()
+                                            self.setMediaItem(mediaItem)
+                                            self.prepare()
+                                            self.seekTo(savedPosition)
+                                            self.setPlaybackSpeed(savedSpeed)
+                                            applyQualityPin(self, null)
+                                            retryCount++
+                                            selectedHls = false
+                                            AppLog.i(TAG, "Malformed manifest → fallback format: ${nextUrl.take(80)}")
+                                        } else {
+                                            retryWithFreshUrl()
+                                        }
+                                    } else {
+                                        retryWithFreshUrl()
+                                    }
+                                }
                             } else {
                                 playerError = "Ошибка видео: ${error.errorCodeName}. Повторная попытка…"
                                 retryWithFreshUrl()
@@ -974,6 +1305,14 @@ fun VideoPlayerScreen(
                             if (state == Player.STATE_READY) {
                                 playerError = null
                                 hasStarted = true
+                                // #CLIP-HLS-DASH-START: успешное воспроизведение — сбрасываем
+                                // счётчик fallback-форматов (HTTP 400), чтобы следующая
+                                // ошибка снова начинала перебор с первого формата.
+                                fallbackAttempt = 0
+                                // FRESH-RESOLVE: воспроизведение пошло — сбрасываем лимит
+                                // свежих video.get на ошибку. Следующий 400 в этой сессии
+                                // снова получит один свежий fetch, а не уйдёт сразу в fallback.
+                                http400FreshAttempts = 0
                             }
                         }
 
@@ -984,6 +1323,7 @@ fun VideoPlayerScreen(
                     })
                     AppLog.i(TAG, "ExoPlayer created for video #${resolvedVideo.id} url=$url")
                 }
+            }
         }
     }
 
@@ -1064,9 +1404,9 @@ fun VideoPlayerScreen(
         isSwitchingQuality = true
 
         val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(newUrl))
-        if (newUrl.contains("m3u8", ignoreCase = true)) {
-            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-        }
+        // #VIDEO-DASH-MIMEBYKEY: MIME по ключу выбранного качества (клипы → точный
+        // DASH/HLS тип; mp4_* → null = прогрессив без явного MIME).
+        mimeFor(option.key, newUrl)?.let { mediaItemBuilder.setMimeType(it) }
         player.setMediaItem(mediaItemBuilder.build())
         player.prepare()
 
@@ -1110,7 +1450,7 @@ fun VideoPlayerScreen(
 
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(url))
-            .setMimeType(MimeTypes.APPLICATION_M3U8)
+            .apply { mimeFor("hls", url)?.let { setMimeType(it) } }
             .build()
         player.setMediaItem(mediaItem)
         player.prepare()
@@ -1639,6 +1979,36 @@ fun VideoPlayerScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 when {
+                    // Fix #VIDEO-BLOCK-ADS: рекламное видео заблокировано — вместо
+                    // плеера показываем заглушку. Не даём инициализировать/воспроизводить.
+                    adBlocked -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Filled.Block, null,
+                                tint = VK_TEXT_SECONDARY, modifier = Modifier.size(48.dp),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Реклама заблокирована",
+                                color = VK_WHITE, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Воспроизведение рекламных роликов отключено в настройках.",
+                                color = VK_TEXT_SECONDARY, fontSize = 13.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Box(
+                                modifier = Modifier
+                                    .background(VK_RED, RoundedCornerShape(8.dp))
+                                    .clickable { onBack() }
+                                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                            ) {
+                                Text("Закрыть", color = VK_WHITE, fontSize = 13.sp)
+                            }
+                        }
+                    }
                     isLoadingVideo -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = VK_WHITE)

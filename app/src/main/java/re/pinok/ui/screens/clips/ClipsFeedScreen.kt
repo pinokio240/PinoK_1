@@ -342,8 +342,11 @@ private fun ClipPlayerItem(
             // VkCookieJar, который подставляет живой VK cookie-set в исходящие запросы.
             // Образец: PlayerService.kt:371-400 (audio), VideoPlayerScreen.kt:802 (video).
             // Fallback на DefaultHttpDataSource если SovaApp ещё не инициализирован.
-            // Referer https://m.vk.com/ — VK CDN игнорирует, но не вредит (OK CDN требует).
-            val refererProps = mapOf("Referer" to "https://m.vk.com/")
+            // Referer https://m.vk.ru/ — VK CDN требует (иначе 400): m.vk.com → m.vk.ru.
+            // CDN требует правильный Origin: https://vk.ru (см. HAR: access-control-allow-origin)
+            // и Referer: m.vk.ru — без Origin CDN отвечает HTTP 400 / HTML-страницей.
+            // OK CDN может принимать любой Referer.
+            val refererProps = mapOf("Referer" to "https://m.vk.ru/", "Origin" to "https://vk.ru")
             val app = context.applicationContext as? SovaApp
             val httpFactory = if (app != null) {
                 try {

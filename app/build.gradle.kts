@@ -204,6 +204,8 @@ dependencies {
     implementation(libs.androidx.media3.database)
     // Fix #68: HLS для VK audio (index.m3u8?siren=1) и video (video.m3u8).
     implementation(libs.androidx.media3.exoplayer.hls)
+    // DASH: видео, где VK отдаёт только .mpd / dash_ondemand / dash_sep (без mp4/hls).
+    implementation(libs.androidx.media3.exoplayer.dash)
 
     // §42.12 P0 #2: ffmpeg-kit-audio — Siren→AAC транскодер.
     // Audio-only build (~15-20 MB). Расшифровывает VK Siren (G.722.1) офлайн.

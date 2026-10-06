@@ -335,11 +335,23 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // "720" | "480" | "360" | "240" | "144". Видео-плеер выбирает ближайшее
             // доступное ≤ предпочтённого (fallback на макс если preferred выше всех).
             videoPreferredQuality = p[Keys.VIDEO_PREFERRED_QUALITY] ?: "auto",
+            // Fix #387: предел качества видео на МОБИЛЬНОЙ сети (экономия трафика).
+            // Значения те же: "auto" (без лимита на мобильной = вести себя как
+            // videoPreferredQuality) | "2160" | "1440" | "1080" | "720" | "480" |
+            // "360" | "240" | "144". Default "480" — разумный компромисс при
+            // воспроизведении по мобильной сети. Применяется ТОЛЬКО к начальному
+            // выбору качества, если сеть не Wi-Fi/Ethernet. Ручное переключение
+            // качества пользователем его не трогает.
+            mobileVideoQualityLimit = p[Keys.MOBILE_VIDEO_QUALITY_LIMIT] ?: "480",
             // #VIDEO-AUTOPLAY: автовоспроизведение видео при открытии VideoPlayerScreen.
             // Default true — пользователь запросил «по умолчанию включено».
             // При выключении ExoPlayer создаётся с playWhenReady=false и LifecycleStartEffect
             // не форсирует play — пользователь жмёт кнопку play сам.
             videoAutoplay = p[Keys.VIDEO_AUTOPLAY] ?: true,
+            // Fix #VIDEO-BLOCK-ADS: блокировка рекламных видео в плеере.
+            // Default true — рекламные ролики (is_ad / is_promoted) по умолчанию
+            // НЕ воспроизводятся в VideoPlayerScreen, показывается заглушка.
+            videoBlockAds = p[Keys.VIDEO_BLOCK_ADS] ?: true,
             // OK-IMPL-1 (Stage 7) + FEED-FIX-4 (#349): включение встраивания
             // внешних видео (YouTube, OK.ru iframe, иные iframe-источники) И
             // нативного OK-воспроизведения в VideoPlatformRouter.
@@ -870,8 +882,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** §42.12 P1 #5: добавлять "NN. " префикс к имени файла в плейлисте. */
     suspend fun setNumTracksInPlaylist(v: Boolean)      = put(Keys.NUM_TRACKS_IN_PLAYLIST, v)
     suspend fun setVideoPreferredQuality(v: String)      = put(Keys.VIDEO_PREFERRED_QUALITY, v)
+    /** Fix #387: предел качества видео на мобильной сети ("auto"/"480"/...). */
+    suspend fun setMobileVideoQualityLimit(v: String)     = put(Keys.MOBILE_VIDEO_QUALITY_LIMIT, v)
     /** #VIDEO-AUTOPLAY: вкл/выкл автовоспроизведения видео при открытии. */
     suspend fun setVideoAutoplay(v: Boolean)            = put(Keys.VIDEO_AUTOPLAY, v)
+    /** Fix #VIDEO-BLOCK-ADS: вкл/выкл блокировки рекламных видео (is_ad / is_promoted). */
+    suspend fun setVideoBlockAds(v: Boolean)            = put(Keys.VIDEO_BLOCK_ADS, v)
     /** OK-IMPL-1 (Stage 7): включить/выключить встраивание внешних видео (YouTube/iframe). */
     suspend fun setExternalVideosEnabled(v: Boolean)     = put(Keys.EXTERNAL_VIDEOS_ENABLED, v)
     // Fix #337: редактор панелей — порядок и видимость кнопок.
@@ -1544,8 +1560,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val numTracksInPlaylist: Boolean,
         /** Fix #334: предпочтительное качество видео ("auto"/"1080"/"720"/...). */
         val videoPreferredQuality: String,
+        /** Fix #387: предел качества видео на мобильной сети ("auto"/"480"/...). */
+        val mobileVideoQualityLimit: String,
         /** #VIDEO-AUTOPLAY: автовоспроизведение при открытии (default true). */
         val videoAutoplay: Boolean,
+        /** Fix #VIDEO-BLOCK-ADS: блокировать рекламные видео (is_ad / is_promoted, default true). */
+        val videoBlockAds: Boolean,
         /**
          * OK-IMPL-1 (Stage 7) + FEED-FIX-4 (#349): включение внешних видео
          * (YouTube/OK iframe/...) И нативного OK-воспроизведения.
@@ -1969,8 +1989,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // §42.12 P1 #5: добавлять "NN. " префикс к имени файла в плейлисте. Default: true.
         val NUM_TRACKS_IN_PLAYLIST = booleanPreferencesKey("num_tracks_in_playlist")
         val VIDEO_PREFERRED_QUALITY = stringPreferencesKey("video_preferred_quality")
+        // Fix #387: предел качества на мобильной сети. Default "480".
+        val MOBILE_VIDEO_QUALITY_LIMIT = stringPreferencesKey("mobile_video_quality_limit")
         // #VIDEO-AUTOPLAY: автовоспроизведение видео при открытии плеера.
         val VIDEO_AUTOPLAY         = booleanPreferencesKey("video_autoplay")
+        // Fix #VIDEO-BLOCK-ADS: блокировка рекламных видео (is_ad / is_promoted).
+        val VIDEO_BLOCK_ADS        = booleanPreferencesKey("video_block_ads")
         // OK-IMPL-1 (Stage 7): включение внешних видео (YouTube/OK iframe).
         val EXTERNAL_VIDEOS_ENABLED = booleanPreferencesKey("external_videos_enabled")
         // Fix #337: редактор панелей — порядок и видимость кнопок.
