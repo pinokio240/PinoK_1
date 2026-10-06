@@ -2011,6 +2011,9 @@ fun ChatDetailScreen(
             }
             val idSet = ids.toSet()
             messages = messages.filter { it.id !in idSet }
+            // P0.28 #MSG-DELETE-REFRESH: после удаления обновляем чат через reloadMessages
+            // — VK мог удалить не сразу (async), а reload гарантирует актуальное состояние.
+            reloadMessages()
             if (failed > 0) {
                 AppLog.w("ChatDetailScreen", "bulk delete: $failed failed of ${ids.size}")
             }
@@ -6317,9 +6320,11 @@ private fun MessageBubble(
         }
         val msgShape = if (bubbleless) bubblelessShape else bubbleShape
         val msgBg = if (bubbleless) bubblelessBg else bubbleColor
-        val msgMaxWidth = if (bubbleless) 320.dp else 280.dp
-        val msgHPadding = if (bubbleless) 10.dp else 12.dp
-        val msgVPadding = if (bubbleless) 6.dp else 8.dp
+        // P0.28 #MSG-BUBBLE-WIDER (2026-10): шире и выше — контент не наползает на
+        // кружок выбора при multi-select. Раньше: 280dp max width, 12dp H / 8dp V padding.
+        val msgMaxWidth = if (bubbleless) 340.dp else 300.dp
+        val msgHPadding = if (bubbleless) 12.dp else 14.dp
+        val msgVPadding = if (bubbleless) 8.dp else 10.dp
         Box(
             modifier = Modifier
                 .widthIn(max = msgMaxWidth)
@@ -6363,18 +6368,20 @@ private fun MessageBubble(
                 )
                 .padding(horizontal = msgHPadding, vertical = msgVPadding),
         ) {
-            // P2.5: selection indicator (checkmark circle) в верхнем углу bubble.
+            // P0.28 #MSG-SELECT-CIRCLE (2026-10): кружок выбора крупнее (28dp было 18dp,
+            // иконка 20dp было 14dp). Padding-right для контента чтобы не наползал.
             if (selectionMode) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .size(18.dp)
+                        .padding(4.dp)
+                        .size(28.dp)
                         .clip(CircleShape)
                         .background(
                             if (selected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                            else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
                         )
-                        .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                        .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (selected) {
@@ -6382,12 +6389,14 @@ private fun MessageBubble(
                             Icons.Outlined.Check,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                 }
             }
-            Column {
+            // P0.28: в selection mode добавляем padding справа сверху чтобы контент
+            // (текст/вложения) не наползал на кружок выбора (28dp).
+            Column(modifier = Modifier.padding(end = if (selectionMode) 32.dp else 0.dp)) {
                 // #60: Reply — ответ на сообщение (reply_message)
                 // Fix #206: плашка кликабельна → скролл к исходному сообщению
                 // (+подсветка), либо preview-диалог если цель вне загруженной истории.
