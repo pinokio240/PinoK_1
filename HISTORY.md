@@ -14448,3 +14448,18 @@ COMPILE-FIX4-2026-10-06: 6 ошибок компиляции от P0.23 (bottom 
 // ChatDetailScreen.kt:11836 — 'Unresolved reference mutableLongStateOf'. P0.24 добавил currentPositionMs: Long by mutableLongStateOf(0L), но забыл import androidx.compose.runtime.mutableLongStateOf. Добавлен.
 // ChatDetailScreen.kt:11960 — 'Assignment type mismatch: actual Int, expected Long'. MediaPlayer.currentPosition возвращает Int (мс), но currentPositionMs — Long. Добавлен .toLong() conversion.
 // 2 файла, +4/−1. Кодировка UTF-8 без BOM.
+
+VOICE-ASR-EXOPLAYER-P0.25-26-2026-10-06: реальная расшифровка ASR + ExoPlayer с cookies. 2 файла, +200/−68.
+// Пользователь: «ПРИ ВОСПРОИЗВЕДЕНИЕ 0:00 и не считает, показывает заглушку, я хочу получать расшифровки, А НЕ ЗАГЛУШКИ».
+// Из лога: LongPoll возвращает audio_message с duration=3, waveform=[0,0,0,...], БЕЗ transcript/transcript_state. VK отдаёт transcript только через messages.getById/getDiffContent после 5-30 сек подготовки ASR на сервере. MediaPlayer не логирует onPrepared — значит 403 от VK CDN (нет cookies).
+// P0.25 #VOICE-ASR-FETCH:
+//   - VKApiClient.kt: добавлен messagesGetById(messageIds: List<Long>) — вызывает messages.getById, возвращает JsonObject response.
+//   - ChatDetailScreen.kt: добавлена fetchVoiceTranscripts() — фильтрует voice-сообщения без done-transcript, вызывает messagesGetById, парсит transcript + transcript_state из response, обновляет messages in-place через Attachment.copy(doc=...)/copy(audioMessage=...).
+//   - Авто-fetch: LaunchedEffect(messages.id-hash) — через 5 сек если есть pending voice, вызывает fetchVoiceTranscripts(). Повторяется при смене списка сообщений (новое голосовое → авто-fetch через 5 сек).
+//   - Ручной fetch: VoiceMessageBubble onRequestTranscript callback — при тапе на ASR кнопку если transcriptContent==null (не готов), вызывает fetchVoiceTranscripts() перед toggle expansion.
+// P0.26 #VOICE-EXOPLAYER:
+//   - VoicePlaybackController: MediaPlayer → ExoPlayer + OkHttpDataSource.Factory(SovaApp.httpClient) — отправляет cookies (remixsid) через VkCookieJar + VK UA + Referer. Fallback на DefaultHttpDataSource если SovaApp null.
+//   - Player.Listener: onPlaybackStateChanged(STATE_READY) → set durationSec из ep.duration; onIsPlayingChanged → start/stop progress tracking; onPlayerError → releasePlayer + fallback URL (Fix #237).
+//   - startProgressTracking: читает ep.currentPosition (Long мс) напрямую, обновляет currentPositionMs + progress. Больше нет durationSec*progress desync.
+//   - Imports: DefaultDataSource, DefaultHttpDataSource, OkHttpDataSource.
+// 2 файла, +200/−68. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

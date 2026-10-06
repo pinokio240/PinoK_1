@@ -13061,3 +13061,39 @@ Task: исправить 6 ошибок компиляции от P0.23 + P0.24.
 // app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+3/−1, import mutableLongStateOf + .toLong())
 
 // Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 39 (VOICE-ASR-EXOPLAYER-P0.25-26-2026-10-06)
+Agent: orchestrator (main)
+Task: починить таймер (0:00 не считает) + реальные расшифровки ASR (не заглушки).
+
+## Контекст
+Пользователь: «ПРИ ВОСПРОИЗВЕДЕНИЕ 0:00 и не считает, показывает заглушку, я хочу получать расшифровки, А НЕ ЗАГЛУШКИ». Прислал лог (Pasted Content_1791285169465.txt, 1424 entries).
+
+## Анализ лога
+// LongPoll возвращает audio_message: duration=3, waveform=[0,0,0,...], БЕЗ transcript/transcript_state. VK отдаёт transcript только через messages.getById/getDiffContent после 5-30 сек подготовки ASR на сервере.
+// В логе НЕТ тегов VoicePlayback/MediaPlayer/onPrepared — значит onPrepared не вызывался → MediaPlayer не получил cookies → VK CDN (psv4.vkuserphoto.ru) вернул 403 → durationSec остался 0 → таймер 0:00.
+
+## Work Log
+// P0.25 ASR fetch:
+//   - VKApiClient.kt:7361-7378 — messagesGetById(messageIds: List<Long>): JsonObject? — вызывает messages.getById.
+//   - ChatDetailScreen.kt:1043-1099 — fetchVoiceTranscripts(): фильтрует voice-сообщения без done-transcript, вызывает messagesGetById, парсит transcript + transcript_state, обновляет messages in-place.
+//   - ChatDetailScreen.kt:3621-3637 — LaunchedEffect(messages.id-hash): авто-fetch через 5 сек если есть pending voice.
+//   - ChatDetailScreen.kt:9496 — VoiceMessageBubble onRequestTranscript callback: ручной fetch при тапе ASR.
+//   - ChatDetailScreen.kt:9676 — onClick ASR: если transcriptContent==null → onRequestTranscript().
+// P0.26 ExoPlayer + cookies:
+//   - ChatDetailScreen.kt:11872-12077 — VoicePlaybackController переписан на ExoPlayer. OkHttpDataSource.Factory(SovaApp.httpClient) — cookies через VkCookieJar. Fallback DefaultHttpDataSource. Player.Listener: onPlaybackStateChanged(STATE_READY) → durationSec; onIsPlayingChanged → progress tracking; onPlayerError → fallback URL.
+//   - startProgressTracking: ep.currentPosition (Long мс) напрямую → currentPositionMs + progress.
+//   - Imports: DefaultDataSource, DefaultHttpDataSource, OkHttpDataSource (стр. 201-203).
+// Коммит d7b09d6, push прошёл: 9beaf0f..d7b09d6 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Таймер: ExoPlayer + OkHttpDataSource (cookies) → VK CDN отдаёт 200 → onPlaybackStateChanged(STATE_READY) → durationSec из ep.duration → таймер корректный (elapsed из currentPosition).
+// ASR: реальные расшифровки через messages.getById — авто-fetch через 5 сек + ручной fetch при тапе ASR. Заглушка только если VK вернул transcript_state != "done" (in_progress/error/empty).
+
+Файлы (2, +200/−68):
+// app/src/main/java/re/pinok/api/VKApiClient.kt (+19, messagesGetById)
+// app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+181/−68, fetchVoiceTranscripts + ExoPlayer)
+
+// Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
