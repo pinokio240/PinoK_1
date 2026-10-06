@@ -14422,3 +14422,10 @@ VOICE-TRANSCRIPT-P0.22-2026-10-06: аудио-сообщения в цвете V
 //   - Transcript block (when expanded): Row с 2dp vertical separator (voiceColor alpha 0.24 — VK CSS .AttachVoice__transcript::before) + text body (textColor, 14sp, padding-left 10dp). Соответствует VK web AttachVoice__transcript layout.
 // Imports: KeyboardArrowUp, IntrinsicSize добавлены.
 // Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+BOTTOM-NAV-ICON-ONLY-P0.23-2026-10-06: нижняя панель — только иконки разделов (без текста), крупнее.
+// Пользователь: «На нижней панели должны быть значки разделов без текста и крупней».
+// NavigationBar (≤5 items, SovaNavHost:1457): убран label = { Text(item.title) } из NavigationBarItem. Иконки 32dp (было ~24dp Material3 default). Явный tint: onSurface (selected) / onSurfaceVariant (not selected). BadgedBox для Messages (unread count) сохранён.
+// BottomNavScrollButton (>5 items, скроллируемая панель, SovaNavHost:336): убран Text(item.title). Иконки 32dp. Высота кнопки 80dp → 64dp (без текста меньше места). BadgedBox сохранён.
+// Drawer / side panel labels НЕ тронуты — пользователь сказал про «нижнюю панель».
+// 1 файл, +24/−13. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

@@ -12981,3 +12981,27 @@ Task: аудио-сообщения в цвете #0077FF + кнопка рас�
 // app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+271/−103, VoiceMessageBubble rewrite)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 36 (BOTTOM-NAV-ICON-ONLY-P0.23-2026-10-06)
+Agent: orchestrator (main)
+Task: нижняя панель — значки разделов без текста, крупнее.
+
+## Контекст
+Пользователь: «На нижней панели должны быть значки разделов без текста и крупней».
+
+## Work Log
+// SovaNavHost.kt:1457 NavigationBar (≤5 items) — убран label = { Text(item.title) } из NavigationBarItem. Иконки 32dp (Modifier.size(32.dp), было ~24dp default). Явный tint: onSurface (selected) / onSurfaceVariant (not selected) — с явным Modifier.size auto-tint нуждается в явном color.
+// SovaNavHost.kt:336 BottomNavScrollButton (>5 items, скролл-Row) — убран Text(item.title). Иконки 32dp. Высота Column 80dp → 64dp (без текста меньше места).
+// BadgedBox для Messages (unread count) сохранён в обоих вариантах.
+// Drawer / side panel labels НЕ тронуты — пользователь сказал про «нижнюю панель».
+// Коммит 82ca60d, push прошёл: f0c05ce..82ca60d PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Нижняя панель: только иконки, без текста, 32dp (было ~24dp).
+// Оба режима (≤5 items NavigationBar + >5 items scroll-Row) обновлены.
+// Бейдж unread для Messages сохранён.
+
+Файл (1, +24/−13): app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
