@@ -13005,3 +13005,35 @@ Task: нижняя панель — значки разделов без тек�
 
 Файл (1, +24/−13): app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 37 (VOICE-TIMER-ASR-P0.24-2026-10-06)
+Agent: orchestrator (main)
+Task: фикс таймера голосовых + ASR кнопка всегда со stub-сообщениями.
+
+## Контекст
+Пользователь: «Таймер при воспроизведении сообщения так и не корректен, кнопки запроса на расшифровку я так и не увидел, а увидел кнопку которая показывает уже расшифровку».
+
+## Root Cause
+// Таймер: elapsed считался как durationSec * progress. progress = pos/duration (MediaPlayer). Если MediaPlayer.duration != VK metadata.duration (часто для streaming MP3), elapsed рассинхронизировался. Также формат "elapsed / total" (0:03 / 0:08) — громоздкий, VK web показывает одно число.
+// ASR кнопка: показывалась только когда hasTranscript = (transcript != null AND transcript_state == "done"). Пользователь видел кнопку только для уже расшифрованных сообщений. Для сообщений без transcript (или in_progress/error) кнопки не было.
+
+## Work Log
+// VoicePlaybackController: добавлен currentPositionMs (Long) state (mutableLongStateOf). Обновляется в startProgressTracking напрямую из MediaPlayer.currentPosition. Сбрасывается в onPrepared, onCompletion, releasePlayer.
+// VoiceMessageBubble:
+//   - elapsedSec = currentPositionMs / 1000 (прямая позиция, не через progress).
+//   - displaySec = if (isPlaying) elapsedSec else durationSec.toInt() — одно число.
+//   - Убрано "elapsed / total" — теперь только одно значение.
+//   - showAsrButton = true всегда (было hasTranscript).
+//   - transcriptContent: when-логика по transcript_state (done/in_progress/error/empty/null).
+//   - Stub-сообщения для не-done состояний (как VK web AttachVoice__transcriptStub).
+//   - isStub flag: меньшая alpha для stub (0.5f текст, 0.12f сепаратор) vs реальный transcript (1.0 текст, 0.24f сепаратор).
+// Коммит 7382ec1, push прошёл: 6c9f73a..7382ec1 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Таймер: одно число (elapsed при playing, total при паузе) — как VK web. Реальная позиция из MediaPlayer, без рассинхрона.
+// ASR кнопка: всегда видна для голосовых. При тапе показывает текст (done) или stub (in_progress/error/empty) — как VK web.
+
+Файл (1, +59/−29): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

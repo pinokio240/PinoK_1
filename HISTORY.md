@@ -14429,3 +14429,16 @@ BOTTOM-NAV-ICON-ONLY-P0.23-2026-10-06: нижняя панель — тольк�
 // BottomNavScrollButton (>5 items, скроллируемая панель, SovaNavHost:336): убран Text(item.title). Иконки 32dp. Высота кнопки 80dp → 64dp (без текста меньше места). BadgedBox сохранён.
 // Drawer / side panel labels НЕ тронуты — пользователь сказал про «нижнюю панель».
 // 1 файл, +24/−13. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+VOICE-TIMER-ASR-P0.24-2026-10-06: фикс таймера (одно число) + ASR кнопка всегда со stub-сообщениями.
+// Пользователь: «Таймер при воспроизведении сообщения так и не корректен, кнопки запроса на расшифровку я так и не увидел, а увидел кнопку которая показывает уже расшифровку».
+// Таймер: VoicePlaybackController добавлен currentPositionMs (Long) state, обновляется в startProgressTracking напрямую из MediaPlayer.currentPosition (раньше только progress float = pos/duration — elapsed считался как durationSec*progress, рассинхрон если MediaPlayer.duration != VK metadata.duration). VoiceMessageBubble: таймер теперь ОДНО число (как VK web AttachVoice__duration). Было "elapsed / total" (0:03 / 0:08) — громоздко. Теперь: если playing → elapsed (real-time из currentPositionMs), иначе → total. elapsedSec = currentPositionMs / 1000 (прямая позиция MediaPlayer, мс).
+// ASR кнопка: было showAsrButton только когда hasTranscript (transcript != null AND transcript_state == "done") — пользователь видел кнопку только для уже расшифрованных. Теперь: showAsrButton = true всегда (как VK web AttachVoice__asrButton — всегда видна для голосовых). transcriptContent при expanded зависит от transcript_state:
+//   - "done" + text → реальный текст расшифровки.
+//   - "in_progress" → "Расшифровка готовится…" (stub, me_voice_asr_status_in_progress).
+//   - "error" → "Ошибка расшифровки" (stub).
+//   - "done" + empty text → "Расшифровка недоступна" (stub, me_voice_asr_status_empty).
+//   - null → "Расшифровка недоступна" (stub, me_voice_asr_status_empty_set).
+// Stub-сообщения: меньшая alpha (0.5f текст, 0.12f сепаратор) для отличия от реальной расшифровки (alpha 1.0 текст, 0.24f сепаратор).
+// VK web reference (из снапшота JS 41738.bb95a044.js): me_voice_asr_status_empty / _in_progress / _error / _empty_set strings. AttachVoice__transcriptStub class для stub-сообщений. AttachVoice__asrButton всегда присутствует (chevron up/down).
+// 1 файл, +59/−29. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
