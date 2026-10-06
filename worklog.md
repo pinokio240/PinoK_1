@@ -13253,3 +13253,33 @@ Task: исправить 3 ошибки компиляции от P0.25e.
 
 Файл (1, +18/−12): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
 Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 46 (VOICE-SEND-V2-P0.26b-2026-10-06)
+Agent: orchestrator (main)
+Task: проверить почему аудио сообщение может не отправиться.
+
+## HAR анализ
+// VK web использует DEDICATED audio-message pipeline (НЕ docs.*):
+//   1. messages.getAudioMessageUploadServer → upload_url с JWT token (pu.vk.ru/gu/audiomessage/v2/upload)
+//   2. Upload (multipart, filename="voice_recording", Content-Type: audio/ogg) → JSON (sha/secret/meta/hash/server/user_id/request_id/app_id)
+//   3. messages.saveAudioMessage(file=<JSON>) → audio_message объект напрямую (id, owner_id, access_key, duration, link_mp3, link_ogg)
+//   4. messages.send(attachment=doc{ownerId}_{id}_{accessKey})
+// Старый pipeline PinoK: docs.getMessagesUploadServer(type=audio_message) → docsUploadVoice → docs.save → messages.send. Мог быть устаревшим/нестабильным.
+
+## Work Log
+// VKApiClient.kt:10481 — sendVoiceMessage переписан на новый pipeline.
+// VKApiClient.kt:10537 — messagesGetAudioMessageUploadServer(): String? (forceWebGateway).
+// VKApiClient.kt:10558 — uploadAudioMessage(uploadUrl, file): String? (multipart, filename="voice_recording", audio/ogg).
+// VKApiClient.kt:10590 — messagesSaveAudioMessage(fileJson): Triple<ownerId, docId, accessKey>? (forceWebGateway).
+// Старые docs.* методы сохранены для обратной совместимости.
+// Коммит 0f74675, push прошёл: 05520ba..0f74675 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Новый pipeline отправки голосовых по образцу VK web HAR.
+// messages.getAudioMessageUploadServer → upload to pu.vk.ru → messages.saveAudioMessage → messages.send.
+// Старый docs.* pipeline заменён (потенциально устаревший/нестабильный).
+
+Файл (1, +89/−12): app/src/main/java/re/pinok/api/VKApiClient.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

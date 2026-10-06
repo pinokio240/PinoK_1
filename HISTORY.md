@@ -14523,3 +14523,14 @@ COMPILE-FIX6-2026-10-06: 3 ошибки компиляции — onRequestAsr sc
 // ChatDetailScreen.kt:6545,6546,6552 — 'Unresolved reference scope/app/fetchVoiceTranscripts'. MessageBubble — отдельная Composable, не имеет доступа к scope/app/fetchVoiceTranscripts из ChatDetailScreen.
 // Фикс: добавлен параметр onRequestAsr в MessageBubble (рядом с onFetchVoiceTranscripts). Caller (ChatDetailScreen:5070) передаёт lambda с доступом к scope/app/fetchVoiceTranscripts. MessageBubble пробрасывает в VoiceMessageBubble.onRequestAsr.
 // 1 файл, +18/−12. Кодировка UTF-8 без BOM.
+
+VOICE-SEND-V2-P0.26b-2026-10-06: новый pipeline отправки голосовых по образцу VK web (HAR).
+// Пользователь: «проверь почему аудио сообщение может не отправиться».
+// HAR анализ: VK web использует DEDICATED audio-message pipeline (НЕ docs.*):
+//   1. messages.getAudioMessageUploadServer → upload_url с JWT token (pu.vk.ru/gu/audiomessage/v2/upload)
+//   2. Upload (multipart, filename="voice_recording", Content-Type: audio/ogg) → JSON (sha/secret/meta/hash/server/user_id/request_id/app_id)
+//   3. messages.saveAudioMessage(file=<JSON>) → audio_message объект напрямую (id, owner_id, access_key, duration, link_mp3, link_ogg)
+//   4. messages.send(attachment=doc{ownerId}_{id}_{accessKey})
+// Старый pipeline (docs.getMessagesUploadServer → docsUploadVoice → docs.save) мог быть устаревшим/нестабильным для audio_message — голосовые не отправлялись.
+// Новые методы: messagesGetAudioMessageUploadServer(), uploadAudioMessage(uploadUrl, file), messagesSaveAudioMessage(fileJson). sendVoiceMessage переписан на новый pipeline. Старые docs.* методы сохранены для обратной совместимости.
+// 1 файл, +89/−12. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
