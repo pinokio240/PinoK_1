@@ -14500,3 +14500,21 @@ VOICE-ASR-SUSPEND-P0.25d-2026-10-06: suspend fetchVoiceTranscripts + LaunchedEff
 //   - onFetchVoiceTranscripts callback обёрнут в scope.launch (manual tap): { scope.launch { fetchVoiceTranscripts() } } — fire-and-forget для UI.
 //   - LaunchedEffect(peerId) вместо messages.id-hash: стабильный ключ, не перезапускает loop при каждом изменении messages (что вызывало infinite restart).
 // 1 файл, +68/−65. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+VOICE-ASR-REQUEST-P0.25e-2026-10-06: messages.recogniseAudioMessage — реальный запрос расшифровки ASR.
+// Пользователь: «изучай лучше расшифровка так и не работает в пинок» (даже вручную не работает).
+// HAR анализ (снапшоты + JS 41738.bb95a044.js): VK web НЕ использует messages.getById для ASR. Он вызывает messages.recogniseAudioMessage — ЯВНЫЙ ЗАПРОС к VK серверу начать speech-to-text. VK web JS:
+//   onClick(ed): if (expanding && !transcription && isTranscriptPossible && !requested):
+//     audio_message_id = authorId + '_' + t.id  // "171093180_710441419"
+//     g.fetch("messages.recogniseAudioMessage", { peer_id, cmid, audio_message_id, group_id })
+//     setRequested(true)
+//   toggleExpanded()
+// HAR: POST messages.recogniseAudioMessage → {"response":1} (запрос принят). Через 5-30 сек transcript появляется в messages.getDiffContent/getHistory.
+// Фикс:
+//   - VKApiClient.kt: добавлен messagesRecogniseAudioMessage(peerId, cmid, audioMessageId, groupId) — forceWebGateway=true, возвращает Boolean.
+//   - Models.kt AudioMsg: добавлены поля id + ownerId (парсятся из audio_message.id/owner_id). Нужны для audio_message_id = "${ownerId}_${id}".
+//   - VKApiClient.kt parseAudioMsg: парсинг id + owner_id в обеих ветках (doc.audio_msg legacy + audio_message standard).
+//   - VoiceMessageBubble: добавлены параметры peerId, cmid, onRequestAsr. asrRequested state (remember по messageId) — защита от повторных запросов. hasTranscript check — skip ASR если уже done. audio_message_id: из AudioMsg.ownerId_id если доступно, fallback doc.ownerId_doc.id (legacy).
+//   - ChatDetailScreen caller: передаёт message.peerId, message.conversationMessageId, onRequestAsr lambda — вызывает messagesRecogniseAudioMessage, затем через 5 сек delay вызывает fetchVoiceTranscripts (poll transcript).
+//   - LaunchedEffect(peerId) poll-loop: 6 попыток × 10 сек — auto-fetch transcript после ASR request.
+// 3 файла, +92/−5. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

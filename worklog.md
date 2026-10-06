@@ -13198,3 +13198,41 @@ Task: починить retry ASR — «расшифровка готовится
 
 Файл (1, +68/−65): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 44 (VOICE-ASR-REQUEST-P0.25e-2026-10-06)
+Agent: orchestrator (main)
+Task: починить расшифровку ASR — «изучай лучше расшифровка так и не работает в пинок».
+
+## HAR анализ (в deeply изучил)
+// JS 41738.bb95a044.js: при тапе ASR-кнопки VK web ВЫЗЫВАЕТ messages.recogniseAudioMessage — ЯВНЫЙ запрос к VK серверу начать speech-to-text. НЕ messages.getById (который я раньше пытался использовать).
+// Логика VK web JS (onClick ed):
+//   audio_message_id = `${e.authorId}_${t.id.toString()}`  // "171093180_710441419"
+//   g.fetch("messages.recogniseAudioMessage", { peer_id, cmid, audio_message_id, group_id })
+//   er(true)  // mark as requested
+// HAR: POST → {"response":1} (accepted). Через 5-30 сек transcript появляется в getDiffContent.
+
+## Work Log
+// VKApiClient.kt:7395 — messagesRecogniseAudioMessage(peerId, cmid, audioMessageId, groupId): Boolean. forceWebGateway=true.
+// Models.kt:181-182 — AudioMsg добавлены поля id + ownerId (@SerializedName "id"/"owner_id").
+// VKApiClient.kt parseAudioMsg — парсинг id + owner_id в обеих ветках (doc.audio_msg + audio_message).
+// ChatDetailScreen.kt:9517-9533 — VoiceMessageBubble: добавлены peerId, cmid, onRequestAsr параметры.
+// ChatDetailScreen.kt:9606-9610 — asrRequested state + hasTranscript check.
+// ChatDetailScreen.kt:9741-9751 — onClick ASR: если willExpand && !hasTranscript && !asrRequested → onRequestAsr(peerId, cmid, audioMsgId). audio_message_id из AudioMsg.ownerId_id если доступно, fallback doc.ownerId_doc.id.
+// ChatDetailScreen.kt:6532-6557 — caller передаёт message.peerId, message.conversationMessageId, onRequestAsr lambda: messagesRecogniseAudioMessage → 5 сек delay → fetchVoiceTranscripts.
+// Коммит 1491470, push прошёл: ca7ac84..1491470 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// messages.recogniseAudioMessage — реальный запрос расшифровки (как VK web).
+// audio_message_id корректный: из AudioMsg.ownerId_id (не Doc.ownerId_id=0 для type=audio_message).
+// asrRequested защита от повторных запросов.
+// После ASR request: 5 сек delay → fetchVoiceTranscripts (poll готового transcript).
+// LaunchedEffect(peerId) poll-loop: 6 попыток × 10 сек — auto-fetch.
+
+Файлы (3, +92/−5):
+// app/src/main/java/re/pinok/api/VKApiClient.kt (+38, messagesRecogniseAudioMessage + parse id/ownerId)
+// app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+55, VoiceMessageBubble + caller)
+// core/data/src/main/java/re/pinok/data/model/Models.kt (+4, AudioMsg id/ownerId)
+
+// Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
