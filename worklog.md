@@ -13115,3 +13115,33 @@ Task: исправить 2 ошибки компиляции от P0.25/P0.26.
 
 Файл (1, +8/−3): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
 Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 41 (VOICE-ASR-FETCH-FIX2-P0.25b-2026-10-06)
+Agent: orchestrator (main)
+Task: починить расшифровку ASR — «расшифровка так и не работает».
+
+## Work Log
+// VKApiClient.messagesGetById: добавлен forceWebGateway=true — гарантированно через web.api.vk.ru (vk1.a.* токен, sig не нужен). Раньше через прямой токен мог дать error 15 (access denied — sig required) если user_secret отсутствует.
+// ChatDetailScreen.fetchVoiceTranscripts: добавлены диагностические логи на каждом шаге:
+//   - "found N pending voice messages (total M)" — сколько voice без done-transcript.
+//   - "requesting getById for ids=[...]" — какие IDs запрашиваем.
+//   - "response keys=[...]" — ключи в response (должны быть count+items).
+//   - "got N items" — сколько сообщений вернул VK.
+//   - "msg=X transcript=... state=..." — per-msg transcript и state.
+//   - "no items[] in response, raw=..." — если items отсутствует, показываем raw response (300 chars).
+//   - "no transcript updates found in response" — если audio_message не найден в attachments.
+// audio_message fallback: attObj.audio_message ?: attObj.doc.audio_msg — legacy doc wrapper (type=doc с вложенным audio_msg).
+// Коммит d0eda14, push прошёл: 38051d3..d0eda14 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// forceWebGateway=true — гарантированно web-шлюз (vk1.a.* токен, без sig).
+// audio_message fallback для legacy doc wrapper.
+// Диагностические логи — теперь видно где именно падает: null response, no items, no audio_message, no transcript.
+
+Файлы (2, +25/−5):
+// app/src/main/java/re/pinok/api/VKApiClient.kt (+5, forceWebGateway)
+// app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+20/−5, diagnostic logging + fallback)
+
+// Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

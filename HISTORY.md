@@ -14468,3 +14468,15 @@ COMPILE-FIX5-2026-10-06: 2 ошибки компиляции от P0.25/P0.26.
 // ChatDetailScreen.kt:1089 — 'Smart cast to Attachment.Doc is impossible, because doc is a public API property declared in different module'. Attachment.doc объявлен в :core:data, доступ из :app — smart cast через модули невозможен. Фикс: локальный val doc = att.doc, затем null-check на локальной val (smart cast работает в пределах одной функции).
 // ChatDetailScreen.kt:6511 — 'Unresolved reference fetchVoiceTranscripts'. fetchVoiceTranscripts объявлена в ChatDetailScreen composable scope, но VoiceMessageBubble вызывается из MessageBubble (отдельная composable). Фикс: добавлен параметр onFetchVoiceTranscripts: () -> Unit в MessageBubble, передаётся в VoiceMessageBubble.onRequestTranscript. Caller (ChatDetailScreen:5043) передаёт { fetchVoiceTranscripts() }.
 // 1 файл, +8/−3. Кодировка UTF-8 без BOM.
+
+VOICE-ASR-FETCH-FIX2-P0.25b-2026-10-06: web gateway + diagnostic logging + doc.audio_msg fallback.
+// Пользователь: «расшифровка так и не работает».
+// Возможные причины:
+// 1. messages.getById через прямой токен → error 15 (sig required) если нет user_secret. Фикс: forceWebGateway=true — гарантированно web.api.vk.ru (vk1.a.* токен, sig не нужен).
+// 2. audio_message в response может быть внутри type=doc (legacy формат), не только type=audio_message. Фикс: fallback на doc.audio_msg если audio_message не найден.
+// 3. Нет диагностического логирования — невозможно понять запускается ли fetchVoiceTranscripts, что VK вернул, где парсинг падает.
+// Фиксы:
+//   - VKApiClient.messagesGetById: forceWebGateway=true.
+//   - ChatDetailScreen.fetchVoiceTranscripts: добавлены диагностические AppLog.i/w на каждом шаге — pending count, requesting ids, response keys, items count, per-msg transcript/state, no-items/no-updates warnings, raw response preview (300 chars) если items[] отсутствует.
+//   - audio_message fallback: attObj.audio_message ?: attObj.doc.audio_msg (legacy doc wrapper).
+// 2 файла, +25/−5. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
