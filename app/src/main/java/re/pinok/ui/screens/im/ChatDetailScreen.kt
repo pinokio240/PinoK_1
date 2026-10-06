@@ -159,6 +159,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -11957,7 +11958,8 @@ private class VoicePlaybackController {
                     val d = p.duration.coerceAtLeast(1)
                     val pos = p.currentPosition.coerceIn(0, p.duration)
                     // P0.24: обновляем currentPositionMs напрямую из MediaPlayer.
-                    currentPositionMs = pos
+                    // pos — Int (мс), currentPositionMs — Long → явный .toLong().
+                    currentPositionMs = pos.toLong()
                     progress = pos.toFloat() / d
                 } catch (_: Exception) {
                     break
