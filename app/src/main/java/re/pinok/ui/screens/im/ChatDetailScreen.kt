@@ -6538,6 +6538,21 @@ private fun MessageBubble(
                                 controller = voicePlaybackController,
                                 // P0.25 #VOICE-ASR-FETCH: запрос transcript при тапе ASR кнопки.
                                 onRequestTranscript = onFetchVoiceTranscripts,
+                                // P0.25e #VOICE-ASR-REQUEST: параметры для messages.recogniseAudioMessage.
+                                peerId = message.peerId,
+                                cmid = message.conversationMessageId ?: 0L,
+                                onRequestAsr = { pId, cId, amId ->
+                                    scope.launch {
+                                        val ok = app.apiClient.messagesRecogniseAudioMessage(pId, cId, amId)
+                                        AppLog.i("VoiceASR", "recogniseAudioMessage result: $ok (peer=$pId cmid=$cId audioMsgId=$amId)")
+                                        if (ok) {
+                                            // VK принял запрос — через 5-30 сек transcript появится.
+                                            // Запускаем poll-loop для подхвата готового transcript.
+                                            kotlinx.coroutines.delay(5000)
+                                            fetchVoiceTranscripts()
+                                        }
+                                    }
+                                },
                             )
                         }
                     }
@@ -9523,6 +9538,14 @@ private fun VoiceMessageBubble(
     // P0.25 #VOICE-ASR-FETCH: callback для запроса transcript (messages.getById).
     // Вызывается при тапе на ASR-кнопку, если transcript ещё не готов.
     onRequestTranscript: () -> Unit = {},
+    // P0.25e #VOICE-ASR-REQUEST: параметры для messages.recogniseAudioMessage.
+    // VK web (HAR): при тапе ASR-кнопки ВЫЗЫВАЕТ recognizeAudioMessage —
+    // это ЗАПРОС на расшифровку (не getById). VK начинает ASR на сервере,
+    // через 5-30 сек transcript появляется в getDiffContent/getHistory.
+    // onRequestAsr: (peerId, cmid, audioMessageId) -> Unit — запускает recognizeAudioMessage.
+    peerId: Long = 0L,
+    cmid: Long = 0L,
+    onRequestAsr: (peerId: Long, cmid: Long, audioMessageId: String) -> Unit = { _, _, _ -> },
 ) {
     // P0.22 #VOICE-COLOR (2026-10): аудио-сообщения ВСЕГДА в цвете VK Modern #0077FF.
     // Раньше: accentColor = MaterialTheme.colorScheme.primary (для входящих) или textColor
@@ -9580,6 +9603,11 @@ private fun VoiceMessageBubble(
     // кнопку, при тапе пользователь увидит "Расшифровка недоступна".
     val showAsrButton = true
     var transcriptExpanded by remember(messageId) { mutableStateOf(false) }
+    // P0.25e: asrRequested — защита от повторных messages.recogniseAudioMessage запросов.
+    // VK web (HAR): er(true) после первого fetch. Сбрасывается при смене messageId.
+    var asrRequested by remember(messageId) { mutableStateOf(false) }
+    // hasTranscript = transcript готов (done + non-blank text).
+    val hasTranscript = !audioMsg.transcript.isNullOrBlank() && audioMsg.transcriptState == "done"
 
     Column(
         modifier = Modifier
@@ -9701,12 +9729,29 @@ private fun VoiceMessageBubble(
                 Spacer(modifier = Modifier.width(4.dp))
                 IconButton(
                     onClick = {
-                        // P0.25 #VOICE-ASR-FETCH: если transcript ещё не готов — запрашиваем
-                        // через messages.getById (VK готовит ASR 5-30 сек после отправки).
-                        // Если уже готов — просто toggle видимости.
-                        if (transcriptContent == null) {
-                            onRequestTranscript()
+                        // P0.25e #VOICE-ASR-REQUEST (VK web HAR): при тапе ASR-кнопки
+                        // ЕСЛИ expanding (transcriptExpanded=false → true) AND transcript
+                        // ещё не готов (transcriptState != "done") AND recognizeAudioMessage
+                        // ещё не запрашивали (asrRequested=false):
+                        //   1. Вызываем messages.recogniseAudioMessage(peerId, cmid, audioMessageId).
+                        //      VK начинает ASR на сервере, через 5-30 сек transcript появится.
+                        //   2. Помечаем asrRequested=true (защита от повторных запросов).
+                        //   3. auto-retry fetchVoiceTranscripts (poll-loop) подхватит готовый transcript.
+                        val willExpand = !transcriptExpanded
+                        if (willExpand && !hasTranscript && !asrRequested && peerId != 0L && cmid != 0L) {
+                            // P0.25e: audio_message_id = "${ownerId}_${id}" — из AudioMsg (не Doc,
+                            // т.к. для type=audio_message Doc.id=0). VK web: authorId_docId.
+                            val audioMsgId = if (audioMsg.ownerId != 0L && audioMsg.id != 0L) {
+                                "${audioMsg.ownerId}_${audioMsg.id}"
+                            } else {
+                                "${doc.ownerId}_${doc.id}"  // fallback для legacy doc.audio_msg
+                            }
+                            onRequestAsr(peerId, cmid, audioMsgId)
+                            asrRequested = true
+                            AppLog.i("VoiceASR", "recogniseAudioMessage requested: peer=$peerId cmid=$cmid audioMsgId=$audioMsgId")
                         }
+                        // P0.25: если transcript уже готов — просто toggle видимости.
+                        // Если не готов но ASR уже запрошен — toggle (показываем "готовится…").
                         transcriptExpanded = !transcriptExpanded
                     },
                     modifier = Modifier.size(24.dp),

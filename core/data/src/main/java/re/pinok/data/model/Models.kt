@@ -176,6 +176,10 @@ data class Attachment(
             @SerializedName("link_ogg")  val linkOgg: String? = null,
             @SerializedName("link_mp3")  val linkMp3: String? = null,
             @SerializedName("waveform")  val waveform: List<Int>? = null,
+            // P0.25e #VOICE-ASR-REQUEST: id и owner_id audio_message (для messages.recogniseAudioMessage).
+            // VK web (HAR): audio_message_id = "${owner_id}_${id}" — нужен для запроса расшифровки.
+            @SerializedName("id")        val id: Long = 0L,
+            @SerializedName("owner_id") val ownerId: Long = 0L,
             // P0.22 #VOICE-TRANSCRIPT (2026-10): расшифровка ASR (speech-to-text).
             // VK отдаёт transcript + transcript_state="done" в audio_message объекте
             // (messages.getDiffContent / messages.getHistory). Показывается через

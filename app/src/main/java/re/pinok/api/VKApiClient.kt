@@ -7381,6 +7381,38 @@ class VKApiClient(
     }
 
     /**
+     * P0.25e #VOICE-ASR-REQUEST (2026-10): messages.recogniseAudioMessage —
+     * ЗАПРАШИВАЕТ расшифровку ASR на сервере VK.
+     *
+     * VK LongPoll НЕ возвращает transcript — нужно ЯВНО запросить расшифровку.
+     * VK web (HAR): при тапе на ASR-кнопку вызывает messages.recogniseAudioMessage
+     * с параметрами peer_id, cmid (conversation_message_id), audio_message_id,
+     * group_id. VK начинает ASR, через 5-30 сек transcript появляется в
+     * messages.getDiffContent / getHistory.
+     *
+     * @return true если VK принял запрос (response:1), false при ошибке/null.
+     */
+    suspend fun messagesRecogniseAudioMessage(
+        peerId: Long,
+        cmid: Long,
+        audioMessageId: String,  // "ownerId_docId" (e.g. "171093180_710441419")
+        groupId: Long = 0,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mapOf(
+            "peer_id" to peerId.toString(),
+            "cmid" to cmid.toString(),
+            "audio_message_id" to audioMessageId,
+            "group_id" to groupId.toString(),
+        )
+        val json = call("messages.recogniseAudioMessage", args, forceWebGateway = true) ?: return false
+        val resp = json.getAsJsonObject("response") ?: return false
+        // response:1 = запрос принят.
+        val result = resp.get("response")?.takeIf { !it.isJsonNull }
+        return result != null && (result.isJsonPrimitive && result.asInt == 1)
+    }
+
+    /**
      * P4.4: `execute` — отправляет VKScript на единый endpoint VK API.
      *
      * VK `execute` позволяет объединить до 25 методов в один HTTP round-trip.
@@ -11817,6 +11849,9 @@ class VKApiClient(
                                 waveform = am.getAsJsonArray("waveform")?.mapNotNull { w ->
                                     if (w.isJsonPrimitive) w.asInt else null
                                 },
+                                // P0.25e: id и owner_id audio_message (для recogniseAudioMessage).
+                                id = safeLong(am.get("id")),
+                                ownerId = safeLong(am.get("owner_id")),
                                 // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR.
                                 transcript = safeString(am.get("transcript")),
                                 transcriptState = safeString(am.get("transcript_state")),
@@ -11848,6 +11883,9 @@ class VKApiClient(
                                 waveform = am.getAsJsonArray("waveform")?.mapNotNull { w ->
                                     if (w.isJsonPrimitive) w.asInt else null
                                 },
+                                // P0.25e: id и owner_id audio_message (для recogniseAudioMessage).
+                                id = safeLong(am.get("id")),
+                                ownerId = safeLong(am.get("owner_id")),
                                 // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR.
                                 transcript = safeString(am.get("transcript")),
                                 transcriptState = safeString(am.get("transcript_state")),
