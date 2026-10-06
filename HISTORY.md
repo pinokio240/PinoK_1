@@ -14480,3 +14480,13 @@ VOICE-ASR-FETCH-FIX2-P0.25b-2026-10-06: web gateway + diagnostic logging + doc.a
 //   - ChatDetailScreen.fetchVoiceTranscripts: добавлены диагностические AppLog.i/w на каждом шаге — pending count, requesting ids, response keys, items count, per-msg transcript/state, no-items/no-updates warnings, raw response preview (300 chars) если items[] отсутствует.
 //   - audio_message fallback: attObj.audio_message ?: attObj.doc.audio_msg (legacy doc wrapper).
 // 2 файла, +25/−5. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+VOICE-ASR-RETRY-P0.25c-2026-10-06: retry-loop ASR fetch + "готовится" stub для null state.
+// Анализ HAR (tempfile.org/LA9u3LEiLAW): VK web использует messages.getDiffContent который возвращает полный audio_message с transcript + transcript_state="done". LongPoll new_message event содержит МИНИМАЛЬНЫЙ audio_message (без transcript). VK готовит ASR на сервере 5-30 сек после отправки.
+// Корень: fetchVoiceTranscripts запускался ОДИН раз через 5 сек — VK мог не подготовить ASR → null transcript → "Расшифровка недоступна" (misleading — звучит как permanently unavailable).
+// Фикс:
+//   - LaunchedEffect: retry-loop 5 попыток × 10 сек = 50 сек total. Каждая попытка перепроверяет hasPendingVoice — если VK подготовил ASR к 2-й попытке, 3-я не запустится (break).
+//   - transcriptState==null (свежее голосовое, VK ещё не начинал ASR): stub изменён с "Расшифровка недоступна" на "Расшифровка готовится…". Пользователь видит "готовится" и auto-retry обновит до реального текста через 10-30 сек.
+//   - isStub упрощён: stub = state != "done" || text blank. Реальный transcript = done + non-blank text.
+//   - transcriptContent всегда non-null (при expanded): каждое состояние имеет сообщение — done+text, in_progress, error, null=preparing.
+// 1 файл, +20/−15. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

@@ -13145,3 +13145,32 @@ Task: починить расшифровку ASR — «расшифровка �
 // app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+20/−5, diagnostic logging + fallback)
 
 // Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 42 (VOICE-ASR-RETRY-P0.25c-2026-10-06)
+Agent: orchestrator (main)
+Task: починить расшифровку ASR — HAR показал что VK готовит transcript через 5-30 сек.
+
+## HAR анализ (tempfile.org/LA9u3LEiLAW)
+// VK web использует messages.getDiffContent → возвращает полный audio_message с transcript:"Бомж стайл! Бомжик! Бомжик стайл" + transcript_state:"done".
+// LongPoll new_message event содержит МИНИМАЛЬНЫЙ audio_message: {id, owner_id, duration, waveform} — БЕЗ transcript.
+// VK готовит ASR на сервере 5-30 сек после отправки голосового.
+
+## Root Cause
+// fetchVoiceTranscripts запускался ОДИН раз через 5 сек. VK мог не подготовить ASR к этому моменту → null transcript → "Расшифровка недоступна" (звучит как permanently unavailable, но на самом деле ASR ещё не готов).
+
+## Work Log
+// LaunchedEffect: retry-loop 5 попыток × 10 сек = 50 сек total. Каждая попытка перепроверяет hasPendingVoice — если VK подготовил ASR, цикл break (no wasted requests).
+// transcriptState==null → stub "Расшифровка готовится…" (было "Расшифровка недоступна").
+// isStub упрощён: stub = state != "done" || text blank.
+// transcriptContent всегда non-null: каждое состояние имеет сообщение.
+// Коммит 5fc3bb7, push прошёл: 8bba061..5fc3bb7 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Retry-loop: 5 попыток × 10 сек — VK имеет до 50 сек на подготовку ASR.
+// Stub "Расшифровка готовится…" для null state — пользователь видит что процесс идёт.
+// Auto-retry обновит messages до реального transcript когда VK подготовит.
+
+Файл (1, +20/−15): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
