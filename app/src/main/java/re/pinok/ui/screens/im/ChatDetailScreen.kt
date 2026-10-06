@@ -1085,8 +1085,9 @@ fun ChatDetailScreen(
                         if (am != null) {
                             val newAm = am.copy(transcript = upd.first ?: am.transcript,
                                                 transcriptState = upd.second ?: am.transcriptState)
-                            if (att.doc?.audioMsg != null) {
-                                att.copy(doc = att.doc.copy(audioMsg = newAm))
+                            val doc = att.doc
+                            if (doc != null && doc.audioMsg != null) {
+                                att.copy(doc = doc.copy(audioMsg = newAm))
                             } else {
                                 att.copy(audioMessage = newAm)
                             }
@@ -5038,6 +5039,8 @@ fun ChatDetailScreen(
                                     message = msg,
                                     profiles = chatProfiles,
                                     voicePlaybackController = voicePlaybackController,
+                                    // P0.25 #VOICE-ASR-FETCH: передаём callback для запроса transcript.
+                                    onFetchVoiceTranscripts = { fetchVoiceTranscripts() },
                                     onLongPress = { contextMsgId = msg.id },
                                     // #REACTION-WEB-MAP: double-click = ❤️ = id 1
                                     // (web-карта; раньше id 2 был ❤️, фактически ставился 🔥).
@@ -5996,6 +5999,8 @@ private fun MessageBubble(
     canMarkImportant: Boolean = false,
     // Fix #120: единый voice-плеер на чат — только одно голосовое играет за раз.
     voicePlaybackController: VoicePlaybackController,
+    // P0.25 #VOICE-ASR-FETCH: запрос transcript (messages.getById) при тапе ASR кнопки.
+    onFetchVoiceTranscripts: () -> Unit = {},
     // #59: ответ на сообщение
     onReply: () -> Unit = {},
     // #60: markAsAnswered + restore
@@ -6508,7 +6513,7 @@ private fun MessageBubble(
                                 messageId = message.id,
                                 controller = voicePlaybackController,
                                 // P0.25 #VOICE-ASR-FETCH: запрос transcript при тапе ASR кнопки.
-                                onRequestTranscript = { fetchVoiceTranscripts() },
+                                onRequestTranscript = onFetchVoiceTranscripts,
                             )
                         }
                     }
