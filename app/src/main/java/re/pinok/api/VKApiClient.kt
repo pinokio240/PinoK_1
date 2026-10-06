@@ -7405,11 +7405,28 @@ class VKApiClient(
             "audio_message_id" to audioMessageId,
             "group_id" to groupId.toString(),
         )
-        val json = call("messages.recogniseAudioMessage", args, forceWebGateway = true) ?: return false
-        val resp = json.getAsJsonObject("response") ?: return false
-        // response:1 = запрос принят.
-        val result = resp.get("response")?.takeIf { !it.isJsonNull }
-        return result != null && (result.isJsonPrimitive && result.asInt == 1)
+        // P0.25f: try/catch — call() может бросить исключение (NetworkOnMainException,
+        // ClassCastException при нестандартном ответе). Без catch крашит приложение.
+        return try {
+            val json = call("messages.recogniseAudioMessage", args, forceWebGateway = true) ?: return false
+            // P0.25f: VK возвращает {"response":1} — ЧИСЛО, не объект.
+            // Раньше: json.getAsJsonObject("response") → null (response is JsonPrimitive
+            // 1, not JsonObject) → всегда return false → ASR запрос «неуспешен» →
+            // fetchVoiceTranscripts не запускался → расшифровка не приходила.
+            // Теперь: проверяем response как примитив (число 1 = success).
+            val respEl = json.get("response") ?: return false
+            if (respEl.isJsonPrimitive) {
+                respEl.asInt == 1
+            } else if (respEl.isJsonObject) {
+                // Некоторые VK API версии возвращают {response: {response: 1}}.
+                respEl.asJsonObject.get("response")?.asInt == 1
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesRecogniseAudioMessage error: ${e.message}", e)
+            false
+        }
     }
 
     /**

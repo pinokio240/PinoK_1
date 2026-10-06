@@ -5069,12 +5069,16 @@ fun ChatDetailScreen(
                                     // ChatDetailScreen scope имеет доступ к app + scope + fetchVoiceTranscripts.
                                     onRequestAsr = { pId, cId, amId ->
                                         scope.launch {
-                                            val ok = app.apiClient.messagesRecogniseAudioMessage(pId, cId, amId)
-                                            AppLog.i("VoiceASR", "recogniseAudioMessage result: $ok (peer=$pId cmid=$cId audioMsgId=$amId)")
-                                            if (ok) {
-                                                // VK принял запрос — через 5-30 сек transcript появится.
-                                                kotlinx.coroutines.delay(5000)
-                                                fetchVoiceTranscripts()
+                                            try {
+                                                val ok = app.apiClient.messagesRecogniseAudioMessage(pId, cId, amId)
+                                                AppLog.i("VoiceASR", "recogniseAudioMessage result: $ok (peer=$pId cmid=$cId audioMsgId=$amId)")
+                                                if (ok) {
+                                                    // VK принял запрос — через 5-30 сек transcript появится.
+                                                    kotlinx.coroutines.delay(5000)
+                                                    fetchVoiceTranscripts()
+                                                }
+                                            } catch (e: Exception) {
+                                                AppLog.e("VoiceASR", "recogniseAudioMessage crash: ${e.message}", e)
                                             }
                                         }
                                     },
