@@ -1008,24 +1008,39 @@ fun VideoPlayerScreen(
         }
         val bgLivePlayer = VideoPlaybackBus.livePlayerFor(bgReuseKey)
         if (bgLivePlayer != null) {
-            AppLog.i(TAG, "#VIDEO-BG-KEEP: reusing live background player (key=$bgReuseKey)")
-            return@remember bgLivePlayer
+            // P0.31 #VIDEO-BG-KEEP-FIX: проверяем что URL живого плеера совпадает с
+            // currentQualityUrl. Если resolvedVideo обновился (video.get вернул свежие
+            // files), но bgLivePlayer играет старый URL (okcdn) → НЕ переиспользуем,
+            // создаём новый плеер с правильным mp4 URL.
+            val bgCurrentUrl = try { bgLivePlayer.currentMediaItem?.localConfiguration?.uri?.toString() } catch (_: Exception) { null }
+            val newUrl = qualityOptions.getOrNull(selectedQualityIndex)?.url
+            if (bgCurrentUrl != null && newUrl != null && bgCurrentUrl == newUrl) {
+                AppLog.i(TAG, "#VIDEO-BG-KEEP: reusing live background player (key=$bgReuseKey, url match)")
+                return@remember bgLivePlayer
+            } else {
+                AppLog.i(TAG, "#VIDEO-BG-KEEP: URL mismatch (bg=${bgCurrentUrl?.take(60)}, new=${newUrl?.take(60)}) — creating new player")
+                bgLivePlayer.release()
+                VideoPlaybackBus.clearLivePlayer(bgReuseKey)
+            }
         }
         val url = if (isLocalPlayback) {
             "file://${localFile.absolutePath}"
         } else {
+            // P0.31 #VIDEO-NO-PLAYER-URL (2026-10): убран resolvedVideo.player из
+            // fallback chain. VK player URL (okcdn.ru/video_ext.php) НЕ playable
+            // напрямую ExoPlayer'ом — всегда 403/HTML. Раньше: qualityOptions пустой
+            // → firstAdaptiveUrl null → брался resolvedVideo.player (okcdn) → 403.
+            // Теперь: если qualityOptions/adaptive пусты → url=null → ExoPlayer не
+            // создаётся → ждём video.get/shortVideo.get → resolvedVideo обновится →
+            // qualityOptions заполнятся mp4_* → ExoPlayer создастся с рабочим URL.
             qualityOptions.getOrNull(selectedQualityIndex)?.url
-                // OK-IMPL-1 (Stage 3b): OK HLS как fallback если нет прямых mp4.
                 ?: okHlsForFallback
                 ?: run {
                     val files = resolvedVideo.files
                     firstAdaptiveUrl(files)
                 }
-                // VIDEO-FIX (#351): расширенный фильтр [isHtmlEmbedUrl] — не даём
-                // ExoPlayer'у HTML-страницу (OK/YouTube/VK embed). Если прямых
-                // медиа-URL нет — ExoPlayer не создаётся (null), UI покажет
-                // fallback «Открыть в браузере» для OK-видео.
-                ?: resolvedVideo.player?.takeIf { !isHtmlEmbedUrl(it) }
+            // P0.31: убран ?: resolvedVideo.player?.takeIf { !isHtmlEmbedUrl(it) }
+            // VK player URL (okcdn) проходит isHtmlEmbedUrl=false, но всё равно 403.
         }
         if (url == null) {
             AppLog.w(TAG, "No video URL — ExoPlayer not created (platform=${resolvedVideo.videoPlatform}, player=${resolvedVideo.player?.take(60)})")

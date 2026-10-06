@@ -113,6 +113,16 @@ object VideoPlaybackBus {
         return player
     }
 
+    // P0.31 #VIDEO-BG-KEEP-FIX: очищает live player (при URL mismatch — старый плеер
+    // с нерабочим okcdn URL освобождается, создаётся новый с правильным mp4 URL).
+    fun clearLivePlayer(key: String) {
+        if (videoKey == key) {
+            playerRef?.release()
+            playerRef = null
+            videoKey = null
+        }
+    }
+
     /**
      * #VIDEO-BG-KEEP: экран (пере)присоединился — синхронный вызов из
      * DisposableEffect, раньше любых жизненных событий. Защищает
