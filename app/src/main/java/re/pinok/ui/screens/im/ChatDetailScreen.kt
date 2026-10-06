@@ -31,6 +31,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -81,6 +82,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 // #IM-SEARCH (Fix #394): лупа в шапке диалога/канала (снапшот 29-a:
 // search_outline_24 «Поиск по каналу» / поиск по сообщениям).
 import androidx.compose.material.icons.filled.Search
@@ -9407,6 +9409,11 @@ private fun VoiceMessageBubble(
     messageId: Long,
     controller: VoicePlaybackController,
 ) {
+    // P0.22 #VOICE-COLOR (2026-10): аудио-сообщения ВСЕГДА в цвете VK Modern #0077FF.
+    // Раньше: accentColor = MaterialTheme.colorScheme.primary (для входящих) или textColor
+    // (для исходящих — белый/чёрный). Пользователь захотел единый VK-акцент для всех голосовых.
+    // Источник: VK Brand Guidelines — #0077FF = primary accent (vk.design).
+    val voiceColor = Color(0xFF0077FF)
     // Fix #244: состояние выбора для вложения.
     val sel = LocalAttachmentSelection.current
     val audioMsg = doc.audioMsg ?: return
@@ -9429,123 +9436,181 @@ private fun VoiceMessageBubble(
     val durationSec = if (isCurrent && controller.durationSec > 0f) controller.durationSec
                       else audioMsg.duration.toFloat()
 
-    Row(
+    // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR. Показывается когда transcript
+    // присутствует И transcript_state == "done". Кнопка-шеврон toggles видимость.
+    val hasTranscript = !audioMsg.transcript.isNullOrBlank() &&
+        audioMsg.transcriptState == "done"
+    var transcriptExpanded by remember(messageId) { mutableStateOf(false) }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 6.dp)
-            .combinedClickable(
-                onClick = {
-                    // Fix #244: в selection mode — toggle, не запускаем воспроизведение.
-                    if (sel != null && sel.selectionMode) sel.onToggleSelection()
-                    else {
-                        // Единственный toggle — контроллер сам решает play/pause/switch.
-                        // Fix #237: передаём fallbackUrl — если primary упадёт (например,
-                        // OGG/Opus не поддерживается), контроллер попробует альтернативный.
-                        controller.toggle(messageId, url, audioMsg.duration.toFloat(), fallbackUrl)
-                    }
-                },
-                onLongClick = { sel?.onLongPress?.invoke() },
-            ),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(top = 6.dp),
     ) {
-        // Play/Pause icon.
-        Icon(
-            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
-            tint = accentColor,
-            modifier = Modifier.size(28.dp),
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-
-        // Waveform + progress.
-        Box(
+        Row(
             modifier = Modifier
-                .weight(1f)
-                .height(28.dp),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {
+                        // Fix #244: в selection mode — toggle, не запускаем воспроизведение.
+                        if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                        else {
+                            // Единственный toggle — контроллер сам решает play/pause/switch.
+                            // Fix #237: передаём fallbackUrl — если primary упадёт (например,
+                            // OGG/Opus не поддерживается), контроллер попробует альтернативный.
+                            controller.toggle(messageId, url, audioMsg.duration.toFloat(), fallbackUrl)
+                        }
+                    },
+                    onLongClick = { sel?.onLongPress?.invoke() },
+                ),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Waveform bars.
-            val waveform = audioMsg.waveform
-            if (waveform != null && waveform.isNotEmpty()) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val barCount = minOf(waveform.size, 32)
-                    val step = waveform.size.toFloat() / barCount
-                    val barW = 2.dp.toPx()
-                    val gap = 1.5.dp.toPx()
-                    val totalWidth = barCount * (barW + gap) - gap
-                    val startX = (size.width - totalWidth) / 2
-                    val maxH = size.height * 0.8f
-                    for (i in 0 until barCount) {
-                        val sample = waveform[(i * step).toInt()].coerceIn(0, 255)
-                        val h = (sample / 255f) * maxH
-                        val x = startX + i * (barW + gap)
-                        val y = (size.height - h) / 2
-                        // Fix #120: столбики до progress — accentColor, после — textColor.
-                        val barColor = if (isCurrent && x < size.width * progress) accentColor
-                                       else textColor.copy(alpha = 0.4f)
-                        drawRoundRect(
-                            color = barColor,
-                            topLeft = androidx.compose.ui.geometry.Offset(x, y),
-                            size = androidx.compose.ui.geometry.Size(barW, h),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
-                        )
+            // Play/Pause icon.
+            Icon(
+                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
+                tint = voiceColor,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Waveform + progress.
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(28.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                // Waveform bars.
+                val waveform = audioMsg.waveform
+                if (waveform != null && waveform.isNotEmpty()) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val barCount = minOf(waveform.size, 32)
+                        val step = waveform.size.toFloat() / barCount
+                        val barW = 2.dp.toPx()
+                        val gap = 1.5.dp.toPx()
+                        val totalWidth = barCount * (barW + gap) - gap
+                        val startX = (size.width - totalWidth) / 2
+                        val maxH = size.height * 0.8f
+                        for (i in 0 until barCount) {
+                            val sample = waveform[(i * step).toInt()].coerceIn(0, 255)
+                            val h = (sample / 255f) * maxH
+                            val x = startX + i * (barW + gap)
+                            val y = (size.height - h) / 2
+                            // P0.22: voiceColor (#0077FF) до progress, серый после.
+                            val barColor = if (isCurrent && x < size.width * progress) voiceColor
+                                           else textColor.copy(alpha = 0.4f)
+                            drawRoundRect(
+                                color = barColor,
+                                topLeft = androidx.compose.ui.geometry.Offset(x, y),
+                                size = androidx.compose.ui.geometry.Size(barW, h),
+                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
+                            )
+                        }
+                    }
+                } else {
+                    // Fallback: simple waveform bars.
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val barCount = 24
+                        val barW = 2.dp.toPx()
+                        val gap = 1.5.dp.toPx()
+                        val totalWidth = barCount * (barW + gap) - gap
+                        val startX = (size.width - totalWidth) / 2
+                        for (i in 0 until barCount) {
+                            val h = size.height * (0.3f + 0.5f * abs((i - barCount / 2f) / (barCount / 2f)))
+                            val x = startX + i * (barW + gap)
+                            val y = (size.height - h) / 2
+                            val barColor = if (isCurrent && x < size.width * progress) voiceColor
+                                           else textColor.copy(alpha = 0.4f)
+                            drawRoundRect(
+                                color = barColor,
+                                topLeft = androidx.compose.ui.geometry.Offset(x, y),
+                                size = androidx.compose.ui.geometry.Size(barW, h),
+                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
+                            )
+                        }
                     }
                 }
-            } else {
-                // Fallback: simple waveform bars.
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val barCount = 24
-                    val barW = 2.dp.toPx()
-                    val gap = 1.5.dp.toPx()
-                    val totalWidth = barCount * (barW + gap) - gap
-                    val startX = (size.width - totalWidth) / 2
-                    for (i in 0 until barCount) {
-                        val h = size.height * (0.3f + 0.5f * abs((i - barCount / 2f) / (barCount / 2f)))
-                        val x = startX + i * (barW + gap)
-                        val y = (size.height - h) / 2
-                        val barColor = if (isCurrent && x < size.width * progress) accentColor
-                                       else textColor.copy(alpha = 0.4f)
-                        drawRoundRect(
-                            color = barColor,
-                            topLeft = androidx.compose.ui.geometry.Offset(x, y),
-                            size = androidx.compose.ui.geometry.Size(barW, h),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
-                        )
-                    }
+                // Progress overlay.
+                if (isCurrent && progress > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress.coerceIn(0f, 1f))
+                            .height(28.dp)
+                            .background(voiceColor.copy(alpha = 0.15f)),
+                    )
                 }
             }
-            // Progress overlay.
-            if (isCurrent && progress > 0f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .height(28.dp)
-                        .background(accentColor.copy(alpha = 0.15f)),
-                )
+
+            Spacer(modifier = Modifier.width(6.dp))
+            // Duration / elapsed time — как в VK web (AttachVoice__duration).
+            // Формат: elapsed / total (0:03 / 0:08).
+            val elapsed = (durationSec * progress).roundToInt()
+            Text(
+                text = elapsed.toRecordingTimeString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = voiceColor,
+                fontSize = 11.sp,
+            )
+            Text(
+                text = "/",
+                style = MaterialTheme.typography.labelSmall,
+                color = textColor.copy(alpha = 0.4f),
+                fontSize = 10.sp,
+            )
+            Text(
+                text = durationSec.toInt().toRecordingTimeString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = voiceColor.copy(alpha = 0.7f),
+                fontSize = 11.sp,
+            )
+
+            // P0.22 #VOICE-TRANSCRIPT: кнопка-шеврон для показа расшифровки ASR.
+            // VK web: AttachVoice__asrButton (chevron_up/down_outline_20).
+            // Показывается только когда есть transcript (transcript_state=="done").
+            if (hasTranscript) {
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(
+                    onClick = { transcriptExpanded = !transcriptExpanded },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        imageVector = if (transcriptExpanded) Icons.Filled.KeyboardArrowUp
+                                      else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = if (transcriptExpanded) "Свернуть расшифровку"
+                                             else "Показать расшифровку",
+                        tint = voiceColor,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.width(6.dp))
-        // Duration / elapsed time.
-        val elapsed = (durationSec * progress).roundToInt()
-        Text(
-            text = elapsed.toRecordingTimeString(),
-            style = MaterialTheme.typography.labelSmall,
-            color = textColor.copy(alpha = 0.8f),
-            fontSize = 11.sp,
-        )
-        Text(
-            text = "/",
-            style = MaterialTheme.typography.labelSmall,
-            color = textColor.copy(alpha = 0.4f),
-            fontSize = 10.sp,
-        )
-        Text(
-            text = durationSec.toInt().toRecordingTimeString(),
-            style = MaterialTheme.typography.labelSmall,
-            color = textColor.copy(alpha = 0.5f),
-            fontSize = 11.sp,
-        )
+        // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR (как в VK web AttachVoice__transcript).
+        // Левая вертикальная линия-сепаратор (2dp, voiceColor alpha 0.24) + текст.
+        if (hasTranscript && transcriptExpanded) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(IntrinsicSize.Min)
+                        .background(voiceColor.copy(alpha = 0.24f)),
+                )
+                Text(
+                    text = audioMsg.transcript ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .padding(start = 10.dp)
+                        .fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 

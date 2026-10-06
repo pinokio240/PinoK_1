@@ -11795,6 +11795,9 @@ class VKApiClient(
                                 waveform = am.getAsJsonArray("waveform")?.mapNotNull { w ->
                                     if (w.isJsonPrimitive) w.asInt else null
                                 },
+                                // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR.
+                                transcript = safeString(am.get("transcript")),
+                                transcriptState = safeString(am.get("transcript_state")),
                             )
                         }
                         Attachment(type = type, doc = Attachment.Doc(
@@ -11823,6 +11826,9 @@ class VKApiClient(
                                 waveform = am.getAsJsonArray("waveform")?.mapNotNull { w ->
                                     if (w.isJsonPrimitive) w.asInt else null
                                 },
+                                // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR.
+                                transcript = safeString(am.get("transcript")),
+                                transcriptState = safeString(am.get("transcript_state")),
                             ),
                         )
                     }
