@@ -3638,19 +3638,23 @@ fun ChatDetailScreen(
 
     // P0.25 #VOICE-ASR-FETCH: авто-запрос transcript для голосовых без расшифровки.
     // VK LongPoll НЕ возвращает transcript — ASR готовится на сервере 5-30 сек.
-    // Триггер: после загрузки истории (messages.isNotEmpty) + каждые 15 сек
-    // пока есть voice-сообщения без done-transcript. Max 5 попыток.
+    // Retry: 5 попыток каждые 10 сек (total 50 сек). Каждая попытка фильтрует
+    // только сообщения БЕЗ done-transcript — если VK подготовил ASR к 1-й попытке,
+    // 2-я не запустится (hasPendingVoice=false → break).
     LaunchedEffect(messages.map { it.id }.hashCode()) {
         if (messages.isEmpty()) return@LaunchedEffect
-        val hasPendingVoice = messages.any { m ->
-            m.attachments?.any { att ->
-                val am = att.doc?.audioMsg ?: att.audioMessage
-                am != null && am.transcriptState != "done"
-            } == true
-        }
-        if (hasPendingVoice) {
-            kotlinx.coroutines.delay(5000)  // VK готовит ASR 5-30 сек.
+        var attempt = 0
+        while (attempt < 5) {
+            val hasPendingVoice = messages.any { m ->
+                m.attachments?.any { att ->
+                    val am = att.doc?.audioMsg ?: att.audioMessage
+                    am != null && am.transcriptState != "done"
+                } == true
+            }
+            if (!hasPendingVoice) break
+            kotlinx.coroutines.delay(10000L)  // VK готовит ASR 5-30 сек — ждём 10.
             fetchVoiceTranscripts()
+            attempt++
         }
     }
 
@@ -9563,7 +9567,10 @@ private fun VoiceMessageBubble(
         transcriptState == "in_progress" -> "Расшифровка готовится…"
         transcriptState == "error" -> "Ошибка расшифровки"
         transcriptState == "done" && transcriptText.isNullOrBlank() -> "Расшифровка недоступна"
-        else -> null  // нет transcript — покажем "Расшифровка недоступна" в expanded
+        // P0.25b: transcriptState==null → VK ещё не готовил ASR (свежее голосовое).
+        // Показываем "Расшифровка готовится…" — retry-fetch обновит через 10-30 сек.
+        transcriptState == null -> "Расшифровка готовится…"
+        else -> "Расшифровка недоступна"
     }
     // Кнопка ASR показывается всегда (даже без transcript — пользователь может нажать,
     // увидит stub). Исключение: если transcript отсутствует вовсе (null) — тоже показываем
@@ -9718,10 +9725,8 @@ private fun VoiceMessageBubble(
         // Показывается когда expanded — содержит либо текст, либо stub-сообщение.
         if (transcriptExpanded) {
             val displayText = transcriptContent ?: "Расшифровка недоступна"
-            val isStub = transcriptContent == null ||
-                transcriptState == "in_progress" ||
-                transcriptState == "error" ||
-                (transcriptState == "done" && transcriptText.isNullOrBlank())
+            // P0.25b: stub = всё кроме реального текста (done + non-blank text).
+            val isStub = transcriptState != "done" || transcriptText.isNullOrBlank()
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
