@@ -13097,3 +13097,21 @@ Task: починить таймер (0:00 не считает) + реальны�
 // app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+181/−68, fetchVoiceTranscripts + ExoPlayer)
 
 // Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 40 (COMPILE-FIX5-2026-10-06)
+Agent: orchestrator (main)
+Task: исправить 2 ошибки компиляции от P0.25/P0.26.
+
+## Work Log
+// ChatDetailScreen.kt:1089 — smart cast на att.doc невозможен (свойство в :core:data, доступ из :app). Фикс: val doc = att.doc (локальная val), затем doc != null && doc.audioMsg != null — smart cast работает в пределах функции.
+// ChatDetailScreen.kt:6511 — fetchVoiceTranscripts недоступен из MessageBubble (отдельная composable). Фикс: добавлен onFetchVoiceTranscripts: () -> Unit параметр в MessageBubble (стр.6003), передаётся в VoiceMessageBubble.onRequestTranscript (стр.6516). Caller (стр.5043) передаёт { fetchVoiceTranscripts() }.
+// Коммит c1fffd1, push прошёл: 706ab82..c1fffd1 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Smart cast через val doc = att.doc.
+// fetchVoiceTranscripts проброшен через onFetchVoiceTranscripts параметр MessageBubble.
+
+Файл (1, +8/−3): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
+Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

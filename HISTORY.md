@@ -14463,3 +14463,8 @@ VOICE-ASR-EXOPLAYER-P0.25-26-2026-10-06: реальная расшифровка
 //   - startProgressTracking: читает ep.currentPosition (Long мс) напрямую, обновляет currentPositionMs + progress. Больше нет durationSec*progress desync.
 //   - Imports: DefaultDataSource, DefaultHttpDataSource, OkHttpDataSource.
 // 2 файла, +200/−68. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+COMPILE-FIX5-2026-10-06: 2 ошибки компиляции от P0.25/P0.26.
+// ChatDetailScreen.kt:1089 — 'Smart cast to Attachment.Doc is impossible, because doc is a public API property declared in different module'. Attachment.doc объявлен в :core:data, доступ из :app — smart cast через модули невозможен. Фикс: локальный val doc = att.doc, затем null-check на локальной val (smart cast работает в пределах одной функции).
+// ChatDetailScreen.kt:6511 — 'Unresolved reference fetchVoiceTranscripts'. fetchVoiceTranscripts объявлена в ChatDetailScreen composable scope, но VoiceMessageBubble вызывается из MessageBubble (отдельная composable). Фикс: добавлен параметр onFetchVoiceTranscripts: () -> Unit в MessageBubble, передаётся в VoiceMessageBubble.onRequestTranscript. Caller (ChatDetailScreen:5043) передаёт { fetchVoiceTranscripts() }.
+// 1 файл, +8/−3. Кодировка UTF-8 без BOM.
