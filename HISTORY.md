@@ -14406,3 +14406,19 @@ THEME-VK-ACCENTS-P0.21-2026-10-06: добавлены VK-фирменные ак
 // Существующие пользователи с сохранённым accentIndex сохраняют свой выбор (DataStore read переопределяет default). Новые пользователи / factory reset → VK Modern.
 // AccentPicker slider (SettingsScreen:4857) авто-адаптируется: valueRange и steps используют SovaColors.accents.size/lastIndex динамически. Никаких hardcoded размеров — добавление цветов не ломает slider.
 // 3 файла, +39/−19. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+VOICE-TRANSCRIPT-P0.22-2026-10-06: аудио-сообщения в цвете VK #0077FF + кнопка расшифровки ASR. 3 файла, +180/−103.
+// Пользователь: «стиль аудио сообщений должен быть цветом #0077FF всегда. По снапшотом посмотри как формируется таймер воспроизведения, как расшифровывается текс в аудио сообщении и сделай кнопку для показа расшифровки как в вк».
+// Изучены VK web снапшоты (аудио_Мессенджер.html + HAR):
+//   - AttachVoice структура: play btn + waveform SVG (width 280 height 12) + duration + asrButton (chevron up/down) + transcript div с left separator line.
+//   - CSS: --vkui--color_icon_accent / --vkui--color_stroke_accent / --vkui--color_text_accent — все VK accent (#0077FF / #2688eb).
+//   - HAR: messages.getDiffContent возвращает audio_message с полями transcript + transcript_state="done" (вместе с waveform, link_mp3, link_ogg).
+// Models.kt AudioMsg: добавлены поля transcript + transcriptState (@SerializedName "transcript" / "transcript_state").
+// VKApiClient.kt: парсинг transcript + transcript_state в обеих ветках — audio_msg (legacy doc.audio_msg) и audio_message (standard type).
+// ChatDetailScreen.kt VoiceMessageBubble:
+//   - voiceColor = Color(0xFF0077FF) hardcoded — всегда VK Modern accent (было accentColor param = theme primary для входящих / textColor для исходящих). Применено к: play/pause icon, waveform bars (до progress), progress overlay, elapsed/total duration text.
+//   - Duration format: elapsed / total (0:03 / 0:08) — как VK web AttachVoice__duration. Elapsed в voiceColor, "/" в muted textColor, total в voiceColor alpha 0.7.
+//   - ASR toggle button (chevron up/down) — Icons.Filled.KeyboardArrowUp/KeyboardArrowDown, 20dp, voiceColor tint. Показывается только когда hasTranscript (transcript non-blank AND transcriptState=="done"). Toggles transcriptExpanded state (remember by messageId).
+//   - Transcript block (when expanded): Row с 2dp vertical separator (voiceColor alpha 0.24 — VK CSS .AttachVoice__transcript::before) + text body (textColor, 14sp, padding-left 10dp). Соответствует VK web AttachVoice__transcript layout.
+// Imports: KeyboardArrowUp, IntrinsicSize добавлены.
+// Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

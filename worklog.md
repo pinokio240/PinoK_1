@@ -12939,3 +12939,45 @@ Task: добавить VK-фирменные акценты в начало сп
 // app/src/main/java/re/pinok/ui/MainActivity.kt (+2/−1)
 
 // Кодировка UTF-8 без BOM. Все комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 35 (VOICE-TRANSCRIPT-P0.22-2026-10-06)
+Agent: orchestrator (main)
+Task: аудио-сообщения в цвете #0077FF + кнопка расшифровки ASR (по VK web снапшотам).
+
+## Контекст
+Пользователь прислал ZIP с VK web снапшотами аудио-мессенджера (HTML + CSS + JS + HAR). Запрос: «стиль аудио сообщений должен быть цветом #0077FF всегда. По снапшотом посмотри как формируется таймер воспроизведения, как расшифровывается текс в аудио сообщении и сделай кнопку для показа расшифровки как в вк».
+
+## Анализ снапшотов
+// AttachVoice структура (HTML): play btn + waveform SVG (width 280 height 12) + duration (4ch width) + asrButton (chevron up/down) + transcript div.
+// CSS (.AttachVoice классы): --vkui--color_icon_accent / --vkui--color_stroke_accent / --vkui--color_text_accent — все VK accent (#0077FF / #2688eb). .AttachVoice__transcript::before — 2px vertical separator line (accent alpha 0.24).
+// HAR (1аудио_мессенжер.har): messages.getDiffContent возвращает audio_message с полями:
+//   "transcript":"Раз, раз, раз, раз, один, два, три. Один, два, три, раз, 2, три"
+//   "transcript_state":"done"
+//   "waveform":[2,31,16,17,0,13,30,4,7,25,29,7,5,19,18,7,31,4,...]
+//   "link_mp3":..., "link_ogg":..., "duration":8, "access_key":...
+
+## Work Log
+// Models.kt:174-185 — AudioMsg добавлены поля transcript + transcriptState (@SerializedName "transcript" / "transcript_state").
+// VKApiClient.kt:11790-11802 (audio_msg legacy) + 11818-11834 (audio_message standard) — парсинг transcript + transcript_state в обеих ветках.
+// ChatDetailScreen.kt VoiceMessageBubble (9403-9614):
+//   - voiceColor = Color(0xFF0077FF) hardcoded (was accentColor param).
+//   - Applied to: play/pause icon, waveform bars (before progress), progress overlay, elapsed/total duration text.
+//   - Duration format: elapsed / total (0:03 / 0:08) — как VK web.
+//   - ASR toggle button (KeyboardArrowUp/Down) — только когда hasTranscript.
+//   - Transcript block (expanded): 2dp vertical separator (voiceColor alpha 0.24) + text body.
+// Imports: KeyboardArrowUp (84), IntrinsicSize (34) добавлены.
+// Коммит 30def04, push прошёл: d5d489f..30def04 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Цвет аудио-сообщений: всегда #0077FF (VK Modern) — play/pause icon, waveform, progress, duration.
+// Таймер: elapsed / total формат (0:03 / 0:08) — как VK web AttachVoice__duration.
+// Расшифровка ASR: парсится из VK API (transcript + transcript_state), кнопка-шеврон toggles видимость, transcript block с vertical separator как в VK.
+
+Файлы (3, +180/−103):
+// core/data/src/main/java/re/pinok/data/model/Models.kt (+6, AudioMsg transcript fields)
+// app/src/main/java/re/pinok/api/VKApiClient.kt (+6, parse transcript)
+// app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+271/−103, VoiceMessageBubble rewrite)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
