@@ -14391,3 +14391,18 @@ AUDIO-LOCAL-FAST-START-P0.20-2026-10-06: prefer local .m4a/.mp3 cache over onlin
 //   val considerLocal = !isOnline || !hasUrl || localIsSafeFormat
 // Результат: скачанные .m4a/.mp3 треки стартуют мгновенно из локального кэша даже онлайн. .ts треки по-прежнему стримят онлайн (Siren safety).
 // 1 файл, +10/−12. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+THEME-VK-ACCENTS-P0.21-2026-10-06: добавлены VK-фирменные акценты в начало списка акцентов.
+// Пользователь: «Эти акценты должны быть добавлены в приложение и быть первыми при переключении акцента цвета в настройках».
+// Color.kt SovaColors.accents: добавлены 3 VK-фирменных цвета в НАЧАЛО списка (indices 0-2):
+//   - VK Modern   #0077FF — VK 2022+ «цифровой» синий (основной акцент VK, primary brand color)
+//   - VK Classic  #4A76A8 — VK 2016-2022 классический «вкотый» синий (ностальгический)
+//   - VK Pink     #E033AC — VK Pro/Donut pink акцент (Donut highlights, Pro features)
+// Источник: VK Brand Guidelines (vk.design). Существующие 10 SOVA-акцентов сдвинуты (Black 0→3, Red 1→4, ..., Pink 9→12). Всего 13 акцентов (было 10). accentNames обновлены.
+// Default accent: был index 6 (Cyan), теперь index 0 (VK Modern #0077FF):
+//   - SovaPrefs.kt:90 — themeAccentIndex default 6 → 0
+//   - MainActivity.kt:985 — accentIndex fallback 6 → 0
+//   - FeedScreen.kt:250 — уже 0 (без изменений)
+// Существующие пользователи с сохранённым accentIndex сохраняют свой выбор (DataStore read переопределяет default). Новые пользователи / factory reset → VK Modern.
+// AccentPicker slider (SettingsScreen:4857) авто-адаптируется: valueRange и steps используют SovaColors.accents.size/lastIndex динамически. Никаких hardcoded размеров — добавление цветов не ломает slider.
+// 3 файла, +39/−19. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

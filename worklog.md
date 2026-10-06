@@ -12906,3 +12906,36 @@ Task: починить медленный старт скачанных трек
 
 Файл (1, +10/−12): app/src/main/java/re/pinok/media/PlayerConnection.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 34 (THEME-VK-ACCENTS-P0.21-2026-10-06)
+Agent: orchestrator (main)
+Task: добавить VK-фирменные акценты в начало списка акцентов цвета в настройках.
+
+## Контекст
+Пользователь спросил про акцент цвета VK, затем: «Эти акценты должны быть добавлены в приложение и быть первыми при переключении акцента цвета в настройках».
+
+## Work Log
+// Color.kt SovaColors.accents: добавлены 3 VK-фирменных цвета в НАЧАЛО списка (indices 0-2):
+//   - VK Modern   #0077FF — VK 2022+ «цифровой» синий (основной акцент VK)
+//   - VK Classic  #4A76A8 — VK 2016-2022 классический «вкотый» синий
+//   - VK Pink     #E033AC — VK Pro/Donut pink акцент
+// Существующие 10 SOVA-акцентов сдвинуты (Black 0→3, Red 1→4, ..., Pink 9→12). Всего 13 акцентов (было 10). accentNames обновлены.
+// SovaPrefs.kt:90 — themeAccentIndex default 6 → 0 (VK Modern).
+// MainActivity.kt:985 — accentIndex fallback 6 → 0.
+// FeedScreen.kt:250 — уже 0 (без изменений).
+// Коммит 4be6512, push прошёл: 6e7f12c..4be6512 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// VK-фирменные акценты (#0077FF, #4A76A8, #E033AC) добавлены в начало списка SovaColors.accents — первые при переключении slider в настройках.
+// Default accent изменён с Cyan (6) на VK Modern (0) для SovaPrefs, MainActivity.
+// Существующие пользователи сохраняют свой выбор (DataStore read).
+// AccentPicker slider авто-адаптируется к новому размеру списка.
+
+Файлы (3, +39/−19):
+// app/src/main/java/re/pinok/ui/theme/Color.kt (+37)
+// core/data/src/main/java/re/pinok/data/local/SovaPrefs.kt (+4)
+// app/src/main/java/re/pinok/ui/MainActivity.kt (+2/−1)
+
+// Кодировка UTF-8 без BOM. Все комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
