@@ -367,8 +367,21 @@ private fun ClipPlayerItem(
             }
             val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
             val mediaItemBuilder = MediaItem.Builder().setUri(playUrl)
+            // P0.19 #CLIP-DASH-MIME: MIME по URL для адаптивных потоков.
+            // bestPlayUrl теперь возвращает DASH/HLS URL для клипов (раньше только
+            // mp4/hls). ExoPlayer определяет контейнер по MIME — без явного MIME
+            // для DASH (.mpd/dash_webm) он пытается играть как прогрессивный mp4 →
+            // HTTP 400. VideoPlayerScreen использует mimeFor() по КЛЮЧУ files,
+            // но ClipsFeedScreen работает с playUrl (без ключа) — определяем MIME
+            // по URL (менее точно, но покрывает основные случаи: m3u8, .mpd,
+            // dash_webm в query).
             if (playUrl.contains("m3u8", ignoreCase = true)) {
                 mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+            } else if (playUrl.contains(".mpd", ignoreCase = true) ||
+                playUrl.contains("dash_webm", ignoreCase = true) ||
+                playUrl.contains("dash_ondemand", ignoreCase = true) ||
+                playUrl.contains("dash_sep", ignoreCase = true)) {
+                mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_MPD)
             }
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))

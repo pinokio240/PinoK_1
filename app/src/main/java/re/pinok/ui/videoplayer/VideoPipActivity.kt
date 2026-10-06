@@ -357,6 +357,12 @@ class VideoPipActivity : ComponentActivity() {
         val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(url))
         if (url.contains("m3u8", ignoreCase = true)) {
             mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        } else if (url.contains(".mpd", ignoreCase = true) ||
+            url.contains("dash_webm", ignoreCase = true) ||
+            url.contains("dash_ondemand", ignoreCase = true) ||
+            url.contains("dash_sep", ignoreCase = true)) {
+            // P0.19 #PIP-DASH-MIME: DASH-манифест для PiP-видео.
+            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_MPD)
         }
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))

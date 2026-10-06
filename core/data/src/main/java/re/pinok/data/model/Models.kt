@@ -352,10 +352,25 @@ data class Video(
     // §37.9: canEdit/canDelete для контекстного меню «Редактировать»/«Удалить».
     val canEditClip: Boolean get() = canEdit == 1
     val canDeleteClip: Boolean get() = canDelete == 1
-    /** Лучший URL для прямого воспроизведения: mp4_720 → mp4_480 → mp4_360 → mp4_240 → hls → player. */
+    // P0.19 #CLIP-DASH-BESTURL (2026-10): лучший URL для прямого воспроизведения.
+    // Приоритет: прогрессивные mp4 (1080→240) → HLS-манифест (hls_ondemand, hls)
+    // → hls_fmp4 (fMP4 HLS) → DASH-манифесты (dash_ondemand, dash, dash_sep,
+    // dash_webm, dash_webm_av1) → mp4_orig → player (embed URL, last-resort).
+    //
+    // Раньше DASH отсутствовал в bestPlayUrl — VK для многих клипов отдаёт ТОЛЬКО
+    // DASH (без mp4/hls). bestPlayUrl возвращал player (embed URL) → ClipsFeedScreen
+    // падал на HTML (ExoPlayer не мог воспроизвести embed-страницу). VideoPlayerScreen
+    // уже использовал firstAdaptiveEntry (DASH-aware), но ClipsFeedScreen/StoryViewer
+    // используют bestPlayUrl напрямую. Теперь bestPlayUrl тоже DASH-aware.
     val bestPlayUrl: String? get() {
         files?.let { f ->
-            return f["mp4_1080"] ?: f["mp4_720"] ?: f["mp4_480"] ?: f["mp4_360"] ?: f["mp4_240"] ?: f["hls"] ?: f["mp4_orig"]
+            return f["mp4_1080"] ?: f["mp4_720"] ?: f["mp4_480"] ?: f["mp4_360"] ?:
+                f["mp4_240"] ?: f["mp4_144"] ?: f["mp4_orig"] ?:
+                // HLS-манифесты (предпочитаем _ondemand — это настоящий плейлист).
+                f["hls_ondemand"] ?: f["hls"] ?: f["hls_fmp4"] ?:
+                // DASH-манифесты (клипы VK часто только DASH).
+                f["dash_ondemand"] ?: f["dash"] ?: f["dash_sep"] ?:
+                f["dash_webm"] ?: f["dash_webm_av1"]
         }
         return player
     }

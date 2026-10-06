@@ -485,6 +485,16 @@ fun StoryViewerScreen(
                         MediaItem.Builder().setUri(videoUrl)
                             .setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
                             .build()
+                    } else if (videoUrl.contains(".mpd", ignoreCase = true) ||
+                        videoUrl.contains("dash_webm", ignoreCase = true) ||
+                        videoUrl.contains("dash_ondemand", ignoreCase = true) ||
+                        videoUrl.contains("dash_sep", ignoreCase = true)) {
+                        // P0.19 #STORY-DASH-MIME: DASH-манифест для story-видео.
+                        // bestPlayUrl теперь возвращает DASH URL — нужен явный MIME,
+                        // иначе ExoPlayer играет как прогрессивный mp4 → HTTP 400.
+                        MediaItem.Builder().setUri(videoUrl)
+                            .setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
+                            .build()
                     } else {
                         MediaItem.fromUri(videoUrl)
                     }
