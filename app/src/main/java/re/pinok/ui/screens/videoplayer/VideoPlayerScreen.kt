@@ -651,22 +651,31 @@ fun VideoPlayerScreen(
             // access_key в идентификаторе). Шаг 3 (UI) — если и это не помогло →
             // кнопка «Открыть в браузере» в error-state (см. ниже в when-блоке).
             val hadAccessKey = !resolvedVideo.accessKey.isNullOrBlank()
-            val fresh = app.apiClient.videoGetById(
-                resolvedVideo.ownerId,
-                resolvedVideo.id,
-                resolvedVideo.accessKey,
-            )
-            // P0.3 шаг 2: videoGetById вернул null/пустое И accessKey был пуст →
-            // пробуем перегрузку videoGet(List<String>) — VK может вернуть полные
-            // files для публичных видео, даже без явного access_key.
-            val finalVideo = if (fresh != null && (fresh.files?.isNotEmpty() == true || !fresh.player.isNullOrBlank())) {
+            // P0.27 #CLIP-VIDEOGET-BUG: для КЛИПОВ (isClip=true) video.get НЕ возвращает
+            // files[] (VK API docs). Нужно использовать shortVideo.get — canonical метод
+            // для clips, всегда возвращает files[] (mp4/hls/dash). Без этого клипы в
+            // каналах падали с "Видео недоступно" — clip терял files при videoGetById.
+            val isClip = resolvedVideo.isClip
+            val fresh = if (isClip) {
+                app.apiClient.shortVideoGet(resolvedVideo.ownerId, resolvedVideo.id)
+            } else {
+                app.apiClient.videoGetById(
+                    resolvedVideo.ownerId,
+                    resolvedVideo.id,
+                    resolvedVideo.accessKey,
+                )
+            }
+            // P0.27: принимаем fresh ТОЛЬКО если есть files[] — иначе clip с files
+            // теряет их при переопределении (clip → videoGetById без files → finalVideo).
+            // Для clips shortVideo.get всегда возвращает files[].
+            // P0.3 шаг 2: только для НЕ-clips — videoGet(list) fallback при пустом accessKey.
+            val finalVideo = if (fresh != null && fresh.files?.isNotEmpty() == true) {
                 fresh
-            } else if (!hadAccessKey) {
+            } else if (!isClip && !hadAccessKey) {
                 AppLog.i(TAG, "videoGetById null и accessKey пустой — fallback на videoGet(listOf(\"ownerId_videoId\"))")
                 val list = app.apiClient.videoGet(listOf("${resolvedVideo.ownerId}_${resolvedVideo.id}"))
                 list.firstOrNull {
-                    it.id == resolvedVideo.id &&
-                        (it.files?.isNotEmpty() == true || !it.player.isNullOrBlank())
+                    it.id == resolvedVideo.id && it.files?.isNotEmpty() == true
                 }
             } else {
                 null
