@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "versionCode": 220,
+      "versionName": "2.2.0",
+      "stamp": "calls-2.2.0-2026.10.06-1",
+      "apkUrl": "",
+      "sha256": "",
+      "notes": "PinoK 2.2.0 (версия 220), штамп calls-2.2.0-2026.10.06-1:\n• Security: маскировка access_token/silent_token в логах, минимизация дампа account.json, VkCookieJar CDN cookies, ServiceCompat для всех foreground-сервисов.\n• Видео в каналах: detectPlatform VK-embed, extractHashFromPlayerUrl, OkHttpDataSource с cookies, DASH MIME, клипы через shortVideo.get вместо video.get, убран okcdn player URL из fallback, BG-KEEP URL mismatch check.\n• Голосовые сообщения: новый VK web pipeline (messages.getAudioMessageUploadServer + saveAudioMessage), ExoPlayer+cookies, расшифровка ASR (messages.recogniseAudioMessage + retry-fetch), таймер из реальной позиции MediaPlayer, цвет #0077FF, кнопка расшифровки.\n• Stories UX: свайп paging, пауза при композинге, overlay со ссылками, тап по автору, полная интеграция стикеров, стрелки-подсказки свайпа, VK-акценты (#0077FF/#4A76A8/#E033AC).\n• UI: нижняя панель без текста (32dp иконки), bubble шире/выше, кружок выбора крупнее, multi-select по умолчанию ON, динамические вкладки CommunityScreen + Файлы, кнопка Клипы в каналах.\n• Stability: AtomicBoolean, Mutex, @Synchronized, RECEIVER_NOT_EXPORTED, URLEncoder, ANR monitoring."
+    },
+    {
       "versionCode": 219,
       "versionName": "2.1.9",
       "stamp": "calls-2.1.9-2026.10.04-1",
