@@ -1047,7 +1047,12 @@ fun ChatDetailScreen(
     // VK LongPoll НЕ возвращает transcript/transcript_state — VK готовит ASR на сервере
     // 5-30 сек после отправки. Запрашиваем messages.getById для свежих голосовых без
     // transcript, обновляем attachments в messages.
-    fun fetchVoiceTranscripts() {
+    // P0.25 #VOICE-ASR-FETCH: запрос transcript (расшифровки ASR) для voice-сообщений.
+    // VK LongPoll НЕ возвращает transcript/transcript_state — VK готовит ASR на сервере
+    // 5-30 сек после отправки. Запрашиваем messages.getById для свежих голосовых без
+    // transcript, обновляем attachments в messages.
+    // P0.25d: suspend — caller ждёт completion перед следующей проверкой hasPendingVoice.
+    suspend fun fetchVoiceTranscripts() {
         // Фильтруем voice-сообщения без transcript (transcript==null ИЛИ state != "done").
         val voiceMsgIds = messages.filter { m ->
             m.attachments?.any { att ->
@@ -1058,64 +1063,62 @@ fun ChatDetailScreen(
         AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: found ${voiceMsgIds.size} pending voice messages (total ${messages.size})")
         if (voiceMsgIds.isEmpty()) return
         AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: requesting getById for ids=$voiceMsgIds")
-        scope.launch {
-            try {
-                val resp = app.apiClient.messagesGetById(voiceMsgIds.take(50)) ?: run {
-                    AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: messagesGetById returned null")
-                    return@launch
-                }
-                AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: response keys=${resp.keySet()}")
-                val items = resp.getAsJsonArray("items") ?: run {
-                    AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: no items[] in response, raw=${resp.toString().take(300)}")
-                    return@launch
-                }
-                AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: got ${items.size()} items")
-                // Map messageId → updated audio_message transcript.
-                val updates = mutableMapOf<Long, Pair<String?, String?>>()
-                for (item in items) {
-                    if (!item.isJsonObject) continue
-                    val msgObj = item.asJsonObject
-                    val msgId = msgObj.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: continue
-                    val atts = msgObj.getAsJsonArray("attachments") ?: continue
-                    for (att in atts) {
-                        if (!att.isJsonObject) continue
-                        val attObj = att.asJsonObject
-                        // audio_message может быть внутри type="audio_message" или type="doc" (legacy).
-                        val amObj = attObj.getAsJsonObject("audio_message")
-                            ?: attObj.getAsJsonObject("doc")?.getAsJsonObject("audio_msg")
-                        if (amObj == null) continue
-                        val transcript = amObj.get("transcript")?.takeIf { !it.isJsonNull }?.asString
-                        val state = amObj.get("transcript_state")?.takeIf { !it.isJsonNull }?.asString
-                        AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: msg=$msgId transcript=${transcript?.take(40) ?: "null"} state=$state")
-                        updates[msgId] = transcript to state
-                    }
-                }
-                if (updates.isEmpty()) {
-                    AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: no transcript updates found in response")
-                    return@launch
-                }
-                // Apply updates to messages.
-                messages = messages.map { m ->
-                    val upd = updates[m.id] ?: return@map m
-                    val newAtts = m.attachments?.map { att ->
-                        val am = att.doc?.audioMsg ?: att.audioMessage
-                        if (am != null) {
-                            val newAm = am.copy(transcript = upd.first ?: am.transcript,
-                                                transcriptState = upd.second ?: am.transcriptState)
-                            val doc = att.doc
-                            if (doc != null && doc.audioMsg != null) {
-                                att.copy(doc = doc.copy(audioMsg = newAm))
-                            } else {
-                                att.copy(audioMessage = newAm)
-                            }
-                        } else att
-                    }
-                    if (newAtts != m.attachments) m.copy(attachments = newAtts) else m
-                }
-                AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: updated ${updates.size} voice messages")
-            } catch (e: Exception) {
-                AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts error: ${e.message}")
+        try {
+            val resp = app.apiClient.messagesGetById(voiceMsgIds.take(50)) ?: run {
+                AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: messagesGetById returned null")
+                return
             }
+            AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: response keys=${resp.keySet()}")
+            val items = resp.getAsJsonArray("items") ?: run {
+                AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: no items[] in response, raw=${resp.toString().take(300)}")
+                return
+            }
+            AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: got ${items.size()} items")
+            // Map messageId → updated audio_message transcript.
+            val updates = mutableMapOf<Long, Pair<String?, String?>>()
+            for (item in items) {
+                if (!item.isJsonObject) continue
+                val msgObj = item.asJsonObject
+                val msgId = msgObj.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: continue
+                val atts = msgObj.getAsJsonArray("attachments") ?: continue
+                for (att in atts) {
+                    if (!att.isJsonObject) continue
+                    val attObj = att.asJsonObject
+                    // audio_message может быть внутри type="audio_message" или type="doc" (legacy).
+                    val amObj = attObj.getAsJsonObject("audio_message")
+                        ?: attObj.getAsJsonObject("doc")?.getAsJsonObject("audio_msg")
+                    if (amObj == null) continue
+                    val transcript = amObj.get("transcript")?.takeIf { !it.isJsonNull }?.asString
+                    val state = amObj.get("transcript_state")?.takeIf { !it.isJsonNull }?.asString
+                    AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: msg=$msgId transcript=${transcript?.take(40) ?: "null"} state=$state")
+                    updates[msgId] = transcript to state
+                }
+            }
+            if (updates.isEmpty()) {
+                AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: no transcript updates found in response")
+                return
+            }
+            // Apply updates to messages.
+            messages = messages.map { m ->
+                val upd = updates[m.id] ?: return@map m
+                val newAtts = m.attachments?.map { att ->
+                    val am = att.doc?.audioMsg ?: att.audioMessage
+                    if (am != null) {
+                        val newAm = am.copy(transcript = upd.first ?: am.transcript,
+                                            transcriptState = upd.second ?: am.transcriptState)
+                        val doc = att.doc
+                        if (doc != null && doc.audioMsg != null) {
+                            att.copy(doc = doc.copy(audioMsg = newAm))
+                        } else {
+                            att.copy(audioMessage = newAm)
+                        }
+                    } else att
+                }
+                if (newAtts != m.attachments) m.copy(attachments = newAtts) else m
+            }
+            AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: updated ${updates.size} voice messages")
+        } catch (e: Exception) {
+            AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts error: ${e.message}")
         }
     }
 
@@ -3638,13 +3641,14 @@ fun ChatDetailScreen(
 
     // P0.25 #VOICE-ASR-FETCH: авто-запрос transcript для голосовых без расшифровки.
     // VK LongPoll НЕ возвращает transcript — ASR готовится на сервере 5-30 сек.
-    // Retry: 5 попыток каждые 10 сек (total 50 сек). Каждая попытка фильтрует
-    // только сообщения БЕЗ done-transcript — если VK подготовил ASR к 1-й попытке,
-    // 2-я не запустится (hasPendingVoice=false → break).
-    LaunchedEffect(messages.map { it.id }.hashCode()) {
-        if (messages.isEmpty()) return@LaunchedEffect
+    // Запускаем периодический poll: каждые 10 сек проверяем есть ли voice без
+    // done-transcript. Если есть — запрашиваем getById. Max 6 попыток (60 сек).
+    // После 6 попыток прекращаем — если VK не подготовил ASR за 60 сек, вероятно
+    // голосовое слишком короткое/шумное и ASR невозможен.
+    LaunchedEffect(peerId) {
         var attempt = 0
-        while (attempt < 5) {
+        while (attempt < 6) {
+            kotlinx.coroutines.delay(10000L)
             val hasPendingVoice = messages.any { m ->
                 m.attachments?.any { att ->
                     val am = att.doc?.audioMsg ?: att.audioMessage
@@ -3652,7 +3656,6 @@ fun ChatDetailScreen(
                 } == true
             }
             if (!hasPendingVoice) break
-            kotlinx.coroutines.delay(10000L)  // VK готовит ASR 5-30 сек — ждём 10.
             fetchVoiceTranscripts()
             attempt++
         }
@@ -5061,7 +5064,7 @@ fun ChatDetailScreen(
                                     profiles = chatProfiles,
                                     voicePlaybackController = voicePlaybackController,
                                     // P0.25 #VOICE-ASR-FETCH: передаём callback для запроса transcript.
-                                    onFetchVoiceTranscripts = { fetchVoiceTranscripts() },
+                                    onFetchVoiceTranscripts = { scope.launch { fetchVoiceTranscripts() } },
                                     onLongPress = { contextMsgId = msg.id },
                                     // #REACTION-WEB-MAP: double-click = ❤️ = id 1
                                     // (web-карта; раньше id 2 был ❤️, фактически ставился 🔥).
