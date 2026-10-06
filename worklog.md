@@ -13037,3 +13037,27 @@ Task: фикс таймера голосовых + ASR кнопка всегда
 
 Файл (1, +59/−29): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 38 (COMPILE-FIX4-2026-10-06)
+Agent: orchestrator (main)
+Task: исправить 6 ошибок компиляции от P0.23 + P0.24.
+
+## Контекст
+После P0.23 (bottom nav icons-only) и P0.24 (voice timer/ASR) пользователь собрал проект — 6 ошибок компиляции.
+
+## Work Log
+// SovaNavHost.kt — добавлен import androidx.compose.foundation.layout.size (P0.23 использовал Modifier.size(32.dp) для иконок, но забыл import).
+// ChatDetailScreen.kt:162 — добавлен import androidx.compose.runtime.mutableLongStateOf (P0.24 добавил currentPositionMs: Long by mutableLongStateOf(0L), но забыл import).
+// ChatDetailScreen.kt:11962 — currentPositionMs = pos.toLong() (MediaPlayer.currentPosition возвращает Int, currentPositionMs — Long).
+// Коммит 2a23863, push прошёл: 42a9c7a..2a23863 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// 6 ошибок компиляции исправлены: 2 missing imports (Modifier.size, mutableLongStateOf) + 1 type mismatch (Int → Long).
+
+Файлы (2, +4/−1):
+// app/src/main/java/re/pinok/ui/navigation/SovaNavHost.kt (+1, import size)
+// app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (+3/−1, import mutableLongStateOf + .toLong())
+
+// Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).

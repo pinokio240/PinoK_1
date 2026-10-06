@@ -14442,3 +14442,9 @@ VOICE-TIMER-ASR-P0.24-2026-10-06: фикс таймера (одно число) 
 // Stub-сообщения: меньшая alpha (0.5f текст, 0.12f сепаратор) для отличия от реальной расшифровки (alpha 1.0 текст, 0.24f сепаратор).
 // VK web reference (из снапшота JS 41738.bb95a044.js): me_voice_asr_status_empty / _in_progress / _error / _empty_set strings. AttachVoice__transcriptStub class для stub-сообщений. AttachVoice__asrButton всегда присутствует (chevron up/down).
 // 1 файл, +59/−29. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+COMPILE-FIX4-2026-10-06: 6 ошибок компиляции от P0.23 (bottom nav icons) + P0.24 (voice timer/ASR).
+// SovaNavHost.kt:367,371,1486,1492 — 'Unresolved reference size'. P0.23 использовал Modifier.size(32.dp) для иконок нижней панели, но забыл import androidx.compose.foundation.layout.size. Добавлен.
+// ChatDetailScreen.kt:11836 — 'Unresolved reference mutableLongStateOf'. P0.24 добавил currentPositionMs: Long by mutableLongStateOf(0L), но забыл import androidx.compose.runtime.mutableLongStateOf. Добавлен.
+// ChatDetailScreen.kt:11960 — 'Assignment type mismatch: actual Int, expected Long'. MediaPlayer.currentPosition возвращает Int (мс), но currentPositionMs — Long. Добавлен .toLong() conversion.
+// 2 файла, +4/−1. Кодировка UTF-8 без BOM.
