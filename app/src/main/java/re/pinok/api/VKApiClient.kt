@@ -7359,6 +7359,25 @@ class VKApiClient(
     }
 
     /**
+     * P0.25 #VOICE-ASR-FETCH (2026-10): messages.getById — запрашивает свежее
+     * сообщение по message_ids для получения transcript (расшифровки ASR).
+     *
+     * VK LongPoll НЕ возвращает transcript/transcript_state для новых voice
+     * сообщений — VK готовит ASR на сервере 5-30 сек после отправки. Только
+     * через getById/getDiffContent можно получить готовую расшифровку.
+     *
+     * Возвращает JsonObject response (items[] — массив сообщений) или null.
+     * Caller сам парсит attachments[].audio_message.transcript.
+     */
+    suspend fun messagesGetById(messageIds: List<Long>): JsonObject? {
+        if (messageIds.isEmpty()) return null
+        if (isOffline()) return null
+        val ids = messageIds.joinToString(",")
+        val json = call("messages.getById", mapOf("message_ids" to ids)) ?: return null
+        return json.getAsJsonObject("response")
+    }
+
+    /**
      * P4.4: `execute` — отправляет VKScript на единый endpoint VK API.
      *
      * VK `execute` позволяет объединить до 25 методов в один HTTP round-trip.

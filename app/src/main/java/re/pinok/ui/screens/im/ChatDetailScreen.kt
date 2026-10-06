@@ -198,6 +198,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -1036,6 +1039,64 @@ fun ChatDetailScreen(
                 }
             } catch (e: Exception) {
                 AppLog.w("ChatDetailScreen", "reload error: ${e.message}")
+            }
+        }
+    }
+
+    // P0.25 #VOICE-ASR-FETCH: запрос transcript (расшифровки ASR) для voice-сообщений.
+    // VK LongPoll НЕ возвращает transcript/transcript_state — VK готовит ASR на сервере
+    // 5-30 сек после отправки. Запрашиваем messages.getById для свежих голосовых без
+    // transcript, обновляем attachments в messages.
+    fun fetchVoiceTranscripts() {
+        // Фильтруем voice-сообщения без transcript (transcript==null ИЛИ state != "done").
+        val voiceMsgIds = messages.filter { m ->
+            m.attachments?.any { att ->
+                val am = att.doc?.audioMsg ?: att.audioMessage
+                am != null && (am.transcript.isNullOrBlank() || am.transcriptState != "done")
+            } == true
+        }.map { it.id }
+        if (voiceMsgIds.isEmpty()) return
+        scope.launch {
+            try {
+                val resp = app.apiClient.messagesGetById(voiceMsgIds.take(50)) ?: return@launch
+                val items = resp.getAsJsonArray("items") ?: return@launch
+                // Map messageId → updated audio_message transcript.
+                val updates = mutableMapOf<Long, Pair<String?, String?>>()
+                for (item in items) {
+                    if (!item.isJsonObject) continue
+                    val msgObj = item.asJsonObject
+                    val msgId = msgObj.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: continue
+                    val atts = msgObj.getAsJsonArray("attachments") ?: continue
+                    for (att in atts) {
+                        if (!att.isJsonObject) continue
+                        val attObj = att.asJsonObject
+                        val amObj = attObj.getAsJsonObject("audio_message") ?: continue
+                        val transcript = amObj.get("transcript")?.takeIf { !it.isJsonNull }?.asString
+                        val state = amObj.get("transcript_state")?.takeIf { !it.isJsonNull }?.asString
+                        updates[msgId] = transcript to state
+                    }
+                }
+                if (updates.isEmpty()) return@launch
+                // Apply updates to messages.
+                messages = messages.map { m ->
+                    val upd = updates[m.id] ?: return@map m
+                    val newAtts = m.attachments?.map { att ->
+                        val am = att.doc?.audioMsg ?: att.audioMessage
+                        if (am != null) {
+                            val newAm = am.copy(transcript = upd.first ?: am.transcript,
+                                                transcriptState = upd.second ?: am.transcriptState)
+                            if (att.doc?.audioMsg != null) {
+                                att.copy(doc = att.doc.copy(audioMsg = newAm))
+                            } else {
+                                att.copy(audioMessage = newAm)
+                            }
+                        } else att
+                    }
+                    if (newAtts != m.attachments) m.copy(attachments = newAtts) else m
+                }
+                AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: updated ${updates.size} voice messages")
+            } catch (e: Exception) {
+                AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts error: ${e.message}")
             }
         }
     }
@@ -3556,6 +3617,25 @@ fun ChatDetailScreen(
     // VK resends typing events every ~4s while user keeps typing; we treat
     // any event within TYPING_TIMEOUT_MS as "still typing".
     val myUserId = remember { app.exchangeAuthRepository.userId() }
+
+    // P0.25 #VOICE-ASR-FETCH: авто-запрос transcript для голосовых без расшифровки.
+    // VK LongPoll НЕ возвращает transcript — ASR готовится на сервере 5-30 сек.
+    // Триггер: после загрузки истории (messages.isNotEmpty) + каждые 15 сек
+    // пока есть voice-сообщения без done-transcript. Max 5 попыток.
+    LaunchedEffect(messages.map { it.id }.hashCode()) {
+        if (messages.isEmpty()) return@LaunchedEffect
+        val hasPendingVoice = messages.any { m ->
+            m.attachments?.any { att ->
+                val am = att.doc?.audioMsg ?: att.audioMessage
+                am != null && am.transcriptState != "done"
+            } == true
+        }
+        if (hasPendingVoice) {
+            kotlinx.coroutines.delay(5000)  // VK готовит ASR 5-30 сек.
+            fetchVoiceTranscripts()
+        }
+    }
+
     LaunchedEffect(peerId, typingEnabled) {
         if (!typingEnabled) {
             typingUsers = emptyMap()
@@ -6427,6 +6507,8 @@ private fun MessageBubble(
                                 accentColor = if (isOut) textColor else MaterialTheme.colorScheme.primary,
                                 messageId = message.id,
                                 controller = voicePlaybackController,
+                                // P0.25 #VOICE-ASR-FETCH: запрос transcript при тапе ASR кнопки.
+                                onRequestTranscript = { fetchVoiceTranscripts() },
                             )
                         }
                     }
@@ -9409,6 +9491,9 @@ private fun VoiceMessageBubble(
     accentColor: Color,
     messageId: Long,
     controller: VoicePlaybackController,
+    // P0.25 #VOICE-ASR-FETCH: callback для запроса transcript (messages.getById).
+    // Вызывается при тапе на ASR-кнопку, если transcript ещё не готов.
+    onRequestTranscript: () -> Unit = {},
 ) {
     // P0.22 #VOICE-COLOR (2026-10): аудио-сообщения ВСЕГДА в цвете VK Modern #0077FF.
     // Раньше: accentColor = MaterialTheme.colorScheme.primary (для входящих) или textColor
@@ -9583,7 +9668,15 @@ private fun VoiceMessageBubble(
             if (showAsrButton) {
                 Spacer(modifier = Modifier.width(4.dp))
                 IconButton(
-                    onClick = { transcriptExpanded = !transcriptExpanded },
+                    onClick = {
+                        // P0.25 #VOICE-ASR-FETCH: если transcript ещё не готов — запрашиваем
+                        // через messages.getById (VK готовит ASR 5-30 сек после отправки).
+                        // Если уже готов — просто toggle видимости.
+                        if (transcriptContent == null) {
+                            onRequestTranscript()
+                        }
+                        transcriptExpanded = !transcriptExpanded
+                    },
                     modifier = Modifier.size(24.dp),
                 ) {
                     Icon(
@@ -11809,10 +11902,13 @@ private val UriSaver: Saver<android.net.Uri?, String> = Saver(
  * чтобы все VoiceMessageBubble перерисовывались реактивно.
  */
 private class VoicePlaybackController {
-    private var player: MediaPlayer? = null
+    // P0.26 #VOICE-EXOPLAYER (2026-10): ExoPlayer вместо MediaPlayer.
+    // MediaPlayer НЕ умеет отправлять cookies → VK voice CDN (psv4.vkuserphoto.ru)
+    // возвращает 403 → onPrepared не вызывается → таймер 0:00, не считает.
+    // ExoPlayer + OkHttpDataSource.Factory(SovaApp.httpClient) = cookies + VK UA.
+    private var player: ExoPlayer? = null
     private var progressJob: kotlinx.coroutines.Job? = null
     // Fix #237: альтернативный URL для fallback при ошибке воспроизведения.
-    // Сохраняется в toggle(), сбрасывается после использования в onError.
     private var currentFallbackUrl: String? = null
     private val scope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main
@@ -11830,10 +11926,7 @@ private class VoicePlaybackController {
     var progress: Float by mutableFloatStateOf(0f)
         private set
 
-    // P0.24 #VOICE-TIMER-FIX (2026-10): currentPosition в мс напрямую из MediaPlayer.
-    // Раньше elapsed = durationSec * progress — рассинхрон если MediaPlayer.duration
-    // отличается от VK metadata.duration (часто для streaming MP3). Теперь elapsed
-    // считается из реальной позиции плеера, без зависимости от progress.
+    // P0.24 #VOICE-TIMER-FIX: currentPosition в мс напрямую из плеера.
     var currentPositionMs: Long by mutableLongStateOf(0L)
         private set
 
@@ -11842,15 +11935,8 @@ private class VoicePlaybackController {
         private set
 
     /**
-     * Начать воспроизведение сообщения [messageId] по URL [url].
-     * Если [messageId] уже текущий и на паузе — resume.
-     * Если уже играет — toggle на паузу.
-     * Если другое сообщение — stop() старого, start() нового.
-     *
-     * Fix #237: [fallbackUrl] — альтернативный URL (например, OGG если
-     * primary MP3, или наоборот). Если primary падает в onError,
-     * контроллер автоматически пробует fallback. Нужно потому что
-     * MediaPlayer на разных устройствах по-разному поддерживает OGG/Opus.
+     * Toggle play/pause/switch для сообщения [messageId] по URL [url].
+     * Fix #237: [fallbackUrl] — альтернативный URL (OGG↔MP3).
      */
     fun toggle(
         messageId: Long,
@@ -11867,7 +11953,7 @@ private class VoicePlaybackController {
                     isPlaying = false
                     stopProgressTracking()
                 } else {
-                    try { p.start() } catch (_: Exception) {}
+                    try { p.play() } catch (_: Exception) {}
                     isPlaying = true
                     startProgressTracking()
                 }
@@ -11878,7 +11964,6 @@ private class VoicePlaybackController {
         // Другое сообщение (или то же, но player умер) → stop старого, start нового.
         releasePlayer()
 
-        // Fix #237: сохраняем fallback для использования в onError.
         currentFallbackUrl = fallbackUrl?.takeIf { it.isNotBlank() && it != url }
         currentMessageId = messageId
         durationSec = fallbackDurationSec
@@ -11892,41 +11977,78 @@ private class VoicePlaybackController {
      */
     private fun startPlayback(messageId: Long, url: String, fallbackDurationSec: Float) {
         try {
-            val mp = MediaPlayer()
-            mp.setDataSource(url)
-            mp.setOnPreparedListener { p ->
-                durationSec = (p.duration / 1000f).coerceAtLeast(fallbackDurationSec)
-                p.start()
-                isPlaying = true
-                progress = 0f
-                currentPositionMs = 0L  // P0.24: сброс позиции при новом воспроизведении.
-                startProgressTracking()
-            }
-            mp.setOnCompletionListener {
-                isPlaying = false
-                progress = 0f
-                currentPositionMs = 0L  // P0.24: сброс по завершению.
-                stopProgressTracking()
-                // Не release — оставим player, чтобы можно было replay без reload.
-            }
-            mp.setOnErrorListener { _, what, extra ->
-                AppLog.e("VoicePlayback", "MediaPlayer error: what=$what extra=$extra url=$url")
-                releasePlayer()
-                // Fix #237: пробуем fallback URL (например, OGG→MP3 или MP3→OGG).
-                val fb = currentFallbackUrl
-                if (fb != null) {
-                    AppLog.i("VoicePlayback", "Trying fallback URL: $fb")
-                    currentFallbackUrl = null  // защита от зацикливания
-                    // Восстанавливаем currentMessageId после releasePlayer(),
-                    // чтобы UI продолжал показывать этот messageId как активный.
-                    currentMessageId = messageId
-                    startPlayback(messageId, fb, fallbackDurationSec)
+            val ctx = SovaApp.getOrNull()?.applicationContext
+                ?: throw IllegalStateException("SovaApp not initialized")
+            val vkUa = re.pinok.util.VkUserAgent.get(ctx as android.app.Application)
+            // P0.10 #VIDEO-CDN-COOKIES: OkHttpDataSource с SovaApp.httpClient
+            // (включает VkCookieJar → cookies для VK CDN). Fallback на
+            // DefaultHttpDataSource если SovaApp null.
+            val app = ctx as? SovaApp
+            val httpFactory = if (app != null) {
+                try {
+                    OkHttpDataSource.Factory(app.httpClient)
+                        .setUserAgent(vkUa)
+                        .setDefaultRequestProperties(mapOf("Referer" to "https://m.vk.ru/"))
+                } catch (e: Exception) {
+                    AppLog.w("VoicePlayback", "OkHttpDataSource failed, fallback Default: ${e.message}")
+                    DefaultHttpDataSource.Factory().setUserAgent(vkUa)
                 }
-                // else: releasePlayer уже сбросил currentMessageId = null
-                true
+            } else {
+                DefaultHttpDataSource.Factory().setUserAgent(vkUa)
             }
-            mp.prepareAsync()
-            player = mp
+            val dataSourceFactory = DefaultDataSource.Factory(ctx, httpFactory)
+            val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
+
+            val ep = ExoPlayer.Builder(ctx)
+                .setMediaSourceFactory(mediaSourceFactory)
+                .build()
+            ep.setMediaItem(MediaItem.fromUri(url))
+            ep.repeatMode = Player.REPEAT_MODE_OFF
+            ep.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    when (state) {
+                        Player.STATE_READY -> {
+                            // Длительность известна после prepare.
+                            val dMs = ep.duration.coerceAtLeast(0L)
+                            if (dMs > 0) {
+                                durationSec = (dMs / 1000f).coerceAtLeast(fallbackDurationSec)
+                            }
+                        }
+                        Player.STATE_ENDED -> {
+                            isPlaying = false
+                            progress = 0f
+                            currentPositionMs = 0L
+                            stopProgressTracking()
+                        }
+                        else -> {}
+                    }
+                }
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    isPlaying = playing
+                    if (playing) {
+                        progress = 0f
+                        currentPositionMs = 0L
+                        startProgressTracking()
+                    } else {
+                        stopProgressTracking()
+                    }
+                }
+                override fun onPlayerError(error: PlaybackException) {
+                    AppLog.e("VoicePlayback", "ExoPlayer error url=$url: ${error.message}", error)
+                    releasePlayer()
+                    // Fix #237: пробуем fallback URL.
+                    val fb = currentFallbackUrl
+                    if (fb != null) {
+                        AppLog.i("VoicePlayback", "Trying fallback URL: $fb")
+                        currentFallbackUrl = null
+                        currentMessageId = messageId
+                        startPlayback(messageId, fb, fallbackDurationSec)
+                    }
+                }
+            })
+            ep.prepare()
+            ep.playWhenReady = true
+            player = ep
         } catch (e: Exception) {
             AppLog.e("VoicePlayback", "startPlayback error url=$url", e)
             releasePlayer()
@@ -11934,8 +12056,7 @@ private class VoicePlaybackController {
     }
 
     /**
-     * Полностью остановить воспроизведение (если, например, пользователь
-     * покинул чат). Освобождает MediaPlayer.
+     * Полностью остановить воспроизведение. Освобождает ExoPlayer.
      */
     fun stop() {
         releasePlayer()
@@ -11951,16 +12072,10 @@ private class VoicePlaybackController {
                 kotlinx.coroutines.delay(50)
                 val p = player ?: break
                 try {
-                    if (!p.isPlaying && progress > 0f) {
-                        // Закончилось или пауза вне нашего контроля.
-                        break
-                    }
-                    val d = p.duration.coerceAtLeast(1)
-                    val pos = p.currentPosition.coerceIn(0, p.duration)
-                    // P0.24: обновляем currentPositionMs напрямую из MediaPlayer.
-                    // pos — Int (мс), currentPositionMs — Long → явный .toLong().
-                    currentPositionMs = pos.toLong()
-                    progress = pos.toFloat() / d
+                    val d = p.duration.coerceAtLeast(1L)
+                    val pos = p.currentPosition.coerceIn(0L, p.duration)
+                    currentPositionMs = pos
+                    progress = (pos.toFloat() / d.toFloat()).coerceIn(0f, 1f)
                 } catch (_: Exception) {
                     break
                 }
@@ -11976,15 +12091,13 @@ private class VoicePlaybackController {
     private fun releasePlayer() {
         stopProgressTracking()
         player?.let { p ->
-            try { p.setOnCompletionListener(null); p.setOnPreparedListener(null); p.setOnErrorListener(null) } catch (_: Exception) {}
-            try { p.reset() } catch (_: Exception) {}
             try { p.release() } catch (_: Exception) {}
         }
         player = null
         currentMessageId = null
         isPlaying = false
         progress = 0f
-        currentPositionMs = 0L  // P0.24: сброс позиции.
+        currentPositionMs = 0L
         durationSec = 0f
     }
 
