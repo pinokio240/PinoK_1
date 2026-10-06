@@ -14490,3 +14490,13 @@ VOICE-ASR-RETRY-P0.25c-2026-10-06: retry-loop ASR fetch + "готовится" s
 //   - isStub упрощён: stub = state != "done" || text blank. Реальный transcript = done + non-blank text.
 //   - transcriptContent всегда non-null (при expanded): каждое состояние имеет сообщение — done+text, in_progress, error, null=preparing.
 // 1 файл, +20/−15. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+VOICE-ASR-SUSPEND-P0.25d-2026-10-06: suspend fetchVoiceTranscripts + LaunchedEffect(peerId) poll.
+// Пользователь: «теперь пишет расшифровывается готовится, но прошло более 30ск, а расшифровка не пришла».
+// Корень: fetchVoiceTranscripts была fire-and-forget (scope.launch внутри). LaunchedEffect retry читал messages в plain while — не реактивно между итерациями. Даже если getById вернул transcript, hasPendingVoice видел старый messages → loop продолжался, но UI не обновлялся (race: следующая итерация читала stale state).
+// Фикс:
+//   - fetchVoiceTranscripts: изменена на suspend. Убран inner scope.launch. Caller ждёт completion перед следующей проверкой hasPendingVoice.
+//   - LaunchedEffect(peerId): poll-loop 6 попыток × 10 сек. Каждая итерация: delay(10s) → check hasPendingVoice (читает CURRENT messages state) → break если нет pending → await fetchVoiceTranscripts (suspend) → next. Compose State reads внутри coroutine (LaunchedEffect scope) реактивны per-iteration через Snapshot — свежий messages после fetchVoice completion.
+//   - onFetchVoiceTranscripts callback обёрнут в scope.launch (manual tap): { scope.launch { fetchVoiceTranscripts() } } — fire-and-forget для UI.
+//   - LaunchedEffect(peerId) вместо messages.id-hash: стабильный ключ, не перезапускает loop при каждом изменении messages (что вызывало infinite restart).
+// 1 файл, +68/−65. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

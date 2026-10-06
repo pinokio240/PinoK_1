@@ -13174,3 +13174,27 @@ Task: починить расшифровку ASR — HAR показал что 
 
 Файл (1, +20/−15): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
 Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 43 (VOICE-ASR-SUSPEND-P0.25d-2026-10-06)
+Agent: orchestrator (main)
+Task: починить retry ASR — «расшифровка готовится, но прошло более 30 сек, а расшифровка не пришла».
+
+## Root Cause
+// fetchVoiceTranscripts была fire-and-forget (scope.launch внутри). LaunchedEffect retry читал messages в plain while — Compose State reads НЕ реактивны между итерациями в plain while-loop. Даже если getById вернул transcript и обновил messages, hasPendingVoice в следующей итерации видел СТАРЫЙ messages → loop продолжался, но UI не обновлялся (race condition: messages update асинхронный, следующая итерация читала stale state).
+// Плюс LaunchedEffect(messages.id-hash) перезапускался при каждом изменении messages → infinite restart цикла.
+
+## Work Log
+// fetchVoiceTranscripts: suspend (убран scope.launch внутри). Caller ждёт completion.
+// LaunchedEffect(peerId): poll-loop 6 попыток × 10 сек. delay → hasPendingVoice (CURRENT messages) → break если нет → await fetchVoiceTranscripts (suspend) → next.
+// onFetchVoiceTranscripts: { scope.launch { fetchVoiceTranscripts() } } — fire-and-forget для UI (manual tap).
+// Committed 600baed, push прошёл: f044ad1..600baed PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// fetchVoiceTranscripts suspend — caller ждёт completion, messages обновляется синхронно.
+// LaunchedEffect(peerId) — стабильный ключ, poll-loop читает CURRENT messages каждую итерацию.
+// 6 попыток × 10 сек = 60 сек total — достаточно для VK ASR (5-30 сек).
+
+Файл (1, +68/−65): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
