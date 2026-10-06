@@ -221,8 +221,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // P1.4: search bar + tabs (Все/Каналы/Непрочитанные) в MessagesScreen.
             msgSearch          = p[Keys.MSG_SEARCH]                ?: true,
             // P2.5: multi-select mode — long-press → «Выбрать» → выделение нескольких
-            // сообщений для массового Delete/Forward. Opt-in (default false).
-            msgMultiSelect     = p[Keys.MSG_MULTI_SELECT]          ?: false,
+            // сообщений для массового Delete/Forward. P0.29: default true (включено по умолчанию).
+            msgMultiSelect     = p[Keys.MSG_MULTI_SELECT]          ?: true,
             // P3.5: multi-file upload — выбор до 10 фото за раз (PickMultipleVisualMedia).
             msgMultiFile       = p[Keys.MSG_MULTI_FILE]            ?: true,
             // P3.6: dual send/mic button — state machine (EDIT/LOADING/LIMIT/MIC/SUBMIT).
@@ -1485,7 +1485,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val msgReadReceipts: Boolean,
         /** P1.4: search + tabs в MessagesScreen. */
         val msgSearch: Boolean,
-        /** P2.5: multi-select mode (long-press → «Выбрать»). Opt-in (default false). */
+        /** P2.5: multi-select mode (long-press → «Выбрать»). P0.29: default true. */
         val msgMultiSelect: Boolean,
         /** P3.5: multi-file upload — до 10 фото за раз (default true). */
         val msgMultiFile: Boolean,

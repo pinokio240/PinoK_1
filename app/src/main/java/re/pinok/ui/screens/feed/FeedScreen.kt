@@ -292,8 +292,8 @@ fun FeedScreen(
             msgReadReceipts = true,
             // P1.4: search + tabs в MessagesScreen (default ON).
             msgSearch = true,
-            // P2.5: multi-select mode (opt-in — default OFF).
-            msgMultiSelect = false,
+            // P0.29: multi-select mode — default ON (включено по умолчанию).
+            msgMultiSelect = true,
             // P3.5: multi-file upload — до 10 фото за раз (default ON).
             msgMultiFile = true,
             // P3.6: dual send/mic button — state machine (opt-in — default OFF).
