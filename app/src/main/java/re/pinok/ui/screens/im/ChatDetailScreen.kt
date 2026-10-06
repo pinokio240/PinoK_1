@@ -9435,11 +9435,32 @@ private fun VoiceMessageBubble(
     // prepare), иначе — из метаданных VK.
     val durationSec = if (isCurrent && controller.durationSec > 0f) controller.durationSec
                       else audioMsg.duration.toFloat()
+    // P0.24 #VOICE-TIMER-FIX: elapsed из реальной позиции MediaPlayer (мс), НЕ через
+    // progress * durationSec. Раньше рассинхрон если MediaPlayer.duration != VK metadata.
+    val elapsedSec = if (isCurrent) (controller.currentPositionMs / 1000f).toInt()
+                     else 0
 
-    // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR. Показывается когда transcript
-    // присутствует И transcript_state == "done". Кнопка-шеврон toggles видимость.
-    val hasTranscript = !audioMsg.transcript.isNullOrBlank() &&
-        audioMsg.transcriptState == "done"
+    // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR. Кнопка-шеврон показывается ВСЕГДА
+    // для голосовых (как в VK web — AttachVoice__asrButton). Содержимое transcript
+    // зависит от transcript_state:
+    //   - "done" + text → показываем текст расшифровки.
+    //   - "in_progress" → "Расшифровка готовится..." (stub).
+    //   - "error" → "Ошибка расшифровки" (stub).
+    //   - null/empty → "Расшифровка недоступна" (stub).
+    // VK web: me_voice_asr_status_empty / _in_progress / _error + AttachVoice__transcriptStub.
+    val transcriptText = audioMsg.transcript
+    val transcriptState = audioMsg.transcriptState
+    val transcriptContent: String? = when {
+        !transcriptText.isNullOrBlank() && transcriptState == "done" -> transcriptText
+        transcriptState == "in_progress" -> "Расшифровка готовится…"
+        transcriptState == "error" -> "Ошибка расшифровки"
+        transcriptState == "done" && transcriptText.isNullOrBlank() -> "Расшифровка недоступна"
+        else -> null  // нет transcript — покажем "Расшифровка недоступна" в expanded
+    }
+    // Кнопка ASR показывается всегда (даже без transcript — пользователь может нажать,
+    // увидит stub). Исключение: если transcript отсутствует вовсе (null) — тоже показываем
+    // кнопку, при тапе пользователь увидит "Расшифровка недоступна".
+    val showAsrButton = true
     var transcriptExpanded by remember(messageId) { mutableStateOf(false) }
 
     Column(
@@ -9543,32 +9564,22 @@ private fun VoiceMessageBubble(
             }
 
             Spacer(modifier = Modifier.width(6.dp))
-            // Duration / elapsed time — как в VK web (AttachVoice__duration).
-            // Формат: elapsed / total (0:03 / 0:08).
-            val elapsed = (durationSec * progress).roundToInt()
+            // P0.24 #VOICE-TIMER-FIX: таймер — ОДНО число (как в VK web AttachVoice__duration).
+            // Раньше: "elapsed / total" (0:03 / 0:08) — громоздко и некорректно при рассинхроне.
+            // Теперь: если playing → elapsed (меняется в реальном времени), иначе → total.
+            // Источник elapsed: controller.currentPositionMs (прямая позиция MediaPlayer, мс).
+            val displaySec = if (isPlaying) elapsedSec else durationSec.toInt()
             Text(
-                text = elapsed.toRecordingTimeString(),
+                text = displaySec.toRecordingTimeString(),
                 style = MaterialTheme.typography.labelSmall,
                 color = voiceColor,
-                fontSize = 11.sp,
-            )
-            Text(
-                text = "/",
-                style = MaterialTheme.typography.labelSmall,
-                color = textColor.copy(alpha = 0.4f),
-                fontSize = 10.sp,
-            )
-            Text(
-                text = durationSec.toInt().toRecordingTimeString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = voiceColor.copy(alpha = 0.7f),
                 fontSize = 11.sp,
             )
 
             // P0.22 #VOICE-TRANSCRIPT: кнопка-шеврон для показа расшифровки ASR.
             // VK web: AttachVoice__asrButton (chevron_up/down_outline_20).
-            // Показывается только когда есть transcript (transcript_state=="done").
-            if (hasTranscript) {
+            // Показывается ВСЕГДА для голосовых (showAsrButton=true).
+            if (showAsrButton) {
                 Spacer(modifier = Modifier.width(4.dp))
                 IconButton(
                     onClick = { transcriptExpanded = !transcriptExpanded },
@@ -9587,8 +9598,14 @@ private fun VoiceMessageBubble(
         }
 
         // P0.22 #VOICE-TRANSCRIPT: расшифровка ASR (как в VK web AttachVoice__transcript).
-        // Левая вертикальная линия-сепаратор (2dp, voiceColor alpha 0.24) + текст.
-        if (hasTranscript && transcriptExpanded) {
+        // Левая вертикальная линия-сепаратор (2dp, voiceColor alpha 0.24) + текст/stub.
+        // Показывается когда expanded — содержит либо текст, либо stub-сообщение.
+        if (transcriptExpanded) {
+            val displayText = transcriptContent ?: "Расшифровка недоступна"
+            val isStub = transcriptContent == null ||
+                transcriptState == "in_progress" ||
+                transcriptState == "error" ||
+                (transcriptState == "done" && transcriptText.isNullOrBlank())
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -9598,12 +9615,12 @@ private fun VoiceMessageBubble(
                     modifier = Modifier
                         .width(2.dp)
                         .height(IntrinsicSize.Min)
-                        .background(voiceColor.copy(alpha = 0.24f)),
+                        .background(voiceColor.copy(alpha = if (isStub) 0.12f else 0.24f)),
                 )
                 Text(
-                    text = audioMsg.transcript ?: "",
+                    text = displayText,
                     style = MaterialTheme.typography.bodySmall,
-                    color = textColor,
+                    color = if (isStub) textColor.copy(alpha = 0.5f) else textColor,
                     fontSize = 14.sp,
                     modifier = Modifier
                         .padding(start = 10.dp)
@@ -11812,6 +11829,13 @@ private class VoicePlaybackController {
     var progress: Float by mutableFloatStateOf(0f)
         private set
 
+    // P0.24 #VOICE-TIMER-FIX (2026-10): currentPosition в мс напрямую из MediaPlayer.
+    // Раньше elapsed = durationSec * progress — рассинхрон если MediaPlayer.duration
+    // отличается от VK metadata.duration (часто для streaming MP3). Теперь elapsed
+    // считается из реальной позиции плеера, без зависимости от progress.
+    var currentPositionMs: Long by mutableLongStateOf(0L)
+        private set
+
     /** Длительность текущего сообщения в секундах (для отображения). */
     var durationSec: Float by mutableFloatStateOf(0f)
         private set
@@ -11874,11 +11898,13 @@ private class VoicePlaybackController {
                 p.start()
                 isPlaying = true
                 progress = 0f
+                currentPositionMs = 0L  // P0.24: сброс позиции при новом воспроизведении.
                 startProgressTracking()
             }
             mp.setOnCompletionListener {
                 isPlaying = false
                 progress = 0f
+                currentPositionMs = 0L  // P0.24: сброс по завершению.
                 stopProgressTracking()
                 // Не release — оставим player, чтобы можно было replay без reload.
             }
@@ -11929,7 +11955,10 @@ private class VoicePlaybackController {
                         break
                     }
                     val d = p.duration.coerceAtLeast(1)
-                    progress = p.currentPosition.toFloat() / d
+                    val pos = p.currentPosition.coerceIn(0, p.duration)
+                    // P0.24: обновляем currentPositionMs напрямую из MediaPlayer.
+                    currentPositionMs = pos
+                    progress = pos.toFloat() / d
                 } catch (_: Exception) {
                     break
                 }
@@ -11953,6 +11982,7 @@ private class VoicePlaybackController {
         currentMessageId = null
         isPlaying = false
         progress = 0f
+        currentPositionMs = 0L  // P0.24: сброс позиции.
         durationSec = 0f
     }
 
