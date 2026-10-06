@@ -5065,6 +5065,19 @@ fun ChatDetailScreen(
                                     voicePlaybackController = voicePlaybackController,
                                     // P0.25 #VOICE-ASR-FETCH: передаём callback для запроса transcript.
                                     onFetchVoiceTranscripts = { scope.launch { fetchVoiceTranscripts() } },
+                                    // P0.25e #VOICE-ASR-REQUEST: callback для messages.recogniseAudioMessage.
+                                    // ChatDetailScreen scope имеет доступ к app + scope + fetchVoiceTranscripts.
+                                    onRequestAsr = { pId, cId, amId ->
+                                        scope.launch {
+                                            val ok = app.apiClient.messagesRecogniseAudioMessage(pId, cId, amId)
+                                            AppLog.i("VoiceASR", "recogniseAudioMessage result: $ok (peer=$pId cmid=$cId audioMsgId=$amId)")
+                                            if (ok) {
+                                                // VK принял запрос — через 5-30 сек transcript появится.
+                                                kotlinx.coroutines.delay(5000)
+                                                fetchVoiceTranscripts()
+                                            }
+                                        }
+                                    },
                                     onLongPress = { contextMsgId = msg.id },
                                     // #REACTION-WEB-MAP: double-click = ❤️ = id 1
                                     // (web-карта; раньше id 2 был ❤️, фактически ставился 🔥).
@@ -6025,6 +6038,10 @@ private fun MessageBubble(
     voicePlaybackController: VoicePlaybackController,
     // P0.25 #VOICE-ASR-FETCH: запрос transcript (messages.getById) при тапе ASR кнопки.
     onFetchVoiceTranscripts: () -> Unit = {},
+    // P0.25e #VOICE-ASR-REQUEST: callback для messages.recogniseAudioMessage.
+    // (peerId, cmid, audioMessageId) -> Unit. Caller (ChatDetailScreen) запускает
+    // корутину: messagesRecogniseAudioMessage → 5 сек delay → fetchVoiceTranscripts.
+    onRequestAsr: (peerId: Long, cmid: Long, audioMessageId: String) -> Unit = { _, _, _ -> },
     // #59: ответ на сообщение
     onReply: () -> Unit = {},
     // #60: markAsAnswered + restore
@@ -6541,18 +6558,7 @@ private fun MessageBubble(
                                 // P0.25e #VOICE-ASR-REQUEST: параметры для messages.recogniseAudioMessage.
                                 peerId = message.peerId,
                                 cmid = message.conversationMessageId ?: 0L,
-                                onRequestAsr = { pId, cId, amId ->
-                                    scope.launch {
-                                        val ok = app.apiClient.messagesRecogniseAudioMessage(pId, cId, amId)
-                                        AppLog.i("VoiceASR", "recogniseAudioMessage result: $ok (peer=$pId cmid=$cId audioMsgId=$amId)")
-                                        if (ok) {
-                                            // VK принял запрос — через 5-30 сек transcript появится.
-                                            // Запускаем poll-loop для подхвата готового transcript.
-                                            kotlinx.coroutines.delay(5000)
-                                            fetchVoiceTranscripts()
-                                        }
-                                    }
-                                },
+                                onRequestAsr = onRequestAsr,
                             )
                         }
                     }
