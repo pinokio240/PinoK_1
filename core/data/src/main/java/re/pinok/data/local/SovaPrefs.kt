@@ -87,7 +87,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
             // Interface
             themeDark          = p[Keys.THEME_DARK]            ?: true,
-            themeAccentIndex   = p[Keys.THEME_ACCENT_INDEX]    ?: 6,
+            // P0.21 #VK-ACCENTS: default 0 = VK Modern (#0077FF). Раньше 6 (Cyan),
+            // но после добавления VK-акцентов в начало SovaColors.accents (indices 0-2)
+            // VK Modern стал первым — логичный default для VK-мода.
+            themeAccentIndex   = p[Keys.THEME_ACCENT_INDEX]    ?: 0,
             themeDynamic       = p[Keys.THEME_DYNAMIC]         ?: false,
             // #MONET-HYBRID: гибридный режим — при включённом Material You
             //   primary/secondary/tertiary = accent (пользовательский),

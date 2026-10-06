@@ -982,7 +982,8 @@ class MainActivity : ComponentActivity() {
                 darkTheme = snap?.themeDark ?: true,
                 dynamicColor = snap?.themeDynamic ?: false,
                 monetHybrid = snap?.themeMonetHybrid ?: true,
-                accentIndex = snap?.themeAccentIndex ?: 6,
+                // P0.21 #VK-ACCENTS: default 0 = VK Modern (#0077FF) — первый в списке.
+                accentIndex = snap?.themeAccentIndex ?: 0,
                 fontScale = snap?.fontScale ?: 100,
                 uiScale = snap?.uiScale ?: re.pinok.data.local.SovaPrefs.UI_SCALE_DEFAULT,
             ) {
