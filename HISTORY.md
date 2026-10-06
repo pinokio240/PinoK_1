@@ -14381,3 +14381,13 @@ VIDEO-DASH-BESTURL-P0.19-2026-10-06: DASH в bestPlayUrl + MIME в clips/stories
 //   - StoryViewerScreen.kt:484: тот же DASH MIME для story-video (bestPlayUrl теперь возвращает DASH для story-видео тоже).
 //   - VideoPipActivity.kt:358: тот же DASH MIME для PiP playback.
 // Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+AUDIO-LOCAL-FAST-START-P0.20-2026-10-06: prefer local .m4a/.mp3 cache over online HLS — мгновенный старт скачанных треков.
+// Пользователь: «раздел Музыка Моя музыка — если файл скачен, но я пытаюсь его запустить старт сразу не происходит».
+// Причина: toMediaItem (PlayerConnection.kt:1281) имел considerLocal = !isOnline || !hasUrl. Гибридный режим (Fix #165) предпочитал онлайн-HLS даже когда локальный кэш есть — потому что .ts кэш может быть Siren-повреждённым (magic != 0x47, TsExtractor не парсит). НО .m4a и .mp3 файлы ВСЕГДА валидны (транскодированы через MediaExtractor/MediaMuxer, Siren-проблема актуальна только для .ts). Даже скачанный .m4a/.mp3 играл через онлайн-HLS → медленный старт (сеть fetches manifest + segments).
+// Фикс: considerLocal теперь true когда локальный файл .m4a или .mp3 (safe formats, non-Siren). Для .ts файлов гибридный режим сохранён (online preferred, .ts может быть siren).
+//   val localExt = localFile?.extension?.lowercase()
+//   val localIsSafeFormat = localExt == "m4a" || localExt == "mp3"
+//   val considerLocal = !isOnline || !hasUrl || localIsSafeFormat
+// Результат: скачанные .m4a/.mp3 треки стартуют мгновенно из локального кэша даже онлайн. .ts треки по-прежнему стримят онлайн (Siren safety).
+// 1 файл, +10/−12. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.

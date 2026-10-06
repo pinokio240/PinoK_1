@@ -12877,3 +12877,32 @@ Task: починить воспроизведение клипов/коротк�
 // app/src/main/java/re/pinok/ui/videoplayer/VideoPipActivity.kt (+6, DASH MIME)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
+
+---
+Task ID: 33 (AUDIO-LOCAL-FAST-START-P0.20-2026-10-06)
+Agent: orchestrator (main)
+Task: починить медленный старт скачанных треков в Моей музыке.
+
+## Контекст
+Пользователь: «раздел Музыка Моя музыка — если файл скачен, но я пытаюсь его запустить старт сразу не происходит, можешь понять почему?».
+
+## Root Cause
+// PlayerConnection.kt:1281 toMediaItem имел considerLocal = !isOnline || !hasUrl.
+// Гибридный режим (Fix #165) предпочитал онлайн-HLS даже когда локальный кэш есть — потому что .ts кэш может быть Siren-повреждённым (magic != 0x47, TsExtractor не парсит).
+// НО .m4a и .mp3 файлы ВСЕГДА валидны (транскодированы через MediaExtractor/MediaMuxer, Siren-проблема актуальна только для .ts). Даже скачанный .m4a/.mp3 играл через онлайн-HLS → медленный старт (сеть fetches manifest + segments).
+
+## Work Log
+// PlayerConnection.kt:1270-1279 — добавлена проверка localIsSafeFormat для .m4a/.mp3.
+//   val localExt = localFile?.extension?.lowercase()
+//   val localIsSafeFormat = localExt == "m4a" || localExt == "mp3"
+//   val considerLocal = !isOnline || !hasUrl || localIsSafeFormat
+// Для .ts файлов гибридный режим сохранён (online preferred, .ts может быть siren) — Siren-проверка magic bytes остаётся.
+// Коммит e4f1a60, push прошёл: d162f7e..e4f1a60 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// Скачанные .m4a/.mp3 треки стартуют мгновенно из локального кэша даже онлайн.
+// .ts треки по-прежнему стримят онлайн (Siren safety — .ts может быть повреждён).
+
+Файл (1, +10/−12): app/src/main/java/re/pinok/media/PlayerConnection.kt.
+Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
