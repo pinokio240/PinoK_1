@@ -1267,18 +1267,16 @@ object PlayerConnection {
         // #ARCH-CONTAINERS 3.7-1: Track.url в :core:data — захват ДО проверки.
         val trackUrl = this.url
         val hasUrl = !trackUrl.isNullOrBlank()
-        // #SIREN-FIX (2026-08-01): .ts-кэш с VK Siren codec (non-encrypted HLS,
-        // первый байт != 0x47) НЕ проигрывается ExoPlayer'ом офлайн — TsExtractor
-        // не умеет siren → UnrecognizedInputFormatException → цикл ошибок.
-        // Лог 2026-08-01 19:49:04: track #456249594, magic 25 78 11 5b, падал.
-        // Если локальный .ts — siren, НЕ используем его: при наличии URL стримим
-        // онлайн HLS (там HLS-стек умеет siren), без URL — about:blank (skip).
-        // #ANR-MAIN-IO: чтение magic bytes (4 байта) — только для .ts и только
-        // если реально рассматриваем local; выполняется на Dispatchers.Default
-        // (готовка очереди) либо main для одиночных треков — это дёшево.
-        // Note: localFile != null включён напрямую в useLocal (не через отдельный
-        // val) — иначе Kotlin не смарт-кастит localFile в Uri.fromFile ниже.
-        val considerLocal = !isOnline || !hasUrl
+        // P0.20 #LOCAL-FAST-START (2026-10): для .m4a/.mp3 (НЕ .ts) preferring local
+        // cache even when online — эти форматы всегда валидны (транскодированы из HLS
+        // через MediaExtractor/MediaMuxer), Siren-проблема актуальна только для .ts.
+        // Раньше: considerLocal = !isOnline || !hasUrl — даже скачанный .m4a/.mp3
+        // играл через онлайн-HLS (медленный старт — сеть fetches manifest + segments).
+        // Теперь: если локальный файл .m4a/.mp3 — prefer local (мгновенный старт).
+        // .ts — оставляем гибридную логику (online preferred, .ts может быть siren).
+        val localExt = localFile?.extension?.lowercase()
+        val localIsSafeFormat = localExt == "m4a" || localExt == "mp3"
+        val considerLocal = !isOnline || !hasUrl || localIsSafeFormat
         var localIsSiren = false
         if (localFile != null && considerLocal && localFile.extension.lowercase() == "ts") {
             try {
