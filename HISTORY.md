@@ -14371,3 +14371,13 @@ STORY-PAUSE-EVERYWHERE-2026-10-06: пауза удержанием (long-press) 
 // StoryViewerScreen.kt — убраны clickable на шапке/StoryLinkButton/StoryDownloadButton; их тап-зоны диспетчеризует корневой detectTapGestures.onTap по геометрии (шапка→стена автора, ссылка→onUrlClick, download→очередь/удаление).
 // SettingsScreen.kt:1639 — блок-инструкция «Как пользоваться историями» (жесты: удержание-пауза, тап-контент, свайп, тап-шапка).
 // StoryViewerScreen.kt (+107). Кодировка UTF-8 без BOM. Gradle НЕ запускался.
+
+VIDEO-DASH-BESTURL-P0.19-2026-10-06: DASH в bestPlayUrl + MIME в clips/stories/PiP. 4 файла, +46/−2.
+// Пользователь: «Проблема воспроизведения клипов и коротких видео осталась» после DASH-работы в коммите e9dc11b.
+// Причина: bestPlayUrl (Models.kt:356) возвращал mp4_1080→240, hls, mp4_orig, player — но НЕ DASH-ключи (dash_ondemand, dash, dash_sep, dash_webm, dash_webm_av1, hls_fmp4). VK для многих клипов отдаёт ТОЛЬКО DASH (без mp4/hls). bestPlayUrl падал на player (embed URL) → ExoPlayer пытался играть HTML embed-страницу → fail. VideoPlayerScreen уже использовал firstAdaptiveEntry (DASH-aware) для qualityOptions + mimeFor() по ключу. Но ClipsFeedScreen, StoryViewerScreen, VideoPipActivity используют bestPlayUrl/playUrl напрямую и проверяли только m3u8 для MIME — DASH URL оставались без MIME → ExoPlayer трактовал как прогрессивный mp4 → HTTP 400.
+// Фикс:
+//   - Models.kt bestPlayUrl: добавлена DASH fallback chain (hls_ondemand, hls, hls_fmp4, dash_ondemand, dash, dash_sep, dash_webm, dash_webm_av1). Приоритет: mp4 (1080→240) → mp4_orig → HLS → hls_fmp4 → DASH → player (embed, last-resort).
+//   - ClipsFeedScreen.kt:369: добавлена DASH MIME-детекция по URL (.mpd, dash_webm, dash_ondemand, dash_sep) → MimeTypes.APPLICATION_MPD. Симметрично существующей m3u8 → APPLICATION_M3U8 проверке.
+//   - StoryViewerScreen.kt:484: тот же DASH MIME для story-video (bestPlayUrl теперь возвращает DASH для story-видео тоже).
+//   - VideoPipActivity.kt:358: тот же DASH MIME для PiP playback.
+// Все новые комментарии — line-comments // (НЕ /** */). Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).

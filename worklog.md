@@ -12842,3 +12842,38 @@ Task: пакет видео-фиксов (DASH-поддержка, HTTP 400/PARS
 // app/src/main/java/re/pinok/ui/videoplayer/VideoPipActivity.kt (+7), app/src/main/java/re/pinok/ui/screens/clips/ClipsFeedScreen.kt (+7)
 
 // Кодировка UTF-8 без BOM. Все новые комментарии — line-comments //. Gradle НЕ запускался (собирает пользователь). НИЧЕГО не закоммичено — коммит делает основной ассистент.
+
+---
+Task ID: 32 (VIDEO-DASH-BESTURL-P0.19-2026-10-06)
+Agent: orchestrator (main)
+Task: починить воспроизведение клипов/коротких видео — осталась после DASH-работы пользователя (коммит e9dc11b).
+
+## Контекст
+Пользователь сделал большой коммит e9dc11b (DASH, Origin vk.ru, mimeFor по ключу, свежий video.get, клипы HLS/DASH, реклама-блок, лимит качества). Но проблема воспроизведения клипов осталась. Изучил код.
+
+## Root Cause
+// Models.kt:356 bestPlayUrl возвращал mp4_1080→mp4_240, hls, mp4_orig, player — БЕЗ DASH-ключей.
+// VK для многих клипов отдаёт ТОЛЬКО DASH (без mp4/hls). bestPlayUrl падал на player (embed URL) → ExoPlayer играл HTML embed-страницу → fail.
+// VideoPlayerScreen уже использовал firstAdaptiveEntry (DASH-aware) для qualityOptions + mimeFor() по ключу (commit e9dc11b).
+// НО ClipsFeedScreen, StoryViewerScreen, VideoPipActivity используют bestPlayUrl/playUrl напрямую + проверяли только m3u8 для MIME. DASH URL оставались без MIME → ExoPlayer трактовал как прогрессивный mp4 → HTTP 400.
+
+## Work Log
+// Models.kt:355-376 — bestPlayUrl расширен DASH fallback chain: mp4 (1080→240) → mp4_orig → hls_ondemand → hls → hls_fmp4 → dash_ondemand → dash → dash_sep → dash_webm → dash_webm_av1 → player (last-resort).
+// ClipsFeedScreen.kt:369-385 — добавлена DASH MIME-детекция по URL (.mpd, dash_webm, dash_ondemand, dash_sep) → MimeTypes.APPLICATION_MPD. Симметрично m3u8 → APPLICATION_M3U8.
+// StoryViewerScreen.kt:484-500 — тот же DASH MIME для story-video.
+// VideoPipActivity.kt:358-366 — тот же DASH MIME для PiP.
+// Коммит 4f066ea, push прошёл: e9dc11b..4f066ea PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// bestPlayUrl теперь DASH-aware — возвращает DASH URL для клипов с только-DASH files[].
+// ClipsFeedScreen/StoryViewerScreen/VideoPipActivity определяют DASH MIME по URL → ExoPlayer корректно играет как DASH (не прогрессивный mp4).
+// VideoPlayerScreen уже работал (firstAdaptiveEntry + mimeFor по ключу) — не трогал.
+
+Файлы (4, +46/−2):
+// core/data/src/main/java/re/pinok/data/model/Models.kt (+19, bestPlayUrl DASH)
+// app/src/main/java/re/pinok/ui/screens/clips/ClipsFeedScreen.kt (+13, DASH MIME)
+// app/src/main/java/re/pinok/ui/screens/feed/StoryViewerScreen.kt (+10, DASH MIME)
+// app/src/main/java/re/pinok/ui/videoplayer/VideoPipActivity.kt (+6, DASH MIME)
+
+// Кодировка UTF-8 без BOM. Все новые комментарии — line-comments // (не /** */). Gradle НЕ собирался (нет Android SDK — пользователь собирает сам).
