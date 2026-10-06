@@ -1055,11 +1055,21 @@ fun ChatDetailScreen(
                 am != null && (am.transcript.isNullOrBlank() || am.transcriptState != "done")
             } == true
         }.map { it.id }
+        AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: found ${voiceMsgIds.size} pending voice messages (total ${messages.size})")
         if (voiceMsgIds.isEmpty()) return
+        AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: requesting getById for ids=$voiceMsgIds")
         scope.launch {
             try {
-                val resp = app.apiClient.messagesGetById(voiceMsgIds.take(50)) ?: return@launch
-                val items = resp.getAsJsonArray("items") ?: return@launch
+                val resp = app.apiClient.messagesGetById(voiceMsgIds.take(50)) ?: run {
+                    AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: messagesGetById returned null")
+                    return@launch
+                }
+                AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: response keys=${resp.keySet()}")
+                val items = resp.getAsJsonArray("items") ?: run {
+                    AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: no items[] in response, raw=${resp.toString().take(300)}")
+                    return@launch
+                }
+                AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: got ${items.size()} items")
                 // Map messageId → updated audio_message transcript.
                 val updates = mutableMapOf<Long, Pair<String?, String?>>()
                 for (item in items) {
@@ -1070,13 +1080,20 @@ fun ChatDetailScreen(
                     for (att in atts) {
                         if (!att.isJsonObject) continue
                         val attObj = att.asJsonObject
-                        val amObj = attObj.getAsJsonObject("audio_message") ?: continue
+                        // audio_message может быть внутри type="audio_message" или type="doc" (legacy).
+                        val amObj = attObj.getAsJsonObject("audio_message")
+                            ?: attObj.getAsJsonObject("doc")?.getAsJsonObject("audio_msg")
+                        if (amObj == null) continue
                         val transcript = amObj.get("transcript")?.takeIf { !it.isJsonNull }?.asString
                         val state = amObj.get("transcript_state")?.takeIf { !it.isJsonNull }?.asString
+                        AppLog.i("ChatDetailScreen", "fetchVoiceTranscripts: msg=$msgId transcript=${transcript?.take(40) ?: "null"} state=$state")
                         updates[msgId] = transcript to state
                     }
                 }
-                if (updates.isEmpty()) return@launch
+                if (updates.isEmpty()) {
+                    AppLog.w("ChatDetailScreen", "fetchVoiceTranscripts: no transcript updates found in response")
+                    return@launch
+                }
                 // Apply updates to messages.
                 messages = messages.map { m ->
                     val upd = updates[m.id] ?: return@map m

@@ -7373,7 +7373,10 @@ class VKApiClient(
         if (messageIds.isEmpty()) return null
         if (isOffline()) return null
         val ids = messageIds.joinToString(",")
-        val json = call("messages.getById", mapOf("message_ids" to ids)) ?: return null
+        // P0.25: forceWebGateway=true — гарантированно через web.api.vk.ru (vk1.a.* токен,
+        // sig не нужен). Иначе через прямой токен messages.getById может дать error 15
+        // (access denied — sig required) если user_secret отсутствует.
+        val json = call("messages.getById", mapOf("message_ids" to ids), forceWebGateway = true) ?: return null
         return json.getAsJsonObject("response")
     }
 
