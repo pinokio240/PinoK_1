@@ -684,10 +684,21 @@ fun VideoPlayerScreen(
                 AppLog.i(TAG, "video.get вернул видео: files=${finalVideo.files?.keys}, platform=${finalVideo.videoPlatform}, externalId=${finalVideo.externalId}, player=${finalVideo.player?.take(60)}")
                 resolvedVideo = finalVideo  // перезапускает LaunchedEffect(resolvedVideo)
             } else {
-                fetchError = "Видео недоступно (нет прямых ссылок)"
-                // P2 #VIDEO-SESSION-HOLD: null + невалидный токен = сессия истекла
-                // (error 5/1117). Показываем inline «Перезайти», а не глобальный popup.
-                sessionExpired = !app.tokenStorage.hasValidToken()
+                // P0.30 #CLIP-KEEP-ORIGINAL-FILES: если shortVideo.get/videoGetById
+                // вернул null или files=0, но оригинальный Video имеет files[] —
+                // НЕ ставим fetchError. Плеер уже создан с оригинальными files[]
+                // (mp4_* URLs от VK CDN). Раньше: fetchError скрывал плеер →
+                // пользователь видел "Видео недоступно" хотя оригинальные files рабочие.
+                val originalHasFiles = resolvedVideo.files?.isNotEmpty() == true
+                if (originalHasFiles) {
+                    AppLog.i(TAG, "video.get вернул null/empty files — сохраняем оригинальные files (${resolvedVideo.files?.keys?.size} keys)")
+                    // Не ставим fetchError — плеер играет с оригинальными files.
+                } else {
+                    fetchError = "Видео недоступно (нет прямых ссылок)"
+                    // P2 #VIDEO-SESSION-HOLD: null + невалидный токен = сессия истекла
+                    // (error 5/1117). Показываем inline «Перезайти», а не глобальный popup.
+                    sessionExpired = !app.tokenStorage.hasValidToken()
+                }
             }
         } catch (e: Exception) {
             fetchError = "Ошибка загрузки: ${e.message}"
@@ -739,16 +750,30 @@ fun VideoPlayerScreen(
                 // доступный HLS/DASH-ключ по [ADAPTIVE_FALLBACK_KEYS]), чтобы
                 // авто-старт начинался сразу с манифеста, а не с битого mp4.
                 if (resolvedVideo.isClip) {
-                    // #CLIP-HLS-DASH-MIMEBYKEY: создаём пункт «Авто» с РЕАЛЬНЫМ
-                    // ключом files (напр. "dash_webm_av1"), а не фиксированным
-                    // "adaptive". Тогда стартовый MediaItem узнаёт точный MIME через
-                    // [mimeFor] по ключу и корректно воспроизводит DASH (HTTP 400
-                    // при прогрессивной интерпретации больше не возникает).
-                    val adaptiveEntry = firstAdaptiveEntry(files)
-                    if (adaptiveEntry != null) {
-                        return@remember listOf(QualityOption(adaptiveEntry.first, "Авто", adaptiveEntry.second))
+                    // P0.30 #CLIP-OKCDN-FIX (2026-10): для клипов сначала пробуем mp4_*
+                    // URL (VK CDN — работают с cookies). Раньше всегда брали firstAdaptiveEntry
+                    // (HLS/DASH), который мог быть с OK CDN (okcdn.ru) → 403.
+                    // Лог показал: mp4_360 работает после quality switch, но начальный
+                    // HLS URL от OK CDN падал. Теперь: если есть mp4_* → строим qualityOptions
+                    // из них (как для обычных видео). Если mp4_* нет → fallback на adaptive.
+                    val mp4Options = VideoQuality.ORDER.mapNotNull { (key, label) ->
+                        val url = files[key]
+                        if (url != null) QualityOption(key, label, url) else null
                     }
-                }
+                    val filteredMp4 = if (HevcSupport.isSupported()) mp4Options
+                        else mp4Options.filter { it.key !in HevcSupport.HEVC_LIKELY_KEYS }
+                    if (filteredMp4.isNotEmpty()) {
+                        // Есть mp4_* — используем их (VK CDN, работают с cookies).
+                        if (filteredMp4.size < mp4Options.size) mp4Options else filteredMp4
+                    } else {
+                        // Нет mp4_* — fallback на adaptive (HLS/DASH).
+                        val adaptiveEntry = firstAdaptiveEntry(files)
+                        if (adaptiveEntry != null) {
+                            return@remember listOf(QualityOption(adaptiveEntry.first, "Авто", adaptiveEntry.second))
+                        }
+                        emptyList()
+                    }
+                } else {
                 val allOptions = VideoQuality.ORDER.mapNotNull { (key, label) ->
                     val url = files[key]
                     if (url != null) QualityOption(key, label, url) else null
@@ -773,6 +798,7 @@ fun VideoPlayerScreen(
             }
         }
     }
+}
 
     // Fix #336: читаем preferredQuality СИНХРОННО из кэша SovaApp.prefsSnapshot
     // (раньше был async produceState — ExoPlayer создавался с firstOrNull()=max
