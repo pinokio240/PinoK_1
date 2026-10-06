@@ -14518,3 +14518,8 @@ VOICE-ASR-REQUEST-P0.25e-2026-10-06: messages.recogniseAudioMessage — реал
 //   - ChatDetailScreen caller: передаёт message.peerId, message.conversationMessageId, onRequestAsr lambda — вызывает messagesRecogniseAudioMessage, затем через 5 сек delay вызывает fetchVoiceTranscripts (poll transcript).
 //   - LaunchedEffect(peerId) poll-loop: 6 попыток × 10 сек — auto-fetch transcript после ASR request.
 // 3 файла, +92/−5. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+COMPILE-FIX6-2026-10-06: 3 ошибки компиляции — onRequestAsr scope.
+// ChatDetailScreen.kt:6545,6546,6552 — 'Unresolved reference scope/app/fetchVoiceTranscripts'. MessageBubble — отдельная Composable, не имеет доступа к scope/app/fetchVoiceTranscripts из ChatDetailScreen.
+// Фикс: добавлен параметр onRequestAsr в MessageBubble (рядом с onFetchVoiceTranscripts). Caller (ChatDetailScreen:5070) передаёт lambda с доступом к scope/app/fetchVoiceTranscripts. MessageBubble пробрасывает в VoiceMessageBubble.onRequestAsr.
+// 1 файл, +18/−12. Кодировка UTF-8 без BOM.

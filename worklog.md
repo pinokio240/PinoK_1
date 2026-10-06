@@ -13236,3 +13236,20 @@ Task: починить расшифровку ASR — «изучай лучше 
 // core/data/src/main/java/re/pinok/data/model/Models.kt (+4, AudioMsg id/ownerId)
 
 // Кодировка UTF-8 без BOM. Все комментарии — line-comments //. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
+
+---
+Task ID: 45 (COMPILE-FIX6-2026-10-06)
+Agent: orchestrator (main)
+Task: исправить 3 ошибки компиляции от P0.25e.
+
+## Work Log
+// ChatDetailScreen.kt:6545,6546,6552 — MessageBubble отдельная Composable, не видит scope/app/fetchVoiceTranscripts.
+// Фикс: onRequestAsr параметр в MessageBubble (6044), caller (5070) передаёт lambda с scope/app/fetchVoiceTranscripts, MessageBubble пробрасывает в VoiceMessageBubble (6561).
+// Коммит 55f7658, push прошёл: 5896d8f..55f7658 PinoK -> PinoK.
+
+## Stage Summary
+ВЫПОЛНЕНО:
+// onRequestAsr проброшен через параметр MessageBubble.
+
+Файл (1, +18/−12): app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt.
+Кодировка UTF-8 без BOM. Gradle НЕ собирался (нет Android SDK — пользователь соберёт сам).
