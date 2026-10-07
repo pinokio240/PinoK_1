@@ -3698,6 +3698,11 @@ class VKApiClient(
         val title = o.get("title")?.takeIf { !it.isJsonNull }?.asString
             ?: layout?.get("title")?.takeIf { !it.isJsonNull }?.asString
 
+        // P0.38-DIAG: логируем КАЖДЫЙ блок каталога.
+        // Цель: понять какие data_type/layout.name реально приходят от VK,
+        // и есть ли вообще блок друзей (data_type=links).
+        re.pinok.util.AppLog.i("Music2", "parseBlock: dataType=$dataType layout=$layoutName title=$title blockId=$blockId")
+
         val tracks = mutableListOf<Track>()
         val playlists = mutableListOf<re.pinok.data.model.CatalogPlaylist>()
 
