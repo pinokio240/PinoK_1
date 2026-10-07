@@ -230,13 +230,21 @@ fun Music2Screen(
     }
 
     // P0.34: загрузка каталога (catalog.getSection — для вкладок 1-4).
+    // P0.38-FIX: loadedSection объявлен ДО loadCatalog (Kotlin local function
+    // не видит переменные, объявленные позже). Трекинг нужен чтобы при смене
+    // вкладки перезагружать каталог, а не показывать блоки от предыдущей вкладки.
+    var loadedSection by remember { mutableStateOf<String?>(null) }
     fun loadCatalog(section: String, refresh: Boolean = false) {
         scope.launch {
             if (refresh) refreshing = true else catalogLoading = true
             catalogError = null
+            // P0.38-FIX: очищаем блоки при смене секции — иначе при переключении
+            // вкладок пользователь видит блоки от предыдущей секции (пока грузится новая).
+            if (loadedSection != section) catalogBlocks = emptyList()
             try {
                 val blocks = app.apiClient.catalogGetAudio(section = section, count = 10)
                 catalogBlocks = blocks
+                loadedSection = section
                 AppLog.i("Music2", "loadCatalog($section): ${blocks.size} blocks")
             } catch (e: Exception) {
                 AppLog.w("Music2", "loadCatalog error: ${e.message}")
@@ -257,8 +265,12 @@ fun Music2Screen(
             if (tracks.isEmpty()) loadTracks()
         } else {
             // Каталог — catalog.getSection.
+            // P0.38-FIX: перезагружаем если (1) пусто, (2) запрошен refresh,
+            // ИЛИ (3) сменилась секция (general→explore→radio→updates).
             val section = CATALOG_SECTIONS[selectedTab]
-            if (catalogBlocks.isEmpty() || refreshNeeded) loadCatalog(section, refresh = false)
+            if (catalogBlocks.isEmpty() || refreshNeeded || loadedSection != section) {
+                loadCatalog(section, refresh = false)
+            }
         }
     }
 
