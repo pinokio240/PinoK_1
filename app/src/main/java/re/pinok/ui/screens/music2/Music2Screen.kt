@@ -484,8 +484,11 @@ private fun Music2CatalogContent(
         }
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
-            catalogBlocks.forEach { block ->
-                item(key = "block_${block.blockId ?: block.title ?: block.hashCode()}") {
+            catalogBlocks.forEachIndexed { blockIndex, block ->
+                // P0.37-FIX: ключ блока включает индекс — иначе при пустых/одинаковых
+                // blockId+title fallback на hashCode даёт коллизию "block_-1541587281".
+                val blockKey = "block_${blockIndex}_${block.blockId ?: block.title ?: block.hashCode()}"
+                item(key = blockKey) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         block.title?.let { title ->
                             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -495,7 +498,10 @@ private fun Music2CatalogContent(
                         }
                     }
                 }
-                items(block.tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
+                // P0.37-FIX: ключ трека включает blockIndex — один и тот же трек
+                // может встречаться в нескольких блоках каталога (например, в "Обзор"
+                // и "Обновления"), что давало коллизию "ownerId_id" в рамках LazyColumn.
+                items(block.tracks, key = { "${blockIndex}_${it.ownerId}_${it.id}" }) { track ->
                     Music2TrackRow(
                         track = track,
                         isPlaying = isCurrentTrack(track) && isPlaying,
@@ -510,7 +516,7 @@ private fun Music2CatalogContent(
                 // P0.37 #MUSIC2-FRIENDS: горизонтальный слайдер друзей.
                 // VK web: links-slider-block / links-cell / links-cell-avatar.
                 if (block.friends.isNotEmpty()) {
-                    item(key = "friends_${block.blockId ?: block.title}") {
+                    item(key = "friends_${blockIndex}_${block.blockId ?: block.title}") {
                         androidx.compose.foundation.lazy.LazyRow(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
