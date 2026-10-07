@@ -4368,6 +4368,44 @@ class VKApiClient(
         return json.has("response")
     }
 
+    // P0.36 #MUSIC2-UPLOAD (2026-10): загрузка своих MP3 файлов.
+    // VK web HAR: audio.getUploadServer → multipart upload → audio.save.
+    // VK web: UploadAudio_SelectFileButton / UploadAudio_CancelButton.
+
+    /** audio.getUploadServer — URL для загрузки аудио файла. */
+    suspend fun audioGetUploadServer(): String? {
+        if (isOffline()) return null
+        val json = call("audio.getUploadServer", mapOf(), forceWebGateway = true) ?: return null
+        return json.getAsJsonObject("response")?.get("upload_url")
+            ?.takeIf { !it.isJsonNull }?.asString
+    }
+
+    /**
+     * audio.save — сохранить загруженный аудио файл.
+     * @param fileJson raw JSON string from upload response (server/file/hash/...).
+     * @return Track или null при ошибке.
+     */
+    suspend fun audioSave(fileJson: String): Track? {
+        if (isOffline()) return null
+        val json = call("audio.save", mapOf("file" to fileJson), forceWebGateway = true) ?: return null
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return null
+            val o = if (resp.has("id")) resp else resp.getAsJsonArray("items")?.firstOrNull()?.asJsonObject ?: resp
+            Track(
+                id = safeLong(o.get("id")),
+                ownerId = safeLong(o.get("owner_id")),
+                artist = safeString(o.get("artist")) ?: "",
+                title = safeString(o.get("title")) ?: "",
+                duration = safeInt(o.get("duration")),
+                url = safeString(o.get("url")),
+                accessKey = safeString(o.get("access_key")),
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "audio.save parse error: ${e.message}")
+            null
+        }
+    }
+
     /** video.add — добавить видео к себе. */
     suspend fun videoAdd(videoId: Long, ownerId: Long, accessKey: String? = null): Boolean {
         if (isOffline()) return false

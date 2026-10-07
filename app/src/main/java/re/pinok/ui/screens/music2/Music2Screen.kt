@@ -14,6 +14,11 @@
 
 package re.pinok.ui.screens.music2
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,9 +35,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
@@ -54,6 +61,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
 import re.pinok.SovaApp
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
@@ -70,6 +81,83 @@ fun Music2Screen(
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
+
+    // P0.36 #MUSIC2-UPLOAD: состояние загрузки аудио файла.
+    var uploading by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // P0.36: file picker launcher — выбор MP3 файла.
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            uploading = true
+            try {
+                // 1. Скопировать файл из uri во временный файл.
+                val tempFile = java.io.File(context.cacheDir, "upload_audio_${System.currentTimeMillis()}.mp3")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                } ?: run {
+                    Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                // 2. Получить upload URL.
+                val uploadUrl = app.apiClient.audioGetUploadServer()
+                if (uploadUrl.isNullOrBlank()) {
+                    Toast.makeText(context, "Не удалось получить URL загрузки", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                // 3. Загрузить файл (multipart POST).
+                val uploadResponse = uploadAudioFile(uploadUrl, tempFile)
+                if (uploadResponse.isNullOrBlank()) {
+                    Toast.makeText(context, "Загрузка файла не удалась", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                // 4. audio.save — сохранить загруженный файл.
+                val savedTrack = app.apiClient.audioSave(uploadResponse)
+                if (savedTrack != null) {
+                    Toast.makeText(context, "Загружено: ${savedTrack.artist} — ${savedTrack.title}", Toast.LENGTH_LONG).show()
+                    // Обновляем список треков.
+                    loadTracks(refresh = true)
+                } else {
+                    Toast.makeText(context, "Не удалось сохранить трек", Toast.LENGTH_SHORT).show()
+                }
+                tempFile.delete()
+            } catch (e: Exception) {
+                AppLog.e("Music2", "upload error: ${e.message}", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                uploading = false
+            }
+        }
+    }
+
+    // P0.36: загрузка файла на upload URL (multipart POST, как VK web HAR).
+    suspend fun uploadAudioFile(uploadUrl: String, file: java.io.File): String? {
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val requestBody = okhttp3.MultipartBody.Builder()
+                    .setType(okhttp3.MultipartBody.FORM)
+                    .addFormDataPart("file", file.name,
+                        file.asRequestBody("audio/mpeg".toMediaType()))
+                    .build()
+                val req = okhttp3.Request.Builder()
+                    .url(uploadUrl)
+                    .header("Origin", re.pinok.api.VKEndpoints.WEB_ORIGIN)
+                    .header("Referer", re.pinok.api.VKEndpoints.WEB_REFERER)
+                    .header("User-Agent", re.pinok.util.VkUserAgent.get(app))
+                    .post(requestBody)
+                    .build()
+                app.httpClient.newCall(req).execute().use { resp ->
+                    resp.body?.string()
+                }
+            } catch (e: Exception) {
+                AppLog.e("Music2", "uploadAudioFile error: ${e.message}", e)
+                null
+            }
+        }
+    }
 
     // P0.32: состояние вкладок (5 табов как в VK web).
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -212,6 +300,8 @@ fun Music2Screen(
                     isPlaying = playerState.isPlaying,
                     currentProgress = currentProgress,
                     volume = playerState.volume,
+                    uploading = uploading,
+                    onUploadClick = { filePicker.launch("audio/*") },
                 )
             } else {
                 Music2CatalogContent(
@@ -239,6 +329,8 @@ private fun Music2MyTracksContent(
     isPlaying: Boolean,
     currentProgress: Float,
     volume: Float = 1.0f,
+    uploading: Boolean = false,
+    onUploadClick: () -> Unit = {},
 ) {
     if (loading && tracks.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -253,6 +345,15 @@ private fun Music2MyTracksContent(
                 ) {
                     Text("Моя музыка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.weight(1f))
+                    // P0.36 #MUSIC2-UPLOAD: кнопка загрузки аудио.
+                    // VK web: UploadAudio_SelectFileButton.
+                    IconButton(onClick = onUploadClick, enabled = !uploading, modifier = Modifier.size(32.dp)) {
+                        if (uploading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Filled.Upload, contentDescription = "Загрузить аудио", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        }
+                    }
                     Text("${tracks.size} треков", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
