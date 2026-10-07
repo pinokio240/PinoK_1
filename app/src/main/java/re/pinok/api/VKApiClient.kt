@@ -3647,6 +3647,18 @@ class VKApiClient(
             ?: resp.getAsJsonObject("catalog")?.getAsJsonArray("sections")?.firstOrNull()?.asJsonObject?.getAsJsonArray("blocks")
             ?: return result
 
+        // P0.38-DIAG: логируем сырую структуру ответа — до фильтрации.
+        // Цель: понять сколько блоков реально пришло и какие у них layout/data_type.
+        re.pinok.util.AppLog.i("Music2", "parseCatalogSection: rawBlocks=${blocksArr.size()} links=${linksById.size} audios=${audiosById.size} playlists=${playlistsById.size}")
+        blocksArr.forEachIndexed { i, be ->
+            if (!be.isJsonObject) return@forEachIndexed
+            val bo = be.asJsonObject
+            val lt = bo.getAsJsonObject("layout")?.get("name")?.takeIf { !it.isJsonNull }?.asString
+            val dt = bo.get("data_type")?.takeIf { !it.isJsonNull }?.asString
+            val tt = bo.get("title")?.takeIf { !it.isJsonNull }?.asString
+            re.pinok.util.AppLog.i("Music2", "  raw[$i]: layout=$lt dataType=$dt title=$tt")
+        }
+
         // #MUSIC-CATALOG-SHOW-ALL: section_id «Показать все» лежит в actions
         // header-блока (layout=header/header_extended), а контент-блок идёт
         // следующим. Запоминаем pending и прикрепляем к следующему контент-блоку.
