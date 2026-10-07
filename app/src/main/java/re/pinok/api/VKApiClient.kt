@@ -3767,6 +3767,15 @@ class VKApiClient(
         // P0.37 #MUSIC2-FRIENDS: парсинг links (друзья с музыкой).
         val friends = mutableListOf<re.pinok.data.model.CatalogFriend>()
         if (dataType == "links") {
+            // P0.37-FIX: helper — извлекает ownerId из url VK ("/audios12345" | "/audios-12345").
+            // VK web links.url формат: "/audios{ownerId}", где ownerId = ID пользователя или -ID группы.
+            fun extractOwnerIdFromUrl(url: String?): Long? {
+                if (url.isNullOrBlank()) return null
+                // Ищем "/audios" + число (с опциональным минусом).
+                val regex = Regex("""/audios(-?\d+)""")
+                val match = regex.find(url) ?: return null
+                return match.groupValues[1].toLongOrNull()
+            }
             // links_ids → ссылки на response.links[].
             o.getAsJsonArray("links_ids")?.forEach { idEl ->
                 val linkId = idEl.takeIf { !it.isJsonNull }?.asString ?: return@forEach
@@ -3776,11 +3785,17 @@ class VKApiClient(
                 val subtitle = safeString(linkObj.get("subtitle")) ?: ""
                 val avatarUrl = linkObj.getAsJsonArray("image")?.firstOrNull()?.asJsonObject
                     ?.get("url")?.takeIf { !it.isJsonNull }?.asString
+                // P0.37-FIX: ownerId из url, не из id поля.
+                val linkUrl = safeString(linkObj.get("url"))
+                val ownerId = extractOwnerIdFromUrl(linkUrl)
+                    ?: linkObj.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: linkObj.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong
                 friends.add(re.pinok.data.model.CatalogFriend(
                     id = linkId,
                     name = name,
                     subtitle = subtitle,
                     avatarUrl = avatarUrl,
+                    ownerId = ownerId,
                 ))
             }
             // Также парсим inline links (без links_ids).
@@ -3793,9 +3808,22 @@ class VKApiClient(
                     val avatarUrl = linkObj.getAsJsonArray("image")?.firstOrNull()?.asJsonObject
                         ?.get("url")?.takeIf { !it.isJsonNull }?.asString
                     val id = safeString(linkObj.get("id")) ?: linkObj.hashCode().toString()
+                    val linkUrl = safeString(linkObj.get("url"))
+                    val ownerId = extractOwnerIdFromUrl(linkUrl)
+                        ?: linkObj.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
+                        ?: linkObj.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong
                     friends.add(re.pinok.data.model.CatalogFriend(
                         id = id, name = name, subtitle = subtitle, avatarUrl = avatarUrl,
+                        ownerId = ownerId,
                     ))
+                }
+            }
+            // P0.37-FIX: логируем результат парсинга друзей для отладки.
+            if (friends.isNotEmpty()) {
+                val withOwner = friends.count { it.ownerId != null }
+                re.pinok.util.AppLog.i("Music2", "parseFriends: ${friends.size} friends, $withOwner with ownerId")
+                friends.take(3).forEach { f ->
+                    re.pinok.util.AppLog.i("Music2", "  friend: id=${f.id} name=${f.name} ownerId=${f.ownerId} subtitle=${f.subtitle}")
                 }
             }
         }

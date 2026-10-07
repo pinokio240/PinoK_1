@@ -524,7 +524,8 @@ private fun Music2CatalogContent(
                             items(block.friends, key = { it.id }) { friend ->
                                 // P0.37: карточка друга кликабельна → audio.get(ownerId=friend).
                                 // VK web: links-cell → переход на /audio?owner_id=...
-                                val friendOwnerId = remember(friend.id) { friend.id.toLongOrNull() }
+                                // P0.37-FIX: ownerId берём из модели (распарсен из url), не из id поля.
+                                val friendOwnerId = friend.ownerId
                                 Column(
                                     modifier = Modifier
                                         .width(72.dp)

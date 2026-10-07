@@ -1705,6 +1705,10 @@ data class CatalogFriend(
     val name: String,
     val subtitle: String,
     val avatarUrl: String?,
+    // P0.37-FIX: ownerId пользователя — парсится из link.url ("/audios12345").
+    // id поля — это ID самой ссылки, не ID пользователя. Без правильного ownerId
+    // audio.get(ownerId=...) падает с ошибкой или возвращает чужое.
+    val ownerId: Long? = null,
 )
 
 /** Плейлист из каталога (расширенный, по сравнению с AudioPlaylist). */
