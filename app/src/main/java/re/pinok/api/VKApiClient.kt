@@ -3606,6 +3606,21 @@ class VKApiClient(
     private fun parseCatalogSectionBlocks(resp: JsonObject): List<re.pinok.data.model.CatalogBlock> {
         val result = mutableListOf<re.pinok.data.model.CatalogBlock>()
 
+        // P0.38-DIAG: логируем ВСЕ ключи верхнего уровня ответа catalog.getSection.
+        // Цель: найти массив друзей — может быть под ключом "friends", "users",
+        // "profiles", "links" или другим. Пока мы парсим только audios/playlists/links.
+        val allKeys = resp.keySet().joinToString(",")
+        re.pinok.util.AppLog.i("Music2", "parseCatalogSection: TOP-LEVEL KEYS = [$allKeys]")
+        // Логируем размер каждого массива.
+        resp.keySet().forEach { key ->
+            val el = resp.get(key)
+            if (el != null && el.isJsonArray) {
+                re.pinok.util.AppLog.i("Music2", "  resp[$key] = array[${el.asJsonArray.size()}]")
+            } else if (el != null && el.isJsonObject) {
+                re.pinok.util.AppLog.i("Music2", "  resp[$key] = object{keys=${el.asJsonObject.keySet().joinToString(",")}}")
+            }
+        }
+
         val audiosById = HashMap<String, Track>()
         resp.getAsJsonArray("audios")?.forEach { el ->
             if (!el.isJsonObject) return@forEach
