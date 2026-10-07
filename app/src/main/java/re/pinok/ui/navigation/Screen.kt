@@ -42,6 +42,10 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     object Feed          : Screen("feed",          "Лента",        Icons.Default.Dashboard)
     object Messages      : Screen("messages",      "Сообщения",    Icons.Default.Email)
     object Music         : Screen("music",         "Музыка",       Icons.Default.LibraryMusic)
+    // P0.32 #MUSIC2 (2026-10): новый контейнер «Музыка 2» — обособленный от старого.
+    // Содержит все новые фичи: pull-to-refresh, 5 вкладок, визуализатор, битрейт,
+    // мини-прогресс в строке, volume slider, дизлайк, Play Mix, загрузку аудио.
+    object Music2        : Screen("music2",        "Музыка 2",     Icons.Default.MusicNote)
     object Video         : Screen("video",         "Видео",        Icons.Default.PlayCircle)
     object Profile       : Screen("profile",       "Профиль",      Icons.Default.Person)
 

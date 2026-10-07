@@ -715,6 +715,7 @@ fun SovaNavHost(
             Screen.Feed.route, Screen.Messages.route, Screen.Music.route,
             Screen.Video.route, Screen.Profile.route, Screen.Friends.route,
             Screen.Groups.route, Screen.Photos.route, Screen.Search.route,
+            Screen.Music2.route,
             Screen.Bookmarks.route, Screen.Documents.route, Screen.Services.route,
             Screen.Settings.route, Screen.Clips.route,
         )
@@ -1692,6 +1693,12 @@ fun SovaNavHost(
                         onShowAll = { sectionId, title ->
                             nav.navigate(Screen.CatalogSection.buildRoute(sectionId, title))
                         },
+                    )
+                }
+                // P0.32 #MUSIC2: новый контейнер «Музыка 2» — обособленный от старого.
+                composable(Screen.Music2.route) {
+                    re.pinok.ui.screens.music2.Music2Screen(
+                        onBack = { nav.popBackStack() },
                     )
                 }
                 // #MUSIC-PORT: экраны музыкальной библиотеки.
