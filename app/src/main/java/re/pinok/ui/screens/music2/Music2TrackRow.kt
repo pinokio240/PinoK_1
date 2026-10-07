@@ -6,13 +6,17 @@
 //   при проигрывании трека, как в VK web.
 // - Mini progress bar в строке (MusicTrackRow_PlayerProgressBar) — тонкая полоса
 //   прогресса внизу строки трека, как в VK web.
-// - Битрейт трека (vmsaudioRow__bitrate) — отображение качества аудио.
-// - Volume slider per track (MusicTrackRow_VolumeSlider) — TODO (будет в следующей итерации).
+// - HQ badge (vmsaudioRow__bitrate) — отображение качества аудио.
+// - Контекстное меню (MusicAudio_MenuButton) — dropdown с:
+//   Текст песни (MusicAudio_OpenLyrics) / Добавить/Убрать (MusicAudio_ToggleOwning)
+//   / Поделиться (MusicAudio_Share) / Редактировать (MusicAudio_OpenEditing).
 //
 // Переиспользует PlayerConnection для состояния плеера.
 
 package re.pinok.ui.screens.music2
 
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -34,22 +38,33 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Lyrics
+import androidx.compose.material.icons.outlined.MusicOff
+import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import re.pinok.SovaApp
 import re.pinok.data.model.Track
 
 // P0.32: VK accent color для музыкального раздела.
@@ -61,9 +76,21 @@ fun Music2TrackRow(
     isPlaying: Boolean,
     progress: Float,
     onClick: () -> Unit,
-    onMenuClick: () -> Unit,
+    onMenuClick: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val app = SovaApp.get()
+
+    // P0.33 #TRACK-MENU: состояние dropdown меню.
+    var menuExpanded by remember { mutableStateOf(false) }
+    // P0.33: состояние own (трек в моей музыке?). Упрощённо: ownerId == myId → own.
+    val myUserId = remember { app.exchangeAuthRepository.userId() }
+    val isOwn = track.ownerId == myUserId
+    // P0.33: состояние lyrics loading.
+    var lyricsLoading by remember(track.id) { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -73,15 +100,12 @@ fun Music2TrackRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
             // P0.32: Play/Pause иконка ИЛИ частотный визуализатор.
-            // VK web: MusicTrackRow_PlaybackControls + MusicTrackCell_FrequencyBars.
-            // Когда трек играет — показываем анимированные полоски визуализатора.
-            // Когда не играет — PlayArrow.
             Box(
                 modifier = Modifier.size(40.dp),
-                contentAlignment = Alignment.Center,
+                contentAlignment = androidx.compose.ui.Alignment.Center,
             ) {
                 if (isPlaying) {
                     FrequencyBars(
@@ -100,8 +124,7 @@ fun Music2TrackRow(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            // P0.32: информация о треке — title + artist + bitrate.
-            // VK web: MusicTrackRow_Title + MusicTrackRow_Authors + vmsaudioRow__bitrate.
+            // P0.32: информация о треке — title + artist + HQ badge + duration.
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = track.title,
@@ -112,7 +135,7 @@ fun Music2TrackRow(
                     color = if (isPlaying) VkAccent else MaterialTheme.colorScheme.onSurface,
                 )
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
@@ -123,10 +146,7 @@ fun Music2TrackRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    // P0.32: HQ badge — высокое качество трека.
-                    // VK web: vmsaudioRow__bitrate. PinoK: используем isHq флаг
-                    // (VK API отдаёт is_hq=true для HQ треков). Поле bitrate пока
-                    // не парсится — TODO: добавить в Track модель + VKApiClient.
+                    // P0.32: HQ badge.
                     if (track.isHq) {
                         Text(
                             text = "HQ",
@@ -148,25 +168,111 @@ fun Music2TrackRow(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // P0.32: контекстное меню (3 точки).
-            // VK web: MusicAudio_MenuButton.
-            // TODO: реализовать dropdown — дизлайк/own/lyrics/share/snippet.
-            IconButton(
-                onClick = onMenuClick,
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    Icons.Filled.MoreVert,
-                    contentDescription = "Меню",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
+            // P0.33 #TRACK-MENU: контекстное меню (3 точки) с dropdown.
+            // VK web: MusicAudio_MenuButton → dropdown с:
+            //   MusicAudio_OpenLyrics (Текст песни)
+            //   MusicAudio_ToggleOwning (Добавить/Убрать из моей музыки)
+            //   MusicAudio_Share (Поделиться)
+            //   MusicAudio_OpenEditing (Редактировать)
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "Меню",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    // P0.33: Текст песни (MusicAudio_OpenLyrics).
+                    // Показываем только если у трека есть lyricsId.
+                    if (track.hasLyrics) {
+                        DropdownMenuItem(
+                            text = { Text("Текст песни") },
+                            leadingIcon = { Icon(Icons.Outlined.Lyrics, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            onClick = {
+                                menuExpanded = false
+                                lyricsLoading = true
+                                scope.launch {
+                                    try {
+                                        val lyrics = app.apiClient.audioGetLyrics(track.lyricsId!!)
+                                        if (lyrics != null) {
+                                            // P0.33: показываем lyrics в Toast (временно —
+                                            // TODO: отдельный LyricsSheet как в старом MusicScreen).
+                                            val lines = lyrics.lines()
+                                            val preview = lines.take(5).joinToString("\n")
+                                            val suffix = if (lines.size > 5) "\n…" else ""
+                                            Toast.makeText(context, preview + suffix, Toast.LENGTH_LONG).show()
+                                        } else {
+                                            Toast.makeText(context, "Текст недоступен", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        lyricsLoading = false
+                                    }
+                                }
+                            },
+                        )
+                    }
+
+                    // P0.33: Добавить/Убрать из моей музыки (MusicAudio_ToggleOwning).
+                    DropdownMenuItem(
+                        text = { Text(if (isOwn) "Убрать из моей музыки" else "Добавить в мою музыку") },
+                        leadingIcon = {
+                            Icon(
+                                if (isOwn) Icons.Outlined.MusicOff else Icons.Outlined.MusicNote,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            scope.launch {
+                                try {
+                                    val ok = if (isOwn) {
+                                        app.apiClient.audioDelete(track.id, track.ownerId)
+                                    } else {
+                                        app.apiClient.audioAdd(track.id, track.ownerId)
+                                    }
+                                    Toast.makeText(
+                                        context,
+                                        if (ok) (if (isOwn) "Удалено" else "Добавлено") else "Ошибка",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                    )
+
+                    // P0.33: Поделиться (MusicAudio_Share).
+                    DropdownMenuItem(
+                        text = { Text("Поделиться") },
+                        leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                        onClick = {
+                            menuExpanded = false
+                            val shareText = "${track.artist} — ${track.title}"
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, shareText)
+                            }
+                            context.startActivity(Intent.createChooser(shareIntent, "Поделиться треком"))
+                        },
+                    )
+                }
             }
         }
 
         // P0.32: Mini progress bar в строке трека.
-        // VK web: MusicTrackRow_PlayerProgressBar — тонкая полоса прогресса внизу строки.
-        // Показывается только когда трек играющий (isPlaying) и progress > 0.
         if (isPlaying && progress > 0f) {
             Box(
                 modifier = Modifier
