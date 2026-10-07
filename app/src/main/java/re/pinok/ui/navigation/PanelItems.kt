@@ -79,6 +79,8 @@ object PanelItems {
         PanelItem("video", "Видео", Screen.Video.icon, PanelAction.Route(Screen.Video)),
         PanelItem("clips", "Клипы", Screen.Clips.icon, PanelAction.Route(Screen.Clips)),
         PanelItem("music", "Музыка", Screen.Music.icon, PanelAction.Route(Screen.Music)),
+        // P0.32: Музыка 2 — новый контейнер (pull-to-refresh, визуализатор, 5 вкладок).
+        PanelItem("music2", "Музыка 2", Screen.Music2.icon, PanelAction.Route(Screen.Music2)),
         PanelItem("bookmarks", "Закладки", Screen.Bookmarks.icon, PanelAction.Route(Screen.Bookmarks)),
         PanelItem("files", "Файлы", Screen.Documents.icon, PanelAction.Route(Screen.Documents)),
         PanelItem("search", "Поиск", Screen.Search.icon, PanelAction.Route(Screen.Search)),
