@@ -200,218 +200,149 @@ fun Music2Screen(
             },
             modifier = Modifier.fillMaxSize(),
         ) {
-            // P0.34: вкладка 0 — «Моя музыка» (список треков).
-            // Вкладки 1-4 — каталог (блоки с треками/плейлистами).
             if (selectedTab == 0) {
-                // === Моя музыка — список треков ===
-                if (loading && tracks.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    state = listState,
-                ) {
-                    // P0.32: заголовок + счётчик треков.
-                    item(key = "header") {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "Моя музыка",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Spacer(modifier = Modifier.weight(1f))
-                            Text(
-                                text = "${tracks.size} треков",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-
-                    // P0.32: список треков — Music2TrackRow с визуализатором + mini progress + bitrate.
-                    items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
-                        Music2TrackRow(
-                            track = track,
-                            isPlaying = isCurrentTrack(track) && playerState.isPlaying,
-                            progress = if (isCurrentTrack(track)) currentProgress else 0f,
-                            onClick = {
-                                val idx = tracks.indexOf(track)
-                                if (isCurrentTrack(track)) {
-                                    PlayerConnection.togglePlayPause()
-                                } else {
-                                    PlayerConnection.playTrackList(tracks, idx, fromMyMusic = true)
-                                }
-                            },
-                            onMenuClick = {
-                                // P0.32: TODO — context menu (дизлайк/own/lyrics/share/snippet)
-                            },
-                        )
-                    }
-
-                    // P0.32: футер — догрузка при скролле.
-                    if (tracks.isNotEmpty()) {
-                        item(key = "footer") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (loading) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                }
-                            }
-                        }
-                    }
-
-                    // P0.32: пустое состояние.
-                    if (tracks.isEmpty() && !loading) {
-                        item(key = "empty") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Icon(
-                                    Icons.Filled.MusicNote,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(48.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Нет треков",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-
-                    // P0.32: error состояние.
-                    if (errorText != null && tracks.isEmpty()) {
-                        item(key = "error") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Text(
-                                    text = errorText ?: "",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
-                }
+                Music2MyTracksContent(
+                    tracks = tracks,
+                    loading = loading,
+                    errorText = errorText,
+                    listState = listState,
+                    isCurrentTrack = isCurrentTrack,
+                    isPlaying = playerState.isPlaying,
+                    currentProgress = currentProgress,
+                )
             } else {
-                // === Каталог (вкладки 1-4: Главная/Обзор/Радио/Обновления) ===
-                // P0.34: catalog.getSection → блоки с треками/плейлистами.
-                if (catalogLoading && catalogBlocks.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        state = listState,
-                    ) {
-                        // P0.34: блоки каталога — каждый блок + его треки как отдельные items.
-                        catalogBlocks.forEach { block ->
-                            // Заголовок блока.
-                            item(key = "block_${block.blockId ?: block.title ?: block.hashCode()}") {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    block.title?.let { title ->
-                                        Text(
-                                            text = title,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                        )
-                                    }
-                                    block.subtitle?.let { sub ->
-                                        Text(
-                                            text = sub,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                                        )
-                                    }
-                                }
-                            }
-                            // Треки внутри блока — как отдельные LazyColumn items.
-                            items(block.tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
-                                Music2TrackRow(
-                                    track = track,
-                                    isPlaying = isCurrentTrack(track) && playerState.isPlaying,
-                                    progress = if (isCurrentTrack(track)) currentProgress else 0f,
-                                    onClick = {
-                                        val idx = block.tracks.indexOf(track)
-                                        if (isCurrentTrack(track)) {
-                                            PlayerConnection.togglePlayPause()
-                                        } else {
-                                            PlayerConnection.playTrackList(block.tracks, idx)
-                                        }
-                                    },
-                                )
-                            }
-                        }
+                Music2CatalogContent(
+                    catalogBlocks = catalogBlocks,
+                    catalogLoading = catalogLoading,
+                    catalogError = catalogError,
+                    listState = listState,
+                    isCurrentTrack = isCurrentTrack,
+                    isPlaying = playerState.isPlaying,
+                    currentProgress = currentProgress,
+                )
+            }
+        }
+    }
+}
 
-                        // P0.34: пустое состояние каталога.
-                        if (catalogBlocks.isEmpty() && !catalogLoading) {
-                            item(key = "catalog_empty") {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(32.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.MusicNote,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(48.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Каталог недоступен",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-
-                        // P0.34: error состояние каталога.
-                        if (catalogError != null && catalogBlocks.isEmpty()) {
-                            item(key = "catalog_error") {
-                                Text(
-                                    text = catalogError ?: "",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(32.dp),
-                                )
-                            }
-                        }
+// P0.34: контент вкладки «Моя музыка» — список треков.
+@Composable
+private fun Music2MyTracksContent(
+    tracks: List<Track>,
+    loading: Boolean,
+    errorText: String?,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    isCurrentTrack: (Track) -> Boolean,
+    isPlaying: Boolean,
+    currentProgress: Float,
+) {
+    if (loading && tracks.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+    } else {
+        LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
+            item(key = "header") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Моя музыка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text("${tracks.size} треков", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
+                Music2TrackRow(
+                    track = track,
+                    isPlaying = isCurrentTrack(track) && isPlaying,
+                    progress = if (isCurrentTrack(track)) currentProgress else 0f,
+                    onClick = {
+                        val idx = tracks.indexOf(track)
+                        if (isCurrentTrack(track)) PlayerConnection.togglePlayPause()
+                        else PlayerConnection.playTrackList(tracks, idx, fromMyMusic = true)
+                    },
+                )
+            }
+            if (tracks.isNotEmpty()) {
+                item(key = "footer") {
+                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                        if (loading) CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     }
                 }
             }
+            if (tracks.isEmpty() && !loading) {
+                item(key = "empty") {
+                    Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Нет треков", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (errorText != null && tracks.isEmpty()) {
+                item(key = "error") {
+                    Text(errorText ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
+                }
+            }
+        }
+    }
+}
+
+// P0.34: контент каталога (вкладки 1-4) — блоки с треками.
+@Composable
+private fun Music2CatalogContent(
+    catalogBlocks: List<re.pinok.data.model.CatalogBlock>,
+    catalogLoading: Boolean,
+    catalogError: String?,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    isCurrentTrack: (Track) -> Boolean,
+    isPlaying: Boolean,
+    currentProgress: Float,
+) {
+    if (catalogLoading && catalogBlocks.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+    } else {
+        LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
+            catalogBlocks.forEach { block ->
+                item(key = "block_${block.blockId ?: block.title ?: block.hashCode()}") {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        block.title?.let { title ->
+                            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                        }
+                        block.subtitle?.let { sub ->
+                            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
+                        }
+                    }
+                }
+                items(block.tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
+                    Music2TrackRow(
+                        track = track,
+                        isPlaying = isCurrentTrack(track) && isPlaying,
+                        progress = if (isCurrentTrack(track)) currentProgress else 0f,
+                        onClick = {
+                            val idx = block.tracks.indexOf(track)
+                            if (isCurrentTrack(track)) PlayerConnection.togglePlayPause()
+                            else PlayerConnection.playTrackList(block.tracks, idx)
+                        },
+                    )
+                }
+            }
+            if (catalogBlocks.isEmpty() && !catalogLoading) {
+                item(key = "catalog_empty") {
+                    Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Каталог недоступен", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (catalogError != null && catalogBlocks.isEmpty()) {
+                item(key = "catalog_error") {
+                    Text(catalogError ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
+                }
             }
         }
     }
