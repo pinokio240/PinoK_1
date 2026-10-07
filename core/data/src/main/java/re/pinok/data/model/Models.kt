@@ -1692,6 +1692,18 @@ data class CatalogBlock(
     val playlists: List<CatalogPlaylist> = emptyList(),
     /** Редакторская пометка (подпись под заголовком). */
     val subtitle: String? = null,
+    // P0.37 #MUSIC2-FRIENDS: друзья с их музыкой (links slider).
+    // VK web: links-slider-block / links-cell / links-cell-avatar.
+    val friends: List<CatalogFriend> = emptyList(),
+)
+
+// P0.37: друг в блоке «Музыка друзей» (links slider).
+// VK web: links-cell с аватаром, именем, количеством треков.
+data class CatalogFriend(
+    val id: String,
+    val name: String,
+    val subtitle: String,
+    val avatarUrl: String?,
 )
 
 /** Плейлист из каталога (расширенный, по сравнению с AudioPlaylist). */

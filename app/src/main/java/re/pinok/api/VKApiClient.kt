@@ -3632,6 +3632,14 @@ class VKApiClient(
             val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
             recommendedById["${ownerId}_${id}"] = o
         }
+        // P0.37 #MUSIC2-FRIENDS: links (друзья с музыкой) — response.links[].
+        val linksById = HashMap<String, JsonObject>()
+        resp.getAsJsonArray("links")?.forEach { el ->
+            if (!el.isJsonObject) return@forEach
+            val o = el.asJsonObject
+            val id = safeString(o.get("id")) ?: return@forEach
+            linksById[id] = o
+        }
 
         // Формат catalog.getSection: response.section.blocks.
         val sectionObj = resp.getAsJsonObject("section")
@@ -3665,7 +3673,7 @@ class VKApiClient(
                 ))
                 continue
             }
-            val block = parseCatalogWebBlock(o, audiosById, playlistsById, recommendedById, pendingShowAllId)
+            val block = parseCatalogWebBlock(o, audiosById, playlistsById, recommendedById, linksById, pendingShowAllId)
             if (block != null) {
                 result.add(block)
                 pendingShowAllId = null
@@ -3680,6 +3688,7 @@ class VKApiClient(
         audiosById: Map<String, Track>,
         playlistsById: Map<String, re.pinok.data.model.AudioPlaylist>,
         recommendedById: Map<String, JsonObject>,
+        linksById: Map<String, JsonObject>,
         showAllId: String? = null,
     ): re.pinok.data.model.CatalogBlock? {
         val dataType = o.get("data_type")?.takeIf { !it.isJsonNull }?.asString
@@ -3734,6 +3743,12 @@ class VKApiClient(
                     parseAudioPlaylist(el.asJsonObject)?.let { playlists.add(toCatalogPlaylist(it)) }
                 }
             }
+            // P0.37 #MUSIC2-FRIENDS: «Музыка друзей» — links slider.
+            // VK web: links-slider-block / links-cell / links-cell-avatar.
+            "links" -> {
+                // Links парсятся из response.links по links_ids.
+                // Парсинг происходит ниже (после when), т.к. нужен linksById map.
+            }
         }
 
         val viewType = when {
@@ -3742,16 +3757,53 @@ class VKApiClient(
                 re.pinok.data.model.CatalogViewType.RECOMMS_SLIDER
             dataType == "music_playlists" -> re.pinok.data.model.CatalogViewType.LARGE_SLIDER
             dataType == "music_recommended_playlists" -> re.pinok.data.model.CatalogViewType.LARGE_SLIDER
+            dataType == "links" -> re.pinok.data.model.CatalogViewType.SLIDER
             layoutName == "header_extended" -> re.pinok.data.model.CatalogViewType.HEADER_EXTENDED
             layoutName == "header" -> re.pinok.data.model.CatalogViewType.HEADER
             layoutName == "separator" -> re.pinok.data.model.CatalogViewType.SEPARATOR
             else -> re.pinok.data.model.CatalogViewType.UNKNOWN
         }
 
+        // P0.37 #MUSIC2-FRIENDS: парсинг links (друзья с музыкой).
+        val friends = mutableListOf<re.pinok.data.model.CatalogFriend>()
+        if (dataType == "links") {
+            // links_ids → ссылки на response.links[].
+            o.getAsJsonArray("links_ids")?.forEach { idEl ->
+                val linkId = idEl.takeIf { !it.isJsonNull }?.asString ?: return@forEach
+                // Ищем link в response.links по id (передаётся через linksById map).
+                val linkObj = linksById[linkId] ?: return@forEach
+                val name = safeString(linkObj.get("title")) ?: ""
+                val subtitle = safeString(linkObj.get("subtitle")) ?: ""
+                val avatarUrl = linkObj.getAsJsonArray("image")?.firstOrNull()?.asJsonObject
+                    ?.get("url")?.takeIf { !it.isJsonNull }?.asString
+                friends.add(re.pinok.data.model.CatalogFriend(
+                    id = linkId,
+                    name = name,
+                    subtitle = subtitle,
+                    avatarUrl = avatarUrl,
+                ))
+            }
+            // Также парсим inline links (без links_ids).
+            if (friends.isEmpty()) {
+                o.getAsJsonArray("links")?.forEach { el ->
+                    if (!el.isJsonObject) return@forEach
+                    val linkObj = el.asJsonObject
+                    val name = safeString(linkObj.get("title")) ?: ""
+                    val subtitle = safeString(linkObj.get("subtitle")) ?: ""
+                    val avatarUrl = linkObj.getAsJsonArray("image")?.firstOrNull()?.asJsonObject
+                        ?.get("url")?.takeIf { !it.isJsonNull }?.asString
+                    val id = safeString(linkObj.get("id")) ?: linkObj.hashCode().toString()
+                    friends.add(re.pinok.data.model.CatalogFriend(
+                        id = id, name = name, subtitle = subtitle, avatarUrl = avatarUrl,
+                    ))
+                }
+            }
+        }
+
         if (viewType == re.pinok.data.model.CatalogViewType.UNKNOWN) return null
         if ((viewType == re.pinok.data.model.CatalogViewType.HEADER ||
                     viewType == re.pinok.data.model.CatalogViewType.HEADER_EXTENDED) && title == null) return null
-        if (tracks.isEmpty() && playlists.isEmpty() &&
+        if (tracks.isEmpty() && playlists.isEmpty() && friends.isEmpty() &&
             viewType != re.pinok.data.model.CatalogViewType.HEADER &&
             viewType != re.pinok.data.model.CatalogViewType.HEADER_EXTENDED &&
             viewType != re.pinok.data.model.CatalogViewType.SEPARATOR) return null
@@ -3764,6 +3816,7 @@ class VKApiClient(
             tracks = tracks,
             playlists = playlists,
             subtitle = null,
+            friends = friends,
         )
     }
 

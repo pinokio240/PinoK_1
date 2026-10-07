@@ -19,6 +19,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,8 +31,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
@@ -57,9 +60,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -456,6 +463,45 @@ private fun Music2CatalogContent(
                             else PlayerConnection.playTrackList(block.tracks, idx)
                         },
                     )
+                }
+                // P0.37 #MUSIC2-FRIENDS: горизонтальный слайдер друзей.
+                // VK web: links-slider-block / links-cell / links-cell-avatar.
+                if (block.friends.isNotEmpty()) {
+                    item(key = "friends_${block.blockId ?: block.title}") {
+                        androidx.compose.foundation.lazy.LazyRow(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items(block.friends, key = { it.id }) { friend ->
+                                Column(
+                                    modifier = Modifier.width(72.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    // Аватар друга.
+                                    if (friend.avatarUrl != null) {
+                                        coil.compose.AsyncImage(
+                                            model = friend.avatarUrl,
+                                            contentDescription = friend.name,
+                                            modifier = Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape),
+                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(friend.name.take(1).uppercase(), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    // Имя друга.
+                                    Text(friend.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                    // Количество треков.
+                                    Text(friend.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (catalogBlocks.isEmpty() && !catalogLoading) {
