@@ -1672,6 +1672,11 @@ enum class CatalogViewType(val raw: String) {
     RECOMMS_SLIDER("recomms_slider"),
     SLIDER("slider"),
     LIST("list"),
+    // P0.38: large_list — layout для блока «Музыка друзей» (data_type=links).
+    LARGE_LIST("large_list"),
+    // P0.38: banner/placeholder — заглушки в «Обновлениях» (VK возвращает их
+    // когда реального контента нет). Рендерим как пустое место, не падаем.
+    BANNER("banner"),
     UNKNOWN("unknown");
 
     companion object {

@@ -3800,7 +3800,11 @@ class VKApiClient(
                 re.pinok.data.model.CatalogViewType.RECOMMS_SLIDER
             dataType == "music_playlists" -> re.pinok.data.model.CatalogViewType.LARGE_SLIDER
             dataType == "music_recommended_playlists" -> re.pinok.data.model.CatalogViewType.LARGE_SLIDER
+            // P0.38: links + large_list → SLIDER (горизонтальная карусель друзей).
+            // VK web: layout.name="large_list", data_type="links" → блок «Музыка друзей».
             dataType == "links" -> re.pinok.data.model.CatalogViewType.SLIDER
+            // P0.38: placeholder/banner — заглушки в «Обновлениях».
+            dataType == "placeholder" || layoutName == "banner" -> re.pinok.data.model.CatalogViewType.BANNER
             layoutName == "header_extended" -> re.pinok.data.model.CatalogViewType.HEADER_EXTENDED
             layoutName == "header" -> re.pinok.data.model.CatalogViewType.HEADER
             layoutName == "separator" -> re.pinok.data.model.CatalogViewType.SEPARATOR

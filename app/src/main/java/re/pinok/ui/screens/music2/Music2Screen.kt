@@ -230,18 +230,22 @@ fun Music2Screen(
         }
     }
 
-    // P0.34: загрузка каталога (catalog.getSection — для вкладок 1-4).
+    // P0.34: загрузка каталога (catalog.getSection — для вкладок 1-5).
     // P0.38-FIX: loadedSection объявлен ДО loadCatalog (Kotlin local function
     // не видит переменные, объявленные позже). Трекинг нужен чтобы при смене
     // вкладки перезагружать каталог, а не показывать блоки от предыдущей вкладки.
     var loadedSection by remember { mutableStateOf<String?>(null) }
     fun loadCatalog(section: String, refresh: Boolean = false) {
+        // P0.38-FIX: очищаем блоки СИНХРОННО (до launch) — иначе между тапом по
+        // вкладке и стартом корутины UI рендерит старые блоки от предыдущей секции.
+        // Пользователь видел контент «Главная» на вкладке «Друзья» = «не свой контент».
+        if (loadedSection != section && !refresh) {
+            catalogBlocks = emptyList()
+            catalogLoading = true
+        }
         scope.launch {
             if (refresh) refreshing = true else catalogLoading = true
             catalogError = null
-            // P0.38-FIX: очищаем блоки при смене секции — иначе при переключении
-            // вкладок пользователь видит блоки от предыдущей секции (пока грузится новая).
-            if (loadedSection != section) catalogBlocks = emptyList()
             try {
                 val blocks = app.apiClient.catalogGetAudio(section = section, count = 10)
                 catalogBlocks = blocks
@@ -567,8 +571,27 @@ private fun Music2CatalogContent(
                             }
                         }
                     }
-                    // LIST / UNKNOWN — пропускаем (пока не реализовано).
+                    // LIST / UNKNOWN / BANNER — пропускаем.
+                    // P0.38: BANNER — это placeholder-заглушки из «Обновлений» (VK возвращает
+                    // их когда реального контента нет). Не рендерим — пустое место.
+                    // LARGE_LIST — обрабатывается через SLIDER (links → friends).
                     else -> Unit
+                }
+            }
+            // P0.38: если все блоки — BANNER/placeholder (как в «Обновлениях»),
+            // показываем «Пока нет обновлений» вместо пустого экрана.
+            if (catalogBlocks.isNotEmpty() && catalogBlocks.all {
+                    it.viewType == re.pinok.data.model.CatalogViewType.BANNER ||
+                    it.viewType == re.pinok.data.model.CatalogViewType.SEPARATOR ||
+                    it.viewType == re.pinok.data.model.CatalogViewType.HEADER ||
+                    it.viewType == re.pinok.data.model.CatalogViewType.HEADER_EXTENDED
+                } && !catalogLoading) {
+                item(key = "no_content") {
+                    Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Пока нет обновлений", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
             if (catalogBlocks.isEmpty() && !catalogLoading) {
