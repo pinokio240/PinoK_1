@@ -41,11 +41,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -3007,11 +3009,17 @@ fun ChatDetailScreen(
         // AuthActivity overlay поверх чата. keepAlive вызывает silentAuth
         // который теперь умеет silent refresh через remixsid (Path 1.5).
         // Это особенно важно при возврате в чат после долгого простоя.
-        try {
-            app.exchangeAuthRepository.keepAlive()
-        } catch (e: Exception) {
-            // ignore — keepAlive failure не блокирует загрузку чата,
-            // ensureFreshToken в callInternal всё равно сработает.
+        // P0.38-SPEED: keepAlive запускается ПАРАЛЛЕЛЬНО (scope.launch), а НЕ
+        // блокируя загрузку сообщений. callInternal сам обрабатывает error 5
+        // (обновляет токен через ensureFreshToken), поэтому keepAlive — лишь
+        // оптимизация которая не должна добавлять 1-3 сек задержки перед показом.
+        scope.launch {
+            try {
+                app.exchangeAuthRepository.keepAlive()
+            } catch (e: Exception) {
+                // ignore — keepAlive failure не блокирует загрузку чата,
+                // ensureFreshToken в callInternal всё равно сработает.
+            }
         }
         // ═══ #CHANNEL-WALL-MODE (Fix #393): определение канала ДО messages-истории ═══
         // Root-cause «каналы — диалоги не открываются, ошибки»: контент канала
@@ -4316,7 +4324,7 @@ fun ChatDetailScreen(
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
                             .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp))
-                            .windowInsetsPadding(WindowInsets.navigationBars)
+                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
                             .imePadding(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -9347,7 +9355,7 @@ private fun VoiceRecordingToolbar(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.navigationBars)
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
             .imePadding(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -9433,7 +9441,7 @@ private fun VoiceReviewToolbar(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.navigationBars)
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
             .imePadding(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
