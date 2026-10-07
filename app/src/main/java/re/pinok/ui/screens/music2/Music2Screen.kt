@@ -34,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -209,6 +210,7 @@ fun Music2Screen(
                     isCurrentTrack = isCurrentTrack,
                     isPlaying = playerState.isPlaying,
                     currentProgress = currentProgress,
+                    volume = playerState.volume,
                 )
             } else {
                 Music2CatalogContent(
@@ -235,6 +237,7 @@ private fun Music2MyTracksContent(
     isCurrentTrack: (Track) -> Boolean,
     isPlaying: Boolean,
     currentProgress: Float,
+    volume: Float = 1.0f,
 ) {
     if (loading && tracks.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -250,6 +253,31 @@ private fun Music2MyTracksContent(
                     Text("Моя музыка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.weight(1f))
                     Text("${tracks.size} треков", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            // P0.35 #MUSIC2-VOLUME: volume slider. VK web: AudioPlayerBlock_VolumeSlider.
+            item(key = "volume_slider") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.MusicNote,
+                        contentDescription = "Громкость",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Slider(
+                        value = volume,
+                        onValueChange = { PlayerConnection.setVolume(it) },
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    )
+                    Text(
+                        text = "${(volume * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(36.dp),
+                    )
                 }
             }
             items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->

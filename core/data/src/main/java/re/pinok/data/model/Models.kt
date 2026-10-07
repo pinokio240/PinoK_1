@@ -1088,6 +1088,8 @@ data class PlayerState(
     val repeatMode: Int = REPEAT_MODE_OFF,
     /** Скорость воспроизведения (0.25x – 3.0x). */
     val speed: Float = 1.0f,
+    // P0.35 #MUSIC2-VOLUME: громкость плеера (0..1). VK web: AudioPlayerBlock_VolumeSlider.
+    val volume: Float = 1.0f,
 ) {
     companion object {
         const val REPEAT_MODE_OFF = 0

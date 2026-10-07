@@ -776,6 +776,16 @@ object PlayerConnection {
         }
     }
 
+    // P0.35 #MUSIC2-VOLUME: громкость плеера (0..1). VK web: AudioPlayerBlock_VolumeSlider.
+    fun setVolume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        withController { ctrl ->
+            ctrl.volume = clamped
+            _playerState.value = _playerState.value.copy(volume = clamped)
+            AppLog.i(TAG, "volume → $clamped")
+        }
+    }
+
     // ─── Эквалайзер (прокси → EqualizerHelper) ───────────────────
 
     /** Применить пресет эквалайзера. */
