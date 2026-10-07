@@ -3698,6 +3698,15 @@ class VKApiClient(
         val title = o.get("title")?.takeIf { !it.isJsonNull }?.asString
             ?: layout?.get("title")?.takeIf { !it.isJsonNull }?.asString
 
+        // P0.37-DIAG: логируем КАЖДЫЙ блок каталога — data_type + layout.name + title.
+        // Нужно чтобы понять, возвращает ли VK "links" блок (друзья) и какие data_type вообще есть.
+        re.pinok.util.AppLog.i("Music2", "parseBlock: dataType=$dataType layout=$layoutName title=$title blockId=$blockId")
+        // Логируем все ключи верхнего уровня блока — для отладки структуры.
+        if (dataType == null || dataType == "links") {
+            val keys = o.keySet().joinToString(",")
+            re.pinok.util.AppLog.i("Music2", "  block keys: $keys")
+        }
+
         val tracks = mutableListOf<Track>()
         val playlists = mutableListOf<re.pinok.data.model.CatalogPlaylist>()
 
