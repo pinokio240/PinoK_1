@@ -3482,17 +3482,16 @@ class VKApiClient(
         "general" to "PUldVA8FR0RzSVNUUlEFAzQKBVQZFlJEfFpFVA0WUVdxWllPBgVTVjs",
         "my" to "PUldVA8FR0RzSVNUWE1JSmRSS0wEGEleZFFYQQQEUlV3U1kL",
         "explore" to "PUldVA8FR0RzSVNUUEwbCikZDFQZFlJEfFpFVA0WUVdxWllPBgVTVjs",
-        // #MUSIC-UPDATES: «Обновления» (following_updates) — новые треки от
-        // артистов, на которых подписан. id из «музыка_Обновления.html».
-        "updates" to "PUldVA8FR0RzSVNUU1sHCikcABhSax4WIgodE0YWR0R_SVNHGRZTRHxaXkcFDVhXflsU",
-        // P0.34 #MUSIC2-RADIO: «Радио» — радиостанции по жанрам/настроению.
-        // VK web: AudioCatalog_Tabs_Tab_radiostations. id из HAR снапшота.
-        "radio" to "PUldVA8FR0RzSVNUR1UPDykYHRdBXQQINUlFVAwW",
-        // P0.38 #MUSIC2-FRIENDS: «Музыка друзей» — отдельная секция с links-блоком.
-        // Источник: HAR «Музыка друзей.har» (entry 33, catalog.getSection).
-        // Ответ: response.section.blocks[0] = {layout: large_list, data_type: links, title: 'Музыка друзей'}
-        // + response.links[] = 20 друзей с {id, image[], meta, subtitle, title, url}.
-        "friends" to "PUldVA8FR0R3W0tMF1kSOSceDR9aaw0ULw4HEkYWR0R-SVNHAgVbX3VaUUYZFl5EfEkEDxcYSVJkUVhaFwVeRHxaRVQHAklcd1xYRgwHWl52Fg",
+        // P0.38 #MUSIC2-RADIO-FIX: правильный section_id из HAR «Радио._обновления.har» entry 72.
+        // Прежний был обрезан (PUldVA8FR0RzSVNUR1UPDykYHRdBXQQINUlFVAwW) → HTTP 500.
+        // Полный: ...UVdqSVFUDwVcV3ZSWkcNBBY. Возвращает radio_stations[100] + блок list/radiostations.
+        "radio" to "PUldVA8FR0RzSVNUR1UPDykYHRdBXQQINUlFVAwWUVdqSVFUDwVcV3ZSWkcNBBY",
+        // P0.38 #MUSIC2-FRIENDS-FIX: правильный section_id из HAR entry 15/360.
+        // Прежний был из deep-link HAR (другой пользователь) → возвращал «Моя музыка».
+        // Этот возвращает links[20] + блок list/links title='Музыка друзей'.
+        "friends" to "PUldVA8FR0RzSVNUagVSRGpJUFQPBUdEfklTRwIFW191WlFGSA",
+        // P0.38: «Обновления» удалён — VK возвращает только placeholder-заглушки (5 баннеров),
+        // реального контента нет. Пользователь предложил убрать раздел.
     )
 
     /**
@@ -3660,6 +3659,15 @@ class VKApiClient(
             val id = safeString(o.get("id")) ?: return@forEach
             linksById[id] = o
         }
+        // P0.38 #MUSIC2-RADIO: radio_stations — response.radio_stations[].
+        // Структура из HAR entry 72: {id, name, logo_url, logo_png_url, background_color, is_followed, stream_url, is_enabled}.
+        val radioStationsById = HashMap<Long, JsonObject>()
+        resp.getAsJsonArray("radio_stations")?.forEach { el ->
+            if (!el.isJsonObject) return@forEach
+            val o = el.asJsonObject
+            val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+            radioStationsById[id] = o
+        }
 
         // P0.38 #MUSIC2-FRIENDS-FIX (REVERTED): профили парсили, но оказалось что
         // «Музыка друзей» — это ОТДЕЛЬНАЯ секция catalog.getSection с section_id="friends",
@@ -3711,7 +3719,7 @@ class VKApiClient(
                 ))
                 continue
             }
-            val block = parseCatalogWebBlock(o, audiosById, playlistsById, recommendedById, linksById, pendingShowAllId)
+            val block = parseCatalogWebBlock(o, audiosById, playlistsById, recommendedById, linksById, radioStationsById, pendingShowAllId)
             if (block != null) {
                 result.add(block)
                 pendingShowAllId = null
@@ -3727,6 +3735,7 @@ class VKApiClient(
         playlistsById: Map<String, re.pinok.data.model.AudioPlaylist>,
         recommendedById: Map<String, JsonObject>,
         linksById: Map<String, JsonObject>,
+        radioStationsById: Map<Long, JsonObject> = emptyMap(),
         showAllId: String? = null,
     ): re.pinok.data.model.CatalogBlock? {
         val dataType = o.get("data_type")?.takeIf { !it.isJsonNull }?.asString
@@ -3792,6 +3801,11 @@ class VKApiClient(
                 // Links парсятся из response.links по links_ids.
                 // Парсинг происходит ниже (после when), т.к. нужен linksById map.
             }
+            // P0.38 #MUSIC2-RADIO: «Радиостанции» — list/radiostations.
+            // VK web: layout=list, data_type=radiostations + response.radio_stations[].
+            "radiostations" -> {
+                // Парсинг происходит ниже (после when), т.к. нужен radioStationsById map.
+            }
         }
 
         val viewType = when {
@@ -3803,6 +3817,8 @@ class VKApiClient(
             // P0.38: links + large_list → SLIDER (горизонтальная карусель друзей).
             // VK web: layout.name="large_list", data_type="links" → блок «Музыка друзей».
             dataType == "links" -> re.pinok.data.model.CatalogViewType.SLIDER
+            // P0.38: radiostations → RADIO_LIST (вертикальный список радиостанций).
+            dataType == "radiostations" -> re.pinok.data.model.CatalogViewType.RADIO_LIST
             // P0.38: placeholder/banner — заглушки в «Обновлениях».
             dataType == "placeholder" || layoutName == "banner" -> re.pinok.data.model.CatalogViewType.BANNER
             layoutName == "header_extended" -> re.pinok.data.model.CatalogViewType.HEADER_EXTENDED
@@ -3875,10 +3891,31 @@ class VKApiClient(
             }
         }
 
+        // P0.38 #MUSIC2-RADIO: парсинг радиостанций из radio_stations_ids → radioStationsById.
+        val radioStations = mutableListOf<re.pinok.data.model.CatalogRadioStation>()
+        if (dataType == "radiostations") {
+            o.getAsJsonArray("radio_stations_ids")?.forEach { idEl ->
+                val id = idEl.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+                val rs = radioStationsById[id] ?: return@forEach
+                val name = safeString(rs.get("name")) ?: "Радио"
+                val logoUrl = safeString(rs.get("logo_url")) ?: safeString(rs.get("logo_png_url"))
+                val streamUrl = safeString(rs.get("stream_url"))
+                val bgColor = safeString(rs.get("background_color"))
+                val isFollowed = rs.get("is_followed")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+                radioStations.add(re.pinok.data.model.CatalogRadioStation(
+                    id = id, name = name, logoUrl = logoUrl, streamUrl = streamUrl,
+                    backgroundColor = bgColor, isFollowed = isFollowed,
+                ))
+            }
+            if (radioStations.isNotEmpty()) {
+                re.pinok.util.AppLog.i("Music2", "parseRadioStations: ${radioStations.size} stations")
+            }
+        }
+
         if (viewType == re.pinok.data.model.CatalogViewType.UNKNOWN) return null
         if ((viewType == re.pinok.data.model.CatalogViewType.HEADER ||
                     viewType == re.pinok.data.model.CatalogViewType.HEADER_EXTENDED) && title == null) return null
-        if (tracks.isEmpty() && playlists.isEmpty() && friends.isEmpty() &&
+        if (tracks.isEmpty() && playlists.isEmpty() && friends.isEmpty() && radioStations.isEmpty() &&
             viewType != re.pinok.data.model.CatalogViewType.HEADER &&
             viewType != re.pinok.data.model.CatalogViewType.HEADER_EXTENDED &&
             viewType != re.pinok.data.model.CatalogViewType.SEPARATOR) return null
@@ -3892,6 +3929,7 @@ class VKApiClient(
             playlists = playlists,
             subtitle = null,
             friends = friends,
+            radioStations = radioStations,
         )
     }
 

@@ -86,10 +86,10 @@ import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
 import re.pinok.util.AppLog
 
-// P0.32: вкладки каталога — как в VK web (6 табов).
-// P0.38: добавлена вкладка «Друзья» (section_id=friends из HAR «Музыка друзей.har»).
-// data-testid: AudioCatalog_Tabs_Tab_all / general / explore / radiostations / updates
-private val MUSIC2_TABS = listOf("Моя музыка", "Главная", "Обзор", "Радио", "Обновления", "Друзья")
+// P0.32: вкладки каталога — как в VK web (5 табов).
+// P0.38: «Обновления» удалён (VK возвращает только placeholder-заглушки).
+// data-testid: AudioCatalog_Tabs_Tab_all / general / explore / radiostations / friends
+private val MUSIC2_TABS = listOf("Моя музыка", "Главная", "Обзор", "Радио", "Друзья")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -163,8 +163,9 @@ fun Music2Screen(
 
     // P0.32: маппинг вкладок → API sections.
     // 0=Моя музыка (audio.get), 1=Главная (general), 2=Обзор (explore),
-    // 3=Радио (radio), 4=Обновления (updates), 5=Друзья (friends, P0.38).
-    val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "updates", "friends")
+    // 3=Радио (radio), 4=Друзья (friends).
+    // P0.38: «Обновления» удалён — VK возвращает только placeholder.
+    val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "friends")
 
     // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
     fun loadTracks(refresh: Boolean = false) {
@@ -571,27 +572,22 @@ private fun Music2CatalogContent(
                             }
                         }
                     }
+                    // P0.38 #MUSIC2-RADIO: RADIO_LIST — вертикальная сетка радиостанций.
+                    re.pinok.data.model.CatalogViewType.RADIO_LIST -> {
+                        if (block.radioStations.isNotEmpty()) {
+                            item(key = "hdr_$blockKey") {
+                                Music2SectionHeader(block.title)
+                            }
+                            items(block.radioStations, key = { "rs_${blockIndex}_${it.id}" }) { station ->
+                                Music2RadioStationRow(station = station)
+                            }
+                        }
+                    }
                     // LIST / UNKNOWN / BANNER — пропускаем.
-                    // P0.38: BANNER — это placeholder-заглушки из «Обновлений» (VK возвращает
-                    // их когда реального контента нет). Не рендерим — пустое место.
+                    // P0.38: BANNER — это placeholder-заглушки (VK возвращает их когда
+                    // реального контента нет). Не рендерим — пустое место.
                     // LARGE_LIST — обрабатывается через SLIDER (links → friends).
                     else -> Unit
-                }
-            }
-            // P0.38: если все блоки — BANNER/placeholder (как в «Обновлениях»),
-            // показываем «Пока нет обновлений» вместо пустого экрана.
-            if (catalogBlocks.isNotEmpty() && catalogBlocks.all {
-                    it.viewType == re.pinok.data.model.CatalogViewType.BANNER ||
-                    it.viewType == re.pinok.data.model.CatalogViewType.SEPARATOR ||
-                    it.viewType == re.pinok.data.model.CatalogViewType.HEADER ||
-                    it.viewType == re.pinok.data.model.CatalogViewType.HEADER_EXTENDED
-                } && !catalogLoading) {
-                item(key = "no_content") {
-                    Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Filled.MusicNote, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Пока нет обновлений", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
                 }
             }
             if (catalogBlocks.isEmpty() && !catalogLoading) {
@@ -786,6 +782,59 @@ private fun Music2FriendsSliderRow(
                 // Количество треков.
                 Text(friend.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
             }
+        }
+    }
+}
+
+// P0.38 #MUSIC2-RADIO: строка радиостанции (лого + название + кнопка play).
+@Composable
+private fun Music2RadioStationRow(station: re.pinok.data.model.CatalogRadioStation) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                // TODO: запуск стрима через PlayerConnection (stream_url HLS).
+                AppLog.i("Music2", "radio click: ${station.name} stream=${station.streamUrl != null}")
+            }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Лого радиостанции.
+        if (station.logoUrl != null) {
+            AsyncImage(
+                model = station.logoUrl,
+                contentDescription = station.name,
+                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.MusicNote, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        // Название радиостанции.
+        Column(modifier = Modifier.weight(1f)) {
+            Text(station.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (station.isFollowed) {
+                Text("Вы подписаны", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        // Кнопка play.
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.PlayArrow, "Слушать", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
         }
     }
 }

@@ -1674,6 +1674,8 @@ enum class CatalogViewType(val raw: String) {
     LIST("list"),
     // P0.38: large_list — layout для блока «Музыка друзей» (data_type=links).
     LARGE_LIST("large_list"),
+    // P0.38: list + radiostations — блок радиостанций.
+    RADIO_LIST("radio_list"),
     // P0.38: banner/placeholder — заглушки в «Обновлениях» (VK возвращает их
     // когда реального контента нет). Рендерим как пустое место, не падаем.
     BANNER("banner"),
@@ -1701,6 +1703,8 @@ data class CatalogBlock(
     // P0.37 #MUSIC2-FRIENDS: друзья с их музыкой (links slider).
     // VK web: links-slider-block / links-cell / links-cell-avatar.
     val friends: List<CatalogFriend> = emptyList(),
+    // P0.38 #MUSIC2-RADIO: радиостанции (list/radiostations block).
+    val radioStations: List<CatalogRadioStation> = emptyList(),
 )
 
 // P0.37: друг в блоке «Музыка друзей» (links slider).
@@ -1714,6 +1718,18 @@ data class CatalogFriend(
     // id поля — это ID самой ссылки, не ID пользователя. Без правильного ownerId
     // audio.get(ownerId=...) падает с ошибкой или возвращает чужое.
     val ownerId: Long? = null,
+)
+
+// P0.38 #MUSIC2-RADIO: радиостанция из catalog.getSection(radio).
+// VK web: radio_stations[] companion array + block list/radiostations.
+// Поля из HAR: id, name, logo_url, logo_png_url, background_color, is_followed, stream_url, is_enabled.
+data class CatalogRadioStation(
+    val id: Long,
+    val name: String,
+    val logoUrl: String?,
+    val streamUrl: String?,
+    val backgroundColor: String? = null,
+    val isFollowed: Boolean = false,
 )
 
 /** Плейлист из каталога (расширенный, по сравнению с AudioPlaylist). */
