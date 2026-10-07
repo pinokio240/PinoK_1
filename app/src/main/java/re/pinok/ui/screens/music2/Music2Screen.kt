@@ -20,6 +20,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -72,6 +74,7 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
+import coil3.compose.AsyncImage
 import re.pinok.SovaApp
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
@@ -85,9 +88,15 @@ private val MUSIC2_TABS = listOf("Моя музыка", "Главная", "Об�
 @Composable
 fun Music2Screen(
     onBack: () -> Unit = {},
+    // P0.37 #MUSIC2-FRIENDS: режим просмотра музыки друга (ownerId != null).
+    ownerId: Long? = null,
+    ownerName: String? = null,
+    onOpenFriend: (Long, String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
+    // P0.37: режим друга — скрываем табы/каталог/upload, грузим audio.get с чужим ownerId.
+    val isFriendMode = ownerId != null
 
     // P0.36 #MUSIC2-UPLOAD: состояние загрузки аудио файла.
     var uploading by remember { mutableStateOf(false) }
@@ -150,13 +159,13 @@ fun Music2Screen(
     // 3=Радио (radio), 4=Обновления (updates).
     val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "updates")
 
-    // P0.32: загрузка треков (audio.get — для «Моя музыка»).
+    // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
     fun loadTracks(refresh: Boolean = false) {
         scope.launch {
             if (refresh) refreshing = true else loading = true
             errorText = null
             try {
-                val result = app.apiClient.audioGet(count = 50, offset = if (refresh) 0 else tracks.size)
+                val result = app.apiClient.audioGet(count = 50, offset = if (refresh) 0 else tracks.size, ownerId = ownerId)
                 if (refresh) {
                     tracks = result
                 } else {
@@ -265,28 +274,49 @@ fun Music2Screen(
     } else 0f
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // P0.32: вкладки (ScrollableTabRow — 5 табов, как в VK web AudioCatalog_Tabs).
-        ScrollableTabRow(
-            selectedTabIndex = selectedTab,
-            modifier = Modifier.fillMaxWidth(),
-            edgePadding = 0.dp,
-        ) {
-            MUSIC2_TABS.forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = { selectedTab = index },
-                    text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        // P0.37: в режиме друга — показываем заголовок с именем друга вместо табов.
+        if (isFriendMode) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = ownerName ?: "Музыка",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
                 )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "${tracks.size} треков",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            // P0.32: вкладки (ScrollableTabRow — 5 табов, как в VK web AudioCatalog_Tabs).
+            ScrollableTabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.fillMaxWidth(),
+                edgePadding = 0.dp,
+            ) {
+                MUSIC2_TABS.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    )
+                }
             }
         }
 
         // P0.32+P0.34: PullToRefreshBox — pull-to-refresh.
         // Вкладка 0 (Моя музыка): обновляет audio.get.
         // Вкладки 1-4 (Каталог): обновляет catalog.getSection.
+        // В режиме друга — обновляет audio.get(ownerId=friend).
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = {
-                if (selectedTab == 0) {
+                if (isFriendMode || selectedTab == 0) {
                     loadTracks(refresh = true)
                 } else {
                     val section = CATALOG_SECTIONS[selectedTab]
@@ -295,7 +325,7 @@ fun Music2Screen(
             },
             modifier = Modifier.fillMaxSize(),
         ) {
-            if (selectedTab == 0) {
+            if (isFriendMode || selectedTab == 0) {
                 Music2MyTracksContent(
                     tracks = tracks,
                     loading = loading,
@@ -307,6 +337,8 @@ fun Music2Screen(
                     volume = playerState.volume,
                     uploading = uploading,
                     onUploadClick = { filePicker.launch("audio/*") },
+                    showControls = !isFriendMode,
+                    headerTitle = if (isFriendMode) ownerName else null,
                 )
             } else {
                 Music2CatalogContent(
@@ -317,6 +349,7 @@ fun Music2Screen(
                     isCurrentTrack = isCurrentTrack,
                     isPlaying = playerState.isPlaying,
                     currentProgress = currentProgress,
+                    onOpenFriend = onOpenFriend,
                 )
             }
         }
@@ -336,6 +369,9 @@ private fun Music2MyTracksContent(
     volume: Float = 1.0f,
     uploading: Boolean = false,
     onUploadClick: () -> Unit = {},
+    // P0.37: в режиме друга скрываем upload/volume controls.
+    showControls: Boolean = true,
+    headerTitle: String? = null,
 ) {
     if (loading && tracks.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -348,43 +384,48 @@ private fun Music2MyTracksContent(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Моя музыка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(headerTitle ?: "Моя музыка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.weight(1f))
                     // P0.36 #MUSIC2-UPLOAD: кнопка загрузки аудио.
                     // VK web: UploadAudio_SelectFileButton.
-                    IconButton(onClick = onUploadClick, enabled = !uploading, modifier = Modifier.size(32.dp)) {
-                        if (uploading) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Filled.Upload, contentDescription = "Загрузить аудио", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    if (showControls) {
+                        IconButton(onClick = onUploadClick, enabled = !uploading, modifier = Modifier.size(32.dp)) {
+                            if (uploading) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Filled.Upload, contentDescription = "Загрузить аудио", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                            }
                         }
                     }
                     Text("${tracks.size} треков", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             // P0.35 #MUSIC2-VOLUME: volume slider. VK web: AudioPlayerBlock_VolumeSlider.
-            item(key = "volume_slider") {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Filled.MusicNote,
-                        contentDescription = "Громкость",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Slider(
-                        value = volume,
-                        onValueChange = { PlayerConnection.setVolume(it) },
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    )
-                    Text(
-                        text = "${(volume * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(36.dp),
-                    )
+            // Скрывается в режиме друга (нет смысла менять громкость плеера из чужой музыки).
+            if (showControls) {
+                item(key = "volume_slider") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.MusicNote,
+                            contentDescription = "Громкость",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Slider(
+                            value = volume,
+                            onValueChange = { PlayerConnection.setVolume(it) },
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        )
+                        Text(
+                            text = "${(volume * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(36.dp),
+                        )
+                    }
                 }
             }
             items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
@@ -434,6 +475,8 @@ private fun Music2CatalogContent(
     isCurrentTrack: (Track) -> Boolean,
     isPlaying: Boolean,
     currentProgress: Float,
+    // P0.37: клик по карточке друга → открытие его музыки.
+    onOpenFriend: (Long, String) -> Unit = { _, _ -> },
 ) {
     if (catalogLoading && catalogBlocks.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -473,13 +516,22 @@ private fun Music2CatalogContent(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             items(block.friends, key = { it.id }) { friend ->
+                                // P0.37: карточка друга кликабельна → audio.get(ownerId=friend).
+                                // VK web: links-cell → переход на /audio?owner_id=...
+                                val friendOwnerId = remember(friend.id) { friend.id.toLongOrNull() }
                                 Column(
-                                    modifier = Modifier.width(72.dp),
+                                    modifier = Modifier
+                                        .width(72.dp)
+                                        .then(
+                                            if (friendOwnerId != null)
+                                                Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
+                                            else Modifier
+                                        ),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                 ) {
                                     // Аватар друга.
                                     if (friend.avatarUrl != null) {
-                                        coil.compose.AsyncImage(
+                                        AsyncImage(
                                             model = friend.avatarUrl,
                                             contentDescription = friend.name,
                                             modifier = Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape),

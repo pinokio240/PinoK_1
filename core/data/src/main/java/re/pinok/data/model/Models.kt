@@ -1670,6 +1670,7 @@ enum class CatalogViewType(val raw: String) {
     TRIPLE_STACKED_SLIDER("triple_stacked_slider"),
     LARGE_SLIDER("large_slider"),
     RECOMMS_SLIDER("recomms_slider"),
+    SLIDER("slider"),
     LIST("list"),
     UNKNOWN("unknown");
 

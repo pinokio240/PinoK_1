@@ -1699,6 +1699,25 @@ fun SovaNavHost(
                 composable(Screen.Music2.route) {
                     re.pinok.ui.screens.music2.Music2Screen(
                         onBack = { nav.popBackStack() },
+                        onOpenFriend = { ownerId, name ->
+                            nav.navigate(Screen.Music2Friend.buildRoute(ownerId, name))
+                        },
+                    )
+                }
+                // P0.37 #MUSIC2-FRIENDS: музыка друга (audio.get с чужим ownerId).
+                composable(
+                    route = Screen.Music2Friend.route,
+                    arguments = listOf(
+                        navArgument(Screen.Music2Friend.ARG_OWNER_ID) { type = NavType.LongType },
+                        navArgument(Screen.Music2Friend.ARG_NAME) { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val friendOwnerId = backStackEntry.arguments?.getLong(Screen.Music2Friend.ARG_OWNER_ID)
+                    val friendName = backStackEntry.arguments?.getString(Screen.Music2Friend.ARG_NAME) ?: "Музыка"
+                    re.pinok.ui.screens.music2.Music2Screen(
+                        onBack = { nav.popBackStack() },
+                        ownerId = friendOwnerId,
+                        ownerName = friendName,
                     )
                 }
                 // #MUSIC-PORT: экраны музыкальной библиотеки.

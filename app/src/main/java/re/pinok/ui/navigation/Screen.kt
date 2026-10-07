@@ -612,6 +612,17 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     /** #CALLS-WEBVIEW (2026-08-25): звонки через WebView vk.ru/calls. */
     object CallsWebView : Screen("calls_webview", "Звонки", null)
 
+    // P0.37 #MUSIC2-FRIENDS: маршрут просмотра музыки друга.
+    // URL: music2_friend/{ownerId}/{name}. name — URL-encoded (могут быть пробелы).
+    object Music2Friend : Screen("music2_friend/{ownerId}/{name}", "Музыка друга", null) {
+        const val ARG_OWNER_ID = "ownerId"
+        const val ARG_NAME = "name"
+        fun buildRoute(ownerId: Long, name: String): String {
+            val n = android.net.Uri.encode(name.ifBlank { "Музыка" })
+            return "music2_friend/$ownerId/$n"
+        }
+    }
+
     companion object {
         val dock = listOf(Feed, Messages, Music, Video, Profile)
         // Сначала социальные разделы, потом системные.
