@@ -24,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,12 +38,16 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -483,84 +489,73 @@ private fun Music2CatalogContent(
             CircularProgressIndicator()
         }
     } else {
+        // P0.37-REWRITE: рендеринг по образцу старого MusicScreen.MusicHomeTab.
+        // Каждый viewType обрабатывается отдельно — слайдеры треков/плейлистов/друзей
+        // рендерятся как горизонтальные LazyRow, а не вертикальный список.
         LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             catalogBlocks.forEachIndexed { blockIndex, block ->
-                // P0.37-FIX: ключ блока включает индекс — иначе при пустых/одинаковых
-                // blockId+title fallback на hashCode даёт коллизию "block_-1541587281".
-                val blockKey = "block_${blockIndex}_${block.blockId ?: block.title ?: block.hashCode()}"
-                item(key = blockKey) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        block.title?.let { title ->
-                            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                        }
-                        block.subtitle?.let { sub ->
-                            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
+                val blockKey = "blk_${blockIndex}_${block.blockId ?: block.title ?: block.hashCode()}"
+                when (block.viewType) {
+                    // HEADER/HEADER_EXTENDED: title уже дублируется в контент-блоке,
+                    // отдельный рендер давал бы двойной заголовок. Пропускаем.
+                    re.pinok.data.model.CatalogViewType.HEADER,
+                    re.pinok.data.model.CatalogViewType.HEADER_EXTENDED -> Unit
+                    // SEPARATOR: тонкая разделительная линия.
+                    re.pinok.data.model.CatalogViewType.SEPARATOR -> {
+                        item(key = "sep_$blockKey") {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                                thickness = 1.dp,
+                                modifier = Modifier.padding(vertical = 4.dp),
+                            )
                         }
                     }
-                }
-                // P0.37-FIX: ключ трека включает blockIndex — один и тот же трек
-                // может встречаться в нескольких блоках каталога (например, в "Обзор"
-                // и "Обновления"), что давало коллизию "ownerId_id" в рамках LazyColumn.
-                items(block.tracks, key = { "${blockIndex}_${it.ownerId}_${it.id}" }) { track ->
-                    Music2TrackRow(
-                        track = track,
-                        isPlaying = isCurrentTrack(track) && isPlaying,
-                        progress = if (isCurrentTrack(track)) currentProgress else 0f,
-                        onClick = {
-                            val idx = block.tracks.indexOf(track)
-                            if (isCurrentTrack(track)) PlayerConnection.togglePlayPause()
-                            else PlayerConnection.playTrackList(block.tracks, idx)
-                        },
-                    )
-                }
-                // P0.37 #MUSIC2-FRIENDS: горизонтальный слайдер друзей.
-                // VK web: links-slider-block / links-cell / links-cell-avatar.
-                if (block.friends.isNotEmpty()) {
-                    item(key = "friends_${blockIndex}_${block.blockId ?: block.title}") {
-                        androidx.compose.foundation.lazy.LazyRow(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            items(block.friends, key = { it.id }) { friend ->
-                                // P0.37: карточка друга кликабельна → audio.get(ownerId=friend).
-                                // VK web: links-cell → переход на /audio?owner_id=...
-                                // P0.37-FIX: ownerId берём из модели (распарсен из url), не из id поля.
-                                val friendOwnerId = friend.ownerId
-                                Column(
-                                    modifier = Modifier
-                                        .width(72.dp)
-                                        .then(
-                                            if (friendOwnerId != null)
-                                                Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
-                                            else Modifier
-                                        ),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    // Аватар друга.
-                                    if (friend.avatarUrl != null) {
-                                        AsyncImage(
-                                            model = friend.avatarUrl,
-                                            contentDescription = friend.name,
-                                            modifier = Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape),
-                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                        )
-                                    } else {
-                                        Box(
-                                            modifier = Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Text(friend.name.take(1).uppercase(), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    // Имя друга.
-                                    Text(friend.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                                    // Количество треков.
-                                    Text(friend.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                                }
+                    // TRIPLE_STACKED_SLIDER: горизонтальная карусель треков.
+                    re.pinok.data.model.CatalogViewType.TRIPLE_STACKED_SLIDER -> {
+                        if (block.tracks.isNotEmpty()) {
+                            item(key = "hdr_$blockKey") {
+                                Music2SectionHeader(block.title)
+                            }
+                            item(key = "ts_$blockKey") {
+                                Music2TrackSliderRow(
+                                    tracks = block.tracks,
+                                    isCurrentTrack = isCurrentTrack,
+                                    isPlaying = isPlaying,
+                                    onPlayTrack = { idx ->
+                                        PlayerConnection.playTrackList(block.tracks, idx)
+                                    },
+                                )
                             }
                         }
                     }
+                    // RECOMMS_SLIDER / LARGE_SLIDER: горизонтальная карусель плейлистов.
+                    re.pinok.data.model.CatalogViewType.RECOMMS_SLIDER,
+                    re.pinok.data.model.CatalogViewType.LARGE_SLIDER -> {
+                        if (block.playlists.isNotEmpty()) {
+                            item(key = "hdr_$blockKey") {
+                                Music2SectionHeader(block.title)
+                            }
+                            item(key = "pl_$blockKey") {
+                                Music2PlaylistSliderRow(playlists = block.playlists)
+                            }
+                        }
+                    }
+                    // P0.37 #MUSIC2-FRIENDS: SLIDER — горизонтальная карусель друзей.
+                    re.pinok.data.model.CatalogViewType.SLIDER -> {
+                        if (block.friends.isNotEmpty()) {
+                            item(key = "hdr_$blockKey") {
+                                Music2SectionHeader(block.title)
+                            }
+                            item(key = "fr_$blockKey") {
+                                Music2FriendsSliderRow(
+                                    friends = block.friends,
+                                    onOpenFriend = onOpenFriend,
+                                )
+                            }
+                        }
+                    }
+                    // LIST / UNKNOWN — пропускаем (пока не реализовано).
+                    else -> Unit
                 }
             }
             if (catalogBlocks.isEmpty() && !catalogLoading) {
@@ -576,6 +571,184 @@ private fun Music2CatalogContent(
                 item(key = "catalog_error") {
                     Text(catalogError, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
                 }
+            }
+        }
+    }
+}
+
+// P0.37-REWRITE: заголовок секции каталога (как SectionHeader в старом MusicScreen).
+@Composable
+private fun Music2SectionHeader(title: String?) {
+    if (title.isNullOrBlank()) return
+    Text(
+        text = title.uppercase(),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+}
+
+// P0.37-REWRITE: горизонтальная карусель треков (по образцу TrackSliderRow).
+@Composable
+private fun Music2TrackSliderRow(
+    tracks: List<Track>,
+    isCurrentTrack: (Track) -> Boolean,
+    isPlaying: Boolean,
+    onPlayTrack: (Int) -> Unit,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
+            val isCurrent = isCurrentTrack(track)
+            Column(
+                modifier = Modifier
+                    .width(140.dp)
+                    .clickable {
+                        val idx = tracks.indexOf(track)
+                        if (isCurrent) PlayerConnection.togglePlayPause()
+                        else onPlayTrack(idx)
+                    },
+            ) {
+                // Обложка с оверлеем play.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (track.albumThumb != null) {
+                        AsyncImage(
+                            model = track.albumThumb,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Icon(Icons.Filled.MusicNote, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(40.dp))
+                    }
+                    // Оверлей play/pause.
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(if (isCurrent && isPlaying) Color.Black.copy(alpha = 0.6f) else MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (isCurrent && isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                // Название трека.
+                Text(track.title, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+                // Артист.
+                Text(track.artist, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+// P0.37-REWRITE: горизонтальная карусель плейлистов (по образцу PlaylistSliderRow).
+@Composable
+private fun Music2PlaylistSliderRow(
+    playlists: List<re.pinok.data.model.CatalogPlaylist>,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(playlists, key = { "${it.ownerId}_${it.id}" }) { pl ->
+            Column(modifier = Modifier.width(150.dp)) {
+                // Обложка плейлиста.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (pl.coverUrl != null) {
+                        AsyncImage(
+                            model = pl.coverUrl,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Icon(Icons.Filled.MusicNote, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp))
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                // Название плейлиста.
+                Text(pl.title, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+                // Совпадение вкусов или кол-во треков.
+                val subtitle = when {
+                    pl.matchPercent != null -> "${pl.matchPercent}% совпадение"
+                    pl.count > 0 -> "${pl.count} треков"
+                    else -> null
+                }
+                if (subtitle != null) {
+                    Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+    }
+}
+
+// P0.37 #MUSIC2-FRIENDS: горизонтальная карусель друзей (links slider).
+@Composable
+private fun Music2FriendsSliderRow(
+    friends: List<re.pinok.data.model.CatalogFriend>,
+    onOpenFriend: (Long, String) -> Unit,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(friends, key = { it.id }) { friend ->
+            val friendOwnerId = friend.ownerId
+            Column(
+                modifier = Modifier
+                    .width(72.dp)
+                    .then(
+                        if (friendOwnerId != null)
+                            Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
+                        else Modifier
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Аватар друга.
+                if (friend.avatarUrl != null) {
+                    AsyncImage(
+                        model = friend.avatarUrl,
+                        contentDescription = friend.name,
+                        modifier = Modifier.size(56.dp).clip(CircleShape),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.size(56.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(friend.name.take(1).uppercase(), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                // Имя друга.
+                Text(friend.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                // Количество треков.
+                Text(friend.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
             }
         }
     }
