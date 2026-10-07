@@ -282,7 +282,7 @@ private fun Music2MyTracksContent(
             }
             if (errorText != null && tracks.isEmpty()) {
                 item(key = "error") {
-                    Text(errorText ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
+                    Text(errorText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
                 }
             }
         }
@@ -341,7 +341,7 @@ private fun Music2CatalogContent(
             }
             if (catalogError != null && catalogBlocks.isEmpty()) {
                 item(key = "catalog_error") {
-                    Text(catalogError ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
+                    Text(catalogError, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(32.dp))
                 }
             }
         }
