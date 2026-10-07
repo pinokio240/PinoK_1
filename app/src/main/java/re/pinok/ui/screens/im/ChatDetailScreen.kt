@@ -4324,8 +4324,7 @@ fun ChatDetailScreen(
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
                             .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp))
-                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                            .imePadding(),
+                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Fix #200: поле ввода расширено — убраны 3 отдельные
@@ -9355,8 +9354,7 @@ private fun VoiceRecordingToolbar(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-            .imePadding(),
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel — иконка корзины/cancel как в VK (cancel_outline_24).
@@ -9441,8 +9439,7 @@ private fun VoiceReviewToolbar(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-            .imePadding(),
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel (delete отложенный файл).

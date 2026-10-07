@@ -3512,6 +3512,12 @@ class VKApiClient(
         val sectionId = CATALOG_SECTION_IDS[section]
             ?: CATALOG_SECTION_IDS["general"]
             ?: return emptyList()
+        // P0.38 #MUSIC2-FRIENDS-PAGINATION: для friends-секции грузим ВСЕ страницы
+        // (VK отдаёт по 20 друзей на страницу, всего ~81 друг). Для остальных секций
+        // достаточно первой страницы — они меньше и пагинация не критична.
+        if (section == "friends") {
+            return catalogGetSectionAllBlocks(sectionId, maxPages = 10)
+        }
         return catalogGetSectionById(sectionId, startFrom)
     }
 
@@ -3585,7 +3591,11 @@ class VKApiClient(
                 }
             }
             pages++
-            val nf = resp.get("next_from")?.takeIf { !it.isJsonNull }?.asString
+            // P0.38-FIX: next_from находится в response.section.next_from, НЕ в response.next_from.
+            // Источник: HAR «Музыка друзей.har» — response.section = {id,title,breadcrumbs,blocks,next_from,url,actions}.
+            val sectionObj = resp.getAsJsonObject("section")
+            val nf = sectionObj?.get("next_from")?.takeIf { !it.isJsonNull }?.asString
+                ?: resp.get("next_from")?.takeIf { !it.isJsonNull }?.asString
             AppLog.i("VKApiClient",
                 "#AUDIO-PAGING-ALL section: page=$pages blocks=+${blocks.size} (fresh=$fresh, all=${all.size}) nextFrom=${if (nf.isNullOrBlank()) "нет" else "есть"}")
             if (nf.isNullOrBlank()) break

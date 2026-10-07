@@ -60,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -168,7 +169,10 @@ fun Music2Screen(
     val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "friends")
 
     // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
+    // P0.38-PAGINATION: добавлен tracksEndReached — флаг что больше нет треков.
+    var tracksEndReached by remember { mutableStateOf(false) }
     fun loadTracks(refresh: Boolean = false) {
+        if (loading && !refresh) return  // P0.38: защита от параллельных вызовов.
         scope.launch {
             if (refresh) refreshing = true else loading = true
             errorText = null
@@ -176,8 +180,11 @@ fun Music2Screen(
                 val result = app.apiClient.audioGet(count = 50, offset = if (refresh) 0 else tracks.size, ownerId = ownerId)
                 if (refresh) {
                     tracks = result
+                    tracksEndReached = result.size < 50
                 } else {
                     tracks = (tracks + result).distinctBy { "${it.ownerId}_${it.id}" }
+                    // P0.38: если вернулось меньше запрошенного — больше треков нет.
+                    if (result.size < 50) tracksEndReached = true
                 }
             } catch (e: Exception) {
                 AppLog.w("Music2", "loadTracks error: ${e.message}")
@@ -283,6 +290,23 @@ fun Music2Screen(
     // P0.32: начальная загрузка.
     LaunchedEffect(Unit) {
         loadTracks()
+    }
+
+    // P0.38 #MUSIC2-PAGINATION: бесконечный скролл — подгрузка следующих треков
+    // когда пользователь прокручивает к концу списка. Работает для «Моя музыка»
+    // и для музыки друга (audio.get с offset).
+    val endReached by remember {
+        derivedStateOf {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = listState.layoutInfo.totalItemsCount
+            // Триггерим когда виден предпоследний элемент (с учётом header+footer).
+            total > 0 && lastVisible >= total - 3 && !loading && tracks.isNotEmpty()
+        }
+    }
+    LaunchedEffect(endReached) {
+        if (endReached && !loading && tracks.isNotEmpty() && !tracksEndReached) {
+            loadTracks(refresh = false)
+        }
     }
 
     // P0.32: pull-to-refresh — перезагрузка списка при pull-down.
