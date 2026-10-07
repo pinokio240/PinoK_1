@@ -139,6 +139,8 @@ fun Music2Screen(
     }
 
     // P0.34: загрузка при смене вкладки.
+    // P0.34: флаг refresh для каталога при возврате на вкладку.
+    var refreshNeeded by remember { mutableStateOf(false) }
     LaunchedEffect(selectedTab) {
         if (selectedTab == 0) {
             // «Моя музыка» — audio.get.
@@ -154,9 +156,6 @@ fun Music2Screen(
     LaunchedEffect(Unit) {
         loadTracks()
     }
-
-    // P0.34: флаг refresh для каталога при возврате на вкладку.
-    var refreshNeeded by remember { mutableStateOf(false) }
 
     // P0.32: pull-to-refresh — перезагрузка списка при pull-down.
     // VK web: catalog.getAudio перезапрашивается, список обновляется.
@@ -333,26 +332,30 @@ fun Music2Screen(
                         modifier = Modifier.fillMaxSize(),
                         state = listState,
                     ) {
-                        // P0.34: блоки каталога.
-                        items(catalogBlocks, key = { it.blockId ?: it.title ?: it.hashCode().toString() }) { block ->
+                        // P0.34: блоки каталога — каждый блок + его треки как отдельные items.
+                        catalogBlocks.forEach { block ->
                             // Заголовок блока.
-                            block.title?.let { title ->
-                                Text(
-                                    text = title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                )
+                            item(key = "block_${block.blockId ?: block.title ?: block.hashCode()}") {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    block.title?.let { title ->
+                                        Text(
+                                            text = title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        )
+                                    }
+                                    block.subtitle?.let { sub ->
+                                        Text(
+                                            text = sub,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
                             }
-                            block.subtitle?.let { sub ->
-                                Text(
-                                    text = sub,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                                )
-                            }
-                            // Треки внутри блока.
+                            // Треки внутри блока — как отдельные LazyColumn items.
                             items(block.tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
                                 Music2TrackRow(
                                     track = track,
