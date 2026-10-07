@@ -3656,6 +3656,45 @@ class VKApiClient(
             linksById[id] = o
         }
 
+        // P0.38 #MUSIC2-FRIENDS-FIX: друзья приходят в response.profiles[],
+        // НЕ в links[] (по исследованию VK web: friends рендерятся из companion-массива).
+        // profiles[] содержит: id, first_name, last_name, photo_100/photo_200, возможно audios_count.
+        val friendsFromProfiles = mutableListOf<re.pinok.data.model.CatalogFriend>()
+        resp.getAsJsonArray("profiles")?.forEach { el ->
+            if (!el.isJsonObject) return@forEach
+            val o = el.asJsonObject
+            val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+            val firstName = safeString(o.get("first_name")) ?: ""
+            val lastName = safeString(o.get("last_name")) ?: ""
+            val name = "$firstName $lastName".trim().ifBlank { "id$id" }
+            // Аватар: photo_200 приоритетнее, photo_100 как fallback.
+            val avatarUrl = safeString(o.get("photo_200"))
+                ?: safeString(o.get("photo_100"))
+                ?: safeString(o.get("photo_50"))
+            // Количество треков: ищем в разных полях (точное имя неизвестно).
+            val audiosCount = o.get("audios_count")?.takeIf { !it.isJsonNull }?.asInt
+                ?: o.get("counters")?.takeIf { !it.isJsonNull }?.asJsonObject
+                    ?.get("audios")?.takeIf { !it.isJsonNull }?.asInt
+            val subtitle = if (audiosCount != null && audiosCount > 0) {
+                "$audiosCount ${pluralAudios(audiosCount)}"
+            } else "Музыка друга"
+            // P0.38-DIAG: логируем структуру первого профиля для отладки.
+            if (friendsFromProfiles.isEmpty()) {
+                re.pinok.util.AppLog.i("Music2", "profile[0] keys: ${o.keySet().joinToString(",")}")
+                re.pinok.util.AppLog.i("Music2", "profile[0]: id=$id name=$name avatar=${avatarUrl != null} audiosCount=$audiosCount")
+            }
+            friendsFromProfiles.add(re.pinok.data.model.CatalogFriend(
+                id = id.toString(),
+                name = name,
+                subtitle = subtitle,
+                avatarUrl = avatarUrl,
+                ownerId = id,
+            ))
+        }
+        if (friendsFromProfiles.isNotEmpty()) {
+            re.pinok.util.AppLog.i("Music2", "parseFriends from profiles[]: ${friendsFromProfiles.size} friends")
+        }
+
         // Формат catalog.getSection: response.section.blocks.
         val sectionObj = resp.getAsJsonObject("section")
         val blocksArr = sectionObj?.getAsJsonArray("blocks")
@@ -3706,7 +3745,29 @@ class VKApiClient(
                 pendingShowAllId = null
             }
         }
+        // P0.38 #MUSIC2-FRIENDS-FIX: добавляем виртуальный friends-блок в конец.
+        // VK web рендерит друзей как top-level элемент из profiles[], а не как catalog-блок.
+        // Мы создаём синтетический SLIDER-блок с друзьями, чтобы UI его отобразил.
+        if (friendsFromProfiles.isNotEmpty()) {
+            result.add(re.pinok.data.model.CatalogBlock(
+                viewType = re.pinok.data.model.CatalogViewType.SLIDER,
+                title = "Музыка друзей",
+                blockId = "friends_slider",
+                showAllId = "friends_slider",
+                tracks = emptyList(),
+                playlists = emptyList(),
+                subtitle = null,
+                friends = friendsFromProfiles,
+            ))
+        }
         return result
+    }
+
+    // P0.38: склонение слова «аудиозаписей» для счётчика треков друга.
+    private fun pluralAudios(count: Int): String = when {
+        count % 10 == 1 && count % 100 != 11 -> "аудиозапись"
+        count % 10 in 2..4 && count % 100 !in 12..14 -> "аудиозаписи"
+        else -> "аудиозаписей"
     }
 
     /** #MUSIC-CATALOG-SECTION: парсит один блок каталога. */
