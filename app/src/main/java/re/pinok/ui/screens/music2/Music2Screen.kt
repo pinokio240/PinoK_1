@@ -171,10 +171,20 @@ fun Music2Screen(
     // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
     // P0.38-PAGINATION: добавлен tracksEndReached — флаг что больше нет треков.
     var tracksEndReached by remember { mutableStateOf(false) }
+    // P0.38-FIX: отдельный флаг isLoadingMore — guard от параллельных пагинаций.
+    // НЕ используем `loading` для guard — оно true изначально (для спиннера первичной
+    // загрузки), что блокировало бы первый loadTracks(). Теперь guard только для
+    // подгрузки следующих страниц, не для первичной.
+    var isLoadingMore by remember { mutableStateOf(false) }
     fun loadTracks(refresh: Boolean = false) {
-        if (loading && !refresh) return  // P0.38: защита от параллельных вызовов.
+        if (isLoadingMore && !refresh) return  // P0.38: защита от параллельных пагинаций.
+        if (refresh) {
+            refreshing = true
+        } else {
+            isLoadingMore = true
+            if (tracks.isEmpty()) loading = true  // первичная загрузка — показываем спиннер
+        }
         scope.launch {
-            if (refresh) refreshing = true else loading = true
             errorText = null
             try {
                 val result = app.apiClient.audioGet(count = 50, offset = if (refresh) 0 else tracks.size, ownerId = ownerId)
@@ -192,6 +202,7 @@ fun Music2Screen(
             } finally {
                 loading = false
                 refreshing = false
+                isLoadingMore = false
             }
         }
     }

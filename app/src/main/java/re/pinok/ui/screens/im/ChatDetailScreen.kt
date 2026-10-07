@@ -4558,6 +4558,10 @@ fun ChatDetailScreen(
             }
             }  // P2.5: closes else (not selection mode)
         },
+        // P0.38-FIX: отключаем авто-apply navigationBars padding к bottomBar.
+        // Иначе двойной padding: Scaffold добавляет navbar + Row добавывает ime.union(navbar).
+        // Это создавало чёрный прямоугольник ~50dp над клавиатурой.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         Box(
             modifier = Modifier
