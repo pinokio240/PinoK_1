@@ -3485,6 +3485,9 @@ class VKApiClient(
         // #MUSIC-UPDATES: «Обновления» (following_updates) — новые треки от
         // артистов, на которых подписан. id из «музыка_Обновления.html».
         "updates" to "PUldVA8FR0RzSVNUU1sHCikcABhSax4WIgodE0YWR0R_SVNHGRZTRHxaXkcFDVhXflsU",
+        // P0.34 #MUSIC2-RADIO: «Радио» — радиостанции по жанрам/настроению.
+        // VK web: AudioCatalog_Tabs_Tab_radiostations. id из HAR снапшота.
+        "radio" to "PUldVA8FR0RzSVNUR1UPDykYHRdBXQQINUlFVAwW",
     )
 
     /**

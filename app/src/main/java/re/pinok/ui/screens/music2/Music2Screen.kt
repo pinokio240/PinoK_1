@@ -72,11 +72,16 @@ fun Music2Screen(
     // P0.32: состояние вкладок (5 табов как в VK web).
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // P0.32: состояние списка треков.
+    // P0.32: состояние списка треков (для вкладки «Моя музыка»).
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    // P0.34 #MUSIC2-CATALOG: состояние каталога (для вкладок Главная/Обзор/Радио/Обновления).
+    var catalogBlocks by remember { mutableStateOf<List<re.pinok.data.model.CatalogBlock>>(emptyList()) }
+    var catalogLoading by remember { mutableStateOf(false) }
+    var catalogError by remember { mutableStateOf<String?>(null) }
 
     // P0.32: состояние плеера — для подсветки играющего трека.
     val playerState by PlayerConnection.playerState.collectAsState()
@@ -86,6 +91,11 @@ fun Music2Screen(
     var searchActive by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
+
+    // P0.32: маппинг вкладок → API sections.
+    // 0=Моя музыка (audio.get), 1=Главная (general), 2=Обзор (explore),
+    // 3=Радио (radio), 4=Обновления (updates).
+    val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "updates")
 
     // P0.32: загрузка треков (audio.get — для «Моя музыка»).
     fun loadTracks(refresh: Boolean = false) {
@@ -109,10 +119,44 @@ fun Music2Screen(
         }
     }
 
+    // P0.34: загрузка каталога (catalog.getSection — для вкладок 1-4).
+    fun loadCatalog(section: String, refresh: Boolean = false) {
+        scope.launch {
+            if (refresh) refreshing = true else catalogLoading = true
+            catalogError = null
+            try {
+                val blocks = app.apiClient.catalogGetAudio(section = section, count = 10)
+                catalogBlocks = blocks
+                AppLog.i("Music2", "loadCatalog($section): ${blocks.size} blocks")
+            } catch (e: Exception) {
+                AppLog.w("Music2", "loadCatalog error: ${e.message}")
+                catalogError = "Ошибка загрузки каталога: ${e.message}"
+            } finally {
+                catalogLoading = false
+                refreshing = false
+            }
+        }
+    }
+
+    // P0.34: загрузка при смене вкладки.
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 0) {
+            // «Моя музыка» — audio.get.
+            if (tracks.isEmpty()) loadTracks()
+        } else {
+            // Каталог — catalog.getSection.
+            val section = CATALOG_SECTIONS[selectedTab]
+            if (catalogBlocks.isEmpty() || refreshNeeded) loadCatalog(section, refresh = false)
+        }
+    }
+
     // P0.32: начальная загрузка.
     LaunchedEffect(Unit) {
         loadTracks()
     }
+
+    // P0.34: флаг refresh для каталога при возврате на вкладку.
+    var refreshNeeded by remember { mutableStateOf(false) }
 
     // P0.32: pull-to-refresh — перезагрузка списка при pull-down.
     // VK web: catalog.getAudio перезапрашивается, список обновляется.
@@ -142,22 +186,33 @@ fun Music2Screen(
             }
         }
 
-        // P0.32: PullToRefreshBox — pull-to-refresh списка треков.
-        // Раньше (старый MusicScreen): НЕ было pull-to-refresh — список не обновлялся.
-        // Теперь: pull-down → loadTracks(refresh=true) → свежий audio.get.
+        // P0.32+P0.34: PullToRefreshBox — pull-to-refresh.
+        // Вкладка 0 (Моя музыка): обновляет audio.get.
+        // Вкладки 1-4 (Каталог): обновляет catalog.getSection.
         PullToRefreshBox(
             isRefreshing = refreshing,
-            onRefresh = { loadTracks(refresh = true) },
+            onRefresh = {
+                if (selectedTab == 0) {
+                    loadTracks(refresh = true)
+                } else {
+                    val section = CATALOG_SECTIONS[selectedTab]
+                    loadCatalog(section, refresh = true)
+                }
+            },
             modifier = Modifier.fillMaxSize(),
         ) {
-            if (loading && tracks.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
-                }
-            } else {
+            // P0.34: вкладка 0 — «Моя музыка» (список треков).
+            // Вкладки 1-4 — каталог (блоки с треками/плейлистами).
+            if (selectedTab == 0) {
+                // === Моя музыка — список треков ===
+                if (loading && tracks.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     state = listState,
@@ -263,6 +318,97 @@ fun Music2Screen(
                         }
                     }
                 }
+            } else {
+                // === Каталог (вкладки 1-4: Главная/Обзор/Радио/Обновления) ===
+                // P0.34: catalog.getSection → блоки с треками/плейлистами.
+                if (catalogLoading && catalogBlocks.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                    ) {
+                        // P0.34: блоки каталога.
+                        items(catalogBlocks, key = { it.blockId ?: it.title ?: it.hashCode().toString() }) { block ->
+                            // Заголовок блока.
+                            block.title?.let { title ->
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
+                            block.subtitle?.let { sub ->
+                                Text(
+                                    text = sub,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                                )
+                            }
+                            // Треки внутри блока.
+                            items(block.tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
+                                Music2TrackRow(
+                                    track = track,
+                                    isPlaying = isCurrentTrack(track) && playerState.isPlaying,
+                                    progress = if (isCurrentTrack(track)) currentProgress else 0f,
+                                    onClick = {
+                                        val idx = block.tracks.indexOf(track)
+                                        if (isCurrentTrack(track)) {
+                                            PlayerConnection.togglePlayPause()
+                                        } else {
+                                            PlayerConnection.playTrackList(block.tracks, idx)
+                                        }
+                                    },
+                                )
+                            }
+                        }
+
+                        // P0.34: пустое состояние каталога.
+                        if (catalogBlocks.isEmpty() && !catalogLoading) {
+                            item(key = "catalog_empty") {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(32.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.MusicNote,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Каталог недоступен",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+
+                        // P0.34: error состояние каталога.
+                        if (catalogError != null && catalogBlocks.isEmpty()) {
+                            item(key = "catalog_error") {
+                                Text(
+                                    text = catalogError ?: "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(32.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             }
         }
     }
