@@ -86,53 +86,6 @@ fun Music2Screen(
     var uploading by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // P0.36: file picker launcher — выбор MP3 файла.
-    val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            uploading = true
-            try {
-                // 1. Скопировать файл из uri во временный файл.
-                val tempFile = java.io.File(context.cacheDir, "upload_audio_${System.currentTimeMillis()}.mp3")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    tempFile.outputStream().use { output -> input.copyTo(output) }
-                } ?: run {
-                    Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-                // 2. Получить upload URL.
-                val uploadUrl = app.apiClient.audioGetUploadServer()
-                if (uploadUrl.isNullOrBlank()) {
-                    Toast.makeText(context, "Не удалось получить URL загрузки", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-                // 3. Загрузить файл (multipart POST).
-                val uploadResponse = uploadAudioFile(uploadUrl, tempFile)
-                if (uploadResponse.isNullOrBlank()) {
-                    Toast.makeText(context, "Загрузка файла не удалась", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-                // 4. audio.save — сохранить загруженный файл.
-                val savedTrack = app.apiClient.audioSave(uploadResponse)
-                if (savedTrack != null) {
-                    Toast.makeText(context, "Загружено: ${savedTrack.artist} — ${savedTrack.title}", Toast.LENGTH_LONG).show()
-                    // Обновляем список треков.
-                    loadTracks(refresh = true)
-                } else {
-                    Toast.makeText(context, "Не удалось сохранить трек", Toast.LENGTH_SHORT).show()
-                }
-                tempFile.delete()
-            } catch (e: Exception) {
-                AppLog.e("Music2", "upload error: ${e.message}", e)
-                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
-            } finally {
-                uploading = false
-            }
-        }
-    }
-
     // P0.36: загрузка файла на upload URL (multipart POST, как VK web HAR).
     suspend fun uploadAudioFile(uploadUrl: String, file: java.io.File): String? {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -158,6 +111,9 @@ fun Music2Screen(
             }
         }
     }
+
+    // P0.36: file picker — объявлен ПОСЛЕ loadTracks (нужна ссылка на loadTracks).
+    // Объявляется позже (после loadTracks). См. ниже.
 
     // P0.32: состояние вкладок (5 табов как в VK web).
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -205,6 +161,48 @@ fun Music2Screen(
             } finally {
                 loading = false
                 refreshing = false
+            }
+        }
+    }
+
+    // P0.36: file picker — объявлен ПОСЛЕ loadTracks (нужна ссылка на loadTracks).
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            uploading = true
+            try {
+                val tempFile = java.io.File(context.cacheDir, "upload_audio_${System.currentTimeMillis()}.mp3")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                } ?: run {
+                    Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val uploadUrl = app.apiClient.audioGetUploadServer()
+                if (uploadUrl.isNullOrBlank()) {
+                    Toast.makeText(context, "Не удалось получить URL загрузки", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val uploadResponse = uploadAudioFile(uploadUrl, tempFile)
+                if (uploadResponse.isNullOrBlank()) {
+                    Toast.makeText(context, "Загрузка файла не удалась", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val savedTrack = app.apiClient.audioSave(uploadResponse)
+                if (savedTrack != null) {
+                    Toast.makeText(context, "Загружено: ${savedTrack.artist} — ${savedTrack.title}", Toast.LENGTH_LONG).show()
+                    loadTracks(refresh = true)
+                } else {
+                    Toast.makeText(context, "Не удалось сохранить трек", Toast.LENGTH_SHORT).show()
+                }
+                tempFile.delete()
+            } catch (e: Exception) {
+                AppLog.e("Music2", "upload error: ${e.message}", e)
+                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                uploading = false
             }
         }
     }
