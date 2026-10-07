@@ -86,9 +86,10 @@ import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
 import re.pinok.util.AppLog
 
-// P0.32: вкладки каталога — как в VK web (5 табов).
+// P0.32: вкладки каталога — как в VK web (6 табов).
+// P0.38: добавлена вкладка «Друзья» (section_id=friends из HAR «Музыка друзей.har»).
 // data-testid: AudioCatalog_Tabs_Tab_all / general / explore / radiostations / updates
-private val MUSIC2_TABS = listOf("Моя музыка", "Главная", "Обзор", "Радио", "Обновления")
+private val MUSIC2_TABS = listOf("Моя музыка", "Главная", "Обзор", "Радио", "Обновления", "Друзья")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,8 +163,8 @@ fun Music2Screen(
 
     // P0.32: маппинг вкладок → API sections.
     // 0=Моя музыка (audio.get), 1=Главная (general), 2=Обзор (explore),
-    // 3=Радио (radio), 4=Обновления (updates).
-    val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "updates")
+    // 3=Радио (radio), 4=Обновления (updates), 5=Друзья (friends, P0.38).
+    val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "updates", "friends")
 
     // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
     fun loadTracks(refresh: Boolean = false) {
