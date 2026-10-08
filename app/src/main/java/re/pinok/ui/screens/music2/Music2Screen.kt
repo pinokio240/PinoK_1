@@ -52,6 +52,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
@@ -107,6 +108,14 @@ fun Music2Screen(
     val scope = rememberCoroutineScope()
     // P0.37: режим друга — скрываем табы/каталог/upload, грузим audio.get с чужим ownerId.
     val isFriendMode = ownerId != null
+
+    // P0.38-POSITION: сохранённая позиция прокрутки для текущего ключа
+    // (ownerId: null=«Моя музыка», число=друг). Объявлено ДО loadTracks, т.к.
+    // она (при refresh) сбрасывает восстановление.
+    val restoreIndex = remember { Music2ScrollPositions.get(ownerId).firstVisibleItemIndex }
+    // Флаг: восстановление ещё не завершено. Пока true — догружаем список до
+    // сохранённого индекса и не даём конфликтовать с ручным скроллом пользователя.
+    var restorePending by remember { mutableStateOf(restoreIndex > 0) }
 
     // P0.36 #MUSIC2-UPLOAD: состояние загрузки аудио файла.
     var uploading by remember { mutableStateOf(false) }
@@ -184,6 +193,10 @@ fun Music2Screen(
         if (refresh) {
             refreshing = true
             tracksEndReached = false
+            // P0.38-POSITION: явный refresh сбрасывает сохранённую позицию,
+            // иначе после pull-to-refresh пользователь снова окажется на старом месте.
+            Music2ScrollPositions.clear(ownerId)
+            restorePending = false
         } else {
             isLoadingMore = true
             if (tracks.isEmpty()) loading = true
@@ -320,6 +333,38 @@ fun Music2Screen(
         loadTracks()
     }
 
+    // P0.38-POSITION: восстановление позиции прокрутки при входе.
+    // Так как список перезагружается с начала, требуется догрузка страниц до тех
+    // пор, пока tracks.size не покроет сохранённый индекс (иначе LazyColumn не
+    // имеет элементов для scrollToItem). После покрытия — плавный скролл к позиции.
+    // restoreIndex/restorePending объявлены выше (до loadTracks).
+    LaunchedEffect(tracks.size, tracksEndReached) {
+        if (restorePending && !loading && tracks.isNotEmpty()) {
+            if (tracks.size > restoreIndex) {
+                // Индекс уже загружен — скроллим и завершаем восстановление.
+                listState.scrollToItem(restoreIndex)
+                restorePending = false
+            } else if (!tracksEndReached) {
+                // Ещё не догружено до сохранённого индекса — подгружаем страницу.
+                loadTracks(refresh = false)
+            } else {
+                // До конца списка догрузили, но индекс недостижим (список меньше) — завершаем.
+                restorePending = false
+            }
+        }
+    }
+
+    // P0.38-POSITION: сохранение позиции прокрутки при уходе с экрана (dispose).
+    // Пишем lastVisibleItemIndex, чтобы при следующем входе восстановить место.
+    androidx.compose.runtime.DisposableEffect(ownerId) {
+        onDispose {
+            val info = listState.layoutInfo.visibleItemsInfo
+            val idx = info.lastOrNull()?.index ?: 0
+            val offset = info.lastOrNull()?.offset ?: 0
+            Music2ScrollPositions.save(ownerId, Music2ScrollPos(idx, offset))
+        }
+    }
+
     // P0.38 #MUSIC2-PAGINATION: бесконечный скролл — подгрузка следующих треков
     // когда пользователь прокручивает к концу списка. Работает для «Моя музыка»
     // и для музыки друга (audio.get с offset).
@@ -386,6 +431,27 @@ fun Music2Screen(
             }
         }
 
+        // P0.38-PROGRESS-FIX: постоянная строка прогресса подгрузки треков.
+        // Вынесена из LazyColumn в постоянную (не скроллящуюся) область экрана,
+        // чтобы оставаться видимой при прокрутке (и в «Мое музыке», и в музыке друга).
+        // Показывается, пока известно общее число (totalCount>0) и ещё не всё
+        // подгружено (tracks.size < totalCount). По завершении догрузки исчезает.
+        if ((isFriendMode || selectedTab == 0) && totalCount > 0 && tracks.size < totalCount) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
+                Text(
+                    text = "Загружено ${tracks.size} из $totalCount",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                // Детерминированный бар: (tracks.size / totalCount) * 100%.
+                LinearProgressIndicator(
+                    progress = { (tracks.size.toFloat() / totalCount.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
         // P0.32+P0.34: PullToRefreshBox — pull-to-refresh.
         // Вкладка 0 (Моя музыка): обновляет audio.get.
         // Вкладки 1-4 (Каталог): обновляет catalog.getSection.
@@ -416,6 +482,7 @@ fun Music2Screen(
                     onUploadClick = { filePicker.launch("audio/*") },
                     showControls = !isFriendMode,
                     headerTitle = if (isFriendMode) ownerName else null,
+                    totalCount = totalCount,
                 )
             } else {
                 Music2CatalogContent(
@@ -449,6 +516,7 @@ private fun Music2MyTracksContent(
     // P0.37: в режиме друга скрываем upload/volume controls.
     showControls: Boolean = true,
     headerTitle: String? = null,
+    totalCount: Int = 0,
 ) {
     if (loading && tracks.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
