@@ -17,6 +17,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -556,9 +560,9 @@ fun EditProfileScreen(onBack: () -> Unit) {
     val currentSaveError = saveError
 
     Scaffold(
-        // #DOUBLE-IME-FIX: убран .imePadding() — подъём на клавиатуру даёт внешний
-        // NavHost (SovaNavHost imePadding). Оставлен fillMaxSize.
-        modifier = Modifier.fillMaxSize(),
+        // P0.39-IME-UNIFY: windowInsetsPadding(ime.union(navbar)) — самоуправление.
+        // IME закрыт → padding = navbar. IME открыт → padding = ime (включает navbar).
+        modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         topBar = {
             TopAppBar(
                 title = { Text("Редактирование профиля") },

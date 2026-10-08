@@ -1555,7 +1555,10 @@ fun SovaNavHost(
             NavHost(
                 navController = nav,
                 startDestination = sanitizedInitialRoute,
-                modifier = Modifier.padding(padding).imePadding(),
+                // P0.39-IME-UNIFY: убран глобальный imePadding. Каждая панель ввода
+                // сама управляет подъёмом через windowInsetsPadding(ime.union(navbar)).
+                // Глобальный imePadding создавал двойной padding с локальным navbar.
+                modifier = Modifier.padding(padding),
                 // Fix #224: масштабируемые fade-переходы между экранами.
                 // animScale=0 → tweenScaled возвращает snap() → мгновенный переход.
                 // animScale=1 → нормальный fade 220ms (enter) / 180ms (exit).

@@ -4044,7 +4044,8 @@ fun ChatDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
@@ -4323,7 +4324,8 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp)),
+                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp))
+                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Fix #200: поле ввода расширено — убраны 3 отдельные
@@ -9358,7 +9360,8 @@ private fun VoiceRecordingToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel — иконка корзины/cancel как в VK (cancel_outline_24).
@@ -9442,7 +9445,8 @@ private fun VoiceReviewToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel (delete отложенный файл).
@@ -9918,7 +9922,8 @@ private fun EmojiStickerPanel(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(280.dp),
+            .height(280.dp)
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         tonalElevation = 3.dp,
     ) {
         Column {
@@ -10278,7 +10283,8 @@ private fun ChannelFooterBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -11819,7 +11825,8 @@ private fun ChannelSearchPanel(
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize(),
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                 ) {
                     // Заголовок панели: «Поиск по постам» + канал + «×»
                     // (снапшот 29-a: h3 «Поиск по постам», крестик «Закрыть»).

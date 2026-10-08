@@ -28,7 +28,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -1133,10 +1137,10 @@ fun NotificationsScreen(
     }
 
     Box(
-        // #DOUBLE-IME-FIX: убран .imePadding() — подъём на клавиатуру даёт внешний
-        // NavHost (SovaNavHost imePadding). Оставлен navigationBarsPadding для защиты
-        // от системной nav bar при скрытой клавиатуре.
-        modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+        // P0.39-IME-UNIFY: windowInsetsPadding(ime.union(navbar)) — самоуправление.
+        // IME закрыт → padding = navbar. IME открыт → padding = ime (включает navbar).
+        // Раньше .imePadding() давал двойной подъём с NavHost.imePadding (теперь убран).
+        modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
     ) {
         // SnackbarHost overlay (раньше был в Scaffold)
         SnackbarHost(

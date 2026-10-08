@@ -22,6 +22,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -3765,13 +3769,13 @@ private fun CommentsBottomSheet(
             }
 
             // Поле ввода нового комментария с вложениями
-            // #SHEET-IME-FIX: ModalBottomSheet не наследует внешний imePadding NavHost,
-            // поэтому добавлен .imePadding(), чтобы клавиатура не закрывала ввод.
+            // P0.39-IME-UNIFY: ModalBottomSheet не наследует внешние insets,
+            // поэтому windowInsetsPadding(ime.union(navbar)) — самоуправление.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .imePadding(),
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Кнопка вложения.

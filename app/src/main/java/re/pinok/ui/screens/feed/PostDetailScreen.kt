@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -1111,15 +1113,15 @@ fun PostDetailScreen(
                 )
             }
             // Поле ввода комментария.
-            // #DOUBLE-IME-FIX: убран .imePadding() — подъём на клавиатуру даёт внешний
-            // NavHost (SovaNavHost imePadding). Оставлен только navigationBars для защиты
-            // от навигационной полосы при скрытой клавиатуре (паттерн ChatDetailScreen).
+            // P0.39-IME-UNIFY: windowInsetsPadding(ime.union(navbar)) — самоуправление.
+            // IME закрыт → padding = navbar. IME открыт → padding = ime (включает navbar).
+            // Раньше .imePadding() давал двойной подъём с NavHost.imePadding (теперь убран).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .windowInsetsPadding(WindowInsets.navigationBars),
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Кнопка вложения.
