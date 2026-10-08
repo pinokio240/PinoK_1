@@ -1111,17 +1111,15 @@ fun PostDetailScreen(
                 )
             }
             // Поле ввода комментария.
-            // #COMMENT-IME-FIX: добавлены .windowInsetsPadding(navigationBars) + .imePadding()
-            // чтобы клавиатура не перекрывала поле ввода. Тот же паттерн что в
-            // ChatDetailScreen.kt:2499-2506. Без этого при enableEdgeToEdge()
-            // система не сдвигает контент вверх → клавиатура закрывает текстовое поле.
+            // #DOUBLE-IME-FIX: убран .imePadding() — подъём на клавиатуру даёт внешний
+            // NavHost (SovaNavHost imePadding). Оставлен только navigationBars для защиты
+            // от навигационной полосы при скрытой клавиатуре (паттерн ChatDetailScreen).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .imePadding(),
+                    .windowInsetsPadding(WindowInsets.navigationBars),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Кнопка вложения.

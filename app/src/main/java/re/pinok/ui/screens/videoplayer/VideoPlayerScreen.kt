@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -3727,10 +3728,13 @@ private fun VideoCommentsSheet(
                         .padding(horizontal = 24.dp, vertical = 14.dp),
                 )
             } else {
+                // #SHEET-IME-FIX: ModalBottomSheet не наследует внешний imePadding NavHost,
+                // поэтому добавлен .imePadding(), чтобы клавиатура не закрывала ввод.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .imePadding(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OutlinedTextField(

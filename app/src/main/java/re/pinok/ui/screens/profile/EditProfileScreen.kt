@@ -556,7 +556,9 @@ fun EditProfileScreen(onBack: () -> Unit) {
     val currentSaveError = saveError
 
     Scaffold(
-        modifier = Modifier.fillMaxSize().imePadding(),
+        // #DOUBLE-IME-FIX: убран .imePadding() — подъём на клавиатуру даёт внешний
+        // NavHost (SovaNavHost imePadding). Оставлен fillMaxSize.
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = { Text("Редактирование профиля") },

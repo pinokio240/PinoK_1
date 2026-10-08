@@ -1133,11 +1133,10 @@ fun NotificationsScreen(
     }
 
     Box(
-        // Fix #334: navigationBarsPadding + imePadding на outer Box — чтобы ВСЁ
-        // содержимое (список, snackbar, loading-skeleton, empty-state) было выше
-        // системной nav bar, а при открытии поиска — выше клавиатуры. Раньше footer
-        // «Загрузить ещё» уходил под nav bar (screenshot Screenshot_20260729_214310).
-        modifier = Modifier.fillMaxSize().navigationBarsPadding().imePadding(),
+        // #DOUBLE-IME-FIX: убран .imePadding() — подъём на клавиатуру даёт внешний
+        // NavHost (SovaNavHost imePadding). Оставлен navigationBarsPadding для защиты
+        // от системной nav bar при скрытой клавиатуре.
+        modifier = Modifier.fillMaxSize().navigationBarsPadding(),
     ) {
         // SnackbarHost overlay (раньше был в Scaffold)
         SnackbarHost(
