@@ -4044,7 +4044,6 @@ fun ChatDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .windowInsetsPadding(WindowInsets.navigationBars)
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -9359,8 +9358,7 @@ private fun VoiceRecordingToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.navigationBars),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel — иконка корзины/cancel как в VK (cancel_outline_24).
@@ -9444,8 +9442,7 @@ private fun VoiceReviewToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.navigationBars),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel (delete отложенный файл).
@@ -9921,8 +9918,7 @@ private fun EmojiStickerPanel(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(280.dp)
-            .windowInsetsPadding(WindowInsets.navigationBars),
+            .height(280.dp),
         tonalElevation = 3.dp,
     ) {
         Column {
@@ -10282,7 +10278,6 @@ private fun ChannelFooterBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -11824,8 +11819,7 @@ private fun ChannelSearchPanel(
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.navigationBars),
+                        .fillMaxSize(),
                 ) {
                     // Заголовок панели: «Поиск по постам» + канал + «×»
                     // (снапшот 29-a: h3 «Поиск по постам», крестик «Закрыть»).
