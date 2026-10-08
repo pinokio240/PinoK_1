@@ -171,45 +171,51 @@ fun Music2Screen(
     val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "friends")
 
     // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
-    // P0.38-PAGINATION-ALL: бесконечный скролл до РЕАЛЬНОГО конца списка.
-    // Пользователь с 5600 треков пролистает все (56 страниц по 100) — не упираясь
-    // в ложный обрыв. VK API максимум 100/запрос, поэтому PAGE_SIZE=100.
+    // P0.38-PAGINATION-V2: отталкиваемся от response.count (общее число треков
+    // которое VK возвращает). Не от размера страницы, а от ТОТАЛЬНОГО count.
+    // Для 5600 треков: count=5600 → грузим пока tracks.size < totalCount.
     var tracksEndReached by remember { mutableStateOf(false) }
-    // P0.38-FIX: отдельный флаг isLoadingMore — guard от параллельных пагинаций.
+    // P0.38-V2: ОБЩЕЕ количество треков пользователя (из response.count VK).
+    var totalCount by remember { mutableStateOf(0) }
     var isLoadingMore by remember { mutableStateOf(false) }
-    // P0.38-ALL: VK API максимум 100 за запрос.
     val pageSize = 100
     fun loadTracks(refresh: Boolean = false) {
-        if (isLoadingMore && !refresh) return  // защита от параллельных пагинаций.
+        if (isLoadingMore && !refresh) return
         if (refresh) {
             refreshing = true
-            tracksEndReached = false  // сбрасываем флаг конца при refresh
+            tracksEndReached = false
         } else {
             isLoadingMore = true
-            if (tracks.isEmpty()) loading = true  // первичная загрузка — показываем спиннер
+            if (tracks.isEmpty()) loading = true
         }
         scope.launch {
             errorText = null
             try {
-                val result = app.apiClient.audioGet(
+                // P0.38-V2: используем audioGetWithCount — возвращает Pair(totalCount, tracks).
+                val (vkTotal, result) = app.apiClient.audioGetWithCount(
                     count = pageSize,
                     offset = if (refresh) 0 else tracks.size,
                     ownerId = ownerId,
                 )
+                // P0.38-V2: сохраняем ОБЩЕЕ количество от VK (если валидно, > 0).
+                if (vkTotal > 0) totalCount = vkTotal
                 if (refresh) {
                     tracks = result
                 } else {
                     tracks = (tracks + result).distinctBy { "${it.ownerId}_${it.id}" }
                 }
-                // P0.38-ALL: конец списка = VK вернул МЕНЬШЕ чем pageSize.
-                // Если ровно pageSize — есть ещё треки, продолжаем подгрузку.
-                tracksEndReached = result.size < pageSize
-                AppLog.i("Music2", "loadTracks: +${result.size} (total ${tracks.size}, end=$tracksEndReached, refresh=$refresh)")
+                // P0.38-V2: конец списка = загружено ВСЕ что VK сказал (totalCount).
+                // Если totalCount известен — tracks.size >= totalCount.
+                // Если totalCount неизвестен (vkTotal<=0) — fallback на size < pageSize.
+                tracksEndReached = if (totalCount > 0) {
+                    tracks.size >= totalCount
+                } else {
+                    result.size < pageSize
+                }
+                AppLog.i("Music2", "loadTracks: +${result.size} (have ${tracks.size}/$totalCount, end=$tracksEndReached, refresh=$refresh)")
             } catch (e: Exception) {
                 AppLog.w("Music2", "loadTracks error: ${e.message}")
                 errorText = "Ошибка загрузки: ${e.message}"
-                // P0.38-ALL: при ошибке НЕ ставим tracksEndReached — пользователь
-                // сможет повторить скроллом. Сетевая ошибка ≠ конец списка.
             } finally {
                 loading = false
                 refreshing = false
@@ -358,7 +364,7 @@ fun Music2Screen(
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    text = "${tracks.size} треков",
+                    text = if (totalCount > 0) "$totalCount треков" else "${tracks.size} треков",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -468,7 +474,7 @@ private fun Music2MyTracksContent(
                             }
                         }
                     }
-                    Text("${tracks.size} треков", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (totalCount > 0) "$totalCount треков" else "${tracks.size} треков", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             // P0.35 #MUSIC2-VOLUME: volume slider. VK web: AudioPlayerBlock_VolumeSlider.
