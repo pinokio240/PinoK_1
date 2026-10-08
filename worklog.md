@@ -13347,3 +13347,20 @@ Stage Summary:
 - Файлов изменено: 1 (ChatDetailScreen.kt, 3 строки модификаторов).
 - Gradle не запускался (правило: сборку проверяет главный агент).
 - Правило #7 закрыто этой записью.
+---
+Task ID: IME-GAP-GLOBAL-FIX
+Task: Устранить «прямоугольник между клавиатурой и полем» в разных местах (двойной IME/нехватка IME).
+Work Log:
+- Диагноз (research): все экраны в едином NavHost с внешним imePadding() (SovaNavHost.kt:1554). Экраны, навешивающие свой дополнительный imePadding()/
+avigationBarsPadding().imePadding(), получают ДВОЙНОЙ подъём → зазор-прямоугольник между панелью и клавиатурой. В ModalBottomSheet внешний ime не доходит → поле закрывается клавиатурой.
+- Фикс (субагент, точечно):
+  - PostDetailScreen.kt ~1117: убран .imePadding() с Row ввода комментария (bottomBar), оставлен navigationBars.
+  - NotificationsScreen.kt ~1139: убран .imePadding() с корневого Box, оставлен navigationBarsPadding.
+  - EditProfileScreen.kt ~561: убран .imePadding() с корневого Scaffold.
+  - FeedScreen.kt ~3770: добавлен .imePadding() на поле ввода в ModalBottomSheet (комментарий).
+  - VideoPlayerScreen.kt ~3733: добавлен .imePadding() на поле ввода в VideoCommentsSheet.
+- Чат (ChatDetailScreen) проверен: все 7 панелей ввода — только navigationBars (без ime), чист. SovaNavHost не тронут (ядро).
+- NULL-чисто и баланс скобок соблюдены. Gradle :app:compileDebugKotlin — BUILD SUCCESSFUL.
+Stage Summary:
+- Файлы изменено: 5 (PostDetailScreen, NotificationsScreen, EditProfileScreen, FeedScreen, VideoPlayerScreen).
+- Требуется тест на устройстве: прямоугольник должен исчезнуть на всех 5 экранах.
