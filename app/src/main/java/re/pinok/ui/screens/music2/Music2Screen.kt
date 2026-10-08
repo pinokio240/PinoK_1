@@ -593,7 +593,8 @@ private fun Music2CatalogContent(
                             }
                         }
                     }
-                    // P0.37 #MUSIC2-FRIENDS: SLIDER — горизонтальная карусель друзей.
+                    // P0.38 #MUSIC2-FRIENDS: SLIDER → GRID (вертикальная сетка друзей).
+                    // VK web: data-testid="grid" --grid-columns=6. На мобиле 3 колонки.
                     re.pinok.data.model.CatalogViewType.SLIDER -> {
                         if (block.friends.isNotEmpty()) {
                             item(key = "hdr_$blockKey") {
@@ -773,51 +774,77 @@ private fun Music2PlaylistSliderRow(
     }
 }
 
-// P0.37 #MUSIC2-FRIENDS: горизонтальная карусель друзей (links slider).
+// P0.38 #MUSIC2-FRIENDS-GRID: вертикальная сетка друзей (как VK web grid).
+// VK web: data-testid="grid" --grid-columns=6, card 147px, avatar 135x135.
+// На мобиле 3 колонки, card ~108dp, avatar 108dp.
 @Composable
 private fun Music2FriendsSliderRow(
     friends: List<re.pinok.data.model.CatalogFriend>,
     onOpenFriend: (Long, String) -> Unit,
 ) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        items(friends, key = { it.id }) { friend ->
-            val friendOwnerId = friend.ownerId
-            Column(
-                modifier = Modifier
-                    .width(72.dp)
-                    .then(
-                        if (friendOwnerId != null)
-                            Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
-                        else Modifier
-                    ),
-                horizontalAlignment = Alignment.CenterHorizontally,
+    // P0.38: 3 колонки на мобиле. VK web 6 на десктопе, но экран уже.
+    val columns = 3
+    val rows = (friends.size + columns - 1) / columns
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        for (rowIndex in 0 until rows) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Аватар друга.
-                if (friend.avatarUrl != null) {
-                    AsyncImage(
-                        model = friend.avatarUrl,
-                        contentDescription = friend.name,
-                        modifier = Modifier.size(56.dp).clip(CircleShape),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.size(56.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(friend.name.take(1).uppercase(), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                for (colIndex in 0 until columns) {
+                    val idx = rowIndex * columns + colIndex
+                    if (idx < friends.size()) {
+                        val friend = friends[idx]
+                        Music2FriendCard(friend = friend, onOpenFriend = onOpenFriend)
+                    } else {
+                        // пустой placeholder чтобы выравнивание не съезжало.
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                // Имя друга.
-                Text(friend.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                // Количество треков.
-                Text(friend.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            }
+            if (rowIndex < rows - 1) Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+// P0.38: одна карточка друга (grid-item).
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.Music2FriendCard(
+    friend: re.pinok.data.model.CatalogFriend,
+    onOpenFriend: (Long, String) -> Unit,
+) {
+    val friendOwnerId = friend.ownerId
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .then(
+                if (friendOwnerId != null)
+                    Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
+                else Modifier
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Аватар 108dp (VK web 135px, на мобиле чуть меньше).
+        if (friend.avatarUrl != null) {
+            AsyncImage(
+                model = friend.avatarUrl,
+                contentDescription = friend.name,
+                modifier = Modifier.size(108.dp).clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier.size(108.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(friend.name.take(1).uppercase(), style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        Spacer(modifier = Modifier.height(6.dp))
+        // Имя друга.
+        Text(friend.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        // Количество треков.
+        Text(friend.subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
