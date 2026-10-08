@@ -13364,3 +13364,33 @@ avigationBarsPadding().imePadding(), получают ДВОЙНОЙ подъё�
 Stage Summary:
 - Файлы изменено: 5 (PostDetailScreen, NotificationsScreen, EditProfileScreen, FeedScreen, VideoPlayerScreen).
 - Требуется тест на устройстве: прямоугольник должен исчезнуть на всех 5 экранах.
+
+---
+Task ID: CHAT-IME-NAVBAR-DUP-FIX
+Task: Прямоугольник над клавиатурой в ЧАТЕ остался после глобального IME-фикса. Причина — дубль navbar (не ime): внутренний Scaffold чата contentWindowInsets=0 + ряд ввода с собственным navigationBarsPadding + внешний bottomBar-Column SovaNavHost=1420.
+Work Log:
+- Research: PostDetail работает на дефолтном contentWindowInsets внутреннего Scaffold (системы потребляет). ChatDetail имел contentWindowInsets=0 (P0.38-FIX) → отключена логика потребления, navbar дублируется (внешний Column SovaNavHost:1420 + ряд ввода chat:4327) → на Android 10 (navbar ~48dp не схлопывается) фоновая полоса = прямоугольник.
+- Фикс (субагент, Вариант A):
+  - ChatDetailScreen.kt:4561-4564 — удалён contentWindowInsets=WindowInsets(0,0,0,0) и P0.38-комментарий (вернуть дефолт как у поста).
+  - ChatDetailScreen.kt:4327 — убран второй .windowInsetsPadding(WindowInsets.navigationBars) у ряда ввода.
+- SovaNavHost не тронут (1554 imePadding остался единственным источником подъёма). Пост/фид/видео-sheets не тронуты.
+- NULL-чисто, баланс скобок ОК. Gradle :app:compileDebugKotlin — BUILD SUCCESSFUL.
+Stage Summary:
+- Файлы: ChatDetailScreen.kt (2 строки).
+- Требуется тест: прямоугольник в чате должен исчезнуть; проверить отсутствие регресса нижней полосы списка при дефолтных инсетах.
+
+---
+Task ID: IME-BOTTOMBAR-UNIFIED-FIX
+Task: Единый паттерн для «прямоугольника между клавиатурой и полем» в разных местах поиска (чаты, сообщества, музыка, каналы). Установлено: единственный имe-подъём — внешний NavHost.imePadding (SovaNavHost:1554); нижняя панель (SovaNavHost:1420) и диалог (ChatDetail:5427) вне зоны ime.
+Work Log:
+- Диагноз (research): поля поиска в верхней панели (MessagesScreen, GroupsScreen) и inline (MusicScreen) в NavHost — получают внешний ime, но нижняя панель SovaNavHost:1420 (только navigationBars) при открытии клавиатуры не поднимается → полоса фона. Диалог «Поиск по сообщениям» — отдельное окно, внешний ime не действует.
+- Единый паттерн (субагент+главный агент):
+  - Новый хелпер app/src/main/java/re/pinok/ui/theme/AppImePadding.kt (Modifier.appImePadding() = imePadding()).
+  - SovaNavHost.kt:1417-1420: нижней панели добавлен .imePadding() (к navigationBars) — чинит чаты/сообщества/музыку разом (полоса фона исчезает).
+  - ChatDetailScreen.kt:5427-5438: диалог «Поиск по сообщениям» — DialogProperties(decorFitsSystemWindows=false) + .appImePadding() на содержимое.
+  - Боковая панель «Поиск по постам» (ChatDetailScreen:11828) — appImePadding НЕ добавлен (она в NavHost, был бы двойной ime); оставлен navigationBars.
+  - MessagesScreen/GroupsScreen/MusicScreen — appImePadding НЕ добавлен (в NavHost, был бы двойной ime); только импорты-пустые строки убраны.
+- NULL-чисто, баланс скобок ОК. Gradle :app:compileDebugKotlin — BUILD SUCCESSFUL.
+Stage Summary:
+- Файлы: НОВЫЙ AppImePadding.kt; SovaNavHost.kt (нижняя панель ime); ChatDetailScreen.kt (диалог appImePadding+DialogProperties).
+- Требуется тест на устройстве: прямоугольник должен исчезнуть в чатах/сообществах/музыке/каналах; проверить, что нижняя панель не поднимается некорректно над клавиатурой на основных экранах.

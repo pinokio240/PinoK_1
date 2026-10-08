@@ -14634,3 +14634,39 @@ avigationBarsPadding.
 **Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL. Требуется тест на устройстве.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CHAT-IME-NAVBAR-DUP — 2026-10-08 — прямоугольник над клавиатурой в чате (дубль navbar)
+
+**Запрос:** прямоугольник над клавиатурой остался в чате (ввод сообщения) после глобального IME-фикса. Комментарий поста работает.
+
+**Диагноз (факт):** это дубль navbar, не ime. Внутренний Scaffold чата имел contentWindowInsets=WindowInsets(0,0,0,0) (P0.38-FIX) — отключена логика потребления системных инсетов (как у работающего поста). Результат: navbar дублируется (внешний bottomBar-Column SovaNavHost:1420 + ряд ввода ChatDetail:4327). На Android 10 (navbar ~48dp не схлопывается при клавиатуре) — фоновая полоса между панелью и клавиатурой = «прямоугольник».
+
+**Фикс (Вариант A, субагент):**
+- ChatDetailScreen.kt:4561–4564 — удалён contentWindowInsets=WindowInsets(0,0,0,0) и P0.38-комментарий (вернуть дефолт, как у поста).
+- ChatDetailScreen.kt:4327 — убран второй windowInsetsPadding(WindowInsets.navigationBars) у ряда ввода.
+
+**НЕ тронуто:** SovaNavHost (внешний NavHost.imePadding :1554 остался единственным источником подъёма), PostDetail, Feed/VideoPlayer sheets, windowSoftInputMode.
+
+**Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL. Требуется тест: прямоугольник в чате должен исчезнуть, без регресса нижней полосы списка.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## IME-BOTTOMBAR-UNIFIED-FIX — 2026-10-08 — единый паттерн для прямоугольника над клавиатурой в поиске
+
+**Запрос:** прямоугольник между клавиатурой и полем в разных местах поиска — чаты, сообщества, музыка, каналы.
+
+**Диагноз (факт):** единственный имe-подъём — внешний NavHost.imePadding() (SovaNavHost:1554). Нижняя панель (SovaNavHost:1420, только navigationBars) при открытии клавиатуры не поднимается → полоса фона у верхних/inline полей. Диалог «Поиск по сообщениям» (ChatDetailScreen:5427) — отдельное окно, внешний ime не действует.
+
+**Единый паттерн:**
+- Хелпер pp/src/main/java/re/pinok/ui/theme/AppImePadding.kt (Modifier.appImePadding()).
+- SovaNavHost.kt: нижней панели добавлен .imePadding() (к navigationBars) — чинит чаты/сообщества/музыку.
+- ChatDetailScreen.kt диалог: DialogProperties(decorFitsSystemWindows=false) + .appImePadding().
+- Везде, где был бы двойной ime (боkовая панель, Messages/Groups/Music) — хелпер НЕ добавлен.
+
+**Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL. Требуется тест на устройстве: исчезновение прямоугольника; нижняя панель не должна некорректно подниматься над клавиатурой.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
