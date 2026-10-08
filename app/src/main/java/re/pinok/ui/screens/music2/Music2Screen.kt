@@ -943,6 +943,7 @@ private fun Music2RadioStationRow(station: re.pinok.data.model.CatalogRadioStati
 }
 
 // P0.38: парсит HEX цвет (#D6424D) в Compose Color.
+// НЕ @Composable — fallback на Color.Gray (не MaterialTheme, т.к. функция чистая).
 private fun parseHexColor(hex: String): Color {
     return try {
         val clean = hex.removePrefix("#")
@@ -951,6 +952,6 @@ private fun parseHexColor(hex: String): Color {
         val b = clean.substring(4, 6).toInt(16)
         Color(r, g, b)
     } catch (e: Exception) {
-        MaterialTheme.colorScheme.primary
+        Color.Gray
     }
 }
