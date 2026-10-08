@@ -1417,7 +1417,11 @@ fun SovaNavHost(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.navigationBars),
+                        // #IME-BOTTOMBAR-FIX: imePadding добавлен, чтобы при открытии клавиатуры
+                        // нижняя панель поднималась вместе с контентом, а не оставляла полосу
+                        // фона между поднятым контентом и клавиатурой (прямоугольник в поиске).
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .imePadding(),
                 ) {
                     if (showMiniPlayer) {
                         GlobalMiniPlayer(

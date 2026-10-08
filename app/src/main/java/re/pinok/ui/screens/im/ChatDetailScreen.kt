@@ -246,6 +246,7 @@ import re.pinok.ui.anim.LocalStickerPhotoScale
 import re.pinok.ui.anim.springScaled
 import re.pinok.ui.anim.tweenScaled
 import re.pinok.ui.theme.UiScale
+import re.pinok.ui.theme.appImePadding
 import re.pinok.media.VoiceRecorder
 import java.text.DecimalFormat
 import re.pinok.realtime.LongPollEvent
@@ -4323,8 +4324,7 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp))
-                            .windowInsetsPadding(WindowInsets.navigationBars),
+                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Fix #200: поле ввода расширено — убраны 3 отдельные
@@ -4558,11 +4558,7 @@ fun ChatDetailScreen(
             }
             }  // P2.5: closes else (not selection mode)
         },
-        // P0.38-FIX: отключаем авто-apply navigationBars padding к bottomBar.
-        // Иначе двойной padding: Scaffold добавляет navbar + Row добавывает ime.union(navbar).
-        // Это создавало чёрный прямоугольник ~50dp над клавиатурой.
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-    ) { padding ->
+        ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -5431,9 +5427,15 @@ fun ChatDetailScreen(
         }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showSearch = false },
+            // #IME-UNIFY: отдельное окно диалога вне внешнего NavHost.imePadding —
+            // decorFitsSystemWindows=false + appImePadding() на содержимом поднимают
+            // поле над клавиатурой и убирают «полосу» фона между ними.
+            properties = androidx.compose.ui.window.DialogProperties(
+                decorFitsSystemWindows = false,
+            ),
             title = { Text("Поиск по сообщениям") },
             text = {
-                Column {
+                Column(modifier = Modifier.appImePadding()) {
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
