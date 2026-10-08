@@ -811,7 +811,7 @@ private fun Music2FriendsSliderRow(
             ) {
                 for (colIndex in 0 until columns) {
                     val idx = rowIndex * columns + colIndex
-                    if (idx < friends.size()) {
+                    if (idx < friends.size) {
                         val friend = friends[idx]
                         Music2FriendCard(friend = friend, onOpenFriend = onOpenFriend)
                     } else {
