@@ -36,10 +36,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
@@ -608,14 +610,30 @@ private fun Music2CatalogContent(
                             }
                         }
                     }
-                    // P0.38 #MUSIC2-RADIO: RADIO_LIST — вертикальная сетка радиостанций.
+                    // P0.38 #MUSIC2-RADIO: RADIO_LIST — grid 2 колонки (VK web flex-wrap).
                     re.pinok.data.model.CatalogViewType.RADIO_LIST -> {
                         if (block.radioStations.isNotEmpty()) {
                             item(key = "hdr_$blockKey") {
                                 Music2SectionHeader(block.title)
                             }
-                            items(block.radioStations, key = { "rs_${blockIndex}_${it.id}" }) { station ->
-                                Music2RadioStationRow(station = station)
+                            // P0.38: рендерим парами (по 2 станции в ряд).
+                            val stations = block.radioStations
+                            val pairs = stations.chunked(2)
+                            itemsIndexed(pairs, key = { i, _ -> "rsp_${blockIndex}_$i" }) { _, pair ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    pair.forEach { station ->
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            Music2RadioStationRow(station = station)
+                                        }
+                                    }
+                                    // если нечётное количество — добиваем пустым spacer.
+                                    if (pair.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
                             }
                         }
                     }
@@ -848,55 +866,91 @@ private fun androidx.compose.foundation.layout.RowScope.Music2FriendCard(
     }
 }
 
-// P0.38 #MUSIC2-RADIO: строка радиостанции (лого + название + кнопка play).
+// P0.38 #MUSIC2-RADIO: карточка радиостанции (grid-item как VK web).
+// VK web: AudioCatalog_BlockRadioStationCell, flex-basis=166px,
+// logo 72x72, --radio_cell_gradient_color (#D6424D), 2 кнопки: ToggleFollowing + TogglePlaying.
+// На мобиле 2 колонки (VK web flex-wrap на десктопе ~6 колонок).
 @Composable
 private fun Music2RadioStationRow(station: re.pinok.data.model.CatalogRadioStation) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
                 // TODO: запуск стрима через PlayerConnection (stream_url HLS).
                 AppLog.i("Music2", "radio click: ${station.name} stream=${station.streamUrl != null}")
             }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        // Лого радиостанции.
-        if (station.logoUrl != null) {
-            AsyncImage(
-                model = station.logoUrl,
-                contentDescription = station.name,
-                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.MusicNote, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        // Название радиостанции.
-        Column(modifier = Modifier.weight(1f)) {
-            Text(station.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (station.isFollowed) {
-                Text("Вы подписаны", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-            }
-        }
-        // Кнопка play.
+        // Лого с gradient-фоном (VK web: --radio_cell_gradient_color).
         Box(
             modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
+                .fillMaxWidth()
+                .height(120.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    station.backgroundColor?.let { parseHexColor(it) }
+                        ?: MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.PlayArrow, "Слушать", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
+            if (station.logoUrl != null) {
+                AsyncImage(
+                    model = station.logoUrl,
+                    contentDescription = station.name,
+                    modifier = Modifier.size(72.dp).clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(40.dp))
+            }
+            // Кнопка play (TogglePlaying) — справа внизу.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.PlayArrow, "Слушать", tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+            // Индикатор подписки (ToggleFollowing) — слева сверху.
+            if (station.isFollowed) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Check, "В моей музыке", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
+                }
+            }
         }
+        Spacer(modifier = Modifier.height(6.dp))
+        // Название станции (2 строки max — VK web: --textclamp-lines=2).
+        Text(
+            station.name,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+// P0.38: парсит HEX цвет (#D6424D) в Compose Color.
+private fun parseHexColor(hex: String): Color {
+    return try {
+        val clean = hex.removePrefix("#")
+        val r = clean.substring(0, 2).toInt(16)
+        val g = clean.substring(2, 4).toInt(16)
+        val b = clean.substring(4, 6).toInt(16)
+        Color(r, g, b)
+    } catch (e: Exception) {
+        MaterialTheme.colorScheme.primary
     }
 }
