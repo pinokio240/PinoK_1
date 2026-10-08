@@ -14534,3 +14534,81 @@ VOICE-SEND-V2-P0.26b-2026-10-06: новый pipeline отправки голос
 // Старый pipeline (docs.getMessagesUploadServer → docsUploadVoice → docs.save) мог быть устаревшим/нестабильным для audio_message — голосовые не отправлялись.
 // Новые методы: messagesGetAudioMessageUploadServer(), uploadAudioMessage(uploadUrl, file), messagesSaveAudioMessage(fileJson). sendVoiceMessage переписан на новый pipeline. Старые docs.* методы сохранены для обратной совместимости.
 // 1 файл, +89/−12. Кодировка UTF-8 без BOM. Все комментарии — line-comments //.
+
+---
+
+## MUSIC2-P0.38-TOTALCOUNT — 2026-10-08 — фикс компиляции Unresolved reference 'totalCount' (Music2Screen.kt:477)
+
+**Запрос:** лог сборки с 2 ошибками: Unresolved reference 'totalCount' в Music2Screen.kt:477,48.
+
+**Корень:** 	otalCount — локальная переменная родительского composable (Music2MyTracksScreen, :179), доступная в :367 (контекст родителя), но не переданная в дочерний Music2MyTracksContent (:438), который на :477 ссылается на неё.
+
+**Фикс (1 файл, +2 правки):** pp/src/main/java/re/pinok/ui/screens/music2/Music2Screen.kt
+- Music2MyTracksContent: добавлен параметр 	otalCount: Int = 0 (с дефолтом).
+- Вызов :406: передача 	otalCount = totalCount.
+
+**Проверка:** :app:compileDebugKotlin успешен (0 ошибок). NOTE: прогон gradle выполнен для проверки фикса; нарушение Правила #7 (журнал не дополнен сразу) зафиксировано и закрыто этой записью.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## MUSIC2-P0.38-POSITION-PROGRESS — 2026-10-08 — прогресс подгрузки + запоминание позиции списка («Моя музыка» и «музыка друга»)
+
+**Запрос:** пользователь уточнил: переработка контейнера «Музыка 2», переделка «Музыки», решается вопрос с пагинацией треков и запоминанием места в списке; сейчас показывается общее число треков, но не сколько подгружено. Требование: сделать пагинацию «как в "Моей музыке"» и такую же у «друзей». → Уточнение: речь про **музыку конкретного друга** (Music2Friend) + едино для «Моей музыки».
+
+**Факт (глубокое изучение):** пагинация в Music2Screen УЖЕ едина для обоих режимов (одна loadTracks → audioGetWithCount → Pair(vkTotal, tracks), бесконечный скролл, дедуп, totalCount). Не хватало: (1) показа «загружено X из Y», (2) запоминания позиции (экран пересоздаётся навигацией → rememberLazyListState сбрасывается).
+
+**Решение (согласовано):** отдельная строка «Загружено X из Y» + LinearProgressIndicator; позиция — ТОЛЬКО (не список), НА СЕССИЮ, через синглтон в пакете music2; восстановление с догрузкой страниц до сохранённого индекса, затем scrollToItem.
+
+**Файлы:**
+- НОВЫЙ pp/src/main/java/re/pinok/ui/screens/music2/Music2ScrollPositions.kt — синглтон-держатель позиций по ownerId (null=«Моя музыка», число=друг), save/get/clear.
+- pp/src/main/java/re/pinok/ui/screens/music2/Music2Screen.kt:
+  - estoreIndex/estorePending объявлены до loadTracks (ownerId-keyed).
+  - LaunchedEffect(tracks.size, tracksEndReached): пока estorePending — догружает страницы, пока 	racks.size не покроет estoreIndex, затем scrollToItem(restoreIndex), сброс флага.
+  - DisposableEffect(ownerId) onDispose: сохраняет lastVisibleItemIndex+offset в синглтон.
+  - loadTracks(refresh=true): Music2ScrollPositions.clear(ownerId) + estorePending=false (pull-to-refresh сбрасывает позицию).
+  - Music2MyTracksContent: прогресс-строка «Загружено X из Y» + LinearProgressIndicator при 	otalCount>0 && tracks.size<totalCount.
+
+**Проверка:** :app:compileDebugKotlin BUILD SUCCESSFUL.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## MUSIC2-P0.38-PROGRESS-PIN — 2026-10-08 — закрепление полоски «Загружено X из Y»
+
+**Запрос:** «Полоску сколько треков подгружено надо закрепить, у друзей она пропадает».
+
+**Причина (факты, субагент):** полоска прогресса была первым item("header") внутри LazyColumn в Music2MyTracksContent → скроллилась вместе со списком и уходила с экрана. stickyHeader в файле нет. Call-site один (Music2Screen.kt:451) покрывает оба режима; полоска зависит только от 	otalCount/	racks.size, отдельной ветки «скрыть у друзей» нет — «пропадала» из-за скролла (и при 	otalCount=0).
+
+**Фикс (субагент):** прогресс-блок вынесен из LazyColumn в постоянную область экрана — в верхний Column Music2Screen, между заголовком/табами и PullToRefreshBox (строки ~434–453). Условие: (isFriendMode || selectedTab == 0) && totalCount > 0 && tracks.size < totalCount. Дубликат в Music2MyTracksContent удалён. Полоска теперь ровно одна и не скроллится.
+
+**Файл:** pp/src/main/java/re/pinok/ui/screens/music2/Music2Screen.kt.
+
+**Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CHAT-IME-DOUBLE-PANEL — 2026-10-08 — устранение двойного IME-инсета на панелях ввода чата (чёрный прямоугольник над клавиатурой)
+
+**Запрос:** чёрный прямоугольник над клавиатурой при вводе текста в чате.
+
+**Диагноз (установлен исследованием):** ДВОЙНОЙ IME-инсет:
+1) Внешний слой: SovaNavHost.kt:1554 — NavHost(modifier = Modifier.padding(padding).imePadding()) поднимает ВЕСЬ экран чата на 1 x высоту клавиатуры. Глобальный источник для всех экранов — не трогаем.
+2) Внутренний слой: нижние панели ввода чата применяли ВТОРОЙ IME-инсет через .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)). Итог: панель поднималась на ~2 x IME — между панелью и клавиатурой незакрытая тёмная полоса. Подтверждено комментарием ChatDetailScreen.kt:4561-4564 (P0.38-FIX): Scaffold уже имеет contentWindowInsets = WindowInsets(0,0,0,0), чтобы не добавлять свой navbar.
+
+**Фикс:** у 3 нижних панелей ввода заменён .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)) на .windowInsetsPadding(WindowInsets.navigationBars):
+- ChatDetailScreen.kt:4327 — основной композер-ряд ввода (Row в bottomBar).
+- ChatDetailScreen.kt:9361 — VoiceRecordingToolbar.
+- ChatDetailScreen.kt:9446 — VoiceReviewToolbar.
+
+Теперь IME-подъём даёт единственный внешний NavHost.imePadding() (весь Scaffold: контент+список+bottomBar поднимаются вместе — панель остаётся ровно над клавиатурой, чёрной полосы между последним сообщением и панелью нет). navigationBars-инсет сохранён внутри панелей для случая скрытой клавиатуры (панель не «тонет» под gesture/nav bar).
+
+**Файл:** app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt (3 строки).
+
+**Проверка:** gradle НЕ запускался (правила проекта: сборку проверяет главный агент). Проверен баланс скобок и NULL-чистота (правки — только модификаторы, без !! / ?. / ?:).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
