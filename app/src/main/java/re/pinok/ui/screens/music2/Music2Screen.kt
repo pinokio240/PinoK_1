@@ -171,17 +171,19 @@ fun Music2Screen(
     val CATALOG_SECTIONS = listOf("my", "general", "explore", "radio", "friends")
 
     // P0.32: загрузка треков (audio.get — для «Моя музыка» или музыки друга).
-    // P0.38-PAGINATION: добавлен tracksEndReached — флаг что больше нет треков.
+    // P0.38-PAGINATION-ALL: бесконечный скролл до РЕАЛЬНОГО конца списка.
+    // Пользователь с 5600 треков пролистает все (56 страниц по 100) — не упираясь
+    // в ложный обрыв. VK API максимум 100/запрос, поэтому PAGE_SIZE=100.
     var tracksEndReached by remember { mutableStateOf(false) }
     // P0.38-FIX: отдельный флаг isLoadingMore — guard от параллельных пагинаций.
-    // НЕ используем `loading` для guard — оно true изначально (для спиннера первичной
-    // загрузки), что блокировало бы первый loadTracks(). Теперь guard только для
-    // подгрузки следующих страниц, не для первичной.
     var isLoadingMore by remember { mutableStateOf(false) }
+    // P0.38-ALL: VK API максимум 100 за запрос.
+    val pageSize = 100
     fun loadTracks(refresh: Boolean = false) {
-        if (isLoadingMore && !refresh) return  // P0.38: защита от параллельных пагинаций.
+        if (isLoadingMore && !refresh) return  // защита от параллельных пагинаций.
         if (refresh) {
             refreshing = true
+            tracksEndReached = false  // сбрасываем флаг конца при refresh
         } else {
             isLoadingMore = true
             if (tracks.isEmpty()) loading = true  // первичная загрузка — показываем спиннер
@@ -189,18 +191,25 @@ fun Music2Screen(
         scope.launch {
             errorText = null
             try {
-                val result = app.apiClient.audioGet(count = 50, offset = if (refresh) 0 else tracks.size, ownerId = ownerId)
+                val result = app.apiClient.audioGet(
+                    count = pageSize,
+                    offset = if (refresh) 0 else tracks.size,
+                    ownerId = ownerId,
+                )
                 if (refresh) {
                     tracks = result
-                    tracksEndReached = result.size < 50
                 } else {
                     tracks = (tracks + result).distinctBy { "${it.ownerId}_${it.id}" }
-                    // P0.38: если вернулось меньше запрошенного — больше треков нет.
-                    if (result.size < 50) tracksEndReached = true
                 }
+                // P0.38-ALL: конец списка = VK вернул МЕНЬШЕ чем pageSize.
+                // Если ровно pageSize — есть ещё треки, продолжаем подгрузку.
+                tracksEndReached = result.size < pageSize
+                AppLog.i("Music2", "loadTracks: +${result.size} (total ${tracks.size}, end=$tracksEndReached, refresh=$refresh)")
             } catch (e: Exception) {
                 AppLog.w("Music2", "loadTracks error: ${e.message}")
                 errorText = "Ошибка загрузки: ${e.message}"
+                // P0.38-ALL: при ошибке НЕ ставим tracksEndReached — пользователь
+                // сможет повторить скроллом. Сетевая ошибка ≠ конец списка.
             } finally {
                 loading = false
                 refreshing = false
@@ -308,16 +317,17 @@ fun Music2Screen(
     // P0.38 #MUSIC2-PAGINATION: бесконечный скролл — подгрузка следующих треков
     // когда пользователь прокручивает к концу списка. Работает для «Моя музыка»
     // и для музыки друга (audio.get с offset).
+    // P0.38-ALL: триггер за 10 элементов до конца — подгрузка начинается заранее,
+    // чтобы к моменту когда пользователь доскроллит — следующая страница уже готова.
     val endReached by remember {
         derivedStateOf {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             val total = listState.layoutInfo.totalItemsCount
-            // Триггерим когда виден предпоследний элемент (с учётом header+footer).
-            total > 0 && lastVisible >= total - 3 && !loading && tracks.isNotEmpty()
+            total > 0 && lastVisible >= total - 10 && !isLoadingMore && tracks.isNotEmpty()
         }
     }
     LaunchedEffect(endReached) {
-        if (endReached && !loading && tracks.isNotEmpty() && !tracksEndReached) {
+        if (endReached && !isLoadingMore && tracks.isNotEmpty() && !tracksEndReached) {
             loadTracks(refresh = false)
         }
     }
