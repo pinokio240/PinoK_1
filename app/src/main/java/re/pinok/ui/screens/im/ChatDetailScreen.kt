@@ -51,7 +51,6 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -4044,8 +4043,7 @@ fun ChatDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
@@ -4324,8 +4322,7 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp))
-                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Fix #200: поле ввода расширено — убраны 3 отдельные
@@ -4640,7 +4637,7 @@ fun ChatDetailScreen(
                                                     .weight(1f)
                                                     .clickable { scrollChannelToPost(pinnedPost) },
                                                 colors = CardDefaults.cardColors(
-                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                    containerColor = MaterialTheme.colorScheme.surface,
                                                 ),
                                             ) {
                                                 Row(
@@ -9360,8 +9357,7 @@ private fun VoiceRecordingToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel — иконка корзины/cancel как в VK (cancel_outline_24).
@@ -9445,8 +9441,7 @@ private fun VoiceReviewToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Cancel (delete отложенный файл).
@@ -9922,8 +9917,7 @@ private fun EmojiStickerPanel(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(280.dp)
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+            .height(280.dp),
         tonalElevation = 3.dp,
     ) {
         Column {
@@ -10283,8 +10277,7 @@ private fun ChannelFooterBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -11825,8 +11818,7 @@ private fun ChannelSearchPanel(
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                        .fillMaxSize(),
                 ) {
                     // Заголовок панели: «Поиск по постам» + канал + «×»
                     // (снапшот 29-a: h3 «Поиск по постам», крестик «Закрыть»).

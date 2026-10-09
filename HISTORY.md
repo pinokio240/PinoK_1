@@ -14670,3 +14670,43 @@ avigationBarsPadding.
 **Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL. Требуется тест на устройстве: исчезновение прямоугольника; нижняя панель не должна некорректно подниматься над клавиатурой.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## WINDOWINSETS-IMPORT-FIX — 2026-10-09 — Unresolved reference 'windowInsetsPadding' (4 файла)
+
+**Запрос:** ошибки компиляции :app:compileDebugKotlin — Unresolved reference 'windowInsetsPadding' в FeedScreen.kt:3778, NotificationsScreen.kt:1143, EditProfileScreen.kt:565, VideoPlayerScreen.kt:3741.
+
+**Причина:** другой пользователь коммитом 865c5d7 удалил глобальный NavHost.imePadding и добавил windowInsetsPadding(ime.union(navbar)) в 4 файла как замену, но пропустил импорт ndroidx.compose.foundation.layout.windowInsetsPadding.
+
+**Фикс:** добавлен недостающий импорт windowInsetsPadding в каждый из 4 файлов.
+
+**Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CHAT-BOTTOM-UNIFY-CLEAR — 2026-10-09 — убрать всё снизу в диалоге (прямоугольник над клавиатурой)
+
+**Запрос:** «убери всё что внизу в диалоге» — прямоугольник/полоса между панелью ввода и клавиатурой.
+
+**Причина:** субагент (865c5d7) перенёс управление insets на панель ввода ime.union(navbar) — для панели внизу окна это даёт лишний ime-подъём → полоса под панелью.
+
+**Фикс (субагент):** в ChatDetailScreen все нижние панели переведены с WindowInsets.ime.union(navigationBars) на WindowInsets.navigationBars (7 панелей: selection-mode 4048, поле ввода 4328, диктофон 9364/9449, стикеры 9923, канал 10284, поиск по постам 11826). Плюс фон закреплённого (4640) surfaceVariant(0.5) → surface.
+
+**Проверка:** :app:compileDebugKotlin — BUILD SUCCESSFUL. Требуется тест на устройстве.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CHAT-BOTTOM-NAVBAR-REMOVE — 2026-10-09 — расширение панели ввода до низа (убрать navigationBarsPadding)
+
+**Запрос:** «расширь вниз, изначальный размер ввода почти до самого низа» — панель ввода должна прижаться к низу экрана.
+
+**Фикс (субагент):** в ChatDetailScreen удалён .windowInsetsPadding(WindowInsets.navigationBars) со всех 7 нижних панелей (selection-mode, поле ввода, диктофон recording/review, стикеры, канал footer, поиск по постам). Панель ввода теперь у самого низа. Удалён неиспользуемый импорт windowInsetsPadding. Диалог «Поиск по сообщениям» (5439 appImePadding) не тронут.
+
+**Проверка:** сборка на пользователе (правило проекта: gradle запускает пользователь). Требуется сборка/тест на устройстве.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

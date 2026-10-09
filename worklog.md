@@ -13394,3 +13394,38 @@ Work Log:
 Stage Summary:
 - Файлы: НОВЫЙ AppImePadding.kt; SovaNavHost.kt (нижняя панель ime); ChatDetailScreen.kt (диалог appImePadding+DialogProperties).
 - Требуется тест на устройстве: прямоугольник должен исчезнуть в чатах/сообществах/музыке/каналах; проверить, что нижняя панель не поднимается некорректно над клавиатурой на основных экранах.
+
+---
+Task ID: WINDOWINSETS-IMPORT-FIX
+Task: Исправить ошибки компиляции Unresolved reference 'windowInsetsPadding' в 4 файлах (FeedScreen, NotificationsScreen, EditProfileScreen, VideoPlayerScreen). Причина: другой пользователь удалил глобальный NavHost.imePadding (коммит 865c5d7) и добавил windowInsetsPadding(ime.union(navbar)) в эти файлы как замену, но НЕ добавил импорт androidx.compose.foundation.layout.windowInsetsPadding.
+Work Log:
+- Диагноз: в 4 файлах используется windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)) — 1 место в каждом, но нет import androidx.compose.foundation.layout.windowInsetsPadding.
+- Фикс: добавлен недостающий импорт windowInsetsPadding в каждый файл (рядом с imePadding).
+- Бэкап перед правкой: патч пуст (дерево было чистое), HEAD сохранён в git.
+- Gradle :app:compileDebugKotlin — BUILD SUCCESSFUL.
+Stage Summary:
+- Файлы: 4 (FeedScreen, NotificationsScreen, EditProfileScreen, VideoPlayerScreen) — по +1 импорту.
+
+---
+Task ID: CHAT-BOTTOM-UNIFY-CLEAR
+Task: Пользователь: «убери всё что внизу в диалоге». Прямоугольник/полоса между панелью ввода и клавиатурой. Субагент перенёс ime на панели (865c5d7), но это дало лишний ime-подъём на панели внизу → полоса.
+Work Log:
+- Фикс: заменил ВО ВСЕХ нижних панелях чата .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)) → .windowInsetsPadding(WindowInsets.navigationBars). Строки: 4048 (selection-mode), 4328 (поле ввода), 9364/9449 (диктофон), 9923 (стикеры), 10284 (канал), 11826 (поиск по постам). ime.union больше нет в файле.
+- Доп. правка: containerColor карточки закреплённого сообщения (4640) surfaceVariant(0.5) → surface (по ТЗ «убрать всё»).
+- Бэкап перед правкой: backup-chat-bottom-clear-2026-10-09.patch.
+- NULL-чисто, баланс скобок ОК. Gradle :app:compileDebugKotlin — BUILD SUCCESSFUL.
+Stage Summary:
+- Файлы: ChatDetailScreen.kt (8 строк).
+- Требуется тест: прямоугольник над клавиатурой в диалоге должен исчезнуть.
+
+---
+Task ID: CHAT-BOTTOM-NAVBAR-REMOVE
+Task: Пользователь: «расширь вниз, изначальный размер ввода почти до самого низа». Убрать .windowInsetsPadding(WindowInsets.navigationBars) со всех нижних панелей чата, чтобы панель ввода прижалась к низу экрана.
+Work Log:
+- Правка (субагент): удалён windowInsetsPadding(WindowInsets.navigationBars) со всех 7 нижних панелей ChatDetailScreen (selection-mode, поле ввода, диктофон recording/review, стикеры, канал footer, поиск по постам). Панель ввода теперь прижата к самому низу (без отступа под системный nav-бар).
+- Удалён неиспользуемый импорт windowInsetsPadding.
+- Диалог «Поиск по сообщениям» (5439 appImePadding) НЕ тронут.
+- Бэкап перед правкой создан субагентом (backup-chat-navigationbar-removal-2026-10-09.kt).
+Stage Summary:
+- Файлы: ChatDetailScreen.kt (7 панелей, -16 строк).
+- Сборка НА ПОЛЬЗОВАТЕЛЕ (правило: я gradle не запускаю).
