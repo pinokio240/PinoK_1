@@ -871,13 +871,17 @@ fun SovaNavHost(
         parseRoutesJson(prefsSnap?.bottomBarItemsHidden).toSet()
     }
     // Нормализованные списки PanelItem для рендера: порядок из prefs, скрытые убраны.
-    val visibleSidebarItems: List<PanelItem> = remember(sidebarOrderKeys, sidebarHiddenKeys) {
+    // #MUSIC2-TOGGLE: если тумблер музыки 2 выключен — убираем пункт «music2» из меню.
+    val music2Visible = prefsSnap?.music2Enabled == true
+    val visibleSidebarItems: List<PanelItem> = remember(sidebarOrderKeys, sidebarHiddenKeys, music2Visible) {
         normalizePanelKeys(sidebarOrderKeys, PanelItems.all)
             .filter { it.key !in sidebarHiddenKeys }
+            .filter { music2Visible || it.key != "music2" }
     }
-    val visibleBottomItems: List<PanelItem> = remember(bottomOrderKeys, bottomHiddenKeys) {
+    val visibleBottomItems: List<PanelItem> = remember(bottomOrderKeys, bottomHiddenKeys, music2Visible) {
         normalizePanelKeys(bottomOrderKeys, PanelItems.all)
             .filter { it.key !in bottomHiddenKeys }
+            .filter { music2Visible || it.key != "music2" }
     }
     var showLogoutDialog by remember { mutableStateOf(false) }
     // Fix #370 #LOGOUT-HOLDER-CLEAR: обёртка над onLogout — ПЕРЕД сменой аккаунта

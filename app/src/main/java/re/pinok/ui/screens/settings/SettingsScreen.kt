@@ -249,6 +249,16 @@ private fun AuthorTab(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item { SectionHeader("Модули") }
+        item {
+            // #MUSIC2-TOGGLE: вкл/выкл контейнера «Музыка 2». По умолчанию ВЫКЛЮЧЕН.
+            // Выключает пункт «Музыка 2» в меню/панели навигации (см. SovaNavHost).
+            ToggleRow(
+                title = "Музыка 2",
+                subtitle = "Новый контейнер музыки (обособленный от старого). Вкл — по умолчанию выключен.",
+                checked = s.music2Enabled,
+            ) { v -> scope.launch { app.prefs.setMusic2Enabled(v) } }
+        }
         item { SectionHeader("Ссылки") }
         item {
             Card(

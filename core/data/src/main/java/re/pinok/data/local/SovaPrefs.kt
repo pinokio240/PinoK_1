@@ -566,6 +566,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             callsSessionUid = p[Keys.CALLS_SESSION_UID] ?: 0L,
             callsCallToken = p[Keys.CALLS_CALL_TOKEN] ?: "",
             callsVideoRx = p[Keys.CALLS_VIDEO_RX] ?: true,
+            music2Enabled = p[Keys.MUSIC2_ENABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
             callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: true,
@@ -1256,6 +1257,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsCallToken(v: String)           = put(Keys.CALLS_CALL_TOKEN, v)
     /** #CALLS-VIDEO-RX (Этап 1): kill-switch приёма видео собеседника (default true). */
     suspend fun setCallsVideoRx(v: Boolean)            = put(Keys.CALLS_VIDEO_RX, v)
+    suspend fun setMusic2Enabled(v: Boolean)           = put(Keys.MUSIC2_ENABLED, v)
     // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv без камеры).
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
     // #CALLS-SWDECODE: принудительный программный декодер видео.
@@ -1786,6 +1788,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          *  декодера на конкретном устройстве выключается в Настройки → Звонки
          *  БЕЗ пересборки (fallback — прежнее поведение a=inactive). Default true. */
         val callsVideoRx: Boolean,
+        val music2Enabled: Boolean,
         /** #CALLS-SYMMETRIC (01.09, Этап 2-заготовка): отправлять чёрную видеозаглушку
          *  (320×180@10fps, БЕЗ камеры и разрешения CAMERA) — answer m=video становится
          *  sendrecv, звонок симметричен как у офиц. клиента. Гипотеза: официальный
@@ -2127,6 +2130,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CALLS_CALL_TOKEN        = stringPreferencesKey("calls_call_token")
         /** #CALLS-VIDEO-RX (Этап 1): приём видео собеседника (kill-switch краша декодера). */
         val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
+        val MUSIC2_ENABLED          = booleanPreferencesKey("music2_enabled")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
         val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
         /** #CALLS-AEC-TOGGLE: hardware AEC/NS аудиодвижка звонков. */
