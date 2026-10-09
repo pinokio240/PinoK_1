@@ -14774,3 +14774,212 @@ avigationBarsPadding.
 **Проверка:** сборка на пользователе (правило). Требуется тест: раздел открывается быстрее.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## IM-LOAD-SPEED-PAGESIZE10 — 2026-10-09 — pageSize=10 (как VK web)
+
+**Доводка:** после pageSize=50 снижено до 10 — как грузит VK web (по 10/страница). Первый экран мгновенный, остальное по скроллу. Логика loadMore проверена (пустой ответ/more<pageSize → конец).
+
+**Проверка:** сборка на пользователе (правило).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIPS-PLAYBACK-FIX — 2026-10-09 — исправление воспроизведения клипов (MIME+DataSource+приоритет)
+
+**Запрос:** «некоторые клипы не играются». Исследование web-плеера VK → advanced-анализ текущего кода.
+
+**Причины (по коду):**
+- MIME определялся по URL, а okcdn-URL клипа прячет dash/hls в query → DASH-манифест игрался как mp4 → HTTP 400.
+- Нет кастомного DataSource для okcdn &bytes=start-end (web использует query-параметр, ExoPlayer шлёт HTTP Range).
+- Приоритет форматов клипов был mp4_* первым, а на клипах mp4 часто даёт 400.
+
+**Фикс (субагент):**
+- ClipsFeedScreen: MIME по ключу files (hls*→M3U8, dash*→MPD), fallback по URL.
+- NetworkInterceptors.OkCdnBytesInterceptor: Range→&bytes= только для *.okcdn.ru, скоуп-клиент для клип-плеера.
+- Models.kt Video.CLIP_FORMAT_PRIORITY + clipPlayEntry(): hls_fmp4/hls первыми (играются без &bytes=), затем dash_*, затем mp4_*. Обычные видео не тронуты.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест клипов и обычного видео.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIPS-PLAYBACK-ROLLBACK — 2026-10-09 — откат фикса клипов (стало хуже)
+
+**Решение пользователя:** откатить ВЕСЬ фикс воспроизведения клипов (CLIPS-PLAYBACK-FIX), т.к. стал хуже.
+
+**Причина:** OkCdnBytesInterceptor вызывал HTTP 400 (Response code: 400 на kvd*.okcdn.ru), один клип вообще не получил URL. 
+
+**Действие:** git checkout трёх файлов к HEAD (e3ee9f3): Models.kt (clipPlayEntry/CLIP_FORMAT_PRIORITY), NetworkInterceptors.kt (OkCdnBytesInterceptor), ClipsFeedScreen.kt (клип-плеер). Клипы вернулись к прежнему поведению. Бэкап фикса сохранён (ackup-clips-rollback-2026-10-09.patch).
+
+**Проверка:** сборка на пользователе (правило). Требуется пересборка/тест.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIPS-ADAPTIVE-HLS — 2026-10-09 — плеер клипов: приоритет HLS/DASH + MIME по ключу
+
+**Запрос:** «начинай вносить правки» по переносу плеера клипов (после отката CLIPS-PLAYBACK-FIX).
+
+**Изменения:**
+- Models.kt: новый Video.clipAdaptiveEntry() — приоритет для клипов hls_fmp4→hls→hls_ondemand→dash_*→mp4_* (на клипах mp4 часто 400).
+- ClipsFeedScreen.kt: плеер клипа использует clipAdaptiveEntry(); MIME по ключу files (hls*→M3U8, dash*→MPD), fallback по URL.
+- БЕЗ кастомного DataSource &bytes= (прошлый риск, вызвавший 400/откат) — на этом этапе только приоритет + точный MIME.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест: клипы через hls/dash играются, обычное видео не сломано.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIPS-BYTES-DIAGNOSTIC — 2026-10-09 — диагностика okcdn &bytes= для DASH-клипов
+
+**Запрос:** «начинай вносить правки» — перенос плеера клипов. Этап 1: проверить, принимает ли okcdn сегменты с query &bytes= (web использует это; ExoPlayer — HTTP Range).
+
+**Реализация:**
+- Новый media/OkCdnQueryRangeDataSource.kt: обёртка DataSource, преобразует закрытый Range→&bytes= для on-demand DASH-сегментов okcdn (host okcdn/vkuser.net, ct 11/12/22/32, не scl), логирует заходы и коды.
+- ClipsFeedScreen.kt: httpFactory обёрнут через DataSource.Factory → DefaultDataSource.Factory. Пока только диагностика (выбор URL не менялся).
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка и тест клипа — в логе искать ClipBytes → bytes=start-end и HTTP-коды (200/400), что определит, принимает ли okcdn &bytes=.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIPS-BYTES-DIAGNOSTIC-RESULT — 2026-10-09 — результат диагностики &bytes=
+
+**Лог:** 64 записи ClipBytes, все seg=false (ProgressiveMediaPeriod, len=-1) — &bytes= ни разу не активировался. Последний клип (vkvd742.okcdn.ru) открывается циклически без рендера (mBufferCountDebug=0 mIsUserLoad=1) — прогрессивный URL не отдаёт данные, fallback нет.
+
+**Вывод:** PinoK-плеер выбирает mp4/hls (ProgressiveMediaPeriod) вместо DASH. Чтобы &bytes= заработал, нужен П2 — выбор DASH-источника (dash_sep/dash_webm_av1), как делает web.
+
+**Действие:** диагностический DataSource оставлен (безвреден, passthrough). Следующий шаг — П2 (ClipSourceSelector DASH-first + MIME).
+
+**Проверка:** сборка на пользователе (правило). Требуется П2 для реального DASH-пути.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-PLAYER-FULL — 2026-10-09 — изолированный ClipPlayer (полный web-перенос)
+
+**Запрос:** «сделай отдельный проигрыватель клипов, а не чини старое». Реализован изолированный ClipPlayer по дизайн-документу CLIP_PLAYBACK_TRANSFER_DESIGN.md.
+
+**Реализация:**
+- НОВЫЙ ClipSourceSelector.kt: WEB_PRIORITY (dash_webm_av1→mp4_144), hasAv1Decoder (кэш), pick()→(key,url,mime), mimeForKey (dash→MPD, hls→M3U8), withFailoverHost.
+- НОВЫЙ ClipPlayer.kt: DASH-first, MIME по ключу, okcdn &bytes=, ABR (3s/15s, 0.9), failover (1+след. формат), stall-guard, позиция для viewSegments. Play/Pause/Release/SetVolume.
+- ClipsFeedScreen: files есть → ClipPlayer; иначе legacy-ExoPlayer (fallback). Управление через ClipPlayer.
+- VKApiClient: + ideoViewSegments. ClipsRepository.trackView → viewSegments (вместо addViewingHistoryRecord err=100), дедуп 30с.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест: клипы через ClipPlayer (DASH-first), старый путь как fallback.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-PLAYER-COMPILE-FIX — 2026-10-09 — фикс компиляции ClipPlayer (media3 1.8.0)
+
+**Ошибки:** AdaptiveTrackSelection.Factory.Builder не существует в media3 1.8.0; onRenderedFirstFrame/onDurationChanged сигнатуры неверны.
+
+**Фикс (проверено javap):** конструктор Factory(10000, 20000, 3000, 0.9f); onRenderedFirstFrame() без аргумента; onDurationChanged убран (нет в интерфейсе 1.8.0, вызов перенесён в onTracksChanged); onPositionDiscontinuity восстановлен.
+
+**Проверка:** сборка на пользователе (правило).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-PLAYER-DIAG-LOGGING — 2026-10-09 — расширенное логирование клипов
+
+**Запрос:** есть видео, которое не грузится; расширить логирование в клипах.
+
+**Реализация:** в ClipPlayer добавлено подробное логирование: prepare (id, filesKeys, av1, источник), startCurrentSource (idx, key, mime, host, failover, url), onPlayerError (code+msg+cause), failover-переходы.
+
+**Замечание из лога:** первые клипы игрались как прогрессивные mp4 (vkuser), последние — DASH-сегменты с &bytes= (работают). Неработающий клип, вероятно — dash_webm_av1 без декодера или истёкший URL.
+
+**Проверка:** сборка на пользователе (правило). Требуется лог нерабочего клипа.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-SEG-DIAG2 — 2026-10-09 — вечная загрузка dash_sep, нужен реальный ct сегментов
+
+**Лог:** &bytes= сработал 0 раз; все клипы идут как ProgressiveMediaPeriod. У dash_sep-клипа вечная загрузка — DASH-сегменты тянутся без &bytes=.
+
+**Причина:** isOkCdnSegment (host okcdn/vkuser + ct∈{11,12,22,32} + не scl) не матчит реальные URL сегментов.
+
+**Действие:** добавлен подробный лог в OkCdnQueryRangeDataSource.open (ct, scl, path, closed). Требуется сборка и лог нерабочего клипа, чтобы увидеть реальный ct сегментов.
+
+**Проверка:** сборка на пользователе (правило).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-PRIORITY-H264-FIRST — 2026-10-09 — H.264/HLS-приоритет вместо AV1 (стабильность)
+
+**Проблема:** dash_webm_av1 клипы дают вечную загрузку (AV1-декодер на устройстве софтовый dav1d, нестабилен).
+
+**Решение:** WEB_PRIORITY изменён — H.264/HLS-форматы (hls_fmp4, hls, dash_sep, mp4_*) впереди, dash_webm_av1 последним (fallback). Отклонение от web-порядка осознанное — ради работоспособности на устройствах с софт-AV1.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест: H.264/HLS клипы играются стабильно.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-SOURCE-TIMEOUT — 2026-10-09 — таймаут на первый кадр (web sourceOpenTimeout)
+
+**Проблема:** вечная загрузка у части клипов — ExoPlayer висит в буферизации, не сообщая об ошибке, если HLS/DASH источник не отдаёт данные (onPlayerError=0).
+
+**Решение (перенос web-правила sourceOpenTimeout):** таймаут на первый кадр в ClipPlayer — если кадр не появился за 3с, переключиться на следующий формат (или failover_host). Сброс при onRenderedFirstFrame и release.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест: зависшие клипы переключаются на рабочий формат за ~3с.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-DASH-FIRST-RESTORE — 2026-10-09 — возврат к DASH-first (по разбору клипы.web)
+
+**Разбор HAR (клипы2.har, 3077 entries):** web играет клипы ТОЛЬКО через DASH — запросов к *.m3u8 в сессии листания клипов 0 (m3u8_total=0). DASH-сегменты (dash_sep/dash_webm_av1) качаются через &bytes= (772, статус 200), Referer/Origin m.vk.ru. HLS web не использует.
+
+**Лог PinoK:** HLS-first для okcdn-клипов → SocketException на vkvd521/vkvd585, зависание, перебор всех источников. Клипы с vkuser.net играют.
+
+**Решение:** WEB_PRIORITY снова DASH-first (dash_webm_av1→dash_sep→hls как fallback), AV1 пропускается при отсутствии декодера.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-CDN-ORIGIN-FIX — 2026-10-09 — Origin m.vk.ru для CDN клипов
+
+**Проблема:** SocketException на okcdn при воспроизведении клипов (Retry 1/2 → Call canceled).
+
+**Разбор (свежий HAR):** web шлёт к CDN Referer/Origin: https://m.vk.ru + Chrome-UA → 200. PinoK слал Origin: https://vk.ru (неверно) + UA VKAndroidApp.
+
+**Правка:** ClipPlayer.buildMediaSourceFactory — Origin изменён на https://m.vk.ru (совпадение с web). При необходимости далее — браузерный UA для CDN-запросов клипов.
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## CLIP-SCL-FIX — 2026-10-09 — skip источников с scl= (превью) — корень зависания
+
+**Проблема (лог):** у части клипов вибранный dash_webm_av1/dash_sep URL имеет scl= (превью, низкое качество) — не полноценный поток. ExoPlayer не получает кадр → зависание, хотя onPlayerError=0 и сеть работает.
+
+**Корень:** URL с scl= — превью-ссылки, web их для воспроизведения не использует.
+
+**Фикс:** ClipSourceSelector.pick() теперь пропускает источник с scl= в query, выбирая следующий полноценный формат (настоящий dash/hls/mp4 без scl).
+
+**Проверка:** сборка на пользователе (правило). Требуется сборка/тест.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
