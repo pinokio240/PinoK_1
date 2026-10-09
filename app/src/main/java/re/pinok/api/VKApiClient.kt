@@ -18774,6 +18774,39 @@ class VKApiClient(
     }
 
     /**
+     * video.viewSegments — запись просмотра в историю (клипы).
+     *
+     * Надёжный аналог video.addViewingHistoryRecord (который BFF-only, err=100
+     * через прямой токен). Web-плеер VK для clips использует именно viewSegments —
+     * работает с прямым vk1.a.* токеном, ответ {"response":1}.
+     *
+     * @param ranges строковый диапазон просмотра, например "0-15" (секунды).
+     * @param ref контекст клипа (по умолчанию "clips").
+     * @param muted muted ли был просмотр (mute==1).
+     * @param trackCode track_code из объекта video (для рекомендаций).
+     */
+    suspend fun videoViewSegments(
+        ownerId: Long,
+        videoId: Long,
+        ranges: String,
+        ref: String = "clips",
+        muted: Boolean = false,
+        trackCode: String? = null,
+    ): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "video_id" to videoId.toString(),
+            "ranges" to ranges,
+            "ref" to ref,
+            "muted" to if (muted) "1" else "0",
+        )
+        trackCode?.let { args["track_code"] = it }
+        val json = call("video.viewSegments", args) ?: return false
+        return json.has("response")
+    }
+
+    /**
      * video.getLongPollServer — отдельный LP для live-clip-чата.
      * Возвращает {server, key, ts} для polling-петли live-сообщений.
      */

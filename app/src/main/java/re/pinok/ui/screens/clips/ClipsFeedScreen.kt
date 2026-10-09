@@ -80,6 +80,7 @@ import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.media.ClipPlayer
 import re.pinok.media.ClipVideoDownloadManager
 import re.pinok.media.VideoPlayerConfig
 import re.pinok.util.AppLog
@@ -331,21 +332,56 @@ private fun ClipPlayerItem(
     }
 
     // ExoPlayer: создаётся один на clip, освобождается при уходе со страницы.
-    val player = remember(clip.id, clip.ownerId, playUrl) {
-        if (playUrl == null) return@remember null
+    // #CLIP-PLAYER-V2 (2026-10-09): предпочитаем изолированный [ClipPlayer]
+    // (полный web-перенос: DASH-first, MIME по ключу, okcdn &bytes=, failover,
+    // stall-guard) — НО только когда у клипа есть files[]. Если files нет
+    // (например, requires video.get lazy-fetch) — откат на старую логику
+    // построения ExoPlayer по bestPlayUrl (legacy fallback).
+    val clipFiles = clip.files
+    val hasFiles = clipFiles != null && clipFiles.isNotEmpty()
+    val clipPlayer = remember(clip.id, clip.ownerId, hasFiles) {
+        if (!hasFiles) {
+            null
+        } else {
+            try {
+                val app = context.applicationContext as? SovaApp
+                if (app == null) {
+                    AppLog.w(TAG, "ClipPlayer: SovaApp not initialized — legacy fallback")
+                    null
+                } else {
+                    val vkUa = VkUserAgent.get(app)
+                    val cp = ClipPlayer(
+                        context = app,
+                        httpClient = app.httpClient,
+                        vkUserAgent = vkUa,
+                        callbacks = object : ClipPlayer.ClipPlayerCallbacks {
+                            override fun onFirstFrame() {}
+                            override fun onError(error: Throwable) {
+                                AppLog.w(TAG, "ClipPlayer(${clip.ownerId}_${clip.id}) error: ${error.message}")
+                            }
+
+                            override fun onTrackChange() {}
+                            override fun onDurationChanged() {}
+                            override fun onPositionChanged() {}
+                        },
+                    )
+                    cp.prepare(clip)
+                    cp
+                }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "ClipPlayer create error for ${clip.ownerId}_${clip.id}", e)
+                null
+            }
+        }
+    }
+
+    // Legacy fallback: старый путь построения ExoPlayer по playUrl (когда files нет
+    // или ClipPlayer не смог подготовиться). Оставлен как страховка.
+    val legacyPlayer = remember(clip.id, clip.ownerId, playUrl, hasFiles) {
+        if (hasFiles || playUrl == null) return@remember null
         try {
             val vkUa = VkUserAgent.get(context.applicationContext as android.app.Application)
-            // P0.10 (Task 20): DefaultHttpDataSource НЕ отправляет cookies автоматически —
-            // VK CDN для clips (sun9-XX.userapi.com) требует remixsid/remixstid/
-            // remixstlid (антифрод-куки), без них mp4-URL возвращает HTTP 400. Перешли на
-            // OkHttpDataSource.Factory(SovaApp.httpClient) — OkHttpClient содержит
-            // VkCookieJar, который подставляет живой VK cookie-set в исходящие запросы.
-            // Образец: PlayerService.kt:371-400 (audio), VideoPlayerScreen.kt:802 (video).
-            // Fallback на DefaultHttpDataSource если SovaApp ещё не инициализирован.
-            // Referer https://m.vk.ru/ — VK CDN требует (иначе 400): m.vk.com → m.vk.ru.
-            // CDN требует правильный Origin: https://vk.ru (см. HAR: access-control-allow-origin)
-            // и Referer: m.vk.ru — без Origin CDN отвечает HTTP 400 / HTML-страницей.
-            // OK CDN может принимать любой Referer.
+            // P0.10 (Task 20): OkHttpDataSource с VkCookieJar (remixsid) для VK CDN.
             val refererProps = mapOf("Referer" to "https://m.vk.ru/", "Origin" to "https://vk.ru")
             val app = context.applicationContext as? SovaApp
             val httpFactory = if (app != null) {
@@ -367,14 +403,6 @@ private fun ClipPlayerItem(
             }
             val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
             val mediaItemBuilder = MediaItem.Builder().setUri(playUrl)
-            // P0.19 #CLIP-DASH-MIME: MIME по URL для адаптивных потоков.
-            // bestPlayUrl теперь возвращает DASH/HLS URL для клипов (раньше только
-            // mp4/hls). ExoPlayer определяет контейнер по MIME — без явного MIME
-            // для DASH (.mpd/dash_webm) он пытается играть как прогрессивный mp4 →
-            // HTTP 400. VideoPlayerScreen использует mimeFor() по КЛЮЧУ files,
-            // но ClipsFeedScreen работает с playUrl (без ключа) — определяем MIME
-            // по URL (менее точно, но покрывает основные случаи: m3u8, .mpd,
-            // dash_webm в query).
             if (playUrl.contains("m3u8", ignoreCase = true)) {
                 mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
             } else if (playUrl.contains(".mpd", ignoreCase = true) ||
@@ -385,9 +413,6 @@ private fun ClipPlayerItem(
             }
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-                // #VIDEO-NET (2026-10-02): увеличенный буфер под сеть (клипы
-                // часто играют на мобильном интернете) — реже обрывы, быстрее
-                // возобновление после ребуферинга.
                 .setLoadControl(VideoPlayerConfig.defaultLoadControl())
                 .build().apply {
                     setMediaItem(mediaItemBuilder.build())
@@ -402,18 +427,40 @@ private fun ClipPlayerItem(
         }
     }
 
+    // Player, который отдаём в PlayerView и на который вешаем play/pause/volume.
+    // Когда активен ClipPlayer — берём его внутренний ExoPlayer. Вычисляется каждую
+    // композицию из стабильных (remember-нутых) clipPlayer/legacyPlayer — без застревания.
+    val player: ExoPlayer? = run {
+        val cp = clipPlayer
+        if (cp != null) cp.exoPlayer() else legacyPlayer
+    }
+
     // Pause/play при смене current-страницы (для экономии батареи).
     LaunchedEffect(isCurrent, isPlaying) {
-        player?.let {
-            it.playWhenReady = isCurrent && isPlaying
-            if (isCurrent && isPlaying) it.play() else it.pause()
+        val cp = clipPlayer
+        if (cp != null) {
+            if (isCurrent && isPlaying) cp.play() else cp.pause()
+        } else {
+            val p = player
+            if (p != null) {
+                p.playWhenReady = isCurrent && isPlaying
+                if (isCurrent && isPlaying) p.play() else p.pause()
+            }
         }
     }
 
     // Освобождаем player при уходе со страницы.
     DisposableEffect(clip.id, clip.ownerId) {
         onDispose {
-            try { player?.release() } catch (_: Exception) {}
+            val cp = clipPlayer
+            if (cp != null) {
+                try { cp.release() } catch (e: Exception) { AppLog.w(TAG, "clipPlayer.release error: ${e.message}") }
+            } else {
+                val p = player
+                if (p != null) {
+                    try { p.release() } catch (e: Exception) { AppLog.w(TAG, "player.release error: ${e.message}") }
+                }
+            }
         }
     }
 
@@ -474,7 +521,15 @@ private fun ClipPlayerItem(
                 .fillMaxSize()
                 .clickable {
                     isPlaying = !isPlaying
-                    player?.let { if (isPlaying) it.play() else it.pause() }
+                    val cp = clipPlayer
+                    if (cp != null) {
+                        if (isPlaying) cp.play() else cp.pause()
+                    } else {
+                        val p = player
+                        if (p != null) {
+                            if (isPlaying) p.play() else p.pause()
+                        }
+                    }
                 },
         )
 
@@ -515,7 +570,14 @@ private fun ClipPlayerItem(
             IconButton(
                 onClick = {
                     isMuted = !isMuted
-                    player?.volume = if (isMuted) 0f else 1f
+                    val vol = if (isMuted) 0f else 1f
+                    val cp = clipPlayer
+                    if (cp != null) {
+                        cp.setVolume(vol)
+                    } else {
+                        val p = player
+                        if (p != null) p.volume = vol
+                    }
                 },
                 modifier = Modifier
                     .size(40.dp)

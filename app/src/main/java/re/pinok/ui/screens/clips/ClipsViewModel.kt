@@ -119,7 +119,7 @@ class ClipsViewModel(
         val prevClip = s.clips.getOrNull(s.currentIndex)
         if (prevClip != null) {
             viewModelScope.launch {
-                repo.trackView(prevClip.ownerId, prevClip.id, prevClip.duration)
+                repo.trackView(prevClip, prevClip.duration)
             }
         }
     }

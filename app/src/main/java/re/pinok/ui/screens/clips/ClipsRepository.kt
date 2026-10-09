@@ -287,22 +287,56 @@ class ClipsRepository(private val api: VKApiClient) {
     /**
      * Записать просмотр в историю (для рекомендаций).
      *
-     * §37.12 #322: video.addViewingHistoryRecord — BFF-only метод VK web,
-     * через прямой vk1.a.* токен стабильно возвращает error 100. Поэтому:
-     *  - НЕ логируем ошибку как E (чтобы не засорять logcat каждый swipe),
-     *    только D-уровень для отладки.
-     *  - Возвращаем false тихо — UI это не волнует (просмотр трекается
-     *    best-effort, не блокирует ничего).
+     * #CLIP-PLAYER-V2 (2026-10-09): заменён BFF-only video.addViewingHistoryRecord
+     * (err=100 через прямой токен) на video.viewSegments — web-плеер клипов VK
+     * использует именно его, и он работает с прямым vk1.a.* токеном ({"response":1}).
+     *
+     * Дедуп раз в 30 секунд на один и тот же клип (Web тоже не шлёт viewSegments
+     * чаще, чтобы не спамить). Просмотр трекается best-effort — UI это не волнует.
+     *
+     * @param video клип; ranges строится как "0-{watchedSeconds}" из переданной
+     *   позиции (duration — сколько секунд клипа просмотрено).
+     * @param watchedSeconds сколько секунд клипа просмотрено (для ranges).
      */
-    suspend fun trackView(ownerId: Long, videoId: Long, durationWatched: Int): Boolean =
+    suspend fun trackView(video: Video, watchedSeconds: Int): Boolean =
         withContext(Dispatchers.IO) {
+            val key = "${video.ownerId}_${video.id}"
+            val now = System.currentTimeMillis()
+            val prev = lastViewTs[key]
+            val last = if (prev == null) 0L else prev
+            if (now - last < VIEW_DEDUPE_MS) {
+                AppLog.d("ClipsRepository", "trackView: dedupe skip $key (${now - last}ms ago)")
+                return@withContext false
+            }
+            if (video.ownerId == 0L || video.id <= 0L) {
+                AppLog.d("ClipsRepository", "trackView: skip (ownerId=0 / videoId<=0) $key")
+                return@withContext false
+            }
+            lastViewTs[key] = now
             try {
-                api.videoAddViewingHistoryRecord(ownerId, videoId, durationWatched)
+                val seconds = watchedSeconds.coerceAtLeast(0)
+                val ranges = "0-$seconds"
+                api.videoViewSegments(
+                    ownerId = video.ownerId,
+                    videoId = video.id,
+                    ranges = ranges,
+                    ref = "clips",
+                    muted = video.isMuted,
+                    trackCode = video.trackCode,
+                )
             } catch (e: Exception) {
-                AppLog.d("ClipsRepository", "trackView (BFF-only, expected to fail on direct token): ${e.message}")
+                AppLog.d("ClipsRepository", "trackView (best-effort) error: ${e.message}")
                 false
             }
         }
+
+    /** Дедуп просмотров: не чаще раза в 30с на один клип. */
+    private val lastViewTs: MutableMap<String, Long> = mutableMapOf()
+
+    private companion object {
+        /** Окно дедупа video.viewSegments на один клип (мс). */
+        const val VIEW_DEDUPE_MS: Long = 30_000L
+    }
 
     /** Заблокировать автора. */
     suspend fun banAuthor(ownerId: Long): Boolean = withContext(Dispatchers.IO) {
