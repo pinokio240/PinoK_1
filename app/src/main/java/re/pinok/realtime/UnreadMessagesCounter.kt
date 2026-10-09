@@ -88,14 +88,11 @@ object UnreadMessagesCounter {
                     is LongPollEvent.NewMessage -> {
                         // Флаг 2 = outbox (исходящее), не считаем
                         if (event.flags and 2 == 0) {
-                            // #COUNTER-CHANNELS: слепой +1 — только для пиров,
-                            // которые гарантированно НЕ каналы: пользователи
-                            // (peerId > 0) и беседы (peerId >= 2e9). Для peerId < 0
-                            // по событию невозможно отличить канал (не входит в
-                            // счётчик) от сообщества-диалога (входит) — запускаем
-                            // точный пересчёт: getConversations знает can_write
-                            // каждого пира.
-                            if (event.peerId > 0L) {
+                            // #EVENTHUB: то же сообщение может прийти и по LongPoll, и по
+                            // EventHub — повтор в окне 5с не учитываем (дедуп счётчика).
+                            if (EventDedup.isDuplicate(event.peerId, event.messageId)) {
+                                AppLog.d(TAG, "NewMessage dup (EventHub/LongPoll) skipped peer=${event.peerId}")
+                            } else if (event.peerId > 0L) {
                                 _unreadCount.value = _unreadCount.value + 1
                                 AppLog.d(TAG, "NewMessage: unreadCount → ${_unreadCount.value}")
                             } else {

@@ -57,6 +57,7 @@ tools/_*
 tools/*.log
 
 # PinoK: локальные бэкапы и скрипты-правки
+backups/
 *.bak
 *.mojibake*
 *.mojibake-bak*

@@ -42,6 +42,7 @@ import re.pinok.captcha.UiCaptchaHandler
 import re.pinok.mods.network.NetworkInterceptors
 import re.pinok.realtime.LongPollClient
 import re.pinok.realtime.Queuev4Client
+import re.pinok.realtime.EventHubWebSocketClient
 import re.pinok.util.AppLog
 import re.pinok.util.NetworkObserver
 import re.pinok.util.NetworkSwitchState
@@ -290,6 +291,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      * останавливается при logout. UI подписывается на [LongPollClient.events].
      */
     override lateinit var longPollClient: LongPollClient
+        private set
+
+    /**
+     * #EVENTHUB: WebSocket-канал мгновенной доставки событий мессенджера
+     * (wss://eh.vk.ru) — дополнение LongPoll (см. [EventHubWebSocketClient]).
+     * Запускается из [re.pinok.ui.MainActivity] вместе с LongPoll,
+     * останавливается при logout. UI может подписаться на [EventHubWebSocketClient.events].
+     */
+    lateinit var eventHubClient: EventHubWebSocketClient
         private set
 
     /**
@@ -1436,6 +1446,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             isTokenValid = { tokenStorage.hasValidToken() },
         )
 
+        // #EVENTHUB: WebSocket-канал мгновенных событий (wss://eh.vk.ru).
+        // UA реального VK Android-клиента — как у LongPoll/media-загрузок.
+        eventHubClient = EventHubWebSocketClient(
+            httpClient = httpClient,
+            apiClient = apiClient,
+            userAgent = VkUserAgent.get(this),
+        )
+
         // #32: MessageNotifier — системные уведомления о новых сообщениях.
         //    Подписывается на longPollClient.events в отдельной корутине,
         //    показывает Notification при LongPollEvent.NewMessage.
@@ -1530,6 +1548,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     try {
                         // Пропускаем исходящие сообщения (флаг 2 = outbox в VK LongPoll)
                         if (event.flags and 2 != 0) return@collect
+
+                        // #EVENTHUB: то же сообщение может прийти и по EventHub (мгновенно),
+                        // и по LongPoll — повтор в окне 5с не нотифицируем (дедуп уведомлений).
+                        if (re.pinok.realtime.EventDedup.isDuplicate(event.peerId, event.messageId)) {
+                            AppLog.d("SovaApp", "notifier: dup (EventHub/LongPoll) skipped peer=${event.peerId}")
+                            return@collect
+                        }
 
                         // Fix #390 #NOTIFY-MODES: режим уведомлений (Настройки →
                         // Уведомления → «Режимы уведомлений», либо закреплённая

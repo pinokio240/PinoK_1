@@ -17021,17 +17021,85 @@ class VKApiClient(
     // ── P1 #CALLS-WIRE (2026-09-17): realtime eventHub + batch + stickers queues ──
 
     /**
-     * P1 #CALLS-WIRE: token для eventHub (новый realtime-канал VK web).
+     * P1 #EVENTHUB: token для eventHub (новый realtime-канал VK web).
      * Web-метод: `eventHub.getToken` -> {"response":{"token":"..."}}.
+     *
+     * Сначала пробуем ЭТАЛОННЫЙ путь web.api.vk.ru (как [batchCall]): GET
+     * /method/eventHub.getToken?v=...&client_id=... + Authorization: Bearer.
+     * Если GET не дал token/упал — fallback на старый POST-путь через [call].
      */
     suspend fun eventHubGetToken(): String? {
         if (isOffline()) return null
-        val json = call("eventHub.getToken", emptyMap(), forceWebGateway = true) ?: return null
+        // NULL-ЯВНО: без safe-call оператора (правило проекта #NULL-EXPLICIT).
+        val er = exchangeAuthRepository
+        val token = if (er != null) er.accessToken() else null
+        val webToken = if (token.isNullOrBlank()) null else fetchEventHubTokenWeb(token)
+        if (webToken != null) {
+            AppLog.d("VKApiClient", "eventHubGetToken: получен по web GET")
+            return webToken
+        }
+        // Fallback: прежний POST-путь через общий call() (web-gateway).
+        val json = call("eventHub.getToken", emptyMap(), forceWebGateway = true)
+        if (json == null) {
+            AppLog.w("VKApiClient", "eventHubGetToken: fallback call() вернул null")
+            return null
+        }
         return try {
-            json.getAsJsonObject("response")
-                ?.get("token")?.takeIf { it.isJsonPrimitive }?.asString
+            val resp = json.getAsJsonObject("response")
+            if (resp == null) return null
+            val el = resp.get("token")
+            if (el == null || !el.isJsonPrimitive) null else el.asString
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "eventHubGetToken parse error", e)
+            null
+        }
+    }
+
+    /**
+     * P1 #EVENTHUB: GET /method/eventHub.getToken по эталону [batchCall]
+     * (web.api.vk.ru, v + client_id в query, Authorization: Bearer).
+     */
+    private suspend fun fetchEventHubTokenWeb(token: String): String? {
+        return try {
+            val req = Request.Builder()
+                .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/eventHub.getToken" +
+                    "?v=${VKEndpoints.API_VERSION}&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}")
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+            val raw = withContext(Dispatchers.IO) {
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body
+                    if (body == null) "" else body.string()
+                }
+            }
+            if (raw.isBlank()) {
+                AppLog.w("VKApiClient", "eventHubGetToken web: пустой ответ/ошибка")
+                null
+            } else {
+                val parsed = JsonParser.parseString(raw)
+                val json = if (parsed.isJsonObject) parsed.asJsonObject else null
+                if (json == null) {
+                    AppLog.w("VKApiClient", "eventHubGetToken web: ответ не-JSON")
+                    null
+                } else {
+                    val resp = json.getAsJsonObject("response")
+                    if (resp == null) {
+                        AppLog.w("VKApiClient", "eventHubGetToken web: нет response-объекта")
+                        null
+                    } else {
+                        val el = resp.get("token")
+                        if (el == null || !el.isJsonPrimitive) {
+                            AppLog.w("VKApiClient", "eventHubGetToken web: нет token")
+                            null
+                        } else {
+                            el.asString
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "eventHubGetToken web error", e)
             null
         }
     }

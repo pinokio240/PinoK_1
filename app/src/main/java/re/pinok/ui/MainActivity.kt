@@ -1104,6 +1104,9 @@ class MainActivity : ComponentActivity() {
                     if (app.tokenStorage.hasValidToken()) {
                         AppLog.i("MainActivity", "Token valid — starting LongPoll")
                         app.longPollClient.start()
+                        // #EVENTHUB: мгновенная доставка событий — дополнение к LongPoll.
+                        // start() идемпотентен и устойчив к отсутствию token (backoff-retry).
+                        app.eventHubClient.start()
                         // #CALLS: автоподключение queuev4 для входящих звонков (LP 115).
                         app.startCallSignaling()
                         // Fix #340: поднимаем foreground-сервис чтобы удержать процесс
@@ -1114,6 +1117,8 @@ class MainActivity : ComponentActivity() {
                         AppLog.i("MainActivity", "No token — stopping LongPoll")
                         app.longPollClient.stop()
                         app.queuev4Client.stop()
+                        // #EVENTHUB: останавливаем канал вместе с LongPoll (нет токена).
+                        app.eventHubClient.stop()
                         re.pinok.realtime.LongPollKeepAliveService.stop(this@MainActivity)
                     }
                 }
@@ -1423,6 +1428,13 @@ class MainActivity : ComponentActivity() {
                                         } catch (e: Exception) {
                                             AppLog.w("MainActivity", "Logout: LongPollClient.stop failed: ${e.message}")
                                         }
+                                        // #EVENTHUB: останавливаем WS-канал при logout.
+                                        try {
+                                            app.eventHubClient.stop()
+                                            AppLog.i("MainActivity", "Logout: EventHubClient stopped")
+                                        } catch (e: Exception) {
+                                            AppLog.w("MainActivity", "Logout: EventHubClient.stop failed: ${e.message}")
+                                        }
                                         // Fix #340: останавливаем keep-alive foreground-сервис —
                                         // после logout нет смысла удерживать процесс живым.
                                         try {
@@ -1530,6 +1542,10 @@ class MainActivity : ComponentActivity() {
                                     } catch (_: Exception) { }
                                     try {
                                         app.longPollClient.stop()
+                                    } catch (_: Exception) { }
+                                    // #EVENTHUB: останавливаем WS-канал при полном выходе.
+                                    try {
+                                        app.eventHubClient.stop()
                                     } catch (_: Exception) { }
                                     // Fix #340: останавливаем keep-alive сервис при полном выходе.
                                     try {
