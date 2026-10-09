@@ -209,11 +209,12 @@ fun MessagesScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     // Fix #127: было 40 — VK API отдаёт только первые 40 диалогов/каналов.
     // Если у пользователя >40 подписок (каналы + ЛС + чаты) — остальные НЕ видны.
-    // VK API максимум count=200. Грузим 200 — один запрос, но ОТВЕТ ~686KB
-    // тянется 2.2-3с (лог), что тормозит открытие раздела «Сообщения».
-    // #IM-LOAD-SPEED: снижено до 50 — первый экран рисуется за ~0.5с,
-    // остальные диалоги догружаются по скроллу (loadMore, hasMore/reachedEnd).
-    val pageSize = 50
+    // VK API максимум count=200. Грузим с пагинацией (не всё сразу): ответ
+    // count=200 тянулся ~686KB за 2.2-3с, тормозя открытие раздела.
+    // #IM-LOAD-SPEED: pageSize=10 как VK web (веб грузит по 10/страница).
+    // Первый экран рисуется мгновенно, остальное догружается по скроллу
+    // (loadMore, hasMore/reachedEnd).
+    val pageSize = 10
     var isRefreshing by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
