@@ -441,16 +441,12 @@ fun MessagesScreen(
     // снаружи в LaunchedEffect(Unit)).
     suspend fun fetchConversationsMerged(): List<Chat> {
         val startedMs = System.currentTimeMillis()
+        // P0.40-IM-SPEED: разделяем на быстрый primary (показать сразу) и фоновый
+        // (channels — догрузить позже). Раньше ждали все 3 запроса → первый экран
+        // тормозил на messagesGetAllChannels (до 20 страниц по 100).
+        // Теперь: primary = conversations(10) + requests(10) — рисуется мгновенно.
+        // channels запускается в фоне, мёрджится в список когда дойдёт.
         val (list, extras) = coroutineScope {
-            // Каждая дочерняя ветка ловит свои исключения (кроме отмены) — ошибка
-            // non-fatal ветки НЕ роняет sibling'и и общий scope. Отмена (уход с
-            // экрана / отмена lpRefetchJob) пробрасывается — coroutineScope
-            // каскадно отменяет остальные ветки, запросы не утекают.
-            // #IM-PARSE-OFFMAIN (глубокая оптимизация): fetch+парсинг модели
-            // (200 айтемов + parsePeerMaps + resolveMissingPeerInfo) уходят с
-            // main на Dispatchers.Default — main рисует список, а не JSON.
-            // Зеркало шейпа: CallsSectionRepositoryImpl (withContext(Default)
-            // вокруг API-вызовов VKApiClient — компилируется и работает в проде).
             val baseDeferred = async {
                 withContext(Dispatchers.Default) {
                     app.apiClient.messagesGetConversations(count = pageSize)
@@ -460,7 +456,8 @@ fun MessagesScreen(
             val requestsDeferred = async<List<Chat>> {
                 try {
                     withContext(Dispatchers.Default) {
-                        app.apiClient.messagesGetConversationRequests(count = 50)
+                        // P0.40-IM-SPEED: 50→10 — requests не блокируют первый экран.
+                        app.apiClient.messagesGetConversationRequests(count = 10)
                     }
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
@@ -470,73 +467,61 @@ fun MessagesScreen(
                     emptyList()
                 }
             }
-            val channelsDeferred = async<List<Chat>> {
-                try {
-                    withContext(Dispatchers.Default) {
-                        app.apiClient.messagesGetAllChannels()
-                    }
-                } catch (ce: kotlinx.coroutines.CancellationException) {
-                    throw ce
-                } catch (e: Exception) {
-                    AppLog.w("MessagesScreen",
-                        "#CHANNEL-NET: getAllChannels fetch failed (non-fatal): ${e.message}")
-                    emptyList()
-                }
-            }
+            // P0.40-IM-SPEED: channels — НЕ ждём в primary. Запускаем в фоне,
+            // мёрджим когда придёт (channelsMergeJob ниже).
             var list = baseDeferred.await()
             val extras = ArrayList<Chat>()
-            // §44 #MSG-REQUESTS: merge запросов от не-друзей (non-fatal — пустые
-            // запросы или ошибка фильтра не ломают основной список).
             val requests = requestsDeferred.await()
             if (list.isNotEmpty() && requests.isNotEmpty()) {
                 val existingIds = list.map { it.peer.id }.toHashSet()
                 val newRequests = requests.filter { it.peer.id !in existingIds }
                 if (newRequests.isNotEmpty()) {
                     list = (list + newRequests)
-                        // NULL-ЯВНО: сортировочный ключ, null-ветка тривиальна
-                        // (нет даты последнего сообщения = 0, дефолт для UI).
                         .sortedByDescending { it.lastMessage?.date ?: 0L }
                     extras.addAll(newRequests)
                     AppLog.i("MessagesScreen",
                         "#CHANNEL-NET: merged ${newRequests.size} message_request(s) into conversation list")
                 }
             }
-            // #MODERN-SYNC-CURSOR: merge каналов, которых нет в legacy getConversations
-            // (non-fatal). ВАЖНО: после основного списка, не внутри retry-цикла —
-            // иначе следующий while-цикл перезапишет список и каналы пропадут.
-            val allChannels = channelsDeferred.await()
-            if (allChannels.isNotEmpty()) {
-                val existingIds = list.map { it.peer.id }.toHashSet()
-                val missing = allChannels.filter { it.peer.id !in existingIds }
-                if (missing.isNotEmpty()) {
-                    list = (list + missing).distinctBy { it.peer.id }
-                    extras.addAll(missing)
-                    AppLog.i("MessagesScreen",
-                        "#CHANNEL-NET: merged ${missing.size} missing channels via getItems")
-                }
-            }
             Pair(list, extras)
         }
         mergedExtras = extras
         AppLog.i("MessagesScreen",
-            "#IM-FAST-LIST: merged list ready in ${System.currentTimeMillis() - startedMs}ms " +
-                "(base+requests+channels=${list.size}, extras=${extras.size})")
-        // #IM-CHANNEL-FIX (56-b-5): сервер отдал флаг уведомлений канала
-        // (user_data.notification_settings.is_enabled, parseChannelItem) — переносим
-        // включённые каналы в локальный кэш SovaPrefs. Пуш-конвейер (SovaApp) не
-        // может получить флаг канала через getConversationsById (push_settings у
-        // каналов = null) → этот кэш — единственный источник «юзер включил пуш
-        // каналу» на момент прихода LP-события. На refresh запись no-op
-        // (addChannelNotifEnabledIds сам пропускает уже существующие id).
-        val serverEnabledChannels = extras
-            .filter { it.isChannel && it.channelNotificationsEnabled == true }
-            .map { it.peer.id }
-        if (serverEnabledChannels.isNotEmpty()) {
+            "#IM-FAST-LIST: primary list ready in ${System.currentTimeMillis() - startedMs}ms " +
+                "(base+requests=${list.size}, extras=${extras.size})")
+        // P0.40-IM-SPEED: channels догружаем в фоне — НЕ блокируем рендеринг.
+        // Раньше channelsDeferred.await() ждал до 20 страниц — теперь фон.
+        scope.launch {
             try {
-                app.prefs.addChannelNotifEnabledIds(serverEnabledChannels)
+                val channelsStarted = System.currentTimeMillis()
+                val allChannels = withContext(Dispatchers.Default) {
+                    app.apiClient.messagesGetAllChannels()
+                }
+                if (allChannels.isNotEmpty()) {
+                    val existingIds = chats.map { it.peer.id }.toHashSet()
+                    val missing = allChannels.filter { it.peer.id !in existingIds }
+                    if (missing.isNotEmpty()) {
+                        chats = (chats + missing).distinctBy { it.peer.id }
+                        mergedExtras = (mergedExtras + missing)
+                        AppLog.i("MessagesScreen",
+                            "#CHANNEL-NET: merged ${missing.size} missing channels in ${System.currentTimeMillis() - channelsStarted}ms (background)")
+                    }
+                }
+                // #IM-CHANNEL-FIX: сервер отдал флаг уведомлений канала.
+                val serverEnabledChannels = allChannels
+                    .filter { it.isChannel && it.channelNotificationsEnabled == true }
+                    .map { it.peer.id }
+                if (serverEnabledChannels.isNotEmpty()) {
+                    try {
+                        app.prefs.addChannelNotifEnabledIds(serverEnabledChannels)
+                    } catch (e: Exception) {
+                        AppLog.w("MessagesScreen", "#IM-CHANNEL-FIX: channel notif cache write failed: ${e.message}")
+                    }
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
             } catch (e: Exception) {
-                AppLog.w("MessagesScreen",
-                    "#IM-CHANNEL-FIX: channel notif cache write failed (non-fatal): ${e.message}")
+                AppLog.w("MessagesScreen", "#CHANNEL-NET: getAllChannels fetch failed (background): ${e.message}")
             }
         }
         return list
