@@ -14710,3 +14710,67 @@ avigationBarsPadding.
 **Проверка:** сборка на пользователе (правило проекта: gradle запускает пользователь). Требуется сборка/тест на устройстве.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## MUSIC2-TOGGLE — 2026-10-09 — тумблер «Музыка 2» в настройках (по умолчанию выключен)
+
+**Запрос:** в настройках → «Автор» галочка вкл/выкл контейнера «Музыка 2», по умолчанию выключен.
+
+**Реализация:**
+- SovaPrefs.kt: ключ MUSIC2_ENABLED (дефолт false), Snapshot поле music2Enabled, data-map, setter setMusic2Enabled.
+- SettingsScreen.kt (AuthorTab): секция «Модули» + ToggleRow «Музыка 2».
+- SovaNavHost.kt: при выключенном тумблере пункт music2 убирается из visibleSidebarItems/visibleBottomItems.
+
+**Примечание:** Music2 — не контейнер-модуль (:feature:music2 нет), а экран в :app; «выключение» = скрытие пункта из меню/панели.
+
+**Проверка:** сборка на пользователе (правило проекта). Требуется сборка/тест.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## MUSIC2-TOGGLE-FEED-SNAPSHOT — 2026-10-09 — фикс компиляции (music2Enabled в Snapshot FeedScreen)
+
+**Запрос:** ошибка :app:compileDebugKotlin — FeedScreen.kt:558 No value passed for parameter 'music2Enabled'.
+
+**Причина:** добавление поля music2Enabled в SovaPrefs.Snapshot требует обновления всех прямых конструкторов Snapshot. Единственный такой — FeedScreen.kt:251 (initial-конструкция, перечень всех полей).
+
+**Фикс:** в FeedScreen.kt добавлен music2Enabled = false в конструктор SovaPrefs.Snapshot (после callsVideoSwDecode) с комментарием #MUSIC2-TOGGLE.
+
+**Проверка:** сборка на пользователе (правило проекта).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## EVENTHUB-WEBSOCKET — 2026-10-09 — мгновенная доставка сообщений через EventHub WebSocket
+
+**Запрос:** ускорить загрузку/доставку сообщений. Реализован полный EventHub WebSocket (в сочетании с LongPoll + дедуп).
+
+**Реализация:**
+- VKApiClient.eventHubGetToken(): доработан — GET web.api.vk.ru/method/eventHub.getToken?v&client_id + Bearer (эталон batchCall), fallback на старый call().
+- Новый EventHubWebSocketClient.kt: wss://eh.vk.ru/?v=1.002&format=json&app_id={client_id}&payload={base64}, заголовок Sec-WebSocket-Protocol: ehsp2, {token}, connect-loop + backoff 1с→30с, ping/pong, events: SharedFlow.
+- SovaApp: создание клиента, подписка notifier с дедупом. MainActivity: start() при токене, stop() при logout/exit.
+- Новый EventDedup.kt: дедуп (peerId, msgId) за 5с между каналами.
+- .gitignore += ackups/.
+
+**Примечание:** EventHub-события пока не парсятся (каркас доставки); longpoll остаётся fallback. client_id используется 6287487 (web), но референс HAR — 7879029 (mobile) — при необходимости поменять.
+
+**Проверка:** сборка на пользователе (правило проекта). Требуется сборка/тест (доставка сообщений быстрее, без дублей).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## IM-LOAD-SPEED — 2026-10-09 — ускорение загрузки раздела «Сообщения»
+
+**Запрос:** раздел «Сообщения» грузится долго (сами сообщения приходят быстро, но открытие списка — медленно).
+
+**Причина (лог):** messages.getConversations count=200 = 686KB, 2.2-3с; #IM-FAST-LIST ready in 3103ms. Каналы/запросы уже параллельны; главный тормоз — тяжёлый запрос с count=200.
+
+**Фикс:** pageSize 200 → 50 (MessagesScreen.kt:213). Первый экран быстрее (~0.5с), остальное по скроллу (loadMore/hasMore/reachedEnd). Комментарий #IM-LOAD-SPEED.
+
+**Проверка:** сборка на пользователе (правило). Требуется тест: раздел открывается быстрее.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
