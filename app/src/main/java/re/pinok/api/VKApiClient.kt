@@ -538,7 +538,12 @@ class VKApiClient(
             "count" to count.toString(),
             "offset" to offset.toString(),
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,last_seen",
+            // P0.40-IM-SPEED: убраны online,last_seen — они раздували ответ
+            // (~30% от размера) и блокировали первый рендер. Онлайн-статус
+            // приходит через LongPoll (events [8, userId, 0/1]) через 2-3с.
+            // last_seen не критичен для списка диалогов.
+            // photo_100/photo_200 оставлены — аватарки нужны для UI.
+            "fields" to "photo_100,photo_200",
         )
         // §44 #MSG-REQUESTS (2026-08-03): filter parameter для message requests.
         // VK кладёт сообщения от не-друзей в отдельную папку «Запросы», которая
