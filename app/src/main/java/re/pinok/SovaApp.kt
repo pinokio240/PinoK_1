@@ -327,6 +327,17 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         private set
 
     /**
+     * #COMMUNITY-POSTS (2026-10-10): poller для push-уведомлений о новых постах
+     * из подписанных сообществ. Опрашивает newsfeed.get(filters="post"),
+     * постит отдельное уведомление на каждый новый пост сообщества в канале
+     * `community_posts`. Запускается из onCreate. Сам проверяет pushEnabled,
+     * communityPostPushEnabled, notifyMode и hasValidToken перед каждым poll.
+     */
+    @Volatile
+    var communityPostsPoller: re.pinok.realtime.CommunityPostsPoller? = null
+        private set
+
+    /**
      * Sprint 1, P0-3 (#76): обработчик VK Captcha (error 14).
      *
      * UI подписывается на [UiCaptchaHandler.challenge] (StateFlow) и показывает
@@ -1470,6 +1481,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         notificationsPoller = re.pinok.realtime.NotificationsPoller(this, apiClient, prefs)
         startNotificationsPoller()
 
+        // #COMMUNITY-POSTS: push-уведомления о новых постах сообществ.
+        //    Channel `community_posts` (IMPORTANCE_DEFAULT — тише диалогового
+        //    канала "messages" IMPORTANCE_HIGH). Poller опрашивает
+        //    newsfeed.get(filters="post"), пушит каждый новый пост сообщества.
+        re.pinok.realtime.CommunityPostsPoller.initChannel(this)
+        communityPostsPoller = re.pinok.realtime.CommunityPostsPoller(this, apiClient, prefs)
+        startCommunityPostsPoller()
+
         // #CALLS: глобальный слушатель queuev4 — LP 115 (входящий звонок).
         //    Подписывается на queuev4Client.events; при LP 115/INCOMING_CALL
         //    логирует payload (conversation params) и показывает уведомление.
@@ -2353,6 +2372,25 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // Запуск периодического poller'а.
         poller.start()
         AppLog.i("SovaApp", "NotificationsPoller started (push notifications)")
+    }
+
+    /**
+     * #COMMUNITY-POSTS (2026-10-10): запуск CommunityPostsPoller.
+     *
+     * Poller каждые POLL_INTERVAL_SEC (default 120с) опрашивает
+     * `newsfeed.get(filters="post")`. При новом посте сообщества — отдельное
+     * уведомление в канал `community_posts`. НЕ зависит от LongPoll — это
+     * чисто REST API polling. Poller сам проверяет pushEnabled,
+     * communityPostPushEnabled, notifyMode и hasValidToken перед каждым poll.
+     */
+    private fun startCommunityPostsPoller() {
+        val poller = communityPostsPoller
+        if (poller == null) {
+            AppLog.w("SovaApp", "startCommunityPostsPoller: poller is null — skip")
+            return
+        }
+        poller.start()
+        AppLog.i("SovaApp", "CommunityPostsPoller started (#COMMUNITY-POSTS)")
     }
 
     /**

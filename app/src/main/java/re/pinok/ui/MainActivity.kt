@@ -1119,6 +1119,8 @@ class MainActivity : ComponentActivity() {
                         app.queuev4Client.stop()
                         // #EVENTHUB: останавливаем канал вместе с LongPoll (нет токена).
                         app.eventHubClient.stop()
+                        // #COMMUNITY-POSTS: токена нет — поллеру постов нечего опрашивать.
+                        try { app.communityPostsPoller?.stop() } catch (e: Exception) { AppLog.w("MainActivity", "No token: CommunityPostsPoller.stop failed: ${e.message}") }
                         re.pinok.realtime.LongPollKeepAliveService.stop(this@MainActivity)
                     }
                 }
@@ -1435,6 +1437,14 @@ class MainActivity : ComponentActivity() {
                                         } catch (e: Exception) {
                                             AppLog.w("MainActivity", "Logout: EventHubClient.stop failed: ${e.message}")
                                         }
+                                        // #COMMUNITY-POSTS: останавливаем поллер постов
+                                        // сообществ при logout — нечего пушить без токена.
+                                        try {
+                                            app.communityPostsPoller?.stop()
+                                            AppLog.i("MainActivity", "Logout: CommunityPostsPoller stopped")
+                                        } catch (e: Exception) {
+                                            AppLog.w("MainActivity", "Logout: CommunityPostsPoller.stop failed: ${e.message}")
+                                        }
                                         // Fix #340: останавливаем keep-alive foreground-сервис —
                                         // после logout нет смысла удерживать процесс живым.
                                         try {
@@ -1546,6 +1556,11 @@ class MainActivity : ComponentActivity() {
                                     // #EVENTHUB: останавливаем WS-канал при полном выходе.
                                     try {
                                         app.eventHubClient.stop()
+                                    } catch (_: Exception) { }
+                                    // #COMMUNITY-POSTS: останавливаем поллер постов
+                                    // сообществ при полном выходе из приложения.
+                                    try {
+                                        app.communityPostsPoller?.stop()
                                     } catch (_: Exception) { }
                                     // Fix #340: останавливаем keep-alive сервис при полном выходе.
                                     try {

@@ -475,6 +475,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             pushOther              = p[Keys.PUSH_OTHER]              ?: true,
             pushPollingIntervalSec = p[Keys.PUSH_POLLING_INTERVAL]   ?: 120,
             pushLastSeenKeys       = p[Keys.PUSH_LAST_SEEN_KEYS]     ?: "",
+            // #COMMUNITY-POSTS: тумблер и seenKeys постов сообществ.
+            communityPostPushEnabled = p[Keys.COMMUNITY_POST_PUSH_ENABLED] ?: true,
+            communityPostsSeenKeys   = p[Keys.COMMUNITY_POSTS_SEEN_KEYS] ?: "",
 
             // §42.2 #PUSH-ENHANCED: расширенные настройки отображения/группировки.
             // Авто-скрытие (0 = никогда, иначе ms до auto-cancel).
@@ -1187,6 +1190,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setPushOther(v: Boolean)                = put(Keys.PUSH_OTHER, v)
     suspend fun setPushPollingIntervalSec(v: Int)       = put(Keys.PUSH_POLLING_INTERVAL, v)
     suspend fun setPushLastSeenKeys(v: String)          = put(Keys.PUSH_LAST_SEEN_KEYS, v)
+    // #COMMUNITY-POSTS: setters для push-уведомлений о постах сообществ.
+    suspend fun setCommunityPostPushEnabled(v: Boolean) = put(Keys.COMMUNITY_POST_PUSH_ENABLED, v)
+    suspend fun setCommunityPostsSeenKeys(v: String)    = put(Keys.COMMUNITY_POSTS_SEEN_KEYS, v)
 
     // §42.2 #PUSH-ENHANCED: setters для расширенных настроек.
     suspend fun setPushAutoDismissMs(v: Long)           = put(Keys.PUSH_AUTO_DISMISS_MS, v)
@@ -1671,6 +1677,17 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val pushLastSeenKeys: String,
 
         /**
+         * #COMMUNITY-POSTS: push-уведомления о новых постах из подписанных сообществ.
+         * communityPostPushEnabled — тумблер фичи (client-side, default true).
+         * communityPostsSeenKeys — CSV последних увиденных ключей постов
+         *   ("ownerId_id", для diff, max 100). Поля с дефолтами (прецедент
+         *   callsDnsPinIp ниже): существующие именованные конструкторы Snapshot
+         *   (FeedScreen.kt) собираются без правок.
+         */
+        val communityPostPushEnabled: Boolean = true,
+        val communityPostsSeenKeys: String = "",
+
+        /**
          * §42.2 #PUSH-ENHANCED: расширенные настройки отображения и группировки.
          *
          * Проблема (скриншот 20260802_221731): 25 уведомлений «Новое уведомление (N)»
@@ -2141,6 +2158,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Волна 45-д #SETTINGS-CRYPTO: тумблер шифрования файла экспорта
         // (сам код шифрования НЕ хранится в контейнере — только тумблер).
         val SETTINGS_EXPORT_ENCRYPT = booleanPreferencesKey("settings_export_encrypt")
+        // #COMMUNITY-POSTS: push-уведомления о новых постах сообществ.
+        val COMMUNITY_POST_PUSH_ENABLED = booleanPreferencesKey("community_post_push_enabled")
+        val COMMUNITY_POSTS_SEEN_KEYS   = stringPreferencesKey("community_posts_seen_keys")
     }
 
     // Fix #189: defaults для Auth Domains Config.
