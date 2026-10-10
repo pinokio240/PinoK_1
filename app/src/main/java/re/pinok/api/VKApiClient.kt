@@ -18463,8 +18463,20 @@ class VKApiClient(
                 try {
                     val videoObj = getObj(o, "video") ?: getObj(o, "clip")
                         ?: getObj(o, "short_video") ?: getObj(o, "item")
+                    // #CLIP-WRAPPER-ID (2026-10-10): у части клипов id/owner_id лежат
+                    // в ВЕРХНЕМ wrapper o, а не во вложенном item/video. Подставляем
+                    // их во videoObj, если внутри него этих полей нет.
+                    val videoObjWithId = if (videoObj == null) null else {
+                        val idIn = safeLongNullable(videoObj.get("id")) ?: safeLongNullable(videoObj.get("clip_id"))
+                        val ownerIn = safeLongNullable(videoObj.get("owner_id"))
+                        val idFallback = safeLongNullable(o.get("id")) ?: safeLongNullable(o.get("clip_id"))
+                        val ownerFallback = safeLongNullable(o.get("owner_id"))
+                        if (idIn == null && idFallback != null) videoObj.addProperty("id", idFallback)
+                        if (ownerIn == null && ownerFallback != null) videoObj.addProperty("owner_id", ownerFallback)
+                        videoObj
+                    }
                     if (videoObj != null) {
-                        parseVideoFull(videoObj)
+                        parseVideoFull(videoObjWithId ?: videoObj)
                     } else {
                         // post+attachments: ищем первый video-attachment
                         val post = getObj(o, "post")
@@ -18544,7 +18556,19 @@ class VKApiClient(
                         else -> getObj(o, "video") ?: getObj(o, "clip")
                             ?: getObj(o, "short_video") ?: getObj(o, "item") ?: o
                     }
-                    parseVideoFull(videoObj)
+                    // #CLIP-WRAPPER-ID (2026-10-10): у части клипов id/owner_id лежат
+                    // в ВЕРХНЕМ wrapper o, а не во вложенном item/video. Подставляем
+                    // их во videoObj, если внутри него этих полей нет.
+                    val videoObjWithId = if (videoObj == null) null else {
+                        val idIn = safeLongNullable(videoObj.get("id")) ?: safeLongNullable(videoObj.get("clip_id"))
+                        val ownerIn = safeLongNullable(videoObj.get("owner_id"))
+                        val idFallback = safeLongNullable(o.get("id")) ?: safeLongNullable(o.get("clip_id"))
+                        val ownerFallback = safeLongNullable(o.get("owner_id"))
+                        if (idIn == null && idFallback != null) videoObj.addProperty("id", idFallback)
+                        if (ownerIn == null && ownerFallback != null) videoObj.addProperty("owner_id", ownerFallback)
+                        videoObj
+                    }
+                    parseVideoFull(videoObjWithId ?: videoObj)
                 } catch (e: Exception) {
                     AppLog.w("VKApiClient", "shortVideoGetRecom: skip bad item ${o.toString().take(200)}: ${e.message}")
                     null

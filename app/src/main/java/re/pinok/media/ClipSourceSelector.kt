@@ -124,13 +124,10 @@ object ClipSourceSelector {
                 AppLog.d(TAG, "pick: skip dash_webm_av1 (no AV1 decoder)")
                 continue
             }
-            // #CLIP-SCL-FIX (2026-10-09): URL с 'scl=' в query — это превью (низкое качество),
-            // а не полноценный поток. Web-плеер их не использует для воспроизведения;
-            // такой dash_webm_av1/dash_sep даёт чёрный экран/зависание. Пропускаем.
-            if (url.contains("scl=")) {
-                AppLog.d(TAG, "pick: skip '$key' — url is preview (scl=): ${url.take(100)}")
-                continue
-            }
+            // #CLIP-SCL (2026-10-10): ранее URL с 'scl=' в query отбрасывались как «превью»,
+            // из-за чего клипы, у которых ВСЕ источники содержат scl=, не воспроизводились
+            // вовсе («нет источников», вечная загрузка). Web-плеер VK такие URL использует —
+            // scl= встречается и у полноценных потоков. Поэтому scl= НЕ отбрасываем.
             val mime = pickMime(key)
             if (mime == null) {
                 return Triple(key, url, "")

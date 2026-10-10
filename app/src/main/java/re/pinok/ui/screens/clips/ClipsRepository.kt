@@ -66,7 +66,13 @@ class ClipsRepository(private val api: VKApiClient) {
             val withFiles = r.items.count { it.bestPlayUrl != null }
             AppLog.i("ClipsRepository", "loadFirst(${section.apiValue}): ${r.items.size} clips, " +
                 "$withFiles with files[] (bestPlayUrl!=null), ${r.items.size - withFiles} need fetch")
-            FeedPage(r.items, r.nextFrom, r.profiles, r.groups)
+            // #CLIP-ZERO-ID (2026-10-10): отсеиваем клипы с ownerId=0 / id<=0 — они дают
+            // мёртвую ссылку vk.ru/clip0_0 и «висят на загрузке» (guard не fetch-ит URL).
+            val validItems = r.items.filter { it.ownerId != 0L && it.id > 0L }
+            if (validItems.size != r.items.size) {
+                AppLog.w("ClipsRepository", "loadFirst: пропущено ${r.items.size - validItems.size} клипов с owner_id=0/id=0")
+            }
+            FeedPage(validItems, r.nextFrom, r.profiles, r.groups)
         } catch (e: Exception) {
             AppLog.e("ClipsRepository", "loadFirst(${section.apiValue}) error", e)
             FeedPage(emptyList(), null, emptyMap(), emptyMap())
@@ -102,7 +108,12 @@ class ClipsRepository(private val api: VKApiClient) {
                 )
             }
             if (r.items.isEmpty() && r.nextFrom == null) return@withContext null
-            FeedPage(r.items, r.nextFrom, r.profiles, r.groups)
+            // #CLIP-ZERO-ID (2026-10-10): отсев клипов с ownerId=0 / id<=0 (как в loadFirst).
+            val validItems = r.items.filter { it.ownerId != 0L && it.id > 0L }
+            if (validItems.size != r.items.size) {
+                AppLog.w("ClipsRepository", "loadNext: пропущено ${r.items.size - validItems.size} клипов с owner_id=0/id=0")
+            }
+            FeedPage(validItems, r.nextFrom, r.profiles, r.groups)
         } catch (e: Exception) {
             AppLog.e("ClipsRepository", "loadNext(${section.apiValue}, from=$nextFrom) error", e)
             null

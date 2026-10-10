@@ -66,7 +66,10 @@ class OkCdnQueryRangeDataSource(
         val okCdnHost = host.endsWith("okcdn.ru") || host.endsWith("vkuser.net")
         if (!okCdnHost) return false
         val q = dataSpecQuery(uriStr) ?: return false
-        if (q.contains("scl=")) return false
+        // #CLIP-SCL (2026-10-10): фильтр `scl=` убран — scl= встречается и у
+        // полноценных on-demand DASH-сегментов (VK использует их как обычные
+        // потоки). Если оставить отброс, такие клипы получают passthrough без
+        // &bytes= и зависают (первый кадр не появляется).
         val ct = Regex("(?:^|&)ct=(\\d+)").find(q)?.groupValues?.get(1) ?: return false
         return ct in setOf("11", "12", "22", "32")
     }
