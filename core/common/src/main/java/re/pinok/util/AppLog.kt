@@ -253,8 +253,8 @@ object AppLog {
             "NotificationsPoller, VkNotificationsNotifier, RemoteInput, настройки пушей"),
         DOWNLOADS("Загрузки",
             "Video/Audio DownloadManager, DocumentFile SD-card, кэш сегментов"),
-        STORIES("Истории и клипы",
-            "Stories viewer, Clips feed, StoryOfflinePlayer, жесты"),
+        STORIES("Истории, клипы и видео",
+            "Stories viewer, Clips feed, плеер клипов/видео, жесты"),
         UI("Интерфейс",
             "Навигация, активити, настройки, разрешения, FAB, темы"),
         SYSTEM("Система",
@@ -275,55 +275,99 @@ object AppLog {
         "AudioPlayer", "AudioPlayerScreen", "AudioPicker", "MusicHomeTab",
         "MusicScreen", "MyMusicMenuList", "PlaylistsDialog", "PlaylistAttachment",
         "SpectrumVisualizer", "VoicePlayback", "AudioUrlUnmasker", "SirenTranscoder",
-        "EqualizerManager" -> LogCategory.AUDIO
+        "EqualizerManager", "Music2", "MusicTab", "MusicAlbumsScreen",
+        "MusicArtistsScreen", "MusicPlaylistsScreen", "AudioContainer", "ArtistDetailScreen",
+        "AudioEffectsEngine", "EqualizerHelper", "EqualizerFeatureFlags", "AudioLibraryPager",
+        "AudioRouteLogger", "VoiceRecorder", "VoiceASR", "GeniusLyricsFetcher",
+        "OfflineAudioPlayer", "PlayerConnection", "PlayerService" -> LogCategory.AUDIO
 
         // MESSAGES
         "ChatDetailScreen", "ChatInfoScreen", "MessagesScreen", "ForwardDialog",
         "PinnedConvsRepo", "ShareSheet", "ShareToChat", "ConversationsRepo",
         "MessagesRepo" -> LogCategory.MESSAGES
 
-        // FEED
+        // FEED (лента, посты, админка сообществ)
         "FeedScreen", "PostDetail", "PostDetailScreen", "CommentsBottomSheet",
-        "RepostDialog", "FeedRepository", "WallRepository" -> LogCategory.FEED
+        "RepostDialog", "FeedRepository", "WallRepository", "FeedRightPanel",
+        "FeedHiddenSourcesScreen", "AdminAddresses", "AdminChats", "AdminComments",
+        "AdminCta", "AdminEventLog", "AdminEvents", "AdminInvites", "AdminLinks",
+        "AdminMenu", "AdminMessages", "AdminPeople", "AdminSections", "AdminSettings",
+        "AdminStats", "AdminStatsW47", "AdminStrikes", "AdminWallQueue" -> LogCategory.FEED
 
         // AUTH
-        "AuthActivity", "ExchangeTokenStorage", "VkAuthWebView", "ExchangeAuthRepo",
-        "WebTokenAuth", "ExternalBrowserAuth", "AuthViewModel", "VkUrlDeepLinker" -> LogCategory.AUTH
+        "AuthActivity", "ExchangeTokenStorage", "VkAuthWebView", "VkAuthWebViewV2",
+        "OAuthWebView", "ExchangeAuthRepo", "WebTokenAuth", "ExternalBrowserAuth",
+        "ExtBrowserAuth", "ExtBrowserLauncher", "AuthViewModel", "VkUrlDeepLinker",
+        "PendingAuthResult", "RemixsidCapturer", "SilentTokenExchanger",
+        "HiddenSessionRefresh", "CookieJarBackup", "AccountFileBackup",
+        "ExchangeAuthApi", "IntentLauncher" -> LogCategory.AUTH
 
         // NETWORK
         "NetworkObserver", "NetworkSwitchPopup", "VKApiClient", "VKApi",
-        "OkHttpInterceptor", "LayerAnonymTokenHandler", "AuthDomainsConfig" -> LogCategory.NETWORK
+        "OkHttpInterceptor", "LayerAnonymTokenHandler", "AuthDomainsConfig",
+        "ExpBackoff", "VkUserAgent", "NetRetry", "NetworkMods", "VkCookieJar",
+        "NetInterceptors", "MessageMods", "PrivacyMods" -> LogCategory.NETWORK
 
         // REALTIME
-        "LongPollClient", "LongPollKeepAliveService", "RealtimeHub",
-        "WebSocketClient" -> LogCategory.REALTIME
+        "LongPollClient", "LongPollKeepAliveService", "LongPollKeepAlive", "RealtimeHub",
+        "WebSocketClient", "ChannelWSClient", "EventHub", "StatsQueuePoller" -> LogCategory.REALTIME
 
         // NOTIFICATIONS
         "NotificationsScreen", "NotificationsTab", "NotificationSettings",
         "NotificationsPoller", "VkNotificationsNotifier", "NotificationActionReceiver",
-        "ReplyResultNotifier" -> LogCategory.NOTIFICATIONS
+        "NotifActionReceiver", "ReplyResultNotifier", "MessageNotifier",
+        "SecurityAlertNotifier", "SecurityAlertsPoller", "SnNotifyFilter",
+        "UnreadCounter", "VKNotifyWeb" -> LogCategory.NOTIFICATIONS
 
         // DOWNLOADS
         "VideoDownloadsCard", "TrackDownloadManager", "VideoDownloadManager",
         "DocumentFileStorage", "DownloadManager", "AudioCacheManager",
-        "VideoCacheManager", "StoryVideoCache" -> LogCategory.DOWNLOADS
+        "VideoCacheManager", "StoryVideoCache", "ZipExporter", "ImageSaver",
+        "MusicDownloadService", "Mp4TagWriter", "FilenameBuilder",
+        "OfflineManagerScreen", "CustomPresetStore" -> LogCategory.DOWNLOADS
 
-        // STORIES
+        // STORIES (истории, клипы, видео)
         "StoriesRow", "StoryOfflinePlayer", "StoryViewer", "ClipsRepository",
-        "ClipsViewModel", "StoryCache" -> LogCategory.STORIES
+        "ClipsViewModel", "StoryCache", "ClipsFeedScreen", "ClipsOwnerScreen",
+        "ClipsCounter", "ClipPlayer", "ClipSourceSelector", "ClipBytes",
+        "OkCdnQueryRangeDataSource", "ClipCreateScreen", "ClipCreateViewModel",
+        "ClipInteractionsSheet", "ClipOfflinePlayer", "ClipDownloadService",
+        "ClipVideoDownloadMgr", "ClipVideoDownloadManager", "VideoPlayerScreen",
+        "VideoScreen", "VideoMessageCreateScreen", "VideoPlaybackBus",
+        "VideoPlaybackService", "VideoPipActivity", "VideoPipController",
+        "VideoPlatformRouter", "VideoPicker", "OkVideoRepository", "OkWebViewPlayer",
+        "HevcSupport", "StoryVideoDlService", "StoryVideoDownloadMgr",
+        "VideoDownloadService" -> LogCategory.STORIES
 
         // UI
-        "SovaNavHost", "Settings", "LogScreen", "LogExport", "PermissionManager",
-        "DraggableLogFab", "BugReport", "ThemeManager", "BottomNav" -> LogCategory.UI
+        "SovaNavHost", "Settings", "SettingsScreen", "LogScreen", "LogExport",
+        "PermissionManager", "DraggableLogFab", "BugReport", "ThemeManager", "BottomNav",
+        "DevicesScreen", "PrivacySettings", "SearchScreen", "ProfileScreen",
+        "UserProfileScreen", "EditProfileScreen", "BlacklistScreen", "DocumentsScreen",
+        "DocsPicker", "PhotoPicker", "PhotosScreen", "PhotosContainer",
+        "BookmarksScreen", "FoldersRepository", "FoldersSettings", "FriendsScreen",
+        "CatalogSectionScreen", "DiscoverTab", "BoardTopicScreen", "CommunityScreen",
+        "GroupsScreen", "GroupMembersScreen", "FollowersSubscriptionsScreen",
+        "ChannelPanel", "AddMemberDialog", "PostActionsMenu", "CreatePostDialog",
+        "TrackShare", "UiCaptchaHandler", "SovaPrefs", "InternalBrowser",
+        "CuaVerifySheet", "GiftPicker" -> LogCategory.UI
 
         // CALLS
         // #CALLS-ACK-REOFFER (2026-08-29): "CallSignaling" добавлен (раньше падал в
         // else → SYSTEM). Категория CALLS принудительно включается в SovaApp.startCallSignaling.
-        "WebRtcEngine", "Queuev4Client", "CallScreen", "CallsHistory", "CallSignaling" -> LogCategory.CALLS
+        "WebRtcEngine", "Queuev4Client", "CallScreen", "CallsHistory", "CallSignaling",
+        "CallsContainer", "CallsMain", "CallsCreateCall", "CallsJoinByLink",
+        "CallsSchedule", "CallsStarter", "CallsActiveSection", "CallsFriendsSection",
+        "CallsScheduledSection", "CallsHomeSection", "CallsHeader", "CallsSettings",
+        "CallsSectionRepo", "IncomingCall", "IncomingCallBanner", "CallsHistorySection",
+        "CallsMissedSection", "CallsRecordings", "CallsTranscripts", "CallsWebView",
+        "CallsRecordingPlayer", "CallChatScreen", "CallMediaSettingsPanel",
+        "CallMorePanel", "CallParticipantsPanel", "CallReactionsPanel",
+        "CallRoomsPanel", "CallWaitingHallPanel" -> LogCategory.CALLS
 
         // SYSTEM
         "SovaApp", "MainActivity", "BootReceiver", "Linkify", "AppLog",
-        "CrashHandler", "WorkManager", "PrefsMigration" -> LogCategory.SYSTEM
+        "CrashHandler", "WorkManager", "PrefsMigration", "UpdaterManager" -> LogCategory.SYSTEM
 
         else -> LogCategory.SYSTEM
     }
