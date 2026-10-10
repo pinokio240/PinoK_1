@@ -2168,7 +2168,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        AppLog.i("MainActivity", "onNewIntent: $intent")
+        // #DEEP-LINK-DIAG (2026-10-10): диагностика клика по push-уведомлению.
+        AppLog.i("MainActivity", "#DEEP-LINK onNewIntent: action=${intent.action} flags=${intent.flags} " +
+            "owner=${intent.getLongExtra(re.pinok.realtime.VkUrlDeepLinker.EXTRA_OWNER_ID, -1L)} " +
+            "item=${intent.getLongExtra(re.pinok.realtime.VkUrlDeepLinker.EXTRA_ITEM_ID, -1L)} " +
+            "peer=${intent.getLongExtra(re.pinok.realtime.MessageNotifier.EXTRA_PEER_ID, -1L)}")
         handleOAuthIntent(intent)
         handleShareIntent(intent)
         handleOpenChatIntent(intent)
@@ -2299,6 +2303,8 @@ class MainActivity : ComponentActivity() {
      */
     private fun handleDeepLinkIntent(intent: Intent?) {
         val action = intent?.action ?: return
+        // #DEEP-LINK-DIAG (2026-10-10): какая ветка сработает.
+        AppLog.i("MainActivity", "#DEEP-LINK handleDeepLinkIntent: action=$action")
         val deepLink: re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction
         when (action) {
             // §47 #URL-INTENT-FILTER: системный ACTION_VIEW с VK URL data.

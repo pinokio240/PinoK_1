@@ -15118,3 +15118,101 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Проверка:** сборка на пользователе (правило). Требуется тест: в режиме ALL (1) приходят push о новых постах сообществ (с задержкой ~интервал опроса), сообщения из диалогов приходят мгновенно и не перекрываются; в SILENT/MESSAGES_ONLY посты сообществ не приходят.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## COMMUNITY-POSTS-DEEPLINK — 2026-10-10 — тап по пушу поста сообщества ведёт к посту
+
+**Запрос:** «„push-уведомления о новых постах“ надо сделать кликабельным, чтобы пуш вёл к посту».
+
+**Причина:** в `CommunityPostsPoller.showPostNotification` contentIntent вёл просто на MainActivity (без указания поста) — тап открывал приложение, но не конкретный пост.
+
+**Фикс:** contentIntent теперь формируется как deep-link `VkUrlDeepLinker.ACTION_OPEN_POST` с extras `EXTRA_OWNER_ID` (= post.ownerId) и `EXTRA_ITEM_ID` (= post.id). MainActivity.handleDeepLinkIntent (уже вызывается в onCreate и onNewIntent) обрабатывает ACTION_OPEN_POST → DeepLinkAction.OpenPost → pendingDeepLink → SovaNavHost навигирует на PostDetailScreen (строки 548-557). Переиспользован существующий механизм deep-link (тот же, что у новостных уведомлений VkNotificationsNotifier), ничего нового в MainActivity/SovaNavHost не потребовалось.
+
+**Доп. (звук/вибрация):** в `showPostNotification` добавлено применение пользовательских тумблеров `pushSoundEnabled`/`pushVibrationEnabled` (аналог `VkNotificationsNotifier.applyDisplayPrefs`, которая private): `setSilent(true)` при выключенном звуке и `setVibrate(longArrayOf(0))` при выключенной вибрации. Канал `community_posts` = IMPORTANCE_DEFAULT + enableVibration(true) — по умолчанию звук и вибрация есть, настройки лишь уважаются.
+
+**Проверка:** сборка на пользователе (правило). Требуется тест: тап по пушу о новом посте сообщества открывает именно этот пост (PostDetailScreen), в т.ч. из свёрнутого приложения; отключение «Звук уведомлений»/«Вибрация уведомлений» в настройках гасит звук/вибрацию пуша постов сообществ.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## COMMUNITY-POSTS-DISTINGUISH — 2026-10-10 — разграничение сообщений друзей и уведомлений сообществ (звук, heads-up, цвет)
+
+**Запрос:** «сообщения от друзей (диалоги и чаты) должны выделяться от уведомлений сообществ», «разный звук», «heads-up», «разные тона цвета», свободная палитра, по умолчанию серый.
+
+**Что сделано:**
+- **Канал постов сообществ** (`community_posts`, IMPORTANCE_DEFAULT — уже БЕЗ heads-up): задан явный тон через `setSound(Settings.System.DEFAULT_NOTIFICATION_URI, AudioAttributes(USAGE_NOTIFICATION_EVENT))`. Разница важности каналов (HIGH у сообщений vs DEFAULT у сообществ) даёт: сообщения — heads-up+звонче, посты сообществ — тише/спокойнее ниже в шторке. Между классами задан порядок в шторке (`setSortKey("1")` у сообществ vs `"0"` у сообщений).
+- **Цвет уведомления поста сообщества — пользовательский** (настройка `communityPostColor`, default серый `0x9E9E9E`), применяется в `showPostNotification.setColor`. Цвет сообщений остался VK-blue `#4A76A8` (не тронут).
+- **UI настройки** (SettingsScreen, секция «Отображение и звук»): карточка «Цвет уведомлений сообществ» с точкой текущего цвета → `CommunityPostColorDialog` — свободная палитра (24 пресета + поле hex `#RRGGBB` с валидацией, предпросмотр, OK/Отмена). Без новых библиотек.
+- **SovaPrefs**: ключ `COMMUNITY_POST_COLOR`, поле Snapshot `communityPostColor: Int = 0x9E9E9E` (default серый, НЕ 0 — чтобы не спутать с «системный»), сеттер `setCommunityPostColor`.
+
+**Исправление в ходе ревью:** Compose `Color(int)`/`setColor(int)` ожидают ARGB; значения вида `0x9E9E9E`/`0xF44336` (без байта альфы 0xFF) давали бы прозрачный цвет. Добавлены хелперы нормализации альфы: `argbOf()` (SettingsScreen, для UI-точки/пресетов/предпросмотра) и `opaqueArgb()` (CommunityPostsPoller, для `setColor`); фолбэк серого в поллере — `0xFF9E9E9E.toInt()`.
+
+**Проверка:** сборка на пользователе (правило). Требуется тест: сообщения из диалогов — heads-up+звонче+VK-blue; посты сообществ — тише/без heads-up/пользовательский цвет (по умолчанию серый), настраивается в Настройки→Уведомления→«Цвет уведомлений сообществ».
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## DEEP-LINK-DIAG — 2026-10-10 — диагностика: клик по push-уведомлению поста сообщества не открывает пост
+
+**Запрос:** «почему из верхней шторки когда кликаю по сообщению не переходит в сообщество к посту» (уведомление поста сообщества из нового поллера CommunityPostsPoller). Приложение открыто, тап — «ничего не происходит».
+
+**Состояние кода:** вся цепочка клика корректна по логике — PendingIntent (ACTION_OPEN_POST + ownerId/itemId) → MainActivity.onNewIntent → handleDeepLinkIntent → pendingDeepLink → SovaNavHost.LaunchedEffect → nav.navigate("post_detail/{ownerId}/{postId}") → PostDetailScreen (грузит пост сам через wallGetById). Destination `post_detail` зарегистрирован (SovaNavHost:2986-2994).
+
+**Действие:** добавлена временная диагностика `#DEEP-LINK-DIAG` (3 лог-точки), чтобы определить обрыв:
+- `MainActivity.onNewIntent` — action/flags/owner/item/peer intent;
+- `MainActivity.handleDeepLinkIntent` — какая ветка сработала (action);
+- `SovaNavHost` LaunchedEffect — дошёл ли pendingDeepLink.
+Остаётся пересобрать (правило — сборка у пользователя) и снять logcat по тегам MainActivity/SovaNavHost при клике. По результату — исправить корень (гипотезы: intent не доходит до onNewIntent / не распознаётся action / pendingDeepLink сбрасывается).
+
+**Проверка:** сборка и logcat на пользователе. Требуется тест: после клика по пушу в logcat видно, до какой точки доходит цепочка.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## COMMUNITY-POSTS-DEEPLINK-ROLLBACK — 2026-10-10 — откат введения кликабельности к посту (логирование осталось)
+
+**Запрос:** «нет, что-то ты вообще не то затронул — вводя кликабельность, откатывай назад, но логирование оставь».
+
+**Решение:** в `CommunityPostsPoller.showPostNotification` contentIntent возвращён к исходному виду — просто `Intent(MainActivity)` с `FLAG_ACTIVITY_NEW_TASK|CLEAR_TOP`, БЕЗ `ACTION_OPEN_POST` и extras (ownerId/itemId). Deep-link к посту убран полностью (0 вхождений `ACTION_OPEN_POST`/`EXTRA_OWNER_ID`/`EXTRA_ITEM_ID` в поллере).
+
+**Сохранено (НЕ откачено):** диагностические логи `#DEEP-LINK-DIAG` (MainActivity.onNewIntent, MainActivity.handleDeepLinkIntent, SovaNavHost LaunchedEffect) — три лог-точки остаются для разбора клика по пушу. Также остаются: звук/вибрация (`setSound`, `setSilent`, `setVibrate`), пользовательский цвет (`communityPostColor` + `opaqueArgb`), UI палитры в SettingsScreen, префы, порядок/heads-up каналов.
+
+**Причина:** пользователь посчитал, что введение кликабельности «затронуто не то» (правка по глубокой ссылке не соответствовала ожиданиям); откатываем именно её, сохраняя диагностику и остальные изменения #COMMUNITY-POSTS-DISTINGUISH.
+
+**Проверка:** сборка на пользователе (правило). Требуется лог после отката: клик по пушу больше не пытается открыть пост как deep-link (нет ACTION_OPEN_POST), диагностика MainActivity/SovaNavHost по-прежнему пишет в logcat.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## COMMUNITY-POSTS-DEEPLINK-REAPPLY — 2026-10-10 — возврат правки кликабельности пуша к посту
+
+**Запрос:** «я погорячился, верни правку».
+
+**Действие:** откат `COMMUNITY-POSTS-DEEPLINK-ROLLBACK` отменён — в `CommunityPostsPoller.showPostNotification` contentIntent снова формируется как deep-link `VkUrlDeepLinker.ACTION_OPEN_POST` с extras `EXTRA_OWNER_ID` (= post.ownerId) и `EXTRA_ITEM_ID` (= post.id). Тап по пушу поста сообщества снова ведёт к посту через MainActivity.handleDeepLinkIntent → DeepLinkAction.OpenPost → pendingDeepLink → SovaNavHost → PostDetailScreen.
+
+**Диагностика `#DEEP-LINK-DIAG` остаётся** (не убиралась): MainActivity.onNewIntent, MainActivity.handleDeepLinkIntent, SovaNavHost LaunchedEffect — для разбора, если клик не сработает.
+
+**Проверка:** сборка на пользователе (правило). Требуется тест: тап по пушу поста сообщества открывает пост; в logcat видны точки #DEEP-LINK-DIAG (MainActivity.onNewIntent/handleDeepLinkIntent, SovaNavHost DEEP_LINK_EFFECT) — по ним локализуется обрыв, если клик не сработает.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## DEEP-LINK-DIAG-TOGGLE — 2026-10-10 — тумблер отключения логирования диагностики пуша + подтверждение клика
+
+**Запрос:** «Сначала кликабельность — успех», затем «оставить диагностику, но добавить тумблер по отключению логирования этого раздела + закоммитить».
+
+**Подтверждено:** тап по пушу поста сообщества теперь открывает пост (PostDetailScreen) — кликабельность работает (deep-link ACTION_OPEN_POST из CommunityPostsPoller → MainActivity.handleDeepLinkIntent → SovaNavHost → PostDetail).
+
+**Диагностика** `#DEEP-LINK-DIAG` оставлена, но переведена на гейтируемую секцию:
+- Лог-сообщения теперь начинаются с маркера `#DEEP-LINK` (префикс сообщения) — 3 места: `MainActivity.onNewIntent` («#DEEP-LINK onNewIntent: …»), `MainActivity.handleDeepLinkIntent` («#DEEP-LINK handleDeepLinkIntent: …»), `SovaNavHost` LaunchedEffect («#DEEP-LINK DEEP_LINK_EFFECT: …»).
+- В SettingsScreen добавлен тумблер в блок «Паттерны диагностики (секции логов)»: `listOf("#DEEP-LINK") to "Пуш-переходы: диагностика (deep-link)"` — выключение гейтит логи секции (ERROR всегда пишутся). Механизм существующий (#LOG-SECTIONS, SovaPrefs.logSectionsOff + AppLog.setDisabledSections — применяется без перезапуска).
+
+**Проверка:** сборка на пользователе (правило). Требуется тест: тумблер «Пуш-переходы: диагностика» в Настройки→Логирование→«Паттерны диагностики» выключает/включает логи #DEEP-LINK; клик по пушу поста по-прежнему открывает пост.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

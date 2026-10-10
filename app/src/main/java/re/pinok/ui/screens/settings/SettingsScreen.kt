@@ -3703,6 +3703,10 @@ private val LOG_SECTION_TOGGLES: List<Pair<List<String>, String>> = listOf(
     listOf("#C9") to "Админка: журнал действий",
     listOf("#CALLS") to "Звонки: диагностика",
     listOf("#MSG") to "Сообщения: архив и поиск",
+    // #DEEP-LINK-DIAG (2026-10-10): диагностика клика по push-уведомлению
+    // (MainActivity.onNewIntent/handleDeepLinkIntent, SovaNavHost DEEP_LINK_EFFECT).
+    // Можно выключить — логи глубокой ссылки не пишутся (ERROR всё равно пишутся).
+    listOf("#DEEP-LINK") to "Пуш-переходы: диагностика (deep-link)",
 )
 
 /**
@@ -6801,6 +6805,9 @@ private fun NotificationsTab(
     var silentUntil by remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
     var silentLoading by remember { androidx.compose.runtime.mutableStateOf(false) }
 
+    // #COMMUNITY-POSTS: состояние диалога выбора цвета уведомлений сообществ.
+    var showCommunityColorDialog by remember { androidx.compose.runtime.mutableStateOf(false) }
+
     // ────────────────────────────────────────────────────────────────────
     // Fix #302 (Task 2-b): состояние sn_* notification toggles.
     // ────────────────────────────────────────────────────────────────────
@@ -7702,6 +7709,50 @@ private fun NotificationsTab(
                 onToggle = { v -> scope.launch { app.prefs.setPushVibrationEnabled(v) } },
             )
         }
+        // #COMMUNITY-POSTS: настраиваемая «свободная палитра» для цвета уведомлений
+        // сообществ (отличен от VK-blue сообщений). Открывает диалог с сеткой
+        // предзаданных цветов + вводом hex (#RRGGBB).
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (s.pushEnabled) Modifier.clickable { showCommunityColorDialog = true }
+                        else Modifier,
+                    ),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(
+                            "Цвет уведомлений сообществ",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (s.pushEnabled) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Цвет тона уведомлений о новых постах сообществ (отдельный от синего сообщений)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // Текущий выбранный цвет как цветная точка.
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(
+                                color = if (s.communityPostColor != 0) Color(argbOf(s.communityPostColor))
+                                        else Color(argbOf(0x9E9E9E)),
+                                shape = CircleShape,
+                            )
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                    )
+                }
+            }
+        }
         item {
             ToggleRow(
                 title = "Кнопка «Прочитать»",
@@ -7856,6 +7907,163 @@ private fun NotificationsTab(
             }
         }
     }
+
+    // #COMMUNITY-POSTS: диалог выбора цвета уведомлений сообществ (свободная
+    // палитра: сетка предзаданных цветов + ввод hex #RRGGBB). Окно НАРУЖЕ
+    // LazyColumn (паттерн #PIN-DIALOG-OVERLAY), состояние — showCommunityColorDialog.
+    if (showCommunityColorDialog) {
+        CommunityPostColorDialog(
+            currentColor = s.communityPostColor,
+            onDismiss = { showCommunityColorDialog = false },
+            onConfirm = { c ->
+                scope.launch { app.prefs.setCommunityPostColor(c) }
+                showCommunityColorDialog = false
+            },
+        )
+    }
+}
+
+/**
+ * #COMMUNITY-POSTS: диалог «свободной палитры» для цвета уведомлений сообществ.
+ *
+ * Без внешних библиотек: сетка предзаданных цветов (24) + точное битовое hex-поле
+ * (#RRGGBB) с валидацией. Все цвета — opaque ARGB (альфа фиксирована 0xFF). Выбор
+ * пресета сразу обновляет hex-поле; ввод hex некорректного значения подсвечивает
+ * поле ошибкой и не применяется, пока не станет валидным.
+ */
+@Composable
+private fun CommunityPostColorDialog(
+    currentColor: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    // Пресеты: 4 ряда × 6 цветов. Первый — «системный» серый дефолт #9E9E9E.
+    val presets = listOf(
+        0x9E9E9E, 0x757575, 0x616161, 0x424242, 0x37474F, 0x000000,
+        0xF44336, 0xE91E63, 0x9C27B0, 0x673AB7, 0x3F51B5, 0x2196F3,
+        0x03A9F4, 0x00BCD4, 0x009688, 0x4CAF50, 0x8BC34A, 0xFFEB3B,
+        0xFFC107, 0xFF9800, 0xFF5722, 0x795548, 0x4A76A8, 0xFFFFFF,
+    )
+
+    var selected by remember(currentColor) { androidx.compose.runtime.mutableStateOf(currentColor) }
+    var hexText by remember(currentColor) { androidx.compose.runtime.mutableStateOf(toHexNoPrefix(currentColor)) }
+    var hexError by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+
+    fun parseHex(hex: String): Int? {
+        var s = hex.trim()
+        if (s.startsWith("#")) s = s.drop(1)
+        if (s.startsWith("0x", ignoreCase = true)) s = s.drop(2)
+        if (s.length != 6 && s.length != 8) return null
+        val v = s.toLongOrNull(16) ?: return null
+        return if (s.length == 6) (0xFF000000.toInt() or v.toInt()) else v.toInt()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Цвет уведомлений сообществ") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Выберите цвет тона уведомлений о новых постах сообществ. " +
+                        "Сообщения из диалогов остаются VK-синими (не меняются).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                // Сетка предзаданных цветов: 4 ряда по 6.
+                presets.chunked(6).forEach { rowColors ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        rowColors.forEach { c ->
+                            val isSel = c == selected
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(color = Color(argbOf(c)), shape = CircleShape)
+                                    .border(
+                                        width = if (isSel) 3.dp else 1.dp,
+                                        color = if (isSel) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.outline,
+                                        shape = CircleShape,
+                                    )
+                                    .clickable {
+                                        selected = c
+                                        hexText = toHexNoPrefix(c)
+                                        hexError = null
+                                    },
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = hexText,
+                    onValueChange = { raw ->
+                        hexText = raw
+                        val parsed = parseHex(raw)
+                        if (parsed != null) {
+                            hexError = null
+                            selected = parsed
+                        } else {
+                            hexError = "Некорректный hex (пример: #4A76A8)"
+                        }
+                    },
+                    label = { Text("Hex (#RRGGBB)") },
+                    singleLine = true,
+                    isError = hexError != null,
+                    supportingText = { hexError?.let { Text(it, color = MaterialTheme.colorScheme.error) } },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                // Предпросмотр выбранного цвета.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(color = Color(argbOf(selected)), shape = CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                    )
+                    Text(
+                        "#${toHexNoPrefix(selected)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = (parseHex(hexText) != null),
+                onClick = { onConfirm(parseHex(hexText) ?: selected) },
+            ) { Text("OK") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+        },
+    )
+}
+
+/** #COMMUNITY-POSTS: int ARGB → строка "RRGGBB" (6 hex без префикса и без альфы). */
+private fun toHexNoPrefix(argb: Int): String {
+    return String.format(java.util.Locale.US, "%06X", (argb and 0xFFFFFF))
+}
+
+/**
+ * #COMMUNITY-POSTS: нормализует int до opaque ARGB для [Color] (Compose ожидает
+ * байт альфы в старшем разряде; значения вида 0x9E9E9E/0xF44336 без 0xFF дали бы
+ * alpha=0 → прозрачный цвет). Если альфа-байт отсутствует (==0) — подставляем 0xFF.
+ */
+private fun argbOf(value: Int): Int {
+    return if (((value ushr 24) and 0xFF) == 0) (value and 0xFFFFFF) or 0xFF000000.toInt() else value
 }
 
 /** Вспомогательный Modifier-мост для clickable без отдельного import-блока. */

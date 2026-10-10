@@ -478,6 +478,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // #COMMUNITY-POSTS: тумблер и seenKeys постов сообществ.
             communityPostPushEnabled = p[Keys.COMMUNITY_POST_PUSH_ENABLED] ?: true,
             communityPostsSeenKeys   = p[Keys.COMMUNITY_POSTS_SEEN_KEYS] ?: "",
+            // #COMMUNITY-POSTS: цвет уведомлений постов сообществ (ARGB int,
+            // default серый 0x9E9E9E; НЕ 0 — чтобы не спутать с «системный»).
+            communityPostColor       = p[Keys.COMMUNITY_POST_COLOR]     ?: 0x9E9E9E,
 
             // §42.2 #PUSH-ENHANCED: расширенные настройки отображения/группировки.
             // Авто-скрытие (0 = никогда, иначе ms до auto-cancel).
@@ -1193,6 +1196,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     // #COMMUNITY-POSTS: setters для push-уведомлений о постах сообществ.
     suspend fun setCommunityPostPushEnabled(v: Boolean) = put(Keys.COMMUNITY_POST_PUSH_ENABLED, v)
     suspend fun setCommunityPostsSeenKeys(v: String)    = put(Keys.COMMUNITY_POSTS_SEEN_KEYS, v)
+    // #COMMUNITY-POSTS: цвет уведомлений постов сообществ (ARGB int, default серый).
+    suspend fun setCommunityPostColor(v: Int)           = put(Keys.COMMUNITY_POST_COLOR, v)
 
     // §42.2 #PUSH-ENHANCED: setters для расширенных настроек.
     suspend fun setPushAutoDismissMs(v: Long)           = put(Keys.PUSH_AUTO_DISMISS_MS, v)
@@ -1686,6 +1691,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          */
         val communityPostPushEnabled: Boolean = true,
         val communityPostsSeenKeys: String = "",
+        /**
+         * #COMMUNITY-POSTS: цвет уведомлений о новых постах сообществ.
+         * ARGB int (default серый 0x9E9E9E — НЕ 0, чтобы не спутать с «системный»).
+         * Потребитель — CommunityPostsPoller.showPostNotification (setColor).
+         */
+        val communityPostColor: Int = 0x9E9E9E,
 
         /**
          * §42.2 #PUSH-ENHANCED: расширенные настройки отображения и группировки.
@@ -2161,6 +2172,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // #COMMUNITY-POSTS: push-уведомления о новых постах сообществ.
         val COMMUNITY_POST_PUSH_ENABLED = booleanPreferencesKey("community_post_push_enabled")
         val COMMUNITY_POSTS_SEEN_KEYS   = stringPreferencesKey("community_posts_seen_keys")
+        // #COMMUNITY-POSTS: цвет уведомлений постов сообществ (ARGB int, default серый).
+        val COMMUNITY_POST_COLOR        = intPreferencesKey("community_post_color")
     }
 
     // Fix #189: defaults для Auth Domains Config.

@@ -632,6 +632,8 @@ fun SovaNavHost(
     // После навигации сбрасываем state через onDeepLinkConsumed.
     LaunchedEffect(pendingDeepLink) {
         val link = pendingDeepLink ?: return@LaunchedEffect
+        // #DEEP-LINK-DIAG (2026-10-10): LaunchedEffect получил deep-link.
+        AppLog.i("SovaNavHost", "#DEEP-LINK DEEP_LINK_EFFECT: link=${link.javaClass.simpleName} (from PendingIntent)")
         handleDeepLink(link, nav)
         onDeepLinkConsumed()
     }

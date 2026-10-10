@@ -7,7 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.CoroutineScope
@@ -103,9 +105,31 @@ class CommunityPostsPoller(
                 enableVibration(true)
                 enableLights(true)
                 setShowBadge(true)
+                // #COMMUNITY-POSTS: задаём ОТДЕЛЬНЫЙ тон для канала постов сообществ —
+                // конкретизированный дефолтный notification-тон с эксплицитными
+                // AudioAttributes(USAGE_NOTIFICATION_EVENT). Вместе с IMPORTANCE_DEFAULT
+                // это даёт более тихий/менее навязчивый тон, чем HIGH-канал `messages`
+                // (сообщения из диалогов), где тон не переопределён явно. Звук/вибрацию
+                // на уровне уведомления дополнительно гасим setSilent/setVibrate в
+                // showPostNotification при выключенных тумблерах.
+                setSound(
+                    Settings.System.DEFAULT_NOTIFICATION_URI,
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                        .build(),
+                )
             }
             nm.createNotificationChannel(channel)
             AppLog.i(TAG, "Channel '$CHANNEL_COMMUNITY_POSTS' created (IMPORTANCE_DEFAULT)")
+        }
+
+        /**
+         * #COMMUNITY-POSTS: нормализует int до opaque ARGB для setColor (ожидает
+         * байт альфы в старшем разряде; 0x9E9E9E без 0xFF дал бы прозрачный цвет).
+         * Если альфа-байт == 0 — подставляем 0xFF.
+         */
+        private fun opaqueArgb(value: Int): Int {
+            return if (((value ushr 24) and 0xFF) == 0) (value and 0xFFFFFF) or 0xFF000000.toInt() else value
         }
     }
 
@@ -286,6 +310,13 @@ class CommunityPostsPoller(
 
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                // #COMMUNITY-POSTS: тап по уведомлению ведёт К ПОСТУ (deep-link),
+                // а не просто на MainActivity. MainActivity.handleDeepLinkIntent
+                // обрабатывает ACTION_OPEN_POST → pendingDeepLink → SovaNavHost
+                // навигирует на PostDetailScreen (ownerId/postId).
+                action = re.pinok.realtime.VkUrlDeepLinker.ACTION_OPEN_POST
+                putExtra(re.pinok.realtime.VkUrlDeepLinker.EXTRA_OWNER_ID, post.ownerId)
+                putExtra(re.pinok.realtime.VkUrlDeepLinker.EXTRA_ITEM_ID, post.id)
             }
             val pendingIntent = PendingIntent.getActivity(
                 context,
@@ -305,7 +336,11 @@ class CommunityPostsPoller(
                 .setWhen(post.date * 1000L)
                 .setShowWhen(true)
                 .setAutoCancel(true)
-                .setColor(0xFF4A76A8.toInt())
+                // #COMMUNITY-POSTS: цвет уведомления поста сообщества — пользовательский
+                // (Настройки → Уведомления → Цвет уведомлений сообществ). Default серый
+                // 0x9E9E9E. Если 0 (не задан) — фолбэк на серый. setColor ожидает ARGB —
+                // нормализуем альфу (0x9E9E9E без 0xFF дал бы прозрачный).
+                .setColor(if (snap.communityPostColor != 0) opaqueArgb(snap.communityPostColor) else 0xFF9E9E9E.toInt())
                 .setContentIntent(pendingIntent)
 
             // Аватар сообщества (photo100, fallback photo200) — best-effort.
@@ -317,6 +352,19 @@ class CommunityPostsPoller(
                         builder.setLargeIcon(bmp)
                     }
                 }
+            }
+
+            // #COMMUNITY-POSTS: применяем пользовательские тумблеры звука/вибрации
+            // пуша (аналог VkNotificationsNotifier.applyDisplayPrefs — она private).
+            // Канал community_posts = IMPORTANCE_DEFAULT + enableVibration(true),
+            // поэтому по умолчанию звук и вибрация есть; здесь только уважаем
+            // настройки «Звук уведомлений» / «Вибрация уведомлений» (Настройки →
+            // Уведомления → Отображение и звук).
+            if (snap.pushSoundEnabled == false) {
+                builder.setSilent(true)
+            }
+            if (snap.pushVibrationEnabled == false) {
+                builder.setVibrate(longArrayOf(0))
             }
 
             NotificationManagerCompat.from(context).notify(notifId, builder.build())
