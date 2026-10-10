@@ -18568,7 +18568,15 @@ class VKApiClient(
                         if (ownerIn == null && ownerFallback != null) videoObj.addProperty("owner_id", ownerFallback)
                         videoObj
                     }
-                    parseVideoFull(videoObjWithId ?: videoObj)
+                    // #CLIP-NO-FILES-AD (2026-10-10): рекламный клип-под-ссылку
+                    // short_video_mytarget_sdk_video (sdk_source, creativeType=vkClips,
+                    // motion-ads + ctaText/trackingLink) НЕ несёт видео-данных (нет files,
+                    // id/owner_id) — его невозможно воспроизвести, и он «висеет на загрузке»,
+                    // т.к. guard по id его не fetch-ит. Отсеиваем по типу на уровне парсинга.
+                    // Обычные клипы "без files" НЕ трогаем — у них есть фоллбэк-докачка
+                    // через shortVideo.get (см. getClip). Только sdk-рекламные сниппеты.
+                    if (typeStr?.contains("sdk", ignoreCase = true) == true) null
+                    else parseVideoFull(videoObjWithId ?: videoObj)
                 } catch (e: Exception) {
                     AppLog.w("VKApiClient", "shortVideoGetRecom: skip bad item ${o.toString().take(200)}: ${e.message}")
                     null
@@ -18703,7 +18711,10 @@ class VKApiClient(
                         else -> getObj(o, "video") ?: getObj(o, "clip")
                             ?: getObj(o, "short_video") ?: getObj(o, "item") ?: o
                     }
-                    parseVideoFull(videoObj)
+                    // #CLIP-NO-FILES-AD (2026-10-10): отсев рекламных sdk-клипов
+                    // (short_video_mytarget_sdk_video — клип-под-ссылку без video files).
+                    if (typeStr?.contains("sdk", ignoreCase = true) == true) null
+                    else parseVideoFull(videoObj)
                 } catch (e: Exception) {
                     AppLog.w("VKApiClient", "shortVideo.getOwnerVideos: skip bad item ${o.toString().take(200)}: ${e.message}")
                     null
