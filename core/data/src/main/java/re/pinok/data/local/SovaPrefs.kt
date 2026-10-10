@@ -481,6 +481,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // #COMMUNITY-POSTS: цвет уведомлений постов сообществ (ARGB int,
             // default серый 0x9E9E9E; НЕ 0 — чтобы не спутать с «системный»).
             communityPostColor       = p[Keys.COMMUNITY_POST_COLOR]     ?: 0x9E9E9E,
+            // #DOZE-RELIABILITY: время последнего показа battery-exemption запроса.
+            batteryExemptionAskedAt  = p[Keys.BATTERY_EXEMPTION_ASKED_AT] ?: 0L,
 
             // §42.2 #PUSH-ENHANCED: расширенные настройки отображения/группировки.
             // Авто-скрытие (0 = никогда, иначе ms до auto-cancel).
@@ -1198,6 +1200,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCommunityPostsSeenKeys(v: String)    = put(Keys.COMMUNITY_POSTS_SEEN_KEYS, v)
     // #COMMUNITY-POSTS: цвет уведомлений постов сообществ (ARGB int, default серый).
     suspend fun setCommunityPostColor(v: Int)           = put(Keys.COMMUNITY_POST_COLOR, v)
+    // #DOZE-RELIABILITY: время последнего показа battery-exemption запроса (мс epoch).
+    suspend fun setBatteryExemptionAskedAt(v: Long)     = put(Keys.BATTERY_EXEMPTION_ASKED_AT, v)
 
     // §42.2 #PUSH-ENHANCED: setters для расширенных настроек.
     suspend fun setPushAutoDismissMs(v: Long)           = put(Keys.PUSH_AUTO_DISMISS_MS, v)
@@ -1697,6 +1701,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * Потребитель — CommunityPostsPoller.showPostNotification (setColor).
          */
         val communityPostColor: Int = 0x9E9E9E,
+        /**
+         * #DOZE-RELIABILITY: время (мс epoch) последнего показа диалога-предложения
+         * отключить оптимизацию батареи. 0 = никогда. Нужен, чтобы не спамить
+         * запросом (показываем не чаще раза в 7 дней, пока пользователь не разрешит).
+         */
+        val batteryExemptionAskedAt: Long = 0L,
 
         /**
          * §42.2 #PUSH-ENHANCED: расширенные настройки отображения и группировки.
@@ -2174,6 +2184,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val COMMUNITY_POSTS_SEEN_KEYS   = stringPreferencesKey("community_posts_seen_keys")
         // #COMMUNITY-POSTS: цвет уведомлений постов сообществ (ARGB int, default серый).
         val COMMUNITY_POST_COLOR        = intPreferencesKey("community_post_color")
+        // #DOZE-RELIABILITY: время последнего показа предложения battery-exemption
+        // (мс epoch). Нужен, чтобы не спамить пользователя запросом.
+        val BATTERY_EXEMPTION_ASKED_AT  = longPreferencesKey("battery_exemption_asked_at")
     }
 
     // Fix #189: defaults для Auth Domains Config.

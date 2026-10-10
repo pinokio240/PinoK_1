@@ -15216,3 +15216,27 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Проверка:** сборка на пользователе (правило). Требуется тест: тумблер «Пуш-переходы: диагностика» в Настройки→Логирование→«Паттерны диагностики» выключает/включает логи #DEEP-LINK; клик по пушу поста по-прежнему открывает пост.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## DOZE-RELIABILITY — 2026-10-10 — устойчивость фоновой доставки к Doze (AlarmManager wakeup + battery-exemption)
+
+**Запрос:** «надёжнее переживать Doze», согласованный план мер C (AlarmManager) и D (battery-exemption), «делаем».
+
+**Контекст:** FCM отсутствует — доставка сообщений зависит от LongPoll/EventHub в процессе SovaApp. Android Doze может усыпить сеть/CPU фонового процесса даже при живом foreground-сервисе (LongPollKeepAliveService держит процесс, но не гарантирует сеть). Сообщения перестают приходить до ручного открытия приложения.
+
+**Мера C — AlarmManager wakeup (#DOZE-RELIABILITY):**
+- Новый `RealtimeWakeReceiver.kt` (BroadcastReceiver): по будильнику будит realtime (`longPollClient.notifyResumed()` + `eventHubClient.start()` при валидном токене) и перепланирует следующий будильник.
+- `schedule(context)`: `AlarmManager.setExactAndAllowWhileIdle` (если разрешены точные будильники, API 31+ проверка `canScheduleExactAlarms()`, иначе inexact `setAndAllowWhileIdle`) раз в 15 мин (INTERVAL_MS; в Doze системный лимит ~9 мин — безопасно).
+- `cancel(context)` — при logout/выходе/нет токена.
+- Интеграция: планирование в `LongPollKeepAliveService.start()`/`onStartCommand` и `BootReceiver`; отмена в `MainActivity` (logout, полный выход, ветка «нет токена»). Receiver объявлен в манифесте (exported=false).
+
+**Мера D — Battery-exemption настоятельно:**
+- `SovaPrefs`: ключ `BATTERY_EXEMPTION_ASKED_AT` (Long, 0 = никогда) + Snapshot-поле `batteryExemptionAskedAt: Long = 0L` (с дефолтом, безопасно для ручных Snapshot-конструкторов) + сеттер.
+- `MainActivity`: при старте (LaunchedEffect) — если оптимизация батареи АКТИВНА и запрос не показывался ≥7 дней — AlertDialog «Работа в фоне» с кнопкой «Разрешить» (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, fallback список) и «Позже». Частота — не чаще раза в 7 дней (фиксируется в префе).
+
+**Проверки:** скобочный баланс всех файлов — перекосы `()` только пред-существующие (MainActivity/SovaPrefs −2 от HEAD симметрично); RealtimeWakeReceiver/LongPollKeepAliveService/BootReceiver — BALANCED. Новых дублей имён нет. НЕ запускался gradle (правило).
+
+**Проверка (после сборки):** экран выключен 30-60 мин → сообщения приходят в фоне; в logcat видны `#DOZE-RELIABILITY wake-receiver` каждые ~15 мин; диалог «Работа в фоне» появляется один раз (не чаще 7 дней).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

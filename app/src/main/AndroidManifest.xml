@@ -451,6 +451,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- #DOZE-RELIABILITY (2026-10-10): периодическое пробуждение realtime
+             (AlarmManager.setExactAndAllowWhileIdle) — LongPoll/EventHub продолжают
+             доставку даже в глубоком Doze. Будильник явный (exported=false,
+             без intent-filter), планируется из LongPollKeepAliveService/BootReceiver. -->
+        <receiver
+            android:name=".realtime.RealtimeWakeReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <!--
           LongPollKeepAliveService (Fix #340) — foreground-сервис, удерживающий
           процесс живым в фоне. Без FCM это единственный способ получать

@@ -4,6 +4,7 @@ package re.pinok.ui
 
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -33,6 +34,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 // #AUTH-FIRST-OPEN-GUEST-2: стрелка «Назад» в guest-настройках.
 import androidx.compose.material.icons.Icons
@@ -1010,6 +1013,61 @@ class MainActivity : ComponentActivity() {
                 // Если токен невалиден (истёк/очищен) — boot выполняется заново,
                 // запускает AuthActivity для silent re-login через remixsid (Fix #107).
                 if (snap != null) {
+                    // #DOZE-RELIABILITY (2026-10-10): предложение отключить оптимизацию
+                    // батареи (мера D) — по одному разу в 7 дней, пока пользователь не
+                    // разрешил. Снимает Doze-ограничения целиком → сообщения и звонки
+                    // в фоне приходят стабильнее (LongPoll/EventHub живут дольше).
+                    var showBatteryDialog by remember(snap.batteryExemptionAskedAt) {
+                        mutableStateOf(false)
+                    }
+                    LaunchedEffect(snap.batteryExemptionAskedAt, currentAuthVersion, isOfflineMode) {
+                        val s = snap
+                        if (s == null) return@LaunchedEffect
+                        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                        val optimized = if (pm == null) true else !pm.isIgnoringBatteryOptimizations(packageName)
+                        val lastAsked = s.batteryExemptionAskedAt
+                        val askedRecently = lastAsked > 0L && (System.currentTimeMillis() - lastAsked) < 7L * 24L * 60L * 60L * 1000L
+                        if (optimized && !askedRecently) {
+                            showBatteryDialog = true
+                            // Фиксируем момент показа, чтобы не показывать снова 7 дней.
+                            runCatching { scope.launch { app.prefs.setBatteryExemptionAskedAt(System.currentTimeMillis()) } }
+                        }
+                    }
+                    if (showBatteryDialog) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showBatteryDialog = false },
+                            title = { Text("Работа в фоне") },
+                            text = {
+                                Text(
+                                    "Чтобы сообщения и звонки приходили вовремя, PinoK нужен режим " +
+                                        "без ограничений батареи. Иначе система может останавливать " +
+                                        "доставку, когда экран выключен.",
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showBatteryDialog = false
+                                    try {
+                                        startActivity(
+                                            Intent(
+                                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                                android.net.Uri.parse("package:" + packageName),
+                                            )
+                                        )
+                                    } catch (e: Exception) {
+                                        try {
+                                            startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                        } catch (e2: Exception) {
+                                            AppLog.w("MainActivity", "battery exemption dialog intent failed: " + e2.message)
+                                        }
+                                    }
+                                }) { Text("Разрешить") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showBatteryDialog = false }) { Text("Позже") }
+                            },
+                        )
+                    }
                     LaunchedEffect(snap.lockerEnabled, snap.lockerPinHash, bootLocal, currentAuthVersion, isOfflineMode) {
                         // Скип только если уже загрузились AND токен жив AND
                         // boot-решение (локер) в этом процессе уже принято.
@@ -1122,6 +1180,8 @@ class MainActivity : ComponentActivity() {
                         // #COMMUNITY-POSTS: токена нет — поллеру постов нечего опрашивать.
                         try { app.communityPostsPoller?.stop() } catch (e: Exception) { AppLog.w("MainActivity", "No token: CommunityPostsPoller.stop failed: ${e.message}") }
                         re.pinok.realtime.LongPollKeepAliveService.stop(this@MainActivity)
+                        // #DOZE-RELIABILITY: токена нет — будильник пробуждения не нужен.
+                        re.pinok.realtime.RealtimeWakeReceiver.cancel(this@MainActivity)
                     }
                 }
 
@@ -1452,6 +1512,13 @@ class MainActivity : ComponentActivity() {
                                         } catch (e: Exception) {
                                             AppLog.w("MainActivity", "Logout: LongPollKeepAliveService.stop failed: ${e.message}")
                                         }
+                                        // #DOZE-RELIABILITY: отменяем будильник пробуждения
+                                        // realtime — после logout доставлять нечего.
+                                        try {
+                                            re.pinok.realtime.RealtimeWakeReceiver.cancel(this@MainActivity)
+                                        } catch (e: Exception) {
+                                            AppLog.w("MainActivity", "Logout: RealtimeWakeReceiver.cancel failed: ${e.message}")
+                                        }
 
                                         // 2. Останавливаем воспроизведение музыки — не нужно
                                         //    держать foreground-сервис активным после logout.
@@ -1565,6 +1632,10 @@ class MainActivity : ComponentActivity() {
                                     // Fix #340: останавливаем keep-alive сервис при полном выходе.
                                     try {
                                         re.pinok.realtime.LongPollKeepAliveService.stop(this@MainActivity)
+                                    } catch (_: Exception) { }
+                                    // #DOZE-RELIABILITY: отменяем будильник пробуждения.
+                                    try {
+                                        re.pinok.realtime.RealtimeWakeReceiver.cancel(this@MainActivity)
                                     } catch (_: Exception) { }
                                     finishAffinity()
                                 },

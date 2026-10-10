@@ -43,6 +43,10 @@ class BootReceiver : BroadcastReceiver() {
                     if (hasToken || hasRemixsid) {
                         AppLog.i("BootReceiver", "Session present (token=$hasToken, remixsid=$hasRemixsid) — starting keep-alive service")
                         LongPollKeepAliveService.start(context)
+                        // #DOZE-RELIABILITY: планируем будильник пробуждения realtime
+                        // (LongPollKeepAliveService.start уже это делает, но дублируем
+                        // явно — на случай если сервис не поднялся сразу после boot).
+                        re.pinok.realtime.RealtimeWakeReceiver.schedule(context)
                     } else {
                         AppLog.i("BootReceiver", "No session — keep-alive service not started")
                     }

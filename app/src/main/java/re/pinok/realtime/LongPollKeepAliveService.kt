@@ -74,6 +74,8 @@ class LongPollKeepAliveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Убеждаемся, что foreground поднят (на случай re-delivery после kill).
         startForegroundCompat()
+        // #DOZE-RELIABILITY: перепланируем будильник пробуждения (re-delivery/kill).
+        RealtimeWakeReceiver.schedule(this)
         // Covers boot case: процесс поднят сервисом (BootReceiver), MainActivity
         // не запускалась → LongPollClient.start() из LaunchedEffect не отработал.
         try {
@@ -302,6 +304,9 @@ class LongPollKeepAliveService : Service() {
             } catch (e: Exception) {
                 AppLog.w(TAG, "start failed: ${e.message}")
             }
+            // #DOZE-RELIABILITY: планируем периодическое пробуждение realtime —
+            // срабатывает даже в глубоком Doze (setExactAndAllowWhileIdle).
+            RealtimeWakeReceiver.schedule(context)
         }
 
         /** Остановить сервис (idempotent). */
