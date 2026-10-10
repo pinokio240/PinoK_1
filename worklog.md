@@ -13688,3 +13688,55 @@ Work Log:
 Stage Summary:
 - Файлы: ClipSourceSelector.kt (skip scl= в pick).
 - Требуется сборка/тест: клипы должны выбирать полноценный источник (без scl=) и играться.
+
+---
+Task ID: CLIP-WRAPPER-ID
+Task: Клипы «висят на загрузке» + ссылка vk.ru/clip0_0. Причина — у части клипов id/owner_id лежат в ВЕРХНЕМ wrapper ленты, а парсеры брали только вложенный item/video → parseVideoFull получал 0.
+Work Log:
+- Диагноз: newsfeedGetClipsFeed (VKApiClient:18464) и shortVideoGetRecom (:18556) берут videoObj = getObj(o,"video"/"clip"/"item"), теряя верхний o с id/owner_id. parseVideoFull:12458-12460 берёт ownerId/id только из переданного o → 0 → guard ClipsFeedScreen:329 не даёт fetch → вечная загрузка; ссылка clip0_0 (SovaNavHost:2056).
+- Фикс (субагент): #CLIP-WRAPPER-ID в ОБОИХ парсерах — перед parseVideoFull подставляем во videoObj id/owner_id из верхнего wrapper o, если их нет во вложенном. addProperty("id"/"owner_id") мутирует JsonObject (одноразовое парсингово — безопасно).
+- Бэкап: backup-clip-ownerid-fix-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ (правило).
+Stage Summary:
+- Файлы: VKApiClient.kt (+26 строк, 2 места).
+- Требуется сборка/тест: клипы с clip0_0 должны получить реальные id/owner_id и начать грузиться.
+
+---
+Task ID: CLIP-ZERO-ID-SKIP
+Task: Отклонять клипы с owner_id=0 / id=0 (vk.ru/clip0_0) и пропускать их в ленте — чтобы не «висели на загрузке» и не давали мёртвую ссылку.
+Work Log:
+- Из живого logcat: ClipPlayer перебирает источники висящего клипа (dash_webm_av1→dash_sep→hls_fmp4→hls→mp4), каждый раз source timeout 3000ms (первый кадр не появился). Отдельный случай — clip0_0 (ownerId=0/id=0) даёт мёртвую ссылку и вечную загрузку.
+- Фикс (по предложению пользователя): отсев в ClipsRepository.loadFirst и loadNext — фильтр it.ownerId != 0L && it.id > 0L + лог пропущенных. Такие клипы не попадают в ленту.
+- Бэкап: backup-clip-skip-zero-id-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ (правило).
+Stage Summary:
+- Файлы: ClipsRepository.kt (2 места).
+- Требуется сборка/тест: клипы clip0_0 не должны появляться, лента без них.
+
+---
+Task ID: CLIP-SCL-ALLOW
+Task: Клипы «висит на загрузке» + «превью показывает, но не грузится» — причина: ClipSourceSelector.pick отбрасывал ВСЕ источники с scl=, из-за чего клипы, где все URL содержат scl=, оставались «без источников» (player=null → постер + вечный «Загрузка видео…»).
+Work Log:
+- Живой logcat подтвердил: у клипов -74292842_456241729, -232531662_456239381, -227662787_456239647 ВСЕ URL имеют scl= → pick: подходящий источник не найден → ClipPlayer error: No playable source → вечная загрузка/превью без проигрывания.
+- Рабочий клип -240506979_456239421 (без scl=) — играется, &bytes= работает.
+- Web-плеер VK использует scl= URL (это рабочие потоки, не только preview) — значит их НЕ надо отбрасывать.
+- Фикс: ClipSourceSelector.pick — убран отброс по scl= (блок #CLIP-SCL-FIX удалён, добавлен #CLIP-SCL с пояснением).
+- Бэкап: backup-clips-scl-fix-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ (правило).
+Stage Summary:
+- Файлы: ClipSourceSelector.kt.
+- Вместе с этим в дереве незакоммичены: VKApiClient (CLIP-WRAPPER-ID), ClipsRepository (CLIP-ZERO-ID), журналы.
+- Требуется сборка/тест: клипы с scl= должны играться.
+
+---
+Task ID: CLIP-SCL-DATASOURCE
+Task: Клипы с scl= всё ещё висели после фикса pick. Причина найдена по захвату logcat: OkCdnQueryRangeDataSource.isOkCdnSegment возвращал false для URL с scl= → сегменты шли passthrough без &bytes= → DASH не отдавался → первый кадр не появлялся → timeout.
+Work Log:
+- Захват 40с: рабочие клипы (scl=false) → &bytes= работает, first render. Висящие (scl=true, напр. -240245846_456239039, -231921045_456239337) → сегменты ct=11/12/32 scl=true идут passthrough (seg=false) без &bytes= → timeout.
+- Фикс: в OkCdnQueryRangeDataSource убран if (q.contains("scl=")) return false — сегменты с scl= теперь распознаются (ct в {11,12,22,32}) и получают &bytes=.
+- Бэкап: backup-clips-scl-fix-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ (правило).
+Stage Summary:
+- Файлы: OkCdnQueryRangeDataSource.kt.
+- Вместе с фиксом pick (ClipSourceSelector) — клипы с scl= теперь и выбираются, и качаются через &bytes=.
+- Требуется сборка/тест.
