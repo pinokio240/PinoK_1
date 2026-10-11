@@ -92,6 +92,9 @@ import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
 // POSTCARD-REFACTOR-PLAN (этап 1): общие компоненты поста — ui/components.
 import re.pinok.ui.components.ActionIcon
+// POSTCARD-REFACTOR-PLAN (этап 2): вертикальная карточка клипа вынесена
+// в общий ui/components/ClipThumbnail.kt.
+import re.pinok.ui.components.ClipThumbnail
 // #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
 import re.pinok.ui.components.PostPhotoGrid
 // Fix #366: общий компонент карусели видео поста.
@@ -2031,58 +2034,8 @@ private fun CommunityPostCard(
 // POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail и ActionIcon вынесены в общие
 // re.pinok.ui.components (см. импорты выше). Сообщество использует разворачиваемое
 // название (#POST-TEXT-EXPAND) — на стороне вызова titleExpandable=true.
-
-@Composable
-private fun ClipThumbnail(video: Video, onClick: (Video) -> Unit) {
-    // #GROUP-CLIPS: вертикальный постер (first_frames → clipPosterUrl), как в веб-VK.
-    val thumbUrl = video.clipPosterUrl ?: video.thumbUrl
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick(video) },
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Box(
-            modifier = Modifier.fillMaxWidth().aspectRatio(9f / 16f)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (thumbUrl != null) {
-                AsyncImage(
-                    model = thumbUrl,
-                    contentDescription = video.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            Box(
-                modifier = Modifier.size(48.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
-            }
-            // Название снизу (как в clips-сетке VK).
-            if (video.title.isNotBlank()) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-                    Text(
-                        text = video.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-    }
-}
+// POSTCARD-REFACTOR-PLAN (этап 2): ClipThumbnail вынесен в общий
+// re.pinok.ui.components.ClipThumbnail (логика 1:1, см. импорт выше).
 
 /** Formats member count in VK style: "1,2 млн", "345 тыс", "42". */
 private fun formatMemberCount(n: Int): String {

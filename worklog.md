@@ -13866,3 +13866,13 @@ Work Log:
 - CommunityScreen/ChatDetailScreen: отсутствует TextAlign — восстановлено.
 - Проверка: все 8 файлов этапа 1 — используемые символы импортированы, баланс скобок net=0.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE2
+Task: Этап 2 рефакторинга PostCard — единый PostAttachmentRenderer + вынос ClipThumbnail.
+Work Log:
+- Создан app/src/main/java/re/pinok/ui/components/PostAttachmentRenderer.kt — единый рендер вложений поста (фото/видео/аудио/плейлисты/link/poll/doc) с флагами конфигурации (showVideoTitle/titleExpandable/renderLinkPollDoc/consumeClicks/clipThumbnailEnabled).
+- Вынесен ClipThumbnail из CommunityScreen в ui/components/ClipThumbnail.kt (public, логика 1-в-1); CommunityScreen импортирует общий компонент, private удалён.
+- Использует internal LinkCard/PollCard/DocAttachmentCard из feed (паттерн ProfileScreen).
+- Проверка: баланс скобок net=0 у всех 3 файлов, дублей имён нет.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.

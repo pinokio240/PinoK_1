@@ -15381,3 +15381,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Фикс:** импорты восстановлены. Проверено: все используемые символы импортированы, баланс скобок 0. Сборка на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REFACTOR-STAGE2 — 2026-10-11 — единый PostAttachmentRenderer
+
+**Сделано (субагент + ревью):** создан ui/components/PostAttachmentRenderer.kt (единый рендер вложений поста с флагами конфигурации); вынесен ClipThumbnail в ui/components. Использует internal LinkCard/PollCard/DocAttachmentCard. Баланс скобок OK.
+
+**Далее:** этап 3 — единый PostCard + подключение экранов.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
