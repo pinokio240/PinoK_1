@@ -15443,3 +15443,11 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Сделано:** единый PostCard расширен параметрами likesOverride/reactionOverride для поддержки WallPostCard. Применяются к isLiked/likeCount и предвыделению пикера реакций. net=0.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REFACTOR-STAGE3C — 2026-10-11 — WallPostCard → делегат PostCard
+
+**Сделано (субагент + ревью):** WallPostCard стала обёрткой-делегатом единого PostCard; сигнатура 1:1, 5 мест вызова не тронуты. Применены likesOverride/reactionOverride, menuItems по гейтам. Ограничение: actionPending/likePending не проброшены.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

@@ -13927,3 +13927,14 @@ Work Log:
 - Добавлены параметры: likesOverride: Pair<Boolean,Int>? (оптимистичный лайк), reactionOverride: Int? (моя реакция).
 - Применение: isLiked/likeCount из likesOverride поверх post.likes; myReactionId для предвыделения ReactionPicker (selectedReactionId).
 - NULL-политика соблюдена (local val lo/ro). net=0.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE3C
+Task: Этап 3c — WallPostCard становится обёрткой-делегатом единого PostCard.
+Work Log:
+- WallPostCard (ProfileScreen.kt) превращена в обёртку-делегат PostCard; публичная сигнатура сохранена 1:1 (5 мест вызова не тронуты).
+- menuItems собраны по гейтам прежнего DropdownMenu (Закрепить/Редактировать/Удалить/Пожаловаться); optimisticLike→likesOverride, optimisticReaction→reactionOverride (PostCard расширен отдельным коммитом bf759c3).
+- Пробросы: showPinnedBadge=true, showAdBadge=false, showSubscribeButton=false, showFullDate=false, showViews=(>0), textMaxLines=10, myUserId=wallOwnerId, onAuthorClick→onPostClick.
+- Ограничение: actionPending/likePending не проброшены (нет в PostCard) — внешнее поведение для обычных пользователей идентично.
+- Проверка: сбалансировано, изменён только ProfileScreen, осиротевших импортов нет.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.

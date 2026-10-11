@@ -47,28 +47,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Favorite
-import androidx.compose.material.icons.outlined.FavoriteBorder
-// П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи; Groups — строка «Подписки».
+// П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи.
 import androidx.compose.material.icons.outlined.Flag
-import androidx.compose.material.icons.outlined.Groups
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 // Fix #378: разделитель над закреплённой кнопкой выхода.
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -93,13 +84,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-// Fix #371/#373: «Показать ещё» — underline link style (паттерн FeedScreen VKUI).
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-// П-8-REACT: пикер реакций рисуется поверх соседей внутри карточки (zIndex).
-import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
 import kotlinx.coroutines.delay
@@ -112,28 +99,16 @@ import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.media.PlayerConnection
-import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
-// #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
-import re.pinok.ui.components.PostPhotoGrid
-// Fix #372/#373: карусель видео в постах/репостах профиля — общий компонент
-// (тот же, что в ленте/сообществах, Fix #366).
-import re.pinok.ui.components.PostVideoCarousel
-import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
 import re.pinok.ui.components.ScrollToTopFab
-// POSTCARD-REFACTOR-PLAN (этап 1): общие компоненты поста вынесены в ui/components.
-import re.pinok.ui.components.ActionIcon
-import re.pinok.ui.components.RepostBlock
-import re.pinok.ui.components.VideoThumbnail
+// POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — обёртка-делегат единого
+// PostCard; пункты её «⋯»-меню — через PostMenuItem.
+import re.pinok.ui.components.PostCard
+import re.pinok.ui.components.PostMenuItem
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
 // (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
-// Fix #376: link/poll/doc вложения — карточки ленты, сделаны internal
-// (FeedScreen). Порядок/параметры рендера 1:1 с PostCard ленты.
-import re.pinok.ui.screens.feed.DocAttachmentCard
-import re.pinok.ui.screens.feed.LinkCard
-import re.pinok.ui.screens.feed.PollCard
 import re.pinok.ui.screens.feed.ReactionEntry
 import re.pinok.ui.screens.feed.ReactionPicker
 import re.pinok.util.AppLog
@@ -2212,7 +2187,6 @@ fun CountersRow(
  *  может отсутствовать → пикер без предвыделения и смена реакции идёт по
  *  цепочке delete+add — честное ограничение, модель core/data не правим).
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WallPostCard(
     post: Post,
@@ -2258,457 +2232,107 @@ fun WallPostCard(
     // настройки. Проброс prefs-флага в UserProfileScreen — follow-up оркестратору.
     carouselEnabled: Boolean = true,
 ) {
-    val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
-    // Fix #70: ранее video-вложения вообще не отображались на стене профиля.
-    val videoAttachments = post.attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
-    // #30 (audio attachments): рендер audio-вложений на стене профиля.
-    val audioAttachments = post.attachments?.filter { it.type == "audio" && it.audio != null }.orEmpty()
-    val timeStr = post.date.toRelativeTime()
-    // П-6a: optimistic-состояние лайка поверх серверных post.likes
-    // (переопределение появляется после первого клика; до того — user_likes из wall.get).
-    val likeOverride = likesState["${post.ownerId}_${post.id}"]
-    val isLiked = likeOverride?.first ?: (post.likes?.userLikes == 1)
-    val likeCount = likeOverride?.second ?: (post.likes?.count ?: 0)
-    // П-8-REACT: «моя реакция» — optimistic-переопределение экрана поверх
-    // серверной post.reactions.user_reacted (reaction_id или 0/absent; поле
-    // отсутствует у старых API/стен без reactions → 0 = «неизвестно», пикер
-    // без предвыделения — честное ограничение, модель core/data не правим).
-    // Предвыделение в пикере осмысленно только при активном лайке.
-    val myReactionId = reactionsState["${post.ownerId}_${post.id}"]
-        ?: post.reactions?.userReacted?.takeIf { it > 0 }
-        ?: 0
-    val pickerSelection = if (isLiked) myReactionId else 0
-    val commentCount = post.comments?.count ?: 0
-    val repostCount = post.reposts?.count ?: 0
-    val viewCount = post.views?.count ?: 0
-    // П-6a: «⋯»-меню «Действий» — правило §5 п.2: посты владельца стены ИЛИ
-    // серверные can_edit/can_delete (поля есть в модели Post/parsePostMini;
-    // на своём профиле wallOwnerId == id текущего пользователя — покрывает и
-    // фоллбэк «owner == userId текущего пользователя»).
-    // П-7-AB: меню открывается и при showReport (чужая запись без manage-прав
-    // — пункты manage гейтерятся showActions ниже, останется один пункт).
+    // POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — ОБЁРТКА-ДЕЛЕГАТ единого
+    // PostCard (ui/components/PostCard.kt). Внешняя сигнатура сохранена 1:1 —
+    // все 5 мест вызова (ProfileScreen/UserProfileScreen/ChatDetailScreen) не
+    // меняются. До вызова PostCard собираем производные состояния: authorIsGroup,
+    // оптимистичный лайк (likesOverride) и реакцию (reactionOverride), права-гейты
+    // ⋮-меню и настройки отрисовки (по паритету со старым inline-кодом).
+
+    // П-6a: пост от группы (< 0) — рисуем аватар/имя группы.
+    val isGroupPost = post.fromId < 0
+    // П-6a: права управляемой записи + видимость «⋯»-меню (посты владельца
+    // стены ИЛИ серверные can_edit/can_delete; меню открывается и при showReport).
     val canManage = post.ownerId == wallOwnerId || post.canEditBool || post.canDeleteBool
     val menuVisible = (showActions && canManage) || showReport
-    // П-6a: «Редактировать» — только текстовые записи (честное ограничение
-    // wall.edit, см. KDoc выше): вложения/репост/копирайт/подпись — не редактируем.
+    // П-6a: «Редактировать» — только текстовые записи (вложения/репост/
+    // копирайт/подпись не покрыты wall.edit).
     val editCovered = post.attachments.isNullOrEmpty() &&
         post.copyHistory == null &&
         post.copyright == null &&
         post.signerId == null &&
         (post.postType == null || post.postType == "post")
-    // П-6a: состояние «⋯»-меню (паттерн FeedScreen.PostCard).
-    var showMenu by remember { mutableStateOf(false) }
-    // Fix #371/#376: контекст для linkify-кликов и открытия link/doc-вложений
-    // (openUrlExternal / startActivity) — один захват на карточку.
-    val ctx = LocalContext.current
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (authorPhoto != null) {
-                    AsyncImage(
-                        model = authorPhoto,
-                        contentDescription = null,
-                        modifier = Modifier.size(36.dp).clip(CircleShape),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.size(36.dp).clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = authorName.take(1).uppercase(),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = authorName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = timeStr,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-                // П-6a (#PROFILE-GAP-6a): «⋯»-меню «Действий» поста (как в VK web).
-                if (menuVisible) {
-                    Spacer(Modifier.weight(1f))
-                    Box {
-                        IconButton(
-                            onClick = { showMenu = true },
-                            modifier = Modifier.size(28.dp),
-                        ) {
-                            Icon(
-                                Icons.Outlined.MoreHoriz,
-                                contentDescription = "Действия",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false },
-                        ) {
-                            // Закрепить/Открепить (wall.pin / wall.unpin) — label по post.is_pinned.
-                            // П-7-AB: гейт showActions — manage-пункт не показывается в
-                            // report-only меню (чужая стена, showActions=false).
-                            if (showActions && (post.canPinBool || post.ownerId == wallOwnerId)) {
-                                DropdownMenuItem(
-                                    text = { Text(if (post.isPinnedBool) "Открепить" else "Закрепить") },
-                                    leadingIcon = { Icon(Icons.Outlined.PushPin, contentDescription = null) },
-                                    onClick = { showMenu = false; onPinToggle(post) },
-                                    enabled = !actionPending,
-                                )
-                            }
-                            // Редактировать (wall.edit) — только текстовые записи (editCovered).
-                            // П-7-AB: гейт showActions — как у «Закрепить» (report-only меню).
-                            if (showActions && editCovered && (post.canEditBool || post.ownerId == wallOwnerId)) {
-                                DropdownMenuItem(
-                                    text = { Text("Редактировать") },
-                                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                                    onClick = { showMenu = false; onEditRequest(post) },
-                                    enabled = !actionPending,
-                                )
-                            }
-                            // Удалить (wall.delete) — подтверждение на уровне экрана.
-                            // П-7-AB: гейт showActions && canManage — ранее Delete был
-                            // безусловно виден внутри меню, но само меню открывалось только
-                            // при showActions && canManage; теперь меню может открыться и
-                            // по showReport — управляемые пункты прячем (поведение П-6а
-                            // при showActions=true не меняется).
-                            if (showActions && canManage) {
-                                DropdownMenuItem(
-                                    text = { Text("Удалить", color = Color(0xFFE53935)) },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Outlined.Delete,
-                                            contentDescription = null,
-                                            tint = Color(0xFFE53935),
-                                        )
-                                    },
-                                    onClick = { showMenu = false; onDeleteRequest(post) },
-                                    enabled = !actionPending,
-                                )
-                            }
-                            // П-7-AB: «Пожаловаться» (wall.markAsSpam) — ЧУЖАЯ запись;
-                            // решение о показе — за вызывающим (showReport). Диалог
-                            // подтверждения и вызов — на уровне экрана (onReportSpam).
-                            if (showReport) {
-                                DropdownMenuItem(
-                                    text = { Text("Пожаловаться") },
-                                    leadingIcon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
-                                    onClick = { showMenu = false; onReportSpam(post) },
-                                    enabled = !actionPending,
-                                )
-                            }
-                        }
-                    }
-                }
+    // П-6a/П-7-AB: гейты и порядок пунктов ⋮-меню — 1:1 со старым inline-меню.
+    // PostCard сам рисует DropdownMenu из menuItems (не вложенный диалог).
+    val postMenuItems = if (menuVisible) {
+        buildList {
+            if (showActions && (post.canPinBool || post.ownerId == wallOwnerId)) {
+                add(PostMenuItem(
+                    label = if (post.isPinnedBool) "Открепить" else "Закрепить",
+                    icon = Icons.Outlined.PushPin,
+                    onClick = { onPinToggle(post) },
+                ))
             }
-            // Fix #375 (#PROFILE-PINNED-LABEL): индикатор закреплённой записи —
-            // паритет с лентой (FeedScreen: «Закреплённый пост» под шапкой).
-            if (post.isPinnedBool) {
-                Text(
-                    text = "Закреплённый пост",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp),
-                )
+            if (showActions && editCovered && (post.canEditBool || post.ownerId == wallOwnerId)) {
+                add(PostMenuItem(
+                    label = "Редактировать",
+                    icon = Icons.Filled.Edit,
+                    onClick = { onEditRequest(post) },
+                ))
             }
-            // Fix #375 (паритет с лентой): индикатор копирайта-источника.
-            // NULL-ЯВНО: модель в :core:data — захват ДО проверки (без ?.-операторов).
-            val postCopyright = post.copyright
-            if (postCopyright != null) {
-                val copyrightName = postCopyright.name
-                if (copyrightName != null) {
-                    Text(
-                        text = copyrightName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+            if (showActions && canManage) {
+                add(PostMenuItem(
+                    label = "Удалить",
+                    icon = Icons.Outlined.Delete,
+                    destructive = true,
+                    onClick = { onDeleteRequest(post) },
+                ))
             }
-            if (post.text.isNotBlank()) {
-                // Fix #371 (#PROFILE-POST-TEXT): паритет с лентой — паттерн Fix #345
-                // (CommunityScreen) + linkifyVkText (FeedScreen:2280): длинный текст
-                // разворачивается на месте, «Показать ещё» — только при реальном
-                // переполнении (hasVisualOverflow); #alias/URL внутри текста кликабельны
-                // (link-аннотации перехватывают клик раньше текста — потомок приоритетнее).
-                // Тап по свёрнутому тексту = развернуть, по развёрнутому/короткому =
-                // открыть пост (onPostClick → PostDetail). ctx — общий val карточки выше.
-                var textExpanded by remember { mutableStateOf(false) }
-                var textOverflowed by remember { mutableStateOf(false) }
-                Text(
-                    text = linkifyVkText(
-                        text = post.text,
-                        linkColor = MaterialTheme.colorScheme.primary,
-                        onUrlClick = { url -> openUrlExternal(ctx, url) },
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        .clickable {
-                            if (textOverflowed && !textExpanded) {
-                                textExpanded = true
-                            } else {
-                                onPostClick(post)
-                            }
-                        },
-                    onTextLayout = { result ->
-                        if (!textExpanded && result.hasVisualOverflow) textOverflowed = true
-                    },
-                    maxLines = if (textExpanded) Int.MAX_VALUE else 10,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (textOverflowed && !textExpanded) {
-                    Text(
-                        text = "Показать ещё",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier
-                            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
-                            .clickable { textExpanded = true },
-                    )
-                }
-            }
-            if (photoAttachments.isNotEmpty()) {
-                // 22-B: общий PostPhotoGrid — карусель при включённой настройке
-                // и фото > 1, иначе прежний вид (1-2 пейджер, 3+ сетка).
-                PostPhotoGrid(
-                    photos = photoAttachments.mapNotNull { it.photo },
-                    onPhotoClick = onPhotoClick,
-                    carouselEnabled = carouselEnabled,
-                )
-            }
-            // Fix #372 (#PROFILE-VIDEO-CAROUSEL): >1 видео и включена карусель —
-            // общий PostVideoCarousel (тот же флаг, что у PostPhotoGrid выше);
-            // иначе прежний вертикальный стопк VideoThumbnail (одно видео).
-            if (carouselEnabled && videoAttachments.size > 1) {
-                PostVideoCarousel(
-                    videos = videoAttachments.mapNotNull { it.video },
-                    carouselEnabled = carouselEnabled,
-                    onVideoClick = onVideoClick,
-                )
-            } else {
-                videoAttachments.forEach { attach ->
-                    val v = attach.video
-                    if (v != null) {
-                        // ProfileScreen.VideoThumbnail исходно не показывал название —
-                        // сохраняем 1-в-1 (showTitle=false).
-                        VideoThumbnail(video = v, onClick = onVideoClick, showTitle = false)
-                    }
-                }
-            }
-            // #30 (audio attachments): рендерим audio-вложения (как в FeedScreen).
-            if (audioAttachments.isNotEmpty()) {
-                AudioAttachmentList(tracks = audioAttachments.mapNotNull { it.audio })
-            }
-            // #30 (playlists): audio_playlist вложения.
-            val playlistAttachments = post.attachments?.filter { it.type == "audio_playlist" && it.audioPlaylist != null }.orEmpty()
-            playlistAttachments.forEach { att -> att.audioPlaylist?.let { PlaylistAttachmentCard(playlist = it) } }
-            // Fix #376 (#PROFILE-LINK-POLL-DOC): link/page/poll/doc вложения —
-            // паритет с лентой (FeedScreen PostCard; LinkCard/PollCard/DocAttachmentCard
-            // сделаны internal). Порядок и параметры 1:1 с FeedScreen:2352-2480.
-            val linkAttachments = post.attachments.orEmpty()
-                .filter { (it.type == "link" || it.type == "page") && it.link != null }
-            linkAttachments.forEach { attach ->
-                val link = attach.link
-                if (link != null) {
-                    LinkCard(link = link, onClick = {
-                        // Fix #51-A: нормализация URL как в ленте — VK отдаёт короткие
-                        // ссылки (vk.cc/abc) без схемы; валидация + resolveActivity.
-                        val rawUrl = link.url.orEmpty().trim()
-                        if (rawUrl.isEmpty()) {
-                            AppLog.w("ProfileScreen", "LinkCard: url is empty, cannot open")
-                            Toast.makeText(ctx, "Ссылка недоступна", Toast.LENGTH_SHORT).show()
-                            return@LinkCard
-                        }
-                        val normalizedUrl = if (rawUrl.contains("://")) rawUrl else "https://$rawUrl"
-                        val uri = try {
-                            android.net.Uri.parse(normalizedUrl)
-                        } catch (e: Exception) {
-                            AppLog.w("ProfileScreen", "LinkCard: invalid url=$rawUrl", e)
-                            Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
-                            return@LinkCard
-                        }
-                        if (uri.scheme == null || uri.host == null) {
-                            AppLog.w("ProfileScreen", "LinkCard: no scheme/host in url=$normalizedUrl")
-                            Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
-                            return@LinkCard
-                        }
-                        val intent = android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            uri,
-                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        if (intent.resolveActivity(ctx.packageManager) == null) {
-                            AppLog.w("ProfileScreen", "LinkCard: no app to handle url=$normalizedUrl")
-                            Toast.makeText(ctx, "Нет приложения для открытия ссылки", Toast.LENGTH_SHORT).show()
-                            return@LinkCard
-                        }
-                        try {
-                            ctx.startActivity(intent)
-                            AppLog.i("ProfileScreen", "LinkCard: opened url=$normalizedUrl")
-                        } catch (e: Exception) {
-                            AppLog.w("ProfileScreen", "Failed to open link: $normalizedUrl", e)
-                            Toast.makeText(ctx, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show()
-                        }
-                    })
-                }
-            }
-            // Опросы (Sprint 4): голосование через polls.addVote (как в ленте).
-            val pollAtt = post.attachments.orEmpty().firstOrNull { it.type == "poll" && it.poll != null }
-            if (pollAtt != null) {
-                val poll = pollAtt.poll
-                if (poll != null) {
-                    val pollVoteScope = rememberCoroutineScope()
-                    val pollVoteApp = SovaApp.get()
-                    PollCard(poll = poll, onVote = { answerIds ->
-                        pollVoteScope.launch {
-                            pollVoteApp.apiClient.pollsAddVote(poll.id, poll.ownerId, answerIds)
-                        }
-                    })
-                }
-            }
-            // Документ-вложения (как в ленте).
-            val docAttachments = post.attachments.orEmpty().filter { it.type == "doc" && it.doc != null }
-            if (docAttachments.isNotEmpty()) {
-                docAttachments.forEach { attach ->
-                    val doc = attach.doc
-                    if (doc != null) {
-                        DocAttachmentCard(doc = doc, onOpen = {
-                            // Fix #51-A: та же нормализация URL, что и для LinkCard выше.
-                            val rawUrl = doc.url.orEmpty().trim()
-                            if (rawUrl.isEmpty()) {
-                                Toast.makeText(ctx, "Ссылка недоступна", Toast.LENGTH_SHORT).show()
-                                return@DocAttachmentCard
-                            }
-                            val normalizedUrl = if (rawUrl.contains("://")) rawUrl else "https://$rawUrl"
-                            val uri = android.net.Uri.parse(normalizedUrl)
-                            if (uri.scheme == null || uri.host == null) {
-                                Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
-                                return@DocAttachmentCard
-                            }
-                            val intent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW, uri,
-                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            try {
-                                ctx.startActivity(intent)
-                                AppLog.i("ProfileScreen", "DocCard: opened url=$normalizedUrl")
-                            } catch (e: Exception) {
-                                AppLog.w("ProfileScreen", "Failed to open doc: $normalizedUrl", e)
-                                Toast.makeText(ctx, "Не удалось открыть документ", Toast.LENGTH_SHORT).show()
-                            }
-                        })
-                    }
-                }
-            }
-            // Fix #70: рендерим репост (copy_history) — первый элемент.
-            post.copyHistory?.firstOrNull()?.let { repost ->
-                RepostBlock(
-                    repost = repost,
-                    onPhotoClick = onPhotoClick,
-                    onVideoClick = onVideoClick,
-                    // Fix #373: тап по карточке репоста/развёрнутому тексту →
-                    // PostDetail оригинала (тот же колбэк, что у тела поста).
-                    onPostClick = onPostClick,
-                    carouselEnabled = carouselEnabled,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // П-8-REACT: long-press по лайку → пикер реакций (паттерн
-                // FeedScreen :2186-2210). Пикер показывается только когда
-                // вызывающий экран прокинул onReaction (иначе dead-UX).
-                var showReactions by remember { mutableStateOf(false) }
-                Box {
-                    ActionIcon(
-                        icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                        count = likeCount,
-                        tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        // П-6a (#PROFILE-GAP-6a): кликабельный лайк записи стены
-                        // (likes.add / likes.delete через onLikeToggle); во время полёта — disabled.
-                        onClick = { onLikeToggle(post) },
-                        // П-8-REACT: long-press → пикер реакций (только если экран
-                        // прокинул onReaction; иначе null — поведение как раньше).
-                        onLongClick = if (onReaction != null) {
-                            { showReactions = true }
-                        } else {
-                            null
-                        },
-                        enabled = !likePending,
-                    )
-                    if (showReactions) {
-                        Box(
-                            modifier = Modifier
-                                .offset(y = (-48).dp)
-                                .zIndex(10f),
-                        ) {
-                            ReactionPicker(
-                                onDismiss = { showReactions = false },
-                                // П-8-REACT: предвыделение «моей» реакции (0 = нет).
-                                selectedReactionId = pickerSelection,
-                                onSelect = { reaction -> onReaction?.invoke(post, reaction) },
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                ActionIcon(
-                    icon = Icons.Outlined.ChatBubbleOutline,
-                    count = commentCount,
-                    // Шаг 5 (#32e): тап по комментарию → PostDetailScreen (через onCommentClick).
-                    onClick = { onCommentClick(post) },
-                )
-                Spacer(Modifier.width(8.dp))
-                ActionIcon(
-                    icon = Icons.Outlined.Repeat,
-                    count = repostCount,
-                    onClick = { onRepostClick(post) },
-                )
-                Spacer(Modifier.weight(1f))
-                if (viewCount > 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Visibility, null, modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(3.dp))
-                        Text(viewCount.toCountString(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp)
-                    }
-                }
+            if (showReport) {
+                add(PostMenuItem(
+                    label = "Пожаловаться",
+                    icon = Icons.Outlined.Flag,
+                    onClick = { onReportSpam(post) },
+                ))
             }
         }
+    } else {
+        emptyList()
     }
+    // П-6a/П-8-REACT: оптимистичные состояния экрана поверх серверных post.*.
+    val optimisticLike = likesState["${post.ownerId}_${post.id}"]
+    val optimisticReaction = reactionsState["${post.ownerId}_${post.id}"]
+    // Просмотры: скрываем нули (паритет со старым ViewBlock и Community).
+    val showViewsWrapped = (post.views?.count ?: 0) > 0
+
+    PostCard(
+        post = post,
+        authorName = authorName,
+        authorPhoto = authorPhoto,
+        authorIsGroup = isGroupPost,
+        signerName = null,
+        showFullDate = false,
+        // Закладок в WallPostCard не было — иконку и пункт меню не добавляем.
+        isBookmarked = null,
+        onToggleBookmark = null,
+        verified = false,
+        // Тап по автору своего/чужого поста → открыть пост (ранее header был
+        // неинтерактивен; разумная навигация паритетом с PostCard).
+        onAuthorClick = { onPostClick(post) },
+        onPostClick = onPostClick,
+        onVideoClick = onVideoClick,
+        onPhotoClick = onPhotoClick,
+        onLikeToggle = onLikeToggle,
+        onCommentClick = onCommentClick,
+        onRepostClick = onRepostClick,
+        onReaction = onReaction,
+        likesOverride = optimisticLike,
+        reactionOverride = optimisticReaction,
+        menuItems = postMenuItems,
+        // Закреп показываем (был в профиле), «Реклама» — нет (в профиле не было).
+        showPinnedBadge = true,
+        showAdBadge = false,
+        showSubscribeButton = false,
+        textMaxLines = 10,
+        carouselEnabled = carouselEnabled,
+        showViews = showViewsWrapped,
+        myUserId = wallOwnerId,
+    )
 }
 
-// POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail, RepostBlock и ActionIcon
-// вынесены в общие re.pinok.ui.components (см. импорты выше).
+// POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard теперь — обёртка-делегат
+// единого PostCard (ui/components/PostCard.kt); вложения/репост/счётчики
+// рендерит общий компонент.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // П-1 (#PROFILE-SNAP): вкладки контента и секции своего профиля.
