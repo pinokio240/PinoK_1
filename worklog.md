@@ -13985,3 +13985,12 @@ Work Log:
 - Причина: ⋯ не появлялся, т.к. extraMenuItems был только в wall-режиме, а канал чаще открывается в history-режиме (5047) или поиске (12002).
 - Фикс: extraMenuItems («Поделиться» → channelSharePost/onSharePost) добавлен во все 3 вызова: wall, history, search.
 - Баланс net=0. Изменён только ChatDetailScreen. Сборка на пользователе.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE3D
+Task: Этап 3d — FeedScreen.PostCard становится обёрткой-делегатом единого PostCard.
+Work Log:
+- FeedScreen.PostCard (private) превращена в обёртку: сигнатура 1:1, тело делегирует единому PostCard через алиас «UnifiedPostCard» (иначе рекурсия — имя совпадает).
+- Собрано: резолв автора из profiles/groups (по fromId), verified, likesOverride из likesState, подписка (showSubscribeButton/subscribed), полный menuItems (закладка/редактировать/закрепить/скрыть/бан/пожаловаться/удалить с гейтами по правам), проброс всех колбэков, textMaxLines=6, showAdBadge/PinnedBadge/Views=true.
+- Убраны осиротевшие импорты (PostPhotoGrid/ActionIcon/AudioAttachmentList и др. — проверено: только в комментариях, импортов нет).
+- Баланс net=0. Изменён только FeedScreen.kt. Сборка на пользователе; пуш с разрешения.

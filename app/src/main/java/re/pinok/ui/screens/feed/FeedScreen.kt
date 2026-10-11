@@ -48,7 +48,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -58,13 +57,10 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Flag
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Verified
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.filled.Refresh
@@ -137,20 +133,17 @@ import re.pinok.data.model.Video
 import re.pinok.media.PlayerConnection
 import re.pinok.ui.navigation.PostHolder
 import re.pinok.ui.navigation.Screen
-import re.pinok.ui.components.ActionIcon
-import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
-import re.pinok.ui.components.PlaylistAttachmentCard
-import re.pinok.ui.components.PostPhotoGrid
-import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.FeedRightPanel
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
+import re.pinok.ui.components.PostCard as UnifiedPostCard
+import re.pinok.ui.components.PostMenuItem
 import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.navigation.FeedDataHolder
@@ -2226,7 +2219,10 @@ private fun PostCard(
     // П-7-AB: «Пожаловаться» (wall.markAsSpam) — диалог и вызов на уровне экрана.
     onReportSpam: (Post) -> Unit = {},
 ) {
-    val ctx = LocalContext.current
+    // Пост-источник: группа (fromId < 0) или пользователь (fromId > 0).
+    val authorIsGroup = post.fromId < 0
+    // Резолв автора (имя/фото) и подписи (signer) — ветвление 1:1 со старым
+    // inline-телом (fromId > 0 → пользователь, иначе → группа).
     val authorName: String
     val authorPhoto: String?
     val signerName: String?
@@ -2246,662 +2242,107 @@ private fun PostCard(
             null
         }
     }
-    val timeStr = post.date.toRelativeTime()
-    val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
-    val videoAttachments = post.attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
-    val audioAttachments = post.attachments?.filter { it.type == "audio" && it.audio != null }.orEmpty()
+    // Подтверждённость группы (verified-бейдж) — для authorIsGroup и g.verified == 1.
+    val verified = authorIsGroup && (groups[-post.fromId]?.verified == 1)
 
-    // Локальное состояние лайка для этого поста.
+    // ─── Оптимистичный лайк (ключ «ownerId_id» из likesState) ───
     val likeKey = "${post.ownerId}_${post.id}"
-    val likeState = likesState[likeKey]
-    val isLiked = likeState?.first ?: (post.likes?.userLikes == 1)
-    val likeCount = likeState?.second ?: post.likes?.count ?: 0
-    // SOVA_2_lenta: состояние меню
-    var showMenu by remember { mutableStateOf(false) }
+    val likesOverride = likesState[likeKey]
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Метка «Реклама» для рекламных постов.
-            if (post.isAd) {
-                Text(
-                    text = "Реклама",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp),
-                )
-            }
-            // Метка для рекомендованных постов.
-            if (post.postType in listOf("suggest", "suggested")) {
-                Text(
-                    text = "Рекомендуемое",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = if (post.isAd) 0.dp else 8.dp),
-                )
-            }
-            // ─── VKUI: vkit-OaLCik vkuiFlex__host vkuiFlex__alignCenter ───
-            // post-header: avatar(link) + name(link) + spacer + context-menu(44x44)
-            // VKUI: NO time in header — time ONLY in footer as post_date_block_preview
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // VKUI: vkuiAvatar__host 36x36, clickable link to author profile
-                // vkuiImageBase__imgObjectFitCover
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable { onAuthorClick(post) },
-                ) {
-                    if (authorPhoto != null) {
-                        AsyncImage(
-                            model = authorPhoto,
-                            contentDescription = authorName,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.outlineVariant),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = authorName.take(1).uppercase(),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-                // VKUI: vkit-rQKpzS vkuiFlex__directionColumn, gap 0px
-                Column(modifier = Modifier.weight(1f)) {
-                    // VKUI: vkuiSubhead__densityCompact vkuiTypography__weight2 vkuiTypography__accent
-                    // vkuiLink__withUnderline — ALL names are accent-colored clickable links
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = authorName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.primary,
-                            textDecoration = TextDecoration.Underline,
-                            modifier = Modifier.clickable { onAuthorClick(post) },
-                        )
-                        // Бейдж верификации (без дополнительного padding)
-                        if (post.fromId < 0) {
-                            val g = groups[-post.fromId]
-                            if (g != null && g.verified == 1) {
-                                Icon(
-                                    Icons.Outlined.Verified,
-                                    contentDescription = "Верифицировано",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            }
-                        }
-                    }
-                    if (signerName != null) {
-                        Text(
-                            text = signerName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                // #FEED-SUBSCRIBE (IMP-FEED-1, п.2): компактная кнопка подписки
-                // в хедере карточки (снапшот: post-header-subscription-button,
-                // раздел «Реакции»). Чип-стиль (pill, primary-текст). Скрыта на
-                // своих постах (fromId == myUserId) и у постов без автора.
-                // Состояние: override из subscriptionState; absent → дефолт
-                // «Подписаться» (для сообществ — из GroupInfo.isMember, если
-                // VK отдал is_member; для юзеров newsfeed.get состояние не отдаёт).
-                if (post.fromId != 0L && post.fromId != myUserId) {
-                    val subscribed: Boolean? = subscriptionState[post.fromId.toString()]
-                        ?: if (post.fromId < 0) groups[-post.fromId]?.let { it.isMember == 1 } else null
-                    Text(
-                        text = if (subscribed == true) "Отписаться" else "Подписаться",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = if (subscribed == true) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(
-                                if (subscribed == true) MaterialTheme.colorScheme.surfaceVariant
-                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                            )
-                            .clickable { onSubscribe(post) }
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
-                }
-                // VKUI: flex-grow spacer (pushes menu to right)
-                // VKUI: vkuiIconButton__densityCompact 44x44, more_horizontal_24
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        modifier = Modifier.size(44.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.MoreHoriz,
-                            contentDescription = "Действия",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(if (post.isFavoriteBool) "Убрать из закладок" else "В закладки") },
-                            leadingIcon = { Icon(if (post.isFavoriteBool) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder, null) },
-                            onClick = { showMenu = false; onToggleBookmark(post) },
-                        )
-                        if (post.canEditBool) {
-                            DropdownMenuItem(
-                                text = { Text("Редактировать") },
-                                leadingIcon = { Icon(Icons.Outlined.Edit, null) },
-                                onClick = { showMenu = false; onEditPost(post) },
-                            )
-                        }
-                        if (post.canPinBool) {
-                            DropdownMenuItem(
-                                text = { Text(if (post.isPinnedBool) "Открепить" else "Закрепить") },
-                                leadingIcon = { Icon(if (post.isPinnedBool) Icons.Outlined.VisibilityOff else Icons.Outlined.PushPin, null) },
-                                onClick = { showMenu = false; onTogglePin(post) },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Скрыть из ленты") },
-                            leadingIcon = { Icon(Icons.Outlined.VisibilityOff, null) },
-                            onClick = { showMenu = false; onHideFromFeed(post) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Не показывать от автора") },
-                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
-                            onClick = { showMenu = false; onBanSource(post) },
-                        )
-                        // П-7-AB (IMP-FEED-1, п.1): «Пожаловаться» — wall.markAsSpam
-                        // (снапшот §1.6: global_report_spam; VK-семантика — ЧУЖАЯ
-                        // запись, гейт ownerId != myUserId как в ProfileScreen).
-                        // Диалог подтверждения и вызов — на уровне экрана (П-7
-                        // паттерн 1:1). Disabled-поведение — в диалоге (reportInFlight).
-                        if (post.ownerId != myUserId) {
-                            DropdownMenuItem(
-                                text = { Text("Пожаловаться") },
-                                leadingIcon = { Icon(Icons.Outlined.Flag, null) },
-                                onClick = { showMenu = false; onReportSpam(post) },
-                            )
-                        }
-                        if (post.canDeleteBool) {
-                            DropdownMenuItem(
-                                text = { Text("Удалить пост", color = Color(0xFFE53935)) },
-                                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = Color(0xFFE53935)) },
-                                onClick = { showMenu = false; onDeletePost(post) },
-                            )
-                        }
-                    }
-                }
-            }
-            // Индикатор закреплённого поста.
-            if (post.isPinnedBool) {
-                Text(
-                    text = "Закреплённый пост",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp),
-                )
-            }
-            // SOVA_2_lenta: индикатор копирайта-источника.
-            // #ARCH-CONTAINERS 3.7-1: модели в :core:data — smart cast чужого модуля
-            // невозможен; захват в локальный val.
-            val copyrightName = post.copyright?.name
-            if (copyrightName != null) {
-                Text(
-                    text = copyrightName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
-            // SOVA_2_lenta: индикатор Donut-заглушки.
-            // #ARCH-CONTAINERS 3.7-1: donut/placeholder в :core:data — захват ДО проверки.
-            val donutPlaceholder = post.donut?.placeholder
-            if (post.isDonut && donutPlaceholder != null) {
-                Text(text = donutPlaceholder,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (post.text.isNotBlank()) {
-                var expanded by remember { mutableStateOf(false) }
-                val textLines = post.text.lines().size
-                val needsExpand = textLines > 6
-                // Fix #204: парсим VK inline-ссылки [#alias|display|url] + обычные URL.
-                val fullText = re.pinok.util.linkifyVkText(
-                    text = post.text,
-                    linkColor = MaterialTheme.colorScheme.primary,
-                    onUrlClick = { url -> re.pinok.util.openUrlExternal(ctx, url) },
-                )
-                val collapsedText = if (needsExpand) {
-                    re.pinok.util.linkifyVkText(
-                        text = post.text.lines().take(6).joinToString("\n"),
-                        linkColor = MaterialTheme.colorScheme.primary,
-                        onUrlClick = { url -> re.pinok.util.openUrlExternal(ctx, url) },
-                    )
-                } else fullText
-                Text(
-                    text = if (needsExpand && !expanded) collapsedText else fullText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onPostClick(post) }
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-                )
-                // VKUI: vkit-b0dQw7 vkuiLink__withUnderline vkuiTypography__weight3 vkuiTypography__accent
-                // "Показать ещё" — underline link style
-                if (needsExpand && !expanded) {
-                    Text(
-                        text = "Показать ещё",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
-                            .clickable { expanded = true },
-                    )
-                }
-            }
-            if (photoAttachments.isNotEmpty()) {
-                // #POST-CAROUSEL-EVERYWHERE (волна 22): общий ui/components-компонент вместо
-                // приватных дубликатов 19-A (семантика 1:1 — VK web vkuiCarouselBase:
-                // свайп + полновысотные зоны-стрелки + счётчик; carouselEnabled=false →
-                // прежний вид: ≤2 пейджер, 3+ сетка). Флаг пробрасывается параметром.
-                PostPhotoGrid(
-                    photos = photoAttachments.mapNotNull { it.photo },
-                    onPhotoClick = onPhotoClick,
-                    carouselEnabled = carouselEnabled,
-                )
-            }
-            // Fix #366 (#VIDEO-CAROUSEL-POSTS): >1 видео и включена карусель —
-            // общий PostVideoCarousel (тот же флаг, что у PostPhotoGrid выше);
-            // иначе прежний вертикальный стопк VideoThumbnail (одно видео).
-            if (carouselEnabled && videoAttachments.size > 1) {
-                PostVideoCarousel(
-                    videos = videoAttachments.mapNotNull { it.video },
-                    carouselEnabled = carouselEnabled,
-                    onVideoClick = onVideoClick,
-                )
-            } else {
-                videoAttachments.forEach { attach ->
-                    val v = attach.video
-                    if (v != null) {
-                        VideoThumbnail(video = v, onClick = onVideoClick)
-                    }
-                }
-            }
-            // Аудио вложения в посте.
-            // #30: используем общий AudioAttachmentList из ui/components.
-            if (audioAttachments.isNotEmpty()) {
-                AudioAttachmentList(tracks = audioAttachments.mapNotNull { it.audio })
-            }
-            // #30 (playlists): audio_playlist вложения.
-            val playlistAttachments = post.attachments?.filter { it.type == "audio_playlist" && it.audioPlaylist != null }.orEmpty()
-            playlistAttachments.forEach { att -> att.audioPlaylist?.let { PlaylistAttachmentCard(playlist = it) } }
-            // Link/snippet attachments (article cards like VK's snippet-attachment)
-            // Fix #49-4: также рендерим page-вложения (VK wiki как alias-ссылки).
-            val linkAttachments = post.attachments
-                ?.filter { (it.type == "link" || it.type == "page") && it.link != null }
-                .orEmpty()
-            linkAttachments.forEach { attach ->
-                val link = attach.link
-                if (link != null) {
-                    LinkCard(link = link, onClick = {
-                        // Fix #51-A: alias (link/page) не открывался из-за URL без scheme.
-                        // VK часто отдаёт короткие ссылки вида "vk.cc/abc" или "vk.com/foo"
-                        // без протокола → Uri.parse создаёт URI без scheme → startActivity
-                        // падает с ActivityNotFoundException. Также page.view_url может быть
-                        // пустым. Нормализуем URL, валидируем, проверяем resolveActivity.
-                        val rawUrl = link.url.orEmpty().trim()
-                        if (rawUrl.isEmpty()) {
-                            AppLog.w("FeedScreen", "LinkCard: url is empty, cannot open")
-                            android.widget.Toast.makeText(
-                                ctx,
-                                "Ссылка недоступна",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                            return@LinkCard
-                        }
-                        // Добавляем https:// если нет scheme (http://, https://, intent:, market:, ...).
-                        val normalizedUrl = if (rawUrl.contains("://")) rawUrl else "https://$rawUrl"
-                        val uri = try {
-                            android.net.Uri.parse(normalizedUrl)
-                        } catch (e: Exception) {
-                            AppLog.w("FeedScreen", "LinkCard: invalid url=$rawUrl", e)
-                            android.widget.Toast.makeText(
-                                ctx,
-                                "Некорректная ссылка",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                            return@LinkCard
-                        }
-                        if (uri.scheme == null || uri.host == null) {
-                            AppLog.w("FeedScreen", "LinkCard: no scheme/host in url=$normalizedUrl")
-                            android.widget.Toast.makeText(
-                                ctx,
-                                "Некорректная ссылка",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                            return@LinkCard
-                        }
-                        val intent = android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            uri,
-                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        // Проверяем что есть приложение способное обработать ACTION_VIEW для этого URI.
-                        if (intent.resolveActivity(ctx.packageManager) == null) {
-                            AppLog.w("FeedScreen", "LinkCard: no app to handle url=$normalizedUrl")
-                            android.widget.Toast.makeText(
-                                ctx,
-                                "Нет приложения для открытия ссылки",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                            return@LinkCard
-                        }
-                        try {
-                            ctx.startActivity(intent)
-                            AppLog.i("FeedScreen", "LinkCard: opened url=$normalizedUrl")
-                        } catch (e: Exception) {
-                            AppLog.w("FeedScreen", "Failed to open link: $normalizedUrl", e)
-                            android.widget.Toast.makeText(
-                                ctx,
-                                "Не удалось открыть ссылку",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                    })
-                }
-            }
-            // Sprint 4: опросы.
-            val pollAtt = post.attachments?.firstOrNull { it.type == "poll" && it.poll != null }
-            if (pollAtt != null) {
-                val poll = pollAtt.poll
-                if (poll != null) {
-                    val pollVoteScope = rememberCoroutineScope()
-                    val pollVoteApp = re.pinok.SovaApp.get()
-                    PollCard(poll = poll, onVote = { answerIds ->
-                        pollVoteScope.launch {
-                            pollVoteApp.apiClient.pollsAddVote(poll.id, poll.ownerId, answerIds)
-                        }
-                    })
-                }
-            }
-            // Документ-вложения.
-            val docAttachments = post.attachments?.filter { it.type == "doc" && it.doc != null }.orEmpty()
-            if (docAttachments.isNotEmpty()) {
-                docAttachments.forEach { attach ->
-                    val doc = attach.doc
-                    if (doc != null) {
-                        DocAttachmentCard(doc = doc, onOpen = {
-                            // Fix #51-A: та же нормализация URL что и для LinkCard.
-                            val rawUrl = doc.url.orEmpty().trim()
-                            if (rawUrl.isEmpty()) {
-                                android.widget.Toast.makeText(
-                                    ctx, "Ссылка недоступна", android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                                return@DocAttachmentCard
-                            }
-                            val normalizedUrl = if (rawUrl.contains("://")) rawUrl else "https://$rawUrl"
-                            val uri = android.net.Uri.parse(normalizedUrl)
-                            if (uri.scheme == null || uri.host == null) {
-                                android.widget.Toast.makeText(
-                                    ctx, "Некорректная ссылка", android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                                return@DocAttachmentCard
-                            }
-                            val intent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW, uri,
-                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            try {
-                                ctx.startActivity(intent)
-                                AppLog.i("FeedScreen", "DocCard: opened url=$normalizedUrl")
-                            } catch (e: Exception) {
-                                AppLog.w("FeedScreen", "Failed to open doc: $normalizedUrl", e)
-                                android.widget.Toast.makeText(
-                                    ctx,
-                                    "Не удалось открыть документ",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        })
-                    }
-                }
-            }
-            // Репост — copy_history.
-            // #ARCH-CONTAINERS 3.7-1: copyHistory в :core:data — захват ДО проверки.
-            val copyHistory = post.copyHistory
-            if (!copyHistory.isNullOrEmpty()) {
-                val original = copyHistory.first()
-                // VKUI: repost header — 24dp avatar, repost_outline_16 icon, 8px gap
-                // padding: 4px 8px 0px
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        // Fix #365: репост-карточка ЦЕЛИКОМ открывает оригинальный
-                        // пост (тот же колбэк onPostClick, что у тела поста:
-                        // saveScrollPosition → PostHolder.last → PostDetail).
-                        // clickable ПОСЛЕ clip — риппл по скруглению; вложенные
-                        // клики (имя автора ниже, ссылки в тексте) перехватываются
-                        // раньше — потомки кликабельнее родителя по умолчанию.
-                        .clickable { onPostClick(original) }
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
-                    elevation = CardDefaults.cardElevation(0.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                    ),
-                ) {
-                    Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp)) {
-                        val origName: String
-                        val origPhoto: String?
-                        if (original.fromId > 0) {
-                            val p = profiles[original.fromId]
-                            origName = if (p != null) "${p.firstName} ${p.lastName}" else "id${original.fromId}"
-                            origPhoto = if (p != null) p.photo100 else null
-                        } else {
-                            val g = groups[-original.fromId]
-                            origName = if (g != null) g.name else "Сообщество"
-                            origPhoto = if (g != null) g.photo100 else null
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            // VKUI: repost_outline_16 icon
-                            Icon(
-                                Icons.Outlined.Repeat,
-                                contentDescription = "Репост",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            // VKUI: vkuiAvatar__host 24x24 (nested)
-                            if (origPhoto != null) {
-                                AsyncImage(
-                                    model = origPhoto,
-                                    contentDescription = origName,
-                                    modifier = Modifier.size(24.dp).clip(CircleShape),
-                                    contentScale = ContentScale.Crop,
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier.size(24.dp).clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.outlineVariant),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        text = origName.take(1).uppercase(),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                            // VKUI: h4, vkuiSubhead__densityCompact vkuiTypography__weight2 vkuiTypography__accent
-                            Text(
-                                text = origName,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.primary,
-                                textDecoration = TextDecoration.Underline,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { onAuthorClick(original) },
-                            )
-                        }
-                        if (original.text.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            // Fix #365: текст репоста разворачивается на месте —
-                            // паттерн Fix #345 (CommunityScreen): «Показать ещё»
-                            // только при реальном переполнении (hasVisualOverflow);
-                            // тап по свёрнутому тексту = развернуть, по развёрнутому
-                            // (и по короткому) = открыть пост целиком.
-                            var repostExpanded by remember { mutableStateOf(false) }
-                            var repostOverflowed by remember { mutableStateOf(false) }
-                            Text(
-                                text = re.pinok.util.linkifyVkText(
-                                    text = original.text,
-                                    linkColor = MaterialTheme.colorScheme.primary,
-                                    onUrlClick = { url -> re.pinok.util.openUrlExternal(ctx, url) },
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        if (repostOverflowed && !repostExpanded) {
-                                            repostExpanded = true
-                                        } else {
-                                            onPostClick(original)
-                                        }
-                                    },
-                                onTextLayout = { result ->
-                                    if (!repostExpanded && result.hasVisualOverflow) repostOverflowed = true
-                                },
-                                maxLines = if (repostExpanded) Int.MAX_VALUE else 6,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (repostOverflowed && !repostExpanded) {
-                                // Стиль «Показать ещё» — как у основного текста поста выше.
-                                Text(
-                                    text = "Показать ещё",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    textDecoration = TextDecoration.Underline,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 2.dp)
-                                        .clickable { repostExpanded = true },
-                                )
-                            }
-                        }
-                        // Фото из оригинального поста.
-                        val origPhotos = original.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
-                        if (origPhotos.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            val origUrls = origPhotos.mapNotNull { it.photo?.largestUrl }
-                            if (origUrls.isNotEmpty()) {
-                                AsyncImage(
-                                    model = origUrls.first(),
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(max = 160.dp)
-                                        .clip(RoundedCornerShape(6.dp)),
-                                    contentScale = ContentScale.Crop,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            // ─── VKUI: post footer — vkuiFlex__justifySpaceBetween, 4px vertical padding ───
-            // Actions: 8px row gap, 16px column gap. Date: post_date_block_preview (right, accent, underline)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                var showReactions by remember { mutableStateOf(false) }
-                Box {
-                    ActionIcon(
-                        icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                        count = likeCount,
-                        tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        onClick = { onLikeToggle(post) },
-                        onLongClick = { showReactions = true },
-                    )
-                    if (showReactions) {
-                        Box(
-                            modifier = Modifier
-                                .offset(y = (-48).dp)
-                                .zIndex(10f),
-                        ) {
-                            ReactionPicker(
-                                onDismiss = { showReactions = false },
-                                onSelect = { reaction ->
-                                    onReaction(post, reaction)
-                                },
-                            )
-                        }
-                    }
-                }
-                ActionIcon(
-                    icon = Icons.Outlined.ChatBubbleOutline,
-                    count = post.comments?.count ?: 0,
-                    onClick = { onCommentClick(post) },
-                )
-                ActionIcon(
-                    icon = Icons.Outlined.Repeat,
-                    count = post.reposts?.count ?: 0,
-                    onClick = { onRepostClick(post) },
-                )
-                // Время поста — обычный текст, без ссылки
-                Text(
-                    text = timeStr,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+    // ─── Кнопка подписки (как в старом inline-хедере) ───
+    // Скрыта на своих постах (fromId == myUserId) и у постов без автора.
+    val showSubscribeButton = post.fromId != 0L && post.fromId != myUserId
+    // Состояние: override из subscriptionState; absent → дефолт «Подписаться»
+    // (для сообществ — из GroupInfo.isMember, если VK отдал is_member).
+    val subscribed: Boolean? = subscriptionState[post.fromId.toString()]
+        ?: if (authorIsGroup) groups[-post.fromId]?.let { it.isMember == 1 } else null
+
+    // ─── Меню ⋮: пункты 1:1 со старым inline-DropdownMenu ───
+    // Пост-гейты (права поста) — зона вызывающего экрана; порядок/иконки повторены.
+    val menuItems = buildList {
+        // Закладка — ВСЕГДА (переключатель по isFavoriteBool).
+        add(PostMenuItem(
+            label = if (post.isFavoriteBool) "Убрать из закладок" else "В закладки",
+            icon = if (post.isFavoriteBool) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+            onClick = { onToggleBookmark(post) },
+        ))
+        if (post.canEditBool) {
+            add(PostMenuItem(
+                label = "Редактировать",
+                icon = Icons.Outlined.Edit,
+                onClick = { onEditPost(post) },
+            ))
+        }
+        if (post.canPinBool) {
+            add(PostMenuItem(
+                label = if (post.isPinnedBool) "Открепить" else "Закрепить",
+                icon = if (post.isPinnedBool) Icons.Outlined.VisibilityOff else Icons.Outlined.PushPin,
+                onClick = { onTogglePin(post) },
+            ))
+        }
+        add(PostMenuItem(
+            label = "Скрыть из ленты",
+            icon = Icons.Outlined.VisibilityOff,
+            onClick = { onHideFromFeed(post) },
+        ))
+        add(PostMenuItem(
+            label = "Не показывать от автора",
+            icon = Icons.Outlined.ContentCopy,
+            onClick = { onBanSource(post) },
+        ))
+        // П-7-AB: «Пожаловаться» — только на чужих записях (ownerId != myUserId).
+        if (post.ownerId != myUserId) {
+            add(PostMenuItem(
+                label = "Пожаловаться",
+                icon = Icons.Outlined.Flag,
+                onClick = { onReportSpam(post) },
+            ))
+        }
+        if (post.canDeleteBool) {
+            add(PostMenuItem(
+                label = "Удалить пост",
+                icon = Icons.Outlined.Delete,
+                destructive = true,
+                onClick = { onDeletePost(post) },
+            ))
         }
     }
+
+    // ─── Делегирование единому PostCard (ui/components/PostCard.kt) ───
+    // Алиас UnifiedPostCard — потому что единый компонент называется так же, как
+    // эта обёртка; без алиаса вызов был бы рекурсией на саму себя.
+    // Все колбэки/состояние пробрасываются 1:1 из сигнатуры обёртки.
+    UnifiedPostCard(
+        post = post,
+        authorName = authorName,
+        authorPhoto = authorPhoto,
+        authorIsGroup = authorIsGroup,
+        signerName = signerName,
+        showFullDate = false,          // лента — относительное время
+        isBookmarked = null,           // закладка показывается только в ⋮-меню
+        onToggleBookmark = null,
+        verified = verified,
+        onAuthorClick = { onAuthorClick(post) },
+        onPostClick = onPostClick,
+        onVideoClick = onVideoClick,
+        onPhotoClick = onPhotoClick,
+        onLikeToggle = onLikeToggle,
+        onCommentClick = onCommentClick,
+        onRepostClick = onRepostClick,
+        onReaction = onReaction,
+        likesOverride = likesOverride,
+        reactionOverride = null,       // отдельной reactionsState-карты в ленте нет
+        menuItems = menuItems,
+        showPinnedBadge = true,        // лента показывает «Закреплённый пост»
+        showAdBadge = true,            // лента показывает «Реклама»
+        showSubscribeButton = showSubscribeButton,
+        subscribed = subscribed,
+        onSubscribe = onSubscribe,
+        textMaxLines = 6,              // лента разворачивает текст после 6 строк
+        carouselEnabled = carouselEnabled,
+        showViews = true,              // лента показывает просмотры
+        myUserId = myUserId,
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════
