@@ -222,6 +222,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -971,6 +973,14 @@ fun ChatDetailScreen(
     // «Открыть сообщество»/«Написать», ссылка и разделы Фото/Видео/Музыка/Файлы.
     // Открывается тапом по шапке канала (peerId<0 && isChannel). Аддитивно.
     var showChannelInfoPanel by remember { mutableStateOf(false) }
+    // #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» в панели канала — закрыть
+    // панель и сфокусировать/прокрутить композер, если канал позволяет писать
+    // (canMessage==1 или canPost==1, админ). Иначе — честный Toast read-only.
+    // FocusRequester на поле ввода + тик: LaunchedEffect(channelWriteFocusTick)
+    // запрашивает фокус после того как панель закрыта, а listState доскроллит
+    // к низу (index 0 = новейшее при reverseLayout).
+    val channelComposerFocusRequester = remember { FocusRequester() }
+    var channelWriteFocusTick by remember { mutableStateOf(0) }
     // #CHANNELS-UI2 (Task 2): индекс активного закрепа в баннере-карусели стены.
     // Список закрепов — channelPosts.filter { isPinned == 1 }; при >1 показываем
     // точки/стрелки для переключения, при 1 — прежний одиночный баннер.
@@ -2659,6 +2669,28 @@ fun ChatDetailScreen(
         scope.launch { channelListState.animateScrollToItem(idx + shift) }
     }
 
+    /**
+     * #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» в панели канала.
+     * Если канал позволяет писать (canMessage==1 или canPost==1 — админ,
+     * обычный композер рендерится, см. else ветку bottomBar ~4086) —
+     * доскролливаем ленту диалога к низу (index 0 = новейшее при
+     * reverseLayout) и фокусируем поле ввода через channelWriteFocusTick
+     * (LaunchedEffect запрашивает фокус после закрытия панели). Если канал
+     * read-only — честный Toast, без мнимого «перехода».
+     */
+    fun requestChannelComposerFocus() {
+        val canWrite = channelGroup?.canMessage == 1 || channelGroup?.canPost == 1
+        if (!canWrite) {
+            Toast.makeText(ctx, "Канал доступен только для чтения", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // Доскролливаем к низу ленты, затем триггерим фокус композера.
+        scope.launch {
+            listState.animateScrollToItem(0)
+            channelWriteFocusTick++
+        }
+    }
+
     // Отправка (или отправка редактированного).
     fun doSend() {
         // #IM-CHANNEL-FIX (56-b-3): ранний guard — в канал нельзя писать.
@@ -4101,6 +4133,19 @@ fun ChatDetailScreen(
                 )
             } else {
             Column {
+                // #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» из панели канала.
+                // Только в этой ветке рендерится обычный композер (админ канала
+                // может писать), поэтому FocusRequester валиден здесь. Когда
+                // channelWriteFocusTick>0 — после доскролла запрашиваем фокус.
+                LaunchedEffect(channelWriteFocusTick) {
+                    if (channelWriteFocusTick > 0) {
+                        try {
+                            channelComposerFocusRequester.requestFocus()
+                        } catch (e: Exception) {
+                            AppLog.w("ChatDetailScreen", "composer focus request failed: ${e.message}")
+                        }
+                    }
+                }
                 // #59: панель ответа (reply) — показывает текст сообщения на которое отвечаем.
                 if (replyingTo != null) {
                     Row(
@@ -4356,7 +4401,10 @@ fun ChatDetailScreen(
                         OutlinedTextField(
                             value = inputText,
                             onValueChange = { inputText = it },
-                            modifier = Modifier.weight(1f),
+                            // #CHANNEL-PANEL-WRITE (2026-10-11): FocusRequester для
+                            // «Написать» из панели канала — focusRequest() вызывается
+                            // LaunchedEffect(channelWriteFocusTick) после доскролла.
+                            modifier = Modifier.weight(1f).focusRequester(channelComposerFocusRequester),
                             placeholder = {
                                 Text(
                                     if (editingMsgId != null) "Редактирование…" else "Сообщение…"
@@ -6013,18 +6061,20 @@ fun ChatDetailScreen(
                 notificationsEnabled = channelNotifEnabled,
                 onToggleNotifications = { toggleChannelNotifications() },
                 onOpenCommunity = {
-                    val url = channelCommunityUrl(channelGroup, peerId)
                     showChannelInfoPanel = false
-                    onUrlClick(url)
+                    // #CHANNEL-PANEL-WRITE (2026-10-11): канал сам является
+                    // группой (peerId<0) — открываем нативный экран сообщества
+                    // PinoK (Screen.Community через onGroupClick(-peerId)), а НЕ
+                    // браузерную ссылку vk.ru (прежний onUrlClick).
+                    onGroupClick(-peerId)
                 },
                 onWrite = {
                     showChannelInfoPanel = false
-                    val canMsg = channelGroup?.canMessage == 1
-                    Toast.makeText(
-                        ctx,
-                        if (canMsg) "Вы уже в диалоге канала" else "Сообщения канала недоступны",
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                    // #CHANNEL-PANEL-WRITE (2026-10-11): реальное действие —
+                    // закрыть панель и сфокусировать/прокрутить композер, если
+                    // канал writable (canMessage/canPost); read-only → честный
+                    // Toast «Канал доступен только для чтения».
+                    requestChannelComposerFocus()
                 },
                 onCopyLink = { url ->
                     try {

@@ -14044,3 +14044,11 @@ Work Log:
 - ChannelInfoPanelContent: шапка изменена с вертикальной на горизонтальную — аватар 80px слева, справа название в 2 строки (splitChannelTitle: первое слово + остаток, паттерн ChannelProfile__name/lastNameWord) + подписчики.
 - Новый хелпер splitChannelTitle. Баланс net=0. Изменён только ChatDetailScreen.
 - Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: CHANNEL-PANEL-WRITE-OPEN
+Task: Реальный функционал кнопок «Открыть сообщество» и «Написать» панели канала.
+Work Log:
+- «Открыть сообщество»: onUrlClick(браузер) → onGroupClick(-peerId) (нативный Screen.Community).
+- «Написать»: requestChannelComposerFocus() — FocusRequester на композер, прокрутка к низу (listState) если writable (canMessage/canPost); read-only → честный Toast «Канал доступен только для чтения».
+- Баланс net=0. Изменён только ChatDetailScreen. Сборка на пользователе; пуш с разрешения.
