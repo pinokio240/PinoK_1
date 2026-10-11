@@ -97,6 +97,14 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
+// #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): иконки ActionCell панели канала
+// — «Сообщество» (Group), «Написать» (Email,
+// vkme_channel_open_convo), «Ещё» (MoreHoriz, more_20/DropdownReforged),
+// «Открыть в браузере» (Public). Паритет снапшоту VK web ChannelProfileMenu__actions.
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.Public
 // W30-1 #IM-UNREAD-MENU: иконка «непрочитанным/прочитанным» — та же, что в
 // long-press меню списка диалогов (MessagesScreen:37, Fix #274) — паритет UX.
 import androidx.compose.material.icons.outlined.MarkChatUnread
@@ -137,7 +145,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Button
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -5997,6 +6004,14 @@ fun ChatDetailScreen(
                 channelTitle = currentTitle,
                 channelPhoto = currentPhoto,
                 subscribers = channelSubscribers,
+                // #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): тумблер уведомлений
+                // канала. Для каналов (peerId<0) используем канальный механизм
+                // channelNotifEnabled/toggleChannelNotifications (channels.
+                // setNotificationMode + fallback allow/deny), как в ChannelFooterBar
+                // (строка ~4090) и меню шапки (~3986), — НЕ обычный toggleMute
+                // (messages.setConversationPushSettings, только для peerId>0).
+                notificationsEnabled = channelNotifEnabled,
+                onToggleNotifications = { toggleChannelNotifications() },
                 onOpenCommunity = {
                     val url = channelCommunityUrl(channelGroup, peerId)
                     showChannelInfoPanel = false
@@ -10494,6 +10509,12 @@ private fun ChannelInfoPanelContent(
     channelTitle: String,
     channelPhoto: String?,
     subscribers: Int,
+    // #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): тумблер уведомлений канала +
+    // «Ещё»-меню. notificationsEnabled=true — уведомления канала включены
+    // (снапшот: на панели есть «Уведомления», иконка меняется notification_
+    // slash_outline когда выкл.). onToggleNotifications — канальный toggle.
+    notificationsEnabled: Boolean,
+    onToggleNotifications: () -> Unit,
     onOpenCommunity: () -> Unit,
     onWrite: () -> Unit,
     onCopyLink: (String) -> Unit,
@@ -10558,23 +10579,73 @@ private fun ChannelInfoPanelContent(
             )
         }
 
-        // Кнопки «Открыть сообщество» / «Написать».
+        // #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): ряд ActionCell «как в VK web»
+        // (снапшот ChannelProfileMenu__actions): [Сообщество] [Написать]
+        // [Уведомления] [Ещё ⋯]. Прежние две кнопки «Открыть сообщество»/
+        // «Написать» сохранены по функционалу (onOpenCommunity/onWrite),
+        // но переведены в стиль ActionCell (иконка + подпись вертикально) —
+        // паритет снапшоту (users_3_outline / message_outline). Добавлены
+        // тумблер «Уведомления» (notification_slash_outline когда выкл., см.
+        // notificationsEnabled/onToggleNotifications) и меню «Ещё» (more_20).
         Spacer(Modifier.height(16.dp))
+        var showChannelMoreMenu by remember { mutableStateOf(false) }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Button(
+            ChannelPanelActionCell(
+                icon = Icons.Outlined.Group,
+                label = "Сообщество",
+                modifier = Modifier.weight(1f),
                 onClick = onOpenCommunity,
+            )
+            ChannelPanelActionCell(
+                icon = Icons.Outlined.Email,
+                label = "Написать",
                 modifier = Modifier.weight(1f),
-            ) {
-                Text("Открыть сообщество")
-            }
-            Button(
                 onClick = onWrite,
+            )
+            ChannelPanelActionCell(
+                icon = if (notificationsEnabled) Icons.Outlined.Notifications
+                else Icons.Outlined.NotificationsOff,
+                label = if (notificationsEnabled) "Уведомления" else "Уведомл. выкл.",
+                modifier = Modifier.weight(1f),
+                onClick = onToggleNotifications,
+            )
+            Box(
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Написать")
+                ChannelPanelActionCell(
+                    icon = Icons.Outlined.MoreHoriz,
+                    label = "Ещё",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { showChannelMoreMenu = true },
+                )
+                DropdownMenu(
+                    expanded = showChannelMoreMenu,
+                    onDismissRequest = { showChannelMoreMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Копировать ссылку") },
+                        leadingIcon = {
+                            Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                        },
+                        onClick = {
+                            showChannelMoreMenu = false
+                            onCopyLink(linkUrl)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Открыть в браузере") },
+                        leadingIcon = {
+                            Icon(Icons.Outlined.Public, contentDescription = null)
+                        },
+                        onClick = {
+                            showChannelMoreMenu = false
+                            onOpenCommunity()
+                        },
+                    )
+                }
             }
         }
 
@@ -10593,6 +10664,50 @@ private fun ChannelInfoPanelContent(
         ChannelInfoSectionsGrid(
             onSectionClick = onSectionClick,
         )
+    }
+}
+
+/**
+ * #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): ActionCell панели канала —
+ * иконка + подпись вертикально (паритет снапшоту VK web
+ * ChannelProfileMenu__actions: users_3_outline / message_outline /
+ * notification_slash_outline). Аккуратная карточка с мягким фоном.
+ */
+@Composable
+private fun ChannelPanelActionCell(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
     }
 }
 

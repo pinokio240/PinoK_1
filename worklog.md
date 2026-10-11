@@ -14026,3 +14026,13 @@ Work Log:
 - Причина: channelSharePost устанавливался (из menuItems ⋯-меню и кнопки репоста), но ShareSheet по нему НЕ рендерился — панель никогда не открывалась.
 - Фикс: добавлен рендер ShareSheet по channelSharePost в конце composable (после ChannelCommentsDialog) — как в FeedScreen (sharePost.value). Паттерн из снапшота VK web: «Поделиться» = модальное окно (reforged-modal-root).
 - Баланс net=0. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: CHANNEL-INFO-PANEL-PORT
+Task: Полный перенос панели канала по снапшоту VK web (ChannelProfileMenu__actions).
+Work Log:
+- ChannelInfoPanelContent переведён на стиль VK web: 4 ActionCell (иконка+подпись) — Сообщество/Написать/Уведомления/Ещё.
+- «Уведомления» — тумблер через канальный механизм channelNotifEnabled/toggleChannelNotifications (НЕ muted — он для обычных диалогов). Иконка Notifications/NotificationsOff.
+- «Ещё» — DropdownMenu: Копировать ссылку (ContentCopy) / Открыть в браузере (Public→onOpenCommunity).
+- Новый composable ChannelPanelActionCell (Surface+иконка+подпись). Существующий функционал сохранён.
+- Баланс net=0. Изменён только ChatDetailScreen. Сборка на пользователе; пуш с разрешения.
