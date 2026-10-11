@@ -5969,6 +5969,17 @@ fun ChatDetailScreen(
         )
     }
 
+    // POSTCARD-REFACTOR-PLAN: «Поделиться» постом канала → ShareSheet.
+    // Раньше channelSharePost устанавливался (menuItems/кнопка репоста), но
+    // ShareSheet по нему НЕ рендерился → панель не открывалась (фикс #CHANNEL-SHARE).
+    val chShare = channelSharePost
+    if (chShare != null) {
+        ShareSheet(
+            post = chShare,
+            onDismiss = { channelSharePost = null },
+        )
+    }
+
     // #CHANNEL-INFO-PANEL (2026-10-03): панель канала — аватар, название,
     // подписчики, кнопки «Открыть сообщество»/«Написать», ссылка на канал и
     // разделы Фото/Видео/Музыка/Файлы. Открывается тапом по шапке канала

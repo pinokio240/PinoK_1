@@ -14018,3 +14018,11 @@ Task: Рефакторинг PostCard завершён.
 Work Log:
 - Community/Profile/Feed/PostDetail/Bookmarks переведены на единый PostCard. Дублирующие inline-реализации удалены.
 - Незапушенные коммиты: fe6c908 (3e), e8d4855 (3f). Пуш с разрешения.
+
+---
+Task ID: CHANNEL-SHARE-FIX
+Task: «Поделиться» в канале не работало — ShareSheet не рендерился.
+Work Log:
+- Причина: channelSharePost устанавливался (из menuItems ⋯-меню и кнопки репоста), но ShareSheet по нему НЕ рендерился — панель никогда не открывалась.
+- Фикс: добавлен рендер ShareSheet по channelSharePost в конце composable (после ChannelCommentsDialog) — как в FeedScreen (sharePost.value). Паттерн из снапшота VK web: «Поделиться» = модальное окно (reforged-modal-root).
+- Баланс net=0. Сборка на пользователе; пуш с разрешения.
