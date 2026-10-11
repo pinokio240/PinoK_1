@@ -107,6 +107,7 @@ import re.pinok.ui.components.ScrollToTopFab
 // PostCard; пункты её «⋯»-меню — через PostMenuItem.
 import re.pinok.ui.components.PostCard
 import re.pinok.ui.components.PostMenuItem
+import re.pinok.ui.components.RepostGroupCache
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
 // (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
 import re.pinok.ui.screens.feed.ReactionEntry
@@ -212,6 +213,11 @@ fun ProfileScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
+    // Группы-источники РЕПОСТОВ стены (copy_history[0] с ownerId<0) → имя/аватар.
+    // Резолв через groups.getById лениво в LaunchedEffect каждого поста (см. items
+    // ниже); кладётся в Snapshot-state → рекомпозиция подставляет имя/фото в шапку
+    // репоста вместо «Запись клуба <id>».
+    val repostGroups = remember { RepostGroupCache() }
     // User request 2026-07-12: кнопка «Создать пост» перенесена из ленты в профиль.
     val creatingPost = remember { mutableStateOf(false) }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -1458,6 +1464,14 @@ fun ProfileScreen(
             items(posts, key = { "${it.ownerId}_${it.id}" }) { post ->
                 // П-6a: ключ поста для optimistic-карт лайка/действий.
                 val postKey = "${post.ownerId}_${post.id}"
+                // Группа-источник репоста (copy_history[0], ownerId<0): резолвим
+                // её имя/аватар через groups.getById лениво. LaunchedEffect можно
+                // вызывать внутри items-lambda (это composable-контекст). Кэш
+                // защищает от повторов и от падения сети (runCatching внутри).
+                val repostOwnerId = post.copyHistory?.firstOrNull()?.ownerId
+                if (repostOwnerId != null && repostOwnerId < 0) {
+                    LaunchedEffect(post.ownerId, post.id) { repostGroups.resolve(app.apiClient, post) }
+                }
                 WallPostCard(
                     post = post,
                     authorName = p.fullName,
@@ -1478,6 +1492,17 @@ fun ProfileScreen(
                     // группа/канал → сообщество, пользователь → чужой профиль.
                     onGroupClick = onGroupClick,
                     onUserClick = onUserClick,
+                    // Группа-источник РЕПОСТА: имя/аватар из кэша репост-групп
+                    // (null до загрузки → заголовок «Запись клуба <id>», затем
+                    // рекомпозиция подставит имя/фото). Клик по репост-шапке
+                    // ВЕДЁТ В СООБЩЕСТВО этой группы.
+                    repostGroupName = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.nameOf(-repostOwnerId) else null,
+                    repostGroupPhoto = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.photoOf(-repostOwnerId) else null,
+                    onRepostGroupClick = {
+                        post.copyHistory?.firstOrNull()?.ownerId
+                            ?.takeIf { it < 0 }
+                            ?.let { onGroupClick(-it) }
+                    },
                     // П-6a (#PROFILE-GAP-6a): лайк записи + «Действия» поста стены
                     // (pin/unpin/delete/edit). Свой профиль → владелец стены = p.id.
                     likesState = likeStates,
@@ -2247,6 +2272,13 @@ fun WallPostCard(
     // автора нет (0) — в пост. Дефолты {} — легаси-вызовы не меняют поведение.
     onGroupClick: (groupId: Long) -> Unit = {},
     onUserClick: (userId: Long) -> Unit = {},
+    // Группа-источник РЕПОСТА (copy_history[0] с ownerId<0). Резолв типа
+    // «группа + аватар + клик в группу» делает вызывающий экран (у PostCard/
+    // RepostBlock нет карты групп). Дефолты null/{} — старый вид заголовка
+    // репоста («Запись клуба <id>»), легаси-вызовы совместимы.
+    repostGroupName: String? = null,
+    repostGroupPhoto: String? = null,
+    onRepostGroupClick: (() -> Unit)? = null,
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — ОБЁРТКА-ДЕЛЕГАТ единого
     // PostCard (ui/components/PostCard.kt). Внешняя сигнатура сохранена 1:1 —
@@ -2353,6 +2385,10 @@ fun WallPostCard(
         carouselEnabled = carouselEnabled,
         showViews = showViewsWrapped,
         myUserId = wallOwnerId,
+        // Группа-источник репоста → PostCard → RepostBlock (заголовок+клик).
+        repostGroupName = repostGroupName,
+        repostGroupPhoto = repostGroupPhoto,
+        onRepostGroupClick = onRepostGroupClick,
     )
 }
 

@@ -1,6 +1,8 @@
 package re.pinok.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Repeat
@@ -25,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -34,6 +38,7 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.Video
 import re.pinok.util.linkifyVkText
 import re.pinok.util.openUrlExternal
+import coil3.compose.AsyncImage
 
 // Fix #70: RepostBlock — отображение copy_history[0] как вложенной карточки.
 // Показывает заголовок «Запись <ownerId>» + текст + вложения оригинального поста
@@ -52,6 +57,12 @@ fun RepostBlock(
     // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, пробрасывается
     // из WallPostCard). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
     carouselEnabled: Boolean = true,
+    // Группа-источник репоста (repost.ownerId<0). Если переданы groupName —
+    // рендерим её аватар/имя/клик в группу ПОВЕРХ «Запись клуба <ownerId>»
+    // (или вместо него). null — прежний вид (заголовок «Запись клуба <id>»).
+    groupName: String? = null,
+    groupPhoto: String? = null,
+    onGroupClick: (() -> Unit)? = null,
 ) {
     // Fix #373: контекст для linkify-кликов в тексте репоста (openUrlExternal).
     val ctx = LocalContext.current
@@ -77,21 +88,77 @@ fun RepostBlock(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(
-                    // Audit #40: для user-posts (ownerId>0) не показываем "клуба" —
-                    // иначе получается двойной пробел "Запись  123". buildString аккуратнее.
-                    text = buildString {
-                        append("Запись")
-                        if (repost.ownerId < 0) append(" клуба")
-                        append(' ')
-                        append(repost.ownerId)
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                val srcGroupName = groupName
+                if (srcGroupName != null) {
+                    // Группа-источник репоста: аватар 20dp (AsyncImage или
+                    // буква-фоллбэк из groupName.take(1)) + имя (клик → onGroupClick).
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(CircleShape),
+                        ) {
+                            val photo = groupPhoto
+                            if (photo != null) {
+                                AsyncImage(
+                                    model = photo,
+                                    contentDescription = srcGroupName,
+                                    modifier = Modifier.size(20.dp),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.outlineVariant),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = srcGroupName.take(1).uppercase(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = srcGroupName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textDecoration = if (onGroupClick != null) {
+                                TextDecoration.Underline
+                            } else {
+                                TextDecoration.None
+                            },
+                            modifier = if (onGroupClick != null) {
+                                Modifier.clickable { onGroupClick?.invoke() }
+                            } else {
+                                Modifier
+                            },
+                        )
+                    }
+                } else {
+                    Text(
+                        // Audit #40: для user-posts (ownerId>0) не показываем "клуба" —
+                        // иначе получается двойной пробел "Запись  123". buildString аккуратнее.
+                        text = buildString {
+                            append("Запись")
+                            if (repost.ownerId < 0) append(" клуба")
+                            append(' ')
+                            append(repost.ownerId)
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (repost.text.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))

@@ -13948,3 +13948,15 @@ Work Log:
 - SovaNavHost: добавил onGroupClick → Screen.Community.buildRoute(groupId) для Profile/UserProfile/ChatDetail (для каналов нативного перехода не было).
 - Проверка: 4 файла, баланс относительно базы не изменился (SovaNavHost net=3 был в HEAD).
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: POSTCARD-REPOST-GROUP-FIX
+Task: Репост-группа: имя+аватарка+клик; защита DELETED-канала; read-on-open.
+Work Log:
+- RepostBlock: добавлены groupName/groupPhoto/onGroupClick → рендер аватара+имени группы-источника репоста (вместо «Запись клуба» когда переданы).
+- PostCard: проброс repostGroupName/Photo/onRepostGroupClick в RepostBlock.
+- WallPostCard (ProfileScreen): +3 параметра, форвардит в PostCard.
+- Новый ui/components/RepostGroupCache: ленивый резолв группы-источника репоста (groupsGetById, Dispatchers.IO, кэш, runCatching) — применён в ProfileScreen/UserProfileScreen/ChatDetailScreen(3 места).
+- ChatDetailScreen: защита g.name != "DELETED" (стр 3292, добавочно), markChannelConversationAsRead() в openChannelPost (#CHANNEL-READ-ON-OPEN).
+- Проверка: баланс сохранён (ProfileScreen net=-2 исходный), PostCard/RepostBlock не пострадали.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.

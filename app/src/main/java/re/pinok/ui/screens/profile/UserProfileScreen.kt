@@ -73,6 +73,7 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.RepostGroupCache
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ShareSheet
 import re.pinok.util.AppLog
@@ -187,6 +188,10 @@ fun UserProfileScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
+    // Группы-источники РЕПОСТОВ чужой стены (copy_history[0] с ownerId<0) →
+    // имя/аватар. Резолв лениво в LaunchedEffect каждого поста (см. items ниже):
+    // на репост чужой стены можно нарваться с любых групп, кэш копит их по ходу.
+    val repostGroups = remember { RepostGroupCache() }
 
     // Этап П-2 (PROFILE-P2-3b): состояние действий чужого профиля.
     var profileMenuExpanded by remember { mutableStateOf(false) }
@@ -771,6 +776,14 @@ fun UserProfileScreen(
             }
 
             items(posts, key = { "${it.ownerId}_${it.id}" }) { post ->
+                // Группа-источник репоста (copy_history[0], ownerId<0): резолвим
+                // её имя/аватар лениво через groups.getById (LaunchedEffect внутри
+                // items-lambda — валидный composable-контекст; кэш не падает при
+                // ошибке сети).
+                val repostOwnerId = post.copyHistory?.firstOrNull()?.ownerId
+                if (repostOwnerId != null && repostOwnerId < 0) {
+                    LaunchedEffect(post.ownerId, post.id) { repostGroups.resolve(app.apiClient, post) }
+                }
                 WallPostCard(
                     post = post,
                     authorName = p.fullName,
@@ -786,6 +799,17 @@ fun UserProfileScreen(
                     // группа/канал → сообщество, пользователь → его профиль.
                     onGroupClick = onGroupClick,
                     onUserClick = onUserClick,
+                    // Группа-источник РЕПОСТА: имя/аватар из кэша репост-групп
+                    // (null до загрузки → «Запись клуба <id>», затем рекомпозиция
+                    // подставит имя/фото). Клик по репост-шапке из группы ВЕДЁТ В
+                    // СООБЩЕСТВО (Screen.Community.buildRoute).
+                    repostGroupName = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.nameOf(-repostOwnerId) else null,
+                    repostGroupPhoto = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.photoOf(-repostOwnerId) else null,
+                    onRepostGroupClick = {
+                        post.copyHistory?.firstOrNull()?.ownerId
+                            ?.takeIf { it < 0 }
+                            ?.let { onGroupClick(-it) }
+                    },
                     // П-7-AB: «Пожаловаться» на записях ЧУЖОЙ стены (wall.markAsSpam).
                     // showActions по-прежнему false (П-6а: manage-пункты только на
                     // своём профиле) → меню открывается с одним «Пожаловаться».

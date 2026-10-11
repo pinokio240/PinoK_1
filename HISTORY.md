@@ -15459,3 +15459,11 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Фикс:** WallPostCard добавил onGroupClick/onUserClick; клик по имени группы/канала теперь ведёт в Screen.Community, по автору-пользователю — в профиль. Провязано через SovaNavHost (Profile/UserProfile/ChatDetail). 4 файла.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REPOST-GROUP-FIX — 2026-10-11 — репост-группа + DELETED-канал + read-on-open
+
+**Фикс:** RepostBlock показывает имя/аватар группы-источника репоста (+клик в группу) через новый RepostGroupCache (ленивый groupsGetById). Защита «DELETED» для названия канала. markChannelConversationAsRead при открытии поста канала.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

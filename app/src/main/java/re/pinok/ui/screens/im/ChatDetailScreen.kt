@@ -275,6 +275,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.RepostGroupCache
 // #CHANNEL-WALL-MODE (Fix #393): «Поделиться» поста канала — существующий
 // компонент (тот же, что в CommunityScreen/UserProfileScreen).
 import re.pinok.ui.components.ShareSheet
@@ -905,6 +906,10 @@ fun ChatDetailScreen(
     var channelPostsError by remember { mutableStateOf<String?>(null) }
     var channelPostsEnd by remember { mutableStateOf(false) }
     var channelPostsLoadingMore by remember { mutableStateOf(false) }
+    // Группы-источники РЕПОСТОВ канала (copy_history[0] с ownerId<0) → имя/аватар.
+    // Канал сам группа; посты канала могут репостить и ДРУГИЕ сообщества — их
+    // резолвим лениво через groups.getById в LaunchedEffect каждого поста.
+    val repostGroups = remember { RepostGroupCache() }
     // Fix #394 #CHANNEL-WALL-FALLBACK: wall.get для канала может быть ЗАКРЫТ
     // навсегда (баг-репорт 14.09: «диалоги каналов не открываются» —
     // wall.get err 15 «Access denied: wall is disabled» у сообщества
@@ -2621,6 +2626,9 @@ fun ChatDetailScreen(
 
     /** Открыть пост канала в PostDetailScreen (через экран-параметр onPostClick). */
     fun openChannelPost(post: Post) {
+        // #CHANNEL-READ-ON-OPEN: при открытии поста канала сбрасываем
+        // непрочитанный бейдж канала (как при открытии канала списком).
+        markChannelConversationAsRead()
         val g = channelGroup
         if (g != null) {
             // Имя сообщества в PostDetailScreen — паритет CommunityScreen
@@ -3281,7 +3289,7 @@ fun ChatDetailScreen(
                 if (badTitle) {
                     try {
                         val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
-                        if (g != null && g.name.isNotBlank()) {
+                        if (g != null && g.name.isNotBlank() && g.name != "DELETED") {
                             if (g.name != currentTitle) currentTitle = g.name
                             // NULL-ЯВНО: elvis на nullable-модели GroupInfo
                             // (photo200 может отсутствовать — фолбэк на photo100,
@@ -4735,6 +4743,12 @@ fun ChatDetailScreen(
                                 }
                                 items(channelPosts, key = { "post_${it.ownerId}_${it.id}" }) { post ->
                                     val likeKey = "${post.ownerId}_${post.id}"
+                                    // Группа-источник репоста (copy_history[0], ownerId<0):
+                                    // резолвим имя/аватар лениво через groups.getById.
+                                    val repostOwnerId = post.copyHistory?.firstOrNull()?.ownerId
+                                    if (repostOwnerId != null && repostOwnerId < 0) {
+                                        LaunchedEffect(post.ownerId, post.id) { repostGroups.resolve(app.apiClient, post) }
+                                    }
                                     WallPostCard(
                                         post = post,
                                         authorName = currentTitle,
@@ -4748,6 +4762,17 @@ fun ChatDetailScreen(
                                         // в шапке поста → сообщество канала (peerId<0 —
                                         // группа, WallPostCard сам применит -post.fromId).
                                         onGroupClick = onGroupClick,
+                                        // Группа-источник РЕПОСТА: имя/аватар из кэша
+                                        // (null до загрузки → «Запись клуба <id>», затем
+                                        // рекомпозиция). Клик по репост-шапке из группы
+                                        // ВЕДЁТ В СООБЩЕСТВО.
+                                        repostGroupName = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.nameOf(-repostOwnerId) else null,
+                                        repostGroupPhoto = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.photoOf(-repostOwnerId) else null,
+                                        onRepostGroupClick = {
+                                            post.copyHistory?.firstOrNull()?.ownerId
+                                                ?.takeIf { it < 0 }
+                                                ?.let { onGroupClick(-it) }
+                                        },
                                         likesState = channelLikeStates,
                                         likePending = channelLikeInFlight.containsKey(likeKey),
                                         onLikeToggle = { toggleChannelPostLike(it) },
@@ -4999,6 +5024,12 @@ fun ChatDetailScreen(
                                     // — они идут ниже через MessageBubble.
                                     val channelPost = messageToChannelPost(msg)
                                     val likeKey = "${channelPost.ownerId}_${channelPost.id}"
+                                    // Группа-источник репоста канала (copy_history[0],
+                                    // ownerId<0): резолвим имя/аватар лениво.
+                                    val repostOwnerId = channelPost.copyHistory?.firstOrNull()?.ownerId
+                                    if (repostOwnerId != null && repostOwnerId < 0) {
+                                        LaunchedEffect(channelPost.ownerId, channelPost.id) { repostGroups.resolve(app.apiClient, channelPost) }
+                                    }
                                     Column {
                                         WallPostCard(
                                             post = channelPost,
@@ -5015,6 +5046,17 @@ fun ChatDetailScreen(
                                             // POSTCARD-REFACTOR-PLAN: тап по имени канала
                                             // в шапке поста (history-режим) → сообщество канала.
                                             onGroupClick = onGroupClick,
+                                            // Группа-источник РЕПОСТА (copy_history[0] с ownerId<0):
+                                            // имя/аватар из кэша (null до загрузки → «Запись
+                                            // клуба <id>»); клик по репост-шапке ВЕДЁТ В
+                                            // СООБЩЕСТВО этой группы.
+                                            repostGroupName = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.nameOf(-repostOwnerId) else null,
+                                            repostGroupPhoto = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.photoOf(-repostOwnerId) else null,
+                                            onRepostGroupClick = {
+                                                channelPost.copyHistory?.firstOrNull()?.ownerId
+                                                    ?.takeIf { it < 0 }
+                                                    ?.let { onGroupClick(-it) }
+                                            },
                                             likesState = channelLikeStates,
                                             likePending = channelLikeInFlight.containsKey(likeKey),
                                             onLikeToggle = { toggleChannelPostLike(it) },
@@ -11781,6 +11823,10 @@ private fun ChannelSearchPanel(
     // ответ «старой» попытки отбрасывается (race-guard без elvis).
     var searchSeq by remember(visible) { mutableStateOf(0) }
     val app = SovaApp.get()
+    // Группы-источники РЕПОСТОВ из выдачи поиска канала (copy_history[0] с
+    // ownerId<0) → имя/аватар. Кэш живёт всю жизнь панели (группы стабильны),
+    // НЕ привязан к remember(visible) — переоткрытие не сбрасывает резолв.
+    val repostGroups = remember { RepostGroupCache() }
 
     // Дебаунс 600мс — как в диалоге поиска сообщений (#IM-SEARCH).
     LaunchedEffect(searchQuery) {
@@ -11934,6 +11980,12 @@ private fun ChannelSearchPanel(
                                 contentPadding = PaddingValues(vertical = 8.dp),
                             ) {
                                 items(results, key = { "search_${it.ownerId}_${it.id}" }) { post ->
+                                    // Группа-источник репоста (copy_history[0], ownerId<0):
+                                    // резолвим имя/аватар лениво через groups.getById.
+                                    val repostOwnerId = post.copyHistory?.firstOrNull()?.ownerId
+                                    if (repostOwnerId != null && repostOwnerId < 0) {
+                                        LaunchedEffect(post.ownerId, post.id) { repostGroups.resolve(app.apiClient, post) }
+                                    }
                                     WallPostCard(
                                         post = post,
                                         authorName = channelTitle,
@@ -11946,6 +11998,17 @@ private fun ChannelSearchPanel(
                                         // POSTCARD-REFACTOR-PLAN: тап по имени канала в
                                         // шапке поста-результата → сообщество канала.
                                         onGroupClick = onGroupClick,
+                                        // Группа-источник РЕПОСТА (copy_history[0] с ownerId<0):
+                                        // имя/аватар из кэша (null до загрузки → «Запись клуба
+                                        // <id>»); клик по репост-шапке ВЕДЁТ В СООБЩЕСТВО этой
+                                        // группы.
+                                        repostGroupName = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.nameOf(-repostOwnerId) else null,
+                                        repostGroupPhoto = if (repostOwnerId != null && repostOwnerId < 0) repostGroups.photoOf(-repostOwnerId) else null,
+                                        onRepostGroupClick = {
+                                            post.copyHistory?.firstOrNull()?.ownerId
+                                                ?.takeIf { it < 0 }
+                                                ?.let { onGroupClick(-it) }
+                                        },
                                         likesState = likesState,
                                         likePending = likeInFlight.containsKey("${post.ownerId}_${post.id}"),
                                         onLikeToggle = onLikeToggle,

@@ -132,6 +132,12 @@ fun PostCard(
     carouselEnabled: Boolean = true,
     showViews: Boolean = true,
     myUserId: Long = 0L,
+    // Группа-источник РЕПОСТА (copy_history[0] из группы, ownerId<0).
+    // Пробрасываются в RepostBlock для заголовка репоста (аватар/имя/клик в группу).
+    // Резолв имени/фото/клика делает вызывающий экран (у PostCard нет карты групп).
+    repostGroupName: String? = null,
+    repostGroupPhoto: String? = null,
+    onRepostGroupClick: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     // ——— ВРЕМЯ (футер, как в эталоне FeedScreen; формат — по showFullDate) ———
@@ -447,6 +453,9 @@ fun PostCard(
                     onVideoClick = onVideoClick,
                     onPostClick = onPostClick,
                     carouselEnabled = carouselEnabled,
+                    groupName = repostGroupName,
+                    groupPhoto = repostGroupPhoto,
+                    onGroupClick = onRepostGroupClick,
                 )
             }
             // ─── ACTION BAR: лайк / комментарий / репост / время (+ views) ───
