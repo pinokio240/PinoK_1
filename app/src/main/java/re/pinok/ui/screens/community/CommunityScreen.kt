@@ -1,7 +1,6 @@
 package re.pinok.ui.screens.community
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,21 +24,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.Favorite
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
-import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -90,22 +82,17 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.Video
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
-// POSTCARD-REFACTOR-PLAN (этап 1): общие компоненты поста — ui/components.
-import re.pinok.ui.components.ActionIcon
 // POSTCARD-REFACTOR-PLAN (этап 2): вертикальная карточка клипа вынесена
 // в общий ui/components/ClipThumbnail.kt.
 import re.pinok.ui.components.ClipThumbnail
-// #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
-import re.pinok.ui.components.PostPhotoGrid
-// Fix #366: общий компонент карусели видео поста.
-import re.pinok.ui.components.PostVideoCarousel
+import re.pinok.ui.components.PostCard
+import re.pinok.ui.components.PostMenuItem
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
-import re.pinok.util.toCountString
 import java.util.Locale
 import android.widget.Toast
 
@@ -1753,282 +1740,67 @@ private fun CommunityPostCard(
     isManager: Boolean = false,
     onActionsClick: (Post) -> Unit = {},
 ) {
-    val photoAttachments = post.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
-    val videoAttachments = post.attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
-    // #30 (audio attachments): рендер audio-вложений на стене сообщества.
-    val audioAttachments = post.attachments?.filter { it.type == "audio" && it.audio != null }.orEmpty()
-    val timeStr = post.date.toAbsoluteTime()
-    val (isLiked, likeCount) = likesOverride
-        ?: ((post.likes?.userLikes == 1) to (post.likes?.count ?: 0))
-    val commentCount = post.comments?.count ?: 0
-    val repostCount = post.reposts?.count ?: 0
-    val viewCount = post.views?.count ?: 0
+    // POSTCARD-REFACTOR-PLAN (этап 3b): тело CommunityPostCard делегируется
+    // единому общему PostCard (ui/components/PostCard.kt). Обёртка сохранена,
+    // чтобы не менять вызов на строке ~1147 и работу screen-level state.
+    // likesOverride (оптимистичное состояние лайка) PostCard сам читает из
+    // post.likes → применяем его через копию поста с переопределённым likes.
+    val displayPost = if (likesOverride != null) {
+        val (overrideLiked, overrideCount) = likesOverride
+        post.copy(
+            likes = Post.Likes(
+                count = overrideCount,
+                userLikes = if (overrideLiked) 1 else 0,
+                canLike = post.likes?.canLike ?: 1,
+            )
+        )
+    } else post
+    // #ADMIN-POST-ACTIONS: меню «⋮» открывает PostActionsMenu через onActionsClick.
+    val menuItems = if (isManager) {
+        listOf(PostMenuItem(label = "Действия", onClick = { onActionsClick(post) }))
+    } else emptyList()
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (authorPhoto != null) {
-                    AsyncImage(
-                        model = authorPhoto,
-                        contentDescription = null,
-                        modifier = Modifier.size(36.dp).clip(CircleShape),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.size(36.dp).clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = authorName.take(1).uppercase(),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = authorName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = timeStr,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                    // #POST-SIGNER: подпись автора — имя под записью, как в VK web
-                    // (тот же паттерн, что в FeedPostCard ленты).
-                    val signer = signerName
-                    if (signer != null) {
-                        Text(
-                            text = signer,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                if (isManager) {
-                    IconButton(onClick = { onActionsClick(post) }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "Действия")// #ADMIN-POST-ACTIONS
-                    }
-                }
-            }
-            if (post.text.isNotBlank()) {
-                // #POST-TEXT-EXPAND (Fix #345): длинный текст разворачивается на
-                // месте; «Показать ещё» — только когда текст реально не влезает
-                // (hasVisualOverflow). Тап по свёрнутому тексту = развернуть,
-                // по развёрнутому = открыть пост (как раньше).
-                var textExpanded by remember { mutableStateOf(false) }
-                var textOverflowed by remember { mutableStateOf(false) }
-                Text(
-                    text = post.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        .clickable {
-                            if (textExpanded) {
-                                onPostClick(post)
-                            } else {
-                                textExpanded = true
-                            }
-                        },
-                    onTextLayout = { result ->
-                        if (!textExpanded && result.hasVisualOverflow) textOverflowed = true
-                    },
-                    maxLines = if (textExpanded) Int.MAX_VALUE else 10,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (textOverflowed && !textExpanded) {
-                    Text(
-                        text = "Показать ещё",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF1976D2),
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier
-                            .padding(start = 12.dp, bottom = 6.dp)
-                            .clickable { textExpanded = true },
-                    )
-                }
-            }
-            if (photoAttachments.isNotEmpty()) {
-                // 22-B: общий PostPhotoGrid — карусель при включённой настройке
-                // и фото > 1, иначе прежний вид (1-2 пейджер, 3+ сетка).
-                PostPhotoGrid(
-                    photos = photoAttachments.mapNotNull { it.photo },
-                    onPhotoClick = onPhotoClick,
-                    carouselEnabled = carouselEnabled,
-                )
-            }
-            // #WALL-CLIPS: клипы (isClip) рендерим вертикальной карточкой,
-            // обычные видео — горизонтальной VideoThumbnail (16:9).
-            // Fix #366: >1 видео и включена карусель — общий PostVideoCarousel
-            // (тот же флаг, что у PostPhotoGrid выше); иначе прежний стопк.
-            if (carouselEnabled && videoAttachments.size > 1) {
-                PostVideoCarousel(
-                    videos = videoAttachments.mapNotNull { it.video },
-                    carouselEnabled = carouselEnabled,
-                    onVideoClick = onVideoClick,
-                )
-            } else {
-                videoAttachments.forEach { attach ->
-                    val v = attach.video
-                    if (v != null) {
-                        if (v.isClip) {
-                            ClipThumbnail(video = v, onClick = onVideoClick)
-                        } else {
-                            VideoThumbnail(video = v, titleExpandable = true, onClick = onVideoClick)
-                        }
-                    }
-                }
-            }
-            // #30 (audio attachments): рендерим audio-вложения (как в FeedScreen).
-            if (audioAttachments.isNotEmpty()) {
-                re.pinok.ui.components.AudioAttachmentList(tracks = audioAttachments.mapNotNull { it.audio })
-            }
-            // #30 (playlists): audio_playlist вложения.
-            val playlistAttachments = post.attachments?.filter { it.type == "audio_playlist" && it.audioPlaylist != null }.orEmpty()
-            playlistAttachments.forEach { att -> att.audioPlaylist?.let { re.pinok.ui.components.PlaylistAttachmentCard(playlist = it) } }
-            // #WALL-CLIPS-REPOST: клипы на стене сообщества часто приходят РЕПОСТАМИ
-            // (copy_history) — при этом сам пост пустой (текст + attachments пусты).
-            // Раньше copy_history не рендерился → пост показывался только с заголовком
-            // группы. Теперь рендерим первый copy_history как вложенную карточку.
-            post.copyHistory?.firstOrNull()?.let { repost ->
-                val rPhotos = repost.attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
-                val rVideos = repost.attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        // Fix #365: репост-карточка ЦЕЛИКОМ открывает оригинальный
-                        // пост (onPostClick → PostHolder.last + PostDetail, роут
-                        // Community в SovaNavHost). clickable ПОСЛЕ clip — риппл по
-                        // скруглению; вложенные клики (фото/видео ниже) перехватываются
-                        // раньше — просмотр открывается как раньше, а не пост.
-                        .clickable { onPostClick(repost) }
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
-                    elevation = CardDefaults.cardElevation(0.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        if (repost.text.isNotBlank()) {
-                            // Fix #365: текст репоста — паттерн Fix #345 (см. пост
-                            // выше): «Показать ещё» при реальном переполнении
-                            // (hasVisualOverflow); тап по свёрнутому тексту =
-                            // развернуть, по развёрнутому (и по короткому) = открыть
-                            // пост целиком.
-                            var repostTextExpanded by remember { mutableStateOf(false) }
-                            var repostTextOverflowed by remember { mutableStateOf(false) }
-                            Text(
-                                text = repost.text,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.clickable {
-                                    if (repostTextOverflowed && !repostTextExpanded) {
-                                        repostTextExpanded = true
-                                    } else {
-                                        onPostClick(repost)
-                                    }
-                                },
-                                onTextLayout = { result ->
-                                    if (!repostTextExpanded && result.hasVisualOverflow) repostTextOverflowed = true
-                                },
-                                maxLines = if (repostTextExpanded) Int.MAX_VALUE else 8,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (repostTextOverflowed && !repostTextExpanded) {
-                                Text(
-                                    text = "Показать ещё",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color(0xFF1976D2),
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier
-                                        .padding(top = 2.dp)
-                                        .clickable { repostTextExpanded = true },
-                                )
-                            }
-                        }
-                        if (rPhotos.isNotEmpty()) {
-                            // 22-B: общий PostPhotoGrid (см. пост выше).
-                            PostPhotoGrid(
-                                photos = rPhotos.mapNotNull { it.photo },
-                                onPhotoClick = onPhotoClick,
-                                carouselEnabled = carouselEnabled,
-                            )
-                        }
-                        // Fix #366: несколько видео в репосте и включённая карусель
-                        // → общий PostVideoCarousel; иначе прежний стопк (клип/видео).
-                        if (carouselEnabled && rVideos.size > 1) {
-                            PostVideoCarousel(
-                                videos = rVideos.mapNotNull { it.video },
-                                carouselEnabled = carouselEnabled,
-                                onVideoClick = onVideoClick,
-                            )
-                        } else {
-                            rVideos.forEach { att ->
-                                val v = att.video
-                                if (v != null) {
-                                    if (v.isClip) {
-                                        ClipThumbnail(video = v, onClick = onVideoClick)
-                                    } else {
-                                        VideoThumbnail(video = v, titleExpandable = true, onClick = onVideoClick)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ActionIcon(
-                    icon = if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                    count = likeCount,
-                    tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
-                    onClick = { onLikeToggle(post.ownerId, post.id, isLiked) },
-                )
-                Spacer(Modifier.width(8.dp))
-                ActionIcon(
-                    icon = Icons.Outlined.ChatBubbleOutline,
-                    count = commentCount,
-                    onClick = { onCommentClick(post.ownerId, post.id) },
-                )
-                Spacer(Modifier.width(8.dp))
-                // Sprint 2, P1-3 (#90): репост кликабелен.
-                ActionIcon(
-                    icon = Icons.Outlined.Repeat,
-                    count = repostCount,
-                    onClick = { onRepostClick(post) },
-                )
-                Spacer(Modifier.weight(1f))
-                if (viewCount > 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Visibility, null, modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(3.dp))
-                        Text(viewCount.toCountString(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-    }
+    PostCard(
+        post = displayPost,
+        authorName = authorName,
+        authorPhoto = authorPhoto,
+        authorIsGroup = post.fromId < 0,
+        signerName = signerName,
+        // Community показывал toAbsoluteTime в карточке → сохраняем полный формат
+        // (PostCard рендерит время в футере, а не в шапке — косметическое отличие).
+        showFullDate = true,
+        // закладки на карточке в Community нет.
+        isBookmarked = null,
+        onToggleBookmark = null,
+        // доступ к g.verified в обёртке нет — verified-бейдж не показываем.
+        verified = false,
+        // тап по аватару/имени автора = открыть пост (как тап по тексту раньше).
+        onAuthorClick = { onPostClick(post) },
+        onPostClick = onPostClick,
+        onVideoClick = onVideoClick,
+        onPhotoClick = onPhotoClick,
+        // like: адаптация (ownerId, postId, isLiked) → (Post). Третьим аргументом
+        // передаём текущее состояние из того же post.likes, что PostCard рисует
+        // (с учётом likesOverride через displayPost).
+        onLikeToggle = { p -> onLikeToggle(p.ownerId, p.id, p.likes?.userLikes == 1) },
+        // comment: адаптация (ownerId, postId) → (Post).
+        onCommentClick = { p -> onCommentClick(p.ownerId, p.id) },
+        onRepostClick = onRepostClick,
+        onReaction = null,
+        menuItems = menuItems,
+        // в Community не было меток «Закреплённый пост»/«Реклама» — сохраняем поведение.
+        showPinnedBadge = false,
+        showAdBadge = false,
+        // кнопки подписки в Community нет.
+        showSubscribeButton = false,
+        subscribed = null,
+        onSubscribe = {},
+        carouselEnabled = carouselEnabled,
+        // Community скрывал 0-просмотры → показываем views, только если они есть.
+        showViews = (post.views?.count ?: 0) > 0,
+        // Community разворачивал текст после 10 строк (было maxLines=10 до «Показать ещё»).
+        textMaxLines = 10,
+    )
 }
 
 // POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail и ActionIcon вынесены в общие

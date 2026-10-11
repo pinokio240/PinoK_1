@@ -15401,3 +15401,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Далее:** 3b — подключение в CommunityScreen (пилот), затем 3c-3e (Profile/Feed/PostDetail/Bookmarks), удаление дублей.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REFACTOR-STAGE3B — 2026-10-11 — PostCard подключён в Community (пилот)
+
+**Сделано (субагент + ревью):** CommunityPostCard стала обёрткой-делегатом единому PostCard. Адаптированы like/comment/меню/likesOverride. Удалены лишние импорты. Расхождения (клипы/репост/футер-время) — известные ограничения пилота.
+
+**Далее:** сборка пользователем для проверки пилота, затем 3c (Profile) → 3d (Feed) → 3e (PostDetail) → 3f (Bookmarks).
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

@@ -13885,3 +13885,14 @@ Work Log:
 - Существующие 5 карточек НЕ тронуты (аддитивный этап). git status: только новый файл.
 - Проверка: баланс net=0, конфликтов имён нет (PostMenuItem/ReactionEntry/ReactionPicker публичны).
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE3B
+Task: Этап 3b — подключение единого PostCard в CommunityScreen (пилот).
+Work Log:
+- Приватная CommunityPostCard стала обёрткой: тело заменено на делегирование единому PostCard (ui/components/PostCard.kt). Вызов на строке ~1147 не менялся.
+- Адаптации: likesOverride через post.copy(likes=...), like (ownerId,postId,isLiked)→(Post), comment (ownerId,postId)→(Post), меню ⋮ через PostMenuItem (isManager→«Действия»), showFullDate=true (Community показывал toAbsoluteTime), showViews=(>)0, textMaxLines=10, verified=false.
+- Удалены неиспользуемые импорты (ActionIcon, PostPhotoGrid, PostVideoCarousel, иконки, toCountString, border). Остальные проверены — используются в других функциях файла.
+- Расхождения пилота: клипы рендерятся как VideoThumbnail (не ClipThumbnail), репост через RepostBlock, время переехало в футер. Отмечено как известные ограничения.
+- Проверка: баланс net=0, изменён только CommunityScreen.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
