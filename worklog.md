@@ -13938,3 +13938,13 @@ Work Log:
 - Ограничение: actionPending/likePending не проброшены (нет в PostCard) — внешнее поведение для обычных пользователей идентично.
 - Проверка: сбалансировано, изменён только ProfileScreen, осиротевших импортов нет.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: POSTCARD-GROUP-CLICK-FIX
+Task: Клик по имени группы/канала ведёт в сообщество (а не в пост); клик по автору-пользователю — в профиль.
+Work Log:
+- WallPostCard добавлены onGroupClick/onUserClick; onAuthorClick ветвит: fromId<0 → onGroupClick(-fromId), fromId>0 → onUserClick(fromId), 0 → onPostClick(post).
+- Вызовы: Profile/UserProfile передают onGroupClick/onUserClick; ChatDetail (каналы) — onGroupClick (посты канала всегда от группы).
+- SovaNavHost: добавил onGroupClick → Screen.Community.buildRoute(groupId) для Profile/UserProfile/ChatDetail (для каналов нативного перехода не было).
+- Проверка: 4 файла, баланс относительно базы не изменился (SovaNavHost net=3 был в HEAD).
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.

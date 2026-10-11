@@ -1861,6 +1861,12 @@ fun SovaNavHost(
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
+                        // POSTCARD-REFACTOR-PLAN: тап по имени группы/канала в шапке
+                        // поста стены → сообщество (паттерн FeedScreen на вызове
+                        // PostCard: Community.buildRoute по положительному id группы).
+                        onGroupClick = { groupId ->
+                            nav.navigate(Screen.Community.buildRoute(groupId))
+                        },
                         // П-6b: пост-закладка → PostDetailScreen
                         // (паттерн BookmarksScreen.onPostClick: PostHolder.last + navigate).
                         onPostClick = { post ->
@@ -2951,6 +2957,15 @@ composable(Screen.CallsHistory.route) {
                         onSubscriptionsClick = { targetId ->
                             nav.navigate(Screen.FollowList.buildRoute(targetId, Screen.FollowList.MODE_SUBSCRIPTIONS))
                         },
+                        // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора в шапке
+                        // поста чужой стены — группа/канал → сообщество, пользователь
+                        // → его профиль (паттерны FeedScreen/ProfileScreen).
+                        onGroupClick = { groupId ->
+                            nav.navigate(Screen.Community.buildRoute(groupId))
+                        },
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
                     )
                 }
                 // П-7-AB: экран «Подписчики»/«Подписки» (остаток правой колонки
@@ -3032,6 +3047,12 @@ composable(Screen.CallsHistory.route) {
                         // Sprint 1, P0-2 (#74): тап по header чата → экран профиля.
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
+                        // POSTCARD-REFACTOR-PLAN: тап по имени канала/группы в шапке
+                        // поста канала → сообщество (канал — группа; паттерн FeedScreen:
+                        // Community.buildRoute по положительному id группы).
+                        onGroupClick = { groupId ->
+                            nav.navigate(Screen.Community.buildRoute(groupId))
                         },
                         // P2.4: тап по wall-вложению в сообщении → PostDetailScreen.
                         onPostClick = { post ->

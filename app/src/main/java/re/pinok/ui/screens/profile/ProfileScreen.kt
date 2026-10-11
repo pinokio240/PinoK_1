@@ -173,6 +173,11 @@ fun ProfileScreen(
     // П-6b (#PROFILE-GAP-6b): тап по карточке «Возможно, вы знакомы» / юзер-закладке
     // → чужой профиль (Screen.UserProfile, паттерн FriendsScreen.onUserClick).
     onUserClick: (Long) -> Unit = {},
+    // POSTCARD-REFACTOR-PLAN: тап по имени группы/канала в шапке поста стены →
+    // сообщество (Screen.Community.buildRoute по положительному id). Своя стена
+    // может содержать посты сообществ (republished/repost) — onGroupClick ведёт
+    // в них. Дефолт {} — легаси-вызовы не меняют поведение.
+    onGroupClick: (Long) -> Unit = {},
     // П-6b: тап по пост-закладке → PostDetailScreen (паттерн BookmarksScreen.
     // onPostClick: PostHolder.last + navigate). Отдельный колбэк — onCommentClick
     // занят постами стены (см. вызов WallPostCard).
@@ -1469,6 +1474,10 @@ fun ProfileScreen(
                     onRepostClick = { repostPost.value = it },
                     // Шаг 5 (#32e): тап по комментарию → onCommentClick → PostDetailScreen.
                     onCommentClick = onCommentClick,
+                    // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора поста —
+                    // группа/канал → сообщество, пользователь → чужой профиль.
+                    onGroupClick = onGroupClick,
+                    onUserClick = onUserClick,
                     // П-6a (#PROFILE-GAP-6a): лайк записи + «Действия» поста стены
                     // (pin/unpin/delete/edit). Свой профиль → владелец стены = p.id.
                     likesState = likeStates,
@@ -2231,6 +2240,13 @@ fun WallPostCard(
     // карусель на чужом профиле всегда включена (дефолт), независимо от
     // настройки. Проброс prefs-флага в UserProfileScreen — follow-up оркестратору.
     carouselEnabled: Boolean = true,
+    // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора поста. Клик по
+    // группе/каналу (post.fromId<0) ведёт в сообщество (groupId — ПОЛОЖИТЕЛЬНЫЙ
+    // id, как в Screen.Community.buildRoute); по пользователю (fromId>0) —
+    // в чужой профиль (userId положительный, Screen.UserProfile.buildRoute);
+    // автора нет (0) — в пост. Дефолты {} — легаси-вызовы не меняют поведение.
+    onGroupClick: (groupId: Long) -> Unit = {},
+    onUserClick: (userId: Long) -> Unit = {},
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — ОБЁРТКА-ДЕЛЕГАТ единого
     // PostCard (ui/components/PostCard.kt). Внешняя сигнатура сохранена 1:1 —
@@ -2306,9 +2322,19 @@ fun WallPostCard(
         isBookmarked = null,
         onToggleBookmark = null,
         verified = false,
-        // Тап по автору своего/чужого поста → открыть пост (ранее header был
-        // неинтерактивен; разумная навигация паритетом с PostCard).
-        onAuthorClick = { onPostClick(post) },
+        // Тап по имени/аватару автора: группа/канал (fromId<0) → сообщество
+        // (Screen.Community.buildRoute по положительному id), пользователь
+        // (fromId>0) → чужой профиль (Screen.UserProfile.buildRoute), иначе
+        // (0 — автора нет) → открыть пост.
+        onAuthorClick = {
+            if (post.fromId < 0) {
+                onGroupClick(-post.fromId)
+            } else if (post.fromId > 0) {
+                onUserClick(post.fromId)
+            } else {
+                onPostClick(post)
+            }
+        },
         onPostClick = onPostClick,
         onVideoClick = onVideoClick,
         onPhotoClick = onPhotoClick,

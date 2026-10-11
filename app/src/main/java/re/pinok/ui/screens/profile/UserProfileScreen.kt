@@ -156,6 +156,12 @@ fun UserProfileScreen(
     // (глобальный Screen.Friends показывает СВОИХ друзей — отклонение в KDoc).
     onFollowersClick: (Long) -> Unit = {},
     onSubscriptionsClick: (Long) -> Unit = {},
+    // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора в шапке поста чужой
+    // стены. Группа/канал (fromId<0) → сообщество; пользователь (fromId>0) →
+    // его профиль (на чужой стене чужие посты-репосты от групп/других людей).
+    // Дефолты {} — легаси-вызовы не меняют поведение.
+    onGroupClick: (Long) -> Unit = {},
+    onUserClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -776,6 +782,10 @@ fun UserProfileScreen(
                     onRepostClick = { repostPost.value = it },
                     // Шаг 5 (#32e): тап по комментарию → onCommentClick → PostDetailScreen.
                     onCommentClick = onCommentClick,
+                    // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора поста —
+                    // группа/канал → сообщество, пользователь → его профиль.
+                    onGroupClick = onGroupClick,
+                    onUserClick = onUserClick,
                     // П-7-AB: «Пожаловаться» на записях ЧУЖОЙ стены (wall.markAsSpam).
                     // showActions по-прежнему false (П-6а: manage-пункты только на
                     // своём профиле) → меню открывается с одним «Пожаловаться».

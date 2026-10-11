@@ -570,6 +570,12 @@ fun ChatDetailScreen(
     peerPhoto: String?,
     onBack: () -> Unit,
     onUserClick: (Long) -> Unit = {},
+    // POSTCARD-REFACTOR-PLAN: тап по имени канала/группы в шапке поста канала
+    // (WallPostCard в channel-режиме). Канал — это группа: opens как сообщество
+    // (Screen.Community.buildRoute по положительному id). Дефолт {} — легаси-вызовы
+    // не меняют поведение. Канальный автор — всегда группа (post.fromId<0), поэтому
+    // для постов канала достаточно onGroupClick; onUserClick туда не передаём.
+    onGroupClick: (Long) -> Unit = {},
     // P2.4: тап по wall-вложению → открыть пост в PostDetailScreen.
     onPostClick: (re.pinok.data.model.Post) -> Unit = {},
     // P2.1: тап по video-вложению → открыть в VideoPlayer.
@@ -4738,6 +4744,10 @@ fun ChatDetailScreen(
                                         onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
                                         onRepostClick = { channelSharePost = it },
                                         onCommentClick = { openChannelPost(it) },
+                                        // POSTCARD-REFACTOR-PLAN: тап по имени канала
+                                        // в шапке поста → сообщество канала (peerId<0 —
+                                        // группа, WallPostCard сам применит -post.fromId).
+                                        onGroupClick = onGroupClick,
                                         likesState = channelLikeStates,
                                         likePending = channelLikeInFlight.containsKey(likeKey),
                                         onLikeToggle = { toggleChannelPostLike(it) },
@@ -4824,6 +4834,8 @@ fun ChatDetailScreen(
                     onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
                     onSharePost = { channelSharePost = it },
                     onCommentClick = { openChannelPost(it) },
+                    // POSTCARD-REFACTOR-PLAN: тап по имени канала в шапке поста-результата.
+                    onGroupClick = onGroupClick,
                     likesState = channelLikeStates,
                     likeInFlight = channelLikeInFlight,
                     onLikeToggle = { toggleChannelPostLike(it) },
@@ -5000,6 +5012,9 @@ fun ChatDetailScreen(
                                                 channelCommentsTarget =
                                                     channelPost.ownerId to channelPost.id
                                             },
+                                            // POSTCARD-REFACTOR-PLAN: тап по имени канала
+                                            // в шапке поста (history-режим) → сообщество канала.
+                                            onGroupClick = onGroupClick,
                                             likesState = channelLikeStates,
                                             likePending = channelLikeInFlight.containsKey(likeKey),
                                             onLikeToggle = { toggleChannelPostLike(it) },
@@ -11745,6 +11760,10 @@ private fun ChannelSearchPanel(
     onPhotoClick: (List<String>, Int) -> Unit,
     onSharePost: (Post) -> Unit,
     onCommentClick: (Post) -> Unit,
+    // POSTCARD-REFACTOR-PLAN: тап по имени канала в шапке поста-результата →
+    // сообщество канала (WallPostCard применяет -post.fromId). Канальные посты —
+    // автором всегда группа, onUserClick не нужен.
+    onGroupClick: (Long) -> Unit = {},
     likesState: Map<String, Pair<Boolean, Int>>,
     likeInFlight: Map<String, Boolean>,
     onLikeToggle: (Post) -> Unit,
@@ -11924,6 +11943,9 @@ private fun ChannelSearchPanel(
                                         onPhotoClick = onPhotoClick,
                                         onRepostClick = onSharePost,
                                         onCommentClick = onCommentClick,
+                                        // POSTCARD-REFACTOR-PLAN: тап по имени канала в
+                                        // шапке поста-результата → сообщество канала.
+                                        onGroupClick = onGroupClick,
                                         likesState = likesState,
                                         likePending = likeInFlight.containsKey("${post.ownerId}_${post.id}"),
                                         onLikeToggle = onLikeToggle,

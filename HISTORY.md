@@ -15451,3 +15451,11 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Сделано (субагент + ревью):** WallPostCard стала обёрткой-делегатом единого PostCard; сигнатура 1:1, 5 мест вызова не тронуты. Применены likesOverride/reactionOverride, menuItems по гейтам. Ограничение: actionPending/likePending не проброшены.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-GROUP-CLICK-FIX — 2026-10-11 — клик по группе/каналу ведёт в сообщество
+
+**Фикс:** WallPostCard добавил onGroupClick/onUserClick; клик по имени группы/канала теперь ведёт в Screen.Community, по автору-пользователю — в профиль. Провязано через SovaNavHost (Profile/UserProfile/ChatDetail). 4 файла.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
