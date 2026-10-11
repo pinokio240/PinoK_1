@@ -136,7 +136,7 @@ fun RepostBlock(
                                 TextDecoration.None
                             },
                             modifier = if (onGroupClick != null) {
-                                Modifier.clickable { onGroupClick?.invoke() }
+                                Modifier.clickable { onGroupClick.invoke() }
                             } else {
                                 Modifier
                             },

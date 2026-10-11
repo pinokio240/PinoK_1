@@ -13960,3 +13960,11 @@ Work Log:
 - ChatDetailScreen: защита g.name != "DELETED" (стр 3292, добавочно), markChannelConversationAsRead() в openChannelPost (#CHANNEL-READ-ON-OPEN).
 - Проверка: баланс сохранён (ProfileScreen net=-2 исходный), PostCard/RepostBlock не пострадали.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: POSTCARD-WARNING-FIX
+Task: Устранить предупреждения компилятора.
+Work Log:
+- RepostBlock.kt:139 — 'onGroupClick?.invoke()' на не-null → onGroupClick.invoke().
+- RepostGroupResolver.kt:39 — 'groupId.toLong()' избыточен (groupId уже Long) → listOf(groupId).
+- Баланс скобок обох файлов net=0.

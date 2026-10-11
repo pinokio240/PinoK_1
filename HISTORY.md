@@ -15467,3 +15467,11 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Фикс:** RepostBlock показывает имя/аватар группы-источника репоста (+клик в группу) через новый RepostGroupCache (ленивый groupsGetById). Защита «DELETED» для названия канала. markChannelConversationAsRead при открытии поста канала.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-WARNING-FIX — 2026-10-11 — предупреждения компилятора
+
+**Фикс:** RepostBlock.kt:139 убран лишний safe-call; RepostGroupResolver.kt:39 убран избыточный toLong(). Баланс OK.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

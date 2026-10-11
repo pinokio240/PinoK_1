@@ -36,7 +36,7 @@ class RepostGroupCache {
         if (groups.containsKey(groupId)) return
         val info = withContext(Dispatchers.IO) {
             try {
-                apiClient.groupsGetById(listOf(groupId.toLong())).firstOrNull()
+                apiClient.groupsGetById(listOf(groupId)).firstOrNull()
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
