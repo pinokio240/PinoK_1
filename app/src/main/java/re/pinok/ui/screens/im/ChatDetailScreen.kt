@@ -10638,9 +10638,12 @@ private fun ChannelInfoPanelContent(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (titleParts.second != null) {
+                // NULL-ЯВНО: second — публичное свойство Pair из чужого модуля,
+                // smart-cast невозможен → захватываем в локальную не-null переменную.
+                val titleSecond = titleParts.second
+                if (titleSecond != null) {
                     Text(
-                        text = titleParts.second,
+                        text = titleSecond,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -14052,3 +14052,10 @@ Work Log:
 - «Открыть сообщество»: onUrlClick(браузер) → onGroupClick(-peerId) (нативный Screen.Community).
 - «Написать»: requestChannelComposerFocus() — FocusRequester на композер, прокрутка к низу (listState) если writable (canMessage/canPost); read-only → честный Toast «Канал доступен только для чтения».
 - Баланс net=0. Изменён только ChatDetailScreen. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: CHANNEL-SMARTCast-FIX
+Task: Ошибка компиляции — smart-cast на Pair.second невозможен.
+Work Log:
+- ChatDetailScreen:10641-10643 — titleParts.second (String? из Pair<String,String?>) публичное свойство чужого модуля, smart-cast невозможен.
+- Фикс: захват в локальную val titleSecond = titleParts.second; использование titleSecond. Баланс net=0.
