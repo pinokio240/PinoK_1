@@ -13977,3 +13977,11 @@ Work Log:
 - Канальный wall-вызов: extraMenuItems с пунктом «Поделиться» → channelSharePost (ChatDetailScreen.kt:4785).
 - PostCard не тронут. Прочие вызовы WallPostCard не меняются (дефолт).
 - Баланс: ChatDetail net=0, ProfileScreen net=-2 (исходный). Сборка на пользователе.
+
+---
+Task ID: CHANNEL-POST-MENU-ALL
+Task: ⋯-меню во всех 3 канальных вызовах WallPostCard.
+Work Log:
+- Причина: ⋯ не появлялся, т.к. extraMenuItems был только в wall-режиме, а канал чаще открывается в history-режиме (5047) или поиске (12002).
+- Фикс: extraMenuItems («Поделиться» → channelSharePost/onSharePost) добавлен во все 3 вызова: wall, history, search.
+- Баланс net=0. Изменён только ChatDetailScreen. Сборка на пользователе.

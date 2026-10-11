@@ -5073,6 +5073,17 @@ fun ChatDetailScreen(
                                             likesState = channelLikeStates,
                                             likePending = channelLikeInFlight.containsKey(likeKey),
                                             onLikeToggle = { toggleChannelPostLike(it) },
+                                            // POSTCARD-REFACTOR-PLAN: «⋯»-меню канального
+                                            // поста в history-режиме. «Поделиться» → тот же
+                                            // ShareSheet, что и кнопка репоста (channelSharePost
+                                            // инициализирует панель).
+                                            extraMenuItems = buildList {
+                                                add(PostMenuItem(
+                                                    label = "Поделиться",
+                                                    icon = Icons.Outlined.Share,
+                                                    onClick = { channelSharePost = channelPost },
+                                                ))
+                                            },
                                         )
                                         ChannelPostWallInfoRow(
                                             post = channelPost,
@@ -12025,6 +12036,16 @@ private fun ChannelSearchPanel(
                                         likesState = likesState,
                                         likePending = likeInFlight.containsKey("${post.ownerId}_${post.id}"),
                                         onLikeToggle = onLikeToggle,
+                                        // POSTCARD-REFACTOR-PLAN: «⋯»-меню канального поста-
+                                        // результата поиска. «Поделиться» → тот же ShareSheet
+                                        // (onSharePost на родителе пишет в channelSharePost).
+                                        extraMenuItems = buildList {
+                                            add(PostMenuItem(
+                                                label = "Поделиться",
+                                                icon = Icons.Outlined.Share,
+                                                onClick = { onSharePost(post) },
+                                            ))
+                                        },
                                     )
                                     HorizontalDivider(
                                         modifier = Modifier.padding(horizontal = 16.dp),
