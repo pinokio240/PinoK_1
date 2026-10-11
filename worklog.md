@@ -13876,3 +13876,12 @@ Work Log:
 - Использует internal LinkCard/PollCard/DocAttachmentCard из feed (паттерн ProfileScreen).
 - Проверка: баланс скобок net=0 у всех 3 файлов, дублей имён нет.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE3A
+Task: Этап 3a — создан единый компонент PostCard в ui/components.
+Work Log:
+- Создан app/src/main/java/re/pinok/ui/components/PostCard.kt (517 строк): единая карточка поста с полным временем/датой (showFullDate→toAbsoluteTime), кликабельным автором/группой (+verified), аватаркой, иконкой-закладкой на карточке (isBookmarked), лайк/коммент/репост + реакции (long-press), динамическим ⋮-меню (PostMenuItem), вложениями (PostAttachmentRenderer), репостом (RepostBlock).
+- Существующие 5 карточек НЕ тронуты (аддитивный этап). git status: только новый файл.
+- Проверка: баланс net=0, конфликтов имён нет (PostMenuItem/ReactionEntry/ReactionPicker публичны).
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
