@@ -13838,3 +13838,11 @@ Work Log:
 - Причина: 'val p = post' где post не-null после parsePostMini → 'if (p != null)' всегда true.
 - Фикс: заменил на не-null локальную val postEntity = parsePostMini(entity); поле post заполняется, резолв автора идёт по postEntity. Предупреждение ушло.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ.
+
+---
+Task ID: POSTCARD-REFACTOR-PLAN
+Task: План единой карточки поста (PostCard) для всех разделов + бэкап + делегирование этапа 1 субагентам.
+Work Log:
+- Составлен план docs/postcard-refactor-plan.md (создан файл).
+- Сделан бэкап backups/postcard-refactor-start-2026-10-11/ (BookmarksScreen, VKApiClient, Models, план).
+- Приступаем к этапу 1 (вынос дублей VideoThumbnail/ActionIcon/RepostBlock в ui/components) — поручается суб-агентам.

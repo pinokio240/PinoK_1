@@ -15351,3 +15351,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Фикс:** if (p != null) вокруг не-null локальной переменной убран — теперь postEntity = parsePostMini(entity) (не-null), резолв автора по postEntity. Сборка на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REFACTOR-PLAN — 2026-10-11 — план единой карточки поста
+
+**Сделано:** план docs/postcard-refactor-plan.md; бэкап ackups/postcard-refactor-start-2026-10-11/.
+
+**Далее:** этап 1 — вынос дублей (VideoThumbnail, ActionIcon, RepostBlock) в ui/components — делегируется субагентам.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
