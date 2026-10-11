@@ -26,11 +26,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -177,8 +184,6 @@ fun CommunityScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
-    // #ADMIN-POST-ACTIONS: пост, для которого открыто меню действий админа.
-    var menuPost by remember { mutableStateOf<Post?>(null) }
     // #ADMIN-POST-ACTIONS-EDIT: пост в режиме редактирования.
     var editingPost by remember { mutableStateOf<Post?>(null) }
     // #ADMIN-SOFT-DELETE: отложенное удаление поста (стрип + таймер 10с).
@@ -1137,9 +1142,87 @@ fun CommunityScreen(
                 authorPhoto = g.photo200 ?: g.photo100,
                 // #POST-SIGNER (волна 39): имя автора подписи из wall.get extended=1.
                 signerName = post.signerId?.let { sid -> signerNames[sid] },
-                // #ADMIN-POST-ACTIONS: меню действий (только для менеджеров).
-                isManager = g.isManager,
-                onActionsClick = { menuPost = it },
+                // #ADMIN-POST-ACTIONS-FLAT: плоское «⋮»-меню поста формируется на
+                // уровне экрана (доступны scope/app/post/groupId/g). Закладка — для
+                // всех пользователей; действия менеджера (редактировать/удалить/
+                // комментарии/закрепить) — только при g.isManager. Заменяет старый
+                // костыль «Действия → PostActionsMenu» (меню-в-меню).
+                menuItems = buildList {
+                    // Закладка поста — всегда (для всех).
+                    add(
+                        PostMenuItem(
+                            label = if (post.isFavoriteBool) "Убрать из закладок" else "В закладки",
+                            icon = if (post.isFavoriteBool) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                            onClick = {
+                                scope.launch {
+                                    val ok = if (post.isFavoriteBool) {
+                                        app.apiClient.faveRemove("post", post.ownerId, post.id)
+                                    } else {
+                                        app.apiClient.faveAdd("post", post.ownerId, post.id)
+                                    }
+                                    AppLog.d("CommunityScreen", "bookmark toggle: ok=$ok")
+                                }
+                            },
+                        )
+                    )
+                    if (g.isManager) {
+                        add(
+                            PostMenuItem(
+                                label = "Редактировать",
+                                icon = Icons.Outlined.Edit,
+                                onClick = { editingPost = post; showComposer = true },
+                            )
+                        )
+                        add(
+                            PostMenuItem(
+                                label = "Удалить",
+                                icon = Icons.Outlined.Delete,
+                                destructive = true,
+                                // #ADMIN-SOFT-DELETE: мягкое удаление со стрипом восстановления.
+                                onClick = {
+                                    softDeletedPost = post
+                                    softDeleteSeconds = 10
+                                },
+                            )
+                        )
+                        val commentsClosed = (post.comments?.canPost ?: 1) == 0
+                        add(
+                            PostMenuItem(
+                                label = if (commentsClosed) "Открыть комментарии" else "Закрыть комментарии",
+                                icon = Icons.Outlined.ChatBubbleOutline,
+                                onClick = {
+                                    scope.launch {
+                                        val ok = if (commentsClosed) {
+                                            app.apiClient.wallOpenComments(groupId, post.id)
+                                        } else {
+                                            app.apiClient.wallCloseComments(groupId, post.id)
+                                        }
+                                        AppLog.d("CommunityScreen", "comments toggle: ok=$ok")
+                                        if (ok) refreshWall()
+                                    }
+                                },
+                            )
+                        )
+                        val pinned = post.isPinned == 1
+                        add(
+                            PostMenuItem(
+                                label = if (pinned) "Убрать из «Главное»" else "Закрепить в «Главное»",
+                                icon = if (pinned) Icons.Outlined.VisibilityOff else Icons.Outlined.PushPin,
+                                onClick = {
+                                    scope.launch {
+                                        val ok = if (pinned) {
+                                            app.apiClient.ownersRemoveFromMainTab(groupId, post.id)
+                                        } else {
+                                            app.apiClient.ownersPinToMainTab(groupId, post.id)
+                                        }
+                                        AppLog.d("CommunityScreen", "pin toggle: ok=$ok")
+                                        if (ok) refreshWall()
+                                    }
+                                },
+                            )
+                        )
+                    }
+                },
                 onVideoClick = onVideoClick,
                 // Fix #365: пробрасываем группы в PostHolder для имени сообщества
                 // в PostDetailScreen (тот же паттерн, что в FeedScreen) — работает
@@ -1593,20 +1676,10 @@ fun CommunityScreen(
     } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
 
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
-    // #ADMIN-POST-ACTIONS: меню действий над постом.
-    menuPost?.let { mp ->
-        PostActionsMenu(
-            groupId = groupId,
-            postId = mp.id,
-            isPinnedInMain = mp.isPinned == 1,
-            isCommentsClosed = (mp.comments?.canPost ?: 1) == 0,
-            onEdit = { editingPost = mp; showComposer = true; menuPost = null },
-            onSoftDelete = { softDeletedPost = mp; softDeleteSeconds = 10; menuPost = null },
-            onDismiss = { menuPost = null },
-            onChanged = { refreshWall() },
-        )
-    }
-
+    // #ADMIN-POST-ACTIONS-FLAT: диалог-меню PostActionsMenu удалён — его место
+    // заняло плоское «⋮»-меню PostCard (см. формирование menuItems на уровне
+    // экрана выше). Файл PostActionsMenu.kt остаётся в проекте, но больше не
+    // вызывается.
     val viewer = photoViewerState.value
     if (viewer != null) {
         PhotoViewer(
@@ -1736,9 +1809,10 @@ private fun CommunityPostCard(
     // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, читается
     // на уровне экрана). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
     carouselEnabled: Boolean = true,
-    // #ADMIN-POST-ACTIONS: показывать кнопку «⋮» и колбэк открытия меню.
-    isManager: Boolean = false,
-    onActionsClick: (Post) -> Unit = {},
+    // #ADMIN-POST-ACTIONS-FLAT: плоские пункты «⋮»-меню формируются на уровне
+    // экрана (см. вызов ниже) и пробрасываются в общий PostCard. Дефолт пустой —
+    // для вызовов без меню.
+    menuItems: List<PostMenuItem> = emptyList(),
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3b): тело CommunityPostCard делегируется
     // единому общему PostCard (ui/components/PostCard.kt). Обёртка сохранена,
@@ -1755,10 +1829,6 @@ private fun CommunityPostCard(
             )
         )
     } else post
-    // #ADMIN-POST-ACTIONS: меню «⋮» открывает PostActionsMenu через onActionsClick.
-    val menuItems = if (isManager) {
-        listOf(PostMenuItem(label = "Действия", onClick = { onActionsClick(post) }))
-    } else emptyList()
 
     PostCard(
         post = displayPost,
