@@ -2211,11 +2211,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Список пользователя: Уведомления, Мессенджер, Сообщества, Фотографии,
         // Друзья, Видео, Клипы, Музыка, Закладки, Файлы, Поиск, Реакции, Сервисы, Логи.
         const val SIDEBAR_DEFAULT_ORDER =
-            """["notifications","messenger","groups","photos","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+            """["notifications","messenger","groups","photos","friends","video","profile","clips","music","bookmarks","files","search","reactions","services","logs"]"""
         // Нижняя панель по умолчанию: те же пункты, но visible только первые 4
         // (Уведомления, Мессенджер, Сообщества, Фотографии) — остальные скрыты.
         const val BOTTOMBAR_DEFAULT_ORDER =
-            """["notifications","messenger","groups","photos","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+            """["notifications","messenger","groups","photos","friends","video","profile","clips","music","bookmarks","files","search","reactions","services","logs"]"""
         // #BOTTOM-DEFAULT-4: все, кроме первых 4, скрыты по умолчанию.
         // Пользователь может включить их через «Редактор панелей» — тогда
         // нижняя панель станет прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).

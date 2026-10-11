@@ -13896,3 +13896,15 @@ Work Log:
 - Расхождения пилота: клипы рендерятся как VideoThumbnail (не ClipThumbnail), репост через RepostBlock, время переехало в футер. Отмечено как известные ограничения.
 - Проверка: баланс net=0, изменён только CommunityScreen.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: PANELEDIT-PROFILE-FIX
+Task: Вернуть кнопку «Профиль» на панели (регрессия #PANELEDIT).
+Work Log:
+- Жалоба: «на панелях нет кнопки Профиль; в настройках обоих панелей "профиль" отсутствует вообще».
+- Причина (найдена): при переходе на #PANELEDIT пункт Profile НЕ внесли в PanelItems.all (остался только в dockScreens/mainRoutes для маршрутизации), а панели строятся из PanelItems → Профиль выпал из панелей И из редактора (CANONICAL=PanelItems.all).
+- Фикс:
+  1. PanelItems.all: добавлен PanelItem('profile','Профиль', Screen.Profile.icon, Route(Screen.Profile)) после video.
+  2. SovaPrefs: 'profile' добавлен в SIDEBAR_DEFAULT_ORDER и BOTTOMBAR_DEFAULT_ORDER (после video); НЕ внесён в BOTTOMBAR_DEFAULT_HIDDEN → Профиль видим на нижней панели по умолчанию (5 кнопок: Уведомления, Мессенджер, Сообщества, Фото, Профиль).
+- Результат: Профиль доступен в редакторе панелей и виден на нижней панели по умолчанию.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.

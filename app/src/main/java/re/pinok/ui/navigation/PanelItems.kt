@@ -77,6 +77,12 @@ object PanelItems {
         PanelItem("photos", "Фотографии", Screen.Photos.icon, PanelAction.Route(Screen.Photos)),
         PanelItem("friends", "Друзья", Screen.Friends.icon, PanelAction.Route(Screen.Friends)),
         PanelItem("video", "Видео", Screen.Video.icon, PanelAction.Route(Screen.Video)),
+        // POSTCARD-REFACTOR-PLAN / #PANELEDIT-FIX: «Профиль» выпал из панелей при
+        // переходе на динамический редактор (PanelItems.all не содержал пункта —
+        // нижняя/боковая панели строились из него, а Screen.Profile остался только
+        // в dockScreens/mainRoutes для маршрутизации). Возвращаем полноправным
+        // пунктом канона: иконка Screen.Profile.icon (Icons.Default.Person).
+        PanelItem("profile", "Профиль", Screen.Profile.icon, PanelAction.Route(Screen.Profile)),
         PanelItem("clips", "Клипы", Screen.Clips.icon, PanelAction.Route(Screen.Clips)),
         PanelItem("music", "Музыка", Screen.Music.icon, PanelAction.Route(Screen.Music)),
         // P0.32: Музыка 2 — новый контейнер (pull-to-refresh, визуализатор, 5 вкладок).
