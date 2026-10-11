@@ -15435,3 +15435,11 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Сборка** на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-EXPAND-OPTIMISTIC — 2026-10-11 — PostCard: оптимистичные лайки/реакции
+
+**Сделано:** единый PostCard расширен параметрами likesOverride/reactionOverride для поддержки WallPostCard. Применяются к isLiked/likeCount и предвыделению пикера реакций. net=0.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

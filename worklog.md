@@ -13919,3 +13919,11 @@ Work Log:
 - Удалены menuPost и вызов PostActionsMenu (файл PostActionsMenu.kt оставлен).
 - Проверка: net=0, изменён только CommunityScreen, все API/иконки существуют.
 - Сборка НА ПОЛЬЗОВАТЕЛЕ; пуш только с разрешения.
+
+---
+Task ID: POSTCARD-EXPAND-OPTIMISTIC
+Task: Расширить единый PostCard поддержкой оптимистичных лайков/реакций (для WallPostCard).
+Work Log:
+- Добавлены параметры: likesOverride: Pair<Boolean,Int>? (оптимистичный лайк), reactionOverride: Int? (моя реакция).
+- Применение: isLiked/likeCount из likesOverride поверх post.likes; myReactionId для предвыделения ReactionPicker (selectedReactionId).
+- NULL-политика соблюдена (local val lo/ro). net=0.

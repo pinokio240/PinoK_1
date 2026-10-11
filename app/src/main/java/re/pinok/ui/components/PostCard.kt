@@ -113,6 +113,13 @@ fun PostCard(
     onCommentClick: (Post) -> Unit = {},
     onRepostClick: (Post) -> Unit = {},
     onReaction: ((Post, ReactionEntry) -> Unit)? = null,
+    // ══ пост-детерминированное состояние (для Profile/WallPostCard) ══
+    // Оптимистичное состояние лайка экрана (key-умозаключение уже в вызывающем).
+    // null — использовать серверные post.likes. (isLiked, count)
+    likesOverride: Pair<Boolean, Int>? = null,
+    // Оптимистичная «моя реакция» на пост (reaction_id; 0/absent = нет).
+    // null — использовать серверные post.reactions.user_reacted.
+    reactionOverride: Int? = null,
     // ══ ⋮ меню ══
     menuItems: List<PostMenuItem> = emptyList(),
     showPinnedBadge: Boolean = true,
@@ -132,8 +139,15 @@ fun PostCard(
 
     // ——— СЧЁТЧИКИ из модели (оптимистичные состояния — зона вызывающего экрана) ———
     val likeObj = post.likes
-    val isLiked = likeObj != null && likeObj.userLikes == 1
-    val likeCount = if (likeObj != null) likeObj.count else 0
+    // #PROFILE-OPTIMISTIC: likesOverride (isLiked, count) — переопределяет
+    // серверные post.likes (как в WallPostCard ProfileScreen). NULL-ЯВНО.
+    val lo = likesOverride
+    val isLiked = if (lo != null) lo.first else (likeObj != null && likeObj.userLikes == 1)
+    val likeCount = if (lo != null) lo.second else (if (likeObj != null) likeObj.count else 0)
+    // #PROFILE-OPTIMISTIC: reactionOverride — «моя реакция» (для предвыделения
+    // в пикере). null → серверные post.reactions.user_reacted (если >0).
+    val ro = reactionOverride
+    val myReactionId = if (ro != null) ro else post.reactions?.userReacted?.takeIf { it > 0 } ?: 0
     val commentObj = post.comments
     val commentCount = if (commentObj != null) commentObj.count else 0
     val repostObj = post.reposts
@@ -462,6 +476,9 @@ fun PostCard(
                                 onSelect = { reaction ->
                                     onReaction?.invoke(post, reaction)
                                 },
+                                // #PROFILE-OPTIMISTIC: предвыделение «моей» реакции
+                                // (reaction_id из reactionOverride или post.reactions).
+                                selectedReactionId = myReactionId,
                             )
                         }
                     }
