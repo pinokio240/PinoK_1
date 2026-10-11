@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,10 +22,12 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Group
@@ -32,7 +35,10 @@ import androidx.compose.material.icons.outlined.InsertPhoto
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.ShoppingBag
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,7 +79,9 @@ import re.pinok.data.model.Bookmark
 import re.pinok.data.model.FaveTag
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
+import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.ScrollToTopFab
+import re.pinok.ui.screens.profile.VideoThumbnail
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 import java.text.SimpleDateFormat
@@ -547,6 +555,11 @@ fun BookmarksScreen(
     }
 }
 
+/**
+ * Карточка закладки: диспетчер по типу. Для «богатых» типов (видео/пост) —
+ * типизированные карточки, для остальных — плоская строка [BookmarkGenericRow].
+ * Сигнатура вызова не менялась (bm, onLongClick, onRemoveClick, onClick).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BookmarkRow(
@@ -554,6 +567,530 @@ private fun BookmarkRow(
     onLongClick: () -> Unit = {},
     onRemoveClick: () -> Unit = {},
     onClick: () -> Unit = {},
+) {
+    // #BOOKMARKS-SMARTCAST: свойства Bookmark (video/post/user/group/link) — public
+    // из core/data, поэтому smart-cast невозможен; берём в локальные val (nullable).
+    val bmV = bm.video
+    val bmP = bm.post
+    val bmU = bm.user
+    val bmG = bm.group
+    val bmL = bm.link
+    when (bm.type) {
+        "video" -> if (bmV != null) {
+            BookmarkVideoCard(
+                bm = bm,
+                video = bmV,
+                onLongClick = onLongClick,
+                onRemoveClick = onRemoveClick,
+                onClick = onClick,
+            )
+        } else {
+            BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+        }
+        "post" -> if (bmP != null) {
+            BookmarkPostCard(
+                bm = bm,
+                post = bmP,
+                onLongClick = onLongClick,
+                onRemoveClick = onRemoveClick,
+                onClick = onClick,
+            )
+        } else {
+            BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+        }
+        "user", "profile" -> if (bmU != null) {
+            BookmarkUserRow(bm, bmU, onLongClick, onRemoveClick, onClick)
+        } else {
+            BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+        }
+        "group" -> if (bmG != null) {
+            BookmarkGroupRow(bm, bmG, onLongClick, onRemoveClick, onClick)
+        } else {
+            BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+        }
+        "link" -> if (bmL != null) {
+            BookmarkLinkRow(bm, bmL, onLongClick, onRemoveClick, onClick)
+        } else {
+            BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+        }
+        else -> BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+    }
+}
+
+/**
+ * Богатая видео-карточка (эталон VK web Закладки_видео): обложка 16:9,
+ * бейдж длительности, название, просмотры, дата добавления.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkVideoCard(
+    bm: Bookmark,
+    video: re.pinok.data.model.Video,
+    onLongClick: () -> Unit,
+    onRemoveClick: () -> Unit,
+    onClick: () -> Unit,
+) {
+    val cover = bm.thumbUrl
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        // Обложка 16:9 с бейджем-длительностью в правом нижнем углу.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            if (cover != null) {
+                AsyncImage(
+                    model = cover,
+                    contentDescription = video.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Outlined.PlayCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // Бейдж длительности «2:42» в углу обложки (эталон video_thumb_label_duration).
+            val durationText = if (video.duration > 0) video.duration.toDurationString() else ""
+            if (durationText.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = durationText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = video.title.ifBlank { typeLabel(bm.type) },
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // «19 415 просмотров» — video.views; затем дата добавления.
+                val viewsText = if (video.views > 0) "${formatCount(video.views)} просмотров" else ""
+                val meta = listOf(viewsText, formatDate(bm.addedDate))
+                    .filter { it.isNotEmpty() }
+                    .joinToString(" • ")
+                if (meta.isNotEmpty()) {
+                    Text(
+                        text = meta,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onRemoveClick) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = "Удалить из закладок",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Полная пост-карточка (эталон VK web Закладки_посты): аватар+автор+время,
+ * текст, счётчики (лайки/репосты/комментарии/просмотры), строка репоста.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkPostCard(
+    bm: Bookmark,
+    post: re.pinok.data.model.Post,
+    onLongClick: () -> Unit,
+    onRemoveClick: () -> Unit,
+    onClick: () -> Unit,
+) {
+    // NULL-ЯВНО: автор поста в закладке — из postAuthor/postGroup (fill через
+    // fave.get extended profiles/groups), fallback на bm.user (легаси).
+    val postAuthor = bm.postAuthor
+    val postGroup = bm.postGroup
+    val fallbackUser = bm.user
+    val author = if (postAuthor != null) postAuthor else fallbackUser
+    val avatarUrl = if (author != null) author.photo100 else postGroup?.photo100
+    // Вложения поста (как в сообществах/ленте): фото и видео.
+    val attachments = post.attachments
+    val photoAttachments = attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
+    val videoAttachments = attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(start = 0.dp, end = 0.dp, top = 10.dp, bottom = 6.dp),
+    ) {
+        // Шапка: аватар + имя автора + время.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        ) {
+            Box(
+                modifier = Modifier.size(36.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (avatarUrl != null) {
+                    AsyncImage(
+                        model = avatarUrl,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                val authorName = when {
+                    postAuthor != null -> postAuthor.fullName
+                    postGroup != null -> postGroup.name
+                    author != null -> author.fullName
+                    bm.title.isNotBlank() -> bm.title
+                    else -> typeLabel(bm.type)
+                }
+                Text(
+                    text = authorName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = formatDate(post.date),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            IconButton(onClick = onRemoveClick) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = "Удалить из закладок",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // Текст поста (обрезаем до трёх строк).
+        if (post.text.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = post.text,
+                modifier = Modifier.padding(horizontal = 12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // #BOOKMARKS-ATTACHMENTS: фото-вложения — переиспользуем PostPhotoGrid
+        // (как в сообществах/ленте): клик по фото ведёт к посту.
+        if (photoAttachments.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            PostPhotoGrid(
+                photos = photoAttachments.mapNotNull { it.photo },
+                onPhotoClick = { _, _ -> onClick() },
+            )
+        }
+        // #BOOKMARKS-ATTACHMENTS: видео-вложения — переиспользуем VideoThumbnail
+        // (16:9 превью с длительностью). Клик ведёт к посту.
+        if (videoAttachments.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            videoAttachments.forEach { att ->
+                val v = att.video
+                if (v != null) {
+                    VideoThumbnail(video = v, onClick = { onClick() })
+                }
+            }
+        }
+        // Репост: «Репост: <оригинал>».
+        val copyHistory = post.copyHistory
+        val original = if (copyHistory != null) copyHistory.firstOrNull() else null
+        if (original != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Репост: ${original.text.take(120)}",
+                modifier = Modifier.padding(horizontal = 12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // Счётчики: лайки/репосты/комментарии/просмотры.
+        Spacer(Modifier.height(8.dp))
+        // NULL-ЯВНО: поля счётчиков nullable — извлекаем в локальные val.
+        val likesObj = post.likes
+        val repostsObj = post.reposts
+        val commentsObj = post.comments
+        val viewsObj = post.views
+        val likesCount = if (likesObj != null) likesObj.count else null
+        val repostsCount = if (repostsObj != null) repostsObj.count else null
+        val commentsCount = if (commentsObj != null) commentsObj.count else null
+        val viewsCount = if (viewsObj != null) viewsObj.count else null
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BookmarkCounter(count = likesCount, icon = Icons.Outlined.ThumbUp)
+            BookmarkCounter(count = repostsCount, icon = Icons.Outlined.Repeat)
+            BookmarkCounter(count = commentsCount, icon = Icons.AutoMirrored.Outlined.Comment)
+            BookmarkCounter(count = viewsCount, icon = Icons.Outlined.Visibility)
+        }
+    }
+}
+
+/** Счётчик с иконкой: избранное/повтор/комментарий/просмотр + число. */
+@Composable
+private fun BookmarkCounter(count: Int?, icon: ImageVector) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = formatCount(count),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Строка закладки-пользователя: аватар 48dp, имя, точка-онлайн. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkUserRow(
+    bm: Bookmark,
+    user: re.pinok.data.model.UserProfile,
+    onLongClick: () -> Unit,
+    onRemoveClick: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.size(48.dp).clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)) {
+            val photo = user.photo100
+            if (photo != null) {
+                AsyncImage(
+                    model = photo,
+                    contentDescription = user.fullName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = user.fullName.ifBlank { typeLabel(bm.type) },
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (user.isOnline) {
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier.size(8.dp).clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
+            Text(
+                text = formatDate(bm.addedDate),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        IconButton(onClick = onRemoveClick) {
+            Icon(Icons.Outlined.Delete, contentDescription = "Удалить из закладок",
+                modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Строка закладки-сообщества: аватар 48dp, имя, число подписчиков. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkGroupRow(
+    bm: Bookmark,
+    group: re.pinok.data.model.Group,
+    onLongClick: () -> Unit,
+    onRemoveClick: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)) {
+            val photo = group.photo100
+            if (photo != null) {
+                AsyncImage(
+                    model = photo,
+                    contentDescription = group.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Group, contentDescription = null, modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = group.name.ifBlank { typeLabel(bm.type) },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val followers = if (group.membersCount > 0) "${formatCount(group.membersCount)} подписчиков" else ""
+            val meta = listOf(followers, formatDate(bm.addedDate)).filter { it.isNotEmpty() }.joinToString(" • ")
+            if (meta.isNotEmpty()) {
+                Text(
+                    text = meta,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        IconButton(onClick = onRemoveClick) {
+            Icon(Icons.Outlined.Delete, contentDescription = "Удалить из закладок",
+                modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Строка закладки-ссылки: favicon-иконка, URL, title. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkLinkRow(
+    bm: Bookmark,
+    link: re.pinok.data.model.Attachment.Link,
+    onLongClick: () -> Unit,
+    onRemoveClick: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            // NULL-ЯВНО: у ссылки фавиконка-превью; fallback на превью закладки.
+            val linkPhoto = link.photo
+            val thumb = if (linkPhoto != null) linkPhoto.largestUrl else bm.thumbUrl
+            if (thumb != null) {
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = bm.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = bm.title.ifBlank { typeLabel(bm.type) },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (link.url.isNotBlank()) {
+                Text(
+                    text = link.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        IconButton(onClick = onRemoveClick) {
+            Icon(Icons.Outlined.Delete, contentDescription = "Удалить из закладок",
+                modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * Запасная плоская строка для прочих типов (article/product/photo/...):
+ * прежнее поведение — иконка + title + дата + корзина.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BookmarkGenericRow(
+    bm: Bookmark,
+    onLongClick: () -> Unit,
+    onRemoveClick: () -> Unit,
+    onClick: () -> Unit,
 ) {
     val icon = iconForType(bm.type)
     val thumb = bm.thumbUrl
@@ -610,6 +1147,23 @@ private fun BookmarkRow(
             )
         }
     }
+}
+
+/**
+ * Форматирование счётчика с разделением тысяч пробелом: 19415 → "19 415".
+ * null → пустая строка (нет данных), 0 → "0".
+ */
+private fun formatCount(n: Int?): String {
+    if (n == null) return ""
+    if (n == 0) return "0"
+    val digits = n.toString()
+    val sb = StringBuilder()
+    for (i in digits.indices) {
+        val fromRight = digits.length - i
+        if (i > 0 && fromRight % 3 == 0) sb.append(' ')
+        sb.append(digits[i])
+    }
+    return sb.toString()
 }
 
 /** Волна 40 #BOOKMARKS-TRACKS: строка локальной закладки-трека (тап = играет). */

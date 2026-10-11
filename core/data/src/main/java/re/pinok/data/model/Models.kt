@@ -1305,6 +1305,13 @@ data class Bookmark(
     val user: UserProfile? = null,
     val group: Group? = null,
     val post: Post? = null,
+    // Волна 40 #BOOKMARKS-POST-AUTHOR: для типа "post" VK кладёт автора записи
+    // в response.profiles[]/groups[] (extended=1), НЕ в item. Здесь храним
+    // резолвнутого автора (user — человек, group — сообщество), чтобы карточка
+    // поста показывала аватар и имя как в сообществах/ленте. Отдельные поля,
+    // чтобы не ломать bookmarkKey/навигацию (bm.user/bm.group остаются null для поста).
+    val postAuthor: UserProfile? = null,
+    val postGroup: Group? = null,
     val photo: PhotoItem? = null,
     val video: Video? = null,
     val link: Attachment.Link? = null,

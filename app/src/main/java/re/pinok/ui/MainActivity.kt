@@ -1021,11 +1021,11 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf(false)
                     }
                     LaunchedEffect(snap.batteryExemptionAskedAt, currentAuthVersion, isOfflineMode) {
-                        val s = snap
-                        if (s == null) return@LaunchedEffect
+                        // snap уже non-null (проверен выше `if (snap != null)`) — null-проверка
+                        // избыточна (условие always false), алиас тоже не нужен.
                         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
                         val optimized = if (pm == null) true else !pm.isIgnoringBatteryOptimizations(packageName)
-                        val lastAsked = s.batteryExemptionAskedAt
+                        val lastAsked = snap.batteryExemptionAskedAt
                         val askedRecently = lastAsked > 0L && (System.currentTimeMillis() - lastAsked) < 7L * 24L * 60L * 60L * 1000L
                         if (optimized && !askedRecently) {
                             showBatteryDialog = true

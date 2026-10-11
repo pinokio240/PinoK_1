@@ -10293,7 +10293,26 @@ class VKApiClient(
             return emptyList()
         }
         return try {
-            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            val resp = json.getAsJsonObject("response") ?: return emptyList()
+            val items = resp.getAsJsonArray("items") ?: return emptyList()
+            // Волна 40 #BOOKMARKS-POST-AUTHOR: fave.get(extended=1) возвращает
+            // авторов вложенных постов в response.profiles[]/groups[], а НЕ в
+            // item. Собираем их в карты id→профиль/группа, чтобы для типа "post"
+            // заполнить postAuthor/postGroup (аватар+имя автора в карточке).
+            val profilesById = mutableMapOf<Long, UserProfile>()
+            resp.getAsJsonArray("profiles")?.forEach { p ->
+                if (p.isJsonObject) {
+                    val u = parseUserProfileMini(p.asJsonObject)
+                    if (u.id != 0L) profilesById[u.id] = u
+                }
+            }
+            val groupsById = mutableMapOf<Long, Group>()
+            resp.getAsJsonArray("groups")?.forEach { g ->
+                if (g.isJsonObject) {
+                    val gr = parseGroupMini(g.asJsonObject)
+                    if (gr.id != 0L) groupsById[gr.id] = gr
+                }
+            }
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
@@ -10308,6 +10327,9 @@ class VKApiClient(
                 var user: UserProfile? = null
                 var group: Group? = null
                 var post: Post? = null
+                // #BOOKMARKS-POST-AUTHOR: автор поста (человек/сообщество) из profiles/groups.
+                var postAuthor: UserProfile? = null
+                var postGroup: Group? = null
                 var photo: PhotoItem? = null
                 var video: Video? = null
                 var link: Attachment.Link? = null
@@ -10320,7 +10342,29 @@ class VKApiClient(
                 when (type) {
                     "user", "profile" -> user = parseUserProfileMini(entity)
                     "group" -> group = parseGroupMini(entity)
-                    "post" -> post = parsePostMini(entity)
+                    "post" -> {
+                        val postEntity = parsePostMini(entity)
+                        post = postEntity
+                        // #BOOKMARKS-POST-AUTHOR: отдаём автора поста из profiles/groups.
+                        // from_id — кто опубликовал; если это сообщество (from_id<0),
+                        // берём группу по -from_id, иначе профиль по from_id.
+                        val fromId = postEntity.fromId
+                        if (fromId < 0L) {
+                            postGroup = groupsById[-fromId]
+                        } else if (fromId > 0L) {
+                            postAuthor = profilesById[fromId]
+                        }
+                        // Fallback: если from_id нет/равен 0, но есть владелец-сообщество
+                        // (пост со стены группы, owner_id<0) — берём группу по -owner_id.
+                        if (postGroup == null && postAuthor == null) {
+                            val ow = postEntity.ownerId
+                            if (ow < 0L) {
+                                postGroup = groupsById[-ow] ?: groupsById[fromId]
+                            } else if (ow > 0L) {
+                                postAuthor = profilesById[ow]
+                            }
+                        }
+                    }
                     "photo" -> photo = parsePhotoItem(entity)
                     "video" -> video = parseVideoMini(entity)
                     "link" -> {
@@ -10363,6 +10407,7 @@ class VKApiClient(
                 }
                 Bookmark(type = type, seen = seen ?: false, addedDate = addedDate,
                     user = user, group = group, post = post, photo = photo, video = video, link = link,
+                    postAuthor = postAuthor, postGroup = postGroup,
                     linkId = linkId, objectId = objectId, objectOwnerId = objectOwnerId, objectTitle = objectTitle)
             }
         } catch (e: Exception) {

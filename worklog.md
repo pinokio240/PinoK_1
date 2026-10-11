@@ -13740,3 +13740,101 @@ Stage Summary:
 - Файлы: OkCdnQueryRangeDataSource.kt.
 - Вместе с фиксом pick (ClipSourceSelector) — клипы с scl= теперь и выбираются, и качаются через &bytes=.
 - Требуется сборка/тест.
+
+---
+Task ID: WARN-ALWAYS-FALSE-MAINACTIVITY
+Task: Устранить предупреждение компилятора MainActivity.kt:1025 Condition is always 'false'.
+Work Log:
+- Причина: внутри if (snap != null) (стр.1015) val s = snap получал non-null тип (snap — локальный val, smart-cast сохраняется в лямбде), поэтому if (s == null) return@LaunchedEffect — always false.
+- Фикс: убраны избыточные val s = snap и if (s == null); использование заменено на snap.batteryExemptionAskedAt.
+- Бэкап: backup-mainactivity-warnfix-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.
+Stage Summary:
+- Файлы: MainActivity.kt (-2 строки, +комментарий).
+
+---
+Task ID: BOOKMARKS-RESEARCH
+Task: Полный реинжиниринг раздела «Закладки» в PinoK по снапшотам VK web (папка Ссылки). Этап: только изучение и план (реализация — следующим этапом).
+Work Log:
+- По правилу: параллельные субагенты изучили (1) 5 HTML-снапшотов закладок (вкладки, карточки поста/видео/люди/сообщества, счётчики, веб-протокол al_bookmarks.php); (2) текущую реализацию PinoK (BookmarksScreen, faveGet/faveAdd/faveRemove, модели, кнопки-флажки).
+- Ключевые факты: веб рендерит закладки серверным HTML (al_bookmarks.php), НЕ через fave.get; вкладки = ?type= (all/user/group/post/video/product). В карточках поста счётчики — только лайки+репосты (без просмотров/комментов); видео — автор+дата+просмотры+длительность; люди/сообщества — аватар+имя (+online у людей).
+- PinoK сейчас: одна универсальная карточка, только fave.get, нет вкладок по типам, нет счётчиков в Bookmark, нет кнопок-флажков у сообществ и поста на детальном экране, у VideoScreen пункт называется «В избранное».
+- План: этапы 1-4 (вкладки-фильтры; раздельные fave.getPosts/getVideos/getPages; карточки по типам; кнопки-флажки везде) + план внешнего вида. Сохранено: C:\Users\Pinokio240\Desktop\docs\закладки-план-2026-10-10.md.
+- Бэкап: не требовался (research-only, код не менялся).
+Stage Summary:
+- Файлы: план в docs (закладки-план-2026-10-10.md). Код не менялся.
+
+---
+Task ID: BOOKMARKS-FULL-CARDS
+Task: Все карточки закладок с контентом сделать полными (по VK web reverse, снапшоты Desktop\Ссылки).
+Work Log:
+- Изучены снапшоты VK web закладок: Закладки_*.html (посты/видео/люди/сообщества/все) + закладки.har. Эталон карточек: видео = обложка 16:9 + длительность + название + «N просмотров»; пост = аватар+автор+время+текст+лайки/репосты/комментарии/просмотры.
+- Переделана BookmarkRow (BookmarksScreen.kt): диспетчер when(bm.type):
+  - BookmarkVideoCard: обложка 16:9 + бейдж длительности (toDurationString) + title + «N просмотров» (formatCount, тысячи с пробелом) + дата.
+  - BookmarkPostCard: аватар+автор (bm.user) + время + текст (3 строки) + «Репост: …» + счётчики (ThumbUp/Repeat/Comment/Visibility).
+  - BookmarkUserRow (аватар+имя+online), BookmarkGroupRow (аватар+имя+подписчики), BookmarkLinkRow (URL).
+  - BookmarkGenericRow — запасная плоская строка (article/product/photo/не-распознанное).
+  - formatCount() хелпер: тысячи через пробел.
+- NULL-чистота, скобки 251/251. toDurationString есть в FormatUtils.
+- Бэкап субагента: backups/bookmarks-fullcard-2026-10-10/. Бэкап главного агента: backup-bookmarks-full-cards-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ (правило).
+Stage Summary:
+- Файлы: BookmarksScreen.kt (-3/+507).
+- Требуется сборка/тест: видео и посты в закладках отображаются полными карточками.
+
+---
+Task ID: BOOKMARKS-SMARTCAST-FIX
+Task: Исправить ошибки компиляции: Smart cast to 'Video'/'Post'/'UserProfile'/'Group'/'Attachment.Link' is impossible, because ... public API property declared in different module (BookmarksScreen.kt:572-602).
+Work Log:
+- Причина: bm.video/bm.post/bm.user/bm.group/bm.link — public-свойства Bookmark из core/data (другой модуль) → smart-cast невозможен напрямую.
+- Фикс: в BookmarkRow берём их в локальные val (bmV/bmP/bmU/bmG/bmL) и используем smart-cast на локальных val внутри if(!=null). Kotlin smart-cast работает на локальных val.
+- Бэкап: backup-bookmarks-smartcast-fix-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.
+Stage Summary:
+- Файлы: BookmarksScreen.kt (диспетчер BookmarkRow).
+
+---
+Task ID: AUTOMIRRORED-COMMENT
+Task: Устранить предупреждение компилятора BookmarksScreen.kt:830 'Icons.Outlined.Comment' is deprecated → использовать AutoMirrored.
+Work Log:
+- Причина: Icons.Outlined.Comment deprecated (использовать AutoMirrored из-за RTL-зеркалирования).
+- Фикс: импорт заменён на androidx.compose.material.icons.automirrored.outlined.Comment; использование на Icons.AutoMirrored.Outlined.Comment (стр.830).
+- Бэкап: backup-bookmarks-automirror-comment-2026-10-10.patch.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.
+Stage Summary:
+- Файлы: BookmarksScreen.kt (2 строки: импорт + использование).
+
+---
+Task ID: BOOKMARKS-ATTACHMENTS-AUTHOR
+Task: Полнота контента карточек закладок — аватар автора + вложения поста (как в сообществах), навигация по клику.
+Work Log:
+- Жалоба: «нет аватарки; если в посте есть картинка или видео — их не видно; карточка должна быть как в сообществах, но с кнопкой перейти к посту».
+- Root cause: fave.get(extended=1) кладёт автора поста в response.profiles[]/groups[], а НЕ в item; парсер читал только items → bm.user был null, аватар/имя поста терялись. Вложения (photo/video) парсились (parseAttachments), но НЕ рендерились в BookmarkPostCard.
+- Фикс:
+  1. Модель Bookmark (Models.kt): добавлены postAuthor: UserProfile? / postGroup: Group? (не трогают bm.user/bm.group — чтобы не сломать bookmarkKey и навигацию).
+  2. VKApiClient.faveGet: резолвим profiles[]/groups[] в карты; для типа "post" заполняем postAuthor (from_id>0) / postGroup (from_id<0) с fallback по owner_id.
+  3. BookmarksScreen.BookmarkPostCard: аватар+имя из postAuthor/postGroup (fallback bm.user); фото-вложения через PostPhotoGrid (клик→пост); видео-вложения через VideoThumbnail (клик→пост); подписи и счётчики с horizontal padding.
+  4. Навигация уже была: onPostClick/onUserClick/onVideoClick/onGroupClick в SovaNavHost (строки 1920-1937).
+- Импорты: добавлены CircleShape, PostPhotoGrid, VideoThumbnail.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.
+Stage Summary:
+- Файлы: Models.kt (+2 поля), VKApiClient.kt (резолв автора в faveGet), BookmarksScreen.kt (BookmarkPostCard: аватар+вложения+падинги).
+
+---
+Task ID: BOOKMARKS-FIX-INSERT-VKAPICLIENT
+Task: Исправить ошибки компиляции, внесённые ошибочной вставкой блока в VKApiClient.
+Work Log:
+- Проблема: первая вставка блока profilesById/groupsById попала НЕ в faveGet, а в messagesGetConversationsById (совпадающий шаблон 'return try {'), сломав messagesGetHistory (List<Message> vs List<Chat>, unresolved profilesNames/groupsNames/parsedChats).
+- Фикс: восстановил VKApiClient.kt из HEAD (git checkout; временный бэкап в temp/VKApiClient.broken.bak), затем аккуратно применил только правку faveGet: profilesById/groupsById из response.profiles/groups, postAuthor/postGroup в "post"-ветке и в конструкторе Bookmark.
+- Проверка: faveGet net=0 (баланс скобок), MessagesGetHistory/ConversationsById на местах (1759 с собственными maps), BookmarksScreen/Models корректны.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.
+Stage Summary:
+- Файлы: VKApiClient.kt (+51/-2, только faveGet), Models.kt (+7), BookmarksScreen.kt (+554).
+
+---
+Task ID: BOOKMARKS-WARNING-ALWAYS-TRUE
+Task: Устранить предупреждение 'VKApiClient.kt:10351 Condition is always true'.
+Work Log:
+- Причина: 'val p = post' где post не-null после parsePostMini → 'if (p != null)' всегда true.
+- Фикс: заменил на не-null локальную val postEntity = parsePostMini(entity); поле post заполняется, резолв автора идёт по postEntity. Предупреждение ушло.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.
