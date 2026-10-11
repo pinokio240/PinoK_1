@@ -13968,3 +13968,12 @@ Work Log:
 - RepostBlock.kt:139 — 'onGroupClick?.invoke()' на не-null → onGroupClick.invoke().
 - RepostGroupResolver.kt:39 — 'groupId.toLong()' избыточен (groupId уже Long) → listOf(groupId).
 - Баланс скобок обох файлов net=0.
+
+---
+Task ID: CHANNEL-POST-MENU
+Task: Добавить ⋯-меню в канальные посты (нет функционала поста).
+Work Log:
+- WallPostCard: добавлен extraMenuItems (дефолт emptyList), меню = postMenuItems + extraMenuItems (ProfileScreen.kt:2286,2387).
+- Канальный wall-вызов: extraMenuItems с пунктом «Поделиться» → channelSharePost (ChatDetailScreen.kt:4785).
+- PostCard не тронут. Прочие вызовы WallPostCard не меняются (дефолт).
+- Баланс: ChatDetail net=0, ProfileScreen net=-2 (исходный). Сборка на пользователе.

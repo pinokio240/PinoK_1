@@ -2279,6 +2279,11 @@ fun WallPostCard(
     repostGroupName: String? = null,
     repostGroupPhoto: String? = null,
     onRepostGroupClick: (() -> Unit)? = null,
+    // POSTCARD-REFACTOR-PLAN: дополнительные пункты «⋯»-меню (для канальных
+    // постов — «Поделиться»/«Действия с сообщением»). Добавляются к
+    // postMenuItems (после них). Дефолт emptyList — легаси-вызовы (Profile/
+    // UserProfile) меню не расширяют.
+    extraMenuItems: List<PostMenuItem> = emptyList(),
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — ОБЁРТКА-ДЕЛЕГАТ единого
     // PostCard (ui/components/PostCard.kt). Внешняя сигнатура сохранена 1:1 —
@@ -2376,7 +2381,10 @@ fun WallPostCard(
         onReaction = onReaction,
         likesOverride = optimisticLike,
         reactionOverride = optimisticReaction,
-        menuItems = postMenuItems,
+        // POSTCARD-REFACTOR-PLAN: к базовым пунктам («⋯»-меню профиля) добавляем
+        // extraMenuItems (канальные «Поделиться»/«Действия с сообщением»).
+        // Конкатенация корректна и при пустом postMenuItems.
+        menuItems = postMenuItems + extraMenuItems,
         // Закреп показываем (был в профиле), «Реклама» — нет (в профиле не было).
         showPinnedBadge = true,
         showAdBadge = false,

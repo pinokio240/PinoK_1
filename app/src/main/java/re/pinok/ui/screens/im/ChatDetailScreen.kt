@@ -70,6 +70,7 @@ import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Check
@@ -279,6 +280,7 @@ import re.pinok.ui.components.RepostGroupCache
 // #CHANNEL-WALL-MODE (Fix #393): «Поделиться» поста канала — существующий
 // компонент (тот же, что в CommunityScreen/UserProfileScreen).
 import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.components.PostMenuItem
 import re.pinok.ui.components.PendingPhotosBar
 import re.pinok.ui.components.PendingPhoto
 import re.pinok.ui.components.nextPendingPhotoId
@@ -4776,6 +4778,17 @@ fun ChatDetailScreen(
                                         likesState = channelLikeStates,
                                         likePending = channelLikeInFlight.containsKey(likeKey),
                                         onLikeToggle = { toggleChannelPostLike(it) },
+                                        // POSTCARD-REFACTOR-PLAN: «⋯»-меню канального
+                                        // поста («Действия с сообщением», как VK web).
+                                        // «Поделиться» → тот же ShareSheet, что и кнопка
+                                        // репоста (channelSharePost инициализирует панель).
+                                        extraMenuItems = buildList {
+                                            add(PostMenuItem(
+                                                label = "Поделиться",
+                                                icon = Icons.Outlined.Share,
+                                                onClick = { channelSharePost = post },
+                                            ))
+                                        },
                                     )
                                     // #CHANNELS-UI2 (Task 1): в wall-режиме, как и в
                                     // history-режиме, под карточкой поста выводим строку
