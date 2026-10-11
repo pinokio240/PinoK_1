@@ -13856,3 +13856,13 @@ Work Log:
 - Call sites согласованы: Profile/Bookmarks/ChatDetail showTitle=false; Feed/Community дефолты; лайк long-press=реакции.
 - Проверка: все файлы net=0 (кроме ProfileScreen net=-2 — ИСХОДНЫЙ дефект, был в HEAD, не внесён субагентом).
 - Сборка НА ПОЛЬЗОВАТЕЛЕ.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE1-FIX-IMPORTS
+Task: Исправить пропавшие импорты после выноса компонентов (этап 1).
+Work Log:
+- Субагент при удалении локальных VideoThumbnail/ActionIcon/RepostBlock удалил и нужные общие импорты.
+- FeedScreen: отсутствуют KeyboardOptions/ImeAction/KeyboardActions/TextAlign/FontWeight/TextDecoration/LocalContext/LocalConfiguration/ContentScale — восстановлено.
+- CommunityScreen/ChatDetailScreen: отсутствует TextAlign — восстановлено.
+- Проверка: все 8 файлов этапа 1 — используемые символы импортированы, баланс скобок net=0.
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.

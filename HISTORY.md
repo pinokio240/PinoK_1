@@ -15371,3 +15371,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Далее:** этап 2 — AttachmentRenderer, этап 3 — единый PostCard.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REFACTOR-STAGE1-FIX-IMPORTS — 2026-10-11 — восстановление импортов
+
+**Ошибки:** после выноса компонентов субагент удалил и общие импорты (FeedScreen: KeyboardOptions/ImeAction/KeyboardActions/TextAlign/FontWeight/TextDecoration/LocalContext/LocalConfiguration/ContentScale; Community/ChatDetail: TextAlign).
+
+**Фикс:** импорты восстановлены. Проверено: все используемые символы импортированы, баланс скобок 0. Сборка на пользователе.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
