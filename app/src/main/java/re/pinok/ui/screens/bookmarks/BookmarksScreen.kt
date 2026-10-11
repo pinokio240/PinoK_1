@@ -81,7 +81,7 @@ import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
 import re.pinok.ui.components.PostPhotoGrid
 import re.pinok.ui.components.ScrollToTopFab
-import re.pinok.ui.screens.profile.VideoThumbnail
+import re.pinok.ui.components.VideoThumbnail
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 import java.text.SimpleDateFormat
@@ -831,7 +831,7 @@ private fun BookmarkPostCard(
             videoAttachments.forEach { att ->
                 val v = att.video
                 if (v != null) {
-                    VideoThumbnail(video = v, onClick = { onClick() })
+                    VideoThumbnail(video = v, onClick = { onClick() }, showTitle = false)
                 }
             }
         }

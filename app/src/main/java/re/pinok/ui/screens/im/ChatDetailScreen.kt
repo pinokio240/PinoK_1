@@ -287,7 +287,7 @@ import kotlin.math.roundToInt
 // (public, второй вызов UserProfileScreen:768) вместо копипасты + PostHolder для
 // имени сообщества в PostDetailScreen.
 import re.pinok.ui.screens.profile.WallPostCard
-import re.pinok.ui.screens.profile.VideoThumbnail
+import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.navigation.PostHolder
 
@@ -11204,8 +11204,9 @@ private fun ChannelVideoDialog(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
-                        // Reuse public ProfileScreen.VideoThumbnail (16:9 карточка).
-                        VideoThumbnail(video = video, onClick = onVideoClick)
+                        // Reuse common ui.components.VideoThumbnail (16:9 карточка);
+                        // исходно использовался profile-вариант без названия (showTitle=false).
+                        VideoThumbnail(video = video, onClick = onVideoClick, showTitle = false)
                     }
                 }
             }

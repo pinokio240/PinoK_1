@@ -89,12 +89,15 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.Video
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
+// POSTCARD-REFACTOR-PLAN (этап 1): общие компоненты поста — ui/components.
+import re.pinok.ui.components.ActionIcon
 // #POST-CAROUSEL-EVERYWHERE (22-B): общий компонент карусели фото поста.
 import re.pinok.ui.components.PostPhotoGrid
 // Fix #366: общий компонент карусели видео поста.
 import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
@@ -1296,7 +1299,7 @@ fun CommunityScreen(
                         }
                     }
                     items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
-                        VideoThumbnail(video = video, onClick = onVideoClick)
+                        VideoThumbnail(video = video, titleExpandable = true, onClick = onVideoClick)
                     }
                     // Футер пагинации видео.
                     item {
@@ -1882,7 +1885,7 @@ private fun CommunityPostCard(
                         if (v.isClip) {
                             ClipThumbnail(video = v, onClick = onVideoClick)
                         } else {
-                            VideoThumbnail(video = v, onClick = onVideoClick)
+                            VideoThumbnail(video = v, titleExpandable = true, onClick = onVideoClick)
                         }
                     }
                 }
@@ -1976,7 +1979,7 @@ private fun CommunityPostCard(
                                     if (v.isClip) {
                                         ClipThumbnail(video = v, onClick = onVideoClick)
                                     } else {
-                                        VideoThumbnail(video = v, onClick = onVideoClick)
+                                        VideoThumbnail(video = v, titleExpandable = true, onClick = onVideoClick)
                                     }
                                 }
                             }
@@ -2024,107 +2027,9 @@ private fun CommunityPostCard(
     }
 }
 
-@Composable
-private fun VideoThumbnail(video: Video, onClick: (Video) -> Unit) {
-    val thumbUrl = video.thumbUrl
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick(video) },
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Column {
-            Box(
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (thumbUrl != null) {
-                    AsyncImage(
-                        model = thumbUrl,
-                        contentDescription = video.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-                Box(
-                    modifier = Modifier.size(48.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
-                }
-                if (video.duration > 0) {
-                    Box(
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                            .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            "${video.duration / 60}:${"%02d".format(video.duration % 60)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            fontSize = 11.sp,
-                        )
-                    }
-                }
-            }
-            // #VIDEO-TITLE-COMMENTS: название + счётчики (просмотры/комментарии).
-            if (video.title.isNotBlank() || video.views > 0 || video.commentsCount > 0) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    if (video.title.isNotBlank()) {
-                        // #POST-TEXT-EXPAND (Fix #345): длинное название видео
-                        // разворачивается тапом (перехватывает клик карточки;
-                        // тап по превью открывает видео как раньше, а тап по
-                        // развёрнутому названию — тоже открывает видео).
-                        var titleExpanded by remember { mutableStateOf(false) }
-                        var titleOverflowed by remember { mutableStateOf(false) }
-                        Text(
-                            text = video.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable {
-                                if (titleExpanded) {
-                                    onClick(video)
-                                } else {
-                                    titleExpanded = true
-                                }
-                            },
-                            onTextLayout = { result ->
-                                if (!titleExpanded && result.hasVisualOverflow) titleOverflowed = true
-                            },
-                            maxLines = if (titleExpanded) Int.MAX_VALUE else 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (titleOverflowed && !titleExpanded) {
-                            Text(
-                                text = "Показать ещё",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF1976D2),
-                                modifier = Modifier
-                                    .padding(top = 2.dp)
-                                    .clickable { titleExpanded = true },
-                            )
-                        }
-                    }
-                    if (video.views > 0 || video.commentsCount > 0) {
-                        val meta = buildList {
-                            if (video.views > 0) add("${video.views.toCountString()} просмотров")
-                            if (video.commentsCount > 0) add("${video.commentsCount.toCountString()} комментариев")
-                        }.joinToString(" • ")
-                        Text(
-                            text = meta,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+// POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail и ActionIcon вынесены в общие
+// re.pinok.ui.components (см. импорты выше). Сообщество использует разворачиваемое
+// название (#POST-TEXT-EXPAND) — на стороне вызова titleExpandable=true.
 
 @Composable
 private fun ClipThumbnail(video: Video, onClick: (Video) -> Unit) {
@@ -2174,27 +2079,6 @@ private fun ClipThumbnail(video: Video, onClick: (Video) -> Unit) {
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ActionIcon(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    count: Int,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    onClick: (() -> Unit)? = null,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-    ) {
-        Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)
-        if (count > 0) {
-            Spacer(Modifier.width(4.dp))
-            Text(count.toCountString(), style = MaterialTheme.typography.labelSmall, color = tint)
         }
     }
 }

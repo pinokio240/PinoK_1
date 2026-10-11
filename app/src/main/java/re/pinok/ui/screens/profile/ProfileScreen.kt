@@ -123,6 +123,10 @@ import re.pinok.ui.components.PostVideoCarousel
 import re.pinok.ui.components.PlaylistAttachmentCard
 import re.pinok.ui.components.RepostDialog
 import re.pinok.ui.components.ScrollToTopFab
+// POSTCARD-REFACTOR-PLAN (этап 1): общие компоненты поста вынесены в ui/components.
+import re.pinok.ui.components.ActionIcon
+import re.pinok.ui.components.RepostBlock
+import re.pinok.ui.components.VideoThumbnail
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
 // (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
 // Fix #376: link/poll/doc вложения — карточки ленты, сделаны internal
@@ -2512,7 +2516,9 @@ fun WallPostCard(
                 videoAttachments.forEach { attach ->
                     val v = attach.video
                     if (v != null) {
-                        VideoThumbnail(video = v, onClick = onVideoClick)
+                        // ProfileScreen.VideoThumbnail исходно не показывал название —
+                        // сохраняем 1-в-1 (showTitle=false).
+                        VideoThumbnail(video = v, onClick = onVideoClick, showTitle = false)
                     }
                 }
             }
@@ -2701,249 +2707,8 @@ fun WallPostCard(
     }
 }
 
-// Fix #70: VideoThumbnail для video-вложений на стене (аналог FeedScreen.VideoThumbnail).
-@Composable
-fun VideoThumbnail(video: Video, onClick: (Video) -> Unit) {
-    val thumbUrl = video.thumbUrl
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick(video) },
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Box(
-            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (thumbUrl != null) {
-                AsyncImage(
-                    model = thumbUrl,
-                    contentDescription = video.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            Box(
-                modifier = Modifier.size(48.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
-            }
-            if (video.duration > 0) {
-                Box(
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        "${video.duration / 60}:${"%02d".format(video.duration % 60)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        fontSize = 11.sp,
-                    )
-                }
-            }
-        }
-    }
-}
-
-// Fix #70: RepostBlock — отображение copy_history[0] как вложенной карточки.
-// Показывает заголовок «Запись <ownerId>» + текст + вложения оригинального поста
-// (фото/видео/аудио/плейлисты — #PROFILE-REPOST-ATTACH).
-// Sprint 2, P1-1 (#88): фото кликабельны → PhotoViewer.
-@Composable
-fun RepostBlock(
-    repost: Post,
-    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
-    onVideoClick: (Video) -> Unit = {},
-    // Fix #373 (#PROFILE-REPOST-OPEN): тап по карточке репоста / по развёрнутому
-    // или короткому тексту → открытие поста-оригинала (PostDetail через onPostClick
-    // вызывающей карточки; колбэк пробрасывается из WallPostCard, дефолт {} —
-    // как у соседей, прежние вызовы совместимы).
-    onPostClick: (Post) -> Unit = {},
-    // 22-B: карусель фото (общий SovaPrefs.feedCarouselEnabled, пробрасывается
-    // из WallPostCard). Дефолт true — легаси-вызовы совместимы (паттерн 19-A).
-    carouselEnabled: Boolean = true,
-) {
-    // Fix #373: контекст для linkify-кликов в тексте репоста (openUrlExternal).
-    val ctx = LocalContext.current
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            // Fix #373: карточка репоста ЦЕЛИКОМ открывает оригинальный пост.
-            // clickable ПОСЛЕ clip — риппл по скруглению; вложенные клики
-            // (PostPhotoGrid/видео/аудио/ссылки ниже) перехватываются раньше —
-            // открывается просмотр, а не пост (потомок кликабельнее родителя).
-            .clickable { onPostClick(repost) },
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        ),
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Repeat,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    // Audit #40: для user-posts (ownerId>0) не показываем "клуба" —
-                    // иначе получается двойной пробел "Запись  123". buildString аккуратнее.
-                    text = buildString {
-                        append("Запись")
-                        if (repost.ownerId < 0) append(" клуба")
-                        append(' ')
-                        append(repost.ownerId)
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (repost.text.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                // Fix #373 (#PROFILE-REPOST-EXPAND): текст репоста — паттерн Fix #345
-                // (CommunityScreen:1337-1365 / FeedScreen:2571-2609) + linkify: «Показать
-                // ещё» только при реальном переполнении (hasVisualOverflow); тап по
-                // свёрнутому тексту = развернуть, по развёрнутому/короткому = открыть
-                // пост целиком (onPostClick).
-                var repostTextExpanded by remember { mutableStateOf(false) }
-                var repostTextOverflowed by remember { mutableStateOf(false) }
-                Text(
-                    text = linkifyVkText(
-                        text = repost.text,
-                        linkColor = MaterialTheme.colorScheme.primary,
-                        onUrlClick = { url -> openUrlExternal(ctx, url) },
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.fillMaxWidth().clickable {
-                        if (repostTextOverflowed && !repostTextExpanded) {
-                            repostTextExpanded = true
-                        } else {
-                            onPostClick(repost)
-                        }
-                    },
-                    onTextLayout = { result ->
-                        if (!repostTextExpanded && result.hasVisualOverflow) repostTextOverflowed = true
-                    },
-                    maxLines = if (repostTextExpanded) Int.MAX_VALUE else 5,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (repostTextOverflowed && !repostTextExpanded) {
-                    Text(
-                        text = "Показать ещё",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp)
-                            .clickable { repostTextExpanded = true },
-                    )
-                }
-            }
-            // Фото из репоста
-            val repostPhotos = repost.attachments
-                ?.filter { it.type == "photo" && it.photo != null }
-                .orEmpty()
-            if (repostPhotos.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                // 22-B: общий PostPhotoGrid (см. WallPostCard выше).
-                PostPhotoGrid(
-                    photos = repostPhotos.mapNotNull { it.photo },
-                    onPhotoClick = onPhotoClick,
-                    carouselEnabled = carouselEnabled,
-                )
-            }
-            // #PROFILE-REPOST-ATTACH: видео в репосте (как в WallPostCard).
-            val repostVideos = repost.attachments
-                ?.filter { it.type == "video" && it.video != null }
-                .orEmpty()
-            // Fix #373: несколько видео в репосте и включённая карусель —
-            // общий PostVideoCarousel (как в посте выше и в ленте, Fix #366);
-            // иначе прежний вертикальный стопк VideoThumbnail (одно видео).
-            if (carouselEnabled && repostVideos.size > 1) {
-                Spacer(Modifier.height(6.dp))
-                PostVideoCarousel(
-                    videos = repostVideos.mapNotNull { it.video },
-                    carouselEnabled = carouselEnabled,
-                    onVideoClick = onVideoClick,
-                )
-            } else {
-                repostVideos.forEach { att ->
-                    val v = att.video
-                    if (v != null) {
-                        Spacer(Modifier.height(6.dp))
-                        VideoThumbnail(video = v, onClick = onVideoClick)
-                    }
-                }
-            }
-            // #PROFILE-REPOST-ATTACH: аудио в репосте.
-            val repostAudios = repost.attachments
-                ?.filter { it.type == "audio" && it.audio != null }
-                .orEmpty()
-            if (repostAudios.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                AudioAttachmentList(tracks = repostAudios.mapNotNull { it.audio })
-            }
-            // #PROFILE-REPOST-ATTACH: плейлисты в репосте.
-            repost.attachments
-                ?.filter { it.type == "audio_playlist" && it.audioPlaylist != null }
-                ?.forEach { att ->
-                    att.audioPlaylist?.let {
-                        Spacer(Modifier.height(6.dp))
-                        PlaylistAttachmentCard(playlist = it)
-                    }
-                }
-        }
-    }
-}
-
-// П-8-REACT: ExperimentalFoundationApi — combinedClickable для long-press
-// (в foundation 1.8 / BOM 2025.06 stable-перегрузка с named onClick/onLongClick
-// opt-in не требует — аннотация страховочная, как @OptIn в FeedScreen:2231).
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun ActionIcon(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    count: Int,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    onClick: (() -> Unit)? = null,
-    // П-8-REACT: long-press (пикер реакций на лайке); null — прежнее поведение.
-    // Прочие вызовы (комментарий/репост) параметр не передают. Named-аргументы
-    // combinedClickable идентичны FeedScreen.ActionIcon (:2391);
-    // onLongClick == null деградирует до простого клика.
-    onLongClick: (() -> Unit)? = null,
-    // П-6a: disabled-состояние — во время API-полёта clickable не вешается.
-    enabled: Boolean = true,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .then(
-                if (onClick != null && enabled) {
-                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                } else {
-                    Modifier
-                }
-            )
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-    ) {
-        Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)
-        if (count > 0) {
-            Spacer(Modifier.width(4.dp))
-            Text(count.toCountString(), style = MaterialTheme.typography.labelSmall, color = tint)
-        }
-    }
-}
+// POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail, RepostBlock и ActionIcon
+// вынесены в общие re.pinok.ui.components (см. импорты выше).
 
 // ═══════════════════════════════════════════════════════════════════════════
 // П-1 (#PROFILE-SNAP): вкладки контента и секции своего профиля.

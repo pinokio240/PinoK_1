@@ -13846,3 +13846,13 @@ Work Log:
 - Составлен план docs/postcard-refactor-plan.md (создан файл).
 - Сделан бэкап backups/postcard-refactor-start-2026-10-11/ (BookmarksScreen, VKApiClient, Models, план).
 - Приступаем к этапу 1 (вынос дублей VideoThumbnail/ActionIcon/RepostBlock в ui/components) — поручается суб-агентам.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE1
+Task: Этап 1 рефакторинга PostCard — вынос дублей в ui/components.
+Work Log:
+- Субагент (general) вынес VideoThumbnail/ActionIcon/RepostBlock в ui/components (новые файлы).
+- Удалены локальные определения из FeedScreen/CommunityScreen/ProfileScreen; импорты обновлены.
+- Call sites согласованы: Profile/Bookmarks/ChatDetail showTitle=false; Feed/Community дефолты; лайк long-press=реакции.
+- Проверка: все файлы net=0 (кроме ProfileScreen net=-2 — ИСХОДНЫЙ дефект, был в HEAD, не внесён субагентом).
+- Сборка НА ПОЛЬЗОВАТЕЛЕ.

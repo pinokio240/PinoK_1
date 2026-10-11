@@ -15361,3 +15361,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Далее:** этап 1 — вынос дублей (VideoThumbnail, ActionIcon, RepostBlock) в ui/components — делегируется субагентам.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## POSTCARD-REFACTOR-STAGE1 — 2026-10-11 — вынос дублей в ui/components
+
+**Сделано (субагент + ревью):** VideoThumbnail, ActionIcon, RepostBlock вынесены в ui/components; локальные определения удалены; импорты и call sites согласованы (showTitle/	itleExpandable/long-press). Баланс скобок OK (ProfileScreen net=-2 — исходный дефект из HEAD).
+
+**Далее:** этап 2 — AttachmentRenderer, этап 3 — единый PostCard.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

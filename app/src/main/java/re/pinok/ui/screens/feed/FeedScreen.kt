@@ -108,16 +108,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -138,6 +128,7 @@ import re.pinok.data.model.Video
 import re.pinok.media.PlayerConnection
 import re.pinok.ui.navigation.PostHolder
 import re.pinok.ui.navigation.Screen
+import re.pinok.ui.components.ActionIcon
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
@@ -151,6 +142,7 @@ import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.FeedRightPanel
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
+import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.navigation.FeedDataHolder
 import re.pinok.ui.navigation.FeedScrollHolder
@@ -3221,85 +3213,9 @@ private fun CommentCard(
     }
 }
 
-@Composable
-private fun VideoThumbnail(video: Video, onClick: (Video) -> Unit) {
-    val thumbUrl = video.thumbUrl
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick(video) },
-        elevation = CardDefaults.cardElevation(0.dp),
-    ) {
-        Column {
-            Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center) {
-                if (thumbUrl != null) {
-                    AsyncImage(model = thumbUrl, contentDescription = video.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                }
-                Box(modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
-                }
-                if (video.duration > 0) {
-                    Box(modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                        Text("${video.duration / 60}:${"%02d".format(video.duration % 60)}",
-                            style = MaterialTheme.typography.labelSmall, color = Color.White, fontSize = 11.sp)
-                    }
-                }
-            }
-            // #VIDEO-TITLE-COMMENTS: название + счётчики (просмотры/комментарии),
-            // если доступны — как в веб-VK под превью видео-вложения.
-            if (video.title.isNotBlank() || video.views > 0 || video.commentsCount > 0) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    if (video.title.isNotBlank()) {
-                        Text(
-                            text = video.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (video.views > 0 || video.commentsCount > 0) {
-                        val meta = buildList {
-                            if (video.views > 0) add("${video.views.toCountString()} просмотров")
-                            if (video.commentsCount > 0) add("${video.commentsCount.toCountString()} комментариев")
-                        }.joinToString(" • ")
-                        Text(
-                            text = meta,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActionIcon(
-    icon: ImageVector,
-    count: Int,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    onClick: () -> Unit = {},
-    onLongClick: () -> Unit = {},
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-    ) {
-        Icon(icon, null, modifier = Modifier.size(18.dp), tint = tint)
-        if (count > 0) {
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(count.toCountString(), style = MaterialTheme.typography.labelSmall, color = tint)
-        }
-    }
-}
+// POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail и ActionIcon вынесены в общие
+// re.pinok.ui.components (см. импорты выше). Лента использует статичное название
+// (titleExpandable=false — дефолт общего компонента).
 
 // Fix #376: internal — карточка link/page-вложений переиспользуется ProfileScreen
 // (паритет постов Профиля с Лентой; подпись/поведение не менялись).
