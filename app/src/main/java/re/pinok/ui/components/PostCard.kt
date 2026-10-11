@@ -330,8 +330,11 @@ fun PostCard(
                                     text = {
                                         Text(
                                             text = item.label,
+                                            // #DARK-THEME-FIX: обычные пункты меню красить в
+                                            // onSurface (читаемо в тёмной теме), а не в
+                                            // Color.Unspecified (мог выродиться в нечитаемый).
                                             color = if (item.destructive) Color(0xFFE53935)
-                                            else Color.Unspecified,
+                                            else MaterialTheme.colorScheme.onSurface,
                                         )
                                     },
                                     leadingIcon = {
@@ -341,7 +344,7 @@ fun PostCard(
                                                 imageVector = icon,
                                                 contentDescription = null,
                                                 tint = if (item.destructive) Color(0xFFE53935)
-                                                else Color.Unspecified,
+                                                else MaterialTheme.colorScheme.onSurface,
                                             )
                                         }
                                     },

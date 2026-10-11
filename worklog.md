@@ -13994,3 +13994,12 @@ Work Log:
 - Собрано: резолв автора из profiles/groups (по fromId), verified, likesOverride из likesState, подписка (showSubscribeButton/subscribed), полный menuItems (закладка/редактировать/закрепить/скрыть/бан/пожаловаться/удалить с гейтами по правам), проброс всех колбэков, textMaxLines=6, showAdBadge/PinnedBadge/Views=true.
 - Убраны осиротевшие импорты (PostPhotoGrid/ActionIcon/AudioAttachmentList и др. — проверено: только в комментариях, импортов нет).
 - Баланс net=0. Изменён только FeedScreen.kt. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE3E
+Task: Этап 3e — PostDetailScreen переведён на единый PostCard + тёмная тема меню.
+Work Log:
+- PostDetailScreen: inline-вёрстка поста заменена на UnifiedPostCard (алиас). likesOverride из isLiked/likeCount, showFullDate=true, textMaxLines=Int.MAX_VALUE, showViews=true.
+- Stub-логика/поиск/комментарии/скролл сохранены. Удалены осиротевшие импорты и PostDetailAudioRow. Баланс net=0.
+- PostCard: меню Color.Unspecified → onSurface (#DARK-THEME-FIX).
+- Сборка на пользователе; пуш с разрешения.
