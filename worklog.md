@@ -14011,3 +14011,10 @@ Work Log:
 - BookmarkPostCard стала обёрткой-делегатом UnifiedPostCard: автор из bm.postAuthor/postGroup/bm.user, isBookmarked=true, onToggleBookmark=onRemoveClick, onPostClick=onClick, showFullDate=true, showViews=(>0).
 - Удалены BookmarkCounter и осиротевшие импорты (Comment/Repeat/ThumbUp/Visibility). Баланс net=0.
 - Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: POSTCARD-REFACTOR-COMPLETE
+Task: Рефакторинг PostCard завершён.
+Work Log:
+- Community/Profile/Feed/PostDetail/Bookmarks переведены на единый PostCard. Дублирующие inline-реализации удалены.
+- Незапушенные коммиты: fe6c908 (3e), e8d4855 (3f). Пуш с разрешения.
