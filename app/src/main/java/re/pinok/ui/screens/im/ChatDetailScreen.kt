@@ -10468,6 +10468,20 @@ private fun subscribersLabel(count: Int): String {
 }
 
 /**
+ * Разбивает название канала на две строки по паттерну VK web (ChannelProfile__name
+ * + ChannelProfile__lastNameWord): первое слово целиком + остаток (без первого слова).
+ * Возвращает Pair(первая часть, остаток или null если слова нет/одно слово).
+ * Пример: «Время Перемен. Новости» → ("Время Перемен.", "Новости").
+ */
+private fun splitChannelTitle(title: String): Pair<String, String?> {
+    val trimmed = title.trim()
+    if (trimmed.isEmpty()) return "" to null
+    val firstSpace = trimmed.indexOf(' ')
+    if (firstSpace <= 0) return trimmed to null
+    return trimmed.substring(0, firstSpace) to trimmed.substring(firstSpace + 1).trim().takeIf { it.isNotEmpty() }
+}
+
+/**
  * #CHANNEL-INFO-PANEL (2026-10-03): построение публичной ссылки на канал.
  * Если у сообщества есть screen_name (уже в GroupInfo.screenName из
  * groupsGetById) — используем его: «vk.ru/имя». Иначе фолбэк на числовой
@@ -10530,33 +10544,71 @@ private fun ChannelInfoPanelContent(
             .padding(bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Аватар (круг) + название + подписчики.
-        if (ava != null) {
-            AsyncImage(
-                model = ava,
-                contentDescription = channelTitle,
-                modifier = Modifier.size(72.dp).clip(CircleShape),
-                contentScale = ContentScale.Crop,
-            )
-            Spacer(Modifier.height(10.dp))
+        // Шапка канала по снапшоту VK web (AvatarCard: аватар 80px слева + справа
+        // название, разбитое на 2 части, и количество подписчиков).
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            // Аватар 80px (как BasicAvatar--size-80) — слева.
+            Box(
+                modifier = Modifier.size(80.dp).clip(CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (ava != null) {
+                    AsyncImage(
+                        model = ava,
+                        contentDescription = channelTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = channelTitle.take(1).uppercase(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                // Название канала разбивается на 2 строки (как ChannelProfile__name
+                // + ChannelProfile__lastNameWord в снапшоте): первое слово + остаток.
+                val titleParts = splitChannelTitle(channelTitle)
+                Text(
+                    text = titleParts.first,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (titleParts.second != null) {
+                    Text(
+                        text = titleParts.second,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                if (subscribers >= 0) {
+                    Text(
+                        text = subscribersLabel(subscribers),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
         }
-        Text(
-            text = channelTitle,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(4.dp))
-        if (subscribers >= 0) {
-            Text(
-                text = subscribersLabel(subscribers),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline,
-            )
-            Spacer(Modifier.height(2.dp))
-        }
+        Spacer(Modifier.height(16.dp))
         // Ссылка на канал (клик — копирование в буфер).
         Row(
             verticalAlignment = Alignment.CenterVertically,
