@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Group
@@ -35,10 +34,7 @@ import androidx.compose.material.icons.outlined.InsertPhoto
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
-import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.ShoppingBag
-import androidx.compose.material.icons.outlined.ThumbUp
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -79,9 +75,8 @@ import re.pinok.data.model.Bookmark
 import re.pinok.data.model.FaveTag
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
-import re.pinok.ui.components.PostPhotoGrid
+import re.pinok.ui.components.PostCard as UnifiedPostCard
 import re.pinok.ui.components.ScrollToTopFab
-import re.pinok.ui.components.VideoThumbnail
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 import java.text.SimpleDateFormat
@@ -736,160 +731,51 @@ private fun BookmarkPostCard(
     val postGroup = bm.postGroup
     val fallbackUser = bm.user
     val author = if (postAuthor != null) postAuthor else fallbackUser
-    val avatarUrl = if (author != null) author.photo100 else postGroup?.photo100
-    // Вложения поста (как в сообществах/ленте): фото и видео.
-    val attachments = post.attachments
-    val photoAttachments = attachments?.filter { it.type == "photo" && it.photo != null }.orEmpty()
-    val videoAttachments = attachments?.filter { it.type == "video" && it.video != null }.orEmpty()
-    Column(
-        modifier = Modifier.fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(start = 0.dp, end = 0.dp, top = 10.dp, bottom = 6.dp),
-    ) {
-        // Шапка: аватар + имя автора + время.
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        ) {
-            Box(
-                modifier = Modifier.size(36.dp).clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (avatarUrl != null) {
-                    AsyncImage(
-                        model = avatarUrl,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Icon(
-                        Icons.Outlined.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(22.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                val authorName = when {
-                    postAuthor != null -> postAuthor.fullName
-                    postGroup != null -> postGroup.name
-                    author != null -> author.fullName
-                    bm.title.isNotBlank() -> bm.title
-                    else -> typeLabel(bm.type)
-                }
-                Text(
-                    text = authorName,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = formatDate(post.date),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-            IconButton(onClick = onRemoveClick) {
-                Icon(
-                    Icons.Outlined.Delete,
-                    contentDescription = "Удалить из закладок",
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        // Текст поста (обрезаем до трёх строк).
-        if (post.text.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = post.text,
-                modifier = Modifier.padding(horizontal = 12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        // #BOOKMARKS-ATTACHMENTS: фото-вложения — переиспользуем PostPhotoGrid
-        // (как в сообществах/ленте): клик по фото ведёт к посту.
-        if (photoAttachments.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            PostPhotoGrid(
-                photos = photoAttachments.mapNotNull { it.photo },
-                onPhotoClick = { _, _ -> onClick() },
-            )
-        }
-        // #BOOKMARKS-ATTACHMENTS: видео-вложения — переиспользуем VideoThumbnail
-        // (16:9 превью с длительностью). Клик ведёт к посту.
-        if (videoAttachments.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            videoAttachments.forEach { att ->
-                val v = att.video
-                if (v != null) {
-                    VideoThumbnail(video = v, onClick = { onClick() }, showTitle = false)
-                }
-            }
-        }
-        // Репост: «Репост: <оригинал>».
-        val copyHistory = post.copyHistory
-        val original = if (copyHistory != null) copyHistory.firstOrNull() else null
-        if (original != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Репост: ${original.text.take(120)}",
-                modifier = Modifier.padding(horizontal = 12.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        // Счётчики: лайки/репосты/комментарии/просмотры.
-        Spacer(Modifier.height(8.dp))
-        // NULL-ЯВНО: поля счётчиков nullable — извлекаем в локальные val.
-        val likesObj = post.likes
-        val repostsObj = post.reposts
-        val commentsObj = post.comments
-        val viewsObj = post.views
-        val likesCount = if (likesObj != null) likesObj.count else null
-        val repostsCount = if (repostsObj != null) repostsObj.count else null
-        val commentsCount = if (commentsObj != null) commentsObj.count else null
-        val viewsCount = if (viewsObj != null) viewsObj.count else null
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BookmarkCounter(count = likesCount, icon = Icons.Outlined.ThumbUp)
-            BookmarkCounter(count = repostsCount, icon = Icons.Outlined.Repeat)
-            BookmarkCounter(count = commentsCount, icon = Icons.AutoMirrored.Outlined.Comment)
-            BookmarkCounter(count = viewsCount, icon = Icons.Outlined.Visibility)
-        }
+    // Имя автора: группа-источник → имя группы; пользователь → fullName; else title.
+    val authorIsGroup = postGroup != null || post.fromId < 0
+    val authorName = when {
+        postGroup != null -> postGroup.name
+        postAuthor != null -> postAuthor.fullName
+        author != null -> author.fullName
+        bm.title.isNotBlank() -> bm.title
+        else -> typeLabel(bm.type)
     }
-}
-
-/** Счётчик с иконкой: избранное/повтор/комментарий/просмотр + число. */
-@Composable
-private fun BookmarkCounter(count: Int?, icon: ImageVector) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = formatCount(count),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    val authorPhoto = if (author != null) author.photo100 else postGroup?.photo100
+    // POSTCARD-REFACTOR-PLAN (этап 3f): BookmarkPostCard — обёртка-делегат
+    // единого PostCard. Закладка на карточке (isBookmarked=true) снимает её
+    // (onToggleBookmark = onRemoveClick). Открытие поста/вложений — onClick.
+    UnifiedPostCard(
+        post = post,
+        authorName = authorName,
+        authorPhoto = authorPhoto,
+        authorIsGroup = authorIsGroup,
+        signerName = null,
+        // Полная дата (закладка показывает абсолютное время поста).
+        showFullDate = true,
+        // Сама запись — уже закладка: видимая иконка-закладка снимает её.
+        isBookmarked = true,
+        onToggleBookmark = onRemoveClick,
+        verified = false,
+        // В закладках клик по автору тоже ведёт в пост (как остальное тело).
+        onAuthorClick = onClick,
+        onPostClick = { onClick() },
+        onVideoClick = { onClick() },
+        onPhotoClick = { _, _ -> onClick() },
+        onLikeToggle = {},
+        onCommentClick = {},
+        onRepostClick = {},
+        onReaction = null,
+        likesOverride = null,
+        reactionOverride = null,
+        menuItems = emptyList(),
+        showPinnedBadge = false,
+        showAdBadge = false,
+        showSubscribeButton = false,
+        textMaxLines = 6,
+        carouselEnabled = true,
+        showViews = (post.views?.count ?: 0) > 0,
+        myUserId = 0L,
+    )
 }
 
 /** Строка закладки-пользователя: аватар 48dp, имя, точка-онлайн. */

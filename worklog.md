@@ -14003,3 +14003,11 @@ Work Log:
 - Stub-логика/поиск/комментарии/скролл сохранены. Удалены осиротевшие импорты и PostDetailAudioRow. Баланс net=0.
 - PostCard: меню Color.Unspecified → onSurface (#DARK-THEME-FIX).
 - Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: POSTCARD-REFACTOR-STAGE3F
+Task: Этап 3f — BookmarksScreen (закладка-пост) переведён на единый PostCard.
+Work Log:
+- BookmarkPostCard стала обёрткой-делегатом UnifiedPostCard: автор из bm.postAuthor/postGroup/bm.user, isBookmarked=true, onToggleBookmark=onRemoveClick, onPostClick=onClick, showFullDate=true, showViews=(>0).
+- Удалены BookmarkCounter и осиротевшие импорты (Comment/Repeat/ThumbUp/Visibility). Баланс net=0.
+- Сборка на пользователе; пуш с разрешения.
