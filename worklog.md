@@ -14059,3 +14059,12 @@ Task: Ошибка компиляции — smart-cast на Pair.second нево
 Work Log:
 - ChatDetailScreen:10641-10643 — titleParts.second (String? из Pair<String,String?>) публичное свойство чужого модуля, smart-cast невозможен.
 - Фикс: захват в локальную val titleSecond = titleParts.second; использование titleSecond. Баланс net=0.
+
+---
+Task ID: VASI-CHANNEL-AVATAR
+Task: Аватарка канала (агент Вася). Причина: канал запрашивался как группа (groups.getById(-peerId)), а аватар живёт в channels.getById → items[0].channel.photo_base.
+Work Log:
+- VKApiClient: data class ChannelInfo (id/title/photoBase/membersCount/parentId) + suspend fun channelsGetById(channelId): ChannelInfo? (~8090) — читает channel.photo_base.
+- ChatDetailScreen.loadChannelMeta: приоритет аватара channel.photo_base → g.photoBase → g.photo200 → g.photo100 → chat.peer.photo. groupsGetById сохранён для имени/подписчиков/фолбэка.
+- Бэкап: backups/vasi-channel-avatar-2026-10-12/. Баланс VKApiClient net=2 (исходные литералы), ChatDetail net=0.
+- Сборка на пользователе; пуш с разрешения.

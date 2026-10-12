@@ -7945,6 +7945,20 @@ class VKApiClient(
         val reactions: Int?,
     )
 
+    // #CHANNEL-AVATAR (vasi, 2026-10-12): метаданные канала из channels.getById
+    // → response.items[0].channel. У КАНАЛА VK Web нет photo_100/200 у групп —
+    // единственный аватар это channel.photo_base (ресайз-URL). Раньше канал
+    // открывался через groups.getById(-peerId), где у не-группы канала аватар
+    // обычно отсутствует/пуст.
+    data class ChannelInfo(
+        val id: Long,               // channel_id (отрицательный, == peer.id)
+        val title: String? = null,
+        val photoBase: String? = null,
+        val membersCount: Int = 0,
+        val parentId: Long? = null, // parent_id — id родительского сообщества,
+                                    // если канал привязан к группе
+    )
+
     /**
      * #CHANNELS-API: channels.getRecommendations — канальные рекомендации.
      * response.items[] = {channel:{...}, last_message:{...}}; группы с описанием
@@ -8064,6 +8078,47 @@ class VKApiClient(
             forceWebGateway = true,
         ) ?: return false
         return tolerantSuccess(json, "channelsSetNotificationMode")
+    }
+
+    /**
+     * #CHANNEL-AVATAR (vasi, 2026-10-12): канальные метаданные из channels.getById.
+     * Аватар канала VK Web живёт в response.items[0].channel.photo_base (ресайз-URL),
+     * а НЕ в группах — groups.getById(-peerId) для канала пуст/без аватара.
+     * Возвращаем photo_base + title + members_count + parent_id; null при ошибке.
+     * Без кэша: за один вызов открытия (тот же контракт, что у веб-клиента).
+     */
+    suspend fun channelsGetById(channelId: Long): ChannelInfo? {
+        if (isOffline()) return null
+        val json = call(
+            "channels.getById",
+            mapOf("channel_ids" to channelId.toString(), "extended" to "1"),
+            forceWebGateway = true,
+        ) ?: run {
+            AppLog.w("VKApiClient",
+                "#CHANNEL-AVATAR channelsGetById FAIL channelId=$channelId: lastApiError=$lastApiError")
+            return null
+        }
+        return try {
+            val item0 = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: return null
+            // Канал — вложенный объект {channel:{channel_id, title, photo_base,
+            // members_count, parent_id}, last_message:{...}}. Берём .channel.
+            val ch = item0.get("channel")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: item0 // resilience: на случай плоской схемы items[0] == канал
+            val id = ch.get("channel_id")?.takeIf { !it.isJsonNull }?.asLong ?: channelId
+            ChannelInfo(
+                id = id,
+                title = ch.get("title")?.takeIf { !it.isJsonNull }?.asString,
+                photoBase = ch.get("photo_base")?.takeIf { !it.isJsonNull }?.asString,
+                membersCount = safeInt(ch.get("members_count")),
+                parentId = ch.get("parent_id")?.takeIf { !it.isJsonNull }?.asLong,
+            )
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "#CHANNEL-AVATAR channelsGetById parse error channelId=$channelId", e)
+            null
+        }
     }
 
     /**

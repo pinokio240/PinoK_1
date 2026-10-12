@@ -2313,21 +2313,30 @@ fun ChatDetailScreen(
     fun loadChannelMeta() {
         scope.launch {
             try {
+                // #CHANNEL-AVATAR (vasi, 2026-10-12): канал — это НЕ группа, его аватар
+                // живёт в channels.getById → items[0].channel.photo_base, а не в
+                // groups.getById(-peerId) (у канала там обычно пусто). Качаем канальные
+                // метаданные как приоритетный источник аватара + группы для GroupInfo/
+                // имени/подписчиков и как fallback-источник.
+                val ch = app.apiClient.channelsGetById(peerId)
+                val channelPhoto = if (ch != null) ch.photoBase else null
                 val g = app.apiClient.groupsGetById(listOf(-peerId)).firstOrNull()
+                // Приоритет аватара канала: channel.photo_base → g.photoBase →
+                // g.photo200 → g.photo100 → chat.peer.photo (уже лежит в currentPhoto,
+                // из nav-аргументов peerPhoto; при отсутствии всех — не затираем его).
+                val gPhoto = if (g != null) (g.photoBase ?: g.photo200 ?: g.photo100) else null
+                val bestPhoto =
+                    if (channelPhoto != null && channelPhoto.isNotBlank()) channelPhoto
+                    else gPhoto
+                if (bestPhoto != null && bestPhoto.isNotBlank() && bestPhoto != currentPhoto) {
+                    currentPhoto = bestPhoto
+                }
                 if (g != null) {
                     channelGroup = g
                     // Fix #394: удалённое сообщество отдаёт name="DELETED" — НЕ
                     // затираем исходное имя из карточки диалога (баг-репорт 14.09:
                     // шапка «Время Перемен. Новости» превращалась в «DELETED»).
                     if (g.name.isNotBlank() && g.name != "DELETED" && g.name != currentTitle) currentTitle = g.name
-                    // NULL-ЯВНО: photo200 может отсутствовать — фолбэк на
-                    // photo100 (паттерн рендера аватарок всего проекта).
-                    // #CHANNEL-AVATAR: для КАНАЛА VK Web нет photo_200/100 —
-                    // только группы photo_base (ресайз-URL): приоритет на неё.
-                    val gPhoto = g.photoBase ?: g.photo200 ?: g.photo100
-                    if (gPhoto != null && gPhoto.isNotBlank() && gPhoto != currentPhoto) {
-                        currentPhoto = gPhoto
-                    }
                     if (g.membersCount > 0) channelSubscribers = g.membersCount
                 }
             } catch (ce: kotlinx.coroutines.CancellationException) {
