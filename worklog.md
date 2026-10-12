@@ -14162,3 +14162,11 @@ Task: Ненавязчивый текст «онлайн/офлайн» в ли�
 Work Log:
 - ChatCard: под именем (для type=="user") добавлен мелкий текст статуса «онлайн» (зелёный)/«офлайн» (outline), labelSmall. Показывается только если online известен (true/false). Не мешает погружению (мелкий, в одном Column карточки). Зелёная точка на аватаре дополняет.
 - Баланс net=0. Бэкап: backups/messages-online-status-2026-10-12/. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: CLEANUP-CHANNEL-DEAD-DIALOGS
+Task: Подчистить мёртвый код после удаления панели канала.
+Work Log:
+- Удалены: 5 состояний showChannelX, 5 рендер-блоков, 5 функций-диалогов (PhotoFeed/Video/Audio/Files/Clips) + 2 вспомогательные (ChannelClipThumbnail/ChannelFileRow) + 3 осиротевших импорта. −810 строк (12753→11944).
+- ChannelCommentsDialog оставлен (жив). photoViewerState/onUrlClick/ChannelPhotoGridItem — живые, не тронуты.
+- Баланс net=0. Бэкап: backups/remove-channel-dead-dialogs-2026-10-12/. Сборка на пользователе; пуш с разрешения.
