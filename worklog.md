@@ -14170,3 +14170,11 @@ Work Log:
 - Удалены: 5 состояний showChannelX, 5 рендер-блоков, 5 функций-диалогов (PhotoFeed/Video/Audio/Files/Clips) + 2 вспомогательные (ChannelClipThumbnail/ChannelFileRow) + 3 осиротевших импорта. −810 строк (12753→11944).
 - ChannelCommentsDialog оставлен (жив). photoViewerState/onUrlClick/ChannelPhotoGridItem — живые, не тронуты.
 - Баланс net=0. Бэкап: backups/remove-channel-dead-dialogs-2026-10-12/. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: WALL-POST-WEBGATEWAY
+Task: Исправить «Поделиться в сообщество» (wall.post/wall.repost не проходили).
+Work Log:
+- Причина: все call wall.post/wall.repost (4 шт) вызывались БЕЗ forceWebGateway=true → web-токен (vk1.a.*) не давал публиковать/репостить в сообщество.
+- Фикс: добавлен forceWebGateway=true в wallPost (6528), wallRepost (6574), repostToGroup (6934), wallPostWithAttachments (7425).
+- Бэкап: backups/wall-post-webgateway-2026-10-12/. Баланс net=2 (исходные литералы). Сборка на пользователе; пуш с разрешения.

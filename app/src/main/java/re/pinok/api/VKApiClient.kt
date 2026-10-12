@@ -6522,7 +6522,10 @@ class VKApiClient(
         // W35-a: от имени сообщества / подпись автора.
         if (fromGroup) args["from_group"] = "1"
         if (signed) args["signed"] = "1"
-        val json = call("wall.post", args) ?: return -1L
+        // #WALL-WEBGATEWAY (2026-10-12): web-токен (vk1.a.*) требует web-gateway
+        // для wall.post — без него публикация не проходит («Поделиться в сообщество
+        // не работает»). Тот же паттерн, что у photos/wall.repost фиксов.
+        val json = call("wall.post", args, forceWebGateway = true) ?: return -1L
         // #SHARE-18B: VK API документирует ответ {"response":{"post_id":N}},
         // но gateway отдаёт и legacy {"response":{"items":[{"id":N}]}} —
         // парсим оба формата явно (паттерн groupsGetById).
@@ -6566,7 +6569,9 @@ class VKApiClient(
             "object" to object_,
         )
         if (message.isNotBlank()) args["message"] = message
-        val json = call("wall.repost", args) ?: return -1L to -1
+        // #WALL-WEBGATEWAY (2026-10-12): web-токен требует web-gateway для
+        // wall.repost (как wall.post). Без него репост не проходит.
+        val json = call("wall.repost", args, forceWebGateway = true) ?: return -1L to -1
         return try {
             val resp = json.getAsJsonObject("response") ?: return -1L to -1
             // #SHARE-18B: VK API документирует wall.repost →
@@ -6924,7 +6929,9 @@ class VKApiClient(
             "attachments" to copyHistory,
         )
         if (message.isNotBlank()) args["message"] = message
-        val json = call("wall.post", args) ?: return -1L
+        // #WALL-WEBGATEWAY (2026-10-12): web-токен требует web-gateway для wall.post
+        // (репост в сообщество). Без него публикация в группу не проходит.
+        val json = call("wall.post", args, forceWebGateway = true) ?: return -1L
         // #SHARE-18B: мульти-формат (items / post_id / post.id) —
         // раньше только post.id; при документированном формате ответа
         // {"response":{"post_id":N}} метод возвращал -1 при УСПЕШНОЙ
@@ -7413,7 +7420,9 @@ class VKApiClient(
         // W36 #COMMUNITY-COMPOSER: от имени сообщества / подпись автора.
         if (fromGroup) args["from_group"] = "1"
         if (signed) args["signed"] = "1"
-        val json = call("wall.post", args) ?: return -1L
+        // #WALL-WEBGATEWAY (2026-10-12): web-токен требует web-gateway для wall.post
+        // (публикация с вложениями). Без него не проходит.
+        val json = call("wall.post", args, forceWebGateway = true) ?: return -1L
         // #SHARE-18B: мульти-формат ответа (items / post_id / post.id) —
         // как в wallPost; иного поведения не меняет, только чинит
         // документированный формат {"response":{"post_id":N}}.
