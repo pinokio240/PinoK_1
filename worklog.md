@@ -14092,3 +14092,12 @@ Task: Исправить Unresolved ndk/abiFilters в build.gradle.kts.
 Work Log:
 - AGP 9.0 (Kotlin DSL): блок ndk { abiFilters } должен жить ВНУТРИ defaultConfig, а не на уровне android{}.
 - Перенёс abiFilters в defaultConfig (после buildConfigField VK_WEB_MOBILE_CLIENT_ID). Баланс net=0.
+
+---
+Task ID: VASI-CHANNEL-PANEL-API
+Task: Панель канала — API/данные (агент Вася). Диагностика: запросы идут, но подписчики брались из группы, донат-блок отсутствовал.
+Work Log:
+- ChannelInfo (VKApiClient): добавлены donutEnabled/donutPriceText/donutUrl/isDon; channelsGetById парсит их из donut_settings/user_data.
+- ChatDetailScreen: новое state channelInfo; loadChannelMeta приоритетно берёт channelSubscribers из ChannelInfo.membersCount (группа — фолбэк).
+- ChannelInfoPanelContent: добавлен донат-блок («Поддержать канал» + price) если donutEnabled && !isDon; onOpenDonut → onUrlClick.
+- Бэкап: backups/vasi-channel-panel-api-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.

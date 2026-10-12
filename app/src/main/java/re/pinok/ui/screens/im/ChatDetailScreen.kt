@@ -117,6 +117,7 @@ import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Movie
@@ -950,6 +951,12 @@ fun ChatDetailScreen(
     // GroupInfo сообщества-канала — для PostHolder.lastGroups (имя сообщества
     // в PostDetailScreen, паритет CommunityScreen).
     var channelGroup by remember { mutableStateOf<re.pinok.api.VKApiClient.GroupInfo?>(null) }
+    // #CHANNEL-DONUT (vasi, 2026-10-12): канальные метаданные из channels.getById
+    // (ChannelInfo) — приоритетный источник подписчиков канала (membersCount) и
+    // данных доната (donutEnabled/donutPriceText/donutUrl/isDon) для панели канала.
+    // Храним последний успешный результат loadChannelMeta (null, если канал ещё
+    // не загрузился или channels.getById не ответил — панель работает на фолбэке).
+    var channelInfo by remember { mutableStateOf<re.pinok.api.VKApiClient.ChannelInfo?>(null) }
     // P0.7 (2026-10-04): админ канала имеет canWrite.allowed=true → Chat.isChannel
     // (Models.kt:758) = false → UI-панели канала (peerId<0 && isChannel) не
     // открывались, клик по шапке — no-op без else. Локально расширяем: канал
@@ -2331,13 +2338,24 @@ fun ChatDetailScreen(
                 if (bestPhoto != null && bestPhoto.isNotBlank() && bestPhoto != currentPhoto) {
                     currentPhoto = bestPhoto
                 }
+                // #CHANNEL-DONUT (vasi, 2026-10-12): сохраняем канальные метаданные
+                // (ChannelInfo) целиком — панель канала читает из них подписчиков
+                // (channel.membersCount) и donut-блок. Приоритет подписчиков: канал
+                // (ch.membersCount) > группа (g.membersCount, фолбэк на случай
+                // отсутствия channels.getById).
+                channelInfo = ch
+                if (ch != null && ch.membersCount > 0) {
+                    channelSubscribers = ch.membersCount
+                }
                 if (g != null) {
                     channelGroup = g
                     // Fix #394: удалённое сообщество отдаёт name="DELETED" — НЕ
                     // затираем исходное имя из карточки диалога (баг-репорт 14.09:
                     // шапка «Время Перемен. Новости» превращалась в «DELETED»).
                     if (g.name.isNotBlank() && g.name != "DELETED" && g.name != currentTitle) currentTitle = g.name
-                    if (g.membersCount > 0) channelSubscribers = g.membersCount
+                    // Фолбэк подписчиков: если channels.getById не дал membersCount
+                    // (ch == null || ch.membersCount == 0), берём из группы.
+                    if (ch == null && g.membersCount > 0) channelSubscribers = g.membersCount
                 }
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 // Уход с экрана — нормальный lifecycle, не ошибка (паттерн Fix #151).
@@ -6061,6 +6079,11 @@ fun ChatDetailScreen(
                 channelTitle = currentTitle,
                 channelPhoto = currentPhoto,
                 subscribers = channelSubscribers,
+                // #CHANNEL-DONUT (vasi, 2026-10-12): канальные метаданные из
+                // channels.getById (подписчики канала + donut-блок). Может быть
+                // null, если канал ещё не загрузился — панель покажет данные без
+                // донат-блока, дозаливка произойдёт при приходе loadChannelMeta.
+                channelInfo = channelInfo,
                 // #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): тумблер уведомлений
                 // канала. Для каналов (peerId<0) используем канальный механизм
                 // channelNotifEnabled/toggleChannelNotifications (channels.
@@ -6135,6 +6158,10 @@ fun ChatDetailScreen(
                         }
                     }
                 },
+                // #CHANNEL-DONUT (vasi, 2026-10-12): открытие донат-ссылки на
+                // оплату через onUrlClick (внутренний/внешний браузер по настройке,
+                // как у paywall постов канала).
+                onOpenDonut = { url -> onUrlClick(url) },
             )
         }
     }
@@ -10582,6 +10609,11 @@ private fun ChannelInfoPanelContent(
     channelTitle: String,
     channelPhoto: String?,
     subscribers: Int,
+    // #CHANNEL-DONUT (vasi, 2026-10-12): канальные метаданные (ChannelInfo) из
+    // channels.getById. Несут данные доната: donutEnabled/isDon/donutPriceText/
+    // donutUrl. null — канал ещё не загрузился / channels.getById не ответил
+    // (тогда donut-блок просто не рисуем).
+    channelInfo: re.pinok.api.VKApiClient.ChannelInfo?,
     // #CHANNEL-INFO-PANEL-ACTIONS (2026-10-11): тумблер уведомлений канала +
     // «Ещё»-меню. notificationsEnabled=true — уведомления канала включены
     // (снапшот: на панели есть «Уведомления», иконка меняется notification_
@@ -10592,6 +10624,10 @@ private fun ChannelInfoPanelContent(
     onWrite: () -> Unit,
     onCopyLink: (String) -> Unit,
     onSectionClick: (String) -> Unit,
+    // #CHANNEL-DONUT (vasi, 2026-10-12): открытие доната-ссылки (payment URL)
+    // через onUrlClick вызывающего (внутренний/внешний браузер по настройке,
+    // тот же механизм, что у paywall постов канала).
+    onOpenDonut: (String) -> Unit,
 ) {
     val linkUrl = channelCommunityUrl(group, peerId)
     val ava = channelPhoto ?: group?.photo200 ?: group?.photo100
@@ -10759,6 +10795,52 @@ private fun ChannelInfoPanelContent(
                             onOpenCommunity()
                         },
                     )
+                }
+            }
+        }
+
+        // #CHANNEL-DONUT (vasi, 2026-10-12): блок «Открыть за N ₽/мес» — паритет
+        // VK web ChannelProfileVKDonutPostsPreview. Рисуется только если канал
+        // включил донат (donutEnabled) И пользователь ещё НЕ дон (isDon). Тап по
+        // кнопке открывает payment-ссылку на оплату (onOpenDonut → onUrlClick
+        // вызывающего, тот же браузерный механизм, что у paywall постов канала).
+        // NULL-ЯВНО: channelInfo — публичное свойство ChannelInfo? из чужого модуля,
+        // захватываем в локальную let-переменную и проверяем явно (без ?. цепи).
+        val donutInfo = channelInfo
+        if (donutInfo != null && donutInfo.donutEnabled && !donutInfo.isDon) {
+            val priceText = donutInfo.donutPriceText
+            val payUrl = donutInfo.donutUrl
+            Spacer(Modifier.height(20.dp))
+            Surface(
+                onClick = { if (payUrl != null && payUrl.isNotBlank()) onOpenDonut(payUrl) },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (priceText.isNullOrBlank()) "Донат" else priceText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "Поддержать канал и открыть закрытые посты",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

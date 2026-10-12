@@ -7957,6 +7957,13 @@ class VKApiClient(
         val membersCount: Int = 0,
         val parentId: Long? = null, // parent_id — id родительского сообщества,
                                     // если канал привязан к группе
+        // #CHANNEL-DONUT (vasi, 2026-10-12): данные доната канала из
+        // donut_settings + user_data.is_don. Нужны панели канала для блока
+        // «Открыть за N ₽/мес» (паритет VK web ChannelProfileVKDonutPostsPreview).
+        val donutEnabled: Boolean = false,   // donut_settings.is_enabled
+        val donutPriceText: String? = null,  // donut_settings.subscription_button.title
+        val donutUrl: String? = null,        // donut_settings.subscription_button.action.url
+        val isDon: Boolean = false,          // user_data.is_don (уже оплатил/дон)
     )
 
     /**
@@ -8108,12 +8115,32 @@ class VKApiClient(
             val ch = item0.get("channel")?.takeIf { it.isJsonObject }?.asJsonObject
                 ?: item0 // resilience: на случай плоской схемы items[0] == канал
             val id = ch.get("channel_id")?.takeIf { !it.isJsonNull }?.asLong ?: channelId
+            // #CHANNEL-DONUT (vasi, 2026-10-12): парсим донат-данные канала.
+            // user_data.is_don — уже дон/поддержавший (тогда donut-блок не
+            // показываем); donut_settings.is_enabled + subscription_button
+            // {title, action.url} — кнопка «Открыть за N ₽/мес».
+            val userData = ch.get("user_data")?.takeIf { it.isJsonObject }?.asJsonObject
+            val isDon = userData?.get("is_don")?.takeIf { it.isJsonPrimitive }
+                ?.asJsonPrimitive?.let { p -> if (p.isBoolean) p.asBoolean else p.asInt != 0 } ?: false
+            val donutSettings = ch.get("donut_settings")?.takeIf { it.isJsonObject }?.asJsonObject
+            val isDonutEnabled = donutSettings?.get("is_enabled")?.takeIf { it.isJsonPrimitive }
+                ?.asJsonPrimitive?.let { p -> if (p.isBoolean) p.asBoolean else p.asInt != 0 } ?: false
+            val subscriptionButton = donutSettings?.get("subscription_button")
+                ?.takeIf { it.isJsonObject }?.asJsonObject
+            val donutPriceText = subscriptionButton?.get("title")
+                ?.takeIf { !it.isJsonNull }?.asString
+            val donutUrl = subscriptionButton?.get("action")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("url")?.takeIf { !it.isJsonNull }?.asString
             ChannelInfo(
                 id = id,
                 title = ch.get("title")?.takeIf { !it.isJsonNull }?.asString,
                 photoBase = ch.get("photo_base")?.takeIf { !it.isJsonNull }?.asString,
                 membersCount = safeInt(ch.get("members_count")),
                 parentId = ch.get("parent_id")?.takeIf { !it.isJsonNull }?.asLong,
+                donutEnabled = isDonutEnabled,
+                donutPriceText = donutPriceText,
+                donutUrl = donutUrl,
+                isDon = isDon,
             )
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "#CHANNEL-AVATAR channelsGetById parse error channelId=$channelId", e)
