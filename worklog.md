@@ -14178,3 +14178,12 @@ Work Log:
 - Причина: все call wall.post/wall.repost (4 шт) вызывались БЕЗ forceWebGateway=true → web-токен (vk1.a.*) не давал публиковать/репостить в сообщество.
 - Фикс: добавлен forceWebGateway=true в wallPost (6528), wallRepost (6574), repostToGroup (6934), wallPostWithAttachments (7425).
 - Бэкап: backups/wall-post-webgateway-2026-10-12/. Баланс net=2 (исходные литералы). Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: REPOST-TO-GROUP-FIX
+Task: Исправить отправку поста в сообщество (error 100 invalid message param).
+Work Log:
+- Лог: wall.post {owner_id=-165284550, attachments=wall-196847141_9910} err=100 "invalid message param".
+- Причина: repostToGroup использовал wall.post с attachments без message → VK error 100 (для репоста в группу требует корректный метод).
+- Фикс: repostToGroup переведён на wall.repost (как VK web — снапшот «Отправка в сообщество»): object=wall{owner}_{post} + group_id + entry_point=share. wall.repost не требует message и принимает group_id. parseWallPostId обрабатывает ответы items/post_id/post.id — ок.
+- Бэкап: backups/wall-post-webgateway-2026-10-12/. Баланс net=2 (литералы). Сборка на пользователе; пуш с разрешения.

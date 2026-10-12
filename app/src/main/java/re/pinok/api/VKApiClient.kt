@@ -6924,18 +6924,19 @@ class VKApiClient(
     ): Long {
         if (isOffline()) return -1L
         val copyHistory = "wall${sourceOwnerId}_${sourcePostId}"
-        val args = mutableMapOf(
-            "owner_id" to (-groupId).toString(),
-            "attachments" to copyHistory,
+        // #REPOST-TO-GROUP-FIX (2026-10-12): используем wall.repost (как VK web —
+        // снапшот «Отправка в сообщество»: object + group_id + entry_point=share),
+        // а НЕ wall.post с attachments. wall.post с attachments=wall{N}_{id} без
+        // message давал error 100 "invalid message param" при публикации в группу.
+        // wall.repost принимает object + group_id + сообщение и не требует message.
+        val args = mutableMapOf<String, String>(
+            "object" to copyHistory,
         )
+        if (groupId > 0) args["group_id"] = groupId.toString()
         if (message.isNotBlank()) args["message"] = message
-        // #WALL-WEBGATEWAY (2026-10-12): web-токен требует web-gateway для wall.post
-        // (репост в сообщество). Без него публикация в группу не проходит.
-        val json = call("wall.post", args, forceWebGateway = true) ?: return -1L
-        // #SHARE-18B: мульти-формат (items / post_id / post.id) —
-        // раньше только post.id; при документированном формате ответа
-        // {"response":{"post_id":N}} метод возвращал -1 при УСПЕШНОЙ
-        // публикации → UI показывал «Не удалось опубликовать».
+        args["entry_point"] = "share"
+        // #WALL-WEBGATEWAY (2026-10-12): web-токен требует web-gateway для wall.repost.
+        val json = call("wall.repost", args, forceWebGateway = true) ?: return -1L
         return parseWallPostId(json, "repostToGroup")
     }
 

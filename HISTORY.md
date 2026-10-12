@@ -15693,3 +15693,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Фикс:** добавлен forceWebGateway=true во все 4 вызова wall.post/repost. Сборка на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## REPOST-TO-GROUP-FIX — 2026-10-12 — отправка поста в сообщество
+
+**Причина:** repostToGroup использовал wall.post без message → error 100.
+
+**Фикс:** переведён на wall.repost (object + group_id + entry_point=share), как в VK web. Сборка на пользователе.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
