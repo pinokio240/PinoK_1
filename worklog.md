@@ -14085,3 +14085,10 @@ Work Log:
 - Один универсальный ARM-APK → ставится на совместимые ARM-устройства, меньше размер.
 - Вернуть x86 для эмулятора — убрать abiFilters (закоментировано в KDoc).
 - Баланс net=0. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: ABI-ARM-ONLY-FIX
+Task: Исправить Unresolved ndk/abiFilters в build.gradle.kts.
+Work Log:
+- AGP 9.0 (Kotlin DSL): блок ndk { abiFilters } должен жить ВНУТРИ defaultConfig, а не на уровне android{}.
+- Перенёс abiFilters в defaultConfig (после buildConfigField VK_WEB_MOBILE_CLIENT_ID). Баланс net=0.

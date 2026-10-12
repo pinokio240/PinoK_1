@@ -15597,3 +15597,11 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Сделано:** ndk.abiFilters = arm64-v8a + armeabi-v7a — x86/x86_64 исключены из APK. Один совместимый ARM-пакет. Сборка на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## ABI-ARM-ONLY-FIX — 2026-10-12 — ndk/abiFilters в defaultConfig
+
+**Фикс:** блок ndk { abiFilters } перенесён в defaultConfig (AGP 9.0 Kotlin DSL — на уровне android{} не резолвился). Сборка на пользователе.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
