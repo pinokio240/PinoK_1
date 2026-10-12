@@ -14147,3 +14147,11 @@ Work Log:
 - Фильтрация переработана; добавлен chatsUnreadSum (бейдж «Чаты»); dialogsUnreadSum теперь только user.
 - Индексы «Каналы» 1→2 синхронизированы (рекомендации, загрузка). folders-режим не тронут (динамические вкладки).
 - Баланс net=0. Изменён только MessagesScreen.kt. Бэкап: backups/messages-chats-tab-2026-10-12/. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: PHOTO-SEND-FIX
+Task: Исправить отправку фото из чата (выбор есть — отправка не идёт).
+Work Log:
+- Причина: photos.getMessagesUploadServer и photos.saveMessagesPhoto вызывались БЕЗ forceWebGateway=true, а web-токен (vk1.a.*) требует web-gateway (как audio.getUploadServer/audio.save) → upload_url не приходил / save падал → attachment не формировался → фото не отправлялось.
+- Фикс: добавлен forceWebGateway=true в photosGetMessagesUploadServer (~6986) и photosSaveMessagePhoto (~7010).
+- Бэкап: backups/photo-send-webgateway-2026-10-12/. Баланс net=2 (исходные литералы). Сборка на пользователе; пуш с разрешения.

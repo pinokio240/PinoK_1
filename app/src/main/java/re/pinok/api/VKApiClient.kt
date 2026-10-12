@@ -6983,7 +6983,11 @@ class VKApiClient(
     suspend fun photosGetMessagesUploadServer(peerId: Long): String? {
         if (isOffline()) return null
         val args = mapOf("peer_id" to peerId.toString())
-        val json = call("photos.getMessagesUploadServer", args) ?: return null
+        // #PHOTO-SEND-FIX (2026-10-12): web-токен (vk1.a.*) требует web-gateway для
+        // photos.getMessagesUploadServer — без forceWebGateway upload_url не приходит
+        // и отправка фото из чата не работает («выбор есть, отправка не идёт»).
+        // Паттерн тот же, что у audio.getUploadServer / channels.getHistory.
+        val json = call("photos.getMessagesUploadServer", args, forceWebGateway = true) ?: return null
         return try {
             json.getAsJsonObject("response")?.get("upload_url")?.takeIf { !it.isJsonNull }?.asString
         } catch (e: Exception) {
@@ -7007,7 +7011,10 @@ class VKApiClient(
             "photo" to photo,
             "hash" to hash,
         )
-        val json = call("photos.saveMessagesPhoto", args) ?: return null
+        // #PHOTO-SEND-FIX (2026-10-12): web-токен (vk1.a.*) требует web-gateway и для
+        // photos.saveMessagesPhoto — без него save падает и attachment не формируется
+        // (фото «не отправляется» из чата). Тот же паттерн, что у audio.save.
+        val json = call("photos.saveMessagesPhoto", args, forceWebGateway = true) ?: return null
         return try {
             val arr = json.getAsJsonArray("response")
             val obj = arr?.get(0)?.asJsonObject ?: return null
