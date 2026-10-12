@@ -278,7 +278,7 @@ fun MessagesScreen(
     var searchQuery by remember { mutableStateOf("") }
     // Fix #258: поиск перенесён в глобальный TopAppBar через ScreenTopBar.
     var showSearch by remember { mutableStateOf(false) }
-    var activeTab by remember { mutableIntStateOf(0) } // 0=Все, 1=Каналы, 2=Непрочитанные
+    var activeTab by remember { mutableIntStateOf(0) } // 0=Диалоги(user), 1=Чаты(группы+сообщества), 2=Каналы, 3=Непрочитанные
     // P3.3: safety-clamp — если активная вкладка указывает на удалённую папку,
     // сбрасываем на «Все» (0). max valid = folders.size + 1 (Непрочитанные).
     LaunchedEffect(folders.size, foldersEnabled) {
@@ -332,7 +332,8 @@ fun MessagesScreen(
     // Первое открытие вкладки «Каналы» → тянем рекомендации (если ещё не грузили).
     // CHAN-PREFS: грузим, только если включён показ «Рекомендаций в каналах».
     LaunchedEffect(activeTab, s.channelRecEnabled) {
-        if (activeTab == 1 && s.channelRecEnabled && !channelRecsLoaded && channelRecs.isEmpty()) {
+        // #CHATS-TAB: «Каналы» теперь вкладка 2 (0=Диалоги, 1=Чаты, 2=Каналы, 3=Непрочитанные).
+        if (activeTab == 2 && s.channelRecEnabled && !channelRecsLoaded && channelRecs.isEmpty()) {
             scope.launch { loadChannelRecs(channelRecsCount) }
         }
     }
@@ -866,15 +867,18 @@ fun MessagesScreen(
                     }
                 }
             } else {
-                // Legacy 3-tab mode: 0=Диалоги, 1=Каналы, 2=Непрочитанные.
-                // #DIALOGS-TAB: «Диалоги» — всё КРОМЕ каналов (broadcast-сообщества);
-                // «Каналы» — только каналы (isChannel = group && can_write.allowed=false).
+                // Legacy 4-tab mode: 0=Диалоги, 1=Чаты, 2=Каналы, 3=Непрочитанные.
+                // #CHATS-TAB: «Диалоги» — только личные (peer.type=="user");
+                // «Чаты» — групповые чаты (type=="chat") + диалоги с сообществами
+                // (type=="group"), НЕ каналы (!isChannel); «Каналы» — только каналы
+                // (isChannel = group && can_write.allowed=false).
                 // #COUNTER-CHANNELS: «Непрочитанные» — только диалоги, без каналов
                 // (бейдж и содержимое консистентны: оба без каналов).
                 when (activeTab) {
-                    0 -> result = result.filter { !it.isChannel }
-                    1 -> result = result.filter { it.isChannel }
-                    2 -> result = result.filter { it.unreadCount > 0 && !it.isChannel }
+                    0 -> result = result.filter { !it.isChannel && it.peer.type == "user" }
+                    1 -> result = result.filter { !it.isChannel && (it.peer.type == "chat" || it.peer.type == "group") }
+                    2 -> result = result.filter { it.isChannel }
+                    3 -> result = result.filter { it.unreadCount > 0 && !it.isChannel }
                     else -> {}
                 }
             }
@@ -1033,7 +1037,8 @@ fun MessagesScreen(
     // никогда не уменьшались при чтении (чаты никуда не исчезают), из-за чего
     // пользователь видел «залипшие» счётчики. Теперь все три бейджа отражают
     // непрочитанное и сбрасываются при просмотре:
-    //  - dialogsUnreadSum  = сумма unreadCount по ДИАЛОГАМ (не каналам) — бейдж «Диалоги»
+    //  - dialogsUnreadSum  = сумма unreadCount по ЛИЧНЫМ диалогам (peer.type=="user") — бейдж «Диалоги»
+    //  - chatsUnreadSum    = сумма unreadCount по ЧАТАМ групп (peer.type=="chat" + "group", не каналы) — бейдж «Чаты»
     //  - totalUnreadSum    = сумма unreadCount по ДИАЛОГАМ — бейдж «Все» в папках-режиме
     //  - channelUnreadSum  = сумма unreadCount только по каналам — бейдж «Каналы»
     //  - unreadCount       = сколько ДИАЛОГОВ имеют непрочитанные (для вкладки «Непрочитанные»)
@@ -1042,8 +1047,17 @@ fun MessagesScreen(
     // totalUnreadSum и unreadCount ИСКЛЮЧАЮТ каналы (isChannel = group &&
     // can_write.allowed=false, #DIALOGS-TAB). Бейджи самих каналов в списке
     // (chat.unreadCount в ChatCard) и бейдж вкладки «Каналы» НЕ тронуты.
+    // #CHATS-TAB: «Диалоги» — только личные (user), «Чаты» — группы+сообщества (не каналы).
     val dialogsUnreadSum by remember(chats) {
-        derivedStateOf { chats.filter { !it.isChannel }.sumOf { it.unreadCount } }
+        derivedStateOf {
+            chats.filter { it.peer.type == "user" && !it.isChannel }.sumOf { it.unreadCount }
+        }
+    }
+    val chatsUnreadSum by remember(chats) {
+        derivedStateOf {
+            chats.filter { !it.isChannel && (it.peer.type == "chat" || it.peer.type == "group") }
+                .sumOf { it.unreadCount }
+        }
     }
     val totalUnreadSum by remember(chats) {
         derivedStateOf { chats.filter { !it.isChannel }.sumOf { it.unreadCount } }
@@ -1150,7 +1164,9 @@ fun MessagesScreen(
                         onFoldersSettings = onFoldersSettings,
                     )
                 } else {
-                    // P1.4: TabRow с 3 табами: Все / Каналы / Непрочитанные.
+                    // P1.4: TabRow с 4 табами: Диалоги / Чаты / Каналы / Непрочитанные.
+                    // #CHATS-TAB (2026-10-12): новая вкладка «Чаты» (1) добавлена между
+                    // «Диалоги» (0) и «Каналы» (2); индексы «Каналы»=2, «Непрочитанные»=3.
                     // FIX (P5.2): бейджи показывают непрочитанное (сбрасывается при чтении),
                     // а не total count чатов.
                     PrimaryTabRow(selectedTabIndex = activeTab) {
@@ -1170,6 +1186,17 @@ fun MessagesScreen(
                             onClick = { activeTab = 1 },
                             text = {
                                 BadgedBox(badge = {
+                                    if (chatsUnreadSum > 0) {
+                                        Badge { Text(if (chatsUnreadSum > 99) "99+" else chatsUnreadSum.toString()) }
+                                    }
+                                }) { Text("Чаты") }
+                            },
+                        )
+                        Tab(
+                            selected = activeTab == 2,
+                            onClick = { activeTab = 2 },
+                            text = {
+                                BadgedBox(badge = {
                                     if (channelUnreadSum > 0) {
                                         Badge { Text(if (channelUnreadSum > 99) "99+" else channelUnreadSum.toString()) }
                                     }
@@ -1177,8 +1204,8 @@ fun MessagesScreen(
                             },
                         )
                         Tab(
-                            selected = activeTab == 2,
-                            onClick = { activeTab = 2 },
+                            selected = activeTab == 3,
+                            onClick = { activeTab = 3 },
                             text = {
                                 BadgedBox(badge = {
                                     if (unreadCount > 0) {
@@ -1392,7 +1419,7 @@ fun MessagesScreen(
                 } else {
                     // #CHANNEL-ONBOARDING: приветственный блок «Встречайте каналы».
                     // Показываем во вкладке «Каналы», когда нет ни одной подписки
-                    // (filteredChats для activeTab==1 пуст) И блок рекомендаций не
+                    // (filteredChats для activeTab==2 пуст) И блок рекомендаций не
                     // показывает контент (настройка выключена, либо ещё грузится,
                     // либо после загрузки пуст — «рекомендации выключены/приходят
                     // пусты» из плана). Кнопка «Найти канал» грузит/перегружает
@@ -1403,7 +1430,7 @@ fun MessagesScreen(
                     val recipeContentVisible =
                         s.channelRecEnabled &&
                             (channelRecsLoading || channelRecsError != null || channelRecs.isNotEmpty())
-                    if (activeTab == 1 && searchQuery.isBlank() && !recipeContentVisible && filteredChats.isEmpty()) {
+                    if (activeTab == 2 && searchQuery.isBlank() && !recipeContentVisible && filteredChats.isEmpty()) {
                         item(key = "chanrec_onboarding") {
                             ChannelOnboardingBlock(
                                 findEnabled = s.channelFindEnabled,
@@ -1419,13 +1446,14 @@ fun MessagesScreen(
                     }
                     // #CHANNEL-REC: блок рекомендаций каналов — верхний блок вкладки
                     // «Каналы» (над списком подписок; веб-аналог channels_list_recommended).
-                    // Показываем только на вкладке каналов (activeTab == 1), вне поиска и
+                    // #CHATS-TAB: «Каналы» теперь вкладка 2 (было 1).
+                    // Показываем только на вкладке каналов (activeTab == 2), вне поиска и
                     // при включённой настройке «Рекомендации в каналах» (CHAN-PREFS),
                     // и только когда есть что показать (загрузка/ошибка/контент) — при
                     // пустом после загрузки списке его место занимает онбординг выше.
                     // #CHANNEL-ONBOARDING: условие дополнено recipeContentVisible, чтобы
                     // пустой заголовок «Рекомендации» не дублировал приветственный блок.
-                    if (activeTab == 1 && searchQuery.isBlank() && s.channelRecEnabled && recipeContentVisible) {
+                    if (activeTab == 2 && searchQuery.isBlank() && s.channelRecEnabled && recipeContentVisible) {
                         // Заголовок «Рекомендации» + кнопка «Найти канал» (перезагрузка /
                         // переход к блоку при пустом списке подписок). Кнопка «Найти канал»
                         // показывается только при включённой настройке channelFindEnabled.
