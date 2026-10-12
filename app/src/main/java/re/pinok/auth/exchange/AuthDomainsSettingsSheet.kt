@@ -95,7 +95,7 @@ fun AuthDomainsSettingsIcon() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AuthDomainsSettingsSheet(onDismiss: () -> Unit) {
+fun AuthDomainsSettingsSheet(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val app = remember { SovaApp.get(context) }
     val prefs = app.prefs

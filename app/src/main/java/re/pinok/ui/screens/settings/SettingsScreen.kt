@@ -89,6 +89,7 @@ import re.pinok.contracts.SettingsSection
 import re.pinok.data.SovaPrefsBackup
 import re.pinok.data.SovaPrefsCrypto
 import re.pinok.data.local.SovaPrefs
+import re.pinok.auth.exchange.AuthDomainsSettingsSheet
 import re.pinok.data.local.AudioFormat
 import re.pinok.data.local.AudioQuality
 import re.pinok.data.model.DownloadState
@@ -146,6 +147,7 @@ import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -245,6 +247,9 @@ private fun AuthorTab(
     scope: CoroutineScope,
 ) {
     val context = LocalContext.current
+    // #SETTINGS-AUTH-DOMAINS (2026-10-12): пункт «Настройки доменов VK» —
+    // открывает AuthDomainsSettingsSheet (лист настройки VK-доменов авторизации).
+    var showAuthDomains by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -332,6 +337,49 @@ private fun AuthorTab(
                 }
             }
         }
+        // #SETTINGS-AUTH-DOMAINS (2026-10-12): доступ к настройке VK-доменов
+        // авторизации из настроек (раньше — только через шестерёнку на входе).
+        item { SectionHeader("Авторизация") }
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showAuthDomains = true },
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Настройки доменов VK",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "OAuth, VK ID, Login, API host — переключение .com/.ru",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+    if (showAuthDomains) {
+        AuthDomainsSettingsSheet(onDismiss = { showAuthDomains = false })
     }
 }
 
