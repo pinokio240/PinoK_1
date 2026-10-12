@@ -14068,3 +14068,11 @@ Work Log:
 - ChatDetailScreen.loadChannelMeta: приоритет аватара channel.photo_base → g.photoBase → g.photo200 → g.photo100 → chat.peer.photo. groupsGetById сохранён для имени/подписчиков/фолбэка.
 - Бэкап: backups/vasi-channel-avatar-2026-10-12/. Баланс VKApiClient net=2 (исходные литералы), ChatDetail net=0.
 - Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: PROFILE-WALL-BOOKMARK
+Task: Закладки постов на стене профиля.
+Work Log:
+- WallPostCard: добавлен onToggleBookmark: (Post)->Unit; пункт «В закладки/Убрать из закладок» добавлен в ⋮-меню ВСЕГДА (не зависит от manage-прав).
+- ProfileScreen вызов: onToggleBookmark → faveAdd/faveRemove("post", ownerId, id) через scope.launch (как лента).
+- Импорты Bookmark/BookmarkBorder добавлены. Баланс net=-2 (исходный). Сборка на пользователе; пуш с разрешения.

@@ -47,6 +47,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Delete
 // П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи.
 import androidx.compose.material.icons.outlined.Flag
@@ -1511,6 +1513,19 @@ fun ProfileScreen(
                     onReaction = { clicked, reaction -> applyWallPostReaction(clicked, reaction) },
                     likePending = likeInFlight.containsKey(postKey),
                     onLikeToggle = { toggleWallPostLike(it) },
+                    // #PROFILE-WALL-BOOKMARK: закладка поста стены профиля.
+                    // Тот же паттерн, что в ленте (FeedScreen): faveAdd/faveRemove
+                    // по "post" (ownerId, id). Пункт добавлен в «⋯»-меню.
+                    onToggleBookmark = { p ->
+                        scope.launch {
+                            val ok = if (p.isFavoriteBool) {
+                                app.apiClient.faveRemove("post", p.ownerId, p.id)
+                            } else {
+                                app.apiClient.faveAdd("post", p.ownerId, p.id)
+                            }
+                            AppLog.d("ProfileScreen", "wall post bookmark toggle: ok=$ok")
+                        }
+                    },
                     showActions = true,
                     wallOwnerId = p.id,
                     actionPending = postActionInFlight.containsKey(postKey),
@@ -2284,6 +2299,11 @@ fun WallPostCard(
     // postMenuItems (после них). Дефолт emptyList — легаси-вызовы (Profile/
     // UserProfile) меню не расширяют.
     extraMenuItems: List<PostMenuItem> = emptyList(),
+    // POSTCARD-REFACTOR-PLAN / #PROFILE-WALL-BOOKMARK: закладка поста стены.
+    // Пункт «В закладки / Убрать из закладок» добавляется в «⋯»-меню ВСЕГДА
+    // (не зависит от showActions/manage-прав), чтобы любой пост на стене
+    // профиля можно было добавить в закладки. Дефолт {} — легаси-вызовы.
+    onToggleBookmark: (Post) -> Unit = {},
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — ОБЁРТКА-ДЕЛЕГАТ единого
     // PostCard (ui/components/PostCard.kt). Внешняя сигнатура сохранена 1:1 —
@@ -2307,8 +2327,17 @@ fun WallPostCard(
         (post.postType == null || post.postType == "post")
     // П-6a/П-7-AB: гейты и порядок пунктов ⋮-меню — 1:1 со старым inline-меню.
     // PostCard сам рисует DropdownMenu из menuItems (не вложенный диалог).
-    val postMenuItems = if (menuVisible) {
-        buildList {
+    // #PROFILE-WALL-BOOKMARK: пункт «В закладки / Убрать из закладок» добавляется
+    // ВСЕГДА (первым), независимо от showActions/manage-прав — любой пост стены
+    // можно заложить (как в ленте FeedScreen).
+    val postMenuItems = buildList {
+        // Закладка поста — всегда (переключатель по post.isFavoriteBool).
+        add(PostMenuItem(
+            label = if (post.isFavoriteBool) "Убрать из закладок" else "В закладки",
+            icon = if (post.isFavoriteBool) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+            onClick = { onToggleBookmark(post) },
+        ))
+        if (menuVisible) {
             if (showActions && (post.canPinBool || post.ownerId == wallOwnerId)) {
                 add(PostMenuItem(
                     label = if (post.isPinnedBool) "Открепить" else "Закрепить",
@@ -2339,8 +2368,6 @@ fun WallPostCard(
                 ))
             }
         }
-    } else {
-        emptyList()
     }
     // П-6a/П-8-REACT: оптимистичные состояния экрана поверх серверных post.*.
     val optimisticLike = likesState["${post.ownerId}_${post.id}"]
