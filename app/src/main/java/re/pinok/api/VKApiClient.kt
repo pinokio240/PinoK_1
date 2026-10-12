@@ -7964,6 +7964,10 @@ class VKApiClient(
         val donutPriceText: String? = null,  // donut_settings.subscription_button.title
         val donutUrl: String? = null,        // donut_settings.subscription_button.action.url
         val isDon: Boolean = false,          // user_data.is_don (уже оплатил/дон)
+        // #CHANNEL-MAP-D (2026-10-12): непрочитанные посты канала (user_data.
+        // read_state.unread_count). 0 = всё прочитано; >0 → кнопка
+        // «К непрочитанному» в панели канала (паритет VK web).
+        val unreadCount: Int = 0,
     )
 
     /**
@@ -8131,6 +8135,11 @@ class VKApiClient(
                 ?.takeIf { !it.isJsonNull }?.asString
             val donutUrl = subscriptionButton?.get("action")?.takeIf { it.isJsonObject }?.asJsonObject
                 ?.get("url")?.takeIf { !it.isJsonNull }?.asString
+            // #CHANNEL-MAP-D (2026-10-12): непрочитанные посты канала из
+            // user_data.read_state.unread_count (VK web счётчик бейджа).
+            val readState = userData?.get("read_state")?.takeIf { it.isJsonObject }?.asJsonObject
+            val unreadCount = readState?.get("unread_count")
+                ?.takeIf { !it.isJsonNull }?.asInt ?: 0
             ChannelInfo(
                 id = id,
                 title = ch.get("title")?.takeIf { !it.isJsonNull }?.asString,
@@ -8141,6 +8150,7 @@ class VKApiClient(
                 donutPriceText = donutPriceText,
                 donutUrl = donutUrl,
                 isDon = isDon,
+                unreadCount = unreadCount,
             )
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "#CHANNEL-AVATAR channelsGetById parse error channelId=$channelId", e)
@@ -22631,21 +22641,32 @@ class VKApiClient(
     }
 
     /**
-     * #ADMIN-HAR-2609-P1: channels.getPinnedMessages — закреплённые сообщения канала.
+     * #ADMIN-HAR-2609-P1 / #CHANNEL-MAP-C (2026-10-12): channels.getPinnedMessages —
+     * закреплённые сообщения канала.
      * HAR: channel_id=-groupId & extended=1 & fields=... . Ответ: response.{count,items}.
-     * @return сырой JsonObject response (структура items — как у messages.getHistory).
+     * @return список закреплённых Message (через parseChannelHistoryItem, как в
+     * channels.getHistory); пустой список, если закрепов нет или запрос не удался.
      */
-    suspend fun channelsGetPinnedMessages(channelId: Long): JsonObject? {
-        if (isOffline()) return null
+    suspend fun channelsGetPinnedMessages(channelId: Long): List<Message> {
+        if (isOffline()) return emptyList()
         val json = call("channels.getPinnedMessages", mapOf(
             "channel_id" to channelId.toString(),
             "extended" to "1",
-        ), forceWebGateway = true) ?: return null
+        ), forceWebGateway = true) ?: return emptyList()
         return try {
-            unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+            val items = resp?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?: return emptyList()
+            val result = ArrayList<Message>(items.size())
+            for (el in items) {
+                if (!el.isJsonObject) continue
+                val m = parseChannelHistoryItem(el.asJsonObject, channelId)
+                if (m != null) result.add(m)
+            }
+            result
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "channelsGetPinnedMessages parse error", e)
-            null
+            emptyList()
         }
     }
 

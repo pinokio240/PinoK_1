@@ -14101,3 +14101,13 @@ Work Log:
 - ChatDetailScreen: новое state channelInfo; loadChannelMeta приоритетно берёт channelSubscribers из ChannelInfo.membersCount (группа — фолбэк).
 - ChannelInfoPanelContent: добавлен донат-блок («Поддержать канал» + price) если donutEnabled && !isDon; onOpenDonut → onUrlClick.
 - Бэкап: backups/vasi-channel-panel-api-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: CHANNEL-MAP-FIXES
+Task: Правки по карте несоответствий канала (веб vs PinoK).
+Work Log:
+- A. Просмотры/время в шапке поста канала: ChannelPostHeaderMetaRow (👁 views · время) над карточкой в wall+history режиме.
+- B. Реакции в wall-режиме: channelWallReactionCounts из channelsGetChannelMessagesCounters + чип ChannelReactionCountChip.
+- C. Закреплённый баннер в history-режиме: channelsGetPinnedMessages → List<Message>; ChannelHistoryPinnedBanner.
+- D. Кнопка «К непрочитанному» в панели: ChannelInfo.unreadCount + onGoToUnread (скролл к новейшему).
+- Бэкап: backups/channel-map-fixes-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.

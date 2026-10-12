@@ -918,6 +918,17 @@ fun ChatDetailScreen(
     var channelPostsError by remember { mutableStateOf<String?>(null) }
     var channelPostsEnd by remember { mutableStateOf(false) }
     var channelPostsLoadingMore by remember { mutableStateOf(false) }
+    // #CHANNEL-MAP-B (2026-10-12): реакционные СЧЁТЧИКИ постов канала в wall-режиме
+    // (cmid → общий count реакций). У модели Post нет разбивки реакций по эмодзи
+    // (только history-режим даёт items) — counters-эндпоинт возвращает агрегиров.
+    // count; рисуем единый чип-счётчик (паритет VK web) под канальным постом.
+    val channelWallReactionCounts = remember { mutableStateMapOf<Long, Int>() }
+    // #CHANNEL-MAP-C (2026-10-12): закреплённые посты канала в history-режиме —
+    // через channels.getPinnedMessages (канальный API, как на VK web). Пуст —
+    // закрепов нет. Рендерится баннером над лентой (аналог wall-баннера).
+    var channelHistoryPinned by remember {
+        mutableStateOf<List<Message>>(emptyList())
+    }
     // Группы-источники РЕПОСТОВ канала (copy_history[0] с ownerId<0) → имя/аватар.
     // Канал сам группа; посты канала могут репостить и ДРУГИЕ сообщества — их
     // резолвим лениво через groups.getById в LaunchedEffect каждого поста.
@@ -2560,6 +2571,28 @@ fun ChatDetailScreen(
                             "#IM-CHANNEL-OPEN wallGet initial: posts=${posts.size} peerId=$peerId")
                         channelPosts = posts
                         if (posts.size < 30) channelPostsEnd = true
+                        // #CHANNEL-MAP-B (2026-10-12): дозагрузка реакционных счётчиков
+                        // для wall-постов канала (best-effort, аналогично истории).
+                        // У Post нет разбивки реакций по эмодзи — агрегированный count
+                        // рисуем единым чипом под карточкой. Ошибка — тихий пропуск.
+                        try {
+                            val wCmids = posts.mapNotNull { it.id.takeIf { id -> id > 0L } }
+                            if (wCmids.isNotEmpty()) {
+                                val wCounters = app.apiClient
+                                    .channelsGetChannelMessagesCounters(peerId, wCmids)
+                                wCounters.forEach { (cmid, counters) ->
+                                    val rc = counters.reactions
+                                    if (rc != null && rc > 0) {
+                                        channelWallReactionCounts[cmid] = rc
+                                    }
+                                }
+                            }
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            AppLog.w("ChatDetailScreen",
+                                "#CHANNEL-MAP-B wall reaction counters failed: ${e.message}")
+                        }
                         if (posts.isEmpty()) {
                             // wallGet глотает детали ошибки в emptyList — честно
                             // показываем «Повторить» только при реальной ошибке API;
@@ -4833,6 +4866,14 @@ fun ChatDetailScreen(
                                     if (repostOwnerId != null && repostOwnerId < 0) {
                                         LaunchedEffect(post.ownerId, post.id) { repostGroups.resolve(app.apiClient, post) }
                                     }
+                                    // #CHANNEL-MAP-A (2026-10-12): просмотры/время в ШАПКЕ поста
+                                    // канала (паритет VK web ChannelPostMeta__views/time). WallPostCard
+                                    // общий (стена профиля) — его шапку не трогаем; рисуем компактный
+                                    // ряд над карточкой, только если есть данные (views>0/date>0).
+                                    ChannelPostHeaderMetaRow(
+                                        views = post.views?.count ?: 0,
+                                        date = post.date,
+                                    )
                                     WallPostCard(
                                         post = post,
                                         authorName = currentTitle,
@@ -4891,6 +4932,22 @@ fun ChatDetailScreen(
                                         // target = peerId(канал) + post.id (cmid поста).
                                         onCommentsClick = { channelCommentsTarget = peerId to post.id },
                                     )
+                                    // #CHANNEL-MAP-B (2026-10-12): реакционный чип wall-поста
+                                    // канала (агрегированный count вместо per-эмодзи items,
+                                    // которых у модели Post нет). Рисуется только если count>0.
+                                    val wallReactionCount = channelWallReactionCounts[post.id]
+                                    if (wallReactionCount != null && wallReactionCount > 0) {
+                                        Row(
+                                            modifier = Modifier.padding(start = 16.dp, top = 2.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            ChannelReactionCountChip(
+                                                count = wallReactionCount,
+                                                onReact = { reactToMessage(post.id, 1) },
+                                            )
+                                        }
+                                    }
                                     Box(
                                         modifier = Modifier.fillMaxWidth().height(1.dp)
                                             .padding(horizontal = 16.dp)
@@ -5043,6 +5100,15 @@ fun ChatDetailScreen(
                         messages.count { !it.isOut && it.readState == 0 }
                     }
                 }
+                // #CHANNEL-MAP-C (2026-10-12): загрузка закреплённых постов канала
+                // в history-режиме через channels.getPinnedMessages (канальный API,
+                // как на VK web). Пуст список — закрепов нет; ошибка — тихий пропуск.
+                if (peerId < 0 && channelHistoryMode) {
+                    LaunchedEffect(peerId, channelHistoryMode) {
+                        val pinned = app.apiClient.channelsGetPinnedMessages(peerId)
+                        channelHistoryPinned = pinned
+                    }
+                }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -5125,6 +5191,13 @@ fun ChatDetailScreen(
                                     if (repostOwnerId != null && repostOwnerId < 0) {
                                         LaunchedEffect(channelPost.ownerId, channelPost.id) { repostGroups.resolve(app.apiClient, channelPost) }
                                     }
+                                    // #CHANNEL-MAP-A (2026-10-12): просмотры/время в ШАПКЕ поста
+                                    // канала в history-режиме (паритет VK web ChannelPostMeta__
+                                    // views/time). Аналогично wall-режиму: ряд над карточкой.
+                                    ChannelPostHeaderMetaRow(
+                                        views = msg.viewsCount ?: 0,
+                                        date = msg.date,
+                                    )
                                     Column {
                                         WallPostCard(
                                             post = channelPost,
@@ -5423,6 +5496,23 @@ fun ChatDetailScreen(
                                 current = channelFeedFilter,
                                 onSelect = { applyChannelFeedFilter(it) },
                             )
+                        }
+                        // #CHANNEL-MAP-C (2026-10-12): баннер закреплённого поста канала
+                        // в history-режиме через channels.getPinnedMessages (канальный
+                        // API, как VK web). Пуст список — закрепов нет, баннер не рисуем.
+                        // reverseLayout: item объявлен последним → визуально самый верх
+                        // ленты. Клик → открыть пост (openChannelPost по messageToChannelPost).
+                        val histPinned = channelHistoryPinned
+                        if (histPinned.isNotEmpty()) {
+                            item(key = "channel_hist_pinned_banner") {
+                                ChannelHistoryPinnedBanner(
+                                    pinnedMessages = histPinned,
+                                    onOpen = { m ->
+                                        val p = messageToChannelPost(m)
+                                        openChannelPost(p)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -6162,6 +6252,20 @@ fun ChatDetailScreen(
                 // оплату через onUrlClick (внутренний/внешний браузер по настройке,
                 // как у paywall постов канала).
                 onOpenDonut = { url -> onUrlClick(url) },
+                // #CHANNEL-MAP-D (2026-10-12): непрочитанные посты канала (из
+                // channelInfo.unreadCount, channels.getById → user_data.read_state.
+                // unread_count). NULL-ЯВНО: local val + if != null (без ?./?:/!!).
+                val unreadInfo = channelInfo
+                unreadCount = if (unreadInfo != null) unreadInfo.unreadCount else 0,
+                // #CHANNEL-MAP-D: «К непрочитанному» — прокрутка к новейшему
+                // посту (индекс 0 в обоих режимах при reverseLayout) + закрытие
+                // панели. wall-режим → channelListState, истории → listState.
+                onGoToUnread = {
+                    showChannelInfoPanel = false
+                    val targetState =
+                        if (channelHistoryMode) listState else channelListState
+                    scope.launch { targetState.animateScrollToItem(0) }
+                },
             )
         }
     }
@@ -8277,6 +8381,164 @@ private fun compactMetric(value: Double, suffix: String): String {
     val s = String.format(java.util.Locale.US, "%.1f", value)
     val trimmed = if (s.endsWith(".0")) s.dropLast(2) else s
     return trimmed.replace('.', ',') + suffix
+}
+
+/** #CHANNEL-MAP-A (2026-10-12): время поста канала в шапке «как VK web»
+ *  (ChannelPostMeta__time): сегодня → «сегодня HH:mm», вчера → «вчера HH:mm»,
+ *  иначе → «dd.MM.yyyy HH:mm». epochSec — unix-секунды. Простая дата + локальная
+ *  таймзона (SimpleDateFormat+Calendar, minSdk 24). */
+private fun channelHeaderTime(epochSec: Long): String {
+    val nowSec = System.currentTimeMillis() / 1000L
+    val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val time = timeFmt.format(Date(epochSec * 1000L))
+    val evCal = Calendar.getInstance().apply { timeInMillis = epochSec * 1000L }
+    val nowCal = Calendar.getInstance().apply { timeInMillis = nowSec * 1000L }
+    val sameDay = evCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+        evCal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)
+    if (sameDay) return "сегодня $time"
+    val yesterdayCal = Calendar.getInstance().apply { timeInMillis = nowSec * 1000L }
+    yesterdayCal.add(Calendar.DAY_OF_YEAR, -1)
+    val isYesterday = evCal.get(Calendar.YEAR) == yesterdayCal.get(Calendar.YEAR) &&
+        evCal.get(Calendar.DAY_OF_YEAR) == yesterdayCal.get(Calendar.DAY_OF_YEAR)
+    if (isYesterday) return "вчера $time"
+    val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+    return dateFmt.format(Date(epochSec * 1000L)) + " $time"
+}
+
+/** #CHANNEL-MAP-A (2026-10-12): строка «👁 14,2K · сегодня 17:17» для шапки поста
+ *  канала (паритет VK web ChannelPostMeta__views/time). views<=0 или date<=0 —
+ *  соответствующий фрагмент опускается (joinNotNull). NULL-политика: локальные
+ *  val + if != null, без ?./?:/!!. */
+private fun channelHeaderMeta(views: Int, date: Long): String {
+    val viewStr = if (views > 0) "👁 ${channelCounterString(views)}" else null
+    val dateStr = if (date > 0) channelHeaderTime(date) else null
+    val parts = ArrayList<String>(2)
+    val v = viewStr
+    if (v != null) parts.add(v)
+    val d = dateStr
+    if (d != null) parts.add(d)
+    return parts.joinToString(" · ")
+}
+
+/** #CHANNEL-MAP-A (2026-10-12): компактный ряд «просмотров + времени» в шапке
+ *  поста канала (как VK web). Рисуется над карточкой поста (в шапке), только
+ *  если есть хоть один фрагмент (views>0 или date>0). Аддитивно — не ломает
+ *  стену профиля (обычные посты параметр не передают). */
+@Composable
+private fun ChannelPostHeaderMetaRow(views: Int, date: Long) {
+    val text = channelHeaderMeta(views, date)
+    if (text.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Visibility,
+            contentDescription = null,
+            modifier = Modifier.size(13.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp,
+        )
+    }
+}
+
+/** #CHANNEL-MAP-B (2026-10-12): единый чип-счётчик реакций канального поста
+ *  (агрегированный count из channels.getChannelMessagesCounters — у модели Post
+ *  нет разбивки по эмодзи). Рисуется под карточкой wall-поста канала, только
+ *  если count>0. Тап — toggle реакции id=1 (❤️), как в history-чипах. */
+@Composable
+private fun ChannelReactionCountChip(count: Int, onReact: () -> Unit) {
+    val pillBg = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
+    val pillFg = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = pillBg,
+        contentColor = pillFg,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onReact() },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(text = reactionEmoji(1), fontSize = 12.sp)
+            Text(
+                text = channelCounterString(count),
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+            )
+        }
+    }
+}
+
+/** #CHANNEL-MAP-C (2026-10-12): баннер закреплённого поста канала в history-режиме
+ *  (паритет VK web, аналог wall-баннера «Закреплённый пост»). Берёт список
+ *  закреплённых Message из channels.getPinnedMessages и показывает первый.
+ *  Клик → onOpen (открыть пост). Полностью аддитивно — только history-каналы. */
+@Composable
+private fun ChannelHistoryPinnedBanner(
+    pinnedMessages: List<Message>,
+    onOpen: (Message) -> Unit,
+) {
+    val first = pinnedMessages.firstOrNull()
+    if (first == null) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Card(
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onOpen(first) },
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ),
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Outlined.PushPin,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (pinnedMessages.size > 1)
+                            "Закреплённый пост (1/${pinnedMessages.size})"
+                        else "Закреплённый пост",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    val pinText = first.text
+                    if (pinText.isNotBlank()) {
+                        Text(
+                            text = pinText.take(80),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** Пикер реакций — горизонтальная панель эмодзи. */
@@ -10628,6 +10890,11 @@ private fun ChannelInfoPanelContent(
     // через onUrlClick вызывающего (внутренний/внешний браузер по настройке,
     // тот же механизм, что у paywall постов канала).
     onOpenDonut: (String) -> Unit,
+    // #CHANNEL-MAP-D (2026-10-12): непрочитанные посты канала. >0 → кнопка
+    // «К непрочитанному» (паритет VK web ChannelProfile__unread). onGoToUnread —
+    // прокрутка ленты к новейшему непрочитанному + закрытие панели.
+    unreadCount: Int,
+    onGoToUnread: () -> Unit,
 ) {
     val linkUrl = channelCommunityUrl(group, peerId)
     val ava = channelPhoto ?: group?.photo200 ?: group?.photo100
@@ -10795,6 +11062,47 @@ private fun ChannelInfoPanelContent(
                             onOpenCommunity()
                         },
                     )
+                }
+            }
+        }
+
+        // #CHANNEL-MAP-D (2026-10-12): кнопка «К непрочитанному» — паритет VK web
+        // ChannelProfile__unread. Показывается только если у канала есть
+        // непрочитанные посты (unreadCount>0). Клик → прокрутка к новейшему
+        // непрочитанному (onGoToUnread, вызывающая сторона закрывает панель).
+        val unread = unreadCount
+        if (unread > 0) {
+            Spacer(Modifier.height(16.dp))
+            Surface(
+                onClick = { onGoToUnread() },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "К непрочитанному",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "$unread новых постов",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
