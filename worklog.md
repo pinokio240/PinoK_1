@@ -14195,3 +14195,12 @@ Work Log:
 - AuthDomainsSettingsSheet стал публичной (убран private), AuthDomainsSettingsIcon не тронут.
 - SettingsScreen.AuthorTab: добавлен раздел «Авторизация» + пункт «Настройки доменов VK» (Card+шестерёнка+стрелка), открывает AuthDomainsSettingsSheet (все поля с описанием + смена + кнопка сброса по умолчанию уже были в листе).
 - Баланс net=0 у обоих файлов. Бэкап: backups/settings-auth-domains-2026-10-12/. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: VASI-AUTH-SILENT-REFRESH
+Task: Потеря авторизации при смене сети после входа через внешний браузер (агент Вася).
+Work Log:
+- Диагноз: внешний браузер (Custom Tabs) даёт только access_token; remixsid/P-куки остаются в Chrome (изоляция Android 7+); exchange_token VK НЕ выдаёт для web-клиента 6287487 (err=15) → Path 1.5 невозможен, Path 3 (exchange_token) был удалён в сентябре → смена сети = потеря.
+- Фикс (Вася): восстановлен Path 3 — refreshViaExchangeToken() в ensureFreshToken (id.vk.com/auth_by_exchange_token) для любой сессии с exchange_token; диагностика exchangeStatus в saveOAuthToken (yes/rejected/unavailable).
+- Честное ограничение: для входа именно через Chrome полностью убрать потерю нельзя (нет exchange_token от VK для 6287487) — решение: #IP-BINDING-RETRY (ждёт 30-60с) или WebView-вход (cookies в PinoK, переживает смену сети штатно).
+- Бэкап: backups/vasi-auth-silent-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.
