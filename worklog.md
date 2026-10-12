@@ -14155,3 +14155,10 @@ Work Log:
 - Причина: photos.getMessagesUploadServer и photos.saveMessagesPhoto вызывались БЕЗ forceWebGateway=true, а web-токен (vk1.a.*) требует web-gateway (как audio.getUploadServer/audio.save) → upload_url не приходил / save падал → attachment не формировался → фото не отправлялось.
 - Фикс: добавлен forceWebGateway=true в photosGetMessagesUploadServer (~6986) и photosSaveMessagePhoto (~7010).
 - Бэкап: backups/photo-send-webgateway-2026-10-12/. Баланс net=2 (исходные литералы). Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: MESSAGES-ONLINE-STATUS
+Task: Ненавязчивый текст «онлайн/офлайн» в личных диалогах сообщений.
+Work Log:
+- ChatCard: под именем (для type=="user") добавлен мелкий текст статуса «онлайн» (зелёный)/«офлайн» (outline), labelSmall. Показывается только если online известен (true/false). Не мешает погружению (мелкий, в одном Column карточки). Зелёная точка на аватаре дополняет.
+- Баланс net=0. Бэкап: backups/messages-online-status-2026-10-12/. Сборка на пользователе; пуш с разрешения.

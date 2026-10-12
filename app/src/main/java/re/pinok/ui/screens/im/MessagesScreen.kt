@@ -2358,6 +2358,26 @@ private fun ChatCard(
                         }
                     }
                     Spacer(modifier = Modifier.height(2.dp))
+                    // #MSG-ONLINE-STATUS (2026-10-12): ненавязчивая надпись «онлайн»/
+                    // «офлайн» для личных диалогов (type=="user", id>0). Показывается
+                    // только если статус известен (online: true/false). Мелкий текст
+                    // labelSmall — не мешает погружению в список; зелёная точка на
+                    // аватаре дополняет его. Каналы/чаты/группы — без надписи.
+                    val isUserPeer = chat.peer.type == "user" && chat.peer.id > 0
+                    val peerOnline = chat.peer.online
+                    if (isUserPeer && peerOnline != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Статус: «онлайн» — зелёным; «офлайн» — приглушённо-серым.
+                            Text(
+                                text = if (peerOnline) "онлайн" else "офлайн",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (peerOnline) Color(0xFF4CAF50)
+                                else MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                    }
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         // #TYPING-FIX: при живом typing пира показываем «печатает…»
                         // (в беседах — имя печатающего) ВМЕСТО сниппета последнего
