@@ -50,11 +50,20 @@ class CallSignalingClient(
     companion object {
         private const val TAG = "CallSignaling"
         private const val ENTITY_TYPE_USER = "USER"
+        /** #CALLS-PROTOCOL-2026-10-12: clientType в WS-query VK web шлёт НЕ "USER", а "VK"
+         *  (videowebrtc.okcdn.ru/ws2?…&clientType=VK&…). Сервер сигналинга сверяет этот
+         *  параметр — с "USER" соединение отклоняется. Как у VK web. */
+        private const val CLIENT_TYPE = "VK"
         private const val PLATFORM = "android"
         private const val APP_VERSION = "2.0.0"
-        private const val PROTOCOL_VERSION = "1"
+        /** #CALLS-PROTOCOL-2026-10-12: version WS-протокола (диалект ws2). С "1" сервер
+         *  отклоняет клиента ошибкой obsolete_client.contact_call («ваша версия устарела»).
+         *  VK web подключается с version=5. Это ГЛАВНЫЙ фикс против obsolete_client. */
+        private const val PROTOCOL_VERSION = "5"
         private const val DEVICE = "HOTWAV Cyber 15"
-        private const val CAPABILITIES = "0"
+        /** #CALLS-PROTOCOL-2026-10-12: capabilities — hex-битмаска возможностей клиента.
+         *  PinoK слал "0" (пусто), VK web шлёт "6D7F". */
+        private const val CAPABILITIES = "6D7F"
 
         /** Команды (enum or из calls SDK). */
         const val CMD_ACCEPT_CALL = "accept-call"
@@ -749,7 +758,10 @@ class CallSignalingClient(
         query.append("&version=").append(PROTOCOL_VERSION)
         query.append("&device=").append(DEVICE)
         query.append("&capabilities=").append(CAPABILITIES)
-        query.append("&clientType=").append(ENTITY_TYPE_USER)
+        // #CALLS-PROTOCOL-2026-10-12 (VK web ws2-эталон): clientType=VK (НЕ "USER").
+        query.append("&clientType=").append(CLIENT_TYPE)
+        // #CALLS-PROTOCOL-2026-10-12 (VK web ws2-эталон): обязательный параметр tgt=start.
+        query.append("&tgt=start")
         peerId?.let { query.append("&peerId=").append(it) }
         return if (base.contains("?")) base + "&" + query else base + "?" + query
     }

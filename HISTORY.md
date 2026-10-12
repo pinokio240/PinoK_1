@@ -15721,3 +15721,13 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 **Фикс (Вася):** восстановлен Path 3 (refresh через exchange_token) + диагностика. Полностью убрать потерю для Chrome-входа нельзя (VK не даёт exchange_token web-клиенту) — решение: дать 30-60с на IP-binding или WebView-вход. Сборка на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+---
+
+## VASI-CALLS-PROTOCOL — 2026-10-12 — протокол звонков приведён к VK web
+
+**Причина:** версия протокола сигналинга version=1 (надо 5) + clientType=USER (надо VK) + нет tgt=start → сервер отклонял как устаревший клиент (obsolete_client.contact_call).
+
+**Фикс (Вася):** version=5, clientType=VK, capabilities=6D7F, tgt=start в WS-URL. Сборка на пользователе.
+
+### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.

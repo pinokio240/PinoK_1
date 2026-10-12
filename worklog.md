@@ -14204,3 +14204,12 @@ Work Log:
 - Фикс (Вася): восстановлен Path 3 — refreshViaExchangeToken() в ensureFreshToken (id.vk.com/auth_by_exchange_token) для любой сессии с exchange_token; диагностика exchangeStatus в saveOAuthToken (yes/rejected/unavailable).
 - Честное ограничение: для входа именно через Chrome полностью убрать потерю нельзя (нет exchange_token от VK для 6287487) — решение: #IP-BINDING-RETRY (ждёт 30-60с) или WebView-вход (cookies в PinoK, переживает смену сети штатно).
 - Бэкап: backups/vasi-auth-silent-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: VASI-CALLS-PROTOCOL
+Task: Исправить звонки (обезлюден сервер obsolete_client.contact_call).
+Work Log:
+- Реверс-инжиниринг HAR звонка VK web: сервер сигналинга (videowebrtc.okcdn.ru/ws2) ождает version=5, clientType=VK, capabilities=6D7F, tgt=start; PinoK слал version=1, clientType=USER, capabilities=0 → obsolete_client.
+- Фикс (Вася, CallSignalingClient): PROTOCOL_VERSION 1→5, добавлен CLIENT_TYPE=VK (используется в clientType), CAPABILITIES 0→6D7F, добавлен tgt=start.
+- Формат offer (participantId числом, animojiVersion, participantType) НЕ менял — следующий шаг если медиа не пойдёт после версии.
+- Бэкап: backups/vasi-calls-protocol-2026-10-12/. Balance net=0. Сборка на пользователе; пуш с разрешения.
