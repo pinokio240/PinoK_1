@@ -90,6 +90,17 @@ android {
         }
     }
 
+    // #ABI-ARM-ONLY (2026-10-12): собираем ТОЛЬКО ARM-архитектуры (arm64-v8a +
+    // armeabi-v7a) — убираем x86/x86_64 из пакета установки. Нативные библиотеки
+    // (ffmpeg-kit, WebRTC, Media3) тянули 4 ABI → APK короходил большой и содержал
+    // x86-код, который на реальных смартфонах не используется. Пользователь:
+    // «чтобы в пакете установки больше не было X86, устанавливались только
+    // совместимые пакеты». Эмуляторы x86 теряют краш-анклав — разработка ведётся
+    // на устройстве/ARM-эмуляторе. Чтобы вернуть x86 для эмулятора — убрать abiFilters.
+    ndk {
+        abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21

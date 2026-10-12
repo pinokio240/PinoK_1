@@ -14076,3 +14076,12 @@ Work Log:
 - WallPostCard: добавлен onToggleBookmark: (Post)->Unit; пункт «В закладки/Убрать из закладок» добавлен в ⋮-меню ВСЕГДА (не зависит от manage-прав).
 - ProfileScreen вызов: onToggleBookmark → faveAdd/faveRemove("post", ownerId, id) через scope.launch (как лента).
 - Импорты Bookmark/BookmarkBorder добавлены. Баланс net=-2 (исходный). Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: ABI-ARM-ONLY
+Task: Убрать x86/x86_64 из пакета установки.
+Work Log:
+- build.gradle.kts: android.ndk.abiFilters += setOf("arm64-v8a", "armeabi-v7a"). Нативные либы (ffmpeg-kit/WebRTC/Media3) тянули 4 ABI; теперь x86/x86_64 исключены.
+- Один универсальный ARM-APK → ставится на совместимые ARM-устройства, меньше размер.
+- Вернуть x86 для эмулятора — убрать abiFilters (закоментировано в KDoc).
+- Баланс net=0. Сборка на пользователе; пуш с разрешения.
