@@ -59,6 +59,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -10901,6 +10902,13 @@ private fun ChannelInfoPanelContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // #CHANNEL-PANEL-BUTTONS (2026-10-12): контент бильярдной высоты
+            // (шапка + 4 ActionCell + донат-блок + «К непрочитанному» + сетка
+            // разделов) легко превышает высоту ModalBottomSheet — без вертикальной
+            // прокрутки нижние разделы (Фото/Видео/Музыка/Файлы/Клипы) обрезались
+            // и их тап не срабатывал («кнопки не работают»). Делаем контент
+            // скроллящимся, чтобы все разделы были достижимы и кликабельны.
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp)
             .padding(bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -11052,7 +11060,11 @@ private fun ChannelInfoPanelContent(
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("Открыть в браузере") },
+                        // #CHANNEL-PANEL-BUTTONS (2026-10-12): пункт вызывал
+                        // onOpenCommunity (нативный экран сообщества), а подпись
+                        // обещала браузер — переименован, чтобы соответствовать
+                        // реальному действию (иначе выглядел «не работающим»).
+                        text = { Text("Открыть сообщество") },
                         leadingIcon = {
                             Icon(Icons.Outlined.Public, contentDescription = null)
                         },
