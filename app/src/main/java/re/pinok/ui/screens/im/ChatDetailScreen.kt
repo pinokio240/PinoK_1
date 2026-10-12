@@ -6255,8 +6255,7 @@ fun ChatDetailScreen(
                 // #CHANNEL-MAP-D (2026-10-12): непрочитанные посты канала (из
                 // channelInfo.unreadCount, channels.getById → user_data.read_state.
                 // unread_count). NULL-ЯВНО: local val + if != null (без ?./?:/!!).
-                val unreadInfo = channelInfo
-                unreadCount = if (unreadInfo != null) unreadInfo.unreadCount else 0,
+                unreadCount = channelInfo?.unreadCount ?: 0,
                 // #CHANNEL-MAP-D: «К непрочитанному» — прокрутка к новейшему
                 // посту (индекс 0 в обоих режимах при reverseLayout) + закрытие
                 // панели. wall-режим → channelListState, истории → listState.

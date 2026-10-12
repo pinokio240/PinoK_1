@@ -14111,3 +14111,11 @@ Work Log:
 - C. Закреплённый баннер в history-режиме: channelsGetPinnedMessages → List<Message>; ChannelHistoryPinnedBanner.
 - D. Кнопка «К непрочитанному» в панели: ChannelInfo.unreadCount + onGoToUnread (скролл к новейшему).
 - Бэкап: backups/channel-map-fixes-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: CHANNEL-PANEL-SYNTAX-FIX
+Task: Исправить ошибки компиляции в вызове ChannelInfoPanelContent (unreadCount/onGoToUnread).
+Work Log:
+- Субагент-уровень general вставил в вызов функции «val unreadInfo = channelInfo; unreadCount = ...» прямо внутри аргументов — синтаксически неверно (аргументы функции не могут содержать val-объявления).
+- Фикс: заменил на корректные именованные аргументы unreadCount = channelInfo?.unreadCount ?: 0 и onGoToUnread = {...}. unreadInfo удалён.
+- Balance net=0. Сборка на пользователе; пуш с разрешения.
