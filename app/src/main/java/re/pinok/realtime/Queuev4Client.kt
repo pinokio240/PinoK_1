@@ -206,6 +206,19 @@ class Queuev4Client(
                 return emptyList()
             }
             val obj = parsed.asJsonObject
+            // P0.43-CALLS-DIAG: логируем ВСЕ entity_type в events — иначе не видно,
+            // приходит ли entity_type:"calls" или только "online"/"im". Это критично
+            // для диагностики incoming_call.
+            val eventsArr = obj.get("events")?.takeIf { it.isJsonArray }?.asJsonArray
+            if (eventsArr != null && eventsArr.size() > 0) {
+                val types = eventsArr.mapNotNull { el ->
+                    if (!el.isJsonObject) return@mapNotNull null
+                    val et = el.asJsonObject.get("entity_type")?.takeIf { it.isJsonPrimitive }?.asString
+                    val dt = el.asJsonObject.getAsJsonObject("data")?.get("type")?.takeIf { it.isJsonPrimitive }?.asString
+                    if (et != null) "$et/$dt" else null
+                }
+                AppLog.i(TAG, "parseCallEvents: events=${eventsArr.size()} entity_types=$types")
+            }
             val result = collectCallEvents(obj)
             // P0.42-CALLS-DIAG: логируем результат парсинга — видим что нашли.
             if (result.isNotEmpty()) {
