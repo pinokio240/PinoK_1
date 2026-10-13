@@ -2067,9 +2067,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             try {
                 // 0) session_key для vchat (auth.anonymLogin) — как браузер.
                 //    Возвращает session_key + okcdn uid + session_secret_key.
-                val sessionKey = ensureCallsSessionKey(force = false)
+                // P0.43-CALLS-FIX: если в prefs нет session_secret_key (прошлый запуск
+                // был до фикса) — принудительно обновляем session_key через force=true,
+                // чтобы auth.anonymLogin вернул и сохранил session_secret_key.
+                val needForce = prefsSnapshot?.callsSessionSecret.isNullOrBlank()
+                val sessionKey = ensureCallsSessionKey(force = needForce)
                 val okUid = prefsSnapshot?.callsSessionUid ?: apiClient.lastAnonymUid()
-                val secret = apiClient.lastAnonymSecret()
+                // P0.43-CALLS-FIX: secret приоритет из runtime (только что получен через
+                // auth.anonymLogin), fallback — из prefs (пережил перезапуск процесса).
+                val secret = apiClient.lastAnonymSecret().ifBlank { prefsSnapshot?.callsSessionSecret ?: "" }
                 val deviceId = exchangeAuthRepository.deviceId()
                 val vkUid = exchangeAuthRepository.userId()
 
@@ -2254,7 +2260,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             val okUid = apiClient.lastAnonymUid()
             val uid = if (okUid > 0L) okUid else exchangeAuthRepository.userId()
             if (uid > 0L) prefs.setCallsSessionUid(uid)
-            AppLog.i("SovaApp", "ensureCallsSessionKey: OK (len=${sessionKey.length}, uid=$uid)")
+            // P0.43-CALLS-FIX: сохраняем session_secret_key в prefs — нужен для
+            // calls.subscribeToQueue при следующих запусках (без повторного auth.anonymLogin).
+            val secret = apiClient.lastAnonymSecret()
+            if (secret.isNotBlank()) prefs.setCallsSessionSecret(secret)
+            AppLog.i("SovaApp", "ensureCallsSessionKey: OK (len=${sessionKey.length}, uid=$uid, secret=${secret.length})")
             sessionKey
         } catch (e: Exception) {
             AppLog.w("SovaApp", "ensureCallsSessionKey error: ${e.message}")

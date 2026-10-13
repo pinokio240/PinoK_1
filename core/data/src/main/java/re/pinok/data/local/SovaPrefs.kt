@@ -572,6 +572,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             callsQueueTs = p[Keys.CALLS_QUEUE_TS] ?: 0L,
             callsSessionKey = p[Keys.CALLS_SESSION_KEY] ?: "",
             callsSessionUid = p[Keys.CALLS_SESSION_UID] ?: 0L,
+            callsSessionSecret = p[Keys.CALLS_SESSION_SECRET] ?: "",
             callsCallToken = p[Keys.CALLS_CALL_TOKEN] ?: "",
             callsVideoRx = p[Keys.CALLS_VIDEO_RX] ?: true,
             music2Enabled = p[Keys.MUSIC2_ENABLED] ?: false,
@@ -1269,6 +1270,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsSessionKey(v: String)          = put(Keys.CALLS_SESSION_KEY, v)
     /** #CALLS: okcdn uid из _okcls_anonymLogin (для userId в WS-URL сигналинга). */
     suspend fun setCallsSessionUid(v: Long)            = put(Keys.CALLS_SESSION_UID, v)
+    /** P0.43-CALLS-FIX: session_secret_key из auth.anonymLogin — для calls.subscribeToQueue. */
+    suspend fun setCallsSessionSecret(v: String)       = put(Keys.CALLS_SESSION_SECRET, v)
     /** #CALLS: $Ksd-токен (calls_token_with_url) — auth_token для auth.anonymLogin v3. */
     suspend fun setCallsCallToken(v: String)           = put(Keys.CALLS_CALL_TOKEN, v)
     /** #CALLS-VIDEO-RX (Этап 1): kill-switch приёма видео собеседника (default true). */
@@ -1821,6 +1824,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val callsSessionKey: String,
         /** #CALLS: okcdn uid (из _okcls_anonymLogin) — userId в WS URL сигналинга. */
         val callsSessionUid: Long,
+        /** P0.43-CALLS-FIX: session_secret_key из auth.anonymLogin — нужен для calls.subscribeToQueue. */
+        val callsSessionSecret: String = "",
         /** #CALLS: $Ksd-токен (calls_token_with_url) — auth_token для auth.anonymLogin v3. */
         val callsCallToken: String,
         /** #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2.5): приём видео собеседника
@@ -2169,6 +2174,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CALLS_QUEUE_TS          = longPreferencesKey("calls_queue_ts")
         val CALLS_SESSION_KEY       = stringPreferencesKey("calls_session_key")
         val CALLS_SESSION_UID       = longPreferencesKey("calls_session_uid")
+        // P0.43-CALLS-FIX: session_secret_key из auth.anonymLogin — нужен для
+        // calls.subscribeToQueue(anonym_auth_user_id, secret, device_id).
+        val CALLS_SESSION_SECRET    = stringPreferencesKey("calls_session_secret")
         val CALLS_CALL_TOKEN        = stringPreferencesKey("calls_call_token")
         /** #CALLS-VIDEO-RX (Этап 1): приём видео собеседника (kill-switch краша декодера). */
         val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
