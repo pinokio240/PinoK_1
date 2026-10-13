@@ -2188,6 +2188,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             }
             if (sessionKey.isNullOrBlank()) {
                 AppLog.w("SovaApp", "ensureCallsSessionKey: auth.anonymLogin не вернул session_key")
+                // P0.42-CALLS: проверяем ошибку 101 (application_key изменён).
+                checkCallsApiKeyError()
                 return null
             }
             // 3) Сохраняем в prefs. okcdn uid (584520805550) — из auth.anonymLogin
@@ -2202,6 +2204,24 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             AppLog.w("SovaApp", "ensureCallsSessionKey error: ${e.message}")
             null
         }
+    }
+
+    // P0.42-CALLS: проверка ошибки 101 (неверный application_key) и показ уведомления.
+    @Volatile
+    var callsApiKeyErrorDetected: Boolean by mutableStateOf(false)
+
+    fun checkCallsApiKeyError() {
+        if (callsApiKeyErrorDetected) return
+        val errorCode = apiClient.lastApiErrorCode
+        if (errorCode == 101) {
+            callsApiKeyErrorDetected = true
+            AppLog.e("SovaApp", "CALLS_API_KEY_ERROR: application_key изменён VK (error 101 PARAM_API_KEY). Звонки не будут работать до обновления ключа.")
+        }
+    }
+
+    suspend fun dismissCallsApiKeyWarning() {
+        prefs.setCallsApiKeyWarningShown(true)
+        callsApiKeyErrorDetected = false
     }
 
     /**

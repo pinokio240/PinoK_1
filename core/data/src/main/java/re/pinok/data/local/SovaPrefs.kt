@@ -591,6 +591,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // prefsSnapshot на каждое новое соединение — применяется без
             // перезапуска). Оператор-дефолт — file-стиль соседей по маппингу.
             callsDnsPinIp = p[Keys.CALLS_DNS_PIN_IP] ?: "",
+            callsApiKeyWarningShown = p[Keys.CALLS_API_KEY_WARNING_SHOWN] ?: false,
             // Волна 45-д #SETTINGS-CRYPTO: шифровать ли файл экспорта настроек
             // (код спрашивается в диалоге при экспорте, НЕ хранится нигде).
             // Импорт всегда умеет оба формата: зашифрованный файл по заголовку
@@ -1289,6 +1290,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
      * — невалидное значение игнорируется в пользу авто.
      */
     suspend fun setCallsDnsPinIp(v: String)            = put(Keys.CALLS_DNS_PIN_IP, v.trim())
+    suspend fun setCallsApiKeyWarningShown(v: Boolean)  = put(Keys.CALLS_API_KEY_WARNING_SHOWN, v)
     /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
     suspend fun setEmailNotifyFreq(v: Int)              = put(Keys.EMAIL_NOTIFY_FREQ, v)
 
@@ -1856,6 +1858,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * продолжает собираться без правок.
          */
         val callsDnsPinIp: String = "",
+        // P0.42-CALLS: флаг "не показывать предупреждение об ошибке 101".
+        val callsApiKeyWarningShown: Boolean = false,
         /**
          * #LOG-SECTIONS (волна 31-f): CSV выключенных секций логов
          * ("#IM,#AUDIO,…"; "" = все секции логируются). Дефолт задан явно —
@@ -2176,6 +2180,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // #CALLS-DNS-PIN: ручной IPv4 для пина okcdn-доменов звонков
         // (пустая строка = авто — встроенный 155.212.204.12).
         val CALLS_DNS_PIN_IP        = stringPreferencesKey("calls_dns_pin_ip")
+        // P0.42-CALLS: флаг "не показывать больше" для предупреждения об ошибке 101 (application_key).
+        val CALLS_API_KEY_WARNING_SHOWN = booleanPreferencesKey("calls_api_key_warning_shown")
         // Волна 45-д #SETTINGS-CRYPTO: тумблер шифрования файла экспорта
         // (сам код шифрования НЕ хранится в контейнере — только тумблер).
         val SETTINGS_EXPORT_ENCRYPT = booleanPreferencesKey("settings_export_encrypt")

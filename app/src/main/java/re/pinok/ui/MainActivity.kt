@@ -1068,6 +1068,34 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
+                    // P0.42-CALLS: предупреждение об ошибке 101 (application_key изменён).
+                    val callsApiKeyWarning by app.callsApiKeyErrorDetected
+                    val callsApiKeyWarningDismissed by app.prefs.data
+                        .map { it.callsApiKeyWarningShown }
+                        .collectAsState(initial = false)
+                    if (callsApiKeyWarning && !callsApiKeyWarningDismissed) {
+                        AlertDialog(
+                            onDismissRequest = { },
+                            title = { Text("Звонки недоступны") },
+                            text = {
+                                Text(
+                                    "VK изменил ключ приложения для звонков (error 101). " +
+                                        "Звонки не будут работать до обновления PinoK.\n\n" +
+                                        "Сообщите разработчику: application_key changed (PARAM_API_KEY).",
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    app.dismissCallsApiKeyWarning()
+                                }) { Text("Больше не показывать") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = {
+                                    app.callsApiKeyErrorDetected = false
+                                }) { Text("Понятно") }
+                            },
+                        )
+                    }
                     LaunchedEffect(snap.lockerEnabled, snap.lockerPinHash, bootLocal, currentAuthVersion, isOfflineMode) {
                         // Скип только если уже загрузились AND токен жив AND
                         // boot-решение (локер) в этом процессе уже принято.
