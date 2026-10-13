@@ -17544,8 +17544,8 @@ class VKApiClient(
                     }
                     val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
                     if (json?.has("error_code") == true || json?.has("error") == true) {
-                        val errCode = json?.get("error_code")?.asInt ?: -1
-                        val errMsg = json?.get("error_msg")?.asString ?: ""
+                        val errCode = json.get("error_code")?.asInt ?: -1
+                        val errMsg = json.get("error_msg")?.asString ?: ""
                         AppLog.w("VKApiClient", "calls.subscribeToQueue [$authType] $base error $errCode: $errMsg")
                         return@use null
                     }
