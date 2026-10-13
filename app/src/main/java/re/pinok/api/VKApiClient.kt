@@ -17474,12 +17474,19 @@ class VKApiClient(
      *   function ek(e){let{base_url:r,queues:n}=e.queue_subscription_info,
      *     {key:i,timestamp:a}=n[0];return`${r}?act=a_check&key=${i}&id=${t}&ts=${a}&wait=20`}
      *
+     * API wrapper (a-6 vendors.js, function s0):
+     *   ir.sessionKey ? t.session_key = ir.sessionKey
+     *   : ir.accessToken && (t.access_token = ir.accessToken)
+     * То есть: если sessionKey не установлен — используется access_token (call_token).
+     *
      * Response: { queue_subscription_info: { base_url, queues: [{ key, timestamp }] } }
      *
      * @param sessionKey из auth.anonymLogin (SovaPrefs.callsSessionKey)
      * @param okUid okcdn user_id (SovaPrefs.callsSessionUid, НЕ VK user_id)
      * @param secret session_secret_key из auth.anonymLogin (lastAnonymSecret)
      * @param deviceId exchangeAuthRepository.deviceId()
+     * @param callToken $Ksd-токен из messages.getCallToken (SovaPrefs.callsCallToken) —
+     *        используется как access_token если sessionKey пустой
      * @return QueueCredential или null.
      */
     suspend fun callsSubscribeToQueue(
@@ -17487,34 +17494,59 @@ class VKApiClient(
         okUid: Long,
         secret: String,
         deviceId: String,
+        callToken: String = "",
     ): QueueCredential? {
         if (isOffline()) return null
-        if (sessionKey.isBlank() || okUid <= 0L || secret.isBlank() || deviceId.isBlank()) {
-            AppLog.w("VKApiClient", "calls.subscribeToQueue: missing params (sk=${sessionKey.length}, uid=$okUid, secret=${secret.length}, dev=${deviceId.length})")
+        if (okUid <= 0L || secret.isBlank() || deviceId.isBlank()) {
+            AppLog.w("VKApiClient", "calls.subscribeToQueue: missing params (uid=$okUid, secret=${secret.length}, dev=${deviceId.length})")
             return null
         }
         val apiKey = VCHAT_API_KEY
-        return try {
-            val form = FormBody.Builder()
+        // P0.43-CALLS-FIX: JS-бандл s0() function: ir.sessionKey ? session_key : access_token.
+        // Сначала пробуем с access_token (call_token) — если он есть. Это правильный путь
+        // браузера: SDK init с accessToken=call_token, sessionKey может быть не установлен.
+        val authVariants = mutableListOf<FormBody.Builder>()
+        if (callToken.isNotBlank()) {
+            // Path 1: access_token (call_token) — БЕЗ session_key
+            authVariants.add(FormBody.Builder()
+                .add("method", "calls.subscribeToQueue")
+                .add("format", "JSON")
+                .add("application_key", apiKey)
+                .add("access_token", callToken)
+                .add("anonym_auth_user_id", okUid.toString())
+                .add("secret", secret)
+                .add("device_id", deviceId))
+        }
+        if (sessionKey.isNotBlank()) {
+            // Path 2: session_key (fallback)
+            authVariants.add(FormBody.Builder()
                 .add("method", "calls.subscribeToQueue")
                 .add("format", "JSON")
                 .add("application_key", apiKey)
                 .add("session_key", sessionKey)
                 .add("anonym_auth_user_id", okUid.toString())
                 .add("secret", secret)
-                .add("device_id", deviceId)
-                .build()
+                .add("device_id", deviceId))
+        }
+        if (authVariants.isEmpty()) {
+            AppLog.w("VKApiClient", "calls.subscribeToQueue: нет ни callToken ни sessionKey")
+            return null
+        }
+        for ((variantIdx, form) in authVariants.withIndex()) {
+            val authType = if (variantIdx == 0) "access_token" else "session_key"
             for (base in VCHAT_BASES) {
                 val req = Request.Builder().url("$base/fb.do").post(form).build()
                 httpClient.newCall(req).execute().use { resp ->
                     val body = resp.body?.string() ?: ""
                     if (!resp.isSuccessful) {
-                        AppLog.w("VKApiClient", "calls.subscribeToQueue $base HTTP ${resp.code}: ${body.take(200)}")
+                        AppLog.w("VKApiClient", "calls.subscribeToQueue [$authType] $base HTTP ${resp.code}: ${body.take(200)}")
                         return@use null
                     }
                     val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
                     if (json?.has("error_code") == true || json?.has("error") == true) {
-                        AppLog.w("VKApiClient", "calls.subscribeToQueue $base error: ${json.toString().take(300)}")
+                        val errCode = json?.get("error_code")?.asInt ?: -1
+                        val errMsg = json?.get("error_msg")?.asString ?: ""
+                        AppLog.w("VKApiClient", "calls.subscribeToQueue [$authType] $base error $errCode: $errMsg")
                         return@use null
                     }
                     // Response: { queue_subscription_info: { base_url, queues: [{ key, timestamp }] } }
@@ -17528,17 +17560,14 @@ class VKApiClient(
                         val ts = first?.get("timestamp")?.takeIf { it.isJsonPrimitive }?.asLong
                             ?: first?.get("ts")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L
                         if (!key.isNullOrBlank()) {
-                            AppLog.i("VKApiClient", "calls.subscribeToQueue OK (key=${key.take(8)}… ts=$ts url=$baseUrl)")
+                            AppLog.i("VKApiClient", "calls.subscribeToQueue OK [$authType] (key=${key.take(8)}… ts=$ts url=$baseUrl)")
                             return QueueCredential(key = key, ts = ts, url = baseUrl, userId = okUid)
                         }
                     }
                 }
             }
-            null
-        } catch (e: Exception) {
-            AppLog.e("VKApiClient", "calls.subscribeToQueue error", e)
-            null
         }
+        null
     }
 
     /**

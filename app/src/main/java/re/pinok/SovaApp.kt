@@ -2078,16 +2078,24 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 val secret = apiClient.lastAnonymSecret().ifBlank { prefsSnapshot?.callsSessionSecret ?: "" }
                 val deviceId = exchangeAuthRepository.deviceId()
                 val vkUid = exchangeAuthRepository.userId()
+                // P0.43-CALLS-FIX: call_token ($Ksd) из messages.getCallToken —
+                // используется как access_token в calls.subscribeToQueue (JS-бандл s0:
+                // ir.sessionKey ? session_key : access_token).
+                val callToken = prefsSnapshot?.callsCallToken ?: ""
 
                 // 1) calls-очередь — через calls.subscribeToQueue (calls.okcdn.ru).
                 //    Это ЕДИНСТВЕННАЯ очередь, доставляющая incoming_call events.
                 //    VK web (JS-бандл): eb(okUid, secret, deviceId).
-                if (!sessionKey.isNullOrBlank() && okUid > 0L && secret.isNotBlank() && deviceId.isNotBlank()) {
+                // P0.43-CALLS-FIX: пробуем даже без sessionKey — access_token (callToken)
+                //    может быть достаточным (JS-бандл s0: ir.sessionKey ? session_key : access_token).
+                if (okUid > 0L && secret.isNotBlank() && deviceId.isNotBlank() &&
+                    (!sessionKey.isNullOrBlank() || callToken.isNotBlank())) {
                     val callsCred = apiClient.callsSubscribeToQueue(
-                        sessionKey = sessionKey,
+                        sessionKey = sessionKey ?: "",
                         okUid = okUid,
                         secret = secret,
                         deviceId = deviceId,
+                        callToken = callToken,
                     )
                     if (callsCred != null) {
                         AppLog.i("SovaApp", "calls-queuev4 активна (через calls.subscribeToQueue, key=${callsCred.key.take(8)}… ts=${callsCred.ts})")
