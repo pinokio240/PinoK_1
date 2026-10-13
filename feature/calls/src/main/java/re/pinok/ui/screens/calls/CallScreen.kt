@@ -1046,8 +1046,10 @@ fun CallScreen(
                             }
                             AppLog.i("CallScreen", "vchat.system.getInfo: ${if (sysResp != null) "OK (${sysResp.keySet().size} полей)" else "null"}")
                             AppLog.i("CallScreen", "startConversation: conversationId=$outgoingConvId (свой UUID, не call_id=$callId)")
+                            // P0.42-CALLS-HAR: caller_app_id=7879029 (VK_WEB_MOBILE_CLIENT_ID),
+                            // НЕ 6287487 (VK_WEB_CLIENT_ID) — HAR подтвердил.
                             val scResp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                deps.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId, callerAppId = 6287487L)
+                                deps.apiClient.vchatStartConversation(outgoingConvId, skConv, peerId, callerAppId = 7879029L)
                             }
                             if (scResp != null) {
                                 AppLog.i("CallScreen", "vchat.startConversation OK (${scResp.keySet().size} полей)")
