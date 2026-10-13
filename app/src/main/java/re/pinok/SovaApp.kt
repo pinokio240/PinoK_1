@@ -1131,8 +1131,16 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     "calls-test.okcdn.ru",
                     "api.mycdn.me",
                 )
+                // P0.42-CALLS-DNS: fallback IP для VK доменов которые не резолвятся
+                // на некоторых устройствах/сетях. web.api.vk.ru = CNAME api.vk.ru.
+                // Если системный DNS не отдаёт IP — используем хардкод.
+                private val fallbackIps = mapOf(
+                    "web.api.vk.ru" to listOf("87.240.137.208", "87.240.137.206", "87.240.129.140", "87.240.137.207"),
+                    "api.vk.ru" to listOf("87.240.137.208", "87.240.137.206", "87.240.129.140", "87.240.137.207"),
+                )
                 override fun lookup(hostname: String): List<java.net.InetAddress> {
-                    if (hostname.lowercase() in pinnedHosts) {
+                    val h = hostname.lowercase()
+                    if (h in pinnedHosts) {
                         var ip = AUTO_IP
                         val snap = prefsSnapshot
                         if (snap != null) {
@@ -1143,7 +1151,25 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         }
                         return listOf(java.net.InetAddress.getByName(ip))
                     }
-                    return okhttp3.Dns.SYSTEM.lookup(hostname)
+                    // Сначала пробуем системный DNS.
+                    return try {
+                        val result = okhttp3.Dns.SYSTEM.lookup(hostname)
+                        if (result.isNotEmpty()) result
+                        else {
+                            // Пустой ответ — fallback на хардкод IP.
+                            fallbackIps[h]?.map { java.net.InetAddress.getByName(it) }
+                                ?: emptyList()
+                        }
+                    } catch (e: java.net.UnknownHostException) {
+                        // P0.42-CALLS-DNS: системный DNS не резолвит — fallback.
+                        val ips = fallbackIps[h]
+                        if (ips != null) {
+                            AppLog.w("SovaApp", "DNS fallback: $hostname → ${ips.joinToString(",")} (system DNS failed: ${e.message})")
+                            ips.map { java.net.InetAddress.getByName(it) }
+                        } else {
+                            throw e
+                        }
+                    }
                 }
             })
 
