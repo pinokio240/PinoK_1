@@ -419,18 +419,7 @@ class ExchangeAuthRepository(
             // #AUTO-OFFLINE-REMOVAL (W41): сброс privacyOfflineMode при авторизации
             // (Fix #211) удалён вместе с авто-офлайном #38 — преф больше не пишется,
             // застрявший из старых версий чистит миграция в SovaApp.
-            // #EXCHANGE-TOKEN (2026-10-12): диагностический лог — ПОЧЕМУ exchange_token
-            // отсутствует. Для web-токенов vk1.a.* (вход через внешний браузер,
-            // client_id=6287487) VK возвращает err=15 "Invalid app" → Unavailable →
-            // exchange_token НЕ сохраняется. Значит silent refresh на смене сети
-            // полагается только на живые cookies (Path 1.5/WebView) или Path 3
-            // (который активируется только когда exchange_token есть).
-            val exchangeStatus = when (exchangeResult) {
-                is ExchangeTokenResult.Success -> "yes"
-                is ExchangeTokenResult.TokenInvalid -> "no(token-rejected)"
-                else -> "no(unavailable/err=15-Invalid-app-for-web-client)"
-            }
-            AppLog.i(TAG, "OAuth auth success — user_id=$userId, exchange_token=$exchangeStatus")
+            AppLog.i(TAG, "OAuth WebView auth success — user_id=$userId, exchange_token=${if (exchangeToken != null) "yes" else "no"}")
             AuthState.Success(result)
         } catch (e: Exception) {
             AppLog.e(TAG, "saveOAuthToken error", e)
@@ -921,26 +910,6 @@ class ExchangeAuthRepository(
                     return@withLock httpResult.accessToken
                 }
                 AppLog.w(TAG, "ensureFreshToken: Path 1.5 token rejected on save — $state")
-            }
-
-            // ── #EXCHANGE-TOKEN (2026-10-12): Path 3 — refresh через exchange_token ──
-            // Восстановлено из #SESSION-WEB-MECHANISM (2026-09-24 Path 3/5 удалялись).
-            // Механизм противоположный remixsid: НЕ зависит от cookies и НЕ привязан
-            // к IP (в отличие от access_token vk1.a.*). POST id.vk.com/auth_by_exchange_token
-            // (grant_type=exchange_token, initiator=expired_token) → свежий AuthResult
-            // (новый access_token + НОВЫЙ exchange_token), сохраняется parseAuthResponse.
-            //
-            // Активация ТОЛЬКО при наличии exchange_token в storage. VK выдаёт его
-            // официальным-client токенам; web-токены vk1.a.* (client_id=6287487, вход
-            // через внешний браузер) его НЕ имеют — err=15 "Invalid app" (ExchangeAuthApi).
-            // Поэтому для внешнего браузера эта ветка честно пропускается, а для любых
-            // flow с exchange_token закрывает смену сети без cookies и WebView.
-            val exchangePath = refreshViaExchangeToken()
-            if (exchangePath != null) {
-                lastRefreshSuccessMs = System.currentTimeMillis()
-                AppLog.i(TAG, "ensureFreshToken: Path 3 exchange_token OK " +
-                    "(user_id=${storage.userId()}) — без cookies и WebView")
-                return@withLock exchangePath
             }
 
             // ── WEB-MECHANISM: скрытый WebView «перепосещение» ──
@@ -1550,58 +1519,6 @@ class ExchangeAuthRepository(
                     }
                 }
             })
-        }
-    }
-
-    /**
-     * #EXCHANGE-TOKEN (2026-10-12): Path 3 — refresh access_token через exchange_token.
-     *
-     * POST id.vk.com/auth_by_exchange_token (grant_type=exchange_token, initiator=expired_token).
-     * В отличие от Path 1.5 (remixsid-куки) и access_token НЕ привязан к IP/сети и НЕ зависит
-     * от CookieManager → работает при смене Wi-Fi↔мобильная сеть даже когда внешний браузер
-     * оставил cookies в своём процессе (Android 7+).
-     *
-     * Активация ТОЛЬКО при наличии exchange_token в storage. VK выдаёт его официальным-client
-     * токенам; web-токены vk1.a.* (client_id=6287487, вход через внешний браузер) его НЕ имеют
-     * — auth.getExchangeToken возвращает err=15 "Invalid app" (см. ExchangeAuthApi). Поэтому для
-     * внешнего браузера эта ветка честно пропускается (следует после Path 1.5 live-cookie).
-     *
-     * NULL-политика: все чтения storage — локальные val + проверка if != null (без ?.).
-     */
-    private suspend fun refreshViaExchangeToken(): String? {
-        // Входной параметр auth_by_exchange_token — ТОЛЬКО exchange_token + device_id
-        // (старый access_token этому эндпоинту не нужен — он сам выдаёт свежий).
-        val exchange = storage.exchangeToken()?.takeIf { it.isNotBlank() }
-        if (exchange == null) {
-            AppLog.i(TAG, "refreshViaExchangeToken: нет exchange_token в storage — skip " +
-                "(web-токены vk1.a.* от внешнего браузера не имеют exchange_token)")
-            return null
-        }
-        val deviceId = storage.deviceId()
-        return try {
-            val json = api.authByExchangeToken(
-                exchangeToken = exchange,
-                deviceId = deviceId,
-                initiator = ExchangeAuthApi.Initiator.EXPIRED_TOKEN,
-                silentAuthByLogin = false,
-            )
-            // parseAuthResponse сам сохранит свежий AuthResult (новый access_token +
-            // новый exchange_token) через storage.saveAuthResult и сбросит invalidated.
-            when (val state = parseAuthResponse(json)) {
-                is AuthState.Success -> {
-                    val fresh = state.result.accessToken
-                    AppLog.i(TAG, "refreshViaExchangeToken: OK — свежий access_token " +
-                        "для user=${state.result.userId} (expires_in=${state.result.expiresIn}s)")
-                    fresh
-                }
-                else -> {
-                    AppLog.w(TAG, "refreshViaExchangeToken: обмен отклонён — $state")
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            AppLog.w(TAG, "refreshViaExchangeToken: network/parse error — ${e.message}")
-            null
         }
     }
 

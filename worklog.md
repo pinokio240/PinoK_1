@@ -14200,10 +14200,9 @@ Work Log:
 Task ID: VASI-AUTH-SILENT-REFRESH
 Task: Потеря авторизации при смене сети после входа через внешний браузер (агент Вася).
 Work Log:
-- Диагноз: внешний браузер (Custom Tabs) даёт только access_token; remixsid/P-куки остаются в Chrome (изоляция Android 7+); exchange_token VK НЕ выдаёт для web-клиента 6287487 (err=15) → Path 1.5 невозможен, Path 3 (exchange_token) был удалён в сентябре → смена сети = потеря.
-- Фикс (Вася): восстановлен Path 3 — refreshViaExchangeToken() в ensureFreshToken (id.vk.com/auth_by_exchange_token) для любой сессии с exchange_token; диагностика exchangeStatus в saveOAuthToken (yes/rejected/unavailable).
-- Честное ограничение: для входа именно через Chrome полностью убрать потерю нельзя (нет exchange_token от VK для 6287487) — решение: #IP-BINDING-RETRY (ждёт 30-60с) или WebView-вход (cookies в PinoK, переживает смену сети штатно).
-- Бэкап: backups/vasi-auth-silent-2026-10-12/. Баланс net=0. Сборка на пользователе; пуш с разрешения.
+- Диагноз: внешний браузер (Custom Tabs) даёт только access_token; remixsid/P-куки остаются в Chrome (изоляция Android 7+); exchange_token VK НЕ выдаёт для web-клиента 6287487 (err=15) → Path 1.5 невозможен → смена сети = потеря.
+- Попытка фикса (Вася): восстановлен Path 3 — refreshViaExchangeToken() в ensureFreshToken. НО для входа именно через Chrome/внешний браузер exchange_token у web-токена НЕТ (VK не выдаёт 6287487) → Path 3 не активируется. ОТКАЧЕН (revert 456a721) как неподтверждённый рабочий механизм для этого сценария.
+- Реальное решение для внешнего входа: #IP-BINDING-RETRY (VK обновляет привязку асинхронно, но для web-токенов долго) или WebView-вход (cookies в PinoK, переживает смену сети штатно).
 
 ---
 Task ID: VASI-CALLS-PROTOCOL
