@@ -200,12 +200,10 @@ class Queuev4Client(
     private suspend fun pollLoop(cred: QueueCredential) {
         var ts = cred.ts
         var backoff = MIN_BACKOFF_MS
+        // P0.42-CALLS-DIAG: логируем старт pollLoop — если этой строки нет, pollLoop не запустился.
+        AppLog.i(TAG, "pollLoop started: url=${cred.url} ts=$ts userId=${cred.userId} key=${cred.key.take(8)}…")
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
             try {
-                // Формат a_check (mobile QueueManager): act/ts/key/id/wait — БЕЗ mode/version.
-                // P3.8: URL-encode cred.key — auth-key может содержать символы, ломающие
-                // query (&, =, +, %, пробел). Без encoding VK вернёт ошибку/пустой ответ,
-                // а cred.key эквивалент access_token → утечка через логи/URL-replay.
                 val encodedKey = URLEncoder.encode(cred.key, "UTF-8")
                 val url = "${cred.url}?act=a_check&key=$encodedKey&ts=$ts&id=${cred.userId}&wait=25"
                 val request = Request.Builder().url(url).get().build()
