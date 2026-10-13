@@ -43,6 +43,16 @@ import kotlin.random.Random
  *
  * Используется для приёма входящих звонков (LP 115).
  */
+/**
+ * P0.42-CALLS-HAR: событие звонка из queuev4 (новый формат).
+ * HAR: {"data":{"value":{...},"type":"incoming_call"},"entity_type":"calls"}
+ */
+data class CallEvent(
+    val type: String,          // "incoming_call", "call_accepted", "current_calls_update", "call_history_updated"
+    val value: JsonObject?,    // payload события (call_id, caller_info, conversation_params, ...)
+    val entityType: String,     // "calls"
+)
+
 // Task 20: реализует CallsQueue (фасад :feature:calls) — события/креденшелы queue.
 class Queuev4Client(
     private val httpClient: OkHttpClient,
@@ -155,6 +165,38 @@ class Queuev4Client(
         }
     }
 
+    // P0.42-CALLS-HAR: парсинг НОВОГО формата queuev4 — события как JSON-объекты.
+    // HAR: {"events":[{"data":{"value":{"call_id":"...","caller_info":{...},
+    // "conversation_params":"579:8Ux7...","from_id":152094335,"type":"incoming_call"},
+    // "entity_type":"calls","entity_id":0}]}
+    private fun collectCallEvents(o: JsonObject): List<CallEvent> {
+        val events = mutableListOf<CallEvent>()
+        o.get("events")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { el ->
+            if (!el.isJsonObject) return@forEach
+            val ev = el.asJsonObject
+            val entityType = ev.get("entity_type")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
+            if (entityType != "calls") return@forEach
+            val data = ev.getAsJsonObject("data") ?: return@forEach
+            val type = data.get("type")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
+            val value = data.getAsJsonObject("value")
+            events.add(CallEvent(type = type, value = value, entityType = entityType))
+        }
+        return events
+    }
+
+    // P0.42-CALLS-HAR: парсинг call-событий из ответа queuev4.
+    private fun parseCallEvents(body: String): List<CallEvent> {
+        return try {
+            val parsed = JsonParser.parseString(body)
+            if (!parsed.isJsonObject) return emptyList()
+            val obj = parsed.asJsonObject
+            collectCallEvents(obj)
+        } catch (e: Exception) {
+            AppLog.w(TAG, "parseCallEvents error: ${e.message}")
+            emptyList()
+        }
+    }
+
     private suspend fun pollLoop(cred: QueueCredential) {
         var ts = cred.ts
         var backoff = MIN_BACKOFF_MS
@@ -189,8 +231,58 @@ class Queuev4Client(
                 val (newTs, rawEvents) = parseResponse(body, ts)
                 ts = newTs
 
-                if (rawEvents.isEmpty()) continue
+                // P0.42-CALLS-HAR: парсим новый формат (events как JSON-объекты с entity_type).
+                val callEvents = parseCallEvents(body)
 
+                if (rawEvents.isEmpty() && callEvents.isEmpty()) continue
+
+                // P0.42-CALLS-HAR: сначала обрабатываем новый формат (calls-события).
+                for (ce in callEvents) {
+                    when (ce.type) {
+                        "incoming_call" -> {
+                            val callId = ce.value?.get("call_id")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                            val fromId = ce.value?.get("from_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                            val convParams = ce.value?.get("conversation_params")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                            val callerInfo = ce.value?.getAsJsonObject("caller_info")
+                            val payload = ce.value?.get("payload")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                            AppLog.i(TAG, "INCOMING_CALL (queuev4 calls): callId=$callId fromId=$fromId convParams.len=${convParams.length}")
+                            _events.emit(QueueEvent(
+                                queueId = QUEUE_CALLS,
+                                ts = ts,
+                                payload = mapOf(
+                                    "type" to "incoming_call",
+                                    "call_id" to callId,
+                                    "from_id" to fromId,
+                                    "conversation_params" to convParams,
+                                    "caller_info" to (callerInfo ?: JsonObject()),
+                                    "payload" to payload,
+                                ),
+                            ))
+                        }
+                        "call_accepted" -> {
+                            val callId = ce.value?.takeIf { it.isJsonPrimitive }?.asString
+                                ?: ce.value?.get("value")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
+                            AppLog.i(TAG, "CALL_ACCEPTED (queuev4 calls): callId=$callId")
+                            _events.emit(QueueEvent(queueId = QUEUE_CALLS, ts = ts,
+                                payload = mapOf("type" to "call_accepted", "call_id" to callId)))
+                        }
+                        "current_calls_update" -> {
+                            AppLog.d(TAG, "CURRENT_CALLS_UPDATE (queuev4 calls)")
+                            _events.emit(QueueEvent(queueId = QUEUE_CALLS, ts = ts,
+                                payload = mapOf("type" to "current_calls_update")))
+                        }
+                        "call_history_updated" -> {
+                            AppLog.d(TAG, "CALL_HISTORY_UPDATED (queuev4 calls)")
+                            _events.emit(QueueEvent(queueId = QUEUE_CALLS, ts = ts,
+                                payload = mapOf("type" to "call_history_updated")))
+                        }
+                        else -> {
+                            AppLog.d(TAG, "CALL_EVENT unknown type=${ce.type}")
+                        }
+                    }
+                }
+
+                // Legacy формат (массивы [code, payload]) — оставляем для совместимости.
                 for (ev in rawEvents) {
                     if (ev.size() == 0) continue
                     val code = ev[0]?.takeIf { it.isJsonPrimitive }?.asInt ?: continue

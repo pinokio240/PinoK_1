@@ -1828,9 +1828,47 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             queuev4Client.events.collect { ev ->
                 try {
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
-                        val payload = ev.payload["payload"] as? String
-                        AppLog.i("SovaApp", "INCOMING_CALL (queuev4): payload.len=${payload?.length ?: 0}")
-                        handleQueuev4Incoming(payload)
+                        // P0.42-CALLS-HAR: новый формат — type/incoming_call с conversation_params.
+                        val type = ev.payload["type"] as? String
+                        if (type == "incoming_call") {
+                            val callId = ev.payload["call_id"] as? String ?: ""
+                            val fromId = ev.payload["from_id"] as? Long ?: 0L
+                            val convParams = ev.payload["conversation_params"] as? String ?: ""
+                            val callerInfo = ev.payload["caller_info"] as? com.google.gson.JsonObject
+                            AppLog.i("SovaApp", "INCOMING_CALL (queuev4 HAR): callId=$callId fromId=$fromId convParams.len=${convParams.length}")
+                            // Сохраняем conversation_params как payload — CallScreen decode'ит их.
+                            if (convParams.isNotBlank()) {
+                                pendingIncomingCallPayload = convParams
+                                pendingIncomingCallPeerId = fromId
+                                // Подтягиваем имя/фото из caller_info (если есть).
+                                if (callerInfo != null) {
+                                    val firstName = callerInfo.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                    val lastName = callerInfo.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                    val photo = callerInfo.get("photo_400")?.takeIf { !it.isJsonNull }?.asString
+                                    pendingIncomingCallTitle = "$firstName $lastName".trim().ifBlank { "Входящий звонок" }
+                                    pendingIncomingCallPhoto = photo
+                                } else {
+                                    refreshIncomingCaller()
+                                }
+                                showIncomingCallNotification()
+                            } else {
+                                // Fallback: старый формат payload (строка).
+                                val payload = ev.payload["payload"] as? String
+                                AppLog.i("SovaApp", "INCOMING_CALL (queuev4 legacy): payload.len=${payload?.length ?: 0}")
+                                handleQueuev4Incoming(payload)
+                            }
+                        } else if (type == "call_accepted") {
+                            AppLog.i("SovaApp", "CALL_ACCEPTED (queuev4)")
+                        } else if (type == "current_calls_update" || type == "call_history_updated") {
+                            AppLog.d("SovaApp", "$type (queuev4)")
+                        } else {
+                            // Legacy: payload как строка.
+                            val payload = ev.payload["payload"] as? String
+                            if (!payload.isNullOrBlank()) {
+                                AppLog.i("SovaApp", "INCOMING_CALL (queuev4 legacy): payload.len=${payload.length}")
+                                handleQueuev4Incoming(payload)
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "startCallNotifier: ${e.message}")
@@ -2095,7 +2133,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // Локальный помощник: anonymLogin по всем application_key.
             suspend fun anonymLoginWith(tok: String): String? {
                 val deviceId = exchangeAuthRepository.deviceId()
-                for (apiKey in listOf("CGMMEJLGDIHBABABA", "7793118", "android_web", "0")) {
+                for (apiKey in listOf("CDLGIBMGDIHBABABA", "CGMMEJLGDIHBABABA", "7793118", "android_web", "0")) {
                     val sk = withContext(Dispatchers.IO) {
                         apiClient.vchatAnonymLogin(tok, apiKey, deviceId)
                     }

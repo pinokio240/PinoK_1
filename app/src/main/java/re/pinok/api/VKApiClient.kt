@@ -13600,14 +13600,15 @@ class VKApiClient(
         private const val MAX_PLAYLIST_PAGES = 60
 
         // #CALLS: vchat API base + apiKey из calls SDK.
-        // apiKey для VK web/MVK = CGMMEJLGDIHBABABA (подтверждён из vchat.clientStats
-        // рабочего веб-звонка vk_web2). CIOPGQJGDIHBABABA — OK-версия (210 DISABLED).
+        // P0.42-CALLS-HAR: application_key=CDLGIBMGDIHBABABA (подтверждено из HAR звонков).
+        // Прежнее CGMMEJLGDIHBABABA — давало ошибки на некоторых методах.
         private val VCHAT_BASES = listOf(
             "https://calls.okcdn.ru",
             "https://api.mycdn.me",
             "https://calls-test.okcdn.ru",
         )
         private val VCHAT_API_KEYS = listOf(
+            "CDLGIBMGDIHBABABA",
             "CGMMEJLGDIHBABABA",
             "7793118",
             "android_web",
@@ -13616,7 +13617,7 @@ class VKApiClient(
         // #CALLS: рабочие хост и ключ (подтверждены тестами — остальные дают
         // 101 PARAM_API_KEY). Для новых методов используем только эти.
         private const val VCHAT_BASE = "https://calls.okcdn.ru"
-        private const val VCHAT_API_KEY = "CGMMEJLGDIHBABABA"
+        private const val VCHAT_API_KEY = "CDLGIBMGDIHBABABA"
 
         // ═══ Fix #236: VK docs allowed/blocked extensions ═══
         // VK docs upload-сервер (docs.getMessagesUploadServer type="doc")
