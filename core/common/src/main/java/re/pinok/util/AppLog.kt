@@ -391,6 +391,10 @@ object AppLog {
         LogCategory.AUTH,
         LogCategory.SYSTEM,
         LogCategory.NETWORK,
+        // P0.42-CALLS: CALLS включена по умолчанию — без логов звонков невозможно
+        // диагностировать входящие/исходящие. Раньше включалась только через
+        // startCallSignaling(), но если он не вызывается — звонки молчат.
+        LogCategory.CALLS,
     )
 
     /**
