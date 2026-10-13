@@ -631,7 +631,7 @@ fun CallScreen(
                         engine.setIceServers(fresh)
                         signaling.stop()
                         kotlinx.coroutines.delay(200)
-                        signaling.start(userId = rejoinUid, conversationId = rejoinConvId, params = fresh, peerId = peerId)
+                        signaling.start(userId = rejoinUid, conversationId = rejoinConvId, params = fresh, peerId = peerId, incoming = direction == CallDirection.INCOMING)
                         var waited = 0
                         while (!signaling.isWsReady() && waited < 10_000) {
                             // #PERF-WS-TICK: тик 250→100мс — ре-join продолжается
@@ -712,6 +712,7 @@ fun CallScreen(
                         conversationId = activeCallId.value ?: "",
                         params = resolved,
                         peerId = peerId,
+                        incoming = direction == CallDirection.INCOMING,
                     )
                     sigStarted = true
                 }
@@ -848,12 +849,12 @@ fun CallScreen(
                 engine.setIceServers(decoded)
                 sigUid = uid
                 sigConvId = convId
-                signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId)
+                signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId, incoming = direction == CallDirection.INCOMING)
                 // #CALLS-SERVER-REJOIN: параметры старта для ре-join'а (как у входящего).
                 sigRestart = { reAccept ->
                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                         signaling.stop()
-                        signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId)
+                        signaling.start(userId = uid, conversationId = convId, params = decoded, peerId = peerId, incoming = direction == CallDirection.INCOMING)
                         var waited = 0
                         while (!signaling.isWsReady() && waited < 10_000) {
                             kotlinx.coroutines.delay(100)
@@ -947,14 +948,14 @@ fun CallScreen(
                 sigUid = uid
                 sigConvId = convId
                 AppLog.i("CallScreen", "Signaling start: conversationId=$convId userId=$uid (okUid=$okUid)")
-                signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
+                signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId, incoming = direction == CallDirection.INCOMING)
                 // #CALLS-ACK-REOFFER (2026-08-29): сохраняем параметры для nudge-перерегистрации WS
                 // (watchdog входящего: offer не пришёл → переподключаем WS; reAccept=true —
                 // после перерегистрации заново отправить accept-call).
                 sigRestart = { reAccept ->
                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                         signaling.stop()
-                        signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId)
+                        signaling.start(userId = uid, conversationId = convId, params = resolvedParams, peerId = peerId, incoming = direction == CallDirection.INCOMING)
                         var waited = 0
                         while (!signaling.isWsReady() && waited < 10_000) {
                             kotlinx.coroutines.delay(100)

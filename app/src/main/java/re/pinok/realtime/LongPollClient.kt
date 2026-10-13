@@ -979,8 +979,17 @@ class LongPollClient(
                     // строка conversation-params (WebRTC). Формат подтверждён из
                     // m.vk.ru бандла: case 115: return {type:INCOMING_CALL, payload:e}
                     val payload = ev.stringAt(1)
-                    AppLog.i(TAG, "INCOMING_CALL (LP 115): payload.len=${payload?.length ?: 0}")
-                    _events.emit(LongPollEvent.IncomingCall(payload))
+                    // #CALLS-INCOMING (2026-10-13): messages LongPoll code 115 —
+                    // заглушка [115,-1,-1] БЕЗ данных, НЕ несёт настоящий входящий звонок.
+                    // Реальный входящий приходит через queuev4-calls (queuev4.vk.ru, 115/70).
+                    // Поэтому при payload == "-1" (маркер без параметров) НЕ эмитим
+                    // IncomingCall — иначе ложное срабатывание входного экрана.
+                    if (payload == "-1") {
+                        AppLog.i(TAG, "LP 115 заглушка -1, пропущен (жду queuev4 calls)")
+                    } else {
+                        AppLog.i(TAG, "INCOMING_CALL (LP 115): payload.len=${payload?.length ?: 0}")
+                        _events.emit(LongPollEvent.IncomingCall(payload))
+                    }
                 }
                 else -> {
                     AppLog.d(TAG, "unknown event type=$type ev=$ev")

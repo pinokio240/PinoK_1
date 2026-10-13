@@ -14469,6 +14469,16 @@ class VKApiClient(
     ): Boolean {
         if (isOffline()) return false
         if (sessionKey.isBlank()) return false
+        // #CALLS-HANGUP-REASON-ENUM (2026-10-13): reason в fb.do — ВЕРХНЕРЕГИСТРОВОЕ
+        // значение enum hangupType эталона (HUNGUP|REJECTED|BUSY|CANCELED|…), как
+        // в WS-пути CallSignalingClient.hangup. Lowercase ("declined", "hungup") сервер
+        // не принимает. Нормализуем здесь единообразно — все HTTP-вызовы уходят с UPPERCASE.
+        val wire = when (reason.lowercase()) {
+            "timeout", "cancel", "canceled", "cancelled" -> "CANCELED"
+            "failed", "error" -> "FAILED"
+            "reject", "rejected", "decline", "declined" -> "REJECTED"
+            else -> "HUNGUP"
+        }
         return try {
             val form = FormBody.Builder()
                 .add("method", "vchat.hangupConversation")
@@ -14476,7 +14486,7 @@ class VKApiClient(
                 .add("conversationId", conversationId)
                 .add("application_key", VCHAT_API_KEY)
                 .add("session_key", sessionKey)
-                .add("reason", reason)
+                .add("reason", wire)
                 .build()
             val req = Request.Builder()
                 .url("$VCHAT_BASE/fb.do")

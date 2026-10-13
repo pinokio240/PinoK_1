@@ -1175,6 +1175,8 @@ class MainActivity : ComponentActivity() {
                         AppLog.i("MainActivity", "No token — stopping LongPoll")
                         app.longPollClient.stop()
                         app.queuev4Client.stop()
+                        // #CALLS-INCOMING: останавливаем dedicated calls-очередь при logout.
+                        app.callsQueuev4Client.stop()
                         // #EVENTHUB: останавливаем канал вместе с LongPoll (нет токена).
                         app.eventHubClient.stop()
                         // #COMMUNITY-POSTS: токена нет — поллеру постов нечего опрашивать.

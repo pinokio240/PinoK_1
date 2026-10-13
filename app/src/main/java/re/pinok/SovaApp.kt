@@ -135,6 +135,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         private set
 
     /**
+     * #CALLS-INCOMING (2026-10-13): третья queuev4-подписка на dedicated calls-очередь
+     * (calls_<uid>_<clientId>_1) — РЕАЛЬНЫЙ канал входящих звонков в простое (LP 115/70).
+     * Поднимается отдельно от multiaccount/accountcounters и от events_queue.
+     * Имя очереди — из VKEndpoints.callsQueueId (см. localStorage queue_credential_calls_cache).
+     */
+    lateinit var callsQueuev4Client: Queuev4Client
+        private set
+
+    /**
      * #CALLS: pending входящий звонок — payload LP 115 + caller.
      * Устанавливается в startCallNotifier при входящем звонке; MainActivity
      * читает и открывает CallScreen(incoming=true, payload). После навигации
@@ -1309,6 +1318,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         queuev4Client = Queuev4Client(httpClient = httpClient, apiClient = apiClient)
         // #CALLS: вторая подписка на events_queue<uid> — полные conversation params.
         eventsQueuev4Client = Queuev4Client(httpClient = httpClient, apiClient = apiClient)
+        // #CALLS-INCOMING (2026-10-13): dedicated calls-очередь — реальный канал
+        // входящих звонков в простое (LP 115/70), см. startCallSignaling().
+        callsQueuev4Client = Queuev4Client(httpClient = httpClient, apiClient = apiClient)
 
         // 4. Media3 — downloaders + PlayerService.
         //    #39 C7: AudioStreamCache (zombie) удалён — стриминг-кэш не использовался
@@ -1762,15 +1774,23 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 if (event is re.pinok.realtime.LongPollEvent.IncomingCall) {
                     try {
                         AppLog.i("SovaApp", "INCOMING_CALL (LP 115): payload.len=${event.payload?.length ?: 0}")
-                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи — один звонок приходит
-                        // ИЗ ТРЁХ коллекторов (LP 115 / queuev4 / events_queue); повторная
-                        // запись того же payload перезапускала LaunchedEffect в SovaNavHost
-                        // и пушила вторую копию CallScreen в backstack.
-                        if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) {
-                            // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
-                            pendingIncomingCallPayload = event.payload
-                            refreshIncomingCaller()
-                            showIncomingCallNotification()
+                        // #CALLS-INCOMING (2026-10-13): messages LongPoll 115 = заглушка
+                        // [115,-1,-1] БЕЗ данных — НЕ настоящий входящий звонок. Реальный
+                        // приходит через queuev4-calls. По "-1" не заполняем входящий,
+                        // чтобы не было ложных срабатываний IncomingCallScreen.
+                        if (event.payload == "-1") {
+                            AppLog.i("SovaApp", "LP 115 заглушка -1, пропущен (жду queuev4 calls)")
+                        } else {
+                            // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи — один звонок приходит
+                            // ИЗ ТРЁХ коллекторов (LP 115 / queuev4 / events_queue); повторная
+                            // запись того же payload перезапускала LaunchedEffect в SovaNavHost
+                            // и пушила вторую копию CallScreen в backstack.
+                            if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) {
+                                // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
+                                pendingIncomingCallPayload = event.payload
+                                refreshIncomingCaller()
+                                showIncomingCallNotification()
+                            }
                         }
                     } catch (e: Exception) {
                         AppLog.w("SovaApp", "startCallNotifier: ${e.message}")
@@ -1784,12 +1804,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
                         val payload = ev.payload["payload"] as? String
                         AppLog.i("SovaApp", "INCOMING_CALL (queuev4): payload.len=${payload?.length ?: 0}")
-                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи (см. LP 115 выше).
-                        if (payload != null && (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != payload)) {
-                            pendingIncomingCallPayload = payload
-                            refreshIncomingCaller()
-                            showIncomingCallNotification()
-                        }
+                        handleQueuev4Incoming(payload)
                     }
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "startCallNotifier: ${e.message}")
@@ -1803,16 +1818,78 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     val payload = ev.payload["payload"] as? String
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS || !payload.isNullOrBlank()) {
                         AppLog.i("SovaApp", "INCOMING_CALL (events_queue): queue=${ev.queueId} payload.len=${payload?.length ?: 0}")
-                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи (см. LP 115 выше).
-                        if (payload != null && (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != payload)) {
-                            pendingIncomingCallPayload = payload
-                            refreshIncomingCaller()
-                            showIncomingCallNotification()
-                        }
+                        handleQueuev4Incoming(payload)
                     }
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "eventsQueuev4 notifier: ${e.message}")
                 }
+            }
+        }
+        // #CALLS-INCOMING (2026-10-13): dedicated calls-очередь (callsQueuev4Client) —
+        // реальный канал входящих звонков в простое (LP 115/70). Тот же обработчик.
+        keepAliveScope.launch {
+            callsQueuev4Client.events.collect { ev ->
+                try {
+                    if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
+                        val payload = ev.payload["payload"] as? String
+                        AppLog.i("SovaApp", "INCOMING_CALL (calls-очередь): payload.len=${payload?.length ?: 0} userId=${ev.payload["userId"]} callId=${ev.payload["callId"]}")
+                        handleQueuev4Incoming(payload)
+                    }
+                } catch (e: Exception) {
+                    AppLog.w("SovaApp", "callsQueuev4 notifier: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * #CALLS-INCOMING (2026-10-13): единый обработчик входящего из queuev4-calls
+     * (queuev4Client / events_queue / dedicated callsQueuev4Client).
+     *
+     * payload — событие LP 115/70: либо строка conversation params (реальный payload
+     * с tkn для WebSocket-сигналинга), либо "-1"/null (маркер без данных). При
+     * "-1"/null полные атрибуты звонка (caller_id и т.п.) тянем через
+     * messagesGetCurrentCalls() — не ждём полного payload из events_queue (может быть null).
+     *
+     * Устойчивость: если messagesGetCurrentCalls вернул пусто/0 (звонок уже снят/принят
+     * на другом устройстве) — ложный входящий не показываем, только логируем.
+     */
+    private fun handleQueuev4Incoming(payload: String?) {
+        keepAliveScope.launch {
+            try {
+                // 1) Реальный payload (не "-1") — используем как есть (guard перезаписи).
+                val realPayload = payload?.takeIf { it != "-1" }
+                if (!realPayload.isNullOrBlank()) {
+                    if (!pendingIncomingCallPayload.isNullOrBlank() && pendingIncomingCallPayload == realPayload) {
+                        return@launch // дубль того же payload — пропускаем.
+                    }
+                    pendingIncomingCallPayload = realPayload
+                    refreshIncomingCaller()
+                    showIncomingCallNotification()
+                    return@launch
+                }
+                // 2) payload == "-1"/null — маркер без данных: проверяем, есть ли реальный
+                //    входящий через messagesGetCurrentCalls (caller_id).
+                val callerId = withContext(Dispatchers.IO) {
+                    apiClient.messagesGetCurrentCalls().firstOrNull()?.get("caller_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                }
+                AppLog.i("SovaApp", "handleQueuev4Incoming(-1): callerId=$callerId")
+                if (callerId <= 0L) {
+                    // Звонка на сервере нет (getCurrentCalls пусто/0) — не показываем ложный входящий.
+                    AppLog.i("SovaApp", "handleQueuev4Incoming: getCurrentCalls пусто/0 — входящего нет, пропускаем")
+                    return@launch
+                }
+                pendingIncomingCallPeerId = callerId
+                // Placeholder "-1" — оверлей IncomingCallScreen и decline обрабатывают "-1"
+                // через HTTP-фолбэк (performIncomingDecline), пока реальный payload не пришёл
+                // (перезапишется реальным параметризованным payload выше по guard).
+                if (pendingIncomingCallPayload.isNullOrBlank()) {
+                    pendingIncomingCallPayload = "-1"
+                }
+                refreshIncomingCaller()
+                showIncomingCallNotification()
+            } catch (e: Exception) {
+                AppLog.w("SovaApp", "handleQueuev4Incoming: ${e.message}")
             }
         }
     }
@@ -1866,6 +1943,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      * Если credential уже задан вручную (SovaPrefs callsQueueKey/Ts) — используем его.
      */
     fun startCallSignaling() {
+        // #CALLS-INCOMING (2026-10-13): dedicated calls-очередь — РЕАЛЬНЫЙ канал входящих
+        // звонков в простое (queuev4-calls, LP 115/70). Запускаем САМОСТОЯТЕЛЬНО, ДО guard
+        // ниже про основную queuev4: даже если основная multiaccount-подписка уже активна
+        // (например процесс восстановлен из фона / исходящий из CallScreen) — calls-очередь
+        // обязана подняться, иначе входящий в простое не дойдёт.
+        startDedicatedCallsQueue()
         if (queuev4Client.isRunning()) return
         // #CALLS-DEBUG: включаем CALLS-логи (иначе Queuev4Client INFO/DEBUG скрыты).
         runCatching { re.pinok.util.AppLog.setCategoryEnabled(re.pinok.util.AppLog.LogCategory.CALLS, true) }
@@ -1911,7 +1994,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "events_queue subscribe error: ${e.message}")
                 }
-                // 2) Fallback: ручной credential из SovaPrefs.
+                // 2) Fallback: ручной credential из SovaPrefs (для основной queuev4).
                 val snap = prefs.data.first()
                 if (snap.callsQueueKey.isNotBlank() && snap.callsQueueTs > 0L) {
                     val uid = exchangeAuthRepository.userId()
@@ -1930,6 +2013,59 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 }
             } catch (e: Exception) {
                 AppLog.e("SovaApp", "startCallSignaling failed", e)
+            }
+        }
+    }
+
+    /**
+     * #CALLS-INCOMING (2026-10-13): подписка на dedicated calls-очередь
+     * calls_<uid>_<clientId>_1 — РЕАЛЬНЫЙ канал входящих звонков в простое.
+     *
+     * Messages LongPoll code 115 = заглушка [115,-1,-1] БЕЗ данных и НЕ несёт звонок;
+     * настоящий входящий приходит через queuev4-calls (LP 115/70). Поэтому подписываемся
+     * на calls-очередь ОТДЕЛЬНО от multiaccount/accountcounters и events_queue —
+     * своим Queuev4Client (callsQueuev4Client), чтобы не ломать существующие подписки
+     * и исходящий вызов, и чтобы входящий докатывался в простое.
+     *
+     * Источник credential:
+     *   1) свежий queue.subscribe (callsQueueId) — SAT-токен, при ошибке web-fallback;
+     *   2) если не дал — кэш из SovaPrefs (persistQueueCredential из localStorage,
+     *      queue_credential_calls_cache). Если credential получить не удалось —
+     *      только логируем «входящие звонки недоступны», приложение не роняем.
+     */
+    private fun startDedicatedCallsQueue() {
+        keepAliveScope.launch {
+            try {
+                val callsUid = exchangeAuthRepository.userId()
+                // #CALLS-INCOMING-2 (2026-10-13): для calls-очереди нужен client_id ВЕБ-кЛИЕНТА
+                // ЗВОНКОВ = VK_WEB_MOBILE_CLIENT_ID (7879029), НЕ VK_WEB_CLIENT_ID (6287487).
+                // Реверс: в vchat.startConversation caller_app_id=7879029; queue.subscribe
+                // с client_id=6287487 даёт err=15 (Access denied). VK_WEB_MOBILE_CLIENT_ID — 7879029.
+                val callsClientId = re.pinok.BuildConfig.VK_WEB_MOBILE_CLIENT_ID
+                val callsQueueName = re.pinok.api.VKEndpoints.callsQueueId(callsUid, callsClientId)
+                var callsCred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = callsQueueName)
+                if (callsCred == null) {
+                    // Fallback: кэшированный calls-credential (persistQueueCredential → SovaPrefs).
+                    val callsSnap = prefs.data.first()
+                    if (callsSnap.callsQueueKey.isNotBlank() && callsSnap.callsQueueTs > 0L) {
+                        callsCred = re.pinok.data.model.QueueCredential(
+                            key = callsSnap.callsQueueKey,
+                            ts = callsSnap.callsQueueTs,
+                            url = "https://queuev4.vk.ru/im1180",
+                            userId = callsUid,
+                        )
+                    }
+                }
+                if (callsCred != null) {
+                    AppLog.i("SovaApp", "queue.subscribe OK (calls=$callsQueueName key=${callsCred.key.take(8)}… ts=${callsCred.ts})")
+                    callsQueuev4Client.setCredential(callsCred)
+                    callsQueuev4Client.start()
+                    AppLog.i("SovaApp", "queuev4 calls-очередь активна")
+                } else {
+                    AppLog.w("SovaApp", "входящие звонки недоступны (нет queue credential для calls: $callsQueueName)")
+                }
+            } catch (e: Exception) {
+                AppLog.w("SovaApp", "calls queue subscribe error: ${e.message}")
             }
         }
     }

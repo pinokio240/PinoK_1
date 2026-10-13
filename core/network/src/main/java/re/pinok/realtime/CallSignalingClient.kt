@@ -167,6 +167,10 @@ class CallSignalingClient(
     private var webSocket: WebSocket? = null
     private var connectJob: Job? = null
     private var running = false
+    /** #CALLS-TGT-INCOMING (2026-10-13): направление звонка для WS query. Входящий —
+     *  tgt=accept + deviceIdx=0, исходящий — tgt=start без deviceIdx (реверс 2026-10-13). */
+    @Volatile
+    private var incomingCall = false
     private val sequence = AtomicLong(0)
     @Volatile
     private var conversationId: String = ""
@@ -177,15 +181,19 @@ class CallSignalingClient(
     private val _messages = MutableSharedFlow<SignalingMessage>(replay = 0, extraBufferCapacity = 64)
     val messages: SharedFlow<SignalingMessage> = _messages.asSharedFlow()
 
-    /** Подключиться к signaling. [params] — декодированные conversation params. */
+    /** Подключиться к signaling. [params] — декодированные conversation params.
+     *  [incoming] — передать true для ВХОДЯЩЕГО звонка: WS query идёт с tgt=accept и
+     *  deviceIdx=0 (как у эталона). Исходящий (дефолт) — tgt=start без deviceIdx. */
     fun start(
         userId: Long,
         conversationId: String,
         params: ConversationParamsDecoder.Params,
         peerId: Long? = null,
+        incoming: Boolean = false,
     ) {
         if (running) return
         running = true
+        this.incomingCall = incoming
         this.conversationId = conversationId
         if (params.endpoint.isBlank()) {
             AppLog.w(TAG, "start: wssBase пустой — не могу подключиться")
@@ -749,7 +757,9 @@ class CallSignalingClient(
         val query = StringBuilder()
         query.append("userId=").append(userId)
         query.append("&entityType=").append(ENTITY_TYPE_USER)
-        query.append("&deviceIdx=0")
+        // #CALLS-TGT-INCOMING (2026-10-13): deviceIdx=0 в query шлёт ТОЛЬКО входящий
+        // (эталон: исходящий — без deviceIdx). См. реверс-звонков-2026-10-13.
+        if (incomingCall) query.append("&deviceIdx=0")
         query.append("&conversationId=").append(conversationId)
         if (params.token.isNotBlank()) query.append("&token=").append(params.token)
         // Параметры из _buildUrl calls SDK
@@ -760,8 +770,10 @@ class CallSignalingClient(
         query.append("&capabilities=").append(CAPABILITIES)
         // #CALLS-PROTOCOL-2026-10-12 (VK web ws2-эталон): clientType=VK (НЕ "USER").
         query.append("&clientType=").append(CLIENT_TYPE)
-        // #CALLS-PROTOCOL-2026-10-12 (VK web ws2-эталон): обязательный параметр tgt=start.
-        query.append("&tgt=start")
+        // #CALLS-TGT-INCOMING (2026-10-13): tgt различает направление — входящий
+        // tgt=accept, исходящий tgt=start (реверс-звонков-2026-10-13; входящий WS
+        // готовится командой accept-call, исходящий регистрирует вызов командой start).
+        query.append("&tgt=").append(if (incomingCall) "accept" else "start")
         peerId?.let { query.append("&peerId=").append(it) }
         return if (base.contains("?")) base + "&" + query else base + "?" + query
     }

@@ -386,7 +386,7 @@ suspend fun performIncomingDecline(
         val okUid = snap.callsSessionUid
         val uid = if (okUid > 0L) okUid else deps.exchangeAuthRepository.userId()
         val signaling = CallSignalingClient(deps.httpClient)
-        signaling.start(userId = uid, conversationId = conv, params = wsParams)
+        signaling.start(userId = uid, conversationId = conv, params = wsParams, incoming = true)
         var waited = 0
         while (!signaling.isWsReady() && waited < 6000) {
             // #PERF-WS-TICK: тик 200→100мс — decline уходит быстрее (кап 6с прежний).

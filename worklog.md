@@ -14212,3 +14212,53 @@ Work Log:
 - Фикс (Вася, CallSignalingClient): PROTOCOL_VERSION 1→5, добавлен CLIENT_TYPE=VK (используется в clientType), CAPABILITIES 0→6D7F, добавлен tgt=start.
 - Формат offer (participantId числом, animojiVersion, participantType) НЕ менял — следующий шаг если медиа не пойдёт после версии.
 - Бэкап: backups/vasi-calls-protocol-2026-10-12/. Balance net=0. Сборка на пользователе; пуш с разрешения.
+
+---
+Task ID: REVERS-CALLS-2026-10-13
+Task: Реверс-инжиниринг протокола входящих/исходящих звонков VK Web по дампам (агент Вася; только исследование, код не менялся).
+Work Log:
+- Материалы: C:\Users\Pinokio240\Desktop\Ссылки\звонок\ (ВХОДЯЩИЙ.har, звонок исходящий.har, Мессенджер*_files/). Полный разбор: docs/реверс-звонков-2026-10-13.md.
+- WS-кадров в HAR нет (_webSocketMessages отсутствуют). Названия/порядок WS-команд восстановлены из метрик vchat.clientStats -> signaling_command_summary.
+- КОМАНДЫ WS: исходящий (инициатор): update-media-modifiers, change-options, change-media-settings, transmit-data, custom-data, change-participant-state. Входящий (принимающий): get-rooms, accept-call, затем update-media-modifiers, change-media-settings, transmit-data, custom-data(x3). 
+- ПОДТВЕРЖДЕНО для фикса obsolete_client (PinoK уже внёс): version=5, clientType=VK (upper, исходящий), capabilities=6D7F, tgt=start (исходящий), protocolVersion=5 в startConversation.
+- НОВОЕ/уточнение: HTTP vchat.acceptConversation НЕ существует — входящий принимается ТОЛЬКО WS-командой accept-call после get-rooms. Входящий WS URL отличается: clientType=vk (нижний регистр), добавляет deviceIdx=0 и tgt=accept. Если PinoK принимает входящие — слать tgt=accept+deviceIdx, а не tgt=start.
+- session_key=-w-* выдаётся auth.anonymLogin (анонимный вход OK API), живёт на звонок/сессию; application_key=CDLGIBMGDIHBABABA константа. Всё в POST calls.okcdn.ru/fb.do (form-urlencoded).
+- vchat.startConversation: conversationId=uuid4, isVideo=false, protocolVersion=5, payload={is_video,with_join_link,join_by_link,community_user_id:0,caller_app_id:7879029}, onlyAdminCanShareMovie=false, externalIds=ЧИСТЫЙ uid собеседника (152094335). Ответ даёт token+endpoint+ws_ip_addresses+wt_endpoint+TURN/STUN (turn:91.231.135.148:19302 и turn:90.156.236.95:19302, username="1791860854:584520805550")+client_type:VK+device_idx:0+p2p_forbidden.
+- vchat.hangupConversation: conversationId + reason=HUNGUP + peerId=ФОРМАТ 3897xxxxxxxxx (исх. 38970049966, вх. 38972735406) — не равен user id.
+- Web.api (v=5.289, client_id=7879029): messages.getCallParticipants(call_id,participant_ids), messages.getConversationsById, calls.getCallSettings(call_id), calls.getConversationByCall(call_id)->чат звонка (напр. peer 2000000229 "Групповой звонок 12.10.2026"), messages.getJoinLink(call_id,invalidate)-> vk.ru/call/join/..., eventHub.getToken.
+- Кодеки: аудио Opus fmtp "dred=100;minptime=10;usedtx=1;useinbandfec=1"; видео H265 (MediaFoundationVideoEncodeAccelerator/AMDh265Encoder). sdk 2.8.13-beta.6, platform vk_mvk, wasm audio-processing/0-0-9.
+- ОГРАНИЧЕНИЕ: точные JSON-схемы WS (type/data/participantId/animojiVersion/request_id) из бандлов не восстановлены — код calls-sdk (calls-sdk.cdn-vk.ru) в дампах отсутствует (только .wasm/.data). Из p-6 vendors виден только HTTP-транспорт fb.do + auth.anonymLogin. Для точных тел WS нужен перехват /ws2 прокси.
+- Сборка НЕ запускалась, git-пуш не делался (только документация).
+## VASI-CALLS-TGT-INCOMING / 2026-10-13
+
+**Проблема:** входящий звонок подключал WS-сигналинг с tgt=start (жёстко зашито), тогда как эталон VK web для входящего использует ws2 URL с 	gt=accept и deviceIdx=0.
+
+**Реверс:** docs/реверс-звонков-2026-10-13.md (по HAR исходящего и входящего звонка VK Web).
+
+**Правка:**
+1. CallSignalingClient.kt — start(...) получил параметр incoming: Boolean = false; новое поле incomingCall. uildUrl теперь: входящий -> 	gt=accept + deviceIdx=0; исходящий -> 	gt=start без deviceIdx.
+2. CallScreen.kt — все вызовы signaling.start дополнены incoming = direction == CallDirection.INCOMING (именованный аргумент, позиционные не сломаны).
+3. VKApiClient.vchatHangupConversation — reason нормализуется в UPPERCASE-enum (HUNGUP|REJECTED|CANCELED|FAILED), как в WS-пути CallSignalingClient.hangup. Устраняет lowercase eason="declined" в HTTP-фолбэке.
+
+**Бэкапы:** backups/vasi-calls-tgt-2026-10-13/ (CallSignalingClient.kt.bak, CallScreen.kt.bak, IncomingCallScreen.kt.bak, VKApiClient.kt.bak).
+Сборка gradle не запускалась, коммитов нет. Требуется пересборка + ручная проверка входящего звонка.
+
+## VASI-CALLS-INCOMING / 2026-10-13
+
+**Проблема:** входящий звонок не доходит в PinoK (в VK Web приходит). Реальный канал VK-звонков — queuev4-calls (queuev4.vk.ru, коды 115 INCOMING_CALL / 70 VIDEO_CALL) + push(FCM call_init). Messages LongPoll 115 — только заглушка [115,-1,-1] без данных. PinoK не имел: (1) dedicated calls-очереди в простое; (2) игнорирования LP-115-заглушки; (3) фолбэка на messagesGetCurrentCalls при маркере -1.
+
+**Правки:**
+1. SovaApp.kt — новый третий Queuev4Client callsQueuev4Client на dedicated calls-очередь calls_<uid>_<clientId>_1 (VKEndpoints.callsQueueId). startDedicatedCallsQueue() вызывается в startCallSignaling ДО guard — поднимает calls-очередь в простое: queueSubscribe(SAT/web-fallback) -> localStorage-кэш -> лог «входящие недоступны» без падения. MainActivity — logout стопает callsQueuev4Client.
+2. LongPollClient.kt + SovaApp — LP 115 с payload=="-1" НЕ эмитится (заглушка), ждём queuev4-calls.
+3. SovaApp.kt — единый handleQueuev4Incoming(payload): реальный payload храним; "-1"/null -> messagesGetCurrentCalls() -> callerId>0 -> placeholder + refreshIncomingCaller + showIncomingCallNotification (getCurrentCalls пусто/0 — не падать).
+
+**Бэкапы:** backups/vasi-calls-incoming-2026-10-13/ (SovaApp.kt, LongPollClient.kt, MainActivity.kt).
+Gradle не запускался, коммитов нет. Требуется пересборка + проверка: входящий звонок в простое/свернутом приложении.
+
+## VASI-CALLS-INCOMING-2 / 2026-10-13 (исправление client_id)
+
+**Проблема (из лога скомпилированного билда):** queue.subscribe {queue_ids=calls_171093180_6287487_1} → err=15 (Access denied). Мой первый фикс использует для calls-очереди VK_WEB_CLIENT_ID=6287487, а VK для calls-очереди требует client_id веб-клиента ЗВОНКОВ = VK_WEB_MOBILE_CLIENT_ID=7879029 (совпадает с caller_app_id в vchat.startConversation по реверсу). Входящий звонок в логе так и не появился — очередь не поднялась.
+
+**Правка:** SovaApp.startDedicatedCallsQueue(): callsClientId = VK_WEB_CLIENT_ID → VK_WEB_MOBILE_CLIENT_ID (7879029). Теперь calls-очередь = calls_<uid>_7879029_1.
+
+**Бэкап:** backups/vasi-calls-incoming-2026-10-13/SovaApp.kt.fixed-v2 (после правки). Gradle не запускался, коммитов нет. Требуется пересборка: лог должен показать queue.subscribe OK (calls=calls_<uid>_7879029_1) и без err=15; затем при входящем — событие из calls-очереди.
