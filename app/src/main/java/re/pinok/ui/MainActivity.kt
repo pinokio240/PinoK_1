@@ -61,6 +61,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
@@ -1069,7 +1070,8 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     // P0.42-CALLS: предупреждение об ошибке 101 (application_key изменён).
-                    val callsApiKeyWarning by app.callsApiKeyErrorDetected
+                    val scope = rememberCoroutineScope()
+                    val callsApiKeyWarning by app.callsApiKeyErrorDetectedState
                     val callsApiKeyWarningDismissed by app.prefs.data
                         .map { it.callsApiKeyWarningShown }
                         .collectAsState(initial = false)
@@ -1086,7 +1088,7 @@ class MainActivity : ComponentActivity() {
                             },
                             confirmButton = {
                                 TextButton(onClick = {
-                                    app.dismissCallsApiKeyWarning()
+                                    scope.launch { app.dismissCallsApiKeyWarning() }
                                 }) { Text("Больше не показывать") }
                             },
                             dismissButton = {

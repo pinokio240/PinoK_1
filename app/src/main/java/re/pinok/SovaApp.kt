@@ -10,6 +10,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import coil3.ImageLoader
@@ -2207,8 +2208,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     }
 
     // P0.42-CALLS: проверка ошибки 101 (неверный application_key) и показ уведомления.
-    @Volatile
-    var callsApiKeyErrorDetected: Boolean by mutableStateOf(false)
+    // expose State<Boolean> for Compose `by` delegate; keep var API for internal read/write.
+    private val _callsApiKeyErrorDetected = mutableStateOf(false)
+    val callsApiKeyErrorDetectedState: State<Boolean> get() = _callsApiKeyErrorDetected
+    var callsApiKeyErrorDetected: Boolean
+        get() = _callsApiKeyErrorDetected.value
+        set(value) { _callsApiKeyErrorDetected.value = value }
 
     fun checkCallsApiKeyError() {
         if (callsApiKeyErrorDetected) return
