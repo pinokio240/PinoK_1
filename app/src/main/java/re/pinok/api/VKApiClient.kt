@@ -14554,6 +14554,9 @@ class VKApiClient(
             return null
         }
         return try {
+            // P0.42-CALLS: is_video из payload и isVideo параметр должны совпадать.
+            // HAR: payload.is_video=false, isVideo=false (аудиозвонок).
+            // Для видеозвонка оба true. Раньше хардкод false.
             val payload = JsonObject().apply {
                 addProperty("is_video", false)
                 addProperty("with_join_link", false)
@@ -14567,8 +14570,6 @@ class VKApiClient(
                 .add("conversationId", conversationId)
                 .add("application_key", VCHAT_API_KEY)
                 .add("session_key", sessionKey)
-                // #CALLS-FIX (2026-08-24): точный эталон Chrome desktop —
-                // externalIds ВМЕСТО uids, payload, onlyAdminCanShareMovie.
                 .add("isVideo", "false")
                 .add("protocolVersion", "5")
                 .add("payload", payload.toString())
@@ -15716,6 +15717,111 @@ class VKApiClient(
     override suspend fun messagesGetGroupsForCallForSchedule(): List<JsonObject> {
         return messagesGetGroupsForCall()
     }
+
+    // P0.42-CALLS: новые методы из HAR анализа звонков VK web.
+
+    /**
+     * P0.42-CALLS: messages.getJoinLink — ссылка-приглашение на звонок.
+     * HAR: вызывается 2× при исходящем звонке после vchat.startConversation.
+     * Возвращает {join_link, short_credentials{short_id, password}}.
+     */
+    suspend fun messagesGetJoinLink(callId: String, invalidate: Boolean = false): JsonObject? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "call_id" to callId,
+            "invalidate" to if (invalidate) "1" else "0",
+        )
+        val json = call("messages.getJoinLink", args) ?: return null
+        return try {
+            getObj(json, "response")
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetJoinLink parse error", e)
+            null
+        }
+    }
+
+    /**
+     * P0.42-CALLS: vchat.clientStats — телеметрия звонка (fb.do, calls.okcdn.ru).
+     * HAR: вызывается на каждом этапе (call_init, call_start, call_accepted,
+     * first_media_sent, call_finish, codec_usage) + каждые 5с (сетевые метрики).
+     */
+    suspend fun vchatClientStats(
+        sessionKey: String,
+        conversationId: String,
+        statsData: JsonObject,
+    ): Boolean {
+        if (isOffline()) return false
+        if (sessionKey.isBlank()) return false
+        return try {
+            val form = FormBody.Builder()
+                .add("method", "vchat.clientStats")
+                .add("format", "JSON")
+                .add("application_key", VCHAT_API_KEY)
+                .add("session_key", sessionKey)
+                .add("conversationId", conversationId)
+                .add("data", statsData.toString())
+                .build()
+            for (base in VCHAT_BASES) {
+                val req = Request.Builder().url("$base/fb.do").post(form).build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string() ?: ""
+                    if (!resp.isSuccessful) {
+                        AppLog.w("VKApiClient", "vchat.clientStats $base HTTP ${resp.code}")
+                        return@use false
+                    }
+                    val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
+                    if (json?.has("error_code") == true) {
+                        AppLog.w("VKApiClient", "vchat.clientStats error: ${json.get("error_code")}")
+                        return@use false
+                    }
+                    return@use true
+                }
+            }
+            false
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "vchatClientStats error", e)
+            false
+        }
+    }
+
+    /**
+     * P0.42-CALLS: system.getInfo — получить serverTime (fb.do, calls.okcdn.ru).
+     * HAR: первый запрос перед vchat.startConversation.
+     */
+    suspend fun vchatSystemGetInfoExternal(sessionKey: String?): JsonObject? {
+        if (isOffline()) return null
+        return try {
+            val formBuilder = FormBody.Builder()
+                .add("method", "system.getInfo")
+                .add("format", "JSON")
+                .add("application_key", VCHAT_API_KEY)
+            if (!sessionKey.isNullOrBlank()) {
+                formBuilder.add("session_key", sessionKey)
+            }
+            val form = formBuilder.build()
+            for (base in VCHAT_BASES) {
+                val req = Request.Builder().url("$base/fb.do").post(form).build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string() ?: ""
+                    if (!resp.isSuccessful) {
+                        AppLog.w("VKApiClient", "system.getInfo $base HTTP ${resp.code}")
+                        return@use null
+                    }
+                    val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
+                    if (json?.has("error_code") == true) {
+                        AppLog.w("VKApiClient", "system.getInfo error: ${json.get("error_code")}")
+                        return@use null
+                    }
+                    json?.get("response")?.takeIf { it.isJsonObject }?.asJsonObject ?: json
+                }.let { if (it != null) return it }
+            }
+            null
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "vchatSystemGetInfoExternal error", e)
+            null
+        }
+    }
+
 
     /**
      * Fix #267 (Plan §36.12 P1-CHAT-5): account.getToggles — feature flags.

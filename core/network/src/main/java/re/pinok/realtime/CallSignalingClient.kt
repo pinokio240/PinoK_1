@@ -111,6 +111,12 @@ class CallSignalingClient(
          *  Сам send-метод в Ж1 (wave-5) НЕ вошёл — добавлен в Ж8-пакете для «Отклонить» (refuse). */
         const val CMD_REMOVE_PARTICIPANT = "remove-participant"
 
+        // P0.42-CALLS: недостающие команды из HAR анализа.
+        /** change-options: включает RTCP feedback (FEEDBACK=true). Только исходящий. */
+        const val CMD_CHANGE_OPTIONS = "change-options"
+        /** custom-data: телеметрия качества сети (bad-net: rtt, loss). Оба типа. */
+        const val CMD_CUSTOM_DATA = "custom-data"
+
         /**
          * #CALLS-ZH2 ФИКС волны-5 (Task 6-a): имя УВЕДОМЛЕНИЯ participant-state-changed
          * (Ж0 §1.2, enum 16131@163588). CallScreen в ветке Ж2 (Task 5-b) уже сравнивает
@@ -415,6 +421,38 @@ class CallSignalingClient(
      * @return true — команда реально ушла в WS.
      */
     fun sendFeedback(key: String): Boolean = send(CMD_FEEDBACK, mapOf("key" to key))
+
+    // P0.42-CALLS: недостающие send-методы из HAR анализа.
+
+    /**
+     * P0.42-CALLS: change-options — включить RTCP feedback (FEEDBACK=true).
+     * HAR: только исходящий (tgt=start), seq=2, сразу после подключения.
+     */
+    fun sendChangeOptions(feedback: Boolean = true): Boolean {
+        val options = JsonObject().apply {
+            addProperty("FEEDBACK", feedback)
+        }
+        return send(CMD_CHANGE_OPTIONS, mapOf("options" to options))
+    }
+
+    /**
+     * P0.42-CALLS: custom-data — телеметрия качества сети.
+     * HAR: {sequence, data:{sdk:{type:"bad-net", rtt:N, loss:N}}, participantId:null}
+     * Отправляется каждые ~5с во время разговора.
+     */
+    fun sendCustomData(rtt: Int, loss: Double, participantId: String? = null): Boolean {
+        val sdkData = JsonObject().apply {
+            addProperty("type", "bad-net")
+            addProperty("rtt", rtt)
+            addProperty("loss", loss)
+        }
+        val data = JsonObject().apply { add("sdk", sdkData) }
+        val params = mutableMapOf<String, Any>(
+            "data" to data,
+        )
+        if (participantId != null) params["participantId"] = participantId
+        return send(CMD_CUSTOM_DATA, params)
+    }
 
     /**
      * #CALLS-ZH Ж2: change-participant-state — поднятая рука (Ж0 §3.2, 16131@306127).
