@@ -14306,3 +14306,19 @@ W  calls-подписка пропущена: sessionKey=156 okUid=584520805550 
 3. `SovaApp.kt` `startCallSignaling`: если в prefs НЕТ `session_secret_key` (прошлый запуск был до фикса) — `force=true` → `auth.anonymLogin` вызывается принудительно → получает и сохраняет secret. `secret` приоритет из runtime (`lastAnonymSecret`), fallback — из prefs (`callsSessionSecret`).
 
 **Коммиты:** `5fedec8` → `c90554e` → `ac07af7` → `c8c4778` (4 коммита на ветке PinoK).
+
+
+## VASI-MERGE-ORIGIN / 2026-10-13 (объединение с origin/PinoK, коммит коллеги aacb824)
+
+**Действия:** взят бэкап в backups\backup-before-colleague-merge-2026-10-13_2300 (все звонковые файлы + diff-HEAD-vs-origin.patch). Выполнен fast-forward merge рабочей ветки до origin/PinoK = aacb824 (fix calls P0.43-r8). Дерево чистое.
+
+**Что принёс коммит коллеги aacb824 (P0.43-r8):** Восстановлен LP 115 как PRIMARY канал входящего звонка (механизм V2.1.6).
+- LongPollClient.kt: снят скип payload=='-1' — 115 снова эмитит IncomingCall(payload) всегда (в т.ч. '-1').
+- SovaApp.kt: при payload '-1' ставится placeholder и refreshIncomingCaller() тянет реальный caller_id через messagesGetCurrentCalls() (как в V2.1.6).
+- Причина: в P0.42 мой скип '-1' сломал входящие; queuev4 в данных не доставляет entity_type:'calls' (только online/im) — подтверждено логом: parseCallEvents entity_types=[online].
+
+**Текущее состояние канала входящего (после merge):** PRIMARY = LP 115 (включая '-1' -> getCurrentCalls), queuev4 — FALLBACK. Остаются мои правки из базовых коммитов: tgt=accept+deviceIdx=0 для входящего WS, reason-нормализация, callsQueuev4Client (calls-очередь с VK_WEB_MOBILE_CLIENT_ID 7879029) как доп.подписка.
+
+**Статус проблемы ВХОДЯЩЕГО ЗВОНКА: НЕ РЕШЕНА.** Живой входящий (пока звенит) в PinoK по-прежнему не появляется (IncomingCallScreen не рендерится, pendingIncomingCallPayload пуст). Нужна пересборка из aacb824 + лог во время НЕОТВЕЧЕННОГО входящего (queue.subscribe OK calls при старте / INCOMING_CALL LP 115 / entity_type:calls).
+
+**Коммит:** aacb824 (colleague). Локальная ветка обновлена fast-forward.
