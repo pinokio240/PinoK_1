@@ -2045,85 +2045,103 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      * Если credential уже задан вручную (SovaPrefs callsQueueKey/Ts) — используем его.
      */
     fun startCallSignaling() {
-        // P0.42-CALLS-HAR: переписано по HAR-снапшоту звонков VK web.
-        // VK web использует stickers.subscribeToQueue (БЕЗ параметров, через web.api.vk.ru),
-        // НЕ queue.subscribe. HAR: 29 вызовов stickers.subscribeToQueue, 0 вызовов queue.subscribe.
-        // stickers.subscribeToQueue возвращает {base_url, key, ts} — это и есть credential
-        // для queuev4.vk.ru long-poll. Один вызов подписывает на все очереди (multiaccount +
-        // calls + events).
+        // P0.43-CALLS-FIX: переписано по JS-бандлу m.vk.ru (a-5_371124dd5e57d323.js).
+        // VK web использует ДВА разных механизма подписки:
+        //   1) calls.subscribeToQueue(anonym_auth_user_id, secret, device_id) через
+        //      calls.okcdn.ru/fb.do — calls-очередь (incoming_call events).
+        //      Использует session_key от auth.anonymLogin (НЕ web_token/SAT).
+        //   2) stickers.subscribeToQueue (без параметров) через web.api.vk.ru —
+        //      multiaccount-очередь (messages/online/counters events, НЕ calls).
+        //
+        // P0.42 ошибочно использовал stickers.subscribeToQueue для всех 3 очередей —
+        // VK возвращал валидные ключи, но events:[] всегда был пустой (ключи для
+        // multiaccount-очереди, не для calls).
+        //
+        // JS-бандл (расшифровка calls-подписки):
+        //   function eb(e,t,r){return createApi("calls.subscribeToQueue",!0)({
+        //     anonym_auth_user_id:e, secret:t, device_id:r})}
+        //   function ek(e){let{base_url:r,queues:n}=e.queue_subscription_info,
+        //     {key:i,timestamp:a}=n[0];return`${r}?act=a_check&key=${i}&id=${t}&ts=${a}&wait=20`}
         if (queuev4Client.isRunning()) return
         keepAliveScope.launch {
             try {
                 // 0) session_key для vchat (auth.anonymLogin) — как браузер.
-                ensureCallsSessionKey(force = false)
+                //    Возвращает session_key + okcdn uid + session_secret_key.
+                val sessionKey = ensureCallsSessionKey(force = false)
+                val okUid = prefsSnapshot?.callsSessionUid ?: apiClient.lastAnonymUid()
+                val secret = apiClient.lastAnonymSecret()
+                val deviceId = exchangeAuthRepository.deviceId()
+                val vkUid = exchangeAuthRepository.userId()
 
-                // 1) P0.42-CALLS-HAR: stickers.subscribeToQueue — как VK web.
-                //    БЕЗ параметров, через web.api.vk.ru (forceWebGateway).
-                //    Возвращает {base_url, key, ts} — credential для queuev4.
-                val queueJson = apiClient.stickersSubscribeToQueue()
-                if (queueJson != null) {
-                    val baseUrl = queueJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString
-                    val key = queueJson.get("key")?.takeIf { !it.isJsonNull }?.asString
-                    val ts = queueJson.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                // 1) calls-очередь — через calls.subscribeToQueue (calls.okcdn.ru).
+                //    Это ЕДИНСТВЕННАЯ очередь, доставляющая incoming_call events.
+                //    VK web (JS-бандл): eb(okUid, secret, deviceId).
+                if (!sessionKey.isNullOrBlank() && okUid > 0L && secret.isNotBlank() && deviceId.isNotBlank()) {
+                    val callsCred = apiClient.callsSubscribeToQueue(
+                        sessionKey = sessionKey,
+                        okUid = okUid,
+                        secret = secret,
+                        deviceId = deviceId,
+                    )
+                    if (callsCred != null) {
+                        AppLog.i("SovaApp", "calls-queuev4 активна (через calls.subscribeToQueue, key=${callsCred.key.take(8)}… ts=${callsCred.ts})")
+                        callsQueuev4Client.setCredential(callsCred)
+                        callsQueuev4Client.start()
+                    } else {
+                        AppLog.w("SovaApp", "calls.subscribeToQueue вернул null — fallback на queue.subscribe")
+                        checkCallsApiKeyError()
+                        // Fallback: queue.subscribe через SAT (если есть) или web-токен.
+                        val qCred = apiClient.queueSubscribe(
+                            userId = vkUid,
+                            queueIdSuffix = "calls_$vkUid",
+                        )
+                        if (qCred != null) {
+                            AppLog.i("SovaApp", "fallback queue.subscribe calls OK (key=${qCred.key.take(8)}…)")
+                            callsQueuev4Client.setCredential(qCred)
+                            callsQueuev4Client.start()
+                        }
+                    }
+                } else {
+                    AppLog.w("SovaApp", "calls-подписка пропущена: sessionKey=${sessionKey?.length} okUid=$okUid secret=${secret.length} deviceId=${deviceId.length}")
+                }
+
+                // 2) multiaccount-очередь — через stickers.subscribeToQueue (без параметров).
+                //    Доставляет messages/online/counters events (НЕ calls).
+                val multiJson = apiClient.stickersSubscribeToQueue()
+                if (multiJson != null) {
+                    val baseUrl = multiJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString
+                    val key = multiJson.get("key")?.takeIf { !it.isJsonNull }?.asString
+                    val ts = multiJson.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
                     if (!baseUrl.isNullOrBlank() && !key.isNullOrBlank()) {
-                        val callsUid = exchangeAuthRepository.userId()
                         val cred = re.pinok.data.model.QueueCredential(
-                            key = key,
-                            ts = ts,
-                            url = baseUrl,
-                            userId = callsUid,
+                            key = key, ts = ts, url = baseUrl, userId = vkUid,
                         )
                         AppLog.i("SovaApp", "stickers.subscribeToQueue OK (key=${key.take(8)}… ts=$ts url=$baseUrl)")
                         queuev4Client.setCredential(cred)
                         queuev4Client.start()
-                        AppLog.i("SovaApp", "queuev4 активна (через stickers.subscribeToQueue)")
-
-                        // P0.42-CALLS-HAR: та же подписка для events_queue и calls-очереди.
-                        // HAR: stickers.subscribeToQueue вызывается многократно — каждый вызов
-                        // возвращает свежий credential. Подписываем events и calls отдельно.
-                        val eventsJson = apiClient.stickersSubscribeToQueue()
-                        if (eventsJson != null) {
-                            val eKey = eventsJson.get("key")?.takeIf { !it.isJsonNull }?.asString
-                            val eTs = eventsJson.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
-                            val eUrl = eventsJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString ?: baseUrl
-                            if (!eKey.isNullOrBlank()) {
-                                val eventsCred = re.pinok.data.model.QueueCredential(
-                                    key = eKey, ts = eTs, url = eUrl, userId = callsUid,
-                                )
-                                eventsQueuev4Client.setCredential(eventsCred)
-                                eventsQueuev4Client.start()
-                                AppLog.i("SovaApp", "events_queuev4 активна (через stickers.subscribeToQueue)")
-                            }
-                        }
-                        val callsJson = apiClient.stickersSubscribeToQueue()
-                        if (callsJson != null) {
-                            val cKey = callsJson.get("key")?.takeIf { !it.isJsonNull }?.asString
-                            val cTs = callsJson.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
-                            val cUrl = callsJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString ?: baseUrl
-                            if (!cKey.isNullOrBlank()) {
-                                val callsCred = re.pinok.data.model.QueueCredential(
-                                    key = cKey, ts = cTs, url = cUrl, userId = callsUid,
-                                )
-                                callsQueuev4Client.setCredential(callsCred)
-                                callsQueuev4Client.start()
-                                AppLog.i("SovaApp", "calls-queuev4 активна (через stickers.subscribeToQueue)")
-                            }
-                        }
+                        AppLog.i("SovaApp", "queuev4 активна (multiaccount, через stickers.subscribeToQueue)")
                     } else {
                         AppLog.w("SovaApp", "stickers.subscribeToQueue: нет base_url/key/ts в ответе")
                     }
                 } else {
-                    AppLog.w("SovaApp", "stickers.subscribeToQueue вернул null — входящие звонки недоступны")
-                    // Fallback: старый путь через queue.subscribe (если stickers не сработал).
-                    val callsUid = exchangeAuthRepository.userId()
-                    val cred = apiClient.queueSubscribe(
-                        userId = 0L,
-                        queueIdSuffix = re.pinok.api.VKEndpoints.multiaccountQueueId(callsUid),
-                    )
-                    if (cred != null) {
-                        AppLog.i("SovaApp", "fallback queue.subscribe OK (key=${cred.key.take(8)}…)")
-                        queuev4Client.setCredential(cred)
-                        queuev4Client.start()
+                    AppLog.w("SovaApp", "stickers.subscribeToQueue вернул null — multiaccount events недоступны")
+                }
+
+                // 3) events-очередь — второй вызов stickers.subscribeToQueue (новый credential).
+                //    VK web вызывает stickers.subscribeToQueue многократно — каждый вызов
+                //    возвращает свежий credential для отдельной очереди.
+                val eventsJson = apiClient.stickersSubscribeToQueue()
+                if (eventsJson != null) {
+                    val eKey = eventsJson.get("key")?.takeIf { !it.isJsonNull }?.asString
+                    val eTs = eventsJson.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                    val eUrl = eventsJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString ?: "https://queuev4.vk.ru/im1180"
+                    if (!eKey.isNullOrBlank()) {
+                        val eventsCred = re.pinok.data.model.QueueCredential(
+                            key = eKey, ts = eTs, url = eUrl, userId = vkUid,
+                        )
+                        eventsQueuev4Client.setCredential(eventsCred)
+                        eventsQueuev4Client.start()
+                        AppLog.i("SovaApp", "events_queuev4 активна (через stickers.subscribeToQueue)")
                     }
                 }
             } catch (e: Exception) {
@@ -2132,8 +2150,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         }
     }
 
-    // P0.42-CALLS-HAR: startDedicatedCallsQueue удалён — stickers.subscribeToQueue
-    // в startCallSignaling выше подписывает все очереди (multiaccount + events + calls).
+    // P0.43-CALLS-FIX: startDedicatedCallsQueue удалён — startCallSignaling выше
+    // подписывает все 3 очереди: calls (queue.subscribe), multiaccount + events (stickers.subscribeToQueue).
 
     /**
      * #CALLS-AUTO (2026-08-23): автоматическое получение session_key (vchat)

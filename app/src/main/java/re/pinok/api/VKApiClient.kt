@@ -135,6 +135,15 @@ class VKApiClient(
     private var lastAnonymUid: Long = 0L
     override fun lastAnonymUid(): Long = lastAnonymUid
 
+    // P0.43-CALLS-FIX: session_secret_key из auth.anonymLogin — нужен для
+    // calls.subscribeToQueue(anonym_auth_user_id, secret, device_id).
+    // VK web JS-бандл a-5_*.js:
+    //   function eb(e,t,r){return createApi("calls.subscribeToQueue",!0)({
+    //     anonym_auth_user_id:e, secret:t, device_id:r})}
+    @Volatile
+    private var lastAnonymSecret: String = ""
+    fun lastAnonymSecret(): String = lastAnonymSecret
+
     // #NOTIF-NFDCAT: последний прочитанный timestamp (response.last_viewed) из
     // notifications.getRedesign. Сбрасывается на 0 при каждом вызове и заполняется
     // из ответа. Экран использует его для переключателя «Новые/Просмотренные».
@@ -14200,6 +14209,9 @@ class VKApiClient(
                     // Нужен для userId в WS URL сигналинга (иначе invalid-token).
                     val okUid = safeString(res.get("uid"))?.toLongOrNull()
                     if (okUid != null && okUid > 0L) lastAnonymUid = okUid
+                    // P0.43-CALLS-FIX: session_secret_key — нужен для calls.subscribeToQueue
+                    // (параметр secret). VK web JS: eb(uid, secret, device_id).
+                    safeString(res.get("session_secret_key"))?.let { lastAnonymSecret = it }
                     return safeString(res.get("session_key"))
                 }
             }
@@ -17448,6 +17460,83 @@ class VKApiClient(
             }
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "batchCallSingle parse: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * P0.43-CALLS-FIX: calls.subscribeToQueue — подписка на calls-очередь через
+     * calls.okcdn.ru (с session_key от auth.anonymLogin, НЕ через web.api.vk.ru).
+     *
+     * VK web JS-бандл (a-5_371124dd5e57d323.js):
+     *   function eb(e,t,r){return createApi("calls.subscribeToQueue",!0)({
+     *     anonym_auth_user_id:e, secret:t, device_id:r})}
+     *   function ek(e){let{base_url:r,queues:n}=e.queue_subscription_info,
+     *     {key:i,timestamp:a}=n[0];return`${r}?act=a_check&key=${i}&id=${t}&ts=${a}&wait=20`}
+     *
+     * Response: { queue_subscription_info: { base_url, queues: [{ key, timestamp }] } }
+     *
+     * @param sessionKey из auth.anonymLogin (SovaPrefs.callsSessionKey)
+     * @param okUid okcdn user_id (SovaPrefs.callsSessionUid, НЕ VK user_id)
+     * @param secret session_secret_key из auth.anonymLogin (lastAnonymSecret)
+     * @param deviceId exchangeAuthRepository.deviceId()
+     * @return QueueCredential или null.
+     */
+    suspend fun callsSubscribeToQueue(
+        sessionKey: String,
+        okUid: Long,
+        secret: String,
+        deviceId: String,
+    ): QueueCredential? {
+        if (isOffline()) return null
+        if (sessionKey.isBlank() || okUid <= 0L || secret.isBlank() || deviceId.isBlank()) {
+            AppLog.w("VKApiClient", "calls.subscribeToQueue: missing params (sk=${sessionKey.length}, uid=$okUid, secret=${secret.length}, dev=${deviceId.length})")
+            return null
+        }
+        val apiKey = VCHAT_API_KEY
+        return try {
+            val form = FormBody.Builder()
+                .add("method", "calls.subscribeToQueue")
+                .add("format", "JSON")
+                .add("application_key", apiKey)
+                .add("session_key", sessionKey)
+                .add("anonym_auth_user_id", okUid.toString())
+                .add("secret", secret)
+                .add("device_id", deviceId)
+                .build()
+            for (base in VCHAT_BASES) {
+                val req = Request.Builder().url("$base/fb.do").post(form).build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string() ?: ""
+                    if (!resp.isSuccessful) {
+                        AppLog.w("VKApiClient", "calls.subscribeToQueue $base HTTP ${resp.code}: ${body.take(200)}")
+                        return@use null
+                    }
+                    val json = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
+                    if (json?.has("error_code") == true || json?.has("error") == true) {
+                        AppLog.w("VKApiClient", "calls.subscribeToQueue $base error: ${json.toString().take(300)}")
+                        return@use null
+                    }
+                    // Response: { queue_subscription_info: { base_url, queues: [{ key, timestamp }] } }
+                    val subInfo = json?.getAsJsonObject("queue_subscription_info") ?: json?.getAsJsonObject("response")
+                        ?.getAsJsonObject("queue_subscription_info")
+                    if (subInfo != null) {
+                        val baseUrl = safeString(subInfo.get("base_url")) ?: "https://queuev4.vk.ru/im1180"
+                        val queues = subInfo.getAsJsonArray("queues")
+                        val first = queues?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
+                        val key = first?.let { safeString(it.get("key")) }
+                        val ts = first?.get("timestamp")?.takeIf { it.isJsonPrimitive }?.asLong
+                            ?: first?.get("ts")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L
+                        if (!key.isNullOrBlank()) {
+                            AppLog.i("VKApiClient", "calls.subscribeToQueue OK (key=${key.take(8)}… ts=$ts url=$baseUrl)")
+                            return QueueCredential(key = key, ts = ts, url = baseUrl, userId = okUid)
+                        }
+                    }
+                }
+            }
+            null
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "calls.subscribeToQueue error", e)
             null
         }
     }
