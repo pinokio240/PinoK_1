@@ -14262,3 +14262,47 @@ Gradle не запускался, коммитов нет. Требуется п
 **Правка:** SovaApp.startDedicatedCallsQueue(): callsClientId = VK_WEB_CLIENT_ID → VK_WEB_MOBILE_CLIENT_ID (7879029). Теперь calls-очередь = calls_<uid>_7879029_1.
 
 **Бэкап:** backups/vasi-calls-incoming-2026-10-13/SovaApp.kt.fixed-v2 (после правки). Gradle не запускался, коммитов нет. Требуется пересборка: лог должен показать queue.subscribe OK (calls=calls_<uid>_7879029_1) и без err=15; затем при входящем — событие из calls-очереди.
+
+## P0.43-r3 / 2026-10-13 — calls.subscribeToQueue via calls.okcdn.ru
+
+**Проблема:** P0.42 использовал `stickers.subscribeToQueue` (без параметров, через web.api.vk.ru) для всех 3 очередей. VK возвращал валидные ключи, но для **multiaccount-очереди** (messages/online/counters) — events всегда `[]`. Входящих звонков нет.
+
+**Анализ JS-бандла** m.vk.ru `a-5_371124dd5e57d323.js`:
+```javascript
+// calls-очередь — через calls.okcdn.ru (anonym auth):
+function eb(e,t,r){return createApi("calls.subscribeToQueue",!0)({
+  anonym_auth_user_id:e, secret:t, device_id:r})}
+
+// multiaccount — через web.api.vk.ru (web-токен):
+function Q(e){return createApi("queue.subscribe")(e,{},{grouping:!1})}
+```
+
+VK web использует **ДВА разных механизма**: `calls.subscribeToQueue` (calls.okcdn.ru, session_key) для calls и `stickers.subscribeToQueue` (web.api.vk.ru, web-токен) для multiaccount.
+
+**Правки** (коммит `ac07af7`):
+1. `VKApiClient.kt`: добавлено хранение `lastAnonymSecret` (session_secret_key из auth.anonymLogin). Раньше сохранялся только session_key + uid.
+2. `VKApiClient.kt`: добавлен метод `callsSubscribeToQueue(sessionKey, okUid, secret, deviceId)` — POST на `calls.okcdn.ru/fb.do` с `method=calls.subscribeToQueue`. Парсит `queue_subscription_info.queues[0]` → `{ key, timestamp }` → QueueCredential.
+3. `SovaApp.kt`: `startCallSignaling` переписан:
+   - calls-очередь → `calls.subscribeToQueue` (приоритет, через calls.okcdn.ru с session_key)
+   - fallback → `queue.subscribe` с `queue_ids=calls_<vkUid>` (через SAT или web-токен)
+   - multiaccount → `stickers.subscribeToQueue` (без параметров, через web.api.vk.ru)
+   - events → второй вызов `stickers.subscribeToQueue`
+
+**Документация:** `docs/звонки.полный.разбор.md` (890 строк, 16 разделов) — обновлён section 6.4 «ДВА механизма подписки», section 9 шаг 0 подписка, section 14 «ОТЛАДКА ВХОДЯЩИХ В PinoK (раунды 2-3)», section 15 «ОБНОВЛЁННЫЕ ВЫВОДЫ», section 16 «УРОКИ (post-mortem P0.42 → P0.43)» с 6 правилами.
+
+## P0.43-r4 / 2026-10-13 — persist session_secret_key in SovaPrefs
+
+**Проблема** (logcat `ciber.txt:61`):
+```
+W  calls-подписка пропущена: sessionKey=156 okUid=584520805550 secret=0 deviceId=36
+```
+`secret=0` — `lastAnonymSecret()` возвращал пустую строку, потому что:
+- `lastAnonymSecret` — `@Volatile var` в VKApiClient, инициализируется пустой при запуске процесса
+- `ensureCallsSessionKey` нашёл `session_key` в prefs (len=156) → НЕ вызвал `vchatAnonymLogin()` → `lastAnonymSecret` остался пустым → calls-подписка пропущена.
+
+**Правки** (коммит `c8c4778`):
+1. `SovaPrefs.kt`: добавлен `CALLS_SESSION_SECRET` key + `callsSessionSecret` поле в `Snapshot` + `setCallsSessionSecret()` setter. Переживает перезапуск процесса.
+2. `SovaApp.kt` `ensureCallsSessionKey`: после `auth.anonymLogin` сохраняет `session_secret_key` в prefs.
+3. `SovaApp.kt` `startCallSignaling`: если в prefs НЕТ `session_secret_key` (прошлый запуск был до фикса) — `force=true` → `auth.anonymLogin` вызывается принудительно → получает и сохраняет secret. `secret` приоритет из runtime (`lastAnonymSecret`), fallback — из prefs (`callsSessionSecret`).
+
+**Коммиты:** `5fedec8` → `c90554e` → `ac07af7` → `c8c4778` (4 коммита на ветке PinoK).
