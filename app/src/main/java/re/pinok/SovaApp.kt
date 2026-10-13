@@ -1891,14 +1891,51 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             }
         }
         // #CALLS-INCOMING (2026-10-13): dedicated calls-очередь (callsQueuev4Client) —
-        // реальный канал входящих звонков в простое (LP 115/70). Тот же обработчик.
+        // реальный канал входящих звонков в простое (LP 115/70).
+        // P0.42-CALLS-FIX: раньше читал ev.payload["payload"] (внутренний JSON
+        // {"is_video":false} — НЕ conversation_params), поэтому звонок показывался
+        // с пустым payload. Теперь использует тот же парсер нового формата, что и
+        // queuev4Client.events.collect выше — type/call_id/from_id/conversation_params/caller_info.
         keepAliveScope.launch {
             callsQueuev4Client.events.collect { ev ->
                 try {
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
-                        val payload = ev.payload["payload"] as? String
-                        AppLog.i("SovaApp", "INCOMING_CALL (calls-очередь): payload.len=${payload?.length ?: 0} userId=${ev.payload["userId"]} callId=${ev.payload["callId"]}")
-                        handleQueuev4Incoming(payload)
+                        val type = ev.payload["type"] as? String
+                        if (type == "incoming_call") {
+                            val callId = ev.payload["call_id"] as? String ?: ""
+                            val fromId = ev.payload["from_id"] as? Long ?: 0L
+                            val convParams = ev.payload["conversation_params"] as? String ?: ""
+                            val callerInfo = ev.payload["caller_info"] as? com.google.gson.JsonObject
+                            AppLog.i("SovaApp", "INCOMING_CALL (calls-очередь HAR): callId=$callId fromId=$fromId convParams.len=${convParams.length}")
+                            if (convParams.isNotBlank()) {
+                                pendingIncomingCallPayload = convParams
+                                pendingIncomingCallPeerId = fromId
+                                if (callerInfo != null) {
+                                    val firstName = callerInfo.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                    val lastName = callerInfo.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                    val photo = callerInfo.get("photo_400")?.takeIf { !it.isJsonNull }?.asString
+                                    pendingIncomingCallTitle = "$firstName $lastName".trim().ifBlank { "Входящий звонок" }
+                                    pendingIncomingCallPhoto = photo
+                                } else {
+                                    refreshIncomingCaller()
+                                }
+                                showIncomingCallNotification()
+                            } else {
+                                // Fallback: старый формат payload как строка (LP 115 legacy).
+                                val payload = ev.payload["payload"] as? String
+                                handleQueuev4Incoming(payload)
+                            }
+                        } else if (type == "call_accepted") {
+                            AppLog.i("SovaApp", "CALL_ACCEPTED (calls-очередь)")
+                        } else if (type == "current_calls_update" || type == "call_history_updated") {
+                            AppLog.d("SovaApp", "$type (calls-очередь)")
+                        } else {
+                            val payload = ev.payload["payload"] as? String
+                            if (!payload.isNullOrBlank()) {
+                                AppLog.i("SovaApp", "INCOMING_CALL (calls-очередь legacy): payload.len=${payload.length}")
+                                handleQueuev4Incoming(payload)
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     AppLog.w("SovaApp", "callsQueuev4 notifier: ${e.message}")

@@ -166,19 +166,32 @@ class Queuev4Client(
     }
 
     // P0.42-CALLS-HAR: парсинг НОВОГО формата queuev4 — события как JSON-объекты.
-    // HAR: {"events":[{"data":{"value":{"call_id":"...","caller_info":{...},
-    // "conversation_params":"579:8Ux7...","from_id":152094335,"type":"incoming_call"},
-    // "entity_type":"calls","entity_id":0}]}
+    // Реальная структура (HAR сигналинг.zip):
+    //   { "ts":"1227312320","events":[{
+    //     "data": {
+    //       "value": { "call_id":"...","caller_info":{...},
+    //                  "conversation_params":"...","from_id":152094335 },
+    //       "type": "incoming_call"          ← type ВНУТРИ data
+    //     },
+    //     "entity_type": "calls",            ← entity_type НА ВЕРХНЕМ УРОВНЕ events[i]
+    //     "entity_id": 0
+    //   }]}
+    // Для call_finished value — строка (call_id), для call_history_updated — отсутствует.
     private fun collectCallEvents(o: JsonObject): List<CallEvent> {
         val events = mutableListOf<CallEvent>()
         o.get("events")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { el ->
             if (!el.isJsonObject) return@forEach
             val ev = el.asJsonObject
-            val entityType = ev.get("entity_type")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
-            if (entityType != "calls") return@forEach
+            // entity_type НА ВЕРХНЕМ УРОВНЕ events[i] (рядом с data)
+            val entityType = ev.get("entity_type")?.takeIf { it.isJsonPrimitive }?.asString
+            if (entityType == null || entityType != "calls") return@forEach
             val data = ev.getAsJsonObject("data") ?: return@forEach
+            // type ВНУТРИ data (для всех событий calls)
             val type = data.get("type")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
-            val value = data.getAsJsonObject("value")
+            // value может быть: объектом (incoming_call), строкой (call_finished),
+            // или отсутствовать (call_history_updated, current_calls_update).
+            val valueEl = data.get("value")
+            val value: JsonObject? = if (valueEl != null && valueEl.isJsonObject) valueEl.asJsonObject else null
             events.add(CallEvent(type = type, value = value, entityType = entityType))
         }
         return events
@@ -188,9 +201,17 @@ class Queuev4Client(
     private fun parseCallEvents(body: String): List<CallEvent> {
         return try {
             val parsed = JsonParser.parseString(body)
-            if (!parsed.isJsonObject) return emptyList()
+            if (!parsed.isJsonObject) {
+                AppLog.d(TAG, "parseCallEvents: not a JSON object (type=${parsed.javaClass.simpleName})")
+                return emptyList()
+            }
             val obj = parsed.asJsonObject
-            collectCallEvents(obj)
+            val result = collectCallEvents(obj)
+            // P0.42-CALLS-DIAG: логируем результат парсинга — видим что нашли.
+            if (result.isNotEmpty()) {
+                AppLog.i(TAG, "parseCallEvents: parsed ${result.size} call events: types=${result.map { it.type }}")
+            }
+            result
         } catch (e: Exception) {
             AppLog.w(TAG, "parseCallEvents error: ${e.message}")
             emptyList()
@@ -218,8 +239,15 @@ class Queuev4Client(
                     currentCall = null
                 }
                 val body = response.body?.string() ?: ""
+                val httpCode = response.code
                 response.close()
+                // P0.42-CALLS-DIAG: логируем каждый poll-цикл — иначе pollLoop "молчит"
+                // и непонятно: ждёт ответа / получил пусто / не распарсил формат.
+                // Тримим body до 200 символов — длинные conversation_params не засоряют лог.
+                val bodyPreview = if (body.length > 200) body.substring(0, 200) + "…(${body.length})" else body
+                AppLog.d(TAG, "poll: code=$httpCode body.len=${body.length} key=${cred.key.take(8)}… ts=$ts body=$bodyPreview")
                 if (body.isBlank()) {
+                    AppLog.w(TAG, "poll: blank body (code=$httpCode) — backoff=${backoff}ms")
                     delay(backoff)
                     backoff = min(backoff * 2, MAX_BACKOFF_MS)
                     continue
