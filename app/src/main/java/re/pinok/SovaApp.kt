@@ -1801,23 +1801,28 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 if (event is re.pinok.realtime.LongPollEvent.IncomingCall) {
                     try {
                         AppLog.i("SovaApp", "INCOMING_CALL (LP 115): payload.len=${event.payload?.length ?: 0}")
-                        // #CALLS-INCOMING (2026-10-13): messages LongPoll 115 = заглушка
-                        // [115,-1,-1] БЕЗ данных — НЕ настоящий входящий звонок. Реальный
-                        // приходит через queuev4-calls. По "-1" не заполняем входящий,
-                        // чтобы не было ложных срабатываний IncomingCallScreen.
-                        if (event.payload == "-1") {
-                            AppLog.i("SovaApp", "LP 115 заглушка -1, пропущен (жду queuev4 calls)")
-                        } else {
-                            // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи — один звонок приходит
-                            // ИЗ ТРЁХ коллекторов (LP 115 / queuev4 / events_queue); повторная
-                            // запись того же payload перезапускала LaunchedEffect в SovaNavHost
-                            // и пушила вторую копию CallScreen в backstack.
-                            if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) {
-                                // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
-                                pendingIncomingCallPayload = event.payload
-                                refreshIncomingCaller()
-                                showIncomingCallNotification()
+                        // P0.43-r8-V216-RESTORE: в V2.1.6 (последней рабочей версии) LP 115
+                        // с payload="-1" НЕ пропускался — handleQueuev4Incoming тянул реальный
+                        // caller_id через messagesGetCurrentCalls(), потом usersGetByIds для
+                        // имени/фото. CallScreen получал conversation_params через
+                        // vchat.getConversationParams. Отключение "-1" в P0.42 сломало входящие.
+                        // #CALLS-NO-DOUBLE-CALLSCREEN: guard перезаписи — один звонок приходит
+                        // ИЗ ТРЁХ коллекторов (LP 115 / queuev4 / events_queue); повторная
+                        // запись того же payload перезапускала LaunchedEffect в SovaNavHost
+                        // и пушила вторую копию CallScreen в backstack.
+                        if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) {
+                            // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
+                            // P0.43-r8: при payload="-1" (маркер без данных) передаём null в
+                            // handleQueuev4Incoming — оно через messagesGetCurrentCalls вытянет
+                            // реальный caller_id (как V2.1.6).
+                            val realPayload = event.payload?.takeIf { it.isNotBlank() && it != "-1" }
+                            if (realPayload != null) {
+                                pendingIncomingCallPayload = realPayload
+                            } else if (pendingIncomingCallPayload.isNullOrBlank()) {
+                                pendingIncomingCallPayload = "-1"  // placeholder, handleQueuev4Incoming вытянет реальный
                             }
+                            refreshIncomingCaller()
+                            showIncomingCallNotification()
                         }
                     } catch (e: Exception) {
                         AppLog.w("SovaApp", "startCallNotifier: ${e.message}")

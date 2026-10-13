@@ -978,18 +978,17 @@ class LongPollClient(
                     // #CALLS: входящий звонок. ev=[115, payload] — payload =
                     // строка conversation-params (WebRTC). Формат подтверждён из
                     // m.vk.ru бандла: case 115: return {type:INCOMING_CALL, payload:e}
+                    //
+                    // P0.43-r8-V216-RESTORE: в V2.1.6 (последней рабочей версии звонков)
+                    // LP 115 — PRIMARY канал входящих. payload="-1" (маркер без данных)
+                    // НЕ пропускался — SovaApp.handleQueuev4Incoming тянул реальный
+                    // caller_id через messagesGetCurrentCalls(), потом usersGetByIds
+                    // для имени/фото. CallScreen получал conversation_params через
+                    // vchat.getConversationParams. Отключение "-1" в P0.42 сломало
+                    // входящие — queuev4 не доставляет incoming_call events.
                     val payload = ev.stringAt(1)
-                    // #CALLS-INCOMING (2026-10-13): messages LongPoll code 115 —
-                    // заглушка [115,-1,-1] БЕЗ данных, НЕ несёт настоящий входящий звонок.
-                    // Реальный входящий приходит через queuev4-calls (queuev4.vk.ru, 115/70).
-                    // Поэтому при payload == "-1" (маркер без параметров) НЕ эмитим
-                    // IncomingCall — иначе ложное срабатывание входного экрана.
-                    if (payload == "-1") {
-                        AppLog.i(TAG, "LP 115 заглушка -1, пропущен (жду queuev4 calls)")
-                    } else {
-                        AppLog.i(TAG, "INCOMING_CALL (LP 115): payload.len=${payload?.length ?: 0}")
-                        _events.emit(LongPollEvent.IncomingCall(payload))
-                    }
+                    AppLog.i(TAG, "INCOMING_CALL (LP 115): payload.len=${payload?.length ?: 0}")
+                    _events.emit(LongPollEvent.IncomingCall(payload))
                 }
                 else -> {
                     AppLog.d(TAG, "unknown event type=$type ev=$ev")
