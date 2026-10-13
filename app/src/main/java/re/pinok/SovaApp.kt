@@ -2129,14 +2129,6 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 AppLog.e("SovaApp", "startCallSignaling failed", e)
             }
         }
-    }                        eventsQueuev4Client.start()
-                        AppLog.i("SovaApp", "events_queuev4 активна (через stickers.subscribeToQueue)")
-                    }
-                }
-            } catch (e: Exception) {
-                AppLog.e("SovaApp", "startCallSignaling failed", e)
-            }
-        }
     }
 
     // P0.43-CALLS-FIX: startDedicatedCallsQueue удалён — startCallSignaling выше
