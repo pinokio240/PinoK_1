@@ -17535,7 +17535,7 @@ class VKApiClient(
         for ((variantIdx, form) in authVariants.withIndex()) {
             val authType = if (variantIdx == 0) "access_token" else "session_key"
             for (base in VCHAT_BASES) {
-                val req = Request.Builder().url("$base/fb.do").post(form).build()
+                val req = Request.Builder().url("$base/fb.do").post(form.build()).build()
                 httpClient.newCall(req).execute().use { resp ->
                     val body = resp.body?.string() ?: ""
                     if (!resp.isSuccessful) {
@@ -17567,7 +17567,7 @@ class VKApiClient(
                 }
             }
         }
-        null
+        return null
     }
 
     /**
