@@ -452,6 +452,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             authApiHost        = p[Keys.AUTH_API_HOST]         ?: AUTH_API_HOST_DEFAULT,
             authWebClientId    = p[Keys.AUTH_WEB_CLIENT_ID]    ?: AUTH_WEB_CLIENT_ID_DEFAULT,
             authForceRevoke    = p[Keys.AUTH_FORCE_REVOKE]     ?: false,
+            // #SETTINGS-DOMAINS (2026-10-14): доп. домены.
+            authWebApiHost    = p[Keys.AUTH_WEB_API_HOST]    ?: AUTH_WEB_API_HOST_DEFAULT,
+            authUserapiHost   = p[Keys.AUTH_USERAPI_HOST]    ?: AUTH_USERAPI_HOST_DEFAULT,
+            authMediaCdnHost  = p[Keys.AUTH_MEDIA_CDN_HOST]  ?: AUTH_MEDIA_CDN_HOST_DEFAULT,
+            authOkCdnHost     = p[Keys.AUTH_OK_CDN_HOST]     ?: AUTH_OK_CDN_HOST_DEFAULT,
+            authMyCdnHost     = p[Keys.AUTH_MY_CDN_HOST]     ?: AUTH_MY_CDN_HOST_DEFAULT,
+            authQueuev4Host   = p[Keys.AUTH_QUEUEV4_HOST]    ?: AUTH_QUEUEV4_HOST_DEFAULT,
+            authEhHost        = p[Keys.AUTH_EH_HOST]         ?: AUTH_EH_HOST_DEFAULT,
+            authVkDomain      = p[Keys.AUTH_VK_DOMAIN]       ?: AUTH_VK_DOMAIN_DEFAULT,
 
             // Fix #302 (Task 2-b): JSON-кэш состояний sn_* toggles из
             // settingsGeneral.getNotifySettings(page="notify"). Структура:
@@ -576,6 +585,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             callsCallToken = p[Keys.CALLS_CALL_TOKEN] ?: "",
             callsVideoRx = p[Keys.CALLS_VIDEO_RX] ?: true,
             music2Enabled = p[Keys.MUSIC2_ENABLED] ?: false,
+            // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false).
+            callsEnabled = p[Keys.CALLS_ENABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
             callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: true,
@@ -1175,6 +1186,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setAuthApiHost(v: String)              = put(Keys.AUTH_API_HOST, v.trim())
     suspend fun setAuthWebClientId(v: String)          = put(Keys.AUTH_WEB_CLIENT_ID, v.trim())
     suspend fun setAuthForceRevoke(v: Boolean)         = put(Keys.AUTH_FORCE_REVOKE, v)
+    // #SETTINGS-DOMAINS (2026-10-14): доп. домены.
+    suspend fun setAuthWebApiHost(v: String)           = put(Keys.AUTH_WEB_API_HOST, v.trim())
+    suspend fun setAuthUserapiHost(v: String)          = put(Keys.AUTH_USERAPI_HOST, v.trim())
+    suspend fun setAuthMediaCdnHost(v: String)         = put(Keys.AUTH_MEDIA_CDN_HOST, v.trim())
+    suspend fun setAuthOkCdnHost(v: String)            = put(Keys.AUTH_OK_CDN_HOST, v.trim())
+    suspend fun setAuthMyCdnHost(v: String)            = put(Keys.AUTH_MY_CDN_HOST, v.trim())
+    suspend fun setAuthQueuev4Host(v: String)          = put(Keys.AUTH_QUEUEV4_HOST, v.trim())
+    suspend fun setAuthEhHost(v: String)               = put(Keys.AUTH_EH_HOST, v.trim())
+    suspend fun setAuthVkDomain(v: String)             = put(Keys.AUTH_VK_DOMAIN, v.trim())
 
     /**
      * Fix #302 (Task 2-b): persist cached notification toggle states
@@ -1277,6 +1297,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** #CALLS-VIDEO-RX (Этап 1): kill-switch приёма видео собеседника (default true). */
     suspend fun setCallsVideoRx(v: Boolean)            = put(Keys.CALLS_VIDEO_RX, v)
     suspend fun setMusic2Enabled(v: Boolean)           = put(Keys.MUSIC2_ENABLED, v)
+    // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков.
+    suspend fun setCallsEnabled(v: Boolean)          = put(Keys.CALLS_ENABLED, v)
     // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv без камеры).
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
     // #CALLS-SWDECODE: принудительный программный декодер видео.
@@ -1649,6 +1671,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val authApiHost: String,
         val authWebClientId: String,
         val authForceRevoke: Boolean,
+        // #SETTINGS-DOMAINS (2026-10-14): доп. домены.
+        val authWebApiHost: String,     // web.api.vk.ru / web.api.vk.com
+        val authUserapiHost: String,    // userapi.com / userapi.ru (аватарки/фото)
+        val authMediaCdnHost: String,   // vkuserphoto.ru / vkuserphoto.com
+        val authOkCdnHost: String,      // okcdn.ru / okcdn.com
+        val authMyCdnHost: String,      // mycdn.me / mycdn.men
+        val authQueuev4Host: String,    // queuev4.vk.ru / queuev4.vk.com
+        val authEhHost: String,         // eh.vk.ru / eh.vk.com
+        val authVkDomain: String,       // vk.ru / vk.com (основной домен)
         /**
          * Fix #302 (Task 2-b): JSON-кэш состояний sn_* notification toggles
          * из settingsGeneral.getNotifySettings(page="notify"). Формат:
@@ -1834,6 +1865,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          *  БЕЗ пересборки (fallback — прежнее поведение a=inactive). Default true. */
         val callsVideoRx: Boolean,
         val music2Enabled: Boolean,
+        // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false).
+        val callsEnabled: Boolean,
         /** #CALLS-SYMMETRIC (01.09, Этап 2-заготовка): отправлять чёрную видеозаглушку
          *  (320×180@10fps, БЕЗ камеры и разрешения CAMERA) — answer m=video становится
          *  sendrecv, звонок симметричен как у офиц. клиента. Гипотеза: официальный
@@ -2101,6 +2134,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val AUTH_API_HOST        = stringPreferencesKey("auth_api_host")
         val AUTH_WEB_CLIENT_ID   = stringPreferencesKey("auth_web_client_id")
         val AUTH_FORCE_REVOKE    = booleanPreferencesKey("auth_force_revoke")
+        // #SETTINGS-DOMAINS (2026-10-14): дополнительные настраиваемые VK-домены.
+        val AUTH_WEB_API_HOST    = stringPreferencesKey("auth_web_api_host")     // web.api.vk.ru
+        val AUTH_USERAPI_HOST    = stringPreferencesKey("auth_userapi_host")     // *.userapi.com (аватарки/фото)
+        val AUTH_MEDIA_CDN_HOST  = stringPreferencesKey("auth_media_cdn_host")   // *.vkuserphoto.ru
+        val AUTH_OK_CDN_HOST     = stringPreferencesKey("auth_okcdn_host")       // calls/video: *.okcdn.ru
+        val AUTH_MY_CDN_HOST     = stringPreferencesKey("auth_mycdn_host")       // видео/аудио: mycdn.me
+        val AUTH_QUEUEV4_HOST    = stringPreferencesKey("auth_queuev4_host")     // queuev4.vk.ru / .com
+        val AUTH_EH_HOST         = stringPreferencesKey("auth_eh_host")          // EventHub: eh.vk.ru / .com
+        val AUTH_VK_DOMAIN       = stringPreferencesKey("auth_vk_domain")        // основной домен: vk.ru / vk.com
         // Fix #302 (Task 2-b): кэш sn_* notification toggles (JSON map).
         val NOTIFY_CACHE_JSON    = stringPreferencesKey("notify_cache_json")
         // §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда).
@@ -2181,6 +2223,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         /** #CALLS-VIDEO-RX (Этап 1): приём видео собеседника (kill-switch краша декодера). */
         val CALLS_VIDEO_RX          = booleanPreferencesKey("calls_video_rx")
         val MUSIC2_ENABLED          = booleanPreferencesKey("music2_enabled")
+        // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков. По умолчанию
+        // ВЫКЛЮЧЕН (false). Когда выключен — весь функционал звонков скрыт (кнопки
+        // аудио/видео в чатах, раздел «Звонки» в настройках/меню, incoming-оверлей).
+        val CALLS_ENABLED           = booleanPreferencesKey("calls_enabled")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
         val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
         /** #CALLS-AEC-TOGGLE: hardware AEC/NS аудиодвижка звонков. */
@@ -2216,6 +2262,16 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         const val AUTH_MOBILE_WEB_HOST_DEFAULT = "m.vk.ru"
         const val AUTH_API_HOST_DEFAULT        = "api.vk.com"
         const val AUTH_WEB_CLIENT_ID_DEFAULT   = "6287487"  // vk.com desktop web
+        // #SETTINGS-DOMAINS (2026-10-14): дефолты доп. доменов. Проект реально ходит
+        // на .ru для web-gateway/queuev4/eh и на .com для api/oauth/userapi/media.
+        const val AUTH_WEB_API_HOST_DEFAULT    = "web.api.vk.ru"
+        const val AUTH_USERAPI_HOST_DEFAULT    = "userapi.com"
+        const val AUTH_MEDIA_CDN_HOST_DEFAULT  = "vkuserphoto.ru"
+        const val AUTH_OK_CDN_HOST_DEFAULT     = "okcdn.ru"
+        const val AUTH_MY_CDN_HOST_DEFAULT     = "mycdn.me"
+        const val AUTH_QUEUEV4_HOST_DEFAULT    = "queuev4.vk.ru"
+        const val AUTH_EH_HOST_DEFAULT         = "eh.vk.ru"
+        const val AUTH_VK_DOMAIN_DEFAULT       = "vk.ru"
 
         // Fix #337 / #PANELEDIT (2026-10-02): дефолтный порядок пунктов панелей
         // (JSON-массивы KEY пунктов — PanelItems.key, а НЕ Screen.route, т.к.

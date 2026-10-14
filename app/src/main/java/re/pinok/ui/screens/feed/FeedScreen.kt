@@ -402,6 +402,20 @@ fun FeedScreen(
             authApiHost = "api.vk.com",
             authWebClientId = "6287487",
             authForceRevoke = false,
+            // #SETTINGS-DOMAINS (2026-10-14): Snapshot расширился — FeedScreen
+            // обязан передать initial-значения новых доменов (тот же класс бага
+            // Fix #100/#110/#189: «No value passed for parameter»).
+            authWebApiHost = "web.api.vk.ru",
+            authUserapiHost = "userapi.com",
+            authMediaCdnHost = "vkuserphoto.ru",
+            authOkCdnHost = "okcdn.ru",
+            authMyCdnHost = "mycdn.me",
+            authQueuev4Host = "queuev4.vk.ru",
+            authEhHost = "eh.vk.ru",
+            authVkDomain = "vk.ru",
+            // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false) —
+            // FeedScreen должен передать initial-значение, иначе Snapshot не соберётся.
+            callsEnabled = false,
             // Fix #237: showLogFab добавлен в Snapshot — FeedScreen тоже должен
             // передавать initial-значение, иначе компилятор падает:
             // «No value passed for parameter 'showLogFab'».

@@ -41,17 +41,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.outlined.CloudOff
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -723,15 +719,9 @@ private fun AuthScreen(
                     onOfflineMode = onOfflineMode,
                     modifier = Modifier.fillMaxSize(),
                 )
-                // Fix #189: шестерёнка с настройками VK доменов — доступна
-                // ДО авторизации. Размещена в правом верхнем углу LandingScreen.
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 8.dp, end = 4.dp),
-                ) {
-                    re.pinok.auth.exchange.AuthDomainsSettingsIcon()
-                }
+                // #SETTINGS-DOMAINS (2026-10-14): шестерёнка настроек доменов на
+                // экране входа УБРАНА — настройки доменов VK перенесены в отдельный
+                // полноэкранный экран: Настройки → «Настройки доменов VK».
             }
             AuthPhase.WEBVIEW -> VkAuthWebViewScreenV2(
                 isLoading = state is AuthState.Loading,

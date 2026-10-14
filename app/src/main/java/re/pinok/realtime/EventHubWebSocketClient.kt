@@ -160,7 +160,11 @@ class EventHubWebSocketClient(
 
     private fun buildUrl(token: String): String {
         val payload = buildPayload(userAgent)
-        return "wss://eh.vk.ru/?v=1.002&format=json&app_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}&payload=$payload"
+        // #SETTINGS-DOMAINS (2026-10-14): домен EventHub настраиваемый (eh.vk.ru / .com)
+        // из AuthDomainsConfig. ВАЖНО: payload обязан содержать ТОЛЬКО base64-JSON без
+        // переносов; хост подставляем из конфига.
+        return re.pinok.auth.exchange.AuthDomainsConfig.ehWsUrl() +
+            "?v=1.002&format=json&app_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}&payload=$payload"
     }
 
     /** payload = base64({"api_version":"5.289","user_agent":"<UA>"}), без переносов. */

@@ -83,6 +83,15 @@ object AuthDomainsConfig {
         const val API_HOST        = SovaPrefs.AUTH_API_HOST_DEFAULT        // api.vk.com
         const val WEB_CLIENT_ID   = SovaPrefs.AUTH_WEB_CLIENT_ID_DEFAULT   // 6287487
         const val FORCE_REVOKE    = false
+        // #SETTINGS-DOMAINS (2026-10-14): доп. домены.
+        const val WEB_API_HOST    = SovaPrefs.AUTH_WEB_API_HOST_DEFAULT   // web.api.vk.ru
+        const val USERAPI_HOST    = SovaPrefs.AUTH_USERAPI_HOST_DEFAULT   // userapi.com
+        const val MEDIA_CDN_HOST  = SovaPrefs.AUTH_MEDIA_CDN_HOST_DEFAULT // vkuserphoto.ru
+        const val OK_CDN_HOST     = SovaPrefs.AUTH_OK_CDN_HOST_DEFAULT    // okcdn.ru
+        const val MY_CDN_HOST     = SovaPrefs.AUTH_MY_CDN_HOST_DEFAULT    // mycdn.me
+        const val QUEUEV4_HOST    = SovaPrefs.AUTH_QUEUEV4_HOST_DEFAULT   // queuev4.vk.ru
+        const val EH_HOST         = SovaPrefs.AUTH_EH_HOST_DEFAULT        // eh.vk.ru
+        const val VK_DOMAIN       = SovaPrefs.AUTH_VK_DOMAIN_DEFAULT      // vk.ru
     }
 
     /**
@@ -97,6 +106,15 @@ object AuthDomainsConfig {
         val apiHost: String,          // api.vk.com / api.vk.ru
         val webClientId: String,      // 6287487
         val forceRevoke: Boolean,     // false = silent sign-in (без revoke=1)
+        // #SETTINGS-DOMAINS (2026-10-14): доп. домены.
+        val webApiHost: String,       // web.api.vk.ru / web.api.vk.com
+        val userapiHost: String,      // userapi.com / userapi.ru
+        val mediaCdnHost: String,     // vkuserphoto.ru / vkuserphoto.com
+        val okCdnHost: String,        // okcdn.ru / okcdn.com
+        val myCdnHost: String,        // mycdn.me
+        val queuev4Host: String,      // queuev4.vk.ru / queuev4.vk.com
+        val ehHost: String,           // eh.vk.ru / eh.vk.com
+        val vkDomain: String,         // vk.ru / vk.com
     )
 
     /**
@@ -119,6 +137,14 @@ object AuthDomainsConfig {
             apiHost        = Defaults.API_HOST,
             webClientId    = Defaults.WEB_CLIENT_ID,
             forceRevoke    = Defaults.FORCE_REVOKE,
+            webApiHost     = Defaults.WEB_API_HOST,
+            userapiHost    = Defaults.USERAPI_HOST,
+            mediaCdnHost   = Defaults.MEDIA_CDN_HOST,
+            okCdnHost      = Defaults.OK_CDN_HOST,
+            myCdnHost      = Defaults.MY_CDN_HOST,
+            queuev4Host    = Defaults.QUEUEV4_HOST,
+            ehHost         = Defaults.EH_HOST,
+            vkDomain       = Defaults.VK_DOMAIN,
         )
 
     /**
@@ -134,6 +160,14 @@ object AuthDomainsConfig {
             apiHost        = validateHost(snap.authApiHost,        Defaults.API_HOST),
             webClientId    = validateClientId(snap.authWebClientId, Defaults.WEB_CLIENT_ID),
             forceRevoke    = snap.authForceRevoke,
+            webApiHost     = validateHost(snap.authWebApiHost,     Defaults.WEB_API_HOST),
+            userapiHost    = validateHost(snap.authUserapiHost,    Defaults.USERAPI_HOST),
+            mediaCdnHost   = validateHost(snap.authMediaCdnHost,   Defaults.MEDIA_CDN_HOST),
+            okCdnHost      = validateHost(snap.authOkCdnHost,      Defaults.OK_CDN_HOST),
+            myCdnHost      = validateHost(snap.authMyCdnHost,      Defaults.MY_CDN_HOST),
+            queuev4Host    = validateHost(snap.authQueuev4Host,    Defaults.QUEUEV4_HOST),
+            ehHost         = validateHost(snap.authEhHost,         Defaults.EH_HOST),
+            vkDomain       = validateHost(snap.authVkDomain,       Defaults.VK_DOMAIN),
         )
         val old = snapshot
         snapshot = validated
@@ -333,6 +367,35 @@ object AuthDomainsConfig {
      */
     fun webClientId(): String = current.webClientId
 
+    // #SETTINGS-DOMAINS (2026-10-14): URL-хелперы для доп. настраиваемых доменов.
+
+    /** Web API gateway (web.api.vk.ru / .com). https://<webApiHost>/method/<name> */
+    fun webApiMethodUrl(methodName: String): String = "https://${current.webApiHost}/method/$methodName"
+
+    /** Голый базовый путь userapi-хоста (аватарки/фото): https://<userapiHost> */
+    fun userapiHostUrl(): String = "https://${current.userapiHost}"
+
+    /** Медиа CDN (vkuserphoto.ru): https://<mediaCdnHost> */
+    fun mediaCdnHostUrl(): String = "https://${current.mediaCdnHost}"
+
+    /** Построить URL фото/аватарки из пути: https://<mediaCdnHost>/<path> */
+    fun mediaCdnUrl(path: String): String = "https://${current.mediaCdnHost}/$path"
+
+    /** OK CDN (okcdn.ru — звонки/видео): https://<okCdnHost> */
+    fun okCdnHostUrl(): String = "https://${current.okCdnHost}"
+
+    /** My CDN (mycdn.me — видео/аудио): https://<myCdnHost> */
+    fun myCdnHostUrl(): String = "https://${current.myCdnHost}"
+
+    /** Queuev4 long-poll host: https://<queuev4Host>/im1180 */
+    fun queuev4BaseUrl(): String = "https://${current.queuev4Host}/im1180"
+
+    /** EventHub WS host: wss://<ehHost> */
+    fun ehWsUrl(): String = "wss://${current.ehHost}/"
+
+    /** Основной VK домен (vk.ru / vk.com) — база для cookies/ссылок. */
+    fun vkBaseUrl(): String = "https://${current.vkDomain}"
+
     /**
      * Fix #212 (P0.1): login host URL — https://<loginHost>/?act=web_token
      *
@@ -367,7 +430,7 @@ object AuthDomainsConfig {
      * (если пользователь логинился через оба). Это безопасно — getCookie()
      * для несуществующего домена просто вернёт null.
      */
-    fun vkCookieUrls(): List<String> {
+fun vkCookieUrls(): List<String> {
         val cfg = current
         // Извлекаем базовый домен из mobileWebHost (m.vk.ru → vk.ru).
         // Если mobileWebHost = "m.vk.com" → base = "vk.com".
@@ -379,6 +442,13 @@ object AuthDomainsConfig {
             "https://${cfg.loginHost}",           // login.vk.com или login.vk.ru
             "https://${cfg.idHost}",              // id.vk.com или id.vk.ru
             "https://${cfg.oauthHost}",           // oauth.vk.com или oauth.vk.ru
+            // #SETTINGS-DOMAINS (2026-10-14): доп. настраиваемые домены.
+            "https://${cfg.webApiHost}",          // web.api.vk.ru / web.api.vk.com
+            "https://${cfg.queuev4Host}",         // queuev4.vk.ru / .com
+            "https://${cfg.ehHost}",              // eh.vk.ru / .com
+            "https://${cfg.okCdnHost}",           // okcdn.ru / .com
+            "https://${cfg.myCdnHost}",           // mycdn.me
+            "https://${cfg.mediaCdnHost}",        // vkuserphoto.ru / .com
             // Также проверяем альтернативный домен (если юзер на .ru, проверяем .com и наоборот).
             "https://m.vk.ru",
             "https://vk.ru",

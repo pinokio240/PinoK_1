@@ -13988,7 +13988,8 @@ class VKApiClient(
                     .add("lang", "ru")
                     .build()
                 val req = Request.Builder()
-                    .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/queue.subscribe?v=${VKEndpoints.API_VERSION}&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}")
+                    .url(re.pinok.auth.exchange.AuthDomainsConfig.webApiMethodUrl("queue.subscribe") +
+                        "?v=${VKEndpoints.API_VERSION}&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}")
                     .post(form)
                     .build()
                 httpClient.newCall(req).execute().use { resp ->
@@ -14027,7 +14028,7 @@ class VKApiClient(
     private fun parseQueueCredential(resp: JsonObject?, uid: Long): QueueCredential? {
         if (resp == null) return null
         val r = if (resp.has("queues")) resp else (resp.getAsJsonObject("response") ?: resp)
-        val baseUrl = safeString(r.get("base_url")) ?: "https://queuev4.vk.ru/im1180"
+        val baseUrl = safeString(r.get("base_url")) ?: re.pinok.auth.exchange.AuthDomainsConfig.queuev4BaseUrl()
         val queues = r.getAsJsonArray("queues") ?: return null
         val first = queues.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
         val key = safeString(first.get("key")) ?: return null
@@ -17350,7 +17351,7 @@ class VKApiClient(
     private suspend fun fetchEventHubTokenWeb(token: String): String? {
         return try {
             val req = Request.Builder()
-                .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/eventHub.getToken" +
+                .url(re.pinok.auth.exchange.AuthDomainsConfig.webApiMethodUrl("eventHub.getToken") +
                     "?v=${VKEndpoints.API_VERSION}&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}")
                 .header("Authorization", "Bearer $token")
                 .get()
@@ -17420,7 +17421,7 @@ class VKApiClient(
             }
             val body = com.google.gson.JsonObject().apply { add("requests", arr) }
             val req = Request.Builder()
-                .url("${VKEndpoints.QUEUE_SUBSCRIBE_HOST_WEB}/method/batch.call" +
+                .url(re.pinok.auth.exchange.AuthDomainsConfig.webApiMethodUrl("batch.call") +
                     "?v=${VKEndpoints.API_VERSION}&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}")
                 .header("Authorization", "Bearer $token")
                 .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
@@ -17553,7 +17554,7 @@ class VKApiClient(
                     val subInfo = json?.getAsJsonObject("queue_subscription_info") ?: json?.getAsJsonObject("response")
                         ?.getAsJsonObject("queue_subscription_info")
                     if (subInfo != null) {
-                        val baseUrl = safeString(subInfo.get("base_url")) ?: "https://queuev4.vk.ru/im1180"
+                        val baseUrl = safeString(subInfo.get("base_url")) ?: re.pinok.auth.exchange.AuthDomainsConfig.queuev4BaseUrl()
                         val queues = subInfo.getAsJsonArray("queues")
                         val first = queues?.firstOrNull()?.takeIf { it.isJsonObject }?.asJsonObject
                         val key = first?.let { safeString(it.get("key")) }
@@ -19813,7 +19814,7 @@ class VKApiClient(
             .add("toxic_filter", if (filters.toxicFilter == true) "1" else "")
             .add("Obscene_words", filters.obsceneWords.orEmpty())
         val req = okhttp3.Request.Builder()
-            .url("https://vk.ru/groupsedit.php?act=save_comments")
+            .url(re.pinok.auth.exchange.AuthDomainsConfig.vkBaseUrl() + "/groupsedit.php?act=save_comments")
             .post(form.build())
             .header(
                 "User-Agent",
@@ -19822,7 +19823,7 @@ class VKApiClient(
             )
             .header("X-Requested-With", "XMLHttpRequest")
             .header("Accept", "text/plain, */*; q=0.01")
-            .header("Referer", "https://vk.ru/group$groupId")
+            .header("Referer", re.pinok.auth.exchange.AuthDomainsConfig.vkBaseUrl() + "/group$groupId")
             .build()
         val body: String = try {
             httpClient.newCall(req).execute().use { resp ->

@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -89,7 +90,6 @@ import re.pinok.contracts.SettingsSection
 import re.pinok.data.SovaPrefsBackup
 import re.pinok.data.SovaPrefsCrypto
 import re.pinok.data.local.SovaPrefs
-import re.pinok.auth.exchange.AuthDomainsSettingsSheet
 import re.pinok.data.local.AudioFormat
 import re.pinok.data.local.AudioQuality
 import re.pinok.data.model.DownloadState
@@ -136,6 +136,8 @@ import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Shield
 // Fix #391 #IN-APP-UPDATER: иконка вкладки «Обновления» (system update — тренд системных настроек).
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.VideoLibrary
@@ -147,7 +149,6 @@ import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -222,6 +223,13 @@ private enum class SettingsTab(
     // версии, ручное скачивание в браузере. ПЕРЕД AUTHOR (AUTHOR остаётся
     // последней ядерной вкладкой — заказ волны 29).
     UPDATE("Обновления", Icons.Outlined.SystemUpdate),
+    // #SETTINGS-DOMAINS (2026-10-14): вкладка «Домены VK» — настройки VK-доменов
+    // (.com/.ru). Раньше были отдельным экраном / шестерёнкой на входе; теперь
+    // доступны всегда как вкладка в главном экране настроек (в т.ч. гостевой режим).
+    DOMAINS("Домены VK", Icons.Outlined.Public),
+    // #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — инструменты для
+    // разработки/экспериментальных функций (тумблер «Музыка 2» и др.).
+    DEVELOPMENT("Разработка", Icons.Outlined.Build),
     AUTHOR("Автор", Icons.Filled.Person),
     // #ARCH-CONTAINERS (Этап 1.4): ядерная вкладка CALLS («Звонки») убрана из
     // enum — вкладка настроек звонков приходит из реестра (SettingsSection
@@ -247,23 +255,10 @@ private fun AuthorTab(
     scope: CoroutineScope,
 ) {
     val context = LocalContext.current
-    // #SETTINGS-AUTH-DOMAINS (2026-10-12): пункт «Настройки доменов VK» —
-    // открывает AuthDomainsSettingsSheet (лист настройки VK-доменов авторизации).
-    var showAuthDomains by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { SectionHeader("Модули") }
-        item {
-            // #MUSIC2-TOGGLE: вкл/выкл контейнера «Музыка 2». По умолчанию ВЫКЛЮЧЕН.
-            // Выключает пункт «Музыка 2» в меню/панели навигации (см. SovaNavHost).
-            ToggleRow(
-                title = "Музыка 2",
-                subtitle = "Новый контейнер музыки (обособленный от старого). Вкл — по умолчанию выключен.",
-                checked = s.music2Enabled,
-            ) { v -> scope.launch { app.prefs.setMusic2Enabled(v) } }
-        }
         item { SectionHeader("Ссылки") }
         item {
             Card(
@@ -337,49 +332,9 @@ private fun AuthorTab(
                 }
             }
         }
-        // #SETTINGS-AUTH-DOMAINS (2026-10-12): доступ к настройке VK-доменов
-        // авторизации из настроек (раньше — только через шестерёнку на входе).
-        item { SectionHeader("Авторизация") }
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showAuthDomains = true },
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Настройки доменов VK",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            "OAuth, VK ID, Login, API host — переключение .com/.ru",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(
-                        Icons.Outlined.Settings,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-    if (showAuthDomains) {
-        AuthDomainsSettingsSheet(onDismiss = { showAuthDomains = false })
+        // #SETTINGS-DOMAINS (2026-10-14): карточка «Настройки доменов VK» в AuthorTab
+        // УБРАНА — домены VK теперь отдельная вкладка (SettingsTab.DOMAINS) в верхнем
+        // ряду настроек, доступная всегда (в т.ч. гостевой режим). Дубль не нужен.
     }
 }
 
@@ -470,10 +425,16 @@ fun SettingsScreen(
         ContainerRegistry.find<SettingsSection>().sortedBy { it.order }
     }
     val tabs = SettingsTab.entries
-    val pages = remember(containerSections) {
+    // #SETTINGS-CALLS-TOGGLE (2026-10-14): при выключенном kill-switch звонков
+    // контейнерная вкладка «Звонки» (SettingsSection route "settings_calls")
+    // НЕ добавляется в список вкладок — раздел настроек звонков скрыт целиком.
+    val callsActive = s.callsEnabled
+    val pages = remember(containerSections, callsActive) {
         buildList {
             tabs.forEach { add(SettingsPage.Core(it)) }
-            containerSections.forEach { add(SettingsPage.Container(it)) }
+            containerSections
+                .filter { callsActive || it.route != "settings_calls" }
+                .forEach { add(SettingsPage.Container(it)) }
         }
     }
     // #UPDATER-BANNER-DISMISS: тап-переход «баннер → вкладка Обновлений»
@@ -521,6 +482,13 @@ fun SettingsScreen(
                     SettingsTab.DATA -> DataTab(app, scope)
                     // Fix #391 #IN-APP-UPDATER: вкладка «Обновления» (перед AUTHOR).
                     SettingsTab.UPDATE -> UpdateTab(s, app, scope)
+                    // #SETTINGS-DOMAINS (2026-10-14): вкладка «Домены VK» — настройки
+                    // доменов доступны всегда как вкладка в главном экране настроек
+                    // (в т.ч. гостевой режим). Контент общий с отдельным экраном.
+                    SettingsTab.DOMAINS -> AuthDomainsContent(snackbar = remember { SnackbarHostState() })
+                    // #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — экспериментальные
+                    // инструменты/тумблеры (Музыка 2 перенесён из AuthorTab).
+                    SettingsTab.DEVELOPMENT -> DevTab(s, app, scope)
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
                 }
                 is SettingsPage.Container -> {
@@ -553,6 +521,47 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Tab: Разработка
+// ══════════════════════════════════════════════════════════════════════
+/**
+ * #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — инструменты для
+ * разработчика и экспериментальные функции. Содержит тумблер «Музыка 2»
+ * (перенесён из AuthorTab, где был в секции «Модули»).
+ */
+@Composable
+private fun DevTab(
+    s: SovaPrefs.Snapshot,
+    app: SovaApp,
+    scope: CoroutineScope,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item { SectionHeader("Экспериментальные функции") }
+        item {
+            // #MUSIC2-TOGGLE: вкл/выкл контейнера «Музыка 2». По умолчанию ВЫКЛЮЧЕН.
+            // Выключает пункт «Музыка 2» в меню/панели навигации (см. SovaNavHost).
+            ToggleRow(
+                title = "Музыка 2",
+                subtitle = "Новый контейнер музыки (обособленный от старого). Вкл — по умолчанию выключен.",
+                checked = s.music2Enabled,
+            ) { v -> scope.launch { app.prefs.setMusic2Enabled(v) } }
+        }
+        item {
+            // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков. По умолчанию
+            // ВЫКЛЮЧЕН. Когда выключен — скрывает весь функционал звонков: кнопки
+            // аудио/видео в чатах, раздел «Звонки» в настройках/меню, входящий оверлей.
+            ToggleRow(
+                title = "Звонки",
+                subtitle = "Вкл — включить все звонки (аудио/видео). Выкл (по умолчанию) — скрыть раздел звонков и все кнопки аудио/видео-вызовов в интерфейсе.",
+                checked = s.callsEnabled,
+            ) { v -> scope.launch { app.prefs.setCallsEnabled(v) } }
         }
     }
 }

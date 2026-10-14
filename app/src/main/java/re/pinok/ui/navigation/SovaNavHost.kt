@@ -421,8 +421,11 @@ fun SovaNavHost(
     val callStarter = remember { ContainerRegistry.find<CallStarter>().firstOrNull() }
     // #NULL-EXPLICIT: явная проверка вместо safe-call — callClick строится только
     // когда в реестре есть CallStarter; иначе null (кнопки звонка не рендерятся).
+    // #SETTINGS-CALLS-TOGGLE (2026-10-14): при выключенном kill-switch звонков
+    // callClick = null — ВСЕ кнопки аудио/видео-вызовов (лента/друзья/профиль/
+    // шапка диалога) НЕ рендерятся (везде условие `onCallClick != null`).
     val callClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = run {
-        val starter = callStarter
+        val starter = if (app.prefsSnapshot?.callsEnabled == true) callStarter else null
         if (starter != null) {
             { pid: Long, title: String, photo: String? ->
                 OutgoingCallMeta.stash(title, photo)
@@ -471,9 +474,11 @@ fun SovaNavHost(
     // buildRoute с другим payload давал ДРУГОЙ route, launchSingleTop не
     // схлопывал, и в backstack пушилась вторая копия CallScreen.
     // + guard дубликата: если CallScreen уже открыт — не навигируем повторно.
+    // #SETTINGS-CALLS-TOGGLE (2026-10-14): при выключенном kill-switch звонков
+    // навигация на in-звонок не выполняется (оверлей входящего тоже скрыт).
     LaunchedEffect(app.incomingCallAccepted) {
         val payload = app.pendingIncomingCallPayload
-        if (!payload.isNullOrBlank() && app.incomingCallAccepted) {
+        if (!payload.isNullOrBlank() && app.incomingCallAccepted && app.prefsSnapshot?.callsEnabled == true) {
             val cur = nav.currentBackStackEntry?.destination?.route
             if (cur != null && cur.startsWith(Screen.Call.route)) {
                 AppLog.i("SovaNavHost", "INCOMING_CALL: CallScreen already open — skip duplicate navigate")
@@ -503,7 +508,9 @@ fun SovaNavHost(
     // соседних pending-полей SovaApp).
     LaunchedEffect(app.pendingOutgoingCallPeerId) {
         val peerId = app.pendingOutgoingCallPeerId
-        if (peerId > 0L) {
+        // #SETTINGS-CALLS-TOGGLE: app.prefsSnapshot (volatile кэш SovaApp) —
+        // синхронный флаг kill-switch, доступен здесь до объявления prefsSnap.
+        if (peerId > 0L && app.prefsSnapshot?.callsEnabled == true) {
             val (metaTitle, metaPhoto) = OutgoingCallMeta.consume()
             val video = app.pendingOutgoingCallVideo
             AppLog.i("SovaNavHost", "OUTGOING_CALL: navigating to CallScreen peerId=$peerId video=$video (CallStarter)")
@@ -525,7 +532,9 @@ fun SovaNavHost(
     // conversation params из holder'а (screen сам consume'ит сессию).
     LaunchedEffect(re.pinok.ui.screens.calls.CallJoinByLinkHolder.session) {
         val joinSession = re.pinok.ui.screens.calls.CallJoinByLinkHolder.session
-        if (joinSession != null) {
+        // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch — при выключенных
+        // звонках присоединение по ссылке тоже не открывает экран звонка.
+        if (joinSession != null && app.prefsSnapshot?.callsEnabled == true) {
             AppLog.i("SovaNavHost", "JOIN_BY_LINK: navigating to CallScreen (join-сессия, convId из params)")
             nav.navigate(Screen.Call.buildRoute(0L, "Звонок по ссылке", null, incoming = true)) {
                 launchSingleTop = true
@@ -875,6 +884,10 @@ fun SovaNavHost(
     // Нормализованные списки PanelItem для рендера: порядок из prefs, скрытые убраны.
     // #MUSIC2-TOGGLE: если тумблер музыки 2 выключен — убираем пункт «music2» из меню.
     val music2Visible = prefsSnap?.music2Enabled == true
+    // #SETTINGS-CALLS-TOGGLE (2026-10-14): глобальный kill-switch звонков.
+    // Если выключен — прячем пункт «Звонки» из боковой панели (контейнерный
+    // NavEntry "calls_history") и оверлей входящего звонка (см. ниже).
+    val callsActive = prefsSnap?.callsEnabled == true
     val visibleSidebarItems: List<PanelItem> = remember(sidebarOrderKeys, sidebarHiddenKeys, music2Visible) {
         normalizePanelKeys(sidebarOrderKeys, PanelItems.all)
             .filter { it.key !in sidebarHiddenKeys }
@@ -1234,9 +1247,17 @@ fun SovaNavHost(
                         // предупреждение в лог и пропуск (не падаем).
                         // #PANELEDIT: контейнерный пункт, чей destination уже
                         // покрыт каноническим пунктом панели ("photos"), пропускаем.
+                        // #SETTINGS-CALLS-TOGGLE (2026-10-14): при выключенном
+                        // kill-switch звонков скрываем контейнерный NavEntry
+                        // «Звонки» (route "calls_history") из боковой панели.
                         containerNavEntries.forEach { entry ->
                             val dest = hostDestinationForRoute(entry.route)
-                            if (dest == null) {
+                            if (!callsActive && dest == Screen.CallsHistory) {
+                                AppLog.i(
+                                    "SovaNavHost",
+                                    "CALLS-TOGGLE: звонки выключены — пункт «${entry.title}» скрыт из панели",
+                                )
+                            } else if (dest == null) {
                                 LaunchedEffect(entry.route) {
                                     AppLog.w(
                                         "SovaNavHost",
@@ -3282,8 +3303,10 @@ composable(Screen.CallsHistory.route) {
     // «Отклонить» → WS hangup REJECTED/BUSY (HTTP-фолбэк) внутри экрана, успех →
     // app.consumeIncomingCall().
     // #CALLS-INCOMING-UI: оверлей входящего (accept/decline/collapse).
+    // #SETTINGS-CALLS-TOGGLE (2026-10-14): при выключенном kill-switch звонков
+    // (callsActive == false) оверлей входящего НЕ рендерится — звонки скрыты.
     val incomingPayloadE = app.pendingIncomingCallPayload
-    if (!incomingPayloadE.isNullOrBlank()) {
+    if (!incomingPayloadE.isNullOrBlank() && callsActive) {
         val incomingPeerIdE = app.pendingIncomingCallPeerId
         val incomingTitleE = app.pendingIncomingCallTitle
         val incomingPhotoE = app.pendingIncomingCallPhoto

@@ -168,7 +168,7 @@ fun CommentAttachmentsView(
  * Бакеты размеров: 64/128/256/512; для комментариев берём 256 (компактно и чётко).
  */
 internal fun stickerCdnUrl(stickerId: Int, size: Int = 256): String =
-    "https://vk.ru/sticker/1-" + stickerId + "-" + size
+    re.pinok.auth.exchange.AuthDomainsConfig.vkBaseUrl() + "/sticker/1-" + stickerId + "-" + size
 
 /** Формат длительности секунды → «m:ss» (аудио/видео/голосовые в комментариях). */
 internal fun formatCommentDuration(totalSec: Int): String {

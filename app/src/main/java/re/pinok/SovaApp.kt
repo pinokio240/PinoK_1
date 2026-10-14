@@ -223,6 +223,15 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      * навигатора решаются в SovaNavHost при заборе события
      * (consumeOutgoingCall), поэтому всегда true. */
     fun requestOutgoingCall(peerId: Long, video: Boolean): Boolean {
+        // #SETTINGS-CALLS-TOGGLE (2026-10-14): глобальный kill-switch звонков.
+        // Когда звонки выключены (callsEnabled == false) — исходящий вызов
+        // игнорируется: pending-событие не ставится, экран звонка не откроется.
+        // (Кнопки в UI скрыты через callClick == null, но защищаем и прямые
+        // точки входа: redial из истории, деп-линки.)
+        if (prefsSnapshot?.callsEnabled != true) {
+            AppLog.i("SovaApp", "CALLS-TOGGLE: звонки выключены — исходящий вызов peerId=$peerId игнорирован")
+            return false
+        }
         pendingOutgoingCallVideo = video
         pendingOutgoingCallPeerId = peerId
         return true
@@ -1798,6 +1807,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // Это основной канал. queuev4-канал оставлен как fallback.
         keepAliveScope.launch {
             longPollClient.events.collect { event ->
+                // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков — при
+                // выключенном входящие звонки (LP 115) игнорируются полностью.
+                if (prefsSnapshot?.callsEnabled != true) {
+                    return@collect
+                }
                 if (event is re.pinok.realtime.LongPollEvent.IncomingCall) {
                     try {
                         AppLog.i("SovaApp", "INCOMING_CALL (LP 115): payload.len=${event.payload?.length ?: 0}")
@@ -1833,6 +1847,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         keepAliveScope.launch {
             queuev4Client.events.collect { ev ->
                 try {
+                    // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков.
+                    if (prefsSnapshot?.callsEnabled != true) {
+                        return@collect
+                    }
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
                         // P0.42-CALLS-HAR: новый формат — type/incoming_call с conversation_params.
                         val type = ev.payload["type"] as? String
@@ -1885,6 +1903,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         keepAliveScope.launch {
             eventsQueuev4Client.events.collect { ev ->
                 try {
+                    // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков.
+                    if (prefsSnapshot?.callsEnabled != true) {
+                        return@collect
+                    }
                     val payload = ev.payload["payload"] as? String
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS || !payload.isNullOrBlank()) {
                         AppLog.i("SovaApp", "INCOMING_CALL (events_queue): queue=${ev.queueId} payload.len=${payload?.length ?: 0}")
@@ -1904,6 +1926,10 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         keepAliveScope.launch {
             callsQueuev4Client.events.collect { ev ->
                 try {
+                    // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков.
+                    if (prefsSnapshot?.callsEnabled != true) {
+                        return@collect
+                    }
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
                         val type = ev.payload["type"] as? String
                         if (type == "incoming_call") {
@@ -2120,7 +2146,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 if (eventsJson != null) {
                     val eKey = eventsJson.get("key")?.takeIf { !it.isJsonNull }?.asString
                     val eTs = eventsJson.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
-                    val eUrl = eventsJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString ?: "https://queuev4.vk.ru/im1180"
+                    val eUrl = eventsJson.get("base_url")?.takeIf { !it.isJsonNull }?.asString ?: re.pinok.auth.exchange.AuthDomainsConfig.queuev4BaseUrl()
                     if (!eKey.isNullOrBlank()) {
                         val eventsCred = re.pinok.data.model.QueueCredential(
                             key = eKey, ts = eTs, url = eUrl, userId = vkUid,

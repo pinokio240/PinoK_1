@@ -14322,3 +14322,86 @@ W  calls-подписка пропущена: sessionKey=156 okUid=584520805550 
 **Статус проблемы ВХОДЯЩЕГО ЗВОНКА: НЕ РЕШЕНА.** Живой входящий (пока звенит) в PinoK по-прежнему не появляется (IncomingCallScreen не рендерится, pendingIncomingCallPayload пуст). Нужна пересборка из aacb824 + лог во время НЕОТВЕЧЕННОГО входящего (queue.subscribe OK calls при старте / INCOMING_CALL LP 115 / entity_type:calls).
 
 **Коммит:** aacb824 (colleague). Локальная ветка обновлена fast-forward.
+
+## SETTINGS-DOMAINS-SCREEN / 2026-10-14 (отдельный экран «Настройки доменов VK»)
+
+**Задача:** вынести «Настройки доменов VK» из модального листа (AuthDomainsSettingsSheet, шестерёнка на входе) в ОТДЕЛЬНУЮ вкладку/экран настроек; добавить недостающие VK-домены (в проекте используются почти все .ru) и кнопки «Сохранить» / «Восстановить по умолчанию».
+
+**Сделано:**
+1. Screen.kt — новый маршрут Screen.SettingsDomains ("settings_domains", «Настройки доменов VK»).
+2. SovaPrefs.kt — 8 новых настраиваемых доменов: web-api (web.api.vk.ru), userapi (userapi.com), media-cdn (vkuserphoto.ru), ok-cdn (okcdn.ru), my-cdn (mycdn.me), queuev4 (queuev4.vk.ru), eh (eh.vk.ru), vk-domain (vk.ru) + поля Snapshot, KEYS, defaults, setters.
+3. AuthDomainsConfig.kt — Snapshot/update/current/defaults расширены новыми доменами + URL-хелперы (webApiMethodUrl, userapiHostUrl, mediaCdnHostUrl, okCdnHostUrl, myCdnHostUrl, queuev4BaseUrl, ehWsUrl, vkBaseUrl), vkCookieUrls дополнен но�выми хостами.
+4. AuthDomainsScreen.kt (новый) — полноэкранный экран: все поля доменов (авторизация/медиа/сервисы/realtime/доп) + кнопки «Сохранить» (пишет все 15 полей) и «Восстановить по умолчанию» + Snackbar.
+5. SettingsScreen.kt — пункт «Настройки доменов VK» теперь открывает экран (onOpenSettingsDomains) вместо модального листа.
+6. SovaNavHost.kt — composable(Screen.SettingsDomains.route) -> AuthDomainsScreen(onBack), callback onOpenSettingsDomains передан.
+7. AuthActivity.kt — шестерёнка настроек доменов на экране входа УБРАНА (настройки перенесены в главные).
+
+**Примечание:** CDN-домены (userapi/okcdn/mycdn) и web.api.vk.ru НЕ подключены к сетевому стеку (критично для SSL-пиннинга и работы — менять их пользователю в 99% не нужно), но теперь настраиваемы в UI и внесены в cookie-список vkCookieUrls.
+
+**Бэкап:** backups/settings-domains-screen-2026-10-14_1200/. Требуется пересборка.
+
+## SETTINGS-DOMAINS-NETWORK / 2026-10-14 (подключение новых доменов в сетевой стек)
+
+По запросу пользователя: смена домена в настройках теперь реально переключает сеть (не только UI).
+
+**Подключено к конфигу (безопасно, нет SSL-пиннинга):**
+- **queuev4** — все fallback-хардкоды https://queuev4.vk.ru/im1180 заменены на AuthDomainsConfig.queuev4BaseUrl():
+  - VKApiClient: parseQueueCredential (2 места: queueSubscribe + queue_subscription_info), 
+  - SovaApp: stickersSubscribeToQueue fallback.
+  Queuev4Client.pollLoop использует cred.url (теперь из конфига).
+- **eh (EventHub)** — EventHubWebSocketClient.buildUrl(): wss://eh.vk.ru/ → AuthDomainsConfig.ehWsUrl().
+
+**НЕ подключено (критично для SSL-пиннинга):**
+- **web-api** (web.api.vk.ru) — используется в SovaApp SSL-pinning и сравнении url.host == WEB_API_HOSTNAME (строки 1187/1238/1244/1260). Смена домена сломает пиннинг. Оставлен захардкоженным; поле в UI существует, но реально не влияет на сеть (требуется отдельное решение: отключить пиннинг при кастомном домене).
+- CDN-домены (userapi/okcdn/mycdn) — инфраструктура VK, не для переключения.
+
+**Бэкап:** backups/settings-domains-network-2026-10-14_1221/. Требуется пересборка.
+
+## SETTINGS-DOMAINS-NETWORK-V2 / 2026-10-14 (доработка подключения доменов, агент «Вася»)
+
+Продолжение SETTINGS-DOMAINS-NETWORK. По результатам code review агента «Вася» внесены доработки:
+
+**1. VKEndpoints.kt — мёртвая константа:** const val QUEUE_POLL_BASE_URL = "https://queuev4.vk.ru/im1180" (нигде не использовалась) заменена на al QUEUE_POLL_BASE_URL с getter из AuthDomainsConfig.queuev4BaseUrl() — будущие использования не обойдут конфиг.
+
+**2. AuthActivity.kt — чистка импортов:** удалены 4 неиспользуемых (Icons, Outlined.Public, Icon, IconButton) после удаления шестерёнки. Проверено — в теле файла не используются.
+
+**3. Подключение web-api и vk-base к сети (по замечанию P4):**
+- VKApiClient: queue.subscribe, eventHub.getToken, atch.call → AuthDomainsConfig.webApiMethodUrl(...) (обход SSL-пиннинга: заменены только URL-запросы НЕ под пиннингом; SovaApp пиннинг не тронут).
+- VKApiClient: groupsSaveCommentsLegacy URL/Referer → AuthDomainsConfig.vkBaseUrl().
+- CommentAttachmentsView: стикер-URL https://vk.ru/sticker/... → kBaseUrl().
+
+**4. CDN-домены НЕ подключены (осознанно):** userapi/media-cdn(vkuserphoto)/okcdn/mycdn — URL приходят из ответов API (нет локальных строковых конструкторов), а поддомены (calls.okcdn.ru, api.mycdn.me, sun*.userapi.com) не совпадают с базовыми хелперами; замена сломала бы endpoints/whitelist. Поля в UI настраиваемые, но реально не влияют на сеть (как задумано: CDN — инфраструктура VK).
+
+**Бэкап:** backups/settings-domains-network-v2-2026-10-14/ (4 файла: VKEndpoints.kt, AuthActivity.kt, VKApiClient.kt, CommentAttachmentsView.kt). Требуется пересборка.
+
+**Итого по сети:** реально переключают сеть домены: oauth/id/login/mobile-web/api (существовали) + web-api + queuev4 + eh + vk-domain. Не влияют на сеть: userapi/media-cdn/ok-cdn/my-cdn/force-revoke (второй — UX-решение, последние — инфраструктура CDN).
+
+## SETTINGS-DEVTAB / 2026-10-14 (вкладка «Разработка» в настройках)
+
+По запросу: в главный экран настроек добавлена вкладка «Разработка» (SettingsTab.DEVELOPMENT, иконка Icons.Outlined.Build), в которую перенесён тумблер «Музыка 2» из AuthorTab.
+
+**Сделано (SettingsScreen.kt):**
+1. enum SettingsTab: добавлен элемент DEVELOPMENT("Разработка", Icons.Outlined.Build) перед AUTHOR (всего 17 элементов).
+2. when(p.tab): добавлено SettingsTab.DEVELOPMENT -> DevTab(s, app, scope) — все 17 веток покрыты.
+3. Новая функция DevTab(s, app, scope): LazyColumn + SectionHeader("Экспериментальные функции") + ToggleRow("Музыка 2", checked=s.music2Enabled, onCheckedChange={v->scope.launch{app.prefs.setMusic2Enabled(v)}}).
+4. Из AuthorTab удалён тумблер «Музыка 2» (секция «Модули») — перенесён в DevTab.
+5. Импорт Icons.Outlined.Build добавлен.
+
+Проверено агентом «Вася»: enum/when exhaustiveness (17=17), импорт иконки корректен, DevTab использует только существующие символы, SovaPrefs-бэкенд (music2Enabled/setMusic2Enabled) есть, дубликата в AuthorTab нет, TabRow/Pager строятся из SettingsTab.entries → новая вкладка рендерится без ручной правки индексов.
+
+**Бэкап:** backups/settings-devtab-2026-10-14_1251/ (SettingsScreen.kt.bak). Требуется пересборка.
+
+## SETTINGS-CALLS-TOGGLE / 2026-10-14 (тумблер «Звонки» в вкладке «Разработка»)
+
+По запросу: в вкладке «Разработка» добавлен тумблер «Звонки» (по умолчанию выключен), который отключает весь функционал звонков и скрывает все связанные элементы UI.
+
+**Бэкенд (SovaPrefs):** новое поле callsEnabled (default false) + сеттер setCallsEnabled + KEYS CALLS_ENABLED + Snapshot-поле + initial в FeedScreen.
+
+**UI (SettingsScreen):** тумблер «Звонки» в DevTab (checked = s.callsEnabled); вкладка «Звонки» (контейнерная секция "settings_calls") скрывается при callsEnabled == false (фильтр в pages).
+
+**Скрытие функционала звонков (агент «Вася»):**
+1. Навигация (SovaNavHost): callClick = null при выключенном (callsEnabled != true) → все кнопки аудио/видео звонков (лента/друзья/профиль/шапка диалога) НЕ рендерятся; входящий/исходящий/join-by-link навигации заблокированы; пункт «Звонки» скрыт из drawer; оверлей IncomingCallScreen не рендерится.
+2. SovaApp: equestOutgoingCall игнорирует вызов при выключенном; 4 коллектора входящих (LP 115, queuev4, events_queue, calls-очередь) делают eturn@collect — входящие события не обрабатываются/не показывается уведомление.
+3. Фича звонков (CallScreen/WebRtcEngine/Queuev4Client/CallsContainer) НЕ удалена — только точки входа скрыты, включается обратно тумблером.
+
+**Бэкап:** backups/settings-calls-toggle-2026-10-14/ (SovaNavHost.kt, SettingsScreen.kt, SovaApp.kt). Требуется пересборка.

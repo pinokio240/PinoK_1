@@ -59,7 +59,10 @@ object VKEndpoints {
     /** #CALLS-WIRE (2026-09-17): realtime host for queue.subscribe / eventHub. */
     const val QUEUE_SUBSCRIBE_HOST = "https://api.vk.ru"
     const val QUEUE_SUBSCRIBE_HOST_WEB = "https://web.api.vk.ru"
-    const val QUEUE_POLL_BASE_URL = "https://queuev4.vk.ru/im1180"
+
+    /** #SETTINGS-DOMAINS (2026-10-14): очередь событий/звонков (queuev4.vk.ru / .com) из конфигурации. */
+    val QUEUE_POLL_BASE_URL: String
+        get() = re.pinok.auth.exchange.AuthDomainsConfig.queuev4BaseUrl()
 
     /** calls_<uid>_<client_id>_1 - real calls queue id (CDP-verified). */
     fun callsQueueId(uid: Long, clientId: String): String = "calls_${uid}_${clientId}_1"
