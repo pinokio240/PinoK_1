@@ -14415,3 +14415,49 @@ eturn@collect — входящие события не обрабатывают�
 - build.gradle.kts: versionCode 221→222, versionName "2.2.1"→"2.2.2".
 - BuildStamp.STAMP: "calls-2.2.0-2026.10.06-1" → "calls-2026.10.14-2.2.2".
 - version.json: добавлен релиз 2.2.2 (первым в списке): notes про закладки/поделиться/домены VK/разработку/профиль. apkUrl и sha256 пока пустые — заполнить после сборки и выкладки APK (ссылка и хэш будут скинуты пользователем).
+## TOOLS-TRAFFIC-CAPTURE / 2026-10-14 (инструменты захвата трафика VK через CDP)
+
+Новая папка tools/traffic-capture/ — инструменты для полного снятия трафика VK (HTTP + WebSocket-кадры + снапшоты страниц) через Chrome DevTools Protocol, без внешних зависимостей.
+
+**Файлы:**
+1. start-browser.ps1 — запуск Chrome/Edge с --remote-debugging-port=9222 (default) на отдельном профиле (user-data-dir в %TEMP%), флаги -Port/-Url/-Chrome/-KillExisting. Умеет открывать URL (по умолчанию vk.com). Пересохранён в UTF-8-BOM — PS 5.1 иначе ломает кириллицу.
+2. cdp-capture.mjs — CDP-клиент (node 21+ native WebSocket): подключается ко всем вкладкам типа page, включает Network/Page/DOM/Runtime; собирает HTTP-запросы/ответы с телами в capture.har (формат Chrome DevTools), ВСЕ WS-кадры (Network.webSocketFrameSent/Received — сигналинг звонков videowebrtc.okcdn.ru / eh.vk.ru) в _webSocketMessages + websocket-frames.txt; тела JS/CSS/JSON/HTML в resources/; снапшот HTML страниц. Флаги: [порт] [папка] --full, --ttl <сек> (автоостановка).
+3. README.md — инструкция быстрого старта, разбор звонков VK (наш кейс), советы.
+4. .gitignore — добавлено tools/traffic-capture/capture/ (захваченные данные содержат реальные токены/cookies VK, коммитить нельзя).
+
+**Реализованные фичи:** автосохранение HAR каждые 30с (не теряется при Stop-Process -Force), --ttl для автономного сбора, graceful shutdown на SIGINT/SIGTERM.
+
+**Протестировано:** HTTP-захват и сохранение ресурсов подтверждены на example.com (entries + resources пишутся). WS-захват код корректен, но внешний echo.websocket.events из этой (российской) сети недоступен — поэтому 0 кадров в тесте; VK-хосты (videowebrtc/eh) доступны. При реальном звонке WS-сигналинг снят будет.
+
+**Статус:** готово. Новый инструмент для повторного самостоятельного снятия сигналинга звонков (у нас на машине есть свежие HAR звонков, но теперь можно снять и без коллеги).
+
+## CAPTURE-CDP-ZVONKI / 2026-10-14 (самостоятельный захват звонков VK через CDP + разбор)
+
+Сгенерирован инструмент tools/traffic-capture (теперь в C:\Users\Pinokio240\Desktop\docs\traffic-capture\).
+Из дебаг-Chrome снят живой трафик вкладки vk.ru/calls. В capture-20261014-194816/capture.har
+отработали 2 входящих (принят/отклонён) + 1 исходящий звонок.
+
+**ГЛАВНОЕ ОТКРЫТИЕ:** современный web-VK (SDK 2.8.13-beta.6, vk_web2) сигналит звонки НЕ по
+WebSocket videowebrtc.okcdn.ru, а через **WebTransport/HTTP3 (signaling_transport:"wt")**.
+WS-кадров звонков в захвате нет (единственный WS — eh.vk.ru subscribe_to_channels).
+
+**Команда исходящего звонка (HTTP, calls.okcdn.ru/fb.do):**
+POST method=vchat.startConversation, conversationId=vcid, isVideo=false, protocolVersion=5,
+payload={"is_video":false,"with_join_link":false,"join_by_link":false,"community_user_id":0,
+"caller_app_id":6287487}, externalIds=<user_id>, session_key (из system.getInfo), application_key=CGMMEJLGDIHBABABA.
+СОВПАДАЕТ с нашей реализацией VKApiClient.vchatStartConversation (caller_app_id=6287487).
+
+**Хронология входящего:** call_init(incoming,D) → messages.getCurrentCalls+getCallParticipants →
+webtransport_connected → signaling_connected → sdp_received:offer → call_start →
+call_accepted_incoming → sdp_generated:answer → first_media_* → call_finish(hangup).
+
+**Хронология исходящего:** call_init(outgoing,D) → system.getInfo → vchat.startConversation →
+webtransport_connected → call_start → sdp_generated:offer → sdp_received:answer →
+call_accepted_outgoing → first_media_* → call_finish(hangup).
+
+**Сигналинг-команды (summary):** accept-call, get-rooms, change-media-settings,
+update-media-modifiers, transmit-data, custom-data, feedback, change-options + ping(Wt).
+
+**Вывод:** протокол команд звонка у нас верный; при входящем web дёргает getCurrentCalls+
+getCallParticipants (совпадает с нашим кодом). Расхождение — ТОЛЬКО в транспорте сигналинга
+(web→WebTransport/QUIC, мы→WS/HTTP). docs/реверс-звонков-2026-10-14-cdp.md.
