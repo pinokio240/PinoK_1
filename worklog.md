@@ -14405,3 +14405,10 @@ W  calls-подписка пропущена: sessionKey=156 okUid=584520805550 
 3. Фича звонков (CallScreen/WebRtcEngine/Queuev4Client/CallsContainer) НЕ удалена — только точки входа скрыты, включается обратно тумблером.
 
 **Бэкап:** backups/settings-calls-toggle-2026-10-14/ (SovaNavHost.kt, SettingsScreen.kt, SovaApp.kt). Требуется пересборка.
+
+## RELEASE-2.2.2 / 2026-10-14 (подготовка релиза)
+
+Версия поднята до 2.2.2 (versionCode 222).
+- build.gradle.kts: versionCode 221→222, versionName "2.2.1"→"2.2.2".
+- BuildStamp.STAMP: "calls-2.2.0-2026.10.06-1" → "calls-2026.10.14-2.2.2".
+- version.json: добавлен релиз 2.2.2 (первым в списке): notes про закладки/поделиться/домены VK/разработку/профиль. apkUrl и sha256 пока пустые — заполнить после сборки и выкладки APK (ссылка и хэш будут скинуты пользователем).

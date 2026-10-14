@@ -35,8 +35,8 @@ android {
         // #RELEASE-V221-BUMP (2026-10-10): bump 220→221 — накопленные фиксы:
         // удалён чёрный прямоугольник над экранной клавиатурой, ускорена загрузка
         // сообщений, исправлены клипы, которые не грузились (#CLIP-NO-FILES-AD).
-        versionCode = 221
-        versionName = "2.2.1"
+        versionCode = 222
+        versionName = "2.2.2"
         buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-04T00:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
