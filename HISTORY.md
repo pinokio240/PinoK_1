@@ -941,7 +941,7 @@ data-* атрибуты, testids).
 - `stories.get` уже возвращает `video.video_files` inline (mp4_144..mp4_720)
 
 **window.vk config** (35 ключей):
-- `id: 171093180`, `platform: mvk`, `vkVideoDomain: m.vkvideo.ru`
+- `id: <VK_UID_DEV>`, `platform: mvk`, `vkVideoDomain: m.vkvideo.ru`
 - `apiConfigDomains: {domain, apiDomain:web.api.vk.ru, loginDomain, connectDomain}`
 - `versionInfo: {static_hash, release_version:2728, force_reload_version:1}`
 - `preloadTabbarStaticConfig` — JS-файлы для каждой вкладки
@@ -2601,11 +2601,11 @@ val expiresIn = if (currentExpiresAt == 0L) 0L
 
 ### Подтверждение из логката (голосовые работают)
 ```
-18:26:19  sendVoiceMessage: peer=171093180 file=voice_1784474767725.ogg (17537 B)
+18:26:19  sendVoiceMessage: peer=<VK_UID_DEV> file=voice_1784474767725.ogg (17537 B)
 18:26:19  → docs.getMessagesUploadServer {type=audio_message}  ← 69ms 268B
 18:26:20  → docs.save {file=…}  ← 108ms 759B
-18:26:20  docsSave ok: type=audio_message doc=171093180_706190894 key=NjFj…
-18:26:20  sendVoiceMessage step4 → messages.send attachment=doc171093180_706190894_…
+18:26:20  docsSave ok: type=audio_message doc=<VK_UID_DEV>_706190894 key=NjFj…
+18:26:20  sendVoiceMessage step4 → messages.send attachment=doc<VK_UID_DEV>_706190894_…
 18:26:20  sendVoiceMessage ✓ sent messageId=291380
 ```
 Fix #115 (парсинг docsSave) + Fix #116 (компиляция) подтверждены.
@@ -5895,7 +5895,7 @@ VkNotificationsNotifier.kt (+1), VK_IMPORT_API.MD §48.
    .ru, но mobileWebHost). Все 5 падали: 4× `{"error_info":"wrong origin"}`,
    1× `{"error_info":"unauthorized"}` (id.vk.com — эндпоинт ПРИНИМАЕТ этот
    Origin, но remixsid не авторизован для .com-контекста). remixsid валиден
-   (VK узнавал user=171093180), кука живая, но `login.vk.com` её не принимает.
+   (VK узнавал user=<VK_UID_DEV>), кука живая, но `login.vk.com` её не принимает.
 
 2. **Бесконечный SILENT-цикл.** AuthActivity запускался с transparent theme
    (Fix #339) т.к. `hasRemixsid=true`. WebView m.vk.ru диспозился через ~118ms
@@ -7402,7 +7402,7 @@ VK app (SSO) — remixsid не появится, и popup вернётся.
 #VKAUTH-V2: cookie-set сохранён в storage (remixsid len=88, p=yes, nttpid=yes, uacck=yes, uas=yes, mvkfp=yes) — Path 1.5 enabled
 silentRefreshViaRemixsid: strategy 1/7 [mweb(m.vk.ru)] → 'wrong origin' (VK contract failure) — trying next strategy
 silentRefreshViaRemixsid: strategy 2/7 [id(id.vk.com)] SUCCEEDED — token obtained
-silentRefreshViaRemixsid: SUCCESS — user=171093180, expires_in=899s, logout_hash=yes
+silentRefreshViaRemixsid: SUCCESS — user=<VK_UID_DEV>, expires_in=899s, logout_hash=yes
 ```
 Смена сети теперь обрабатывается тихо (strategy 2 = id.vk.com origin).
 «wrong origin» на strategy 1 (m.vk.ru) — ожидаемый fallback, не ошибка.
@@ -7625,7 +7625,7 @@ SUCCESS`.
 ## 2026-08-15 — #SSO-LOGOUT-STALE-WEBVIEW: подвисание при повторном SSO после выхода
 
 **Результат теста:** ПЕРВЫЙ вход «войти через приложение» СРАБОТАЛ (silentRefreshViaRemixsid
-SUCCESS, user=171093180). НО при повторном выходе + повторном входе этим же
+SUCCESS, user=<VK_UID_DEV>). НО при повторном выходе + повторном входе этим же
 способом — «подвисание»: бесконечный цикл remixsid найден → saveRemixsid →
 ensureSdkInitialized → m.vk.ru/feed → onDispose RETAINED → factory REUSED → ... (hang).
 
@@ -8575,10 +8575,10 @@ APK установлен, запуск без крашей.
    те же, что v3/v14 (§35.3.2) — `handleEvent` без изменений.
 
 ### Тест на устройстве (HOTWAV, re.pinok.debug)
-- `messagesGetDiff ok: key=yes(9a4b679b…) ts=1642435314 server_lp=api.vk.com/ruim171093180
+- `messagesGetDiff ok: key=yes(9a4b679b…) ts=1642435314 server_lp=api.vk.com/ruim<VK_UID_DEV>
   server_version=10498152 invalidate_all=true counters=3/0 folders=1` — credentials валидны,
   тот же ts что legacy getLongPollServer.
-- `LP server acquired: version=21 server=api.vk.com/ruim171093180 modern=true` — loop
+- `LP server acquired: version=21 server=api.vk.com/ruim<VK_UID_DEV> modern=true` — loop
   использует v21; за 40+с НЕТ `failed`/`poll-error` → поллинг здоров.
 - После отката default=false — legacy `getLongPollServer {lp_version=3}` снова активен.
 
@@ -9167,7 +9167,7 @@ remixnsid + httoken) и Origin id.vk.com (это уже умеет silentRefresh
 снапшоты в папке, может тупо их сплагиатить» → «да».
 
 **Разбор снапшотов (идея «сплагиатить веб»):**
-- `музыка_Главная.html` = m.vk.ru/audios171093180, СЕРВЕРНО-рендеренный каталог:
+- `музыка_Главная.html` = m.vk.ru/audios<VK_UID_DEV>, СЕРВЕРНО-рендеренный каталог:
   блоки по `data-view-type` (header/triple_stacked_slider/recomms_slider/
   large_slider/separator), треки `data-audio="[32-элементный кортеж]"`,
   плейлисты `audioPlaylists__item` (`act=audio_playlist-{owner}_{id}`) и
@@ -9292,7 +9292,7 @@ Vetka (84%); «Собрано редакцией» → Спешу навстре
 «Музыка_Главная_мобайл.html» / «Обзор_мобайл.html» + свежие куки.
 
 **Прорыв: полный explore section-id найден.**
-- «Обзор_мобайл.html» — мобильный SSR `m.vk.ru/audios171093180?section=explore`
+- «Обзор_мобайл.html» — мобильный SSR `m.vk.ru/audios<VK_UID_DEV>?section=explore`
   ПОСЛЕ JS, содержит `AudioSection__explore` с полным `data-section-id`.
 - Извлечены все 9 блоков (data-view-type → title):
   1. Сегодня в плеере (triple_stacked_slider)
@@ -9630,8 +9630,8 @@ PiP снова показывает старый клип.
 **JS-архитектура VK:** SPA с webpack-чанками (vkweb/vkmvk), core_spa + feature bundles (audio/video/calls/wall/feed/mail/reactions/stories). Версия API 5.285.
 
 **Звонки localStorage (важные ключи):**
-- calls_token_with_url_171093180 → WebRTC relay calls.okcdn.ru
-- queue_credential_calls_cache_171093180_6287487 → queuev4.vk.ru/im1180
+- calls_token_with_url_<VK_UID_DEV> → WebRTC relay calls.okcdn.ru
+- queue_credential_calls_cache_<VK_UID_DEV>_6287487 → queuev4.vk.ru/im1180
 - calls_video_options → {noise_cancellation_mode: "NEURAL", simple_pip_enabled_by_user: false}
 
 **Bookmarks UI:** /bookmarks?type=<user|group|post|article|link|video|narrative|game|mini_app|product>. FCThumb боковая панель с закреплёнными. Tags через tags API.---
@@ -9756,7 +9756,7 @@ PiP снова показывает старый клип.
 ### Стартовая точка для следующей сессии:
 
 **Приоритет:**
-1. Проверить на устройстве: ввести key/ts из localStorage (queue_credential_calls_cache_171093180_7879029) в Настройки → Звонки → Подключить queuev4, позвонить с другого аккаунта — должен прийти LP 115 → уведомление.
+1. Проверить на устройстве: ввести key/ts из localStorage (queue_credential_calls_cache_<VK_UID_DEV>_7879029) в Настройки → Звонки → Подключить queuev4, позвонить с другого аккаунта — должен прийти LP 115 → уведомление.
 2. Полный ответ на входящий звонок: декодирование conversation params (LZ4) + WebSocket-сигналинг + vchat API (accept/decline) + WebRTC.
 3. WebSocket-клиент signaling по образцу calls SDK (_buildUrl: endpoint + query).
 4. TURN/STUN брать из conversation params вместо хардкода в WebRtcEngine.
@@ -9824,17 +9824,17 @@ PiP снова показывает старый клип.
 - SovaPrefs: callsSessionKey (ручной ввод session_key из localStorage `_okcls_anonymLogin` в Настройки → Звонки).
 
 **Лог-тест на устройстве (Cyber_15, входящий звонок):**
-- LP 115 payload.len=2 ("-1") → messages.getCurrentCalls нашёл call_id=84eb87a0-7bc1-4ea8-9052-7f0ef9ec6725, caller=152094335.
+- LP 115 payload.len=2 ("-1") → messages.getCurrentCalls нашёл call_id=84eb87a0-7bc1-4ea8-9052-7f0ef9ec6725, caller=<VK_UID_PEER>.
 - getAnonymToken дал `anonym.eyJ...`, но auth.anonymLogin → **401 AUTH_LOGIN: Access token is broken**; apiKey 7793118/android_web/0 → 101 PARAM_API_KEY. session_key=null → vchat.getConversationParams → 103 PARAM_SESSION_KEY required → FAILED.
 - Диагноз: apiKey CGMMEJLGDIHBABABA ВАЛИДЕН (vchat отвечает 103, а не 101), проблема в типе токена.
 
 **Разбор папки C:\Users\Pinokio240\Desktop\ссылки\Новая папка\2208 (снапшоты vk.ru/m.vk.ru + localStorage дамп log.txt):**
-- log.txt = localStorage-дамп аккаунта uid=171093180: `_okcls_anonymLogin:$Ksd...` → **session_key + session_secret_key + uid=584520805550**; `calls_token_with_url_<uid>` = `$Ksd...///https://calls.okcdn.ru` (callToken + endpoint); `queue_connection_events_queue<uid>`; `queue_credential_calls_cache_<uid>_<app_id>`.
+- log.txt = localStorage-дамп аккаунта uid=<VK_UID_DEV>: `_okcls_anonymLogin:$Ksd...` → **session_key + session_secret_key + uid=<OKCDN_UID>**; `calls_token_with_url_<uid>` = `$Ksd...///https://calls.okcdn.ru` (callToken + endpoint); `queue_connection_events_queue<uid>`; `queue_credential_calls_cache_<uid>_<app_id>`.
 - q_frame.html подтверждает queuev4.vk.ru/im1180 LongPoll (endpoint whitelist).
 - calls JS-чанк (auth.anonymLogin/vchat) в снапшот НЕ попал — только CSS (calls.dda8e018.css, webCallsBridge).
 
 **ЭКСПЕРИМЕНТАЛЬНО ДОКАЗАНО (curl/Invoke-WebRequest к calls.okcdn.ru/fb.do):**
-- ✅ auth.anonymLogin + `$`-токен из дампа → **валидный session_key** (uid=584520805550, external_user_id=171093180).
+- ✅ auth.anonymLogin + `$`-токен из дампа → **валидный session_key** (uid=<OKCDN_UID>, external_user_id=<VK_UID_DEV>).
 - ✅ vchat.getConversationParams + **`conversation_id`** (с подчёркиванием!) + session_key → полный ответ: token, endpoint=wss://videowebrtc.okcdn.ru/ws2, turn_server{urls,username,credential}, stun_server{urls}.
 - ❌ `conversationId` (без подчёркивания) → error 4 REQUEST common.finder (ЭТО был баг в нашем коде).
 - ❌ anonym.eyJ... (oauth.vk.ru/oauth.vk.com, любой client_id) → 401 AUTH_LOGIN: vchat НЕ принимает VK oauth-токены.
@@ -9848,7 +9848,7 @@ PiP снова показывает старый клип.
 ### Стартовая точка для следующей сессии:
 
 **Приоритет:**
-1. **Ввести session_key в Настройки → Звонки** (из localStorage `_okcls_anonymLogin`, значение в дампе log.txt — аккаунт uid=171093180) и повторить входящий звонок: теперь vchat.getConversationParams вернёт STUN/TURN/endpoint → WebSocket-сигналинг → accept.
+1. **Ввести session_key в Настройки → Звонки** (из localStorage `_okcls_anonymLogin`, значение в дампе log.txt — аккаунт uid=<VK_UID_DEV>) и повторить входящий звонок: теперь vchat.getConversationParams вернёт STUN/TURN/endpoint → WebSocket-сигналинг → accept.
 2. Автоматизация session_key: понять, как веб получает `$Ksd...`-токен (calls SDK чанк не сохранён) — или принимать session_key как достаточный (без auth.anonymLogin).
 3. WebSocket-сигналинг: проверить формат запросов к endpoint (wss://videowebrtc.okcdn.ru/ws2) — callAcceptIncoming/callDeclineIncoming.
 4. Исходящий звонок: messagesStartCall → conversation params → тот же сигналинг.
@@ -9881,7 +9881,7 @@ PiP снова показывает старый клип.
 
 **3. Логи реальных звонков PinoK (call_log2-20) — диагностика:**
 - vchat.getConversationParams РАБОТАЕТ с `conversation_id` + session_key → STUN/TURN/endpoint/token.
-- WS к videowebrtc.okcdn.ru/ws2: userId=okcdn uid (584520805550) — ОБЯЗАТЕЛЬНО (иначе invalid-token).
+- WS к videowebrtc.okcdn.ru/ws2: userId=okcdn uid (<OKCDN_UID>) — ОБЯЗАТЕЛЬНО (иначе invalid-token).
 - offer/candidates приходят, Remote audio track есть, answer отправляется, но **ICE: CHECKING → CLOSED** (не CONNECTED) во всех тестах.
 - **startRecording (микрофон) не запускается**; initPlayout запускается, но играть нечего (нет ICE).
 - БАГ: в setRemoteDescription передавался `onSuccess` вместо `onSetSuccess` → createAnswer не вызывался. ИСПРАВЛЕНО.
@@ -9927,12 +9927,12 @@ PiP снова показывает старый клип.
 - pcap `logs/relay_call.pcap` (1.3MB, снят tcpdump на эмуляторе): медиа = **SRTP напрямую на relay-адрес** `193.203.43.2:48701` (пакеты 30-127 байт каждые ~15мс, audio PT 63/97/123, video PT 72/73/77).
 - **P2P не используется вообще** — даже между устройствами за одним NAT (host/srflx-кандидаты не задействованы).
 - ChannelData (0x4000-0x4FFF) — единичные служебные пакеты (13 шт), НЕ медиа. Send-Indication — нет.
-- Chrome шлёт STUN Binding Request **без MESSAGE-INTEGRITY** на STUN-порт (19302) и **с MI на relay-порт** (48701). USERNAME в relay = `/Cm3:C2Uz` — **НЕ тот, что в vchat getConversationParams** (`1787537855:584520805550`).
+- Chrome шлёт STUN Binding Request **без MESSAGE-INTEGRITY** на STUN-порт (19302) и **с MI на relay-порт** (48701). USERNAME в relay = `/Cm3:C2Uz` — **НЕ тот, что в vchat getConversationParams** (`<TURN_USER_MASKED>`).
 - Chrome использует **2 relay-сокета** (10.0.2.15:56893 — активный, 10.0.2.16:55868 — запасной), оба на 193.203.43.2:48701.
 
 **2. TURN-доступность подтверждена (НЕ причина ICE FAILED):**
 - Все 6 TURN-серверов из params TCP=True (19302). STUN UDP Binding Response (0x0101) получены от 91.231.135.173/95, 193.203.43.26, 90.156.236.82.
-- TURN Allocate с нашими credentials (`1787537855:584520805550` / `qT3nDA1LmP/e9HyB6LqPR9xkbv4=`) → **401 Unauthorized** на любом сервере (91.231.135.x и 193.203.43.2), и с MD5 long-term, и с REST HMAC. Мой ручной скрипт мог считать MI неверно, но факт: **credentials из vchat getConversationParams НЕ совпадают с теми, что реально использует Chrome**.
+- TURN Allocate с нашими credentials (`<TURN_USER_MASKED>` / `<TURN_CRED_MASKED>`) → **401 Unauthorized** на любом сервере (91.231.135.x и 193.203.43.2), и с MD5 long-term, и с REST HMAC. Мой ручной скрипт мог считать MI неверно, но факт: **credentials из vchat getConversationParams НЕ совпадают с теми, что реально использует Chrome**.
 
 **3. Главная гипотеза: мы используем НЕПРАВИЛЬНЫЕ TURN-credentials.**
 - Chrome берёт TURN из **WS-события `connection`** (в нём есть `conversationParams.turn` — в логе видно `"conversationParams":{"turn":{"urls":["tu...`), а не из vchat getConversationParams.
@@ -9944,8 +9944,8 @@ PiP снова показывает старый клип.
 - DataStore-файл `sova_settings.preferences_pb` в эмуляторе был **битым** (теги несовместимы): `prefs read: callsSessionKey=BLANK uid=0` — DataStore возвращал пустые значения, хотя ключ в файле был.
 - Ручной патч proto-файла → `CorruptionException: Value not set` / `Unable to parse preferences proto` (краш при старте).
 - `adb shell input text` **обрезает** длинные строки (~90 символов) и `-w` в начале трактует как флаг adb (добавляет лишние `-`). UI-ввод через input text ненадёжен для session_key (156 символов).
-- **Рабочее решение:** временный DEBUG-блок в `SovaApp.onCreate` (ПОСЛЕ `prefs = SovaPrefs(this)`, иначе `UninitializedPropertyAccessException`) — `appScope.launch { prefs.setCallsSessionKey(FULL); prefs.setCallsSessionUid(584520805550L) }`. Запись прошла (файл 5089 байт, full key = True).
-- Полный session_key = `-w-fl0000MtRwXi530010Gapu8Z100000000w4P63DsGhCrcH5OAp6oqxCoC1Dm4j6oAF5OCx6NOV6py16rGxI00000g4zjoRR000000g1poBn00hP1vfN2yQIklvUZRD2QovPTE5zvSf6Cc8hvAgT6pQB2f` (156 симв.), uid=584520805550 (из localStorage `_okcls_anonymLogin`, дамп 2208/log.txt).
+- **Рабочее решение:** временный DEBUG-блок в `SovaApp.onCreate` (ПОСЛЕ `prefs = SovaPrefs(this)`, иначе `UninitializedPropertyAccessException`) — `appScope.launch { prefs.setCallsSessionKey(FULL); prefs.setCallsSessionUid(<OKCDN_UID>L) }`. Запись прошла (файл 5089 байт, full key = True).
+- Полный session_key = `<SESSION_KEY_MASKED>` (156 симв.), uid=<OKCDN_UID> (из localStorage `_okcls_anonymLogin`, дамп 2208/log.txt).
 - При обрезанном session_key (67 симв.) vchat отвечал `103 PARAM_SESSION_KEY: Session key is corrupted`. С полным ключом (проверить в след. сессии) — должен пройти.
 - **ВАЖНО:** DEBUG-блок в SovaApp.kt надо УБРАТЬ после подтверждения (помечен `// DEBUG-CALLS-FIX (временный)`).
 
@@ -9955,7 +9955,7 @@ PiP снова показывает старый клип.
 - `9c3ad47f0404`, model M2004J19C, device galahad, Redmi 9, **Android 12** (SDK 31), MT6768 (Helio G80), arm64-v8a.
 - IP **192.168.0.108** — та же LAN 192.168.0.x (Cyber_15=.100, ПК=.106).
 - Установлены: `com.vkontakte.android` (VK 8.192), Chrome, VK Store, VK Video.
-- VK открывается, но **не залогинен** (экран входа). Аккаунт для входа — `rc-grinpark@mail.ru` (виден в дампе как hint).
+- VK открывается, но **не залогинен** (экран входа). Аккаунт для входа — `<EMAIL_MASKED>` (виден в дампе как hint).
 - uiautomator на MIUI падает с `theme_compatibility.xml: ENOENT` (некритично, дамп всё равно создаётся).
 - Батарея 40%, заряжается, 29.6°C.
 
@@ -9966,11 +9966,11 @@ PiP снова показывает старый клип.
 ### Стартовая точка для следующей сессии:
 
 **Приоритет:**
-1. **Проверить звонок с полным session_key + логикой WS-connection TURN** (обе правки уже в коде): звонит 3-е устройство на 171093180 → PinoK в эмуляторе принимает → смотреть FULL_CONNECTION (TURN из WS) → ICE.
+1. **Проверить звонок с полным session_key + логикой WS-connection TURN** (обе правки уже в коде): звонит 3-е устройство на <VK_UID_DEV> → PinoK в эмуляторе принимает → смотреть FULL_CONNECTION (TURN из WS) → ICE.
 2. Если vchat всё ещё `Session key is corrupted` — проверить, что полный session_key записался (DEBUG-блок), либо залогинить сам session_key из prefs.
-3. **Сравнить TURN из WS-connection и из vchat** — если они разные, понять, какой Chrome реально использует (в pcap username `/Cm3:C2Uz`, не `1787537855:584520805550`).
+3. **Сравнить TURN из WS-connection и из vchat** — если они разные, понять, какой Chrome реально использует (в pcap username `/Cm3:C2Uz`, не `<TURN_USER_MASKED>`).
 4. Если ICE всё ещё FAILED при TURN из WS — копать **DTLS роль (a=setup)** и **порядок кандидатов после onSetSuccess** (различие с эталоном).
-5. **Redmi 9** — залогинить VK (rc-grinpark@mail.ru) и использовать как 2-й участник звонка в одной сети (192.168.0.x).
+5. **Redmi 9** — залогинить VK (<EMAIL_MASKED>) и использовать как 2-й участник звонка в одной сети (192.168.0.x).
 6. Убрать DEBUG-блок session_key из SovaApp.kt после подтверждения.
 7. Проверить имя/аватар звонящего в CallScreen (был вопрос — refreshIncomingCaller вызывает usersGetByIds, но с `fields=photo_100,photo_200`; в эмуляторе отображался заголовок без аватарки — проверить после успешного accept).
 
@@ -10017,7 +10017,7 @@ PiP снова показывает старый клип.
 2. Проверить входящий звонок без ручного ввода (queue.subscribe + session_key автоматически).
 3. Если get_anonym_token всё ещё 401 — разбирать client_secret / $callToken.
 4. ICE: если всё ещё FAILED — DTLS роль (a=setup) и порядок кандидатов (см. прошлую сессию).
-5. Redmi 9 — залогинить VK (rc-grinpark@mail.ru) как 2-го участника.
+5. Redmi 9 — залогинить VK (<EMAIL_MASKED>) как 2-го участника.
 
 ---
 
@@ -10048,7 +10048,7 @@ PiP снова показывает старый клип.
   4. `auth.anonymLogin` с `$`-токеном (version=3) → session_key (правильный формат).
 - **Вывод:** для рабочего session_key нужен `$`-токен из `messages.getAnonymCallToken`, который требует: (а) anonym.eyJ-токен (есть), (б) **решение капчи error 14** (PoW captchaNotRobot — реализовано в vk-turn-proxy), (в) правильный `secret` из getCallPreview + `link`.
 
-**4. Redmi 9 (второй участник):** официальный VK 8.192 запущен, залогинен под rc-grinpark@mail.ru, открыт диалог с «Сергей Ширабоко» (171093180). VK на Redmi звонок от PinoK НЕ получил (нет экрана/уведомления) — потому что исходящий в PinoK не завершён.
+**4. Redmi 9 (второй участник):** официальный VK 8.192 запущен, залогинен под <EMAIL_MASKED>, открыт диалог с «Сергей Ширабоко» (<VK_UID_DEV>). VK на Redmi звонок от PinoK НЕ получил (нет экрана/уведомления) — потому что исходящий в PinoK не завершён.
 
 ### Сборка: BUILD SUCCESSFUL без warnings. APK установлен на эмулятор.
 
@@ -10090,37 +10090,37 @@ PiP снова показывает старый клип.
 
 ### Текущее состояние (проверено на эмуляторе):
 - `vchat.startConversation OK (6 полей)` + `conversation id из startConversation: <uuid>` ✅
-- WS connected (code=101) с userId=584520805550 ✅ (invalid-token ушёл)
+- WS connected (code=101) с userId=<OKCDN_UID> ✅ (invalid-token ушёл)
 - **БЛОКЕР: `conversation-ended (INITIALLY_CLOSED)`** сразу после onOpen — WS закрывается, participantId не приходит, offer не отправляется, собеседник звонок не видит.
 - Причина INITIALLY_CLOSED НЕ выяснена. Гипотезы: (а) сервер закрывает conversation, пока не получен offer/первый transmit-data; (б) неверный формат подключения (token/entityType); (в) нужен другой endpoint (в Yandex Browser calls_token_with_url указывал на **h-xd.okcdn.ru**, не calls.okcdn.ru).
 
 ### Важные находки:
-- **Yandex Browser на ПК** (`C:\Users\Pinokio240\AppData\Local\Yandex\YandexBrowser\User Data\Default\Local Storage\leveldb`) содержит VK-сессию 171093180: `calls_token_with_url_171093180 = $Ksd1qVP...///h-xd.okcdn.ru` (тот же $Ksd, что в Chrome эмулятора!) + session_key -w-fl (156) + uid 584520805550. Доступ к данным есть.
-- `messages.startCall` (peer_id=152094335) возвращает call_id — но 152094335 это «Лида Кузнецова» (не Redmi). Redmi залогинен под rc-grinpark@mail.ru (другой uid). **Звонили не на Redmi** — отсюда TARGET_USER_UNAVAILABLE. Для звонка на Redmi нужен uid rc-grinpark.
+- **Yandex Browser на ПК** (`C:\Users\Pinokio240\AppData\Local\Yandex\YandexBrowser\User Data\Default\Local Storage\leveldb`) содержит VK-сессию <VK_UID_DEV>: `calls_token_with_url_<VK_UID_DEV> = $Ksd<MASKED>...///h-xd.okcdn.ru` (тот же $Ksd, что в Chrome эмулятора!) + session_key -w-fl (156) + uid <OKCDN_UID>. Доступ к данным есть.
+- `messages.startCall` (peer_id=<VK_UID_PEER>) возвращает call_id — но <VK_UID_PEER> это «Лида Кузнецова» (не Redmi). Redmi залогинен под <EMAIL_MASKED> (другой uid). **Звонили не на Redmi** — отсюда TARGET_USER_UNAVAILABLE. Для звонка на Redmi нужен uid <EMAIL_MASKED_PREFIX>.
 - `vchat.createJoinLink` → **PERMISSION_DENIED: blocked for 512002378693 from IP 95.26.26.148** — метод заблокирован (антифрод).
-- Redmi 9 (rc-grinpark) в спящем режиме не готов принимать (TARGET_USER_UNAVAILABLE) — нужно разбудить + VK на переднем плане.
+- Redmi 9 (<EMAIL_MASKED_PREFIX>) в спящем режиме не готов принимать (TARGET_USER_UNAVAILABLE) — нужно разбудить + VK на переднем плане.
 
 ### Стартовая точка для следующей сессии:
 1. **Разобрать INITIALLY_CLOSED** — почему conversation (созданная через startConversation) закрыта сразу. Сравнить с эталонным Chrome pcap (logs/relay_call.pcap) — какой WS-URL/параметры/токен. Проверить h-xd.okcdn.ru endpoint.
 2. **Порядок сигналинга исходящего** — в SDK startCall → _startConversation(opponentIds) → _processConnection(p) → allocateTransport → readyToSend → offer. Сверить с нашим: возможно, нужен accept-call/join после startConversation, или offer отправляется на peerId из opponentIds (не из connection).
 3. **participantId для исходящего** — в SDK offer идёт на конкретного opponent (participantId известен из startConversation/accept). Проверить, как получить.
-4. Звонок на Redmi — нужен uid rc-grinpark (или позвонить на Лиду 152094335 как тестового собеседника).
+4. Звонок на Redmi — нужен uid <EMAIL_MASKED_PREFIX> (или позвонить на Лиду <VK_UID_PEER> как тестового собеседника).
 5. Проверить входящий звонок на PinoK — тоже упирался в conversation-ended.
 
 ---
 
-## Сессия 2026-08-24 (вечер) — ЭТАЛОННЫЙ звонок Yandex Browser на ПК (171093180)
+## Сессия 2026-08-24 (вечер) — ЭТАЛОННЫЙ звонок Yandex Browser на ПК (<VK_UID_DEV>)
 
 ### Проект: PinoK
 
 ### Что сделано
 **Доступ к Yandex Browser на ПК получен и подтверждён:**
 - Профиль: `C:\Users\Pinokio240\AppData\Local\Yandex\YandexBrowser\User Data\Default`
-- Local Storage (leveldb) **читается**: VK-сессия 171093180 найдена.
+- Local Storage (leveldb) **читается**: VK-сессия <VK_UID_DEV> найдена.
 - Данные в localStorage Yandex:
-  - `calls_token_with_url_171093180` = `$Ksd1qVPbC1un9bouSZLLMIWrnOWoUgqgWS1cnUjOj8M8SDtUFBVbVSAZ9mrVfwgMKpu51///h-xd.okcdn.ru` (тот же $Ksd, что в Chrome эмулятора!)
-  - `session_key` = `-w-fl0000MtRwXi530010Wb3LBEgypzxjeR8PdCR2pOc3cJgjcPwjby93cOQ2pPgzoVszcN0zdRgm088yN9IWq00EwcIOb0wcbDvBDvFUfYgohtJR8XdW0vCxuHroNlqmBsI3XDGJ7ye` (156 симв., формат -w-fl)
-  - `queue_credential_calls_cache_171093180_7879029` (key/ts/url)
+  - `calls_token_with_url_<VK_UID_DEV>` = `$Ksd<MASKED>bC1un9bouSZLLMIWrnOWoUgqgWS1cnUjOj8M8SDtUFBVbVSAZ9mrVfwgMKpu51///h-xd.okcdn.ru` (тот же $Ksd, что в Chrome эмулятора!)
+  - `session_key` = `<SESSION_KEY_MASKED>` (156 симв., формат -w-fl)
+  - `queue_credential_calls_cache_<VK_UID_DEV>_7879029` (key/ts/url)
   - `web_token` (6287487:web_token:login:auth)
 
 ### Эталонный звонок Yandex Browser (16:52) — СНИМОК СОЕДИНЕНИЙ:
@@ -10188,7 +10188,7 @@ PiP снова показывает старый клип.
 
 ### Что сделано:
 
-1. **Chrome на ПК (не Yandex) заработал с remote debugging** (`--remote-debugging-port=9222`, профиль `--user-data-dir=...\Temp\gigatool\chrome_rd`). В нём уже была сессия VK 171093180 (m.vk.ru + desktop vk.ru/feed — desktop залогинен, раздел «Звонки» есть).
+1. **Chrome на ПК (не Yandex) заработал с remote debugging** (`--remote-debugging-port=9222`, профиль `--user-data-dir=...\Temp\gigatool\chrome_rd`). В нём уже была сессия VK <VK_UID_DEV> (m.vk.ru + desktop vk.ru/feed — desktop залогинен, раздел «Звонки» есть).
 
 2. **Снят полный сигналинг рабочего звонка vk.ru/calls** через CDP (Fetch.enable + Network.getRequestPostData/getResponseBody):
    - **Весь сигналинг идёт через HTTP POST к `calls.okcdn.ru/fb.do` + long-poll `queuev4.vk.ru/im1180` (a_check), WebSocket НЕ используется в vk.ru desktop!**
@@ -10200,10 +10200,10 @@ PiP снова показывает старый клип.
      &protocolVersion=5
      &payload={"is_video":false,"with_join_link":false,"join_by_link":false,"community_user_id":0,"caller_app_id":6287487}
      &onlyAdminCanShareMovie=false
-     &externalIds=152094335
+     &externalIds=<VK_UID_PEER>
      &method=vchat.startConversation&format=JSON
      &application_key=CGMMEJLGDIHBABABA
-     &session_key=-w-fl0000MtRwXi530010adzUdq... (156)
+     &session_key=<SESSION_KEY_MASKED_PREFIX>... (156)
      ```
    - **Критично: браузер передаёт `externalIds` (НЕ uids!), `payload` с `caller_app_id=6287487`, `onlyAdminCanShareMovie=false`, и НЕ передаёт `createJoinLink`/`capabilities`.**
 
@@ -10219,8 +10219,8 @@ PiP снова показывает старый клип.
 4. **Проверка исправленного startConversation прямо из Chrome (CDP fetch)** — сервер вернул ПОЛНЫЙ ОТВЕТ (раньше был INITIALLY_CLOSED):
    ```json
    {"token":"DgM0...MASKED...n3zk=",
-    "endpoint":"wss://videowebrtc.okcdn.ru/ws2?userId=584520805550&entityType=USER&conversationId=bd094e37-...&token=...",
-    "turn_server":{"urls":["turn:193.203.43.38:19302","turn:193.203.43.11:19302"],"username":"1787611562:584520805550","credential":"U76Q3s8eWP4YGwLmEuwTQgCGoc8="},
+    "endpoint":"wss://videowebrtc.okcdn.ru/ws2?userId=<OKCDN_UID>&entityType=USER&conversationId=bd094e37-...&token=...",
+    "turn_server":{"urls":["turn:193.203.43.38:19302","turn:193.203.43.11:19302"],"username":"<TURN_USER_MASKED>","credential":"<TURN_CRED_MASKED>"},
     "stun_server":{"urls":["stun:193.203.43.38:19302"]},"client_type":"VK","id":"bd094e37-2b24-41e7-95c3-a6a84fbee1a9"}
    ```
    - WS endpoint = **`wss://videowebrtc.okcdn.ru/ws2`** (не calls.okcdn.ru!) — наш CallSignalingClient строит URL правильно (endpoint + userId + conversationId + token).
@@ -14505,7 +14505,7 @@ VOICE-ASR-REQUEST-P0.25e-2026-10-06: messages.recogniseAudioMessage — реал
 // Пользователь: «изучай лучше расшифровка так и не работает в пинок» (даже вручную не работает).
 // HAR анализ (снапшоты + JS 41738.bb95a044.js): VK web НЕ использует messages.getById для ASR. Он вызывает messages.recogniseAudioMessage — ЯВНЫЙ ЗАПРОС к VK серверу начать speech-to-text. VK web JS:
 //   onClick(ed): if (expanding && !transcription && isTranscriptPossible && !requested):
-//     audio_message_id = authorId + '_' + t.id  // "171093180_710441419"
+//     audio_message_id = authorId + '_' + t.id  // "<VK_UID_DEV>_710441419"
 //     g.fetch("messages.recogniseAudioMessage", { peer_id, cmid, audio_message_id, group_id })
 //     setRequested(true)
 //   toggleExpanded()
@@ -14564,10 +14564,15 @@ VOICE-SEND-V2-P0.26b-2026-10-06: новый pipeline отправки голос
 **Файлы:**
 - НОВЫЙ pp/src/main/java/re/pinok/ui/screens/music2/Music2ScrollPositions.kt — синглтон-держатель позиций по ownerId (null=«Моя музыка», число=друг), save/get/clear.
 - pp/src/main/java/re/pinok/ui/screens/music2/Music2Screen.kt:
-  - estoreIndex/estorePending объявлены до loadTracks (ownerId-keyed).
-  - LaunchedEffect(tracks.size, tracksEndReached): пока estorePending — догружает страницы, пока 	racks.size не покроет estoreIndex, затем scrollToItem(restoreIndex), сброс флага.
+  - 
+estoreIndex/
+estorePending объявлены до loadTracks (ownerId-keyed).
+  - LaunchedEffect(tracks.size, tracksEndReached): пока 
+estorePending — догружает страницы, пока 	racks.size не покроет 
+estoreIndex, затем scrollToItem(restoreIndex), сброс флага.
   - DisposableEffect(ownerId) onDispose: сохраняет lastVisibleItemIndex+offset в синглтон.
-  - loadTracks(refresh=true): Music2ScrollPositions.clear(ownerId) + estorePending=false (pull-to-refresh сбрасывает позицию).
+  - loadTracks(refresh=true): Music2ScrollPositions.clear(ownerId) + 
+estorePending=false (pull-to-refresh сбрасывает позицию).
   - Music2MyTracksContent: прогресс-строка «Загружено X из Y» + LinearProgressIndicator при 	otalCount>0 && tracks.size<totalCount.
 
 **Проверка:** :app:compileDebugKotlin BUILD SUCCESSFUL.
@@ -15336,7 +15341,8 @@ ewsfeedGetClipsFeed, shortVideoGetRecom) брали только вложенн�
 
 ## BOOKMARKS-FIX-INSERT-VKAPICLIENT — 2026-10-11 — фикс ошибочной вставки
 
-**Ошибки компиляции:** вставка блока резолва автора попала в messagesGetConversationsById, а не faveGet (совпадающий шаблон eturn try {), сломав messagesGetHistory/ConversationsById.
+**Ошибки компиляции:** вставка блока резолва автора попала в messagesGetConversationsById, а не faveGet (совпадающий шаблон 
+eturn try {), сломав messagesGetHistory/ConversationsById.
 
 **Фикс:** восстановил VKApiClient из HEAD, заново применил правку ТОЛЬКО в faveGet. Проверка баланса скобок и скоупов пройдена.
 
