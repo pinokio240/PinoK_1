@@ -544,7 +544,7 @@ fun FeedScreen(
             // Fix #100 / #110 / #189 / #monet-hybrid). Default true — как в SovaPrefs.
             callsVideoRx = true,
             // #CALLS-SYMMETRIC / #CALLS-SWDECODE (01.09): initial-значения — как в SovaPrefs.
-            callsVideoTx = true,
+            callsVideoTx = false,
             callsVideoSwDecode = false,
             // #MUSIC2-TOGGLE: music2Enabled добавлен в Snapshot — FeedScreen тоже
             // обязан передавать initial-значение (тот же класс бага, что callsVideoRx).

@@ -49,6 +49,15 @@ dependencies {
     // #CALLS: WebRTC (org.webrtc.*) — WebRtcEngine/VideoTextureRenderer.
     implementation(libs.webrtc)
 
+    // #CALLS-REAL-CAMERA (2026-10-15): CameraX (ImageAnalysis) для захвата камеры в звонке
+    // вместо Camera2Enumerator. view/video НЕ нужны — только core+camera2+lifecycle.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    // ProcessLifecycleOwner — LifecycleOwner для bindToLifecycle (у движка нет Activity,
+    // context = applicationContext).
+    implementation(libs.androidx.lifecycle.process)
+
     // Compose-набор (BOM): CallScreen и все экраны звонков.
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

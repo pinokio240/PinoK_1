@@ -101,6 +101,7 @@ import re.pinok.data.model.SettingsParam
 import re.pinok.data.model.SettingsSection as BffSettingsSection
 import re.pinok.ui.theme.SovaColors
 import re.pinok.util.AppLog
+import re.pinok.ui.screens.calls.CameraTestScreen
 // Fix #391 #IN-APP-UPDATER (волна 29-i): модель/менеджер обновлений — вкладка «Обновления».
 import re.pinok.updater.UpdateInfo
 import re.pinok.updater.UpdaterManager
@@ -115,6 +116,7 @@ import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CloudOff
@@ -230,6 +232,9 @@ private enum class SettingsTab(
     // #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — инструменты для
     // разработки/экспериментальных функций (тумблер «Музыка 2» и др.).
     DEVELOPMENT("Разработка", Icons.Outlined.Build),
+    // #CALLS-PERM-TAB (2026-10-15): отдельная вкладка «Разрешения» — запрос любого
+    // разрешения вручную (микрофон/камера/уведомления/BT/«Все файлы») + статус.
+    PERMISSIONS("Разрешения", Icons.Outlined.Lock),
     AUTHOR("Автор", Icons.Filled.Person),
     // #ARCH-CONTAINERS (Этап 1.4): ядерная вкладка CALLS («Звонки») убрана из
     // enum — вкладка настроек звонков приходит из реестра (SettingsSection
@@ -489,6 +494,7 @@ fun SettingsScreen(
                     // #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — экспериментальные
                     // инструменты/тумблеры (Музыка 2 перенесён из AuthorTab).
                     SettingsTab.DEVELOPMENT -> DevTab(s, app, scope)
+                    SettingsTab.PERMISSIONS -> PermissionsTab()
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
                 }
                 is SettingsPage.Container -> {
@@ -571,45 +577,22 @@ private fun DevTab(
 // ══════════════════════════════════════════════════════════════════════
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun CallsTab(
     s: SovaPrefs.Snapshot,
     app: SovaApp,
     scope: CoroutineScope,
 ) {
     val context = LocalContext.current
+    // #CAMERA-TEST (2026-10-15): флаг показа тестового экрана камеры (self-превью).
+    var showCameraTest by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { SectionHeader("Разрешения") }
-        item {
-            val micGranted = re.pinok.util.PermissionManager.isGranted(context, android.Manifest.permission.RECORD_AUDIO)
-            val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-            ToggleRow(
-                title = "Микрофон",
-                subtitle = "Доступ к микрофону для звонков",
-                checked = micGranted,
-            ) {
-                if (it) launcher.launch(android.Manifest.permission.RECORD_AUDIO)
-                else {
-                    android.widget.Toast.makeText(context, "Отключите микрофон в настройках системы", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-        item {
-            val notifGranted = re.pinok.util.PermissionManager.isGranted(context, android.Manifest.permission.POST_NOTIFICATIONS)
-            val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-            ToggleRow(
-                title = "Уведомления о звонках",
-                subtitle = "Всплывающее уведомление при входящем звонке",
-                checked = notifGranted,
-            ) {
-                if (it) launcher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                else {
-                    android.widget.Toast.makeText(context, "Отключите уведомления в настройках системы", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
+        // #CALLS-PERM-TAB (2026-10-15): разделы «Разрешения» и «Запрос разрешений»
+        // перенесены в отдельную вкладку «Разрешения» (SettingsTab.PERMISSIONS →
+        // PermissionsTab). Здесь остаются только настройки звонков.
 
         // #CALLS-VIDEO-RX (Этап 1, CALLS_MAP §11.2.5): kill-switch приёма видео.
         // При краше видео-декодера на конкретном устройстве пользователь выключает
@@ -645,6 +628,29 @@ private fun CallsTab(
                 checked = s.callsVideoSwDecode,
             ) { v ->
                 scope.launch { app.prefs.setCallsVideoSwDecode(v) }
+            }
+        }
+        // #CAMERA-TEST (2026-10-15): кнопка ручной проверки захвата камеры — открывает
+        // отладочный экран self-превью (CameraTestScreen в feature.calls). Вне звонка.
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable { showCameraTest = true },
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Проверка камеры", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Открыть тестовый экран self-превью камеры (захват кадров). Вне звонка",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text("→", style = MaterialTheme.typography.titleMedium)
+                }
             }
         }
 
@@ -816,6 +822,27 @@ private fun CallsTab(
         item { SectionHeader("Устройства и шумодав по умолчанию") }
         item { CallsDefaultDevicesCards(app, scope, context) }
     }
+
+    // #CAMERA-TEST (2026-10-15): полноэкранный оверлей теста камеры — поверх
+    // вкладки настроек. CameraTestScreen сам управляет разрешением/захватом/превью.
+    if (showCameraTest) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { showCameraTest = false }) {
+            Box(Modifier.fillMaxSize()) {
+                CameraTestScreen()
+                // #CAMERA-TEST: кнопка закрытия поверх превью (в углу).
+                IconButton(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                    onClick = { showCameraTest = false },
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Закрыть тест камеры",
+                        tint = Color.White,
+                    )
+                }
+            }
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -915,6 +942,87 @@ private fun parseCallsServerSettings(resp: JsonObject?): CallsServerSettingsData
         }
     }
     return CallsServerSettingsData(toggles, callsIp, ipEnabled)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Tab: Разрешения (#CALLS-PERM-TAB, 2026-10-15)
+//  Отдельная вкладка для запроса ВСЕХ разрешений вручную + статус каждого.
+// ══════════════════════════════════════════════════════════════════════
+@Composable
+private fun PermissionsTab() {
+    val context = LocalContext.current
+    // Единый launcher запроса одного разрешения (Compose-правило: на уровне композиции).
+    val permLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        AppLog.i("SettingsScreen", "Permission result: granted=$granted")
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // ПРИМЕЧАНИЕ: чтобы кнопки обновляли статус сразу, при re-compose читаем
+        // актуальное состояние (isGranted indempotent). Переключатели не нужны —
+        // системные диалоги решают выдачу/отзыв, здесь только кнопки-запросы.
+        item { SectionHeader("Системные разрешения") }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    PermissionRequestButton(
+                        label = "Микрофон",
+                        granted = re.pinok.util.PermissionManager.isGranted(context, android.Manifest.permission.RECORD_AUDIO),
+                        onClick = { permLauncher.launch(android.Manifest.permission.RECORD_AUDIO) },
+                    )
+                    PermissionRequestButton(
+                        label = "Камера",
+                        granted = re.pinok.util.PermissionManager.isGranted(context, android.Manifest.permission.CAMERA),
+                        onClick = { permLauncher.launch(android.Manifest.permission.CAMERA) },
+                    )
+                    PermissionRequestButton(
+                        label = "Уведомления",
+                        granted = re.pinok.util.PermissionManager.isGranted(
+                            context,
+                            android.Manifest.permission.POST_NOTIFICATIONS
+                        ),
+                        onClick = { permLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) },
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PermissionRequestButton(
+                            label = "Bluetooth",
+                            granted = re.pinok.util.PermissionManager.isGranted(
+                                context,
+                                android.Manifest.permission.BLUETOOTH_CONNECT
+                            ),
+                            onClick = { permLauncher.launch(android.Manifest.permission.BLUETOOTH_CONNECT) },
+                        )
+                    }
+                }
+            }
+        }
+
+        item { SectionHeader("Доступ к файлам") }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    // «Все файлы» (MANAGE_EXTERNAL_STORAGE) — спец-право, только через
+                    // системные Настройки (не системный диалог):
+                    PermissionRequestButton(
+                        label = "«Все файлы»",
+                        granted = re.pinok.util.PermissionManager.hasAllFilesAccess(context),
+                        onClick = {
+                            val intent = re.pinok.util.PermissionManager.allFilesAccessSettingsIntent(context)
+                            if (intent != null) {
+                                (context as? android.app.Activity)?.startActivity(intent)
+                                    ?: android.widget.Toast.makeText(context, "Нужен Activity-контекст", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                android.widget.Toast.makeText(context, "Доступ не требуется на этом Android", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -4559,6 +4667,35 @@ private fun ToggleRow(
                         else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Switch(checked = checked, onCheckedChange = onToggle, enabled = enabled)
+        }
+    }
+}
+
+/**
+ * #CALLS-PERM-REQUESTS (2026-10-15): кнопка-строка для запроса ОДНОГО разрешения.
+ * Показывает название, статус (Выдано / Не выдано) и кнопку «Запросить».
+ */
+@Composable
+private fun PermissionRequestButton(
+    label: String,
+    granted: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                if (granted) "Выдано" else "Не выдано",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+        }
+        Button(onClick = onClick, enabled = !granted) {
+            Text(if (granted) "Выдано" else "Запросить")
         }
     }
 }

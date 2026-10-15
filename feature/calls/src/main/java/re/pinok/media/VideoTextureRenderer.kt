@@ -6,6 +6,7 @@ import android.view.Surface
 import android.view.TextureView
 import org.webrtc.EglBase
 import org.webrtc.EglRenderer
+import org.webrtc.GlRectDrawer
 import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import re.pinok.util.AppLog
@@ -77,9 +78,13 @@ class VideoTextureRenderer(context: Context) :
     fun init(eglContext: EglBase.Context, events: org.webrtc.RendererCommon.RendererEvents?) {
         rendererEvents = events
         surfaceTextureListener = this
-        // GlDrawer=null: SurfaceViewRenderer.init(ctx, events) передаёт внутрь EglRenderer
-        // ровно те же CONFIG_PLAIN + null-drawer (кодек/дровер по умолчанию) — путь отрисован.
-        eglRenderer.init(eglContext, EglBase.CONFIG_PLAIN, null)
+        // #CALLS-VIDEO-FIX (2026-10-15): GlDrawer ОБЯЗАН быть не-null — EglRenderer хранит
+        // own `drawer` (this.drawer, отдельное поле от frameDrawer) и вызывает
+        // frameDrawer.drawFrame(frame, this.drawer, ...). Передача null → NPE в
+        // EglRenderer.renderFrameOnRenderThread → FATAL на EglThread (лог 19:33:43).
+        // GlRectDrawer — ровно то, что передаёт SurfaceViewRenderer.init(ctx, events)
+        // (surfaceview-вывод: `new GlRectDrawer()`); реализует RendererCommon.GlDrawer.
+        eglRenderer.init(eglContext, EglBase.CONFIG_PLAIN, GlRectDrawer())
         AppLog.i(TAG, PREFIX + "init: EglRenderer готов (TextureView-путь, без z-order)")
     }
 

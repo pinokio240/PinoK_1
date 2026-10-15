@@ -5,6 +5,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
 // Audit #40: удалены неиспользуемые импорты ComponentActivity и SovaApp.
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -52,6 +53,11 @@ object PermissionManager {
 
         // RECORD_AUDIO — все API (голосовые сообщения)
         perms.add(Manifest.permission.RECORD_AUDIO)
+
+        // #CALLS-REAL-CAMERA (2026-10-15): CAMERA — для реального захвата видео в звонках
+        // (иначе SecurityException "cannot open camera without camera permission" при
+        // videoTxEnabled). Запрашиваем при первом входе по умолчанию, как и микрофон.
+        perms.add(Manifest.permission.CAMERA)
 
         // BLUETOOTH_CONNECT — API 31+ (dangerous).
         // Нужен для: диагностики BT-кодека (AudioRouteLogger), BT-маршрутизации
@@ -112,6 +118,46 @@ object PermissionManager {
     }
 
     /**
+     * #CALLS-REAL-CAMERA: проверить, выдано ли CAMERA (реальный захват камеры).
+     */
+    fun hasCamera(context: Context): Boolean {
+        return isGranted(context, Manifest.permission.CAMERA)
+    }
+
+    /**
+     * #ALL-FILES (2026-10-15): есть ли «Все файлы» (MANAGE_EXTERNAL_STORAGE, API 30+).
+     * Это специальное разрешение (не через system-диалог, а через системные настройки).
+     * На Android 11+ обычного «диалога записи всех файлов» нет — только Settings-экран.
+     */
+    fun hasAllFilesAccess(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
+        return Environment.isExternalStorageManager()
+    }
+
+    /**
+     * #ALL-FILES: Intent в системные настройки для ручного включения «Все файлы»
+     * (MANAGE_EXTERNAL_STORAGE). Запускается activity-контекстом. Вернёт null, если
+     * экран недоступен (старый API) — тогда управление файлами не требует разрешения.
+     */
+    fun allFilesAccessSettingsIntent(context: Context): android.content.Intent? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return try {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}")
+            )
+            // Если intent без package не находится — общий экран управления доступом.
+            val pm = context.packageManager
+            val resolveInfo = pm.resolveActivity(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            if (resolveInfo != null) intent else
+                android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+        } catch (e: Throwable) {
+            AppLog.w("PermissionManager", "allFilesAccessSettingsIntent: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Проверить, есть ли доступ к медиафайлам (audio/video/images).
      */
     fun hasMediaAccess(context: Context): Boolean {
@@ -166,12 +212,36 @@ fun RequestAllPermissionsEffect() {
         requestAttempted = true
 
         val needed = PermissionManager.getNotGrantedPermissions(context)
-        if (needed.isEmpty()) {
+        if (needed.isNotEmpty()) {
+            AppLog.i("PermissionManager", "Requesting ${needed.size} permissions: ${needed.map { it.substringAfterLast(".") }}")
+            launcher.launch(needed.toTypedArray())
+        } else {
             AppLog.i("PermissionManager", "All permissions already granted")
-            return@LaunchedEffect
         }
 
-        AppLog.i("PermissionManager", "Requesting ${needed.size} permissions: ${needed.map { it.substringAfterLast(".") }}")
-        launcher.launch(needed.toTypedArray())
+        // #ALL-FILES (2026-10-15): MANAGE_EXTERNAL_STORAGE («Все файлы») — специальное
+        // разрешение, его НЕТ в обычном системном диалоге: включается только через
+        // системные Настройки → «Все файлы». Если доступа ещё нет — открываем экран
+        // разрешения для этого приложения (не блокирует вход; пользователь решит сам).
+        // Откладываем на ~1.5с, чтобы системный диалог обычных прав успел закрыться
+        // и не наслаиваться на экран Настроек (два системных окна одновременно — глюк).
+        if (!PermissionManager.hasAllFilesAccess(context)) {
+            kotlinx.coroutines.delay(1500)
+            val intent = PermissionManager.allFilesAccessSettingsIntent(context)
+            if (intent != null) {
+                // Для запуска системного экрана нужен Activity-контекст.
+                val activity = context as? android.app.Activity
+                if (activity != null) {
+                    AppLog.i("PermissionManager", "#ALL-FILES: открываю системные настройки «Все файлы»")
+                    activity.startActivity(intent)
+                } else {
+                    AppLog.w("PermissionManager", "#ALL-FILES: контекст не Activity — системный экран не открыт (root/вне Activity)")
+                }
+            } else {
+                AppLog.i("PermissionManager", "#ALL-FILES: экран недоступен (старый API) — доступ не требуется")
+            }
+        } else {
+            AppLog.i("PermissionManager", "#ALL-FILES: «Все файлы» уже предоставлены")
+        }
     }
 }

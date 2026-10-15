@@ -85,8 +85,8 @@ import re.pinok.data.model.CallMediaType
 import re.pinok.data.model.CallPhase
 import re.pinok.data.model.CallParticipant
 import re.pinok.data.model.VkCall
-import org.webrtc.SurfaceViewRenderer
 import re.pinok.media.WebRtcEngine
+import re.pinok.media.VideoTextureRenderer
 import re.pinok.util.AppLog
 import org.webrtc.SessionDescription
 import re.pinok.feature.calls.CallsDependencies
@@ -153,6 +153,11 @@ fun CallScreen(
         }
     }
 
+    // #CALLS-REAL-CAMERA (2026-10-15): запрашиваем CAMERA до/во время звонка (для
+    // реального захвата камеры в движке). Не блокирующая — если откажут, движок
+    // сам сделает фоллбэк на чёрную заглушку (tryStartCamera вернёт false).
+    var cameraGranted by remember { mutableStateOf(re.pinok.util.PermissionManager.hasCamera(context)) }
+
     val peer = CallParticipant(peerId = peerId, name = title, photo100 = photo)
     // #CALLS-NAME-FIX (2026-08-29): имя/аватар — state, а не val: они могут подтянуться
     // ПОСЛЕ навигации (refreshIncomingCaller в SovaApp — async, навигация срабатывает
@@ -171,7 +176,7 @@ fun CallScreen(
     )
 
     // #CALLS: WebSocket-сигналинг для ответа на входящий/исходящий звонок.
-    val signaling = remember { re.pinok.realtime.CallSignalingClient(deps.httpClient) }
+    val signaling = deps.signaling
     // conversation params для входящего (декодированные)
     val incomingParams = remember(incomingPayload) {
         incomingPayload?.let { re.pinok.media.ConversationParamsDecoder.decode(it) }
@@ -294,6 +299,11 @@ fun CallScreen(
     // все входящие команды по именам: строка «Принято: candidate×3, connection×2…»
     // покажет, приходил ли «candidate» и что ещё приходит от сервера/собеседника.
     val rxCommands = remember { mutableStateMapOf<String, Int>() }
+    // #CALLS-IN-CHAIN (2026-10-15): сводная цепочка входящих команд сигналинга по порядку
+    // поступления — «connection→offer→candidate→...→accept-call→answer» (как в снапшоте
+    // ВХОДЯЩИЙ.har). Накапливается в handleTextFrame/collect асимптотически; дубли не
+    // раздувают строку (идемпотентно: candidate просто оставляет отметку из rxCommands).
+    val inChain = remember { mutableStateOf("") }
     // #CALLS-ZOMBIE (2026-08-29, скриншот 23:45): счётчик ПОДРЯД идущих ошибок сервера
     // (type:"error" на наши transmit-data). Сервер отвергает данные, когда разговор
     // уже мёртв (собеседник вышел / conversation закрыта). Экран обязан это заметить.
@@ -355,9 +365,16 @@ fun CallScreen(
     //  - videoRxEnabled — kill-switch из настроек (callsVideoRx, default true).
     var remoteVideoTrack by remember { mutableStateOf<org.webrtc.VideoTrack?>(null) }
     var peerVideoEnabled by remember { mutableStateOf(false) }
-    var isVideoCall by remember { mutableStateOf(false) }
+    var isVideoCall by remember { mutableStateOf(video) }
     var videoFrames by remember { mutableStateOf(-1) }
     var videoRxEnabled by remember { mutableStateOf(false) }
+    // #CALLS-ACCEPT-MEDIASETTINGS (2026-10-15): передача TX-видео (камера-заглушка) из настроек —
+    // нужно для корректного isVideoEnabled в accept-call (по эталону mediaSettings отражает
+    // состояние кнопок; камерой в UI отдельно не управляем, поэтому берём callsVideoTx).
+    var videoTxEnabled by remember { mutableStateOf(false) }
+    // #CALLS-CAMERA-TOGGLE (2026-10-15): состояние кнопки камеры в футере звонка (по эталону
+    // есть переключаемая кнопка камеры). Управляет передачей видео в реальном времени.
+    var isCameraOn by remember { mutableStateOf(false) }
     // #CALLS-AEC-TOGGLE: hardware AEC/NS из настроек (читается до initialize).
     var echoCancelPref by remember { mutableStateOf(true) }
 
@@ -428,7 +445,31 @@ fun CallScreen(
                 }
                 AppLog.i("CallScreen", "#CALLS-ZH2: ASR (ssrc=" + ssrc + "): " + text.take(120))
             },
+            // #CALLS-STATE-STABLE-FIX (2026-10-15): результат применения remote SDP.
+            // doReoffer объявлен НИЖЕ (строка ~539) — здесь НЕ вызываем его напрямую
+            // (Kotlin: локальная lambda-переменная недоступна до объявления). Оставляем
+            // только диагностику; основную защиту от «state stable» даёт сброс lastLocalSdp
+            // в createPeerConnection (WebRtcEngine). Reoffer при провале применяется другими
+            // путями (accepted-call / registered-peer / watchdog).
+            onRemoteSdpResult = { type, success ->
+                if (!success && type == SessionDescription.Type.ANSWER) {
+                    AppLog.w("CallScreen", "answer НЕ применён (state stable?) — диагностика; reoffer идёт другими путями")
+                }
+            },
         )
+    }
+
+    // #CALLS-REAL-CAMERA (2026-10-15): запрашиваем CAMERA разрешение. ОБЯЗАН быть после
+    // объявления engine (строки 381-449), т.к. в колбэке перезапускаем камеру через engine.
+    val cameraLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        cameraGranted = granted
+        AppLog.i("CallScreen", "CAMERA permission granted=$granted")
+        if (granted && isCameraOn) {
+            engine.setCameraEnabled(false)
+            engine.setCameraEnabled(true)
+        }
     }
 
     // ══ #CALLS-ZH2 (Task 6-a): Ж6/Ж7 имена по умолчанию + тоггл субтитров ══
@@ -642,7 +683,7 @@ fun CallScreen(
                             AppLog.w("CallScreen", "SERVER-REJOIN: WS перерегистрирован (${waited}мс) — жду свежий connection для PC-RESTART")
                             if (direction == CallDirection.INCOMING) {
                                 AppLog.i("CallScreen", "SERVER-REJOIN: повторный accept-call")
-                                signaling.acceptCall(isVideo = isVideoCall)
+                                signaling.acceptCall(isVideo = isVideoCall, isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
                             }
                         } else {
                             AppLog.w("CallScreen", "SERVER-REJOIN: WS не поднялся за 10с")
@@ -763,8 +804,13 @@ fun CallScreen(
                 }
                 // #CALLS-ACK-REOFFER (2026-08-29): accept-call ДО создания PC/answer —
                 // детерминированный порядок (engine.acceptCall — асинхронный post).
-                val acceptOk = signaling.acceptCall(isVideo = false)
+                val acceptOk = signaling.acceptCall(isVideo = false, isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
                 AppLog.i("CallScreen", "Принять: accept-call ${if (acceptOk) "отправлен" else "ОТБРОШЕН (WS закрыт!)"}")
+                // #CALLS-IN-OFFER (2026-10-15 откат): ранее был добавлен блок извлечения offer из
+                // signaling.pendingOffer() (чтобы справиться с вытеснением из replay-буфера),
+                // но он вызвал РЕГРЕСС — входящий звонок стал вообще не приходить. Блок
+                // откачен; offer доставляется штатно через replay-буфер (replay=8), а при
+                // необходимости гонка с кандидатами решается на стороне движка.
                 // #CALLS-IN-OFFER: PC создаётся здесь; буферизованный offer
                 // применяется САМ в acceptCall (setRemoteDescription → answer).
                 engine.acceptCall(call)
@@ -802,18 +848,30 @@ fun CallScreen(
             val rx = s?.callsVideoRx ?: true
             videoRxEnabled = rx
             engine.setVideoRxEnabled(rx)
-            // #CALLS-SYMMETRIC: чёрная видеозаглушка наружу (sendrecv без камеры, Этап 2-заготовка).
-            val tx = s?.callsVideoTx ?: true
-            engine.setVideoTxEnabled(tx)
+            // #CALLS-CAMERA-AUTO (2026-10-15): камера включается АВТОМАТИЧЕСКИ при видео-звонке
+            // (isVideoCall), независимо от тумблера «Отправлять видеозаглушку» (callsVideoTx).
+            // Турмблер callsVideoTx больше НЕ управляет реальной камерой — он остался для
+            // старой чёрной заглушки. isVideoCall=true: исходящий — параметр video, входящий —
+            // установится в offer-обработчике (ниже, по m=video в offer).
+            val camAutoOn = isVideoCall
+            isCameraOn = camAutoOn
+            videoTxEnabled = camAutoOn
+            engine.setVideoTxEnabled(camAutoOn)
             // #CALLS-AEC-TOGGLE: эхоподавление из настроек → hardware AEC/NS
             // JavaAudioDeviceModule (см. initialize). Применяется с этого звонка.
             val aec = s?.callsEchoCancel ?: true
             echoCancelPref = aec
-            AppLog.i("CallScreen", "videoRx=$rx, videoTx(заглушка)=$tx, echoCancel=$aec (из настроек, до старта звонка)")
+            AppLog.i("CallScreen", "videoRx=$rx, videoTx(камера-авто)=$camAutoOn, echoCancel=$aec (до старта звонка)")
         }
         engine.initialize(echoCancelEnabled = echoCancelPref)
         // #CALLS-MIC-GUARD: запрашиваем микрофон до установки соединения.
         if (!micGranted) micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        // #CALLS-REAL-CAMERA: запрашиваем камеру, если передача видео включена в настройках
+        // (videoTxEnabled). Критерий — НЕ isVideoCall: движок стартует захват камеры (tryStartCamera)
+        // и при исходящем аудио-звонке (video=false), если videoTx=true, — иначе SecurityException
+        // «cannot open camera without camera permission». Если откажут — движок сам сделает
+        // фоллбэк на чёрную заглушку (tryStartCamera вернёт false).
+        if (videoTxEnabled && !cameraGranted) cameraLauncher.launch(android.Manifest.permission.CAMERA)
         if (joinByLink) {
             // #CALLS-JOIN-BY-LINK (Этап Г/Г4): API-часть уже выполнена модалкой
             // (getAnonymTokenByLink при анониме/пароле → joinConversationByLink),
@@ -861,7 +919,7 @@ fun CallScreen(
                             waited += 100
                         }
                         if (reAccept && signaling.isWsReady()) {
-                            val ok = signaling.acceptCall(isVideo = isVideoCall)
+                            val ok = signaling.acceptCall(isVideo = isVideoCall, isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
                             AppLog.i("CallScreen", "JOIN_BY_LINK nudge: WS перерегистрирован, повторный accept-call ok=$ok")
                         }
                     }
@@ -962,7 +1020,7 @@ fun CallScreen(
                             waited += 100
                         }
                         if (reAccept && signaling.isWsReady()) {
-                            val ok = signaling.acceptCall(isVideo = false)
+                            val ok = signaling.acceptCall(isVideo = false, isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
                             AppLog.i("CallScreen", "nudge: WS перерегистрирован, повторный accept-call ok=$ok")
                         }
                     }
@@ -1165,6 +1223,16 @@ fun CallScreen(
             diagEvent = msg.command
             // #CALLS-RX-DEBUG: считаем входящие команды для экранной строки «Принято:».
             rxCommands[msg.command] = (rxCommands[msg.command] ?: 0) + 1
+            // #CALLS-IN-CHAIN (2026-10-15): накапливаем сводную цепочку входящих команд
+            // по порядку (снапшот-эталон ВХОДЯЩИЙ.har): connection→offer→candidate→...
+            // Дубли одной команды не дублируются в строке (частоты видны в rxCommands).
+            val cmdTx = msg.command
+            val alreadyInChain = cmdTx.isNotBlank() && inChain.value.split("→").any { it == cmdTx }
+            if (cmdTx.isNotBlank() && !alreadyInChain) {
+                inChain.value = if (inChain.value.isBlank()) cmdTx else inChain.value + "→" + cmdTx
+                // Каждый шаг цепочки логируем в лог — по нему виден точный порядок.
+                AppLog.i("CallScreen", "IN-CHAIN: ${inChain.value}")
+            }
             when (msg.command) {
                 re.pinok.realtime.CallSignalingClient.CMD_ANSWER,
                 re.pinok.realtime.CallSignalingClient.CMD_OFFER -> {
@@ -1207,7 +1275,13 @@ fun CallScreen(
                             // m=video в offer (connection.mediaSettings НЕ маркирует).
                             if (sdp.contains("m=video")) {
                                 isVideoCall = true
-                                AppLog.i("CallScreen", "offer содержит m=video — ВИДЕО-звонок")
+                                // #CALLS-CAMERA-TOGGLE: входящий видео-звонок — камера по умолчанию
+                                // включена (эталон: aria-pressed=true; но только если передача настроена).
+                                if (!isCameraOn && videoTxEnabled) {
+                                    isCameraOn = true
+                                    engine.setCameraEnabled(true)
+                                }
+                                AppLog.i("CallScreen", "offer содержит m=video — ВИДЕО-звонок (isCameraOn=$isCameraOn)")
                             }
                         }
                         // #CALLS-IN-OFFER: решение «применить сейчас или буферизовать до
@@ -1215,13 +1289,22 @@ fun CallScreen(
                         // применится в acceptCall; PC есть → сразу). Гонки с кнопкой
                         // «Принять» больше нет.
                         AppLog.i("CallScreen", "remote ${type.name.lowercase()} → engine (участник=${remoteParticipantId.value}, len=${sdp.length})")
-                        engine.setRemoteSdp(sdp, type)
-                        if (!isOffer) {
-                            answerReceived.value = true
-                            lastAppliedAnswerOLine = sdpOLine(sdp)
-                            phase = CallPhase.CONNECTING
+                        // #CALLS-DUP-ANSWER-FIX (2026-10-15): реоффер после accepted-call вызывает
+                        // ВТОРОЙ (дублирующий) answer у сервера. Первый уже применён: ICE CONNECTED,
+                        // phase=ACTIVE, аудио идёт. Повторяющийся answer сбрасывал phase в CONNECTING
+                        // («Соединение...») и валил движок («Called in wrong state: stable») — звонок
+                        // жил, но UI застревал и затем рвал соединение. Дубликат игнорируем:
+                        if (!isOffer && (phase == CallPhase.ACTIVE || iceConnected.value)) {
+                            AppLog.i("CallScreen", "дублирующий answer пропущен (уже ACTIVE/ICE CONNECTED) — o-line не меняем")
                         } else {
-                            lastAppliedOfferOLine = sdpOLine(sdp)
+                            engine.setRemoteSdp(sdp, type)
+                            if (!isOffer) {
+                                answerReceived.value = true
+                                lastAppliedAnswerOLine = sdpOLine(sdp)
+                                phase = CallPhase.CONNECTING
+                            } else {
+                                lastAppliedOfferOLine = sdpOLine(sdp)
+                            }
                         }
                     }
                 }
@@ -1424,13 +1507,13 @@ fun CallScreen(
                         // #CALLS-OUTGOING: также слушаем topology-changed — сервер может
                         // переключить topology и указать offerTo (кому слать offer).
                         // Обрабатывается в when-ветке ниже.
-                        // #CALLS-OUTGOING-FIX (2026-08-24): после connection инициатор
-                        // ТОЖЕ отправляет accept-call (подтверждает участие) — иначе сервер
-                        // не ретранслирует answer от собеседника, и звонок висит в CONNECTING.
-                        if (direction == re.pinok.data.model.CallDirection.OUTGOING) {
-                            AppLog.i("CallScreen", "Исходящий: отправляю accept-call (подтверждение участия)")
-                            signaling.acceptCall(isVideo = false)
-                        }
+                        // #CALLS-OUTGOING-NO-ACCEPT (2026-10-15): инициатор исходящего НЕ шлёт
+                        // accept-call — по снапшоту `звонок исходящий.har` (эталон VK Web)
+                        // в исходящем НЕТ ни accept-call, ни get-rooms. Мы ранее отправляли
+                        // accept-call при исходящем (старый #CALLS-OUTGOING-FIX) — это заставляло
+                        // сервер считать разговор принятым и авто-поднимать трубку у собеседника
+                        // (на официальном VK). Убрано: инициатор шлёт offer и ждёт answer/accepted-call.
+                        // Оставлен только на входящем (принимающем) — там он обязателен.
                     } catch (e: Exception) {
                         AppLog.w("CallScreen", "WS connection TURN parse error: ${e.message}")
                     }
@@ -1565,8 +1648,12 @@ fun CallScreen(
     // Видео считаем «живым» (рендерим) только когда кадры реально декодируются;
     // пока кадров нет — плейсхолдер. Callback приходит с потока getStats —
     // присваивание Compose-состоянию потокобезопасно.
-    LaunchedEffect(remoteVideoTrack, peerVideoEnabled, videoRxEnabled) {
-        val active = remoteVideoTrack != null && peerVideoEnabled && videoRxEnabled
+    // #CALLS-VIDEO-FIX (2026-10-15): убран peerVideoEnabled из блокировки поллинга —
+    // по снапшотам media-settings-changed приходит с isVideoEnabled хаотично (в 5 из 6
+    // событий пустое), поэтому peerVideoEnabled оставался false и блокировал приём.
+    // Теперь поллинг гейтится только фактом наличия трека и RX-флага.
+    LaunchedEffect(remoteVideoTrack, videoRxEnabled) {
+        val active = remoteVideoTrack != null && videoRxEnabled
         if (!active) {
             if (videoFrames != -1) {
                 AppLog.i("CallScreen", "#CALLS-VIDEO-RX: поллинг кадров остановлен (active=false)")
@@ -2049,7 +2136,7 @@ fun CallScreen(
     // Вычисление перенесено НАД Scaffold: containerColor должен становиться
     // прозрачным, когда видео рендерится (см. #CALLS-VIDEO-BG ниже).
     val videoRenderActive = remoteVideoTrack != null && videoRxEnabled &&
-        peerVideoEnabled && videoFrames > 0 &&
+        videoFrames > 0 &&
         (phase == CallPhase.CONNECTING || phase == CallPhase.ACTIVE)
 
     // #CALLS-SURFACEVIEW (2026-09-01): SurfaceViewRenderer — официальный рендер
@@ -2110,55 +2197,80 @@ fun CallScreen(
             // кадров нет, остаётся плейсхолдер (аватар + статус).
             if (videoRenderActive && remoteVideoTrack != null) {
                 val track = remoteVideoTrack!!
-                var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+                // #CALLS-VIDEO-TEXVIEW (2026-10-15, регресс #CALLS-SURFACE-ZTOP):
+                // SurfaceViewRenderer с setZOrderOnTop(true) ЗАНОВО дал чёрный экран при
+                // ДОКАЗАННОМ рендере (декодер MTK VP8, кадры растут, onFirstFrameRendered ✓).
+                // Документированная причина (VideoTextureRenderer.kt строки 25-31; устройство
+                // HOTWAV Cyber 15 / MediaTek / Android 13): hardware-overlay слой SurfaceView
+                // НЕ попадает в финальную композицию сквозь иерархию (NavHost + вложенные
+                // Scaffold'ы + нижняя навигация) ВНЕ зависимости от z-order. Поэтому
+                // возвращаемся на проверенный путь — TextureView (обычный GPU-композитируемый
+                // view, без punch-through/z-order, попадает в скриншот).
+                // API VideoTextureRenderer (артефакт stream-webrtc-android 1.3.10):
+                //   init(eglContext, events) — ДО createEglSurface; addSink/removeSink;
+                //   releaseRenderer() — ровно один раз. setZOrderOnTop НЕ вызываем
+                //   (обычный узел окна — иерархия уже корректна: containerColor прозрачен).
+                // #CALLS-RENDERER-STABLE (2026-10-15, регресс #CALLS-VIDEO-TEXVIEW):
+                // СТАБИЛЬНЫЙ рендерер на всё время ветки. Причина старого бага: паттерн
+                // "DisposableEffect(track, textureRenderer)" перезапускался, когда
+                // textureRenderer (mutableState) впервые получал не-null значение
+                // прямо из factory AndroidView → onDispose освобождал РАБОТАЮЩИЙ рендер
+                // сразу после первого кадра (лог «releaseRenderer: кадров в sink: 1»),
+                // а новый, пересозданный factory, визуально НЕ отдавал кадры (стоп-кадр).
+                // ФИКС:
+                //  1) привязка track.addSink() делается НА ФАБРИКЕ — в одном месте с init,
+                //     обоими вызовами управляет владелец трека, рендер сам себе консьюмер,
+                //     НЕ зависит от нестабильного стейта compose.
+                //  2) textureRenderer НЕ входит в ключ DisposableEffect — эффект НЕ
+                //     перезапускается при первом non-null assign; ключ — только track
+                //     (track стабилен в течение звонка → единственный демонтаж при уходе).
+                //  3) onDispose НЕ вызывает releaseRenderer() на рендере, который живёт
+                //     только с момента factory: рендер сам знает своего трека; здесь
+                //     только removeSink + releaseRenderer — но только если ветка ПАДАЕТ
+                //     (exit), а не при рекомпозиции. Оба вызова идемпотентны.
+                // Рендер создаётся ровно ОДИН раз на вход в ветку; AndroidView НЕ
+                // пересоздаёт его при рекомпозиции (factory вызывается лишь при
+                // покидании/возврате ветки, а внутри блока экземпляр стабилен).
+                var textureRenderer by remember { mutableStateOf<VideoTextureRenderer?>(null) }
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .fillMaxHeight(0.55f)
                         .align(Alignment.TopCenter),
                     factory = { ctx ->
-                        SurfaceViewRenderer(ctx).apply {
-                            // #CALLS-SURFACE-ZTOP (2026-09-01, лог 17:01): было
-                            // setZOrderMediaOverlay(true) — sublayer -1/-2 = ПОВЕРХНОСТЬ
-                            // ВСЁ РАВНО СЗАДИ ОКНА (mediaOverlay влияет только на порядок
-                            // МЕЖДУ SurfaceView). Рендер доказанно рисовал
-                            // (onFirstFrameRendered ✓, hwAccel=true, 350 кадров), но
-                            // экран чёрный: любой непрозрачный предок (фон NavHost/темы)
-                            // перекрывает поверхность. setZOrderOnTop — sublayer +1,
-                            // поверхность НАД окном → видна независимо от фонов.
-                            // Панель управления вне границ видео (ниже 55%) — не
-                            // перекрывается.
-                            setZOrderOnTop(true)
+                        VideoTextureRenderer(ctx).also { tr ->
                             runCatching {
                                 val egl = engine.eglBaseContext()
                                     ?: error("EGL-контекст движка недоступен")
-                                val me = this
-                                init(egl, object : org.webrtc.RendererCommon.RendererEvents {
+                                tr.init(egl, object : org.webrtc.RendererCommon.RendererEvents {
                                     override fun onFirstFrameRendered() {
-                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован ✓ (SurfaceView)")
+                                        AppLog.i("CallScreen", "video renderer: ПЕРВЫЙ КАДР отрисован ✓ (TextureView)")
                                     }
                                     override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
                                         AppLog.d("CallScreen", "video renderer: кадр ${videoWidth}x$videoHeight rot=$rotation")
                                     }
                                 })
-                                AppLog.i("CallScreen", "video renderer: SurfaceViewRenderer инициализирован")
+                                AppLog.i("CallScreen", "video renderer: VideoTextureRenderer инициализирован")
                             }.onFailure { AppLog.e("CallScreen", "video renderer init: ${it.message}") }
-                            renderer = this
+                            // Привязка приёмника кадров — в одном контексте с init, НЕ в
+                            // DisposableEffect: так addSink не зависит от перезапусков
+                            // эффекта и рендер всегда получает кадры с самого создания.
+                            runCatching { track.addSink(tr) }
+                                .onFailure { AppLog.e("CallScreen", "video addSink: ${it.message}") }
+                            textureRenderer = tr
                         }
                     },
+                    update = { textureRenderer = it },
                 )
-                // Cleanup: removeSink + release. release() идемпотентен у SurfaceViewRenderer
-                // (в отличие от EglRenderer), но страхуемся флагом.
-                DisposableEffect(track, renderer) {
-                    val r = renderer
-                    if (r != null) {
-                        runCatching { track.addSink(r) }
-                            .onFailure { AppLog.e("CallScreen", "video addSink: ${it.message}") }
-                    }
+                // Teardown: ТОЛЬКО при реальном уходе ветки (track/движок сменились или
+                // рендер выключен). Ключ БЕЗ textureRenderer — смена рендера на первый
+                // non-null НЕ освобождает рабочий рендер после первого кадра.
+                DisposableEffect(track) {
                     onDispose {
-                        if (r != null) {
-                            runCatching { track.removeSink(r) }
-                            runCatching { r.release() }
+                        val tr = textureRenderer
+                        if (tr != null) {
+                            runCatching { track.removeSink(tr) }
+                            tr.releaseRenderer()
                         }
                     }
                 }
@@ -2182,7 +2294,7 @@ fun CallScreen(
                     onMute = {
                         isMuted = !isMuted
                         engine.setMuted(isMuted)
-                        signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = false)
+                        signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
                     },
                     onEnd = {
                         signaling.hangup(if (phase == CallPhase.ACTIVE) "hungup" else "cancel")
@@ -2388,82 +2500,44 @@ fun CallScreen(
                             horizontalArrangement = Arrangement.spacedBy(20.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            CallControlButton(
-                                icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                                label = if (isMuted) "Вкл. микрофон" else "Микрофон",
-                                color = if (isMuted) Color(0xFF616161) else Color(0xFF37474F),
-                                onClick = {
-                                    isMuted = !isMuted
-                                    engine.setMuted(isMuted)
-                                    // #CALLS-ZH Ж4: mute сопровождаем change-media-settings —
-                                    // ПОЛНЫЙ mediaSettings из 6 bool (Ж0 §9.1, 16131@306103;
-                                    // не диф — его не понимает сервер). isVideoEnabled=false:
-                                    // локальной камеры нет (видеозаглушка #CALLS-SYMMETRIC).
-                                    signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = false)
-                                },
-                            )
+CallControlButton(
+                            icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            label = if (isMuted) "Вкл. микрофон" else "Микрофон",
+                            color = if (isMuted) Color(0xFF616161) else Color(0xFF37474F),
+                            onClick = {
+                                isMuted = !isMuted
+                                engine.setMuted(isMuted)
+                                // #CALLS-ZH Ж4: mute сопровождаем change-media-settings —
+                                // ПОЛНЫЙ mediaSettings из 6 bool (Ж0 §9.1, 16131@306103;
+                                // не диф — его не понимает сервер). isVideoEnabled=false:
+                                // локальной камеры нет (видеозаглушка #CALLS-SYMMETRIC).
+                                signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
+                            },
+                        )
+                        // #CALLS-CAMERA-TOGGLE (2026-10-15): кнопка камеры в футере, как в эталоне VK Web.
+                        // testid mvk_calls_call_footer_camera (выкл) / _camera_pressed (вкл),
+                        // aria-label «Включить/Выключить камеру», aria-pressed — кнопка-переключатель.
+                        // Кнопка есть в любом звонке (аудио и видео), отличается только исходное
+                        // состояние опции-пер-старт (isCameraOn). Переключает передачу видео
+                        // в реальном времени + шлёт change-media-settings с актуальным isVideoEnabled.
+                        CallControlButton(
+                            icon = if (isCameraOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                            label = if (isCameraOn) "Выключить камеру" else "Включить камеру",
+                            color = if (isCameraOn) Color(0xFF43A047) else Color(0xFF616161),
+                            onClick = {
+                                isCameraOn = !isCameraOn
+                                videoTxEnabled = isCameraOn
+                                engine.setCameraEnabled(isCameraOn)
+                                signaling.changeMediaSettings(isAudioEnabled = !isMuted, isVideoEnabled = isCameraOn)
+                            },
+                        )
                             CallControlButton(
                                 icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
                                 label = if (isSpeakerOn) "Динамик" else "Динамик",
                                 color = if (isSpeakerOn) Color(0xFF43A047) else Color(0xFF37474F),
                                 onClick = { isSpeakerOn = !isSpeakerOn; engine.setSpeakerOn(isSpeakerOn) },
                             )
-                            CallControlButton(
-                                icon = Icons.Default.Link,
-                                label = "Ссылка",
-                                color = Color(0xFF37474F),
-                                onClick = {
-                                    val cid = activeCallId.value
-                                    if (cid.isNullOrBlank()) {
-                                        android.widget.Toast.makeText(context, "Звонок ещё не создан", android.widget.Toast.LENGTH_SHORT).show()
-                                        return@CallControlButton
-                                    }
-                                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                        try {
-                                            val snap = deps.prefs.data.first()
-                                            val sk = snap.callsSessionKey
-                                            val link = if (sk.isNotBlank()) {
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                    deps.apiClient.vchatCreateJoinLink(cid, sk)
-                                                }
-                                            } else null
-                                            val full = if (!link.isNullOrBlank()) "https://vk.ru/call/join/$link" else null
-                                            if (full != null) {
-                                                val clip = android.content.ClipData.newPlainText("join_link", full)
-                                                context.getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(clip)
-                                                android.widget.Toast.makeText(context, "Ссылка скопирована", android.widget.Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                android.widget.Toast.makeText(context, "Не удалось создать ссылку", android.widget.Toast.LENGTH_SHORT).show()
-                                            }
-                                        } catch (e: Exception) {
-                                            android.widget.Toast.makeText(context, "Ошибка: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                            )
                             // ══ #CALLS-ZH (Этап Ж, Task 5-b): новые кнопки футера ══
-                            // Ж3: чат звонка (calls_call_footer_button_chat) — готовый
-                            // CallChatScreen (Этап Д) с активным callId.
-                            CallControlButton(
-                                icon = Icons.AutoMirrored.Filled.Chat,
-                                label = "Чат",
-                                color = if (showCallChat) Color(0xFF43A047) else Color(0xFF37474F),
-                                onClick = {
-                                    val cid = activeCallId.value
-                                    if (cid.isNullOrBlank()) {
-                                        android.widget.Toast.makeText(context, "Звонок ещё не создан", android.widget.Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        showCallChat = true
-                                    }
-                                },
-                            )
-                            // Ж1: участники (calls_call_footer_button_participants).
-                            CallControlButton(
-                                icon = Icons.Default.Group,
-                                label = "Участники",
-                                color = if (showParticipants) Color(0xFF43A047) else Color(0xFF37474F),
-                                onClick = { showParticipants = true },
-                            )
                             // Ж2: реакции + поднятая рука (зона calls_call_footer_button_raise_hand).
                             CallControlButton(
                                 icon = Icons.Default.EmojiEmotions,
@@ -2471,21 +2545,7 @@ fun CallScreen(
                                 color = if (showReactions) Color(0xFF43A047) else Color(0xFF37474F),
                                 onClick = { showReactions = true },
                             )
-                            // Ж4: настройки медиа (rc calls_call_settings_root).
-                            CallControlButton(
-                                icon = Icons.Default.Settings,
-                                label = "Настройки",
-                                color = if (showMediaSettings) Color(0xFF43A047) else Color(0xFF37474F),
-                                onClick = { showMediaSettings = true },
-                            )
-                            // ══ #CALLS-ZH2 (Task 6-a): «Ещё» — Ж6 запись / Ж7 расшифровка+субтитры / Ж8 зал ожидания / Ж9 залы ══
-                            // (web-меню calls_call_menu_*; панели — CallMorePanel и вложенные).
-                            CallControlButton(
-                                icon = Icons.Default.MoreHoriz,
-                                label = "Ещё",
-                                color = if (showMorePanel) Color(0xFF43A047) else Color(0xFF37474F),
-                                onClick = { showMorePanel = true },
-                            )
+                            // Завершить (красная кнопка — самая последняя в футере, как в VK).
                             CallControlButton(
                                 icon = Icons.Default.CallEnd,
                                 label = "Завершить",
@@ -2499,6 +2559,13 @@ fun CallScreen(
                                     phase = CallPhase.ENDED
                                     onNavigateBack()
                                 },
+                            )
+                            // Ж4: настройки медиа (rc calls_call_settings_root).
+                            CallControlButton(
+                                icon = Icons.Default.Settings,
+                                label = "Настройки",
+                                color = if (showMediaSettings) Color(0xFF43A047) else Color(0xFF37474F),
+                                onClick = { showMediaSettings = true },
                             )
                         }
                     }
@@ -2555,6 +2622,16 @@ fun CallScreen(
                                 textAlign = TextAlign.Center,
                             )
                         }
+                        // #CALLS-IN-CHAIN (2026-10-15): сводная цепочка входящих команд
+                        // по порядку поступления (эталон ВХОДЯЩИЙ.har: connection→offer→...→answer).
+                        if (inChain.value.isNotBlank()) {
+                            Text(
+                                text = "Цепочка: ${inChain.value}",
+                                color = Color.White.copy(alpha = 0.45f),
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                         // #CALLS-ICE-STATS-UI (2026-08-30): решающая строка медиа-диагностики —
                         // типы собранных кандидатов (relay=0 при TURN = аллокация не удалась) и
                         // агрегат candidate-pair (reqS>0/resR=0/reqR=0 = собеседник не отвечает
@@ -2602,7 +2679,7 @@ fun CallScreen(
                 isMuted = muted
                 engine.setMuted(muted)
                 // Тот же wire, что у футерной mute-кнопки (Ж0 §9.1: 6 bool целиком).
-                signaling.changeMediaSettings(isAudioEnabled = !muted, isVideoEnabled = false)
+                signaling.changeMediaSettings(isAudioEnabled = !muted, isVideoEnabled = isCameraOn)
             },
             onSpeakerChange = { on ->
                 isSpeakerOn = on

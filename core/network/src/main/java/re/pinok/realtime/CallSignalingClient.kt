@@ -184,8 +184,37 @@ class CallSignalingClient(
     /** #CALLS-DIAG (2026-08-29): сколько ждём открытия WS, прежде чем рвать попытку. */
     private val CONNECT_TIMEOUT_MS = 10_000L
 
-    private val _messages = MutableSharedFlow<SignalingMessage>(replay = 0, extraBufferCapacity = 64)
+    // #CALLS-REPLAY-INCOMING (2026-10-15): replay=64 вместо 8 — при входящем звонке WS
+    // поднимается на ring ДО открытия CallScreen (SovaApp.ensureIncomingSignalingOnRing),
+    // и offer звонящего прилетает раньше, чем CallScreen подпишется на messages.
+    // При replay=0 поздний подписчик не получает already-прилетевший offer → он теряется,
+    // движок без remoteDescription создаёт свой offer вместо answer → звонок не соединяется.
+    // replay=8 НЕ хватало: в зазоре offer→подписка сервер присылает пачку кандидатов
+    // (~10-15), которые ВЫТЕСНЯЮТ offer из буфера (лог: command=offer count=0, хотя
+    // offer пришёл). replay=64 с запасом держит offer на старте буфера до подписки.
+    // extraBufferCapacity=64 — буфер при активном подписчике (не теряем кадры при отставания).
+    private val _messages = MutableSharedFlow<SignalingMessage>(replay = 64, extraBufferCapacity = 64)
     val messages: SharedFlow<SignalingMessage> = _messages.asSharedFlow()
+
+    /**
+     * #CALLS-IN-OFFER-REPLAY-FIX (2026-10-15): железобетонная доставка последнего offer.
+     *
+     * БАГ: replay=8 в [_messages] НЕ гарантирует, что при входящем звонке offer дойдёт
+     * до CallScreen. PinoK поднимает WS signalа на ring ДО открытия CallScreen
+     * (SovaApp.ensureIncomingSignalingOnRing), и offer звонящего прилетает РАНЬШЕ, чем
+     * CallScreen составится и начнёт `messages.collect`. MutableSharedFlow БЕЗ подписчика
+     * кладёт события ТОЛЬКО в replay-буфер (последние 8) — extraBufferCapacity=64
+     * работает лишь при активном подписчике. Если за зазор (~3с между приходом offer и
+     * стартом подписки) сервер успевает прислать ≥8 кандидатов, они ВЫТЕСНЯЮТ offer из
+     * replay-буфера, и подписчик получает только кандидатов, а offer — нет
+     * (в логе "signaling: command=offer" count=0, движок без remoteDescription создаёт
+     * свой offer вместо answer → «Соединение…»).
+     *
+     * ПРИМЕЧАНИЕ (2026-10-15 откат): поле pendingOffer было добавлено, но вызвало РЕГРЕСС —
+     * входящий звонок стал вообще не приходить. Данный механизм отключён; offer доставляется
+     * только через replay-буфер (replay=8), а гонка с кандидатами решается на стороне
+     * движка/экрана. Причины регресса не до конца ясны, возвращаемся к прежнему поведению.
+     */
 
     /** Подключиться к signaling. [params] — декодированные conversation params.
      *  [incoming] — передать true для ВХОДЯЩЕГО звонка: WS query идёт с tgt=accept и
@@ -264,11 +293,19 @@ class CallSignalingClient(
 
     // ─── Команды ────────────────────────────────────────────────
 
-    /** Принять входящий звонок (audio). @return true — команда реально ушла в WS. */
-    fun acceptCall(isVideo: Boolean = false): Boolean {
+    /**
+     * #CALLS-ACCEPT-MEDIASETTINGS (2026-10-15): принять входящий звонок.
+     * mediaSettings в accept-call должны отражать РЕАЛЬНОЕ состояние кнопок пользователя
+     * (микрофон/камера) на момент приёма — как в эталоне (ВХОДЯЩИЙ.har: mediaSettings
+     * = {isAudioEnabled, isVideoEnabled, ...}, далее меняется через media-settings-changed).
+     * Раньше isAudioEnabled было жёстко true, isVideoEnabled бралось из isVideo — игнорируя
+     * выключенный микрофон/камеру. @return true — команда реально ушла в WS.
+     */
+    fun acceptCall(isVideo: Boolean = false, isAudioEnabled: Boolean = true, isVideoEnabled: Boolean? = null): Boolean {
+        val video = isVideoEnabled ?: isVideo
         val media = JsonObject().apply {
-            addProperty("isAudioEnabled", true)
-            addProperty("isVideoEnabled", isVideo)
+            addProperty("isAudioEnabled", isAudioEnabled)
+            addProperty("isVideoEnabled", video)
             addProperty("isScreenSharingEnabled", false)
             addProperty("isFastScreenSharingEnabled", false)
             addProperty("isAudioSharingEnabled", false)

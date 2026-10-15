@@ -50,7 +50,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import re.pinok.feature.calls.CallsDependencies
 import re.pinok.media.ConversationParamsDecoder
-import re.pinok.realtime.CallSignalingClient
 import re.pinok.util.AppLog
 
 /**
@@ -385,7 +384,9 @@ suspend fun performIncomingDecline(
         val snap = deps.prefs.data.first()
         val okUid = snap.callsSessionUid
         val uid = if (okUid > 0L) okUid else deps.exchangeAuthRepository.userId()
-        val signaling = CallSignalingClient(deps.httpClient)
+        // #CALLS-COMMON-SIGNALING: используем ОБЩИЙ клиент (уже поднят на ring в SovaApp),
+        // иначе при отмене поверх активного WS создаётся второй параллельный клиент.
+        val signaling = deps.signaling
         signaling.start(userId = uid, conversationId = conv, params = wsParams, incoming = true)
         var waited = 0
         while (!signaling.isWsReady() && waited < 6000) {
@@ -398,7 +399,7 @@ suspend fun performIncomingDecline(
         if (sent) {
             delay(1200)
         }
-        signaling.stop()
+        if (signaling.isRunning()) signaling.stop()
         if (sent) {
             val after = withContext(Dispatchers.IO) {
                 runCatching { deps.apiClient.messagesGetCurrentCalls() }.getOrNull()

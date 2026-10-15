@@ -201,6 +201,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         pendingIncomingCallPhoto = null
         incomingCallCollapsed = false
         incomingCallAccepted = false
+        // #CALLS-COMMON-SIGNALING: разрешаем подъём WS для СЛЕДУЮЩЕГО входящего
+        // (клиент уже поднят/занят на текущий; start() не перезапустит пока running).
+        incomingSignalingStarted = false
     }
 
     // ═══ #ARCH-CONTAINERS (Этап 1.3, потреблено на Этапе 1.4): pending ИСХОДЯЩЕГО звонка ═══
@@ -249,6 +252,22 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     override fun getOkUid(): Long = apiClient.lastAnonymUid()
     override fun getVkUid(): Long = exchangeAuthRepository.userId()
     override fun getAnonymUid(): Long = apiClient.lastAnonymUid()
+
+    /**
+     * #CALLS-COMMON-SIGNALING (2026-10-14): общий сигналинг-клиент звонка.
+     * Один на всю сессию: SovaApp поднимает его на ring (входящий) и выставляет
+     * в CallsDependencies, а CallScreen/IncomingCallScreen переиспользуют его
+     * (не создают свой). Ленивый: первый доступ — из UI (композиция после
+     * onCreate), httpClient к тому моменту инициализирован.
+     */
+    override val signaling: re.pinok.realtime.CallSignalingClient by lazy {
+        re.pinok.realtime.CallSignalingClient(httpClient = httpClient)
+    }
+    /** #CALLS-COMMON-SIGNALING: признак, что сигналинг входящего уже поднят на ring
+     *  (чтобы коллекторы-дубли не стартовали его повторно и не плодили WS). */
+    @Volatile
+    var incomingSignalingStarted = false
+        private set
 
     /**
      * #CALLS-SNAP (2026-09-05): репозиторий раздела «Звонки» (Этап А2 плана
@@ -1809,7 +1828,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             longPollClient.events.collect { event ->
                 // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков — при
                 // выключенном входящие звонки (LP 115) игнорируются полностью.
-                if (prefsSnapshot?.callsEnabled != true) {
+                // #CALLS-LOG-ENABLED (2026-10-14): логируем АКТУАЛЬНОЕ значение
+                // prefsSnapshot.callsEnabled при каждом LP-событии — чтобы по логу
+                // было видно, что тумблер реально включён/выключен и где решаем.
+                val callsEnabledNow = prefsSnapshot?.callsEnabled
+                val lpPayloadLen = if (event is re.pinok.realtime.LongPollEvent.IncomingCall) event.payload?.length ?: 0 else -1
+                AppLog.i("SovaApp", "LP-event: type=${event.javaClass.simpleName} callsEnabled=$callsEnabledNow (payload.len=$lpPayloadLen)")
+                if (callsEnabledNow != true) {
+                    AppLog.i("SovaApp", "INCOMING-CALL-KILLSWITCH: LP-событие проигнорировано (callsEnabled=$callsEnabledNow) — включите тумблер «Звонки» в настройках")
                     return@collect
                 }
                 if (event is re.pinok.realtime.LongPollEvent.IncomingCall) {
@@ -1836,6 +1862,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                                 pendingIncomingCallPayload = "-1"  // placeholder, handleQueuev4Incoming вытянет реальный
                             }
                             refreshIncomingCaller()
+                            // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу
+                            // (поймать offer) — ТОЛЬКО при реальном payload (не "-1").
+                            if (realPayload != null) ensureIncomingSignalingOnRing(realPayload)
                             showIncomingCallNotification()
                         }
                     } catch (e: Exception) {
@@ -1848,7 +1877,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             queuev4Client.events.collect { ev ->
                 try {
                     // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков.
-                    if (prefsSnapshot?.callsEnabled != true) {
+                    // #CALLS-LOG-ENABLED (2026-10-14): логируем актуальное значение
+                    // callsEnabled при каждом queuev4-событии (для диагностики входящих).
+                    val callsEnabledNow = prefsSnapshot?.callsEnabled
+                    AppLog.i("SovaApp", "queuev4-event: queueId=${ev.queueId} type=${ev.payload["type"]} callsEnabled=$callsEnabledNow")
+                    if (callsEnabledNow != true) {
+                        AppLog.i("SovaApp", "INCOMING-CALL-KILLSWITCH: queuev4-событие проигнорировано (callsEnabled=$callsEnabledNow)")
                         return@collect
                     }
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
@@ -1874,6 +1908,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                                 } else {
                                     refreshIncomingCaller()
                                 }
+                                // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
+                                ensureIncomingSignalingOnRing(convParams)
                                 showIncomingCallNotification()
                             } else {
                                 // Fallback: старый формат payload (строка).
@@ -1904,7 +1940,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             eventsQueuev4Client.events.collect { ev ->
                 try {
                     // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков.
-                    if (prefsSnapshot?.callsEnabled != true) {
+                    // #CALLS-LOG-ENABLED (2026-10-14): логируем callsEnabled при событии.
+                    val callsEnabledNow = prefsSnapshot?.callsEnabled
+                    AppLog.i("SovaApp", "events_queue-event: queueId=${ev.queueId} callsEnabled=$callsEnabledNow")
+                    if (callsEnabledNow != true) {
+                        AppLog.i("SovaApp", "INCOMING-CALL-KILLSWITCH: events_queue-событие проигнорировано (callsEnabled=$callsEnabledNow)")
                         return@collect
                     }
                     val payload = ev.payload["payload"] as? String
@@ -1927,7 +1967,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             callsQueuev4Client.events.collect { ev ->
                 try {
                     // #SETTINGS-CALLS-TOGGLE (2026-10-14): kill-switch звонков.
-                    if (prefsSnapshot?.callsEnabled != true) {
+                    // #CALLS-LOG-ENABLED (2026-10-14): логируем callsEnabled при событии.
+                    val callsEnabledNow = prefsSnapshot?.callsEnabled
+                    AppLog.i("SovaApp", "calls-queue-event: queueId=${ev.queueId} type=${ev.payload["type"]} callsEnabled=$callsEnabledNow")
+                    if (callsEnabledNow != true) {
+                        AppLog.i("SovaApp", "INCOMING-CALL-KILLSWITCH: calls-очередь-событие проигнорировано (callsEnabled=$callsEnabledNow)")
                         return@collect
                     }
                     if (ev.queueId == re.pinok.realtime.Queuev4Client.QUEUE_CALLS) {
@@ -1950,6 +1994,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                                 } else {
                                     refreshIncomingCaller()
                                 }
+                                // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
+                                ensureIncomingSignalingOnRing(convParams)
                                 showIncomingCallNotification()
                             } else {
                                 // Fallback: старый формат payload как строка (LP 115 legacy).
@@ -1998,6 +2044,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     }
                     pendingIncomingCallPayload = realPayload
                     refreshIncomingCaller()
+                    // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
+                    ensureIncomingSignalingOnRing(realPayload)
                     showIncomingCallNotification()
                     return@launch
                 }
@@ -2020,6 +2068,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                     pendingIncomingCallPayload = "-1"
                 }
                 refreshIncomingCaller()
+                // #CALLS-COMMON-SIGNALING: payload=null — метод сам дёрнет
+                // getCurrentCalls и получит conversation params через vchat.
+                ensureIncomingSignalingOnRing(null)
                 showIncomingCallNotification()
             } catch (e: Exception) {
                 AppLog.w("SovaApp", "handleQueuev4Incoming: ${e.message}")
@@ -2076,47 +2127,26 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      * Если credential уже задан вручную (SovaPrefs callsQueueKey/Ts) — используем его.
      */
     fun startCallSignaling() {
-        // P0.43-CALLS-FIX: правильный механизм подписки найден через полный реверс
-        // spa-im.69bbfd1a75b23b0e.js (3.6 MB) + mvk-calls-bridge.js.
+        // #CALLS-DEDICATED-QUEUE-RESTORE (2026-10-14): подписка на входящие звонки.
+        // РЕАЛЬНЫЙ канал входящих — dedicated calls-очередь (calls_<uid>_7879029_1,
+        // см. callDedicatedCallsQueueStart ниже) — восстановлен как v1.9.8.
         //
-        // КРИТИЧНО: incoming_call events приходят через IM-очередь (НЕ calls-очередь!).
-        // IM-очередь подписывается через queue.subscribe с queue_ids=
-        //   "onlfriends_<uid>,accountcounters_<uid>" (VKEndpoints.countersQueueId)
-        // Эта очередь мультиплексирует events с entity_type:"calls" (incoming_call,
-        // call_finished, call_history_updated) + messages/online/counters.
-        //
-        // Очередь calls_<uid> (calls-SDK) — отдельная, для SDK-специфичных events
-        // (IncomingCall, CallFinished). В HAR она ВСЕГДА пустая — звонок отменяется
-        // до доставки SDK-события. Не нужна для входящих.
-        //
-        // stickers.subscribeToQueue — для stickers/vmoji UGC updates, НЕ для calls.
-        //
-        // JS-бандл spa-im.69bbfd1a75b23b0e.js, case "QueueStart":
-        //   let t=e.viewer.id, a=Array.from(e.activeQueueIds); // {"onlfriends","accountcounters"}
-        //   let i=a.map(e=>`${e}_${t}`).join(",");  // "onlfriends_<uid>,accountcounters_<uid>"
-        //   let s=await r.fetch("queue.subscribe",{queue_ids:i},{retries:1/0});
+        // Прежний P0.43-CALLS-FIX ошибочно утверждал, что incoming_call приходят через
+        // IM-очередь (onlfriends_<uid>,accountcounters_<uid>) и удалял calls-очередь.
+        // Это опровергнуто живым логом: queuev4/multiaccount/events дают только
+        // online/im/counters (parseCallEvents: entity_types=[online/null]), а входящий
+        // звонок не доходит. IM/multiaccount/events-очереди остаются для счётчиков/
+        // онлайн (блоки 3-4 ниже), callsQueuev4Client — только за calls-очередью.
         if (queuev4Client.isRunning()) return
         keepAliveScope.launch {
             try {
                 val vkUid = exchangeAuthRepository.userId()
-                val deviceId = exchangeAuthRepository.deviceId()
 
-                // 1) IM-очередь (ЕДИНСТВЕННАЯ, доставляющая incoming_call events).
-                //    queue.subscribe с queue_ids=onlfriends_<uid>,accountcounters_<uid>.
-                //    VK web SPA: case "QueueStart" -> r.fetch("queue.subscribe", {queue_ids:i}).
-                val imCred = apiClient.queueSubscribe(
-                    userId = vkUid,
-                    queueIdSuffix = re.pinok.api.VKEndpoints.countersQueueId(vkUid),
-                )
-                if (imCred != null) {
-                    AppLog.i("SovaApp", "queue.subscribe IM OK (key=${imCred.key.take(8)}... ts=${imCred.ts} url=${imCred.url})")
-                    callsQueuev4Client.setCredential(imCred)
-                    callsQueuev4Client.start()
-                    AppLog.i("SovaApp", "calls-queuev4 активна (IM-очередь: onlfriends_$vkUid,accountcounters_$vkUid)")
-                } else {
-                    AppLog.w("SovaApp", "queue.subscribe IM вернул null - входящие звонки недоступны")
-                    checkCallsApiKeyError()
-                }
+                // 1) #CALLS-DEDICATED-QUEUE-RESTORE (2026-10-14): IM-очередь НЕ подписываем
+                //    на callsQueuev4Client — он зарезервирован за dedicated calls-очередью
+                //    (см. callDedicatedCallsQueueStart ниже, v1.9.8-механизм). IM/multiaccount/
+                //    events-очереди (см. блоки 3-4) мультиплексируют online/im/counters и НЕ
+                //    доставляют calls-события (зафиксировано: parseCallEvents entity_types=[online/null]).
 
                 // 2) session_key для vchat (auth.anonymLogin) - для исходящих звонков.
                 //    Входящим не нужен, но EnsureCallsSessionKey нужен для accept-call WS.
@@ -2156,14 +2186,62 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         AppLog.i("SovaApp", "events_queuev4 активна (через stickers.subscribeToQueue)")
                     }
                 }
+
+                // 5) #CALLS-DEDICATED-QUEUE-RESTORE (2026-10-14): dedicated calls-очередь
+                //    calls_<uid>_7879029_1 — РЕАЛЬНЫЙ канал входящих звонков (LP 115/70).
+                //    IM/multiaccount/events-очереди мультиплексируют online/im/counters,
+                //    но НЕ доставляют calls-события входящих (зафиксировано в логе:
+                //    parseCallEvents: entity_types=[online/null]). Восстановлено как v1.9.8.
+                callDedicatedCallsQueueStart()
             } catch (e: Exception) {
                 AppLog.e("SovaApp", "startCallSignaling failed", e)
             }
         }
     }
 
-    // P0.43-CALLS-FIX: startDedicatedCallsQueue удалён — startCallSignaling выше
-    // подписывает все 3 очереди: calls (queue.subscribe), multiaccount + events (stickers.subscribeToQueue).
+    /**
+     * #CALLS-DEDICATED-QUEUE-RESTORE (2026-10-14): подписка на dedicated calls-очередь
+     * (calls_<uid>_<clientId>_1) — реальный канал входящих звонков в простое (LP 115/70).
+     * Восстановлено из v1.9.8/d1a8dff (было удалено в P0.43-CALLS-FIX в пользу ошибочного
+     * утверждения, что IM-очередь доставляет calls-события). client_id = VK_WEB_MOBILE_CLIENT_ID
+     * (7879029), НЕ VK_WEB_CLIENT_ID (6287487) — иначе queue.subscribe err=15.
+     */
+    private fun callDedicatedCallsQueueStart() {
+        keepAliveScope.launch {
+            try {
+                val callsUid = exchangeAuthRepository.userId()
+                val callsClientId = BuildConfig.VK_WEB_MOBILE_CLIENT_ID
+                val callsQueueName = re.pinok.api.VKEndpoints.callsQueueId(callsUid, callsClientId)
+                var callsCred = apiClient.queueSubscribe(userId = 0L, queueIdSuffix = callsQueueName)
+                if (callsCred == null) {
+                    // Fallback: кэшированный calls-credential (persistQueueCredential → SovaPrefs).
+                    val snap = prefs.data.first()
+                    if (snap.callsQueueKey.isNotBlank() && snap.callsQueueTs > 0L) {
+                        callsCred = re.pinok.data.model.QueueCredential(
+                            key = snap.callsQueueKey,
+                            ts = snap.callsQueueTs,
+                            url = "https://queuev4.vk.ru/im1180",
+                            userId = callsUid,
+                        )
+                    }
+                }
+                if (callsCred != null) {
+                    AppLog.i("SovaApp", "queue.subscribe OK (calls=$callsQueueName key=${callsCred.key.take(8)}… ts=${callsCred.ts})")
+                    callsQueuev4Client.setCredential(callsCred)
+                    callsQueuev4Client.start()
+                    AppLog.i("SovaApp", "queuev4 calls-очередь активна (dedicated, v1.9.8-механизм)")
+                } else {
+                    AppLog.w("SovaApp", "входящие звонки недоступны (нет queue credential для calls: $callsQueueName)")
+                }
+            } catch (e: Exception) {
+                AppLog.w("SovaApp", "calls queue subscribe error: ${e.message}")
+            }
+        }
+    }
+
+    // #CALLS-DEDICATED-QUEUE-RESTORE (2026-10-14): dedicated calls-очередь
+    // восстановлена (см. callDedicatedCallsQueueStart выше) — v1.9.8-механизм
+    // приёма входящих; IM/multiaccount/events-очереди НЕ несут calls-события.
 
     /**
      * #CALLS-AUTO (2026-08-23): автоматическое получение session_key (vchat)
@@ -2393,6 +2471,78 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             }
         } catch (e: Exception) {
             AppLog.w("SovaApp", "createCallNotificationChannel failed: ${e.message}")
+        }
+    }
+
+    /**
+     * #CALLS-COMMON-SIGNALING (2026-10-14): поднять сигналинг входящего звонка
+     * СРАЗУ на ring (при получении события), а не только в accept. Веб-эталон
+     * держит канал открытым весь период ожидания (offer звонящего приходит
+     * на ~2-й секунде, ещё до поднятия трубки); у нас раньше WS стартовал
+     * только в performIncomingAccept — offer терялся, звонящий слышал тишину.
+     *
+     * Декодирует conversation params из payload (если реальные), иначе получает
+     * через vchat.getConversationParams по conversationId, и стартует ОБЩИЙ
+     * signaling-клиент (incoming=true → tgt=accept). Повторные входы (коллекторы-
+     * дубли) игнорируются флагом incomingSignalingStarted.
+     */
+    private fun ensureIncomingSignalingOnRing(payload: String?) {
+        if (incomingSignalingStarted) return
+        incomingSignalingStarted = true
+        keepAliveScope.launch {
+            try {
+                // 1) conversation params — из payload (могут быть "-1" placeholder).
+                var params: re.pinok.media.ConversationParamsDecoder.Params? = null
+                val real = payload?.takeIf { !it.isNullOrBlank() && it != "-1" }
+                if (!real.isNullOrBlank()) {
+                    params = withContext(Dispatchers.Default) {
+                        runCatching { re.pinok.media.ConversationParamsDecoder.decode(real) }.getOrNull()
+                    }
+                    AppLog.i("SovaApp", "RING-SIGNALING: params декодированы из payload (endpoint=${params?.endpoint?.take(40) ?: "null"} token=${params?.token?.take(8) ?: "null"})")
+                }
+                // 2) conversationId — ВСЕГДА из getCurrentCalls (в Params поля conversationId
+                //    нет!). Ранее блок выполнялся только при params==null — если params уже
+                //    декодировались из payload, convId оставался null и WS стартовал с ПУСТЫМ
+                //    conversationId → SERVER_ERROR "Parameter conversationId is required" +
+                //    сломанное соединение. РЕГРЕСС от 2026-10-14 (ring-подъём).
+                var convId: String? = null
+                val calls = withContext(Dispatchers.IO) {
+                    runCatching { apiClient.messagesGetCurrentCalls() }.getOrNull()
+                }
+                val first = calls?.firstOrNull()
+                if (first != null) {
+                    val v1 = first.get("conversation_id")
+                    val v2 = first.get("id")
+                    val v3 = first.get("call_id")
+                    convId = (v1?.takeIf { it.isJsonPrimitive }?.asString)
+                        ?: (v2?.takeIf { it.isJsonPrimitive }?.asString)
+                        ?: (v3?.takeIf { it.isJsonPrimitive }?.asString)
+                }
+                AppLog.i("SovaApp", "RING-SIGNALING: getCurrentCalls items=${calls?.size ?: 0} convId=$convId")
+                val cid = convId
+                // 3) если params нет, а convId есть — vchat.getConversationParams.
+                if (params == null && !cid.isNullOrBlank()) {
+                    val (sk, vchatResp) = getCallConversationParams(cid)
+                    if (vchatResp != null) {
+                        params = re.pinok.media.ConversationParamsDecoder.decodeParamsJson(vchatResp)
+                    }
+                }
+                val resolved = params
+                if (resolved == null || cid.isNullOrBlank()) {
+                    AppLog.w("SovaApp", "RING-SIGNALING: conversation params/convId не получены — WS НЕ поднят (params=${resolved != null} convId=$cid payload=${payload?.take(30)})")
+                    incomingSignalingStarted = false
+                    return@launch
+                }
+                // 4) uid — okcdn uid (callsSessionUid), при отсутствии — VK uid.
+                val okUid = prefsSnapshot?.callsSessionUid ?: 0L
+                val uid = if (okUid > 0L) okUid else exchangeAuthRepository.userId()
+                val conv = cid
+                AppLog.i("SovaApp", "RING-SIGNALING: поднимаю WS на ring conv=$conv uid=$uid (params endpoint=${resolved.endpoint.take(40)})")
+                signaling.start(userId = uid, conversationId = conv, params = resolved, incoming = true)
+            } catch (e: Exception) {
+                AppLog.w("SovaApp", "RING-SIGNALING error: ${e.message}")
+                incomingSignalingStarted = false
+            }
         }
     }
 

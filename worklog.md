@@ -10717,7 +10717,7 @@ Task: Разбор звонок исходящий_2809.har — Блок A дл�
 
 Work Log:
 - HAR 26 МБ, 197 entries. JSON парсинг через Python.
-- A-1: старт = vchat.startConversation на https://calls.okcdn.ru/fb.do (application_key=CDLGIBMGDIHBABABA). messages.startCall в дампе НЕТ.
+- A-1: старт = vchat.startConversation на https://calls.okcdn.ru/fb.do (application_key=<маскировано>). messages.startCall в дампе НЕТ.
 - params: conversationId, isVideo=false, protocolVersion=5, payload{is_video,with_join_link,join_by_link,community_user_id,caller_app_id=7879029}, onlyAdminCanShareMovie=false, externalIds=<peerId>.
 - Ответ: token + endpoint=wss://videowebrtc.okcdn.ru/ws2 + ws_ip_addresses + wt_endpoint=https://videowebrtc.okcdn.ru:23456/wt + wt_ip_addresses + turn_server.
 - A-4: getCallParams/getConversationParams В ДАМПЕ НЕТ.
@@ -10736,7 +10736,7 @@ Agent: assistant (deepseek-pp)
 Task: B-4 ishodyashchiy zvonok - vyravnivanie po HAR zvonok ishodyashchiy_2809.har.
 
 Work Log:
-- HAR razobran (Blok A): start = vchat.startConversation na calls.okcdn.ru/fb.do, application_key=CDLGIBMGDIHBABABA, payload.caller_app_id=7879029.
+- HAR razobran (Blok A): start = vchat.startConversation na calls.okcdn.ru/fb.do, application_key=<маскировано>, payload.caller_app_id=7879029.
 - Sverka s kodom: 3 rashozhdeniya (veroyatnaya prichina baga "2-ya popytka").
 
 Stage Summary (pravki, aprus yuzera):
@@ -14222,7 +14222,7 @@ Work Log:
 - КОМАНДЫ WS: исходящий (инициатор): update-media-modifiers, change-options, change-media-settings, transmit-data, custom-data, change-participant-state. Входящий (принимающий): get-rooms, accept-call, затем update-media-modifiers, change-media-settings, transmit-data, custom-data(x3). 
 - ПОДТВЕРЖДЕНО для фикса obsolete_client (PinoK уже внёс): version=5, clientType=VK (upper, исходящий), capabilities=6D7F, tgt=start (исходящий), protocolVersion=5 в startConversation.
 - НОВОЕ/уточнение: HTTP vchat.acceptConversation НЕ существует — входящий принимается ТОЛЬКО WS-командой accept-call после get-rooms. Входящий WS URL отличается: clientType=vk (нижний регистр), добавляет deviceIdx=0 и tgt=accept. Если PinoK принимает входящие — слать tgt=accept+deviceIdx, а не tgt=start.
-- session_key=-w-* выдаётся auth.anonymLogin (анонимный вход OK API), живёт на звонок/сессию; application_key=CDLGIBMGDIHBABABA константа. Всё в POST calls.okcdn.ru/fb.do (form-urlencoded).
+- session_key=-w-* выдаётся auth.anonymLogin (анонимный вход OK API), живёт на звонок/сессию; application_key=<маскировано> константа. Всё в POST calls.okcdn.ru/fb.do (form-urlencoded).
 - vchat.startConversation: conversationId=uuid4, isVideo=false, protocolVersion=5, payload={is_video,with_join_link,join_by_link,community_user_id:0,caller_app_id:7879029}, onlyAdminCanShareMovie=false, externalIds=ЧИСТЫЙ uid собеседника (<VK_UID_PEER>). Ответ даёт token+endpoint+ws_ip_addresses+wt_endpoint+TURN/STUN (turn:91.231.135.148:19302 и turn:90.156.236.95:19302, username="<TURN_USER_MASKED>")+client_type:VK+device_idx:0+p2p_forbidden.
 - vchat.hangupConversation: conversationId + reason=HUNGUP + peerId=ФОРМАТ 3897xxxxxxxxx (исх. 38970049966, вх. 38972735406) — не равен user id.
 - Web.api (v=5.289, client_id=7879029): messages.getCallParticipants(call_id,participant_ids), messages.getConversationsById, calls.getCallSettings(call_id), calls.getConversationByCall(call_id)->чат звонка (напр. peer 2000000229 "Групповой звонок 12.10.2026"), messages.getJoinLink(call_id,invalidate)-> vk.ru/call/join/..., eventHub.getToken.
@@ -14444,7 +14444,7 @@ WS-кадров звонков в захвате нет (единственны�
 **Команда исходящего звонка (HTTP, calls.okcdn.ru/fb.do):**
 POST method=vchat.startConversation, conversationId=vcid, isVideo=false, protocolVersion=5,
 payload={"is_video":false,"with_join_link":false,"join_by_link":false,"community_user_id":0,
-"caller_app_id":6287487}, externalIds=<user_id>, session_key (из system.getInfo), application_key=CGMMEJLGDIHBABABA.
+"caller_app_id":6287487}, externalIds=<user_id>, session_key (из system.getInfo), application_key=<маскировано>.
 СОВПАДАЕТ с нашей реализацией VKApiClient.vchatStartConversation (caller_app_id=6287487).
 
 **Хронология входящего:** call_init(incoming,D) → messages.getCurrentCalls+getCallParticipants →
@@ -14461,3 +14461,541 @@ update-media-modifiers, transmit-data, custom-data, feedback, change-options + p
 **Вывод:** протокол команд звонка у нас верный; при входящем web дёргает getCurrentCalls+
 getCallParticipants (совпадает с нашим кодом). Расхождение — ТОЛЬКО в транспорте сигналинга
 (web→WebTransport/QUIC, мы→WS/HTTP). docs/реверс-звонков-2026-10-14-cdp.md.
+
+## CALLS-COMMON-SIGNALING / 2026-10-14 (общий сигналинг-клиент, подъём WS на ring)
+
+По диагнозу двух субагентов (агент-диагност + агент анализа эталона): веб-VK держит канал
+сигналинга открытым ВЕСЬ период ожидания входящего (offer звонящего приходит на ~2-й секунде,
+до поднятия трубки), а PinoK поднимал WS только в accept — offer терялся, звонящий слышал тишину.
+
+**Что сделано:**
+1. CallsDependencies: добавлен член signaling: CallSignalingClient (общий клиент звонка).
+2. SovaApp:
+   - override val signaling: CallSignalingClient by lazy { CallSignalingClient(httpClient) } — один на сессию;
+   - флаг incomingSignalingStarted (guard повторных подъёмов; сбрасывается в consumeIncomingCall);
+   - метод ensureIncomingSignalingOnRing(payload) — декодирует conversation params из payload
+     (или через vchat.getConversationParams по convId из getCurrentCalls) и стартует ОБЩИЙ
+     сигналинг сразу на ring (incoming=true → tgt=accept);
+   - вызовы ensureIncomingSignalingOnRing во всех 4 коллекторах входящих (LP 115 / queuev4 /
+     events_queue / calls-очередь) + handleQueuev4Incoming (реальный payload и "-1").
+3. CallScreen: al signaling = deps.signaling вместо emember { CallSignalingClient(deps.httpClient) } —
+   переиспользует общий клиент (при running от SovaApp start не перезапускается, accept идёт на уже открытом WS).
+4. IncomingCallScreen (performIncomingDecline): al signaling = deps.signaling вместо создания своего.
+   if (isRunning()) stop() — чтобы не гасить WS, если клиент нужен активному звонку.
+
+**Замысел:** WS входящего поднимается СРАЗУ при ring, до accept, чтобы успеть поймать offer
+звонящего (как веб). Один WS на звонок (никаких параллельных клиентов).
+
+**Бэкап:** backups/calls-common-signaling-2026-10-14/ (CallsDependencies.kt, SovaApp.kt,
+CallScreen.kt, IncomingCallScreen.kt). Требуется пересборка. Сборка — на пользователе.
+
+## CALLS-LOG-ENABLED / 2026-10-14 (логирование callsEnabled во всех 4 коллекторах входящих)
+
+По анализу лого: входящий звонок не пришёл, а лог показывал «CALLS-TOGGLE: звонки выключены»
+при ОБОЗНАЧЕННОМ включённом тумблере. Добавлено явное логирование актуального значения
+prefsSnapshot.callsEnabled в КАЖДОМ из 4 коллекторов входящих + явный маркер игнорирования.
+
+**Что добавлено (SovaApp.kt, startCallNotifier):**
+1. LP 115 (longPollClient.events): LP-event: type=... callsEnabled=... + INCOMING-CALL-KILLSWITCH: LP-событие проигнорировано (callsEnabled=...).
+2. queuev4: queuev4-event: queueId=... type=... callsEnabled=... + KILLSWITCH-лог.
+3. events_queue: events_queue-event: queueId=... callsEnabled=... + KILLSWITCH-лог.
+4. calls-очередь: calls-queue-event: queueId=... type=... callsEnabled=... + KILLSWITCH-лог.
+
+Теперь по логу будет видно: (а) реальное значение prefsSnapshot.callsEnabled на момент события;
+(б) что событие пришло, но проигнорировано kill-switch'ом. Это устраняет неоднозначность
+«тумблер включён, но лог показывает выключен» (кэш prefsSnapshot мог не обновиться).
+
+**Бэкап:** backups/calls-logg-callsEnabled-2026-10-14/SovaApp.kt.bak. Требуется пересборка.
+Сборка на пользователе.
+
+## CALLS-DEDICATED-QUEUE-RESTORE / 2026-10-14 (восстановлена dedicated calls-очередь — v1.9.8)
+
+По изучению лога и истории (команда пользователя: опираться на снапшоты и на то, как v1.9.8 принимал LP 115):
+
+**Корень проблемы:** входящий звонок НЕ доходит, потому что мы не подписаны на правильный канал.
+- P0.43-CALLS-FIX ошибочно удалил dedicated calls-очередь, утверждая, что incoming_call приходят
+  через IM-очередь (onlfriends/accountcounters) и что calls-очередь «всегда пустая».
+- Это ОПРОВЕРГНУТО живым логом: queuev4/multiaccount/events дают только online/im/counters
+  (parseCallEvents: events=1 entity_types=[online/null]), а входящий звонок от собеседника
+  (msgId=307273, attach1_call_state=canceled_by_initiator, initiator=152094335, receiver=171093180)
+  НЕ доставлен — LP 115 не пришёл и calls-события в очереди нет.
+
+**Что сделано (SovaApp.kt):**
+1. Восстановлена подписка на dedicated calls-очередь: функция callDedicatedCallsQueueStart()
+   (calls_<uid>_7879029_1, client_id=VK_WEB_MOBILE_CLIENT_ID=7879029, НЕ 6287487 — иначе err=15),
+   вызывается из startCallSignaling() после multiaccount/events очередей.
+2. callsQueuev4Client теперь зарезервирован ТОЛЬКО за calls-очередью (IM-очередь на него НЕ ставится).
+3. Убран блок IM-очереди (он не даёт calls; дублируется multiaccount+events), убран неиспользуемый deviceId.
+4. Старый неверный комментарий P0.43-CALLS-FIX заменён на актуальный.
+
+**Проверено:** фигурные скобки сбалансированы. Требует пересборки (на пользователе).
+
+**Бэкап:** backups/calls-dedicated-queue-restore-2026-10-14/SovaApp.kt.bak
+
+## CALLS-INCOMING-DIAG / 2026-10-15 (входящий приходит, но соединение не устанавливается — фикс + логи)
+
+По свежему логу входящего (протокол 2026-10-15): входящий звонок ДОХОДИТ (dedicated calls-очередь
+работает, callsEnabled=true, payload.len=512, RING-SIGNALING поднимает WS), но соединение НЕ устанавливается.
+
+**Корень (найден в коде):** ensureIncomingSignalingOnRing извлекал conversationId из getCurrentCalls
+ТОЛЬКО при params==null. Если params декодировались из реального payload (512 симв), блок getCurrentCalls
+пропускался → convId оставался null → WS стартовал с conversationId="" → SERVER_ERROR
+"Parameter conversationId is required" → сломанное первое соединение (Broken pipe при отправке answer).
+
+**Фикс (SovaApp.kt, ensureIncomingSignalingOnRing):**
+- conversationId теперь извлекается ВСЕГДА (getCurrentCalls), независимо от декодирования params.
+- Если params пуст ИЛИ convId пуст — WS НЕ поднимается (честный отказ с логом), вместо старта с пустым id.
+
+**Логирование добавлено (диагностика порядка команд vs эталон):**
+- RING-SIGNALING: params декодированы (endpoint/token) / getCurrentCalls items/convId / WS НЕ поднят / поднимаю WS conv.
+- (в CallScreen уже были: ANSWER отправлен/не ушёл, сервер ack, signaling command, offer/answer/candidate.)
+
+**Бэкап:** backups/calls-incoming-diagnostics-2026-10-15/ (SovaApp.kt.bak, CallScreen.kt.bak). Требуется пересборка.
+
+## Документация по снапшотам
+- C:\Users\Pinokio240\Desktop\docs\снапшоты-цепочка-входящего-ws.md — точные WS-цепочки ответа
+  входящего (accept-call→get-rooms→modifiers→settings→answer→candidates) и исходящего (без accept-call/get-rooms)
+  из ВХОДЯЩИЙ.har / звонок исходящий.har, с фактами, а не гипотезами.
+
+## CALLS-IN-CHAIN / 2026-10-15 (сводная цепочка входящих команд + логирование)
+
+Добавлено (CallScreen.kt):
+1. inChain (mutableStateOf) — сводная цепочка входящих команд сигналинга по порядку поступления
+   (эталон ВХОДЯЩИЙ.har: connection→offer→candidate→...). Дубли одной команды не дублируются
+   (частоты — в rxCommands «Принято:»). Каждый шаг логируется: IN-CHAIN: ....
+2. Отображение на экране (пока phase != ACTIVE): строка «Цепочка: connection→offer→...».
+3. rxCommands («Принято:») — по-прежнему только на экране (не логировался; при желании можно
+   добавить в лог). Аккумулируется в collect.
+
+Позволяет по живому логу видеть ТОЧНЫЙ порядок входящих команд и сравнивать с эталонным
+снапшотом (accept-call/get-rooms/update-media-modifiers/change-media-settings/answer).
+
+Бэкап: backups/calls-incoming-diagnostics-2026-10-15/ (CallScreen.kt.bak — до этой правки).
+Требуется пересборка.
+
+## CALLS-REPLAY-INCOMING / 2026-10-15 (replay=8 в SharedFlow сигналинга — фикс потери offer на входящем)
+
+Найдено субагентом (анализ кода + снапшотов ВХОДЯЩИЙ.har/звонок исходящий.har) и подтверждено логом:
+
+**Корень:** при входящем звонке WS поднимается на ring ДО открытия CallScreen
+(SovaApp.ensureIncomingSignalingOnRing), и offer звонящего прилетает раньше, чем CallScreen
+подпишется на signaling.messages. _messages был MutableSharedFlow(replay=0) — поздний подписчик
+НЕ получает уже прилетевший offer → он теряется. Движок без remoteDescription на
+topology-changed{SERVER} создаёт свой offer (restartIce→createOffer) вместо answer → звонок
+не соединяется: у звонящего «поднял трубку, но звук нет», при «Конец» на PinoK у сопоба
+разговор продолжается (нет честного answer/remote-hangup).
+
+**Фикс (CallSignalingClient.kt:193):** replay 0 → 8. Буфер последних событий (offer + пара
+кандидатов) дожидается позднего подписчика. Далее существующий код всё достраивает сам:
+offer → engine.setRemoteSdp (буфер при PC=null) → acceptCall применяет буфер → createAnswer → sendSdp(answer).
+
+**Бэкап:** backups/calls-replay-1-incoming-2026-10-15/CallSignalingClient.kt.bak. Требуется пересборка.
+
+## CALLS-OUTGOING-NO-ACCEPT / 2026-10-15 (убран accept-call для исходящего — авто-подъём трубки у собеседника)
+
+Симптом: исходящий от PinoK — у собеседника (на официальном VK) трубка ПОДНИМАЕТСЯ САМА, хотя
+он не принимает. Проанализирован снапшот звонок исходящий.har (эталон VK Web):
+
+**Факт из снапшота:** инициатор исходящего НЕ шлёт accept-call и НЕ шлёт get-rooms. Он шлёт:
+update-media-modifiers → change-options → change-media-settings → transmit-data(offer) → кандидаты →
+ждёт answer → accepted-call от собеседника.
+
+**Было в PinoK:** CallScreen.kt (старый #CALLS-OUTGOING-FIX) отправлял accept-call при исходящем
+после connection — это заставляло сервер считать разговор принятым и авто-поднимать трубку
+у собеседника (на официальном VK).
+
+**Фикс (CallScreen.kt):** убран accept-call для исходящего (блок после connection).
+accept-call остался только на входящем (принимающем) там, где он обязателен по эталону
+(ВХОДЯЩИЙ.har). Проверено: в других местах acceptCall для исходящего нет (650 — guard INCOMING,
+771/970 — входящий, 869 — join-by-link).
+
+**Бэкап:** backups/calls-outgoing-no-accept-2026-10-15/CallScreen.kt.bak. Требуется пересборка.
+Если после отключения исходящий перестанет соединяться (регресс старого фикса) — вернём, но
+первично проверяем именно авто-подъём.
+
+## CALLS-ACCEPT-MEDIASETTINGS / 2026-10-15 (mediaSettings в accept-call из реальных кнопок)
+
+По эталону (ВХОДЯЩИЙ.har) mediaSettings в accept-call отражают состояние кнопок пользователя
+(микрофон/камера) на момент приёма и меняются далее через media-settings-changed. Раньше у нас
+isAudioEnabled был жёстко true, isVideoEnabled из параметра — игнорировался выключенный микрофон.
+
+**Фикс:**
+1. CallSignalingClient.acceptCall(...): добавлены параметры isAudioEnabled/isVideoEnabled
+   (дефолт сохраняет прежнее поведение для совместимости).
+2. CallScreen: все 4 вызова acceptCall теперь передают isAudioEnabled = !isMuted (реальное
+   состояние микрофона).
+
+**Бэкап:** backups/calls-messagingsettings-accept-2026-10-15/CallSignalingClient.kt.bak.
+Требуется пересборка. Также ранее: backups/calls-outgoing-no-accept-2026-10-15/ (убран accept-call
+исходящего) и backups/calls-replay-1-incoming-2026-10-15/ (replay=8) — в составе этой сессии.
+
+## CALLS-ACCEPT-MEDIASETTINGS-videoTx / 2026-10-15 (isVideoEnabled в accept-call из видео-передачи)
+
+Дополнение к CALLS-ACCEPT-MEDIASETTINGS: видео тоже передаётся из реального состояния.
+Камерой в UI отдельно не управляют (она всегда «заглушка»), поэтому isVideoEnabled берётся из
+настройки callsVideoTx (передача TX-видео).
+
+**Фикс (CallScreen.kt):**
+1. Добавлена переменная videoTxEnabled (remember, как videoRxEnabled).
+2. В run{...} при чтении настроек: videoTxEnabled = tx; engine.setVideoTxEnabled(tx).
+3. Все 4 вызова acceptCall передают isVideoEnabled = videoTxEnabled (вместе с isAudioEnabled = !isMuted).
+
+Теперь mediaSettings в accept-call соответствует состоянию кнопок микрофона и видео-передачи,
+как требует эталон (ВХОДЯЩИЙ.har).
+
+Бэкап: backups/calls-messagingsettings-accept-2026-10-15/CallSignalingClient.kt.bak (клиент)
++ CallScreen.kt.bak (backups/calls-outgoing-no-accept-2026-10-15/). Требуется пересборка.
+
+## CALLS-CAMERA-TOGGLE / 2026-10-15 (кнопка включения/выключения камеры в звонке)
+
+По снапшоту VK Web (Мессенджер_видео.html) в футере звонка ЕСТЬ переключаемая кнопка камеры:
+data-testid="mvk_calls_call_footer_camera_pressed", aria-label="Выключить камеру", aria-pressed=true,
+рядом с микрофоном (mvk_calls_call_footer_mic_pressed) и выходом (mvk_calls_call_footer_exit).
+В PinoK такой кнопки не было — камера управлялась только через настройку callsVideoTx.
+
+**Добавлено (CallScreen.kt + WebRtcEngine.kt):**
+1. WebRtcEngine.setCameraEnabled(enabled): переключает videoTxEnabled и в реальном времени
+   запускает/останавливает видеозаглушку (startDummyVideoIfNeeded/stopDummyVideo).
+2. CallScreen: переменная isCameraOn (remember, состояние кнопки камеры).
+   LaunchedEffect(isVideoCall): видео-звонок → isCameraOn=true (камера по умолчанию вкл, как эталон),
+   аудио → false.
+3. Кнопка камеры в футере (CallControlButton, иконка Videocam/VideocamOff, label «Выключить/Включить
+   камеру»): переключает isCameraOn + videoTxEnabled + setCameraEnabled + changeMediaSettings(isVideoEnabled).
+4. Все 4 accept-call теперь передают isVideoEnabled = isCameraOn (реальное состояние кнопки).
+5. Все changeMediaSettings (микрофон, панель настроек) используют isVideoEnabled = isCameraOn.
+
+**Бэкап:** backups/calls-camera-toggle-2026-10-15/ (CallScreen.kt.bak)
++ backups/calls-messagingsettings-accept-2026-10-15/ (CallSignalingClient.kt.bak, CallScreen.kt.bak).
+Требуется пересборка.
+
+## CALLS-CAMERA-TOGGLE-fix / 2026-10-15 (исправление вложенного LaunchedEffect)
+
+Ошибка компиляции: LaunchedEffect(isVideoCall) был вставлен ВНУТРЬ LaunchedEffect(Unit)
+(вложенный LaunchedEffect недопустим, @Composable вне контекста).
+
+**Фикс (CallScreen.kt):** убрал вложенный LaunchedEffect. Вместо него инициализация isCameraOn:
+- при старте (run обработка настроек): isCameraOn = isVideoCall && tx (исходящий видео).
+- в offer-обработчике (m=video): isCameraOn = true, если videoTxEnabled (входящий видео).
+- кнопка камеры переключает isCameraOn (как было).
+
+Скобки сбалансированы. Требуется пересборка.
+
+## CALLS-CAMERA-TOGGLE / 2026-10-15 (кнопка камеры только в видео-звонке)
+
+Сверка со снапшотами (активный футер — только Мессенджер_видео.html; traffic-capture
+vk.ru/calls — страница списка звонков, DOM активного звонка НЕ содержит):
+
+fуттер активного видео-звонка (Мессенджер_видео.html), порядок:
+1) mvk_calls_call_footer_link «Ссылка»
+2) mvk_calls_call_footer_hand «Поднять руку» pressed=false
+3) mvk_calls_call_footer_camera_pressed «Выключить камеру» pressed=TRUE (иконка videocam_alt_28)
+4) mvk_calls_call_footer_mic_pressed «Выключить микрофон» pressed=true
+5) mvk_calls_call_footer_exit «Выйти»
+
+В аудио/обычном звонке (Мессенджер.html) кнопки камеры НЕТ (camera_pressed=0).
+
+**Правка (CallScreen.kt):** кнопка камеры (Calls-CAMERA-TOGGLE в футтере) обёрнута в
+if (isVideoCall) — в аудио-звонке не рендерится (соответствие эталону). Ранее рендерилась
+безусловно в ACTIVE/CONNECTING-футере.
+
+## CALLS-CAMERA-TOGGLE / 2026-10-15 (КОРРЕКЦИЯ: кнопка камеры видна ВСЕГДА)
+
+Предыдущий вывод «кнопка камеры только в видеозвонке» — ОШИБОЧЕН. Глубокий разбор 3
+снапшотов (Мессенджер/Мессенджер2/Мессенджер_видео, 12.10 22:08-22:10): это ОДИН И ТОТ ЖЕ
+видеозвонок, снятый трижды с РАЗНЫМ состоянием кнопки камеры:
+- Мессенджер.html & Мессенджер2.html: mvk_calls_call_footer_camera «Включить камеру» pressed=false
+- Мессенджер_виdeo.html (22:10): mvk_calls_call_footer_camera_pressed «Выключить камеру» pressed=true
+
+Во ВСЕХ трёх футер активного звонка полный (mic/mic_pressed/exit/link/hand идентичны) —
+значит КНОПКА КАМЕРЫ ЕСТЬ В ЛЮБОМ ЗВОНКЕ, во ВСЕХ состояниях; разница лишь в pressed
+(вкл/выкл). Моя обёртка if (isVideoCall), прятавшая кнопку в аудио-звонке, убрана.
+
+**Правка (CallScreen.kt):** кнопка камеры рендерится ВСЕГДА (нет if isVideoCall). Исходное
+состояние = isCameraOn (видео→вкл, аудио→выкл); в аудио-звонке камеру можно включить кнопкой,
+в видео — выключить. Полное соответствие снапшоту.
+
+## CALLS-REAL-CAMERA / 2026-10-15 (реальный захват камеры вместо чёрной заглушки)
+
+Движок WebRtcEngine имел только чёрную видеозаглушку (dummy 320x180@10fps, БЕЗ камеры).
+Задача: передача РЕАЛЬНОГО видео с камеры в звонке.
+
+**WebRtcEngine.kt:**
+- Импорты: Camera2Enumerator, CameraVideoCapturer, SurfaceTextureHelper, VideoCapturer, VideoFrame.
+- Поля: surfaceTextureHelper, cameraCapturer, cameraCapturing.
+- tryStartCamera(src): Camera2Enumerator → фронтальная камера (или любая) →
+  SurfaceTextureHelper.create("camera-capturer", eglCtx) → createCapturer → capturer.initialize(helper, ctx, src.capturerObserver) →
+  startCapture(1280,720,30). Кадры идут напрямую в src.capturerObserver (VideoSource сам делает copy/release —
+  VideoSource.java adaptedFrame.release(); свой observer НЕ создаём — двойной release → крэш).
+- pumpBlackFrame(): запасной чёрный источник, если камеры нет/нет прав (m=video не мёртвый).
+- stopCameraStateOnly(): stopCapture+dispose капчера и helper.
+- startDummyVideoIfNeeded() теперь: камера (приоритет) ИЛИ чёрная заглушка (фоллбэк).
+- stopDummyVideo(): дополнительно останавливает камеру (stopCameraStateOnly).
+- setCameraEnabled() обёрнут в post{} — camera lifecycle обязан быть на signaling thread.
+
+**CallScreen.kt:**
+- cameraGranted + cameraLauncher (RequestPermission CAMERA) — неблокирующий.
+- При старте видео-звонка: if (isVideoCall && !cameraGranted) cameraLauncher.launch(CAMERA).
+- При ответе разрешения: если granted && isCameraOn → перезапуск камеры (re-apply).
+
+**PermissionManager.kt:** + hasCamera(context) (isGranted CAMERA).
+
+CAMERA уже заявлен в app/src/main/AndroidManifest.xml (точек проверено). Требуется пересборка.
+
+## CALLS-FOOTER-SIMPLIFY / 2026-10-15 (удалены кнопки футера)
+
+По запросу пользователя убраны кнопки из футера активного звонка (CallScreen.kt):
+- Ссылка (была 2482-2514)
+- Чат (была 2518-2530)
+- Участники (была 2532-2537)
+- Ещё (была 2554-2559)
+
+Остались: микрофон, камера, динамик, Реакции, Настройки, Завершить.
+Панели CallParticipantsPanel/CallChatScreen/CallMorePanel теперь не открываются ничем
+(showParticipants/showCallChat/showMorePanel навсегда false) — оставлены в коде как мёртвые,
+не видны (рендерятся только при showX=true). Импорты иконок Link/Chat/Group/MoreHoriz не
+почищены (компиляции не мешает). Скобки сбалансированы.
+
+## CALLS-VIDEO-FIX / 2026-10-15 (приём/передача видео — правки по снапшотам)
+
+Диагноз субагента (по снапшотам ВХОДЯЩИЙ.har/звонок исходящий.har/Мессенджер_видео.html):
+эталон оф. клиента ВСЕГДА держит m=video SEND_RECV в offer/answer (независимо от камеры),
+камеру гейтит кадрами (isVideoEnabled), а отображение видео зависит от факта прихода трека,
+а НЕ от события media-settings-changed (которое приходит хаотично).
+
+Применено (бэкап: backups\calls-video-fix-2026-10-15\):
+
+1. CallScreen.kt: убран peerVideoEnabled из блокирующих условий
+   - поллинг кадров: LaunchedEffect(remoteVideoTrack, videoRxEnabled), active = track != null && rx
+   - videoRenderActive = track != null && rx && videoFrames>0 && phase (без peerVideoEnabled)
+2. WebRtcEngine.kt prepareVideoTransceivers: теперь
+   - !videoRxEnabled -> INACTIVE
+   - localVideoTrack != null (canSend) -> SEND_RECV (ВСЕГДА, даже если камера выключена)
+   - иначе -> RECV_ONLY
+   Больше не зависит от videoTxEnabled; камера гейтится только захватом кадров.
+3. WebRtcEngine.kt startDummyVideoIfNeeded: трек/источник создаётся при videoRxEnabled
+   (всегда в видео-звонке), а НЕ только при videoTxEnabled. Захват камеры/заглушки — только
+   если videoTxEnabled (иначе трек есть, кадры не текут — как эталон с выкл камерой).
+
+НЕ применял (рискованно, требуется отдельный тест):
+- stripH265 (гипотеза 2): это защита от краша HW-декодера H265 (краш 21:50, не снят).
+  Оставлен до отдельной проверки декодера.
+- change-media-settings isVideoEnabled:true при старте (гипотеза 4): эталон и так шлёт
+  isVideoEnabled=false в видео-звонке (просто не включает камеру) — совпадает.
+
+Скобки сбалансированы. Требуется пересборка.
+
+## CALLS-CAMERA-TEST / 2026-10-15 (мини-фрейм проверки камеры + фикс permission)
+
+ПРОБЛЕМА (доказана логом 803КБ от пользователя): исходящий аудио-звонок (video=false)
+при videoTxEnabled=true → WebRtcEngine.tryStartCamera стартует камеру, но permission CAMERA
+не запрошен → SecurityException "cannot open camera without camera permission" (3 ретрая,
+onCameraError). Причина: запрос CAMERA стоял под if (isVideoCall && !cameraGranted), а при
+аудио-звонке isVideoCall=false.
+
+РЕШЕНО (2 субагента, проверено мной):
+1. CallScreen.kt:857 — условие запроса CAMERA изменено на
+   if (videoTxEnabled && !cameraGranted) cameraLauncher.launch(CAMERA) —
+   запрашивается при любом звонке, если передача видео включена (videoTxEnabled),
+   независимо от isVideoCall. cameraLauncher объявлен посередине (после engine, ~453),
+   videoTxEnabled объявлен раньше — порядок корректен. Скобки CallScreen = 0.
+2. НОВЫЙ файл feature/calls/.../CameraTestScreen.kt — #CAMERA-TEST отладочный экран
+   self-превью камеры ВНЕ звонка: запрос CAMERA → PeerConnectionFactory (только для
+   VideoSource/VideoTrack) + Camera2Enumerator + SurfaceViewRenderer + счётчик кадров
+   (VideoSink.onFrame). Показывает статус/количество кадров/живое превью. Сборка
+   :feature:calls:compileDebugKotlin = BUILD SUCCESSFUL (проверил субагент).
+
+Бэкап: backups/calls-camera-permission-test-2026-10-15/
+Подключение тест-экрана в навигацию: composable("camera_test"){ CameraTestScreen() },
+nav.navigate("camera_test") — НЕ подключал (ТЗ), осталось на усмотрение.
+
+## CALLS-SETTINGS-CAMERA-TEST / 2026-10-15 (кнопка теста камеры в Настройки→Звонки)
+
+По запросу пользователя добавлена кнопка «Проверка камеры» в Настройки → Звонки
+(SettingsScreen.kt, CallsTab, секция «Видео», после переключателя «Программный декодер»).
+
+**SettingsScreen.kt (в :app):**
+- import re.pinok.ui.screens.calls.CameraTestScreen (строка 104)
+- CallsTab: добавлен @OptIn(ExperimentalMaterial3Api::class) (575) + var showCameraTest (583)
+- Карточка-кнопка «Проверка камеры» (655-671): Card + Modifier.clickable { showCameraTest = true }
+- В конце CallsTab: if (showCameraTest) { Dialog { Box { CameraTestScreen() + IconButton(✕ Close) } } }
+  (849-861) — полноэкранный оверлей, IconButton закрывает (иконка Icons.Default.Close).
+
+Бэкап: backups/calls-settings-cameratest-2026-10-15/
+Скобки: фигурные 0 (ОК); круглые -16 — предсуществующий дисбаланс (был и в бэкапе).
+
+CameraTestScreen (создан ранее субагентом, feature.calls) — сам запрашивает CAMERA, открывает
+камеру, показывает SurfaceViewRenderer + счётчик кадров. Требуется пересборка.
+
+## PERMISSIONS-FIRSTRUN / 2026-10-15 (CAMERA + «Все файлы» при первом входе)
+
+По запросу пользователя:
+1. КАМЕРА запрашивается при первом входе по умолчанию (как микрофон) — раньше только
+   в звонке (кнопка камеры). Теперь CAMERA добавлена в getRequiredPermissions()
+   (PermissionManager.kt:60) — системный диалог при первом входе в MainActivity.
+
+2. «Все файлы» (MANAGE_EXTERNAL_STORAGE, API 30+) — теперь тоже запрашивается при первом
+   входе. Это СПЕЦИАЛЬНОЕ разрешение (не через обычный диалог): только системные
+   Настройки → «Все файлы». Поэтому:
+   - PermissionManager.hasAllFilesAccess() — Environment.isExternalStorageManager()
+   - PermissionManager.allFilesAccessSettingsIntent() — Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
+   - Запускается в RequestAllPermissionsEffect() (вызывается из MainActivity после авторизации)
+     с задержкой 1.5с (чтобы системный диалог обычных прав не наслаивался на экран Настроек).
+   - Нужен Activity-контекст (startActivity) — обрабатывается безопасно (null-чек).
+
+Бэкап: backups/calls-permissions-firstrun-2026-10-15/
+NOTE: раньше «Все файлы» включался только кнопкой «Доступ к файлам» во вкладке Офлайн
+(SettingsScreen) — теперь дополнительно авто при первом входе. Скобки ОК (0/0).
+
+## CALLS-STATE-STABLE-FIX + PERM-REQUESTS / 2026-10-15
+
+### 1. «Трубка сама кладётся» — фикс (причина из живого лога)
+Лог: offer уходит 3 раза (transmit-data seq1/2/3), затем
+setRemoteSdp error: Failed to set remote answer sdp: Called in wrong state: stable,
+через ~5с авто hangup CANCELED, потом у собеседника BUSY.
+
+Причина (субагент, доказано строками): offer ретраится (connection/registered-peer/accepted-call
+все зовут doReoffer), но PC после рестарта/recreate остаётся в state=stable, а кэшированный
+lastLocalSdp ПРЕДЫДУЩЕГО цикла не сбрасывался → серверный answer падает на stable, ошибка
+маскировалась (answerReceived/CONNECTING ставились вслепую), ICE не вставал → авто-CANCELED.
+
+**Фиксы применены:**
+- WebRtcEngine.kt:688 — lastLocalSdp = null в createPeerConnection() (не льётся stale-SDP).
+- WebRtcEngine.kt:63,503,518 — новый колбэк onRemoteSdpResult(type, success).
+- CallScreen.kt:449 — при failure ответа экземпляра Answer запускаем doReoffer("answer-failed")
+  (заново ловит have-local-offer) вместо маскировки → нет зависшего BUSY.
+
+Бэкап: backups/calls-state-stable-fix-2026-10-15/
+
+### 2. Раздел «Запрос разрешений» в Настройках
+SettingsScreen.kt (CallsTab): после секции «Разрешения» добавлен раздел «Запрос разрешений»
+с кнопками (PermissionRequestButton — новый composable, строка 4677):
+- Микрофон, Камера, Уведомления, Bluetooth (API31+) — системный диалог через
+  единый singlePermissionLauncher (объявлен на уровне композиции, строка 587);
+- Доступ к файлам («Все файлы») — открывает системные настройки MANAGE_EXTERNAL_STORAGE.
+Каждая кнопка показывает статус «Выдано/Не выдано» и запрашивает по тапу.
+
+Бэкап: backups/calls-settings-cameratest-2026-10-15/
+
+## CALLS-CAMERAX-IMAGEANALYSIS / 2026-10-15 (замена Camera2 на CameraX)
+
+Пользователь: захват Camera2 даёт кадры (счётчик в тесте растёт), но рендер чёрный даже
+в тест-экране. Решение — переиспользовать CameraX (как в «кружочках»), т.к. ImageAnalysis
+даёт CPU-I420 (не зависит от GL/текстур, устраняет класс «чёрного из-за EGL/texture»).
+
+**Создан CameraXVideoCapture.kt (feature:calls/media):**
+- ImageAnalysis.Builder().setTargetResolution(1280,720) + STRATEGY_KEEP_ONLY_LATEST
+- Протокол: bindToLifecycle(ProcessLifecycleOwner, FRONT, imageAnalysis) на main-потоке.
+- Анализатор: ImageProxy(YUV_420_888) → КОПИРУЮЩАЯ конвертация в JavaI420Buffer
+  (YuvHelper.copyPlane с учётом rowStride; U/V деинтерливинг при pixelStride==2/NV21)
+  → VideoFrame(i420, rotationDegrees, nanoTime) → src.capturerObserver.onFrameCaptured
+  → finally proxy.close().
+- start(videoSource, frontCamera=true): Boolean; stop() — unbindAll.
+
+**WebRtcEngine.kt:**
+- Поля surfaceTextureHelper/cameraCapturer/cameraCapturing → cameraXCapture.
+- tryStartCamera(src) теперь создаёт CameraXVideoCapture(ProcessLifecycleOwner.
+  get(), front) и стартует; false → фоллбэк на pumpBlackFrame (как было).
+- stopCameraStateOnly() → cap.stop().
+- startDummyVideoIfNeeded/stopDummyVideo/setCameraEnabled не тронуты.
+
+**Зависимости (feature:calls/build.gradle.kts):**
+- + androidx.camera.core / camera2 / lifecycle, + androidx.lifecycle.process.
+  Все алиасы уже были в libs.versions.toml (camerax=1.4.2, lifecycle=2.9.4).
+
+**Ошибка doReoffer (исправлена):** в фиксе state-stable я добавил вызов doReoffer("answer-failed")
+в колбэк onRemoteSdpResult, но doReoffer — локальная lambda-val (CallScreen:539), недоступна до
+объявления → Unresolved reference. Убрал прямой вызов (оставлен только лог); reoffer идёт
+другими путями (accepted-call/registered-peer/watchdog).
+
+Бэкап: backups/calls-camerax-bridge-2026-10-15/
+Требуется пересборка (новые зависим: offline может не хватить кэша — при сбое собрать online).
+
+## SETTINGS-PERMISSIONS-TAB + CAMERA-SWITCH / 2026-10-15
+
+### 1. Отдельная вкладка «Разрешения» в Настройках
+Перенесены из CallsTab в отдельную вкладку SettingsTab.PERMISSIONS (иконка Lock):
+- enum: PERMISSIONS("Разрешения", Icons.Outlined.Lock) (SettingsScreen:237)
+- when(tab): SettingsTab.PERMISSIONS -> PermissionsTab() (497)
+- Новый composable PermissionsTab() (952): кнопки запроса
+  Микрофон/Камера/Уведомления/Bluetooth(API31+) через permLauncher +
+  «Все файлы» (MANAGE_EXTERNAL_STORAGE через системные настройки).
+- PermissionRequestButton (4679) — переиспользован.
+- Из CallsTab удалены секции «Разрешения» и «Запрос разрешений», убран singlePermissionLauncher.
+- Сборка :app:compileDebugKotlin — BUILD SUCCESSFUL (проверено мной сам).
+
+### 2. Кнопка смены камеры в тест-экране
+CameraTestScreen.kt (субагент):
+- import org.webrtc.CameraVideoCapturer.CameraSwitchHandler
+- CameraTestController.currentIsFront + isFrontCamera() + switchCamera()
+  (capturer.switchCamera(CameraSwitchHandler) — переключение на лету, без пересоздания).
+- UI-кнопка «Камера: ФРОНТ/ТЫЛ» (enabled=capturing).
+- Сборка :feature:calls:compileDebugKotlin — BUILD SUCCESSFUL.
+
+### Правило сборки
+Ассистент сам запускает gradle только по явному разрешению пользователя. В этих двух
+задачах субагентам была ошибочно разрешена сборка (user поправил — «САМ»). Дальше:
+субагенты пишут код, сборку запускает ассистент/пользователь.
+
+## CAMERA-TEST-FIX / 2026-10-15 (краш при закрытии теста камеры)
+Тест камеры — УСПЕХ (из лога пользователя): камера открывается, onFirstFrameAvailable,
+«первый кадр отрисован на поверхности ✓», Frames received 77-120, Dropped:0, Rendered:все,
+Render fps 19-30, переключение камер 0↔1↔2 работает (onCameraSwitchDone, rot 90/270).
+
+Обнаружен краш при ЗАКРЫТИИ теста (лог 17:03:52):
+Handler sending message to a Handler on a dead thread at CameraTestController.release(CameraTestScreen.kt:305)
+
+Причина: повторный release() видел не-null handler, указывающий на УЖЕ завершённый
+(quitSafely) поток, и h.post{} падал. handler/thread не обнулялись после первого release().
+
+Фикс (CameraTestScreen.kt): после thread.quitSafely() обнуляю thread=null, handler=null
+(строки 311-312) — повторный release() идёт в ветку else{post()} (синхронно).
+start() уже пересоздаёт поток (if thread==null) — безопасно. Сборка BUILD SUCCESSFUL.
+
+Также: настройки «Разрешения» (отдельная вкладка) — пользователь подтвердил успех.
+
+## VIDEO-BLACK-SCREEN-FIX / 2026-10-15 (чёрный экран при приёме видео)
+
+Симптом: исходящий голосовой звонок (video=false). Передача видео не велась (ожидаемо —
+камера не вкл при голосовом), приём видео от собеседника: кадры ДЕКОДИРУЮТСЯ
+(c2.mtk.vpx.decoder VP8), videoFrames 30→471, renderActive=true, «ПЕРВЫЙ КАДР отрисован»,
+НО экран чёрный.
+
+Причина (субагент, доказано из VideoTextureRenderer.kt:14-28 + лог MTK):
+На устройстве MediaTek (HOTWAV Cyber 15, Android 13) SurfaceView — отдельный hardware-overlay
+слой — не попадает в финальную композицию окна (NavHost+Scaffold+нижняя навигация).
+setZOrderOnTop бесполезен/усугубляет. SurfaceView отрисовывает кадры (лог), но визуально скрыт.
+
+Фикс: замена SurfaceViewRenderer на VideoTextureRenderer (TextureView) в CallScreen —
+TextureView обычный GPU-узел, композитится с окном, виден и попадает в скриншоты.
+- import re.pinok.media.VideoTextureRenderer (89)
+- Блок рендера: VideoTextureRenderer(ctx) + tr.init(egl, events) + addSink/removeSink + releaseRenderer (2215-2244).
+- setZOrderOnTop НЕ вызываем.
+
+Сборка :feature:calls — BUILD SUCCESSFUL.
+
+ВАЖНО: чтобы Пинок ПЕРЕДАВАЛ видео, нужно звонить ВИДЕОзвонком (video=true), а не голосовым —
+правка «камера-авто при isVideoCall» сработает только при video=true. При голосовом (video=false)
+камера не включается (корректно).
+
+## ROLLBACK / 2026-10-15 (откат фикса потери offer во входящем звонке)
+
+Пользователь: после фикса «потери offer» (pendingOffer-механизм) входящий звонок
+ВООБЩЕ перестал приходить. Откатил 3 правки субагента:
+
+1. CallSignalingClient.kt:
+   - удалён pendingOfferMessage + pendingOffer() (дуплирование offer вне replay).
+   - удалён сброс в stop() и присваивание в handleTextFrame.
+   - offer снова доставляется ТОЛЬКО через replay-буфер (replay=8).
+2. CallScreen.kt (performIncomingAccept):
+   - удалён блок извлечения offer из signaling.pendingOffer() перед acceptCall.
+   - возвращено простое engine.acceptCall(call).
+3. WebRtcEngine.kt (applyRemoteSdp):
+   - удалён дедуп offer по o-line (добавленный вместе с pendingOffer).
+   - lastRemoteOffer сохраняется (для рестарта); hasRemoteDescription() НЕ трогалась
+     (она была ДО фикса — подтверждено бэкапом calls-camerax-bridge).
+
+Компиляция :core:network + :feature:calls — BUILD SUCCESSFUL.
+
+Гипотеза регресса: pendingOffer-механизм вмешался в синхронный accept-поток и/или
+дублировал offer, ломая входящий. Откат вернул прежнее (рабочее) поведение.
+Требуется сборка полного APK и проверка входящего звонка пользователем.

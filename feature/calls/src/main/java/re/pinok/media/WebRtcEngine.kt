@@ -16,6 +16,7 @@ import org.webrtc.RtpTransceiver
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.VideoFrame
 import org.webrtc.VideoTrack
 import re.pinok.data.model.CallPhase
 import re.pinok.data.model.VkCall
@@ -49,6 +50,13 @@ class WebRtcEngine(
      * ssrc→участник НЕ мапится: реестра participantIdRegistry в движке нет (Ж0 §5.3) —
      * честное ограничение: субтитры показываются без атрибуции спикера. */
     private val onAsrText: ((String, Long) -> Unit)? = null,
+    /**
+     * #CALLS-STATE-STABLE-FIX (2026-10-15): результат применения удалённого SDP.
+     * Аргументы: (тип SDP, success). Вызывается на signaling-треде. Позволяет CallScreen
+     * НЕ ставить answerReceived/phase=CONNECTING вслепую — если setRemoteDescription
+     * упал (например «Called in wrong state: stable»), идёт reoffer, а не зависший BUSY.
+     */
+    private val onRemoteSdpResult: ((SessionDescription.Type, Boolean) -> Unit)? = null,
 ) {
 companion object {
         private const val TAG = "WebRtcEngine"
@@ -220,12 +228,47 @@ companion object {
 
     fun setVideoTxEnabled(enabled: Boolean) { videoTxEnabled = enabled }
 
+    /**
+     * #CALLS-CAMERA-TOGGLE (2026-10-15): включить/выключить передачу видео (кнопку камеры).
+     * По снапшоту VK Web в футере звонка есть переключаемая кнопка камеры
+     * (data-testid="mvk_calls_call_footer_camera_pressed", aria-label="Выключить камеру",
+     * aria-pressed). Здесь: обновляем флаг TX-видео и в реальном времени запускаем/останавливаем
+     * видеозаглушку (m=video остаётся, но поток кадров включается/выключается).
+     */
+    fun setCameraEnabled(enabled: Boolean) {
+        if (videoTxEnabled == enabled) return
+        // #CALLS-REAL-CAMERA: camera-API (SurfaceTextureHelper/EGL, capture lifecycle)
+        // обязан выполняться на signaling thread (как и весь WebRTC) — см. комментарий
+        // класса (стр. 31-34). setCameraEnabled вызывается с UI-потока (Compose onClick).
+        post {
+            if (videoTxEnabled == enabled) return@post
+            videoTxEnabled = enabled
+            if (enabled) {
+                startDummyVideoIfNeeded()
+                AppLog.i(TAG, "#CALLS-CAMERA-TOGGLE: передача видео ВКЛЮЧЕНА")
+            } else {
+                stopDummyVideo()
+                AppLog.i(TAG, "#CALLS-CAMERA-TOGGLE: передача видео ВЫКЛЮЧЕНА")
+            }
+        }
+    }
+
     // #CALLS-SYMMETRIC: фиктивный источник видео (чёрные кадры 320×180@10fps).
     // Живёт на signaling thread; создается один раз, переиспользуется при рестартах PC.
     @Volatile
     private var dummyVideoRunning = false
     private var dummyVideoSource: org.webrtc.VideoSource? = null
     private var localVideoTrack: org.webrtc.VideoTrack? = null
+
+    // #CALLS-REAL-CAMERA (2026-10-15): реальный захват с камеры вместо чёрной заглушки.
+    // CameraXVideoCapture (CameraX ImageAnalysis) копирует YUV_420_888 в org.webrtc.VideoFrame и
+    // пушит в dummyVideoSource.capturerObserver.onFrameCaptured (как делала pumpDummyFrame).
+    // localVideoTrack/трансиверы/цеха — прежние; меняется только источник кадров в video source.
+    private var cameraXCapture: CameraXVideoCapture? = null
+    // #CALLS-CAMERA-TOGGLE-FIX (2026-10-15): флаг реально идущего захвата камеры.
+    // Используется в startDummyVideoIfNeeded, чтобы повторный запуск по кнопке «Камера»
+    // реально поднимал камеру, а не пропускал из-за существующего dummyVideoSource.
+    private var cameraCapturing: Boolean = false
 
     // #CALLS-VIDEO-RX: EglBase живёт столько же, сколько factory — видео-декодер и
     // рендерер CallScreen (SurfaceViewRenderer) делят этот EGL-контекст. Раньше
@@ -449,11 +492,15 @@ companion object {
     /** Применение remote SDP (только на signaling thread, PC уже создан). */
     private fun applyRemoteSdp(sessionDesc: SessionDescription) {
         AppLog.i(TAG, "setRemoteSdp: type=${sessionDesc.type} sdpLen=${sessionDesc.description.length}")
+        // #CALLS-IN-OFFER-REPLAY-FIX (2026-10-15 откат): блок дедупа offer по o-line
+        // был добавлен вместе с pendingOffer, но вызвал РЕГРЕСС (входящий не приходит).
+        // Дедуп снят; offer доставляется штатно. lastRemoteOffer сохраняется для рестарта.
         // #CALLS-PC-RESTART: сохраняем offer для возможного рестарта (см. recreateAndReanswer).
         if (sessionDesc.type == SessionDescription.Type.OFFER) lastRemoteOffer = sessionDesc
         peerConnection?.setRemoteDescription(SdpObserverAdapter(
             onSetSuccess = {
                 AppLog.i(TAG, "setRemoteSdp SUCCESS, pending=${pendingRemoteIce["remote"]?.size ?: 0}")
+                onRemoteSdpResult?.invoke(sessionDesc.type, true)
                 drainPendingIceCandidates()
                 // #CALLS-FIX: как в VK — createAnswer ТОЛЬКО после успешной
                 // установки remote SDP (onSetSuccess), не сразу.
@@ -466,7 +513,10 @@ companion object {
                     createAnswer()
                 }
             },
-            onError = { err -> AppLog.e(TAG, "setRemoteSdp error: $err") }
+            onError = { err ->
+                AppLog.e(TAG, "setRemoteSdp error: $err")
+                onRemoteSdpResult?.invoke(sessionDesc.type, false)
+            }
         ), sessionDesc)
     }
 
@@ -631,6 +681,11 @@ companion object {
         lastPairStats = null
         // #CALLS-PC-RESTART: оффер прошлого звонка не должен утечь в новый
         lastRemoteOffer = null
+        // #CALLS-STATE-STABLE-FIX (2026-10-15): сбрасываем кэшированный локальный SDP.
+        // Иначе ретраи после recreate PC шлют lastLocalSdp ПРЕДЫДУЩЕГО цикла, пока новый
+        // PC ещё в state=stable (не have-local-offer) → серверный answer падает
+        // «Called in wrong state: stable», ICE не встаёт, звонок сам сбрасывается.
+        lastLocalSdp = null
         // #CALLS-INLINE-ICE: новый PC — буфер кандидатов и режим отправки заново
         gatheredCandidates.clear()
         inlineIceSent = false
@@ -1042,18 +1097,23 @@ companion object {
         // НЕ RECVONLY (kRecvOnly — это нативный C++; в Kotlin-биндинге 'RECVONLY' не существует).
         // #CALLS-SYMMETRIC (01.09): с видеозаглушкой (videoTx) m=video отвечает SEND_RECV —
         // звонок симметричен, как у офиц. клиента (см. гипотезу в комментарии к полю).
-        val canTx = videoTxEnabled && localVideoTrack != null
+        // #CALLS-VIDEO-FIX (2026-10-15): по снапшотам оф. клиент ВСЕГДА держит m=video
+        // SEND_RECV в offer/answer (независимо от камеры), камеру гейтит только фактическим
+        // захватом кадров (isVideoEnabled), без перестройки направления. Раньше при
+        // выключенной камере мы отвечали RECV_ONLY/INACTIVE, что ломало симметричность
+        // SFU-микшера. Теперь: если RX видео нужен и видео-трек существует — SEND_RECV
+        // (даже если камера выключена — трек всё равно живёт, кадры просто не текут).
+        val canSend = localVideoTrack != null
         val target = when {
-            canTx && videoRxEnabled -> RtpTransceiver.RtpTransceiverDirection.SEND_RECV
-            canTx                   -> RtpTransceiver.RtpTransceiverDirection.SEND_ONLY
-            videoRxEnabled          -> RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
-            else                    -> RtpTransceiver.RtpTransceiverDirection.INACTIVE
+            !videoRxEnabled -> RtpTransceiver.RtpTransceiverDirection.INACTIVE
+            canSend         -> RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+            else            -> RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
         }
         peerConnection?.transceivers?.forEach { tr ->
             if (tr.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {
                 try {
                     tr.direction = target
-                    AppLog.i(TAG, "video-транссивер → $target (videoTx=${if (canTx) "ON" else "OFF"}, videoRx=${if (videoRxEnabled) "RECEIVE" else "OFF"})")
+                    AppLog.i(TAG, "video-транссивер → $target (track=${if (canSend) "ON" else "OFF"}, videoRx=${if (videoRxEnabled) "RECEIVE" else "OFF"})")
                 } catch (e: Exception) {
                     AppLog.w(TAG, "не удалось задать направление video-транссиверу: ${e.message}")
                 }
@@ -1076,9 +1136,37 @@ companion object {
      * CapturerObserver.onFrameCaptured(VideoFrame), JavaI420Buffer.allocate(II),
      * VideoFrame(Buffer,int,long).
      */
+    /**
+     * #CALLS-REAL-CAMERA (2026-10-15): поднять источник видео для исходящего m=video.
+     * Предпочитаем РЕАЛЬНУЮ камеру (CameraX ImageAnalysis вместо прежнего
+     * Camera2Enumerator+SurfaceTextureHelper — устраняет «чёрный экран при растущем счётчике
+     * кадров»); если камеры нет/недоступна/нет прав — фоллбэк на прежнюю чёрную заглушку
+     * (pumpBlackFrame), чтобы m=video не был мёртвым (sendrecv всё равно симметричный).
+     * Кадры идут в dummyVideoSource через capturerObserver — localVideoTrack/трансиверы/цеха
+     * не меняются.
+     *
+     * Вызывается на signaling thread (post {} в startCall/acceptCall/setCameraEnabled).
+     */
     private fun startDummyVideoIfNeeded() {
-        if (!videoTxEnabled) {
-            AppLog.i(TAG, "#CALLS-SYMMETRIC: выключено в настройках (callsVideoTx=false) — m=video ответит ${if (videoRxEnabled) "recvonly" else "inactive"}")
+        // #CALLS-VIDEO-FIX (2026-10-15): трек (и m=video sendrecv) создаём ВСЕГДА, когда
+        // видео-приём нужен — независимо от включена ли камера (эталон: оф. клиент держит
+        // sendrecv всегда, камеру гейтит кадрами через isVideoEnabled). Захват (камеру/
+        // заглушку) запускаем только при videoTxEnabled (реальная передача кадров).
+        if (!videoRxEnabled) {
+            AppLog.i(TAG, "#CALLS-SYMMETRIC: видео-приём выключен (callsVideoRx=false) — m=video отсутствует/заглушено")
+            return
+        }
+        // #CALLS-CAMERA-TOGGLE-FIX (2026-10-15): источник/трек может уже существовать
+        // (создан при первом старте, камера тогда была выключена), но по кнопке «Камера»
+        // нужно именно ЗАПУСТИТЬ захват камеры. Раньше `if (dummyVideoSource != null) return`
+        // молча пропускал запуск камеры, когда источник уже был — камера не стартовала.
+        if (dummyVideoSource != null && !cameraCapturing && videoTxEnabled) {
+            if (tryStartCamera(dummyVideoSource!!)) {
+                AppLog.i(TAG, "#CALLS-REAL-CAMERA: реальная камера запущена (повторный старт по кнопке)")
+            } else {
+                AppLog.i(TAG, "#CALLS-REAL-CAMERA: камера недоступна — фоллбэк на чёрную заглушку")
+                pumpBlackFrame()
+            }
             return
         }
         if (dummyVideoSource != null) return
@@ -1087,12 +1175,63 @@ companion object {
         val src = f.createVideoSource(false)
         dummyVideoSource = src
         localVideoTrack = f.createVideoTrack("video0", src)
-        AppLog.i(TAG, "#CALLS-SYMMETRIC: видеозаглушка создана (video0: 320x180@10fps, чёрные кадры — БЕЗ камеры)")
-        pumpDummyFrame()
+        if (videoTxEnabled) {
+            if (tryStartCamera(src)) {
+                AppLog.i(TAG, "#CALLS-REAL-CAMERA: реальная камера запущена (video0, source=камера)")
+            } else {
+                AppLog.i(TAG, "#CALLS-REAL-CAMERA: камера недоступна — фоллбэк на чёрную заглушку (video0: 320x180@10fps)")
+                pumpBlackFrame()
+            }
+        } else {
+            // Трек живёт (m=video sendrecv), но захвата нет — кадры не текут, как у
+            // эталона с выключенной камерой (isVideoEnabled=false).
+            AppLog.i(TAG, "#CALLS-SYMMETRIC: видео-трек создан (sendrecv), но камера выключена — кадры не передаются")
+        }
     }
 
-    /** Помпа чёрных кадров: 10fps на signaling thread (кадр ~86КБ — копейки). */
-    private fun pumpDummyFrame() {
+    /**
+     * Попытка поднять реальную камеру (CameraX) и направить её кадры в video source.
+     * @param src video source, куда CameraX будет пушить кадры (через capturerObserver).
+     * @return true — камера открылась и ведёт захват; false — не удалось (фоллбэк на заглушку).
+     */
+    private fun tryStartCamera(src: org.webrtc.VideoSource): Boolean {
+        return try {
+            // #CALLS-REAL-CAMERA: ProcessLifecycleOwner держит жизненный цикл процесса —
+            // Activity у движка может не быть (context — applicationContext). CameraX требует
+            // LifecycleOwner для bindToLifecycle; ProcessLifecycleOwner всегда «STARTED», пока
+            // процесс жив, и корректно останавливает захват на pause процесса.
+            val owner = androidx.lifecycle.ProcessLifecycleOwner.get()
+            val cap = CameraXVideoCapture(context.applicationContext, owner)
+            val ok = cap.start(src, frontCamera = true)
+            cameraXCapture = cap
+            cameraCapturing = ok
+            if (ok) {
+                AppLog.i(TAG, "#CALLS-REAL-CAMERA: CameraX-захват запущен (front=front, 1280x720)")
+                true
+            } else {
+                cameraXCapture = null
+                cameraCapturing = false
+                false
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "#CALLS-REAL-CAMERA: не удалось поднять камеру CameraX: ${e.message}")
+            stopCameraStateOnly()
+            false
+        }
+    }
+
+    /** Остановить реальную камеру (без трогания dummyVideoSource/localVideoTrack). */
+    private fun stopCameraStateOnly() {
+        val cap = cameraXCapture
+        cameraXCapture = null
+        cameraCapturing = false
+        if (cap != null) {
+            runCatching { cap.stop() }.onFailure { AppLog.w(TAG, "#CALLS-REAL-CAMERA: stop CameraX: ${it.message}") }
+        }
+    }
+
+    /** Помпа чёрных кадров (запасной источник, если реальной камеры нет): 10fps. */
+    private fun pumpBlackFrame() {
         if (!dummyVideoRunning) return
         try {
             val buffer = org.webrtc.JavaI420Buffer.allocate(320, 180)
@@ -1105,7 +1244,7 @@ companion object {
         } catch (e: Exception) {
             AppLog.w(TAG, "#CALLS-SYMMETRIC: кадр заглушки не отправлен: ${e.message}")
         }
-        signalingHandler?.postDelayed({ pumpDummyFrame() }, 100L)
+        if (dummyVideoRunning) signalingHandler?.postDelayed({ pumpBlackFrame() }, 100L)
     }
 
     /**
@@ -1124,6 +1263,10 @@ companion object {
     private fun stopDummyVideo() {
         val wasRunning = dummyVideoRunning
         dummyVideoRunning = false
+        // останавливаем реальную камеру (если была поднята) — стоп кадра не идёт,
+        // но source/track закроем ниже; без стопа камеры её внутренний поток дёрнет
+        // Source с освобождённым треком.
+        stopCameraStateOnly()
         localVideoTrack = null
         val src = dummyVideoSource
         dummyVideoSource = null
@@ -1131,7 +1274,7 @@ companion object {
             runCatching { src.dispose() }
                 .onFailure { AppLog.w(TAG, "#CALLS-SYMMETRIC: dispose источника: ${it.message}") }
         }
-        if (wasRunning) AppLog.i(TAG, "#CALLS-SYMMETRIC: видеозаглушка остановлена")
+        if (wasRunning) AppLog.i(TAG, "#CALLS-REAL-CAMERA: источник видео остановлен")
     }
 
     private fun createAnswer() {

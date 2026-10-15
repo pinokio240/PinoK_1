@@ -72,3 +72,7 @@ _debug/
 *fix*-bak-*
 *fixscope-bak-*
 
+
+# Domki/analitika (2026-10-15): вся папка docs вне git
+docs/
+

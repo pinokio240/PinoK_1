@@ -589,7 +589,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             callsEnabled = p[Keys.CALLS_ENABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
-            callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: true,
+            callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: false,
             // #CALLS-SWDECODE (01.09): принудительный SW-декодер — диагностика
             // чёрного экрана при доказанном рендере (TextureView, 1354 кадра).
             callsVideoSwDecode = p[Keys.CALLS_VIDEO_SW_DECODE] ?: false,

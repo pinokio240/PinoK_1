@@ -8,6 +8,7 @@ import re.pinok.data.local.SovaPrefs
 import re.pinok.data.model.QueueCredential
 import re.pinok.data.model.QueueEvent
 import re.pinok.data.model.UserProfile
+import re.pinok.realtime.CallSignalingClient
 
 /**
  * Task 20 (2026-09-03): DI-контракт экранов звонков, перенесённых в
@@ -42,6 +43,17 @@ interface CallsDependencies {
     val longPollClient: CallsLongPoll
     val callsSessionKey: String
     val callsSessionUid: Long
+
+    /**
+     * #CALLS-COMMON-SIGNALING (2026-10-14): ОБЩИЙ сигналинг-клиент входящего звонка.
+     * Создаётся в SovaApp один раз и поднимается на ring (при получении события
+     * incoming_call) ДО того, как пользователь нажал «Принять» — чтобы успеть
+     * поймать offer звонящего (веб-эталон держит канал открытым весь период
+     * ожидания; у нас раньше WS поднимался только в accept, и offer терялся).
+     * CallScreen и IncomingCallScreen ПЕРЕИСПОЛЬЗУЮТ этот же клиент, а не создают
+     * свой (два WS на один звонок недопустимы).
+     */
+    val signaling: CallSignalingClient
 
     suspend fun ensureCallsSessionKey(force: Boolean): String?
     suspend fun getCallConversationParams(conversationId: String): Pair<String?, JsonObject?>
