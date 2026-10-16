@@ -92,12 +92,16 @@ object UnreadMessagesCounter {
                             // EventHub — повтор в окне 5с не учитываем (дедуп счётчика).
                             if (EventDedup.isDuplicate(event.peerId, event.messageId)) {
                                 AppLog.d(TAG, "NewMessage dup (EventHub/LongPoll) skipped peer=${event.peerId}")
-                            } else if (event.peerId > 0L) {
+                            } else if (event.peerId in 1 until 2_000_000_000L) {
+                                // #COUNTER-USER-ONLY (2026-10-16): инкрементим бейдж иконки
+                                // «Сообщения» ТОЛЬКО для личных диалогов (0 < peerId < 2e9).
+                                // Групповые чаты (peerId >= 2e9) и каналы/сообщества (peerId < 0)
+                                // в бейдж не входят — они пересчитываются refreshCount ниже.
                                 _unreadCount.value = _unreadCount.value + 1
                                 AppLog.d(TAG, "NewMessage: unreadCount → ${_unreadCount.value}")
                             } else {
                                 AppLog.d(TAG,
-                                    "#COUNTER-CHANNELS: NewMessage peer=${event.peerId} — recompute (community/channel)")
+                                    "#COUNTER-USER-ONLY: NewMessage peer=${event.peerId} — recompute (chat/channel/community)")
                                 refreshCount(app)
                             }
                         }
@@ -149,10 +153,16 @@ object UnreadMessagesCounter {
      * Пагинация: getConversations по [COUNTER_PAGE_SIZE], до [COUNTER_MAX_PAGES]
      * страниц. Каналы (chat.isChannel) суммируются отдельно — только для лога,
      * в бейдж не попадают.
+     *
+     * #COUNTER-USER-ONLY (2026-10-16, требование пользователя): бейдж на иконке
+     * «Сообщения» считает ТОЛЬКО ЛИЧНЫЕ диалоги (peer.type == "user"). Непрочитанное
+     * ЧАТОВ групп (peer.type == "chat"/"group") в него НЕ входит — как вкладка
+     * «Диалоги» (MessagesScreen.dialogsUnreadSum). Каналы (isChannel) — тоже вне бейджа.
      */
     private suspend fun computeUnread(app: SovaApp) {
         try {
             var dialogsUnread = 0
+            var chatsUnread = 0
             var channelsUnread = 0
             var offset = 0
             var pages = 0
@@ -163,10 +173,11 @@ object UnreadMessagesCounter {
                 )
                 if (page.isEmpty()) break
                 for (chat in page) {
-                    if (chat.isChannel) {
-                        channelsUnread += chat.unreadCount
-                    } else {
-                        dialogsUnread += chat.unreadCount
+                    val t = chat.peer.type
+                    when {
+                        chat.isChannel -> channelsUnread += chat.unreadCount
+                        t == "user" -> dialogsUnread += chat.unreadCount
+                        else -> chatsUnread += chat.unreadCount
                     }
                 }
                 offset += page.size
@@ -175,12 +186,12 @@ object UnreadMessagesCounter {
             }
             _unreadCount.value = dialogsUnread
             AppLog.d(TAG,
-                "#COUNTER-CHANNELS: refreshCount: dialogsUnread=$dialogsUnread " +
-                    "channelsExcluded=$channelsUnread pages=$pages")
+                "#COUNTER-USER-ONLY: refreshCount: dialogsUnread=$dialogsUnread " +
+                    "chatsExcluded=$chatsUnread channelsExcluded=$channelsUnread pages=$pages")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            AppLog.w(TAG, "#COUNTER-CHANNELS: refreshCount failed: ${e.message}")
+            AppLog.w(TAG, "#COUNTER-USER-ONLY: refreshCount failed: ${e.message}")
         }
     }
 

@@ -1040,6 +1040,26 @@ fun SovaNavHost(
         Screen.AdminComments.route,
     ).any { currentRoute.startsWith(it.substringBefore("{")) }
 
+    // BOTTOMBAR-FIX: полноэкранные медиа-экраны, где глобальную нижнюю панель
+    // НЕ показываем даже при включённой фиксации (иммерсивный контент: плееры,
+    // просмотр историй/клипов, рекордеры, внутренний браузер). Эти экраны имеют
+    // свой fullscreen-UI, и наложенная поверх NavigationBar перекрывала бы контент.
+    // Обычные экраны с hasOwnTopBar (Сообщество, профили, посты, чаты, настройки,
+    // музыка-библиотека, админ-экраны сообщества) НЕ входят сюда — при фиксации
+    // панель на них показывается.
+    val isFullscreenMedia = hasOwnTopBar && listOf(
+        Screen.VideoMessageCreate.route,     // полноэкранный рекордер видео
+        Screen.StoryViewer.route,            // просмотр истории
+        Screen.StoryOfflinePlayer.route,     // офлайн-плеер историй
+        Screen.ClipOfflinePlayer.route,      // офлайн-плеер клипов
+        Screen.ClipsOwner.route,             // клипы автора (fullscreen)
+        Screen.OfflineAudioPlayer.route,     // офлайн-плеер аудио
+        Screen.Equalizer.route,              // эквалайзер (иммерсивный)
+        Screen.AudioPlayer.route,            // аудиоплеер
+        Screen.AudioQueue.route,             // очередь аудио
+        Screen.InternalBrowser.route,        // внутренний браузер
+    ).any { currentRoute.startsWith(it.substringBefore("{")) }
+
     // §37.12 #327: экраны, которые хотят скрыть ТОЛЬКО глобальный TopAppBar,
     // но ОСТАВИТЬ bottom NavigationBar. В отличие от hasOwnTopBar (который
     // скрывает оба), hidesGlobalTopBarOnly скрывает только верхнюю панель.
@@ -1090,6 +1110,9 @@ fun SovaNavHost(
             ): androidx.compose.ui.geometry.Offset {
                 val dy = available.y
                 if (dy == 0f) return androidx.compose.ui.geometry.Offset.Zero
+                // BOTTOMBAR-FIX: при включённой фиксации нижняя панель не
+                // скрывается/показывается скроллом — всегда остаётся видимой.
+                if (prefsSnap?.uiFixBottomBar == true) return androidx.compose.ui.geometry.Offset.Zero
                 val prev = scrollDeltaAccumulator.floatValue
                 // Накапливаем, ограничивая чтобы накопитель не «залипал».
                 val next = (prev + dy).coerceIn(-160f, 160f)
@@ -1455,9 +1478,12 @@ fun SovaNavHost(
                             onOpenPlayer = { nav.navigate(Screen.AudioPlayer.route) },
                         )
                     }
-                    if (!hasOwnTopBar && visibleBottomItems.isNotEmpty()) {
-                        // Fix #337: если все кнопки нижней панели скрыты —
-                        // NavigationBar не показываем (рамка осталась бы).
+                    if ((!hasOwnTopBar || (prefsSnap?.uiFixBottomBar == true && !isFullscreenMedia))
+                        && visibleBottomItems.isNotEmpty()) {
+                        // BOTTOMBAR-FIX: при включённой фиксации показываем панель и на
+                        // экранах со своей шапкой (hasOwnTopBar), КРОМЕ полноэкранных
+                        // медиа (isFullscreenMedia) — там панель не нужна (иммерсивный
+                        // контент). Это и есть причина «панель не видна на сообществе».
                         // Hide-on-scroll (#299): AnimatedVisibility с shrinkVertically
                         // схлопывает NavigationBar к нижнему краю. Scaffold измеряет
                         // высоту bottomBar слота — при collapse высота=0 → content
@@ -1465,7 +1491,14 @@ fun SovaNavHost(
                         // разворачивается на всю высоту. MiniPlayer остаётся видимым.
                         // Fix #334: inset перенесён на outer Column — здесь НЕ дублируем.
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = bottomBarVisible,
+                            // BOTTOMBAR-FIX: при включённой фиксации панель ВСЕГДА
+                            // видна на уровне рендера — независимо от того, скрыла ли
+                            // её логика (bottomBarVisible) раньше (например, панель
+                            // была свёрнута скроллом до включения фиксации). Guard в
+                            // onPreScroll (1095) уже не даёт скрыть её дальше, а здесь
+                            // мы форсируем видимость даже если bottomBarVisible == false.
+                            // Это делает фиксацию абсолютной на всех экранах.
+                            visible = bottomBarVisible || (prefsSnap?.uiFixBottomBar == true),
                             enter = androidx.compose.animation.expandVertically(
                                 expandFrom = Alignment.Bottom,
                                 animationSpec = re.pinok.ui.anim.tweenScaled(animScale, 220),

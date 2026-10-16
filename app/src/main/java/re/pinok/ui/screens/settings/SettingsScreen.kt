@@ -1779,6 +1779,16 @@ private fun InterfaceTab(
                 onChange = { scope.launch { app.prefs.setInterfaceAnimSpeed(it) } },
             )
         }
+        // BOTTOMBAR-FIX: фиксация нижней панели. При выключении панель
+        // скрывается при просмотре контента (скролл вниз) и возвращается скроллом
+        // вверх. При включении панель всегда зафиксирована и не скрывается.
+        item {
+            ToggleRow(
+                title = "Фиксация нижней панели",
+                subtitle = "Не скрывать панель навигации при просмотре контента",
+                checked = s.uiFixBottomBar,
+            ) { scope.launch { app.prefs.setUiFixBottomBar(it) } }
+        }
         // Fix #228: масштаб стикер-фото в чате (0..40%, шаг 1%).
         item {
             StickerPhotoScaleRow(
@@ -1929,6 +1939,17 @@ private fun NewsTab(
                 checked = s.feedShowFilter,
             ) { scope.launch { app.prefs.setFeedShowFilter(it) } }
         }
+
+        // NEWS-COLLAPSE: сворачивание текста поста. Влияет ТОЛЬКО на отображение
+        // (обрезает длинный текст до 10 строк), содержимое поста не меняется.
+        item { SectionHeader("Текст постов") }
+        item {
+            ToggleRow(
+                title = "Сворачивать текст поста",
+                subtitle = "Обрезать длинные посты до 6 строк с кнопкой «Показать всё»",
+                checked = s.newsCollapsePostText,
+            ) { scope.launch { app.prefs.setNewsCollapsePostText(it) } }
+        }
     }
 }
 
@@ -1971,6 +1992,23 @@ private fun MessagesTab(
         item { ToggleRow("Закреплённые сообщения", s.msgPinBar) { scope.launch { app.prefs.setMsgPinBar(it) } } }
         // P1.4: search + tabs в MessagesScreen.
         item { ToggleRow("Поиск и вкладки в чатах", s.msgSearch) { scope.launch { app.prefs.setMsgSearch(it) } } }
+        // #MSG-TAB-TOGGLES (2026-10-16): полное включение/выключение вкладок
+        // «Чаты» и «Каналы» в MessagesScreen. Default ON (вкладки видны).
+        item { SectionHeader("Вкладки") }
+        item {
+            ToggleRow(
+                title = "Вкладка «Чаты»",
+                subtitle = "Отображать вкладку «Чаты» (групповые беседы и сообщества) в списке диалогов. Выключите, чтобы полностью скрыть вкладку",
+                checked = s.msgShowChatsTab,
+            ) { scope.launch { app.prefs.setMsgShowChatsTab(it) } }
+        }
+        item {
+            ToggleRow(
+                title = "Вкладка «Каналы»",
+                subtitle = "Отображать вкладку «Каналы» (broadcast-сообщества) в списке диалогов. Выключите, чтобы полностью скрыть вкладку",
+                checked = s.msgShowChannelsTab,
+            ) { scope.launch { app.prefs.setMsgShowChannelsTab(it) } }
+        }
         // P3.2: mute/unmute chat — toggle уведомлений.
         item { ToggleRow("Заглушение чатов", s.msgMute) { scope.launch { app.prefs.setMsgMute(it) } } }
         // P3.1: ChatInfo screen — отдельный экран информации о чате.

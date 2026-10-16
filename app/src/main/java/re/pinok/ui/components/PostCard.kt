@@ -391,32 +391,41 @@ fun PostCard(
                 )
             }
             // ─── ТЕКСТ с linkify и разворачиванием ───
+            // NEWS-COLLAPSE: сворачивание текста поста происходит по ВИЗУАЛЬНЫМ строкам
+            // (maxLines + onTextLayout.hasVisualOverflow, как в RepostBlock), а не по числу
+            // символов перевода строки \n в данных. Раньше обрезка шла через post.text.lines()
+            // → посты с одним большим абзацем (1 \n) никогда не сворачивались. Теперь текст
+            // режется по реально занимаемым на экране строкам, а содержимое не меняется.
             if (post.text.isNotBlank()) {
                 var expanded by remember { mutableStateOf(false) }
-                val textLines = post.text.lines().size
-                val needsExpand = textLines > textMaxLines
+                var textOverflowed by remember { mutableStateOf(false) }
                 val linkColor = MaterialTheme.colorScheme.primary
                 val fullText = linkifyVkText(
                     text = post.text,
                     linkColor = linkColor,
                     onUrlClick = { url -> openUrlExternal(ctx, url) },
                 )
-                val collapsedText = if (needsExpand) {
-                    linkifyVkText(
-                        text = post.text.lines().take(textMaxLines).joinToString("\n"),
-                        linkColor = linkColor,
-                        onUrlClick = { url -> openUrlExternal(ctx, url) },
-                    )
-                } else fullText
+                // textMaxLines: Int.MAX_VALUE = преф выключен → лимита нет (весь текст,
+                // overflow=false → кнопки нет). Иначе (10) → обрезка + кнопка «Показать ещё».
+                val limit = if (textMaxLines == Int.MAX_VALUE) Int.MAX_VALUE else textMaxLines
                 Text(
-                    text = if (needsExpand && !expanded) collapsedText else fullText,
+                    text = fullText,
                     style = MaterialTheme.typography.bodyMedium,
+                    maxLines = if (expanded) Int.MAX_VALUE else limit,
+                    overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { result ->
+                        if (!expanded) {
+                            if (result.hasVisualOverflow) textOverflowed = true
+                        } else {
+                            textOverflowed = false
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onPostClick(post) }
                         .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
                 )
-                if (needsExpand && !expanded) {
+                if (textOverflowed && !expanded) {
                     Text(
                         text = "Показать ещё",
                         style = MaterialTheme.typography.bodySmall,
@@ -459,6 +468,10 @@ fun PostCard(
                     groupName = repostGroupName,
                     groupPhoto = repostGroupPhoto,
                     onGroupClick = onRepostGroupClick,
+                    // NEWS-COLLAPSE: текст репоста следует тому же правилу, что и основной
+                    // текст поста (post.textMaxLines). Int.MAX_VALUE (преф выкл) → репост
+                    // целиком; иначе — лимит визуальных строк (лента: 6).
+                    textMaxLines = if (textMaxLines == Int.MAX_VALUE) Int.MAX_VALUE else 6,
                 )
             }
             // ─── ACTION BAR: лайк / комментарий / репост / время (+ views) ───

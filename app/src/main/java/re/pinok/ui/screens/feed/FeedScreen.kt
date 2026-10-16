@@ -246,6 +246,7 @@ fun FeedScreen(
             newsAdsBlocked = true,
             newsRepostsHidden = false,
             newsPromoHidden = true,
+            newsCollapsePostText = false,
             themeDark = true,
             themeAccentIndex = 0,
             themeDynamic = false,
@@ -259,6 +260,8 @@ fun FeedScreen(
             fontScale = 100,
             // Fix #224: скорость анимаций (default 100% = норма).
             interfaceAnimSpeed = 100,
+            // BOTTOMBAR-FIX: фиксация нижней панели (default true = не скрывается скроллом).
+            uiFixBottomBar = true,
             // Fix #228: масштаб стикер-фото (default 0% = исходный размер).
             stickerPhotoScale = 0,
             privacyOfflineMode = false,
@@ -292,6 +295,9 @@ fun FeedScreen(
             msgReadReceipts = true,
             // P1.4: search + tabs в MessagesScreen (default ON).
             msgSearch = true,
+            // #MSG-TAB-TOGGLES (2026-10-16): вкладки «Чаты»/«Каналы» в MessagesScreen — ON по умолчанию.
+            msgShowChatsTab = true,
+            msgShowChannelsTab = true,
             // P0.29: multi-select mode — default ON (включено по умолчанию).
             msgMultiSelect = true,
             // P3.5: multi-file upload — до 10 фото за раз (default ON).
@@ -1832,6 +1838,8 @@ fun FeedScreen(
                             subscriptionState = subscribeState,
                             // #FEED-CAROUSEL (19-A): флаг из prefs экрана.
                             carouselEnabled = feedPrefs.feedCarouselEnabled,
+                            // NEWS-COLLAPSE: сворачивание текста поста (преф экрана).
+                            collapsePostText = feedPrefs.newsCollapsePostText,
                             onSubscribe = { toggleSubscribe(it) },
                             onReportSpam = { reportingPost.value = it },
                             onLikeToggle = { clickedPost ->
@@ -1883,6 +1891,8 @@ fun FeedScreen(
                     subscriptionState = subscribeState,
                     // #FEED-CAROUSEL (19-A): флаг из prefs экрана.
                     carouselEnabled = feedPrefs.feedCarouselEnabled,
+                    // NEWS-COLLAPSE: сворачивание текста поста (преф экрана).
+                    collapsePostText = feedPrefs.newsCollapsePostText,
                     onSubscribe = { toggleSubscribe(it) },
                     onReportSpam = { reportingPost.value = it },
                     onLikeToggle = { clickedPost ->
@@ -2211,6 +2221,9 @@ private fun PostCard(
     // (существующий collectAsState feedPrefs) и пробрасывается вниз — новых
     // чтений prefs на каждый кадр нет.
     carouselEnabled: Boolean = true,
+    // NEWS-COLLAPSE: сворачивание текста поста в ленте до 10 строк с кнопкой
+    // «Показать всё» (преф newsCollapsePostText). Влияет ТОЛЬКО на отображение.
+    collapsePostText: Boolean = false,
     // Sprint 2, P1-3 (#90): тап по кнопке репоста → диалог подтверждения.
     onRepostClick: (Post) -> Unit = {},
     // SOVA_2_lenta: контекстное меню поста.
@@ -2352,7 +2365,10 @@ private fun PostCard(
         showSubscribeButton = showSubscribeButton,
         subscribed = subscribed,
         onSubscribe = onSubscribe,
-        textMaxLines = 6,              // лента разворачивает текст после 6 строк
+        // NEWS-COLLAPSE: при включённом сворачивании текст обрезается до 6 строк
+        // (нужен запас, чтобы кнопка «Показать всё» помещалась), иначе текст
+        // полностью. Int.MAX_VALUE → needsExpand=false → без кнопки, без обрезки.
+        textMaxLines = if (collapsePostText) 6 else Int.MAX_VALUE,
         carouselEnabled = carouselEnabled,
         showViews = true,              // лента показывает просмотры
         myUserId = myUserId,

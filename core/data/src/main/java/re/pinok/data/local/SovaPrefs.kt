@@ -84,6 +84,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             newsAdsBlocked     = p[Keys.NEWS_ADS_BLOCKED]     ?: true,
             newsRepostsHidden  = p[Keys.NEWS_REPOSTS_HIDDEN]  ?: false,
             newsPromoHidden    = p[Keys.NEWS_PROMO_HIDDEN]    ?: true,
+            // NEWS-COLLAPSE: сворачивание текста поста в ленте до 10 строк
+            // с кнопкой «Показать всё». Default false — текст полностью.
+            // Влияет ТОЛЬКО на отображение, не на содержимое.
+            newsCollapsePostText = p[Keys.NEWS_COLLAPSE_POST_TEXT] ?: NEWS_COLLAPSE_POST_TEXT_DEFAULT,
 
             // Interface
             themeDark          = p[Keys.THEME_DARK]            ?: true,
@@ -109,6 +113,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // 50 — вдвое быстрее, 0 — анимации выключены (мгновенные переходы).
             // Применяется к NavHost-переходам, swipe-reply spring, AnimatedVisibility.
             interfaceAnimSpeed = p[Keys.INTERFACE_ANIM_SPEED]  ?: 100,
+            // BOTTOMBAR-FIX: фиксация нижней панели (true = панель не скрывается
+            // скроллом при просмотре контента, false = скрывается как раньше).
+            uiFixBottomBar      = p[Keys.UI_FIX_BOTTOM_BAR]        ?: UI_FIX_BOTTOM_BAR_DEFAULT,
 
             // Fix #228: масштаб стикер-фото в чате (0..40, в процентах увеличения
             // относительно исходного размера). 0 — исходный размер, 40 — +40% к
@@ -220,6 +227,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             msgReadReceipts    = p[Keys.MSG_READ_RECEIPTS]         ?: true,
             // P1.4: search bar + tabs (Все/Каналы/Непрочитанные) в MessagesScreen.
             msgSearch          = p[Keys.MSG_SEARCH]                ?: true,
+            // #MSG-TAB-TOGGLES (2026-10-16): полное включение/выключение вкладок
+            // «Чаты» и «Каналы» в MessagesScreen. Default true (вкладки видны).
+            msgShowChatsTab    = p[Keys.MSG_SHOW_CHATS_TAB]        ?: true,
+            msgShowChannelsTab = p[Keys.MSG_SHOW_CHANNELS_TAB]     ?: true,
             // P2.5: multi-select mode — long-press → «Выбрать» → выделение нескольких
             // сообщений для массового Delete/Forward. P0.29: default true (включено по умолчанию).
             msgMultiSelect     = p[Keys.MSG_MULTI_SELECT]          ?: true,
@@ -615,6 +626,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setNewsAdsBlocked(v: Boolean)            = put(Keys.NEWS_ADS_BLOCKED, v)
     suspend fun setNewsRepostsHidden(v: Boolean)         = put(Keys.NEWS_REPOSTS_HIDDEN, v)
     suspend fun setNewsPromoHidden(v: Boolean)           = put(Keys.NEWS_PROMO_HIDDEN, v)
+    suspend fun setNewsCollapsePostText(v: Boolean)      = put(Keys.NEWS_COLLAPSE_POST_TEXT, v)
 
     suspend fun setThemeDark(v: Boolean)                 = put(Keys.THEME_DARK, v)
     suspend fun setThemeAccentIndex(v: Int)              = put(Keys.THEME_ACCENT_INDEX, v)
@@ -626,6 +638,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setUiScale(v: Float)                     = put(Keys.UI_SCALE, v)
     /** Fix #224: скорость анимаций интерфейса (0..100). 0 = выключены. */
     suspend fun setInterfaceAnimSpeed(v: Int)            = put(Keys.INTERFACE_ANIM_SPEED, v)
+    suspend fun setUiFixBottomBar(v: Boolean)            = put(Keys.UI_FIX_BOTTOM_BAR, v)
     /** Fix #228: масштаб стикер-фото (0..40, % увеличения от оригинала). */
     suspend fun setStickerPhotoScale(v: Int)             = put(Keys.STICKER_PHOTO_SCALE, v)
     /** Fix #237: показ плавающего значка логирования. */
@@ -703,6 +716,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setMsgReadReceipts(v: Boolean)           = put(Keys.MSG_READ_RECEIPTS, v)
     /** P1.4: search + tabs в MessagesScreen. */
     suspend fun setMsgSearch(v: Boolean)                 = put(Keys.MSG_SEARCH, v)
+    /** #MSG-TAB-TOGGLES (2026-10-16): вкладка «Чаты» в MessagesScreen. */
+    suspend fun setMsgShowChatsTab(v: Boolean)           = put(Keys.MSG_SHOW_CHATS_TAB, v)
+    /** #MSG-TAB-TOGGLES (2026-10-16): вкладка «Каналы» в MessagesScreen. */
+    suspend fun setMsgShowChannelsTab(v: Boolean)        = put(Keys.MSG_SHOW_CHANNELS_TAB, v)
     /** P2.5: multi-select mode — выделение нескольких сообщений. Opt-in. */
     suspend fun setMsgMultiSelect(v: Boolean)            = put(Keys.MSG_MULTI_SELECT, v)
     /** P3.5: multi-file upload — до 10 фото за раз. */
@@ -1462,6 +1479,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val newsAdsBlocked: Boolean,
         val newsRepostsHidden: Boolean,
         val newsPromoHidden: Boolean,
+        val newsCollapsePostText: Boolean,
         // Interface
         val themeDark: Boolean,
         val themeAccentIndex: Int,
@@ -1473,6 +1491,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val uiScale: Float,
         /** Fix #224: скорость анимаций интерфейса (0..100%). 0 = выключены (snap). */
         val interfaceAnimSpeed: Int,
+    val uiFixBottomBar: Boolean,
         /** Fix #228: масштаб стикер-фото (0..40, % увеличения от оригинала). */
         val stickerPhotoScale: Int,
         /** Fix #237: показ плавающего значка логирования (DraggableLogFab). */
@@ -1529,6 +1548,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val msgReadReceipts: Boolean,
         /** P1.4: search + tabs в MessagesScreen. */
         val msgSearch: Boolean,
+        /** #MSG-TAB-TOGGLES (2026-10-16): вкладка «Чаты» в MessagesScreen (default true). */
+        val msgShowChatsTab: Boolean,
+        /** #MSG-TAB-TOGGLES (2026-10-16): вкладка «Каналы» в MessagesScreen (default true). */
+        val msgShowChannelsTab: Boolean,
         /** P2.5: multi-select mode (long-press → «Выбрать»). P0.29: default true. */
         val msgMultiSelect: Boolean,
         /** P3.5: multi-file upload — до 10 фото за раз (default true). */
@@ -1946,6 +1969,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NEWS_ADS_BLOCKED    = booleanPreferencesKey("news_ads_blocked")
         val NEWS_REPOSTS_HIDDEN = booleanPreferencesKey("news_reposts_hidden")
         val NEWS_PROMO_HIDDEN   = booleanPreferencesKey("news_promo_hidden")
+        val NEWS_COLLAPSE_POST_TEXT = booleanPreferencesKey("news_collapse_post_text")
         // Interface
         val THEME_DARK          = booleanPreferencesKey("theme_dark")
         val THEME_ACCENT_INDEX  = intPreferencesKey("theme_accent_index")
@@ -1955,6 +1979,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Fix #UISCALE: масштаб всего интерфейса (float, дефолт 0.85 = −15%).
         val UI_SCALE             = floatPreferencesKey("ui_scale")
         val INTERFACE_ANIM_SPEED= intPreferencesKey("interface_anim_speed")
+    val UI_FIX_BOTTOM_BAR           = booleanPreferencesKey("ui_fix_bottom_bar")
         val STICKER_PHOTO_SCALE = intPreferencesKey("sticker_photo_scale")
         // Fix #237: показ плавающего значка логирования.
         val SHOW_LOG_FAB        = booleanPreferencesKey("show_log_fab")
@@ -2008,6 +2033,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val MSG_SWIPE_REPLY      = booleanPreferencesKey("msg_swipe_reply")
         val MSG_READ_RECEIPTS    = booleanPreferencesKey("msg_read_receipts")
         val MSG_SEARCH            = booleanPreferencesKey("msg_search")
+        val MSG_SHOW_CHATS_TAB    = booleanPreferencesKey("msg_show_chats_tab")
+        val MSG_SHOW_CHANNELS_TAB = booleanPreferencesKey("msg_show_channels_tab")
         val MSG_MULTI_SELECT      = booleanPreferencesKey("msg_multi_select")
         val MSG_MULTI_FILE        = booleanPreferencesKey("msg_multi_file")
         val MSG_DUAL_BUTTON       = booleanPreferencesKey("msg_dual_button")
@@ -2256,6 +2283,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Кнопки/панели/текст уменьшаются при стандартной настройке. Рост
         // предложения задаётся пользователем: 0.75 / 0.85 / 1.0 / 1.15 / 1.3.
         const val UI_SCALE_DEFAULT = 0.85f
+        const val UI_FIX_BOTTOM_BAR_DEFAULT = true
+        // NEWS-COLLAPSE: сворачивание текста поста в ленте до 10 строк (default: off).
+        const val NEWS_COLLAPSE_POST_TEXT_DEFAULT = false
         const val AUTH_OAUTH_HOST_DEFAULT      = "oauth.vk.com"
         const val AUTH_ID_HOST_DEFAULT         = "id.vk.com"
         const val AUTH_LOGIN_HOST_DEFAULT      = "login.vk.com"

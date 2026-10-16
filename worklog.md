@@ -14999,3 +14999,185 @@ TextureView обычный GPU-узел, композитится с окном,
 Гипотеза регресса: pendingOffer-механизм вмешался в синхронный accept-поток и/или
 дублировал offer, ломая входящий. Откат вернул прежнее (рабочее) поведение.
 Требуется сборка полного APK и проверка входящего звонка пользователем.
+
+## IM-COUNTER-USER-ONLY / 2026-10-16 (бейдж иконки «Сообщения» = только личные диалоги)
+
+Требование пользователя: «сообщение вкладка чаты — счётчик чатов не должен прибавляться
+к счётчику на иконке сообщений».
+
+Файл: app/.../realtime/UnreadMessagesCounter.kt (бейдж «Сообщения» в bottom nav).
+БЫЛО: computeUnread считал dialogsUnread = все !isChannel (личные + ЧАТЫ групп). NewMessage
+инкрементил при peerId > 0 (личные + групповые чаты >=2e9).
+
+СТАЛО (#COUNTER-USER-ONLY):
+- computeUnread: dialogsUnread = только peer.type == "user" (+ каналы и чаты групп
+  исключаются отдельными счётчиками chatsExcluded/channelsExcluded, только для лога).
+- NewMessage: инкремент бейджа только для 0 < peerId < 2_000_000_000 (личные);
+  групповые чаты (>=2e9) и каналы (<0) → refreshCount (полный пересчёт без них).
+
+Семантика peerId: >0 и <2e9 = личный; >=2e9 = групповой чат; <0 = сообщество/канал.
+Бэкап: backups/im-counter-user-only-2026-10-16/
+Сборку проверяет пользователь (меня поправили: gradle запускаю только по явному разрешению).
+
+## MSG-TAB-TOGGLES / 2026-10-16 (тумблеры вкладок Чаты/Каналы) — УСПЕХ
+
+Требование: «Настройки-Сообщения — два тумблера полного выключения/включения вкладок Чаты и
+Каналы, по умолчанию включены, с описанием».
+
+Было сделано:
+1. SovaPrefs: msgShowChatsTab / msgShowChannelsTab (default true) + сеттеры + ключи + Snapshot-поля.
+2. SettingsScreen (MessagesTab): раздел «Вкладки» — 2 ToggleRow с описаниями.
+3. MessagesScreen: вкладки Чаты/Каналы скрываются при выключении; «Непрочитанные» всегда
+   последняя (переменный индекс unreadTabIndex); динамические индексы chatsTabIndex/
+   channelsTabIndex; сброс activeTab на Диалоги при скрытии активной вкладки; режим папок не тронут.
+4. FeedScreen: добавлены initial-значения обоих полей в SovaPrefs.Snapshot (ошибка компиляции
+   "No value passed for parameter" исправлена).
+
+Сборка: :app — SUCCESS (проверил пользователь). Бэкап: backups/settings-msgs-tab-toggles-2026-10-16/
+
+## SETTINGS-INTERFACE-BOTTOMBAR-FIX / 2026-10-16 — СДЕЛАНО (без сборки)
+
+Требование: «Настройки-Интерфейс — тумблер выключения/включения Фиксации нижней панели,
+запрещающий панели скрываться при просмотре контента». Default = включено.
+
+Изменения:
+1. SovaPrefs: uiFixBottomBar (default UI_FIX_BOTTOM_BAR_DEFAULT = true) — поле Snapshot,
+   val Snapshot, сеттер setUiFixBottomBar, ключ UI_FIX_BOTTOM_BAR, константа.
+2. FeedScreen: initial-значение uiFixBottomBar = true в Snapshot (критично для компиляции).
+3. SettingsScreen (InterfaceTab, раздел «Текст и анимации»): ToggleRow «Фиксация нижней панели»
+   с подписью «Не скрывать панель навигации при просмотре контента».
+4. SovaNavHost.onPreScroll: guard prefsSnap?.uiFixBottomBar == true => панель не скрывается/
+   показывается скроллом (всегда видима). prefsSnap объявлен на 711 < onPreScroll (1085) - ок.
+
+Бэкап: backups/settings-interface-bottombar-fix-2026-10-16/ (SettingsScreen.kt, SovaPrefs.kt).
+Сборку НЕ запускал (по правилу — только пользователь).
+
+## SETTINGS-INTERFACE-BOTTOMBAR-FIX / 2026-10-16 — УТОЧНЕНИЕ (после жалобы «не везде фиксирована»)
+
+Проверка субагентом (very thorough) механизма скрытия нижней панели:
+- Единственное место, КОТОРОЕ СКРЫВАЕТ панель — onPreScroll в SovaNavHost (стр.1106,
+  guard uiFixBottomBar уже встроен на 1095). Других записей bottomBarVisible=false НЕТ.
+- Прямые записи .value=true извне (FAB-тапы): FeedScreen.kt:2052/2063 и ScrollToTopFab.kt:82
+  (единый FAB «наверх», ~18 экранов) — они только ПОКАЗЫВАЮТ, не скрывают.
+- Экран с hasOwnTopBar (1461) панель не рендерит вовсе — это полноэкранные экраны, где
+  нижней панели нет по дизайну (не баг).
+
+Корень жалобы «не везде фиксирована»: если панель была свёрнута скроллом ДО включения
+фиксации, bottomBarVisible оставался false → панель не появлялась на экранах без смены
+маршрута. Доп. правка в SovaNavHost (рендер bottomBar):
+- visible = bottomBarVisible || (prefsSnap?.uiFixBottomBar == true) — форсирование видимости
+  на уровне AnimatedVisibility решает эту проблему: при фиксации панель видна ВСЕГДА на
+  любом экране, где она предусмотрена, независимо от остаточного bottomBarVisible=false.
+- FAB-логика при фиксации корректна: bottomBarVisible=true const → FAB «наверх» появляется
+  по скроллу (index>0/offset>200), а не по скрытию панели.
+
+Бэкап: backups/settings-interface-bottombar-fix-2026-10-16/ обновлён.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-INTERFACE-BOTTOMBAR-COMMUNITY / 2026-10-16 — панель не видна на сообществе (СДЕЛАНО, без сборки)
+
+Причина (подтверждена субагентом very thorough): глобальная NavigationBar рендерится только при
+if (!hasOwnTopBar && ...) — SovaNavHost. Раньше строка 1461, теперь ~1481. Community входит в
+список hasOwnTopBar (строка 969) → панель вообще не рендерится как компонент. Преф uiFixBottomBar
+влиял только на hide-on-scroll (onPreScroll guard + AnimatedVisibility visible), но не доходил до
+условия рендера. Это НЕ скролл и НЕ вкладки — это полноэкранная пометка маршрута.
+
+Решение (по выбору пользователя «везде, кроме полноэкранных медиа»):
+1. Введён список isFullscreenMedia (SovaNavHost, после hasOwnTopBar): экраны, где панель не
+   показываем даже при фиксации — VideoMessageCreate, StoryViewer, StoryOfflinePlayer,
+   ClipOfflinePlayer, ClipsOwner, OfflineAudioPlayer, Equalizer, AudioPlayer, AudioQueue,
+   InternalBrowser (иммерсивные медиа/плееры/рекордеры).
+2. Условие рендера (стр.1481):
+   if ((!hasOwnTopBar || (prefsSnap?.uiFixBottomBar == true && !isFullscreenMedia)) && visibleBottomItems.isNotEmpty())
+   → при фиксации панель появляется на обычных экранах с hasOwnTopBar (Сообщество, профили,
+   посты, чаты, настройки, музыка-библиотека, админ-экраны), но НЕ на полноэкранных медиа.
+3. CommunityScreen НЕ имеет своего Scaffold — контент (LazyColumn) в NavHost глобального Scaffold,
+   поэтому bottom-слот автоматически поднимет контент. Правка CommunityScreen НЕ нужна.
+
+Все экраны hasOwnTopBar (~30, стр.946-1041) теперь при фиксации получают панель, кроме 10 медиа.
+
+Бэкап: backups/settings-interface-bottombar-community-2026-10-16/ обновлён.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-INTERFACE-BOTTOMBAR-COMMUNITY / 2026-10-16 — УСПЕХ (подтверждено пользователем)
+
+Панель теперь видна на Сообществе и обычных экранах при включённой «Фиксации нижней панели»,
+и НЕ видна на полноэкранных медиа (isFullscreenMedia). Сборка :app — SUCCESS. Бэкап:
+backups/settings-interface-bottombar-community-2026-10-16/ и
+backups/settings-interface-bottombar-fix-2026-10-16/.
+
+## SETTINGS-NEWS-COLLAPSE / 2026-10-16 — сворачивание текста постов (СДЕЛАНО, без сборки)
+
+Требование: «Настройки-Новости — тумблер, включающий сворачивание текста поста до 10 строк
+в посте с появлением кнопки «Показать всё», не влияя на содержимое».
+
+Ресёрч субагентом: механизм УЖЕ ЕСТЬ в PostCard.kt (строки ~393-431) — per-post remember
+expanded + collapseText по textMaxLines + кнопка «Показать ещё» (if needsExpand && !expanded).
+В ленте textMaxLines жёстко зашит =6 (FeedScreen). Просто переиспользовали.
+
+Изменения (5 файлов/точек):
+1. SovaPrefs: newsCollapsePostText (default NEWS_COLLAPSE_POST_TEXT_DEFAULT = false) — загрузка
+   в Snapshot, сеттер setNewsCollapsePostText, поле Snapshot, ключ NEWS_COLLAPSE_POST_TEXT, константа.
+2. FeedScreen: initial newsCollapsePostText = false (dummy Snapshot, критично для компиляции).
+3. SettingsScreen NewsTab: новый раздел «Текст постов» + тумблер «Сворачивать текст поста»
+   (подпись «Обрезать длинные посты до 10 строк с кнопкой «Показать всё»»), checked = s.newsCollapsePostText.
+4. FeedScreen обёртка PostCard: новый параметр collapsePostText: Boolean = false.
+5. FeedScreen вызовы ленты (2 места: likesItems + posts): collapsePostText = feedPrefs.newsCollapsePostText.
+   textMaxLines = if (collapsePostText) 10 else Int.MAX_VALUE (было 6) — при OFF текст полностью
+   (Int.MAX_VALUE -> needsExpand=false, без кнопки), при ON — 10 строк + кнопка «Показать всё».
+
+Другие экраны не тронуты: Profile/Community используют свою обёртку (textMaxLines фиксирован),
+PostDetail = Int.MAX_VALUE. Изменение только в ленте.
+
+Бэкап: backups/settings-news-collapse-2026-10-16/ обновлён.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-NEWS-COLLAPSE / 2026-10-16 — ИСПРАВЛЕНИЕ корня «ничего не меняется»
+
+Симптом: тумблер включён, но лента не меняется. Диагностика субагентом (very thorough) найден
+ТОЧНЫЙ корень: в PostCard.kt основной текст поста обрезался по числу СИМВОЛОВ ПЕРЕВОДА СТРОКИ
+в данных (post.text.lines().size > textMaxLines), а не по реальным визуальным строкам на экране.
+Подавляющее большинство постов имеют <=10 переносов \n (даже длинный одноабзацный текст = 1
+строка перевода) → needsExpand всегда false → текст не сворачивался.
+
+Дополнительно: текст репоста шёл через RepostBlock со СВОИМ жёстким maxLines=5, преф туда не
+пробрасывался — репосты заведомо не реагировали.
+
+Правка (PostCard.kt блок текста поста, ~393-...):
+- Убрал ручную обрезку по lines(). Переписал на визуальное ограничение как в RepostBlock:
+  Text(maxLines = if (expanded) Int.MAX_VALUE else limit, overflow = Ellipsis,
+       onTextLayout = { result -> if (!expanded && result.hasVisualOverflow) textOverflowed = true })
+  limit = if (textMaxLines == Int.MAX_VALUE) Int.MAX_VALUE else textMaxLines.
+- Кнопка «Показать ещё» теперь появляется по textOverflowed (реальный overflow на ширине экрана).
+- Преф-интеграция (SovaPrefs+FeedScreen+Settings NewsTab) уже была корректной - не менялась.
+- RepostBlock: НЕ трогал в этой итерации (отдельная ветка; при желании прокинуть преф туда - отдельно).
+
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+Бэкап: backups/postcard-text-collapse-fix-2026-10-16/.
+
+## SETTINGS-NEWS-COLLAPSE / 2026-10-16 — репост также подчиняется тумблеру (СДЕЛАНО, без сборки)
+
+Дополнение: текст РЕПОСТА теперь следует тому же правилу, что и основной текст поста.
+- RepostBlock.kt: добавлен параметр textMaxLines: Int = 5 (дефолт прежний; не-лента не меняется).
+  Применяется в maxLines текста репоста: if (repostTextExpanded) Int.MAX_VALUE else textMaxLines.
+- PostCard.kt (UnifiedPostCard): вызов RepostBlock передаёт
+  textMaxLines = if (textMaxLines == Int.MAX_VALUE) Int.MAX_VALUE else 10 —
+  т.е. преф выкл → репост целиком; включён → 10 визуальных строк (как основной текст поста).
+- RepostBlock вызывается только из PostCard (PostCard.kt:462) — других вызовов нет, всё покрыто.
+
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+Бэкап: backups/postcard-text-collapse-fix-2026-10-16/.
+
+## SETTINGS-NEWS-COLLAPSE / 2026-10-16 — лимит изменён 10 -> 6
+
+По запросу пользователя лимит сворачивания текста поста снижен с 10 до 6 строк.
+- FeedScreen (основной текст поста): textMaxLines = if (collapsePostText) 6 else Int.MAX_VALUE.
+- PostCard.kt (текст репоста): textMaxLines = if (...) Int.MAX_VALUE else 6 (было 10).
+- SettingsScreen NewsTab: подпись тумблера «Обрезать длинные посты до 6 строк...».
+Сборку НЕ запускал. Бэкап: backups/postcard-text-collapse-fix-2026-10-16/.
+
+## SETTINGS-NEWS-COLLAPSE / 2026-10-16 — УСПЕХ (подтверждено пользователем)
+
+Тумблер «Сворачивать текст поста» (Настройки → Новости) работает: пост и репост сворачиваются
+до 6 строк с кнопкой «Показать всё», содержимое не меняется. Сборка :app — SUCCESS.
+Бэкап: backups/postcard-text-collapse-fix-2026-10-16/ и backups/settings-news-collapse-2026-10-16/.

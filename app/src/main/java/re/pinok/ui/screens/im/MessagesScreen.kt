@@ -287,6 +287,27 @@ fun MessagesScreen(
         }
     }
 
+    // #MSG-TAB-TOGGLES: динамические индексы вкладок (режим БЕЗ папок).
+    // «Диалоги»=0 всегда; «Чаты» занимают следующий индекс, только если включён
+    // тумблер msgShowChatsTab; «Каналы» — только если msgShowChannelsTab;
+    // «Непрочитанные» всегда последний (переменный индекс). -1 = вкладка скрыта.
+    val showChatsTab = s.msgShowChatsTab
+    val showChannelsTab = s.msgShowChannelsTab
+    val chatsTabIndex = if (showChatsTab) 1 else -1
+    val channelsTabIndex = if (showChannelsTab) (1 + if (showChatsTab) 1 else 0) else -1
+    val unreadTabIndex = 1 + (if (showChatsTab) 1 else 0) + (if (showChannelsTab) 1 else 0)
+
+    // #MSG-TAB-TOGGLES: если тумблер скрыл вкладку, на которой пользователь стоит,
+    // сбрасываем на «Диалоги» (0). В режиме папок индексы другие — не трогаем.
+    LaunchedEffect(showChatsTab, showChannelsTab, foldersEnabled) {
+        if (!foldersEnabled) {
+            var valid = setOf(0, unreadTabIndex)
+            if (showChatsTab) valid = valid + chatsTabIndex
+            if (showChannelsTab) valid = valid + channelsTabIndex
+            if (activeTab !in valid) activeTab = 0
+        }
+    }
+
     // #CHANNEL-REC: рекомендации каналов (channels.getRecommendations; веб —
     // блок channels_list_recommended). Состояние: список рекомендаций, флаги
     // loading/error, текущий count (кнопка «Показать ещё» увеличивает и
@@ -332,8 +353,8 @@ fun MessagesScreen(
     // Первое открытие вкладки «Каналы» → тянем рекомендации (если ещё не грузили).
     // CHAN-PREFS: грузим, только если включён показ «Рекомендаций в каналах».
     LaunchedEffect(activeTab, s.channelRecEnabled) {
-        // #CHATS-TAB: «Каналы» теперь вкладка 2 (0=Диалоги, 1=Чаты, 2=Каналы, 3=Непрочитанные).
-        if (activeTab == 2 && s.channelRecEnabled && !channelRecsLoaded && channelRecs.isEmpty()) {
+        // #MSG-TAB-TOGGLES: «Каналы» теперь динамическая вкладка (channelsTabIndex).
+        if (activeTab == channelsTabIndex && s.channelRecEnabled && !channelRecsLoaded && channelRecs.isEmpty()) {
             scope.launch { loadChannelRecs(channelRecsCount) }
         }
     }
@@ -846,7 +867,7 @@ fun MessagesScreen(
     // Fix #274: + сортировка pinned наверх + локальный reorder.
     // Вычисляется через derivedStateOf для эффективности (пересчёт только при
     // изменении chats, searchQuery, activeTab, folders, foldersEnabled, localPinnedOrder).
-    val filteredChats by remember(chats, searchQuery, activeTab, folders, foldersEnabled, localPinnedOrder, localArchivedIds) {
+    val filteredChats by remember(chats, searchQuery, activeTab, folders, foldersEnabled, localPinnedOrder, localArchivedIds, showChatsTab, showChannelsTab) {
         derivedStateOf {
             var result = chats
             // Fix #356 #MSG-ARCHIVE: архивные диалоги исключены из основного
@@ -874,11 +895,17 @@ fun MessagesScreen(
                 // (isChannel = group && can_write.allowed=false).
                 // #COUNTER-CHANNELS: «Непрочитанные» — только диалоги, без каналов
                 // (бейдж и содержимое консистентны: оба без каналов).
-                when (activeTab) {
-                    0 -> result = result.filter { !it.isChannel && it.peer.type == "user" }
-                    1 -> result = result.filter { !it.isChannel && (it.peer.type == "chat" || it.peer.type == "group") }
-                    2 -> result = result.filter { it.isChannel }
-                    3 -> result = result.filter { it.unreadCount > 0 && !it.isChannel }
+                // #MSG-TAB-TOGGLES: индексы вкладок переменные (см. chatsTabIndex /
+                // channelsTabIndex / unreadTabIndex). «Чаты» и «Каналы» обрабатываются,
+                // только если тумблер включён; «Непрочитанные» показывается всегда.
+                when {
+                    activeTab == 0 -> result = result.filter { !it.isChannel && it.peer.type == "user" }
+                    showChatsTab && activeTab == chatsTabIndex -> result =
+                        result.filter { !it.isChannel && (it.peer.type == "chat" || it.peer.type == "group") }
+                    showChannelsTab && activeTab == channelsTabIndex -> result =
+                        result.filter { it.isChannel }
+                    activeTab == unreadTabIndex -> result =
+                        result.filter { it.unreadCount > 0 && !it.isChannel }
                     else -> {}
                 }
             }
@@ -1169,6 +1196,9 @@ fun MessagesScreen(
                     // «Диалоги» (0) и «Каналы» (2); индексы «Каналы»=2, «Непрочитанные»=3.
                     // FIX (P5.2): бейджи показывают непрочитанное (сбрасывается при чтении),
                     // а не total count чатов.
+                    // #MSG-TAB-TOGGLES: вкладки «Чаты»/«Каналы» скрываются тумблерами
+                    // msgShowChatsTab/msgShowChannelsTab; «Непрочитанные» показывается
+                    // всегда и занимает последний (переменный) индекс unreadTabIndex.
                     PrimaryTabRow(selectedTabIndex = activeTab) {
                         Tab(
                             selected = activeTab == 0,
@@ -1181,31 +1211,35 @@ fun MessagesScreen(
                                 }) { Text("Диалоги") }
                             },
                         )
+                        if (showChatsTab) {
+                            Tab(
+                                selected = activeTab == chatsTabIndex,
+                                onClick = { activeTab = chatsTabIndex },
+                                text = {
+                                    BadgedBox(badge = {
+                                        if (chatsUnreadSum > 0) {
+                                            Badge { Text(if (chatsUnreadSum > 99) "99+" else chatsUnreadSum.toString()) }
+                                        }
+                                    }) { Text("Чаты") }
+                                },
+                            )
+                        }
+                        if (showChannelsTab) {
+                            Tab(
+                                selected = activeTab == channelsTabIndex,
+                                onClick = { activeTab = channelsTabIndex },
+                                text = {
+                                    BadgedBox(badge = {
+                                        if (channelUnreadSum > 0) {
+                                            Badge { Text(if (channelUnreadSum > 99) "99+" else channelUnreadSum.toString()) }
+                                        }
+                                    }) { Text("Каналы") }
+                                },
+                            )
+                        }
                         Tab(
-                            selected = activeTab == 1,
-                            onClick = { activeTab = 1 },
-                            text = {
-                                BadgedBox(badge = {
-                                    if (chatsUnreadSum > 0) {
-                                        Badge { Text(if (chatsUnreadSum > 99) "99+" else chatsUnreadSum.toString()) }
-                                    }
-                                }) { Text("Чаты") }
-                            },
-                        )
-                        Tab(
-                            selected = activeTab == 2,
-                            onClick = { activeTab = 2 },
-                            text = {
-                                BadgedBox(badge = {
-                                    if (channelUnreadSum > 0) {
-                                        Badge { Text(if (channelUnreadSum > 99) "99+" else channelUnreadSum.toString()) }
-                                    }
-                                }) { Text("Каналы") }
-                            },
-                        )
-                        Tab(
-                            selected = activeTab == 3,
-                            onClick = { activeTab = 3 },
+                            selected = activeTab == unreadTabIndex,
+                            onClick = { activeTab = unreadTabIndex },
                             text = {
                                 BadgedBox(badge = {
                                     if (unreadCount > 0) {
@@ -1430,7 +1464,7 @@ fun MessagesScreen(
                     val recipeContentVisible =
                         s.channelRecEnabled &&
                             (channelRecsLoading || channelRecsError != null || channelRecs.isNotEmpty())
-                    if (activeTab == 2 && searchQuery.isBlank() && !recipeContentVisible && filteredChats.isEmpty()) {
+                    if (activeTab == channelsTabIndex && searchQuery.isBlank() && !recipeContentVisible && filteredChats.isEmpty()) {
                         item(key = "chanrec_onboarding") {
                             ChannelOnboardingBlock(
                                 findEnabled = s.channelFindEnabled,
@@ -1447,13 +1481,13 @@ fun MessagesScreen(
                     // #CHANNEL-REC: блок рекомендаций каналов — верхний блок вкладки
                     // «Каналы» (над списком подписок; веб-аналог channels_list_recommended).
                     // #CHATS-TAB: «Каналы» теперь вкладка 2 (было 1).
-                    // Показываем только на вкладке каналов (activeTab == 2), вне поиска и
+                    // Показываем только на вкладке каналов (activeTab == channelsTabIndex), вне поиска и
                     // при включённой настройке «Рекомендации в каналах» (CHAN-PREFS),
                     // и только когда есть что показать (загрузка/ошибка/контент) — при
                     // пустом после загрузки списке его место занимает онбординг выше.
                     // #CHANNEL-ONBOARDING: условие дополнено recipeContentVisible, чтобы
                     // пустой заголовок «Рекомендации» не дублировал приветственный блок.
-                    if (activeTab == 2 && searchQuery.isBlank() && s.channelRecEnabled && recipeContentVisible) {
+                    if (activeTab == channelsTabIndex && searchQuery.isBlank() && s.channelRecEnabled && recipeContentVisible) {
                         // Заголовок «Рекомендации» + кнопка «Найти канал» (перезагрузка /
                         // переход к блоку при пустом списке подписок). Кнопка «Найти канал»
                         // показывается только при включённой настройке channelFindEnabled.

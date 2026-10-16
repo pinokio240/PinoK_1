@@ -63,6 +63,10 @@ fun RepostBlock(
     groupName: String? = null,
     groupPhoto: String? = null,
     onGroupClick: (() -> Unit)? = null,
+    // NEWS-COLLAPSE: сворачивание текста репоста. Int.MAX_VALUE = преф выключен
+    // (весь текст), иначе — лимит визуальных строк (лента: 10). По умолчанию 5
+    // (прежнее поведение для прочих экранов, где тумблер неактивен).
+    textMaxLines: Int = 5,
 ) {
     // Fix #373: контекст для linkify-кликов в тексте репоста (openUrlExternal).
     val ctx = LocalContext.current
@@ -186,7 +190,9 @@ fun RepostBlock(
                     onTextLayout = { result ->
                         if (!repostTextExpanded && result.hasVisualOverflow) repostTextOverflowed = true
                     },
-                    maxLines = if (repostTextExpanded) Int.MAX_VALUE else 5,
+                    // NEWS-COLLAPSE: maxLines берётся из параметра (по умолч. 5, лента: 10,
+                    // при выключенном префе Int.MAX_VALUE = весь текст без обрезки).
+                    maxLines = if (repostTextExpanded) Int.MAX_VALUE else textMaxLines,
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (repostTextOverflowed && !repostTextExpanded) {
