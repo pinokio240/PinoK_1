@@ -214,7 +214,10 @@ fun MessagesScreen(
     // #IM-LOAD-SPEED: pageSize=10 как VK web (веб грузит по 10/страница).
     // Первый экран рисуется мгновенно, остальное догружается по скроллу
     // (loadMore, hasMore/reachedEnd).
-    val pageSize = 10
+    // #IM-LOADMORE (2026-10-16): pageSize 10→30 по просьбе пользователя — сразу
+    // видно больше диалогов (не кажется, что список пуст/только закреплённые),
+    // продолжение догружается по скроллу с показом спиннера.
+    val pageSize = 30
     var isRefreshing by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 

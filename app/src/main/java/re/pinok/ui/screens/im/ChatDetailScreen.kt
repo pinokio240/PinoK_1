@@ -1009,6 +1009,36 @@ fun ChatDetailScreen(
         .map { it.msgBubbleless }
         .collectAsState(initial = false)
 
+    // #CHAT-APPEARANCE (2026-10-16): независимый шрифт/цвет текста и фон диалога.
+    // Читаем префы один раз на уровне экрана и предоставляем через CompositionLocal
+    // LocalChatAppearance (читается в MessageBubble и в корневом фоне). Значения
+    // собираются в объект ChatAppearance; переопределение применяется только если
+    // соответствующий тумблер включён.
+    val chatAppearance by app.prefs.data.map { snap ->
+        val fontOverride = snap.chatFontOverride
+        val sizes = re.pinok.data.local.SovaPrefs.CHAT_FONT_SIZES_SP
+        val sizeSp = if (fontOverride && snap.chatFontSizeIndex in sizes.indices) {
+            sizes[snap.chatFontSizeIndex].toFloat()
+        } else {
+            null
+        }
+        // #CHAT-SPECTRUM: цвет текста хранится как точный ARGB Int (0 = не выбран).
+        val textColor = if (fontOverride && snap.chatTextColorArgb != 0) {
+            val c = snap.chatTextColorArgb
+            Color(c)
+        } else {
+            null
+        }
+        // #CHAT-SPECTRUM: цвет фона диалога тоже ARGB Int (0 = не выбран → системный).
+        val bgColor = if (snap.chatBgOverride && snap.chatBgColorArgb != 0) {
+            val c = snap.chatBgColorArgb
+            Color(c)
+        } else {
+            null
+        }
+        ChatAppearance(textColor = textColor, fontSizeSp = sizeSp, bgColor = bgColor)
+    }.collectAsState(initial = ChatAppearance())
+
     // Context для кэша и т.д.
     val ctx = LocalContext.current
     // P5.1: открытие ссылок из чата во внутреннем браузере (WebView).
@@ -3808,7 +3838,11 @@ fun ChatDetailScreen(
         }
     }
 
-    CompositionLocalProvider(LocalStickerPhotoScale provides stickerPhotoScale) {
+    CompositionLocalProvider(
+        LocalStickerPhotoScale provides stickerPhotoScale,
+        // #CHAT-APPEARANCE: независимый шрифт/цвет/фон диалога (чатов/каналов).
+        LocalChatAppearance provides chatAppearance,
+    ) {
     Scaffold(
         topBar = {
             if (selectionMode) {
@@ -4659,11 +4693,14 @@ fun ChatDetailScreen(
             }  // P2.5: closes else (not selection mode)
         },
         ) { padding ->
+        // #CHAT-BACKGROUND: независимый фон диалога — если включён тумблер и выбран цвет,
+        // используем его вместо системного surface. Покрывает и обычный чат, и канал.
+        val chatBgOverride = LocalChatAppearance.current.bgColor
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(MaterialTheme.colorScheme.surface),
+                .background(chatBgOverride ?: MaterialTheme.colorScheme.surface),
         ) {
             if (isChannel && !channelWallFallback) {
                 // ═══ #CHANNEL-WALL-MODE (Fix #393): контент канала ═══════════
@@ -6220,7 +6257,12 @@ private fun MessageBubble(
         MaterialTheme.colorScheme.surfaceVariant
     }
     // P3.7: в bubble-less режиме текст всегда onSurface (нет яркого bubble-фона).
-    val textColor = if (bubbleless) {
+    // #CHAT-APPEARANCE: если включён независимый шрифт диалога и выбран цвет текста —
+    // переопределяем цвет текста сообщения со всех пузырей (исходящих и входящих).
+    val chatTextColorOverride = LocalChatAppearance.current.textColor
+    val textColor = if (chatTextColorOverride != null) {
+        chatTextColorOverride
+    } else if (bubbleless) {
         MaterialTheme.colorScheme.onSurface
     } else if (isOut) {
         MaterialTheme.colorScheme.onPrimary
@@ -6614,9 +6656,18 @@ private fun MessageBubble(
                     } else {
                         MaterialTheme.colorScheme.primary
                     }
+                    // #CHAT-APPEARANCE: независимый размер шрифта текста сообщения. Если задан —
+                    // копируем bodyMedium с переопределённым fontSize (в sp). Применяется
+                    // только к тексту в диалогах (чатах/каналах), не трогая остальной UI.
+                    val chatFontSizeOverride = LocalChatAppearance.current.fontSizeSp
                     Text(
                         text = re.pinok.util.linkifyVkText(message.text, linkColor, onUrlClick),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = if (chatFontSizeOverride != null)
+                            MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = chatFontSizeOverride.sp,
+                            )
+                        else
+                            MaterialTheme.typography.bodyMedium,
                         color = textColor,
                     )
                 }

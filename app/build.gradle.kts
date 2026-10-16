@@ -32,12 +32,12 @@ android {
         // сообщества». Двухфазный релиз: version.json 6/2.1.5 с пустыми
         // apkUrl/sha256 заполним после публикации APK на GitHub Releases
         // (docs/UPDATER.md §1 шаг 5).
-        // #RELEASE-V221-BUMP (2026-10-10): bump 220→221 — накопленные фиксы:
-        // удалён чёрный прямоугольник над экранной клавиатурой, ускорена загрузка
-        // сообщений, исправлены клипы, которые не грузились (#CLIP-NO-FILES-AD).
-        versionCode = 222
-        versionName = "2.2.2"
-        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-04T00:00:00+03:00\"")
+        // #RELEASE-V223-BUMP (2026-10-16): bump 222→223 — накопленные фиксы:
+        // настройки мессенджера (шрифт/фон диалога, фиксация панели, домашний экран),
+        // редактор панелей (Лента), flood-control (rps 3 + retry 6/9), навигация назад.
+        versionCode = 223
+        versionName = "2.2.3"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-16T18:26:47+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

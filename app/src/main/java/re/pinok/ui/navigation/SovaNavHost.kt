@@ -712,6 +712,17 @@ fun SovaNavHost(
     val animScale = ((prefsSnap?.interfaceAnimSpeed ?: 100).coerceIn(0, 100) / 100f) *
         re.pinok.ui.anim.ANIM_BASE_SPEED
 
+    // HOME-SCREEN: выбранный «Главный экран» (домашний раздел). Если настройка включена и
+    // раздел выбран — используем его как домашний роут вместо Feed (Лента по умолчанию).
+    // uiHomeRoute хранит Screen.route-строку (устанавливается из настроек). Используется
+    // как цель стрелки «назад», глобального BackHandler и фолбэков Clips/Logs.
+    val homeRoute = if ((prefsSnap?.uiHomeEnabled == true) &&
+        !prefsSnap?.uiHomeRoute.isNullOrBlank()) {
+        prefsSnap?.uiHomeRoute.orEmpty()
+    } else {
+        Screen.Feed.route
+    }
+
     // Основные экраны (dock + drawer) — только их сохраняем как lastRoute.
     // Детальные экраны (VideoPlayer, PostDetail, ChatDetail и т.д.) НЕ сохраняем —
     // они контекстные и зависят от переданных данных.
@@ -1418,8 +1429,9 @@ fun SovaNavHost(
                                         } else {
                                             IconButton(onClick = {
                                                 if (!nav.popBackStack()) {
-                                                    // Fallback: если назад некуда — на Ленту.
-                                                    nav.navigate(Screen.Feed.route) {
+                                                    // Fallback: если назад некуда — на Главный экран
+                                                    // (homeRoute; по умолчанию Лента).
+                                                    nav.navigate(homeRoute) {
                                                         popUpTo(nav.graph.startDestinationId) { saveState = true }
                                                         launchSingleTop = true
                                                         restoreState = true
@@ -1606,6 +1618,28 @@ fun SovaNavHost(
                 }
             },
         ) { padding ->
+            // BACK-NAV-FIX: системная кнопка/жест «назад» на корневом (start) экране —
+            // напр. когда Messages стал start destination из-за сохранённого lastRoute —
+            // раньше закрывала приложение (дефолт NavController: popBackStack()==false
+            // → finish). Теперь, если назад некуда, возвращаемся на Ленту (Feed) как
+            // на домашний anchor — точно так же, как делает внутриэкранная стрелка
+            // (асимметрия SovaNavHost.kt:1420-1427). Overlay-экранные BackHandler'ы
+            // (Video/Photo) регистрируются глубже в композиции и имеют приоритет.
+            BackHandler {
+                if (!nav.popBackStack()) {
+                    // На корневом (start) экране: если это НЕ Главный экран — возвращаемся
+                    // на него как на домашний anchor (homeRoute; по умолчанию Лента).
+                    // Если мы уже на Главном — НЕ обрабатываем back, чтобы сохранить
+                    // стандартное поведение Android «закрыть приложение».
+                    if (nav.currentDestination?.route != homeRoute) {
+                        nav.navigate(homeRoute) {
+                            popUpTo(nav.graph.startDestinationId) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+            }
             // #FEED-FAB-SYNC: пробрасываем bottomBarVisibleState в дочерние экраны,
             // чтобы FeedScreen показывал FAB «наверх» синхронно со скрытием панели.
             CompositionLocalProvider(
@@ -2043,7 +2077,7 @@ composable(Screen.CallsHistory.route) {
                         },
                         onBack = {
                             if (!nav.popBackStack()) {
-                                nav.navigate(Screen.Feed.route) {
+                                nav.navigate(homeRoute) {
                                     popUpTo(nav.graph.startDestinationId) { saveState = true }
                                     launchSingleTop = true
                                     restoreState = true
@@ -2452,10 +2486,10 @@ composable(Screen.CallsHistory.route) {
                     // Fix #114: «Закрыть» вместо «назад». popBackStack() может
                     // вернуть false, если Logs оказался startDestination
                     // (lastRoute="logs" мог быть сохранён до фикса #114).
-                    // В этом случае явно навигируем на Feed — всегда работает.
+                    // В этом случае явно навигируем на Главный экран — всегда работает.
                     LogScreen(onClose = {
                         if (!nav.popBackStack()) {
-                            nav.navigate(Screen.Feed.route) {
+                            nav.navigate(homeRoute) {
                                 popUpTo(nav.graph.startDestinationId) { inclusive = true }
                                 launchSingleTop = true
                             }

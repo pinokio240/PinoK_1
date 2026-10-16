@@ -52,3 +52,7 @@ object SovaColors {
         "Purple", "Cyan", "Brown", "Lime", "Pink",
     )
 }
+
+// #CHAT-BACKGROUND: палитра фона диалога удалена — с 2026-10-16 цвет фона и текста диалога
+// выбирается спектральным пикером (SpectrumColorPicker) и хранится как точный ARGB Int,
+// см. SovaPrefs.chatTextColorArgb / chatBgColorArgb.

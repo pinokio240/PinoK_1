@@ -13422,6 +13422,20 @@ class VKApiClient(
             } else {
                 AppLog.e("VKApiClient", "API error $code: $msg (method=$method)")
             }
+
+            // #FLOOD-RETRY (2026-10-16): автоматический retry при rate-limit/flood control.
+            // VK: error_code 6 = "Too many requests per second", error_code 9 = "Flood
+            // control". Оба возвращаются в теле (HTTP 200) и НЕ обрабатывались раньше —
+            // сразу падали в lastApiError. Теперь: если attempt==0 — ждём backoff и
+            // делаем второй запрос (attempt==1). Пауза по статье relaya: 6 → ~1с, 9 → ~5с.
+            if ((code == 6 || code == 9) && attempt == 0) {
+                val backoffMs = if (code == 9) 5_000L else 1_000L
+                AppLog.w("VKApiClient", "API error $code ($msg) on $method — rate limit/flood control, waiting ${backoffMs}ms and retrying (attempt 2/2)")
+                kotlinx.coroutines.delay(backoffMs)
+                attempt++
+                continue
+            }
+
             lastApiError = "$method: $msg"
             lastApiErrorCode = code
             if (code == 5 || code == 1117) {
@@ -13591,8 +13605,10 @@ class VKApiClient(
         // Документируемый Flood Control VK ~20 rps — 6 оставляет ~3.3x запас;
         // массовая пагинация audio.get по-прежнему сдержана собственной
         // PAUSE_BETWEEN_PAGES_MS=1500 (AudioLibraryPager, ~0.7 rps фактических).
-        // ОТКАТ при Flood Control в логкате тестера (err=9): вернуть 3.
-        private const val MAX_REQUESTS_PER_SECOND = 6
+        // ОТКАТ при Flood Control в логкате тестера (err=9): 17.10.2026 вернулся
+        // с 6 на 3 rps — newsfeed.get стал ловить flood control при совпадении
+        // фонового poll-а CommunityPostsPoller (каждые 120с) с активностью ленты.
+        private const val MAX_REQUESTS_PER_SECOND = 3
         private const val RATE_WINDOW_MS = 1000L
 
         /**

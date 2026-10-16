@@ -88,6 +88,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // с кнопкой «Показать всё». Default false — текст полностью.
             // Влияет ТОЛЬКО на отображение, не на содержимое.
             newsCollapsePostText = p[Keys.NEWS_COLLAPSE_POST_TEXT] ?: NEWS_COLLAPSE_POST_TEXT_DEFAULT,
+            // NEWS-TIMER (2026-10-16): интервал фонового опроса newsfeed.get (CommunityPostsPoller)
+            // в секундах. Дефолт 180 = 3 мин. Минимум 120 (coerceAtLeast в poller). Слайдер в
+            // настройках округляет до минут. Не влияет на ручное обновление ленты.
+            newsPollIntervalSec = p[Keys.NEWS_POLL_INTERVAL_SEC]     ?: NEWS_POLL_INTERVAL_SEC_DEFAULT,
+            // NEWS-AUTO-OFF (2026-10-16): тумблер «Не обновлять новости автоматически».
+            // При true полностью отключает фоновый опрос newsfeed.get И фоновые уведомления
+            // о постах сообществ (источник один — CommunityPostsPoller). Новости запрашиваются
+            // только лентой по действиям пользователя. Дефолт false (автообновление включено).
+            newsAutoRefreshOff = p[Keys.NEWS_AUTO_REFRESH_OFF]       ?: NEWS_AUTO_REFRESH_OFF_DEFAULT,
 
             // Interface
             themeDark          = p[Keys.THEME_DARK]            ?: true,
@@ -116,6 +125,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // BOTTOMBAR-FIX: фиксация нижней панели (true = панель не скрывается
             // скроллом при просмотре контента, false = скрывается как раньше).
             uiFixBottomBar      = p[Keys.UI_FIX_BOTTOM_BAR]        ?: UI_FIX_BOTTOM_BAR_DEFAULT,
+            // HOME-SCREEN: выбор «Главного экрана» (домашнего раздела). uiHomeEnabled —
+            // тумблер включения настройки (default false = прежнее поведение: дом = Лента).
+            // uiHomeRoute — PanelItem.key выбранного раздела (пусто = не выбран, значит Лента).
+            uiHomeEnabled       = p[Keys.UI_HOME_ENABLED]         ?: UI_HOME_ENABLED_DEFAULT,
+            uiHomeRoute         = p[Keys.UI_HOME_ROUTE]           ?: UI_HOME_ROUTE_DEFAULT,
 
             // Fix #228: масштаб стикер-фото в чате (0..40, в процентах увеличения
             // относительно исходного размера). 0 — исходный размер, 40 — +40% к
@@ -283,6 +297,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // P3.7: bubble-less дизайн — flat layout сообщений (без Card/bubble).
             // Аналог m.vk.ru: ConvoMessageWithoutBubble. Default false (opt-in, экспериментально).
             msgBubbleless      = p[Keys.MSG_BUBBLELESS]           ?: false,
+            // #CHAT-APPEARANCE (2026-10-16): независимый шрифт и фон диалога.
+            // Цвета хранятся как точный ARGB Int (0 = не выбран → системный/тема).
+            chatFontOverride   = p[Keys.CHAT_FONT_OVERRIDE]         ?: CHAT_FONT_OVERRIDE_DEFAULT,
+            chatFontSizeIndex  = p[Keys.CHAT_FONT_SIZE_INDEX]      ?: CHAT_FONT_SIZE_INDEX_DEFAULT,
+            chatTextColorArgb  = p[Keys.CHAT_TEXT_COLOR_ARGB]      ?: CHAT_TEXT_COLOR_ARGB_DEFAULT,
+            chatBgOverride     = p[Keys.CHAT_BG_OVERRIDE]          ?: CHAT_BG_OVERRIDE_DEFAULT,
+            chatBgColorArgb    = p[Keys.CHAT_BG_COLOR_ARGB]        ?: CHAT_BG_COLOR_ARGB_DEFAULT,
             // P4.2: LongPoll backfill — восстановление пропущенных между сессиями
             // событий через messages.getLongPollHistory(pts, ts). Fix #339: default true —
             // без backfill'а накопленные за время Doze сообщения теряются и юзер не видит
@@ -388,7 +409,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // (Офлайн, Настройки, Выйти) — они НЕ входят в sidebarItemsOrder
             // и не редактируются. Только "dynamic" пункты (Friends/Groups/...).
             sidebarItemsOrder = p[Keys.SIDEBAR_ITEMS_ORDER] ?: SIDEBAR_DEFAULT_ORDER,
-            sidebarItemsHidden = p[Keys.SIDEBAR_ITEMS_HIDDEN] ?: "[]",
+            sidebarItemsHidden = p[Keys.SIDEBAR_ITEMS_HIDDEN] ?: SIDEBAR_DEFAULT_HIDDEN,
             // #BOTTOM-DEFAULT-4 (2026-08-01): пользователь просил, чтобы по умолчанию
             // на нижней панели было 4 кнопки: Профиль, Сообщения, Музыка, Видео.
             // Раньше дефолт был 5 (feed + 4) и hidden=[] → после #SIDEBAR-BOTTOM-UNION
@@ -627,6 +648,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setNewsRepostsHidden(v: Boolean)         = put(Keys.NEWS_REPOSTS_HIDDEN, v)
     suspend fun setNewsPromoHidden(v: Boolean)           = put(Keys.NEWS_PROMO_HIDDEN, v)
     suspend fun setNewsCollapsePostText(v: Boolean)      = put(Keys.NEWS_COLLAPSE_POST_TEXT, v)
+    /** NEWS-TIMER: интервал фонового опроса newsfeed.get (сек). */
+    suspend fun setNewsPollIntervalSec(v: Int)         = put(Keys.NEWS_POLL_INTERVAL_SEC, v.coerceAtLeast(120))
+    /** NEWS-AUTO-OFF: «Не обновлять новости автоматически». */
+    suspend fun setNewsAutoRefreshOff(v: Boolean)      = put(Keys.NEWS_AUTO_REFRESH_OFF, v)
 
     suspend fun setThemeDark(v: Boolean)                 = put(Keys.THEME_DARK, v)
     suspend fun setThemeAccentIndex(v: Int)              = put(Keys.THEME_ACCENT_INDEX, v)
@@ -639,6 +664,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** Fix #224: скорость анимаций интерфейса (0..100). 0 = выключены. */
     suspend fun setInterfaceAnimSpeed(v: Int)            = put(Keys.INTERFACE_ANIM_SPEED, v)
     suspend fun setUiFixBottomBar(v: Boolean)            = put(Keys.UI_FIX_BOTTOM_BAR, v)
+    suspend fun setUiHomeEnabled(v: Boolean)             = put(Keys.UI_HOME_ENABLED, v)
+    suspend fun setUiHomeRoute(v: String)                = put(Keys.UI_HOME_ROUTE, v)
     /** Fix #228: масштаб стикер-фото (0..40, % увеличения от оригинала). */
     suspend fun setStickerPhotoScale(v: Int)             = put(Keys.STICKER_PHOTO_SCALE, v)
     /** Fix #237: показ плавающего значка логирования. */
@@ -884,6 +911,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsNoiseCancelDefault(v: String)    = put(Keys.CALLS_NOISE_CANCEL_DEFAULT, v)
     /** P3.7: bubble-less дизайн — flat layout сообщений. */
     suspend fun setMsgBubbleless(v: Boolean)              = put(Keys.MSG_BUBBLELESS, v)
+    /** #CHAT-APPEARANCE: независимый шрифт диалога. */
+    suspend fun setChatFontOverride(v: Boolean)           = put(Keys.CHAT_FONT_OVERRIDE, v)
+    suspend fun setChatFontSizeIndex(v: Int)              = put(Keys.CHAT_FONT_SIZE_INDEX, v)
+    suspend fun setChatTextColorArgb(v: Int)              = put(Keys.CHAT_TEXT_COLOR_ARGB, v)
+    /** #CHAT-BACKGROUND: независимый фон диалога. */
+    suspend fun setChatBgOverride(v: Boolean)             = put(Keys.CHAT_BG_OVERRIDE, v)
+    suspend fun setChatBgColorArgb(v: Int)                = put(Keys.CHAT_BG_COLOR_ARGB, v)
     /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий. */
     suspend fun setMsgLpBackfill(v: Boolean)              = put(Keys.MSG_LP_BACKFILL, v)
     /** P4.1: LongPoll v14 — lp_version=14, mode=1226 (расширенные поля). */
@@ -1001,7 +1035,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Перезаписываем оба набора панелей новыми дефолтами в любом случае:
             // старые route-значения не имеют смысла в новой системе иначе.
             p[Keys.SIDEBAR_ITEMS_ORDER] = SIDEBAR_DEFAULT_ORDER
-            p[Keys.SIDEBAR_ITEMS_HIDDEN] = "[]"
+            p[Keys.SIDEBAR_ITEMS_HIDDEN] = SIDEBAR_DEFAULT_HIDDEN
             p[Keys.BOTTOMBAR_ITEMS_ORDER] = BOTTOMBAR_DEFAULT_ORDER
             p[Keys.BOTTOMBAR_ITEMS_HIDDEN] = BOTTOMBAR_DEFAULT_HIDDEN
             p[Keys.PANEL_DEFAULTS_V3] = 1
@@ -1480,6 +1514,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val newsRepostsHidden: Boolean,
         val newsPromoHidden: Boolean,
         val newsCollapsePostText: Boolean,
+        val newsPollIntervalSec: Int,
+        val newsAutoRefreshOff: Boolean,
         // Interface
         val themeDark: Boolean,
         val themeAccentIndex: Int,
@@ -1492,6 +1528,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         /** Fix #224: скорость анимаций интерфейса (0..100%). 0 = выключены (snap). */
         val interfaceAnimSpeed: Int,
     val uiFixBottomBar: Boolean,
+        val uiHomeEnabled: Boolean,
+        val uiHomeRoute: String,
         /** Fix #228: масштаб стикер-фото (0..40, % увеличения от оригинала). */
         val stickerPhotoScale: Int,
         /** Fix #237: показ плавающего значка логирования (DraggableLogFab). */
@@ -1962,6 +2000,27 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * и заново при импорте на другой установке — см. SovaPrefsCrypto).
          */
         val settingsExportEncrypt: Boolean = false,
+        /**
+         * #CHAT-APPEARANCE (2026-10-16): независимый шрифт диалога. chatFontOverride —
+         * тумблер включения; chatFontSizeIndex — индекс размера текста (список FontSpec,
+         * см. CHAT_FONT_SIZES_SP); chatTextColorIndex — индекс цвета текста в
+         * SovaColors.accents (0 = системный по умолчанию). Не зависят от глобального
+         * fontScale/uiScale — применяются только в диалогах (чаты/каналы).
+         * Дефолты заданы явно — прецедент logSectionsOff выше.
+         */
+        val chatFontOverride: Boolean = false,
+        val chatFontSizeIndex: Int = 0,
+        // ARGB Int цвет текста диалога (0 = не выбран → системный/тема). Задан явно —
+        // прецедент logSectionsOff выше.
+        val chatTextColorArgb: Int = 0,
+        /**
+         * #CHAT-BACKGROUND (2026-10-16): независимый фон диалога. chatBgOverride — тумблер
+         * включения; chatBgColorArgb — точный ARGB Int цвета фона диалога (0 = не выбран →
+         * системная тема). Влияет только на фон списка сообщений в чатах/каналах.
+         * Дефолт задан явно — прецедент logSectionsOff выше.
+         */
+        val chatBgOverride: Boolean = false,
+        val chatBgColorArgb: Int = 0,
     )
 
     private object Keys {
@@ -1970,6 +2029,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NEWS_REPOSTS_HIDDEN = booleanPreferencesKey("news_reposts_hidden")
         val NEWS_PROMO_HIDDEN   = booleanPreferencesKey("news_promo_hidden")
         val NEWS_COLLAPSE_POST_TEXT = booleanPreferencesKey("news_collapse_post_text")
+        val NEWS_POLL_INTERVAL_SEC  = intPreferencesKey("news_poll_interval_sec")
+        val NEWS_AUTO_REFRESH_OFF   = booleanPreferencesKey("news_auto_refresh_off")
         // Interface
         val THEME_DARK          = booleanPreferencesKey("theme_dark")
         val THEME_ACCENT_INDEX  = intPreferencesKey("theme_accent_index")
@@ -1980,6 +2041,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val UI_SCALE             = floatPreferencesKey("ui_scale")
         val INTERFACE_ANIM_SPEED= intPreferencesKey("interface_anim_speed")
     val UI_FIX_BOTTOM_BAR           = booleanPreferencesKey("ui_fix_bottom_bar")
+        val UI_HOME_ENABLED              = booleanPreferencesKey("ui_home_enabled")
+        val UI_HOME_ROUTE                = stringPreferencesKey("ui_home_route")
         val STICKER_PHOTO_SCALE = intPreferencesKey("sticker_photo_scale")
         // Fix #237: показ плавающего значка логирования.
         val SHOW_LOG_FAB        = booleanPreferencesKey("show_log_fab")
@@ -2066,6 +2129,12 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val MSG_BUBBLELESS        = booleanPreferencesKey("msg_bubbleless")
         // P4.2: LongPoll backfill — persistence ts/pts между сессиями
         val MSG_LP_BACKFILL        = booleanPreferencesKey("msg_lp_backfill")
+        // #CHAT-APPEARANCE (2026-10-16): независимый шрифт и фон диалога.
+        val CHAT_FONT_OVERRIDE     = booleanPreferencesKey("chat_font_override")
+        val CHAT_FONT_SIZE_INDEX   = intPreferencesKey("chat_font_size_index")
+        val CHAT_TEXT_COLOR_ARGB   = intPreferencesKey("chat_text_color_argb")
+        val CHAT_BG_OVERRIDE       = booleanPreferencesKey("chat_bg_override")
+        val CHAT_BG_COLOR_ARGB     = intPreferencesKey("chat_bg_color_argb")
         // P4.1: LongPoll v14 — lp_version=14, mode=1226
         val MSG_LP_V14             = booleanPreferencesKey("msg_lp_v14")
         // §52.5 Sprint A (P0): Modern Sync API — messages.getDiff (lp_version=21)
@@ -2284,8 +2353,24 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // предложения задаётся пользователем: 0.75 / 0.85 / 1.0 / 1.15 / 1.3.
         const val UI_SCALE_DEFAULT = 0.85f
         const val UI_FIX_BOTTOM_BAR_DEFAULT = true
+        // HOME-SCREEN: default — настройка выключена (дом = Лента), выбранный раздел пуст.
+        const val UI_HOME_ENABLED_DEFAULT = false
+        const val UI_HOME_ROUTE_DEFAULT = ""
         // NEWS-COLLAPSE: сворачивание текста поста в ленте до 10 строк (default: off).
         const val NEWS_COLLAPSE_POST_TEXT_DEFAULT = false
+        // NEWS-TIMER: интервал фонового опроса newsfeed.get (сек). 180 = 3 мин.
+        const val NEWS_POLL_INTERVAL_SEC_DEFAULT = 180
+        // NEWS-AUTO-OFF: тумблер «Не обновлять новости автоматически» (default: автообновление вкл).
+        const val NEWS_AUTO_REFRESH_OFF_DEFAULT = false
+        // #CHAT-APPEARANCE (2026-10-16): дефолты независимого шрифта/фона диалога.
+        const val CHAT_FONT_OVERRIDE_DEFAULT = false
+        const val CHAT_FONT_SIZE_INDEX_DEFAULT = 0
+        // ARGB-цвета (0 = не выбран → системный/тема). Дефолт 0 = «не переопределять».
+        const val CHAT_TEXT_COLOR_ARGB_DEFAULT = 0
+        const val CHAT_BG_OVERRIDE_DEFAULT = false
+        const val CHAT_BG_COLOR_ARGB_DEFAULT = 0
+        // Размеры шрифта текста диалога (в sp), индекс = CHAT_FONT_SIZE_INDEX.
+        val CHAT_FONT_SIZES_SP: List<Int> = listOf(12, 13, 14, 15, 16, 17, 18, 20, 22, 24)
         const val AUTH_OAUTH_HOST_DEFAULT      = "oauth.vk.com"
         const val AUTH_ID_HOST_DEFAULT         = "id.vk.com"
         const val AUTH_LOGIN_HOST_DEFAULT      = "login.vk.com"
@@ -2312,6 +2397,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Друзья, Видео, Клипы, Музыка, Закладки, Файлы, Поиск, Реакции, Сервисы, Логи.
         const val SIDEBAR_DEFAULT_ORDER =
             """["notifications","messenger","groups","photos","friends","video","profile","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+        // PANEL-EDIT-FEED: «Лента» добавлена в канон PanelItems.all, но по умолчанию скрыта
+        // в обеих панелях (не меняем дефолтную панель) — доступна в «Редакторе панелей».
+        const val SIDEBAR_DEFAULT_HIDDEN = """["feed"]"""
         // Нижняя панель по умолчанию: те же пункты, но visible только первые 4
         // (Уведомления, Мессенджер, Сообщества, Фотографии) — остальные скрыты.
         const val BOTTOMBAR_DEFAULT_ORDER =
@@ -2320,7 +2408,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Пользователь может включить их через «Редактор панелей» — тогда
         // нижняя панель станет прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).
         const val BOTTOMBAR_DEFAULT_HIDDEN =
-            """["friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+            """["feed","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
 
         // Fix #390 #NOTIFY-MODES: константы режима уведомлений.
         // 0 — «Уведомления Сообщений»: всплывающие только от Сообщений (звук+вибрация

@@ -240,6 +240,15 @@ fun FeedScreen(
     // Мониторинг сети для показа кнопки «Офлайн» при ошибке загрузки.
     val isOffline by app.networkObserver.isOnlineFlow.collectAsState(initial = !app.networkObserver.isOnline())
 
+    // NEWS-TIMER: пока лента видима на экране, фоновый опрос новостей (CommunityPostsPoller)
+    // пропускается — лента сама тянет свежие посты, нет смысла дублировать запросы newsfeed.get.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        re.pinok.FeedVisibility.isVisible = true
+        onDispose {
+            re.pinok.FeedVisibility.isVisible = false
+        }
+    }
+
     // Настройки фильтрации ленты — реагируем на изменения в реальном времени.
     val feedPrefs by app.prefs.data.collectAsState(
         initial = re.pinok.data.local.SovaPrefs.Snapshot(
@@ -247,6 +256,9 @@ fun FeedScreen(
             newsRepostsHidden = false,
             newsPromoHidden = true,
             newsCollapsePostText = false,
+            // NEWS-TIMER/AUTO-OFF: интервал фонового опроса и тумблер отключения автообновления.
+            newsPollIntervalSec = 180,
+            newsAutoRefreshOff = false,
             themeDark = true,
             themeAccentIndex = 0,
             themeDynamic = false,
@@ -262,6 +274,9 @@ fun FeedScreen(
             interfaceAnimSpeed = 100,
             // BOTTOMBAR-FIX: фиксация нижней панели (default true = не скрывается скроллом).
             uiFixBottomBar = true,
+            // HOME-SCREEN: настройка «Главный экран» (default выключена, дом = Лента).
+            uiHomeEnabled = false,
+            uiHomeRoute = "",
             // Fix #228: масштаб стикер-фото (default 0% = исходный размер).
             stickerPhotoScale = 0,
             privacyOfflineMode = false,

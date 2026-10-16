@@ -959,6 +959,16 @@ class MainActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
             val snapshot by app.prefs.data.collectAsState(initial = null)
             val snap = snapshot
+            // HOME-SCREEN: стартовый маршрут фиксируем ОДИН раз при создании экрана (remember).
+            // НЕ читаем реактивно из snap на каждой рекомпозиции — иначе изменение настроек
+            // «Главного экрана» (uiHomeRoute) в настройках НЕМЕДЛЕННО перенастраивает NavHost
+            // на новый startDestination и приложение переходит в выбранный раздел (баг), хотя
+            // переход должен происходить только при следующем запуске. remember сохраняет
+            // значение первых вычислений на время жизни комозиции/Activity.
+            val initialRoute = remember {
+                if (snap?.uiHomeEnabled == true && !snap?.uiHomeRoute.isNullOrBlank())
+                    snap?.uiHomeRoute.orEmpty() else snap?.lastRoute ?: re.pinok.ui.navigation.Screen.Feed.route
+            }
             var bootLocal by rememberSaveable { mutableStateOf(false) }
 
             // Fix #169: кэшируем snapshot для мгновенного доступа из onResume.
@@ -1491,7 +1501,10 @@ class MainActivity : ComponentActivity() {
                                 LocalPhotosDeps provides app,
                             ) {
                             SovaNavHost(
-                                initialRoute = snap.lastRoute,
+                                // HOME-SCREEN: стартовый маршрут зафиксирован в remember выше
+                                // (см. объявление initialRoute) — применяется при следующем запуске,
+                                // а не сразу при изменении настроек.
+                                initialRoute = initialRoute,
                                 pendingOpenChatPeerId = pendingOpenChatPeerId,
                                 pendingOpenChatTitle = pendingOpenChatTitle,
                                 onOpenChatConsumed = { consumeOpenChat() },

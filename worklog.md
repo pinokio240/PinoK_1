@@ -15181,3 +15181,362 @@ PostDetail = Int.MAX_VALUE. Изменение только в ленте.
 Тумблер «Сворачивать текст поста» (Настройки → Новости) работает: пост и репост сворачиваются
 до 6 строк с кнопкой «Показать всё», содержимое не меняется. Сборка :app — SUCCESS.
 Бэкап: backups/postcard-text-collapse-fix-2026-10-16/ и backups/settings-news-collapse-2026-10-16/.
+
+## BACK-NAV-MESSAGES-FIX / 2026-10-16 — системный back на корне закрывал приложение (СДЕЛАНО, без сборки)
+
+Симптом: открыт экран «Сообщения», системная кнопка «назад» сворачивает приложение вместо
+возврата в ленту. Субагент (very thorough) нашёл: корень графа = persisted lastRoute (не
+жестко feed). Если пользователь вышел в фон с Messages, lastRoute="messages", и Messages
+становится start destination -> стек [messages] -> popBackStack()=false -> дефолт NavController
+завершает Activity. Внутриэкранная стрелка имела фолбэк if(!popBackStack())->navigate(Feed)
+(SovaNavHost:1420-1427), а системный back такого фолбэка НЕ имел (асимметрия).
+
+Правка (SovaNavHost, в области ) { padding -> перед CompositionLocalProvider/NavHost):
+BackHandler { if (!nav.popBackStack()) { if (nav.currentDestination?.route != Screen.Feed.route)
+  { navigate(Feed){ popUpTo(startDest){saveState}; launchSingleTop; restoreState } } } }
+- На корне, если НЕ Лента -> навигируем на Feed (фикс бага для Messages и любых других корней).
+- Если уже на Ленте -> НЕ перехватываем back (сохраняем стандартное «закрыть приложение»).
+- Overlay-экранные BackHandler (Video/Photo, строки ~3304/3316) глубже в композиции -> их
+  приоритет выше, наш - только глобальный фолбэк. Вложенные BackHandler (ChatDetail, Search)
+  тоже глубже -> выше приоритет. Всё корректно.
+
+Бэкап: backups/back-nav-messages-fix-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## BACK-NAV-MESSAGES-FIX / 2026-10-16 — УСПЕХ (подтверждено пользователем)
+
+Системная кнопка «назад» на экране «Сообщения» (и любом корневом экране с lastRoute) теперь
+возвращает на Ленту вместо закрытия приложения. На Ленте back по-прежнему закрывает приложение.
+Сборка :app - SUCCESS. Бэкап: backups/back-nav-messages-fix-2026-10-16/.
+
+## SETTINGS-HOME-SCREEN / 2026-10-16 — выбор «Главного экрана» (СДЕЛАНО, без сборки)
+
+Требование: Настройки → Интерфейс, настройка «Главный экран» с тумблером «Начальный экран»;
+позволяет выбирать домашний раздел вместо жёстко зашитой Ленты. По уточнению: тумблер + 
+радио-список 5 основных разделов (Лента/Сообщения/Музыка/Видео/Профиль), действует и при старте,
+и как цель стрелки/системного «назад».
+
+Ресёрч субагентом: «дом» жёстко зашит = Feed в 4 местах (дефолт lastRoute, startDestination,
+фолбэк стрелки, глобальный BackHandler) + фолбэки Clips/Logs. FeedScreen.kt:457 - initial дом в
+dummy Snapshot (критично для компиляции).
+
+Изменения (6 файлов):
+1. SovaPrefs: uiHomeEnabled (bool, default false) + uiHomeRoute (string, default "") — загрузка,
+   сеттеры setUiHomeEnabled/setUiHomeRoute, поля Snapshot, ключи UI_HOME_ENABLED/UI_HOME_ROUTE,
+   константы UI_HOME_ENABLED_DEFAULT=false / UI_HOME_ROUTE_DEFAULT="".
+2. FeedScreen: initial uiHomeEnabled=false, uiHomeRoute="" (dummy Snapshot).
+3. SettingsScreen InterfaceTab: секция «Главный экран» — тумблер «Начальный экран» (checked=
+   s.uiHomeEnabled); при включении — список из 5 RadioButton (Лента/Сообщения/Музыка/Видео/
+   Профиль), выбор пишет setUiHomeRoute(Screen.*.route).
+4. MainActivity:1497: initialRoute = if (snap.uiHomeEnabled && snap.uiHomeRoute.isNotBlank()) 
+   snap.uiHomeRoute else snap.lastRoute — старт с выбранного дома.
+5. SovaNavHost: введён homeRoute (если uiHomeEnabled && uiHomeRoute непусто -> uiHomeRoute, иначе
+   Screen.Feed.route). Заменены Screen.Feed.route -> homeRoute в 4 фолбэках: стрелка TopAppBar,
+   глобальный BackHandler (сравнение на homeRoute), Clips onBack, Logs onClose.
+6. MainActivity бэкап добавлен.
+
+Примечание: uiHomeRoute хранит Screen.route-строку; маршруты 5 разделов зарегистрированы в NavHost
+composable, так что startDestination=homeRoute находит совпадение. Настройка применяется при
+следующем запуске (startDestination фиксируется на старте) и сразу для фолбэков (реактивны).
+
+Бэкап: backups/settings-home-screen-fix-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## PANEL-EDITOR-FEED / 2026-10-16 — добавлена «Лента» в редактор панелей (СДЕЛАНО, без сборки)
+
+Симптом: в «Редакторе панелей» отсутствует кнопка «Лента». Ресёрч субагентом: редактор
+строит список ТОЛЬКО из PanelItems.all, а пункта feed в нём не было (Feed существовал только в
+dockScreens/mainRoutes для маршрутизации). Потому и не появлялся в редакторе и в панелях.
+
+Изменения:
+1. PanelItems.all: добавлен первым элемент
+   PanelItem("feed", "Лента", Screen.Feed.icon (Icons.Default.Dashboard), PanelAction.Route(Screen.Feed)).
+2. SovaPrefs: чтобы НЕ менять дефолтную панель:
+   - SIDEBAR_DEFAULT_HIDDEN = ["feed"] (новая константа), дефолт sidebarItemsHidden заменён
+     с "[]" на SIDEBAR_DEFAULT_HIDDEN (строки 396, 1011).
+   - BOTTOMBAR_DEFAULT_HIDDEN: добавлен "feed" в начало (строка ~2337).
+   - normalizePanelKeys/normalizeOrder автодополняют feed в order из all; скрытие
+     контролируется hidden — по умолчанию feed скрыт в обеих панелях, но доступен в редакторе.
+3. Реакции (FeedFilter "LIKES") уже открывают Ленту на разделе LIKES — пункт «Лента» открывает
+   на GENERAL (по умолчанию). Не дублирует функционально.
+
+Побочный эффект: у уже кастомизировавших панели пользователей (V3 миграция уже применена)
+feed не попадает в их сохранённый hidden и может автодополниться в конец видимой панели.
+Безвредно: Лента в панели удобна и скрывается через редактор. У не-кастомизировавших —
+V3 миграция применит новый hidden с feed → панель не изменится.
+
+Бэкап: backups/panel-editor-feed-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## PANEL-EDITOR-FEED / 2026-10-16 — УСПЕХ (подтверждено пользователем)
+
+«Лента» появилась в «Редакторе панелей» и доступна для добавления в панель. Default-панель
+не изменилась (feed скрыт по умолчанию). Сборка :app - SUCCESS. Бэкап: backups/panel-editor-feed-2026-10-16/.
+
+## SETTINGS-CHAT-FONT-BG / 2026-10-16 — независимый шрифт и фон диалога (СДЕЛАНО, без сборки)
+
+Требование: Настройки → Сообщения — «Независимый шрифт диалога» (тумблер + размер текста +
+цвет текста) и «Независимый фон диалога» (тумблер + богатая палитра). Не зависят от глобальных
+настроек шрифта/темы. Активно задействованы субагенты.
+
+Ресёрч субагентом: точки рендера в ChatDetailScreen — фон списка (surface, бывш. 4666),
+textColor (бывш. 6223-6229), размер основного текста (бывш. 6619, bodyMedium), паттерн
+CompositionLocal LocalStickerPhotoScale. Палитра accents (13 цв.) + AccentPicker-slider.
+Магазин цветов: Int индекс (themeAccentIndex) или ARGB (communityPostColor). Поля Snapshot
+могут иметь дефолты (прецедент logSectionsOff) — FeedScreen-дummy не требуется.
+
+Изменения (4 файла + 1 новый):
+1. SovaPrefs: 5 префов с дефолтами — chatFontOverride(false), chatFontSizeIndex(0),
+   chatTextColorIndex(0), chatBgOverride(false), chatBgColorIndex(0). Загрузка, ключи
+   (CHAT_*), сеттеры, константы дефолтов, CHAT_FONT_SIZES_SP = [12..24].
+   Поскольку все поля с явными дефолтами — FeedScreen-конструктор менять НЕ нужно.
+2. Color.kt: объект ChatBgPalette — богатая палитра фона диалога (18 цветов: светлые +
+   тёмные) + имена.
+3. LocalChatAppearance.kt (НОВЫЙ): data class ChatAppearance(textColor, fontSizeSp, bgColor,
+   все nullable) + staticCompositionLocalOf LocalChatAppearance { ChatAppearance() }.
+4. ChatDetailScreen: собран chatAppearance (collectAsState map префов → ChatAppearance;
+   применяет цвет текста/размер только при fontOverride, фон при bgOverride). Предоставлен в
+   CompositionLocalProvider (вместе с LocalStickerPhotoScale). Применение: фон списка (стр.
+   ~4698) = bgColor ?: surface; textColor (~6258) переопределяется при textColor!=null; размер
+   текста (~6657) = bodyMedium.copy(fontSize=fontSizeSp.sp) при fontSizeSp!=null.
+5. SettingsScreen MessagesTab: секции «Шрифт диалога» (тумблер + DropdownMenu размера [12..24
+   sp] + сетка-палитра 13 цветов текста из accents) и «Фон диалога» (тумблер + сетка-палитра
+   18 цветов из ChatBgPalette) с FlowRow. Добавлен импорт FlowRow.
+
+Нюанс: fontSize задаётся в sp и технически масштабируется глобальной density (fontScale*uiScale),
+поэтому «независимость» = свой размер, отличный от глобального, а не абсолютно фиксированный
+px. При fontScale=100 (норма) даёт точно заданный размер.
+
+Бэкап: backups/settings-chat-font-bg-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## FLOOD-CONTROL-RPS3 / 2026-10-16 — снижен лимит API до 3 rps (СДЕЛАНО, без сборки)
+
+Симптом: newsfeed.get: flood control при работе с лентой. Анализ:
+- CommunityPostsPoller каждые 120с вызывает newsfeedGet(filters=post) (фон).
+- Лента при открытии/смене раздела/pull-to-refresh одновременно дёргает newsfeedGet,
+  newsfeedGetRecommended, а раздел «Друзья» — friendsGet + newsfeedGet (FeedScreen:906-921).
+- Глобальный rate limiter был 6 rps (S7-1) — при совпадении фонового poll-а с активностью
+  ленты суммарный трафик к newsfeed.get превышал лимит VK -> flood control.
+
+Решение (по выбору пользователя): снизить MAX_REQUESTS_PER_SECOND с 6 до 3 в VKApiClient.kt
+(было 3 раньше и работало стабильно; комментарий-предостережение в коде уже предупреждал
+«ОТКАТ при Flood Control: вернуть 3»). Заодно обновлён комментарий.
+Дополнительно (не делал, если понадобится): увеличить интервал CommunityPostsPoller 120->300с
+и/или добавить специфичный cooldown для newsfeed.*.
+
+Бэкап: backups/flood-control-rps3-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-NEWS-TIMER (2026-10-16) — таймер обновления новостей + тумблер отключения автообновления (СДЕЛАНО, без сборки)
+
+Требование (по уточнениям):
+- Настройка «Таймер обновления новостей» (Настройки → Новости): слайдер 120–3600 сек,
+  округление до минут (2м..60м), дефолт 180с.
+- Тумблер «Не обновлять новости автоматически»: при ВКЛ полностью отключает фоновый опрос
+  newsfeed.get И фоновые уведомления о постах сообществ (источник один — poller). Честное
+  описание + знак предупреждения (иконка WarningAmber + красная подпись).
+- Пропуск опросов при видимой ленте (feed не конкурирует за бюджет newsfeed.get с лентой).
+
+Реализация (5 файлов + 1 новый):
+1. SovaPrefs: newsPollIntervalSec (int, дефолт NEWS_POLL_INTERVAL_SEC_DEFAULT=180,
+   сеттер coerceAtLeast(120)) + newsAutoRefreshOff (bool, дефолт false). Поля Snapshot
+   БЕЗ дефолтов (нужно в FeedScreen), ключи NEWS_POLL_INTERVAL_SEC/NEWS_AUTO_REFRESH_OFF,
+   константы.
+2. FeedScreen: initial newsPollIntervalSec=180, newsAutoRefreshOff=false + DisposableEffect:
+   FeedVisibility.isVisible=true при входе в ленту, false при уходе.
+3. FeedVisibility.kt (НОВЫЙ): объект с AtomicBoolean-флагом «лента видима» (thread-safe).
+4. CommunityPostsPoller: в цикле интервал из префа (каждый проход читает newsPollIntervalSec,
+   coerceAtLeast(120); POLL_INTERVAL_SEC=120 остаётся fallback). В pollOnce две новые проверки
+   до fetch: newsAutoRefreshOff=true -> return; FeedVisibility.isVisible -> return.
+5. SettingsScreen NewsTab: секция «Обновление новостей» — тумблер «Не обновлять новости
+   автоматически» (+ предупреждение при ВКЛ) и слайдер «Таймер обновления новостей»
+   (120..3600, шаг 60с, отображение в минутах), скрыт при выключенном автообновлении.
+
+Бэкап: backups/settings-news-timer-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## VK-ERROR6-9-RETRY (2026-10-16) — автоповтор при rate limit/flood control (СДЕЛАНО, без сборки)
+
+Проблема: newsfeed.get: flood control (error 9) и rate limit (error 6). VK возвращает их в теле
+HTTP 200 (не 429). Раньше kody 6/9 сразу падали в lastApiError → UI показывал ошибку.
+
+Решение: в callInternal (VKApiClient.kt, цикл while(attempt<2)) ДО установки lastApiError добавлен
+блок #FLOOD-RETRY: если code==6 или code==9 и attempt==0 → ждём backoff (6→1с, 9→5с, по статье
+relaya) и делаем повторный запрос (attempt++ + continue). Попыток всего 2 (attempt 0 и 1).
+
+Вставлено после логирования ошибки, перед lastApiError=... (~строка 13424).
+
+Бэкап: backups/vk-error6-9-retry-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-CHAT-SPECTRUM (2026-10-16) — спектральная палитра цвета текста и фона диалога (СДЕЛАНО, без сборки)
+
+Требование: палитра цвета текста сообщений и фона диалога должна быть СПЕКТРАЛЬНОЙ (двумерное
+SV-поле, как в фотошопе), а не сетью фиксированных квадратиков. По уточнениям: двумерное поле +
+полоса Hue; хранение точного ARGB Int (полная свобода); применимо к обеим палитрам.
+
+Изменения (4 файла + 1 новый):
+1. SovaPrefs: поля-индексы заменены на ARGB: chatTextColorIndex -> chatTextColorArgb (int, 0 = не
+   выбран), chatBgColorIndex -> chatBgColorArgb (int, 0 = не выбран). Загрузка, ключи
+   CHAT_TEXT_COLOR_ARGB/CHAT_BG_COLOR_ARGB, сеттеры setChatTextColorArgb/setChatBgColorArgb,
+   константы (дефолт 0). Поля Snapshot с дефолтами — FeedScreen менять не нужно.
+2. ColorPicker2D.kt (НОВЫЙ): SpectrumColorPicker — двумерное SV-поле (Saturation по X, Value по Y)
+   + горизонтальная полоса Hue + превью-полоса с HEX-кодом. Использует android.graphics.Color
+   HSVToColor/colorToHSV. Тап/перетаскивание выбирает цвет; результат — точный ARGB.
+3. SettingsScreen MessagesTab: квадратики (FlowRow+SovaColors.accents/ChatBgPalette) заменены на
+   SpectrumColorPicker для цвета текста и фона. Удалены неиспользуемые импорты FlowRow/luminance,
+   добавлен toArgb. Fallback цвет при 0: текст 0xFF333333, фон 0xFFF5F5F5.
+4. ChatDetailScreen: textColor/bgColor теперь читают ARGB Int (Color(snap.chatTextColorArgb) при
+   !=0), вместо индексов в SovaColors.accents/ChatBgPalette. Логика та же (при выключенном тумблере null).
+5. Color.kt: удалён неиспользуемый объект ChatBgPalette (палитра больше не нужна — спектр).
+
+Бэкап: backups/settings-chat-spectrum-palette-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-CHAT-COLOR-DIALOG (2026-10-16) — выбор цвета через всплывающий диалог с пикером (СДЕЛАНО, без сборки)
+
+Требование: под тумблером цвета показать строку «Цвет» + цветовой квадратик; по нажатию на
+квадратик открывается рабочая палитра в диалоге с кнопкой «Применить цвет». Распространяется на
+цвет текста и цвет фона диалога.
+
+Изменения (2 файла):
+1. ColorPicker2D.kt: переработан — добавлены ColorSwatchRow (строка «Цвет» + квадратик 38dp,
+   кликабельный) и ColorPickerDialog (AlertDialog с ядром SpectrumPickerBody + кнопки
+   «Применить цвет»/«Отмена»; значение применяется ТОЛЬКО по кнопке, не при каждом движении).
+   Ядро пикера (SV-поле + hue-полоса + HEX-превью) вынесено в private SpectrumPickerBody.
+2. SettingsScreen MessagesTab: добавлены состояния showColorTextDialog/showColorBgDialog;
+   встроенные пикеры (SpectrumColorPicker) заменены на ColorSwatchRow + ColorPickerDialog для
+   текста и фона. Сохранение — только по «Применить цвет» (setChatTextColorArgb/setChatBgColorArgb).
+
+Бэкап: backups/settings-chat-color-picker-dialog-2026-10-16/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## SETTINGS-CHAT-COLOR-DIALOG — фикс компиляции (@Composable вне контекста) (2026-10-16)
+
+Ошибка: SettingsScreen.kt:2240/2267 "@Composable invocations can only happen from the context
+of a @Composable function". Причина: Color(...) и ColorPickerDialog(...) вызывались на уровне
+LazyListScope (вне item{}), а LazyListScope НЕ является composable-контекстом.
+
+Исправление: перенёс создание превью-цвета прямо в item {} (swatchColor=Color(...) — внутри composable
+item-контекста), а оба ColorPickerDialog вынес в КОНЕЦ MessagesTab (после LazyColumn), где есть
+composable-контекст. Состояния showColorTextDialog/showColorBgDialog остались на уровне функции.
+
+Бэкап: backups/settings-chat-color-picker-dialog-2026-10-16/.
+Сборку НЕ запускал. Жду проверки :app.
+
+## SETTINGS-CHAT-COLOR-DIALOG — фикс перемещения маркера в спектре (2026-10-16)
+
+Проблема: кружок выбора цвета нельзя корректно переместить. Причина — в SpectrumPickerBody
+нормировка координат шла по FIELD_DP (значение в dp, 260), тогда как Canvas-разметка рисует поле
+в px (260.dp * density). При density>1 (обычный кейс) маркер и расчёт касания работали в диапазоне
+0..260 px, а поле на экране было больше — маркер застревал в углу, касания правой/нижней половины
+давали s/v=1 из-за coerce.
+
+Исправление: в pointerInput использовать size (реальные px поля) для нормализации координат
+касания/драга, а в DrawScope.size для позиции маркера. То же для hue-полосы. Теперь размер поля
+в px, координаты и маркер синхронизированы на любой density.
+
+Бэкап: backups/settings-chat-color-picker-dialog-2026-10-16/.
+Сборку НЕ запускал. Жду проверки :app.
+
+## SETTINGS-CHAT-COLOR-DIALOG — УСПЕХ (подтверждено пользователем, 2026-10-16)
+
+Кружок выбора цвета в спектральном пикере корректно перемещается по всему SV-полю на любой
+density. Сборка :app - SUCCESS. Бэкапы: backups/settings-chat-spectrum-palette-2026-10-16/ и
+backups/settings-chat-color-picker-dialog-2026-10-16/.
+
+## RELEASE-V223-BUMP (2026-10-16) — версия 2.2.3 (versionCode 223)
+
+app/build.gradle.kts: versionCode 222→223, versionName 2.2.2→2.2.3, обновлён комментарий.
+version.json НЕ тронут (по указанию пользователя — готовится отдельно). Сборку не запускал.
+
+## RELEASE-V223-BUMP — version.json обновлён (2026-10-16)
+
+В version.json добавлена запись 2.2.3 (versionCode 223): stamp 2026.10.16-2.2.3, notes с полным
+списком изменений сессии (настройки мессенджера, главный экран, лента в редакторе, навигация,
+flood-control + таймер ленты). apkUrl — предположительный (уточнится при релизе), sha256 — плейсхолдер
+TO_FILL_AFTER_BUILD (заполнить после сборки/загрузки релиза). Build.gradle.kts уже 223/2.2.3, BUILD_TIMESTAMP
+2026-10-16. Сборку не запускал.
+
+## SETTINGS-NOTIFY-GROUP-TEXT (2026-10-16) — уточнён текст группировки уведомлений
+
+Проверка по коду: группировка уведомлений полностью соответствует описанию (режимы none/category/
+community/user, порог сворачивания, pinch-out). Выявлен нюанс: тап по СВЁРНУТОЙ стопке открывает
+общий список уведомлений, а не конкретный элемент. Уточнён текст под бездектности: добавлено
+предупреждение про тап по стопке и инструкция развернуть её жестом.
+
+Бэкап: backups/settings-notify-group-text-2026-10-16/.
+Сборку НЕ запускал.
+
+## SETTINGS-ANTITELEMETRY-TEXT (2026-10-16) — уточнено описание настройки
+
+Проверка по коду: privacyAntiTelemetry дропает только трек-эндпоинты (stats.track*/trackevents/
+trackvisitor, см. isTelemetryCall в VKApiClient). Бизнес-статистика сообщества (stats.get,
+stats.getPostReach) и телеметрия вне VK API НЕ покрываются. Уточнён текст настройки: «Блокировать
+отправку событий о ваших действиях в VK (трекинг stats.track*). Не влияет на статистику сообщества
+и на работу приложения».
+
+Бэкап: backups/settings-notify-group-text-2026-10-16/.
+Сборку НЕ запускал.
+
+## SETTINGS-LOGGING-TEXT (2026-10-16) — уточнение описания автоочистки логов
+
+Проверка по коду: все настройки хранения логов применяются корректно (applyLogConfig, без
+конфликтов). Нюанс: автоочистка работает по сроку хранения при применении настройки, а не только
+при старте. Переименовано «Автоочистка» → «Авто очистка логов» и уточнено описание: удаление
+файлов старше срока хранения при применении настроек и при старте; работает при сроке хранения > 0.
+
+Бэкап: backups/settings-logging-2026-10-16/.
+Сборку НЕ запускал.
+
+## IM-LOADMORE (2026-10-16) — больше диалогов сразу + спиннер при дозагрузке
+
+Пользователь: «в Сообщениях Диалоги не полный список, а только закреплённые». Причина: грузится
+только первая страница pageSize=10 диалогов, остальные догружаются только при прокрутке вниз —
+казалось, что списка нет, кроме закреплённых.
+
+Исправление:
+1. pageSize 10 -> 30 (сразу видно больше диалогов, меньше шансов что список «пуст»).
+2. Спиннер при дозагрузке УЖЕ был реализован (isLoadingMore + CircularProgressIndicator в
+   футере списка, строки 2075-2084) — показывается при прокрутке к концу, пока грузится следующая
+   порция. Убедился, что reachedEnd срабатывает за 5 элементов до конца.
+
+Проверка: спиннер действительно появляется во время дозагрузки. Сборку НЕ запускал.
+Бэкап: backups/settings-im-loadmore-2026-10-16/.
+
+## HOME-SCREEN-BUG (2026-10-16) — исправлен мгновенный переход при выборе главного экрана
+
+Проблема: при выборе «Главного экрана» в настройках (RadioButton) приложение СРАЗУ переходило в
+выбранный раздел (не должно — переход только при следующем запуске).
+
+Причина: MainActivity вычислял initialRoute РЕАКТИВНО из snap (collectAsState) на каждой
+рекомпозиции. Изменение uiHomeRoute в настройках → snap обновился → SovaNavHost пересоздался с
+новым initialRoute → NavHost(new startDestination) сбросил навигацию к новому дому.
+
+Исправление: initialRoute зафиксирован в remember{...} при первом создании экрана MainActivity
+(значение остаётся на время жизни Activity), поэтому смена настроек больше не перенастраивает
+NavHost; выбранный дом применится только при следующем запуске приложения. Добавлен null-safe
+доступ (snap может быть null при первой композиции).
+
+Бэкап: backups/settings-home-screen-fix-2026-10-16/.
+Сборку НЕ запускал. Жду проверки :app.
+
+## HOME-SCREEN-BUG — УСПЕХ (подтверждено пользователем, 2026-10-16)
+
+Выбор главного экрана больше не вызывает мгновенный переход — применяется при следующем запуске.
+Сборка :app - SUCCESS. Бэкап: backups/settings-home-screen-fix-2026-10-16/.
+
+## RELEASE-V223 — version.json финализирован (2026-10-16)
+
+В version.json для 2.2.3 обновлён sha256 (f2970a…c0e9), apkUrl подтверждён (PinoK_1610261800.apk),
+notes оставлен как есть. Готово к публикации релиза V2.2.3.
+
+## RELEASE-V223 — version.json подписан (ed25519) (2026-10-16)
+
+version.json.sig создан/обновлён через tools/updater-sign/sign_manifest.py (Python 3.14):
+seed передан пользователем (50f2…fdef), публичный ключ (XvaSZqNnskbup2Obuj+XwN7q2pqHJKpYUsrtbde8wEI=)
+СОВПАЛ с зашитым в APK (UpdaterSigning.RELEASE_PUBLIC_KEY_B64) — подпись валидна для установленных
+сборок. Отпечаток публичного: 22520fde…. Verify: OK. Приватный ключ удалён из репозитория после
+подписи (не храним секрет). Замечание: системный python = 2.7 — запускаем скрипт через py -3 (Python
+3.14).

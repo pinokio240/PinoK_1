@@ -71,6 +71,12 @@ object PanelItems {
 
     /** Канонический порядок + полный набор пунктов панелей. */
     val all: List<PanelItem> = listOf(
+        // PANEL-EDIT-FEED: «Лента» как полноправный пункт канона (был только в dockScreens/
+        // mainRoutes для маршрутизации, но отсутствовал в PanelItems.all → не появлялся в
+        // «Редакторе панелей»). Добавлен первым, как главный экран (Screen.Feed, route "feed").
+        // По умолчанию скрыт (см. BOTTOMBAR_DEFAULT_HIDDEN/SIDEBAR), поэтому дефолтная панель
+        // не меняется — пользователь сам добавляет его в редакторе при желании.
+        PanelItem("feed", "Лента", Screen.Feed.icon, PanelAction.Route(Screen.Feed)),
         PanelItem("notifications", "Уведомления", Screen.Notifications.icon, PanelAction.Route(Screen.Notifications)),
         PanelItem("messenger", "Мессенджер", Icons.AutoMirrored.Filled.Chat, PanelAction.Route(Screen.Messages)),
         PanelItem("groups", "Сообщества", Screen.Groups.icon, PanelAction.Route(Screen.Groups)),

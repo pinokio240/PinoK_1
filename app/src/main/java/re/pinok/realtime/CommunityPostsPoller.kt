@@ -168,7 +168,15 @@ class CommunityPostsPoller(
                 } catch (e: Exception) {
                     AppLog.w(TAG, "periodic poll failed: ${e.message}")
                 }
-                delay(POLL_INTERVAL_SEC * 1000L)
+                // NEWS-TIMER: интервал опроса берём из префа (настраиваемый таймер,
+                // default 180с). Читаем заново на каждом проходе, чтобы смена настройки
+                // подхватывалась без перезапуска poller'а. Нижний предел 120с.
+                val intervalSec = try {
+                    prefs.data.first().newsPollIntervalSec.coerceAtLeast(120)
+                } catch (e: Exception) {
+                    POLL_INTERVAL_SEC
+                }
+                delay(intervalSec * 1000L)
             }
         }
     }
@@ -197,6 +205,22 @@ class CommunityPostsPoller(
         pollMutex.withLock {
             try {
                 val snap = prefs.data.first()
+
+                // NEWS-AUTO-OFF (2026-10-16): тумблер «Не обновлять новости автоматически».
+                // При true полностью отключаем фоновый опрос newsfeed.get (и уведомления о
+                // постах сообществ) — новости тянет только лента по действиям пользователя.
+                if (snap.newsAutoRefreshOff) {
+                    AppLog.d(TAG, "pollOnce: newsAutoRefreshOff=true — auto-refresh disabled, skip")
+                    return@withLock
+                }
+
+                // NEWS-TIMER (2026-10-16): пока лента видима на экране, пропускаем опрос —
+                // лента сама запрашивает свежие посты, фоновый опрос дублировал бы их и 
+                // конкурировал за бюджет newsfeed.get (источник всплесков flood control).
+                if (re.pinok.FeedVisibility.isVisible) {
+                    AppLog.d(TAG, "pollOnce: feed visible — skip background poll (feed handles it)")
+                    return@withLock
+                }
 
                 // Глобальный master toggle push.
                 if (!snap.pushEnabled) return@withLock

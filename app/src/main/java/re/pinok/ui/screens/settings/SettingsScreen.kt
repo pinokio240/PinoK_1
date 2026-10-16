@@ -72,6 +72,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -1789,6 +1790,54 @@ private fun InterfaceTab(
                 checked = s.uiFixBottomBar,
             ) { scope.launch { app.prefs.setUiFixBottomBar(it) } }
         }
+
+        // HOME-SCREEN: выбор «Главного экрана» (домашнего раздела). Тумблер включает
+        // настройку; при включении появляется список радио-кнопок для выбора раздела.
+        item { SectionHeader("Главный экран") }
+        item {
+            ToggleRow(
+                title = "Начальный экран",
+                subtitle = "Выбрать раздел, который открывается при запуске и служит целью «назад»",
+                checked = s.uiHomeEnabled,
+            ) { scope.launch { app.prefs.setUiHomeEnabled(it) } }
+        }
+        if (s.uiHomeEnabled) {
+            // 5 основных разделов (ключи PanelItem.all + feed). При выборе сохраняем
+            // Screen.route-строку (она же используется в startDestination/фолбэках).
+            val homeOptions = listOf(
+                Triple(re.pinok.ui.navigation.Screen.Feed.route, "Лента", null),
+                Triple(re.pinok.ui.navigation.Screen.Messages.route, "Сообщения", null),
+                Triple(re.pinok.ui.navigation.Screen.Music.route, "Музыка", null),
+                Triple(re.pinok.ui.navigation.Screen.Video.route, "Видео", null),
+                Triple(re.pinok.ui.navigation.Screen.Profile.route, "Профиль", null),
+            )
+            item {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    homeOptions.forEach { (route, label, _) ->
+                        androidx.compose.foundation.layout.Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { scope.launch { app.prefs.setUiHomeRoute(route) } }
+                                .padding(vertical = 10.dp, horizontal = 8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = s.uiHomeRoute == route,
+                                onClick = { scope.launch { app.prefs.setUiHomeRoute(route) } },
+                            )
+                            androidx.compose.material3.Text(
+                                text = label,
+                                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Fix #228: масштаб стикер-фото в чате (0..40%, шаг 1%).
         item {
             StickerPhotoScaleRow(
@@ -1950,6 +1999,77 @@ private fun NewsTab(
                 checked = s.newsCollapsePostText,
             ) { scope.launch { app.prefs.setNewsCollapsePostText(it) } }
         }
+
+        // NEWS-TIMER / NEWS-AUTO-OFF (2026-10-16): управление фоновым обновлением новостей.
+        item { SectionHeader("Обновление новостей") }
+        item {
+            // Тумблер «Не обновлять новости автоматически» — ПОЛНОСТЬЮ отключает фоновый
+            // опрос newsfeed.get и уведомления о постах сообществ (источник один — poller).
+            // Честное описание + знак предупреждения (иконка Warning + оранжевая подпись).
+            ToggleRow(
+                title = "Не обновлять новости автоматически",
+                subtitle = "Запрашивать новости только в ленте по вашим действиям (открытие, обновление, смена раздела)",
+                checked = s.newsAutoRefreshOff,
+            ) { scope.launch { app.prefs.setNewsAutoRefreshOff(it) } }
+        }
+        if (s.newsAutoRefreshOff) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.WarningAmber,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Внимание: в этом режиме вы НЕ будете получать фоновых уведомлений " +
+                            "о новых постах сообществ, пока не откроете ленту.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+        // Слайдер интервала опроса. Доступен, только если автообновление не отключено.
+        if (!s.newsAutoRefreshOff) {
+            item {
+                val intervalSec = s.newsPollIntervalSec.coerceIn(120, 3600)
+                val minutes = intervalSec / 60
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Таймер обновления новостей",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "$minutes мин",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Slider(
+                        value = intervalSec.toFloat(),
+                        onValueChange = { v ->
+                            // Округляем до целой минуты (шаг 60 сек).
+                            val rounded = ((v / 60).toInt() * 60).coerceIn(120, 3600)
+                            scope.launch { app.prefs.setNewsPollIntervalSec(rounded) }
+                        },
+                        valueRange = 120f..3600f,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1963,6 +2083,9 @@ private fun MessagesTab(
     app: SovaApp,
     scope: CoroutineScope,
 ) {
+    // #CHAT-SPECTRUM: состояние открытия диалогов выбора цвета текста и фона диалога.
+    var showColorTextDialog by remember { mutableStateOf(false) }
+    var showColorBgDialog by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2056,6 +2179,85 @@ private fun MessagesTab(
             checked = s.channelFindEnabled,
         ) { scope.launch { app.prefs.setChannelFindEnabled(it) } } }
 
+        // #CHAT-APPEARANCE: независимый шрифт диалога (чатов/каналов) — не зависит от
+        // глобального изменения шрифта в настройках.
+        item { SectionHeader("Шрифт диалога") }
+        item {
+            ToggleRow(
+                title = "Независимый шрифт диалога",
+                subtitle = "Свой размер и цвет текста в чатах и каналах, независимо от общего шрифта",
+                checked = s.chatFontOverride,
+            ) { scope.launch { app.prefs.setChatFontOverride(it) } }
+        }
+        if (s.chatFontOverride) {
+            // Выпадающий список размера текста (в sp).
+            item {
+                var sizeMenuExpanded by remember { mutableStateOf(false) }
+                val sizes = re.pinok.data.local.SovaPrefs.CHAT_FONT_SIZES_SP
+                val currentSize = sizes.getOrElse(s.chatFontSizeIndex) { sizes.first() }
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { sizeMenuExpanded = true }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Размер текста",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${currentSize} sp", style = MaterialTheme.typography.bodyMedium)
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                    }
+                    DropdownMenu(expanded = sizeMenuExpanded, onDismissRequest = { sizeMenuExpanded = false }) {
+                        sizes.forEachIndexed { idx, sp ->
+                            DropdownMenuItem(
+                                text = { Text("$sp sp") },
+                                onClick = {
+                                    scope.launch { app.prefs.setChatFontSizeIndex(idx) }
+                                    sizeMenuExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            // #CHAT-SPECTRUM: выбор цвета текста диалога. Под тумблером — строка «Цвет» + квадратик;
+            // по нажатию открывается диалог со спектральным пикером и кнопкой «Применить цвет».
+            // Color() и диалог вынесены в конец MessagesTab (после LazyColumn) — здесь нельзя
+            // вызывать composable вне item{} (LazyListScope не является composable-контекстом).
+            item {
+                re.pinok.ui.components.ColorSwatchRow(
+                    title = "Цвет",
+                    swatchColor = Color(s.chatTextColorArgb.takeIf { it != 0 } ?: 0xFF333333.toInt()),
+                    onClick = { showColorTextDialog = true },
+                )
+            }
+        }
+
+        // #CHAT-BACKGROUND: независимый фон диалога (чатов/каналов) — спектральная палитра.
+        item { SectionHeader("Фон диалога") }
+        item {
+            ToggleRow(
+                title = "Независимый фон диалога",
+                subtitle = "Свой цвет фона в чатах и каналах, независимо от общей темы",
+                checked = s.chatBgOverride,
+            ) { scope.launch { app.prefs.setChatBgOverride(it) } }
+        }
+        if (s.chatBgOverride) {
+            item {
+                re.pinok.ui.components.ColorSwatchRow(
+                    title = "Цвет",
+                    swatchColor = Color(s.chatBgColorArgb.takeIf { it != 0 } ?: 0xFFF5F5F5.toInt()),
+                    onClick = { showColorBgDialog = true },
+                )
+            }
+        }
+
         item { SectionHeader("Действия с сообщениями") }
         // P2.5: multi-select mode — выделение нескольких сообщений.
         // Fix #244: прямой вход в selection по long-press (без DropdownMenu).
@@ -2098,6 +2300,23 @@ private fun MessagesTab(
         // - "WebSocket для каналов" (msgWsChannels) — ChannelWebSocketClient
         //   существует но не инстанциируется, методы STUB с TODO.
         // Pref и setter остаются в SovaPrefs (не трогаем — обратная совместимость).
+    }
+
+    // #CHAT-SPECTRUM: диалоги выбора цвета текста и фона диалога. Вынесены сюда (после
+    // LazyColumn), чтобы ColorPickerDialog и превью-цвета вызывались в composable-контексте.
+    if (showColorTextDialog) {
+        re.pinok.ui.components.ColorPickerDialog(
+            initialColor = Color(s.chatTextColorArgb.takeIf { it != 0 } ?: 0xFF333333.toInt()),
+            onDismiss = { showColorTextDialog = false },
+            onApply = { c -> scope.launch { app.prefs.setChatTextColorArgb(c.toArgb()) } },
+        )
+    }
+    if (showColorBgDialog) {
+        re.pinok.ui.components.ColorPickerDialog(
+            initialColor = Color(s.chatBgColorArgb.takeIf { it != 0 } ?: 0xFFF5F5F5.toInt()),
+            onDismiss = { showColorBgDialog = false },
+            onApply = { c -> scope.launch { app.prefs.setChatBgColorArgb(c.toArgb()) } },
+        )
     }
 }
 
@@ -3566,7 +3785,14 @@ private fun PrivacyTab(
         // включается автоматически после N сетевых неудач либо вручную
         // из drawer (кнопка «Офлайн» → OfflineManagerScreen).
         item { ToggleRow("Маскировка устройства", s.privacyDeviceMask) { scope.launch { app.prefs.setPrivacyDeviceMask(it) } } }
-        item { ToggleRow("Анти-телеметрия", s.privacyAntiTelemetry) { scope.launch { app.prefs.setPrivacyAntiTelemetry(it) } } }
+        item {
+            ToggleRow(
+                title = "Анти-телеметрия",
+                subtitle = "Блокировать отправку событий о ваших действиях в VK (трекинг stats.track*). " +
+                    "Не влияет на статистику сообщества (просмотры/охват) и на работу приложения.",
+                checked = s.privacyAntiTelemetry,
+            ) { scope.launch { app.prefs.setPrivacyAntiTelemetry(it) } }
+        }
         item { ToggleRow("Скрывать «был в сети»", s.privacyHideLastSeen) { scope.launch { app.prefs.setPrivacyHideLastSeen(it) } } }
 
         // Fix #360 #PROFILE-SUGGEST-TOGGLE: включатель раздела «Возможно, вы
@@ -3941,8 +4167,9 @@ private fun LoggingTab(
         item { SectionHeader("Хранение логов") }
         item {
             ToggleRow(
-                title = "Автоочистка логов",
-                subtitle = "Удалять старые файлы логов при старте приложения",
+                title = "Авто очистка логов",
+                subtitle = "Удалять файлы логов старше срока хранения при каждом применении настроек " +
+                    "(и при старте приложения). Работает только если задан срок хранения > 0 дней.",
                 checked = s.logAutoClean,
             ) { v ->
                 scope.launch {
@@ -7588,7 +7815,10 @@ private fun NotificationsTab(
                     Text(
                         "«Выкл» (рекомендуется) — каждое уведомление отдельной " +
                             "карточкой, можно напрямую тапнуть на конкретный пост/фото/видео.\n" +
-                            "Группировка сворачивает N уведомлений в стопку «N новых».",
+                            "Группировка сворачивает N уведомлений в стопку «N новых». " +
+                            "Внимание: тап по свёрнутой стопке открывает общий список " +
+                            "уведомлений — чтобы открыть конкретный элемент, разверните " +
+                            "стопку жестом (см. ниже) и тапните по нужной карточке.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
