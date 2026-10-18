@@ -76,11 +76,11 @@ object AuthDomainsConfig {
      * Дублируют SovaPrefs.Companion.AUTH_*_DEFAULT для удобства импорта.
      */
     object Defaults {
-        const val OAUTH_HOST      = SovaPrefs.AUTH_OAUTH_HOST_DEFAULT      // oauth.vk.com
-        const val ID_HOST         = SovaPrefs.AUTH_ID_HOST_DEFAULT         // id.vk.com
-        const val LOGIN_HOST      = SovaPrefs.AUTH_LOGIN_HOST_DEFAULT      // login.vk.com
+        const val OAUTH_HOST      = SovaPrefs.AUTH_OAUTH_HOST_DEFAULT      // oauth.vk.ru
+        const val ID_HOST         = SovaPrefs.AUTH_ID_HOST_DEFAULT         // id.vk.ru
+        const val LOGIN_HOST      = SovaPrefs.AUTH_LOGIN_HOST_DEFAULT      // login.vk.ru
         const val MOBILE_WEB_HOST = SovaPrefs.AUTH_MOBILE_WEB_HOST_DEFAULT // m.vk.ru
-        const val API_HOST        = SovaPrefs.AUTH_API_HOST_DEFAULT        // api.vk.com
+        const val API_HOST        = SovaPrefs.AUTH_API_HOST_DEFAULT        // api.vk.ru
         const val WEB_CLIENT_ID   = SovaPrefs.AUTH_WEB_CLIENT_ID_DEFAULT   // 6287487
         const val FORCE_REVOKE    = false
         // #SETTINGS-DOMAINS (2026-10-14): доп. домены.

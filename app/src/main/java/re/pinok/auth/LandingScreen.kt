@@ -2,6 +2,7 @@ package re.pinok.auth
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,10 +39,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.launch
+import re.pinok.SovaApp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -88,10 +92,52 @@ internal fun LandingScreen(
     onShowManualPaste: () -> Unit = {},
     // «Офлайн-режим» — вызывает OfflineManager (guest mode), оставлена по запросу.
     onOfflineMode: () -> Unit = {},
+    // #AUTH-OFFLINE (2026-10-17): флаг «сеть недоступна». Когда true — кнопки авторизации
+    // («Войти через VK», «Войти через Яндекс/Chrome») блокируются, при попытке нажать
+    // показывается уведомление «Подключитесь к интернету» (исчезает по тапу).
+    isOnline: Boolean = true,
+    // #AUTH2 (2026-10-17): если включена «Авторизация 2» — на LandingScreen появляется
+    // дополнительная кнопка «Войти в аккаунт 2» (WebView-флоу по образцу vk-lite).
+    // Обычная кнопка «Войти через VK» остаётся как была.
+    authV2Enabled: Boolean = false,
+    onStartAuthV2: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val isLoading = state is AuthState.Loading
     val errorMessage = (state as? AuthState.Error)?.message?.let(::humanizeError)
+
+    // #AUTH-OFFLINE: показываем уведомление, если пользователь нажал на заблокированную кнопку.
+    var showOfflineNotice by rememberSaveable { mutableStateOf(false) }
+    val offline = !isOnline
+
+    // #AUTH-OFFLINE-REAL (2026-10-18): помимо снапшота сети `isOnline` (который
+    // не ловит «Wi-Fi подключён, но интернета нет»), при нажатии выполняется
+    // фоновая проверка РЕАЛЬНОГО доступа к vk.com (TCP-коннект на 443). Пока
+    // проверка идёт — кнопки блокируются (checkingRealNet=true), чтобы не
+    // допустить повторные нажатия. При отсутствии реального интернета показываем
+    // то же уведомление «Подключитесь к интернету».
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var checkingRealNet by remember { mutableStateOf(false) }
+
+    /** Если офлайн/нет реального интернета — показать уведомление и НЕ выполнять действие. */
+    fun authAction(action: () -> Unit) {
+        if (offline) {
+            showOfflineNotice = true
+            return
+        }
+        if (checkingRealNet) return
+        scope.launch {
+            checkingRealNet = true
+            val hasReal = try {
+                SovaApp.get(context).networkObserver.hasRealInternetDeferred()
+            } catch (_: Exception) {
+                false
+            }
+            checkingRealNet = false
+            if (hasReal) action() else showOfflineNotice = true
+        }
+    }
 
     // Fix #194b: диалог подтверждения перед запуском внешнего браузера.
     // Пользователь должен успеть прочитать инструкцию (выбрать браузер, где
@@ -152,11 +198,13 @@ internal fun LandingScreen(
         // silentRefreshViaRemixsid удерживает сессию при смене IP (remixsid +
         // httoken + remixnsid + p cookie ... в storage). Авторизация ТОЛЬКО через VK ID.
         Button(
-            onClick = onStartWebView,
-            enabled = !isLoading,
+            onClick = { authAction(onStartWebView) },
+            enabled = !isLoading && !checkingRealNet,
             colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                containerColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                    else MaterialTheme.colorScheme.primary,
+                contentColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    else MaterialTheme.colorScheme.onPrimary,
             ),
             modifier = Modifier.fillMaxWidth().height(56.dp),
         ) {
@@ -177,6 +225,38 @@ internal fun LandingScreen(
             textAlign = TextAlign.Center,
         )
 
+        // #AUTH2 (2026-10-17): дополнительная кнопка «Войти в аккаунт 2» — видна
+        // ТОЛЬКО при включённой «Авторизации 2». Запускает AuthV2Activity (WebView-флоу
+        // по образцу vk-lite-auth). Обычный «Войти через VK» остаётся как был.
+        if (authV2Enabled) {
+            Spacer(Modifier.height(4.dp))
+            Button(
+                onClick = { authAction(onStartAuthV2) },
+                enabled = !isLoading && !checkingRealNet,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                        else MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        else MaterialTheme.colorScheme.onSecondaryContainer,
+                ),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Login,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Войти в аккаунт 2", style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                text = "Альтернативный WebView-вход (как в vk-lite): VK сам принимает номер/пароль/2FA.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+            )
+        }
+
         Spacer(Modifier.height(12.dp))
 
         // Secondary — «Войти через Яндекс / Chrome» (внешний браузер, OAuth implicit).
@@ -186,8 +266,8 @@ internal fun LandingScreen(
         // браузер покажет пустую страницу с access_token в URL — пользователь
         // «Поделиться» → PinoK.
         OutlinedButton(
-            onClick = { showBrowserConfirmDialog = true },
-            enabled = !isLoading,
+            onClick = { authAction { showBrowserConfirmDialog = true } },
+            enabled = !isLoading && !checkingRealNet,
             modifier = Modifier.fillMaxWidth().height(52.dp),
         ) {
             Icon(
@@ -255,6 +335,26 @@ internal fun LandingScreen(
             )
             Spacer(Modifier.width(8.dp))
             Text("Офлайн-режим", style = MaterialTheme.typography.titleMedium)
+        }
+
+        // #AUTH-OFFLINE: уведомление «Подключитесь к интернету» — появляется при попытке
+        // нажать на заблокированную кнопку авторизации, исчезает по тапу на само сообщение.
+        if (showOfflineNotice) {
+            Surface(
+                color = MaterialTheme.colorScheme.inverseSurface,
+                contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showOfflineNotice = false },
+            ) {
+                Text(
+                    text = "Подключитесь к интернету",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+            }
         }
     }
 

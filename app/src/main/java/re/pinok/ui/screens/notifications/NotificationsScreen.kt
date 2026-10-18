@@ -890,14 +890,21 @@ fun NotificationsScreen(
 
     // Пагинация
     fun loadMoreNotifications() {
+        // #NOTIF-PAGINATION-DOUBLE-LOAD (2026-10-18): фикс двойного вызова.
+        // Раньше loadingMore=true ставился ВНУТРИ scope.launch (асинхронно после
+        // launch) — между вызовом loadMoreNotifications и фактической установкой
+        // флага snapshotFlow (на filteredNotifications.size) успевал дёрнуть
+        // loadMore ещё раз с тем же nextFrom → один cursor запрашивался дважды →
+        // дубли, список плохо рос. Теперь флаг ставится СИНХРОННО до launch,
+        // guard ниже мгновенно блокирует повторный вызов.
         if (loadingMore || endReached || notifications.isEmpty()) return
         // Fix #255: если nextFrom null — больше нет страниц (двойная проверка)
         if (nextFrom.isNullOrBlank()) {
             endReached = true
             return
         }
+        loadingMore = true
         scope.launch {
-            loadingMore = true
             try {
                 // #NOTIF-NFDCAT: loadMore сохраняет серверную категорию.
                 val page = app.apiClient.notificationsGetPage(

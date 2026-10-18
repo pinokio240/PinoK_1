@@ -74,6 +74,10 @@ class ExchangeAuthApi(
         phone: String,
         password: String,
         deviceId: String,
+        // #CAPTCHA-V2 (2026-10-17): повторный запрос после капчи.
+        successToken: String? = null,   // новая схема: success_token (после WebView)
+        captchaSid: String? = null,     // классика: captcha_sid
+        captchaKey: String? = null,     // классика: captcha_key
     ): JsonObject = postLegacyAuthEndpoint(
         form = formBody {
             add("grant_type", "password")
@@ -85,6 +89,9 @@ class ExchangeAuthApi(
             add("client_id", BuildConfig.VK_CLIENT_ID)
             add("client_secret", BuildConfig.VK_CLIENT_SECRET)
             add("device_id", deviceId)
+            if (!successToken.isNullOrBlank()) add("success_token", successToken)
+            if (!captchaSid.isNullOrBlank()) add("captcha_sid", captchaSid)
+            if (!captchaKey.isNullOrBlank()) add("captcha_key", captchaKey)
         },
     )
 

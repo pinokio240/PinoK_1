@@ -6,9 +6,11 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import re.pinok.util.AppLog
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -361,6 +363,49 @@ class NetworkObserver(private val context: Context) {
     fun isOnline(): Boolean = _isOnline.value
 
     fun isOffline(): Boolean = !_isOnline.value
+
+    /**
+     * #AUTH-OFFLINE-REAL (2026-10-18): реальная проверка доступа к VK поверх
+     * [isOnline] (снапшот сетевого интерфейса).
+     *
+     * Проблема: [isOnline]/[_isOnline] опирается на ConnectivityManager и
+     * `NET_CAPABILITY_INTERNET` — это capability (наличие потенциально
+     * интернет-способной сети), а НЕ фактическая связность. При «Wi-Fi
+     * подключён к роутеру, но провайдер не даёт интернет» (роутер без связи с
+     * интернетом, каптивный портал, нет DNS/шлюза) система держит
+     * NET_CAPABILITY_INTERNET=true, onLost не срабатывает → isOnline==true,
+     * хотя реального доступа к vk.com нет. Из-за этого кнопка входа на
+     * LandingScreen оставалась активной и авторизация сбрасывалась.
+     *
+     * Это дополнение — настоящий TCP-коннект к vk.com:443 с таймаутом. Только
+     * если соединение установлено — считаем интернет реально доступным.
+     *
+     * @param timeoutMs таймаут на установку соединения (по умолчанию 4000мс).
+     * @return true, если vk.com:443 отвечает на TCP-уровне (реальный интернет).
+     */
+    fun pingVk(timeoutMs: Int = 4_000): Boolean {
+        if (!checkOnline()) return false
+        return try {
+            java.net.Socket().use { socket ->
+                val address = java.net.InetAddress.getByName("vk.com")
+                socket.connect(java.net.InetSocketAddress(address, 443), timeoutMs)
+                socket.isConnected
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** True если есть сеть И реальный доступ к vk.com (см. [pingVk]). */
+    fun hasRealInternet(timeoutMs: Int = 4_000): Boolean = isOnline() && pingVk(timeoutMs)
+
+    /**
+     * Асинхронная версия [hasRealInternet]: возвращает результат по завершении
+     * проверки в единственном значении. Удобна из UI (не блокирует главный
+     * поток) — запускается в корутине на Dispatchers.IO.
+     */
+    suspend fun hasRealInternetDeferred(timeoutMs: Int = 4_000): Boolean =
+        withContext(Dispatchers.IO) { hasRealInternet(timeoutMs) }
 
     /**
      * Fix #377 #DOZE-RESUME-NET: принудительный FRESH-снапшот сети.

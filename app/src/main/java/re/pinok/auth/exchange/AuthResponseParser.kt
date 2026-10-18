@@ -84,7 +84,11 @@ object AuthResponseParser {
 
             // Captcha.
             errorStr.equals("need_captcha", ignoreCase = true) ->
-                AuthState.Error(AuthErrorKind.TOO_MANY_ATTEMPTS, "Требуется капча")
+                AuthState.NeedCaptcha(
+                    redirectUri = err.get("redirect_uri")?.takeIf { !it.isJsonNull }?.asString,
+                    captchaSid = err.get("captcha_sid")?.takeIf { !it.isJsonNull }?.asString,
+                    captchaImg = err.get("captcha_img")?.takeIf { !it.isJsonNull }?.asString,
+                )
 
             // Rate limiting.
             errorStr.equals("too_many_attempts", ignoreCase = true) ||

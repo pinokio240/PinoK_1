@@ -15540,3 +15540,310 @@ seed передан пользователем (50f2…fdef), публичный
 сборок. Отпечаток публичного: 22520fde…. Verify: OK. Приватный ключ удалён из репозитория после
 подписи (не храним секрет). Замечание: системный python = 2.7 — запускаем скрипт через py -3 (Python
 3.14).
+
+## RELEASE-V223 — УСПЕХ (подтверждено пользователем, 2026-10-16)
+
+Релиз 2.2.3 опубликован полностью: код запушен (7c45f71), version.json подписан и проверен,
+GitHub Release V2.2.3 создан пользователем. Обновление доступно через апдейтер. Сессия завершена.
+
+## AUTH2-CONTAINER (2026-10-17) — каркас «Авторизации 2» (СДЕЛАНО, без сборки)
+
+Требование: контейнер «Авторизация 2» + тумблер в «Разработке»; старый WebView-вход не ломается.
+Ресёрч субагентами (very thorough): прямой HTTP OAuth-флоу УЖЕ реализован в auth/exchange/
+(ExchangeAuthApi — OkHttp, authByPassword, 2FA NeedValidation/ValidationCodeForm, капча CaptchaHandler,
+TokenStorage). Мёртв только UI-вход (submitCredentials без вызова). Поэтому новый флоу переиспользует
+готовую логику, а не пишется с нуля.
+
+Сделано:
+1. SovaPrefs: преф authV2Enabled (default false) — ключ AUTH_V2_ENABLED, загрузка, поле Snapshot,
+   сеттер setAuthV2Enabled. Поле БЕЗ дефолта в конструкторе → добавлено initial в FeedScreen.
+2. SettingsScreen DevTab: тумблер «Авторизация 2» (subtitle про прямой HTTP + не влияет на авто-вход).
+3. auth2/AuthFlow.kt (НОВЫЙ): sealed AuthFlowResult (Success/Cancelled/Error), интерфейс AuthFlow,
+   фабрика AuthFlowFactory.resolve(app, silent): silent=true -> null (старый флоу); authV2Enabled && !silent
+   -> DirectHttpAuthFlow; иначе null (прежний путь).
+4. auth2/AuthV2Activity.kt (НОВЫЙ): экран входа, переиспользует AuthViewModel (submitCredentials/
+   submit2FaCode/resendCode/submitWithoutPassword/cancel) + ValidationCodeForm для 2FA. Запускается
+   из AuthActivity по тумблеру.
+5. AuthActivity.onCreate: форк перед setContent — если authV2Enabled && !silent -> startActivity(AuthV2Activity)
+   + finish(); try/catch с fallback на прежний WebView-вход. Silent re-login НЕ трогается.
+6. AndroidManifest: зарегистрирован .auth.auth2.AuthV2Activity (singleTask, Theme.PinoK).
+
+Ограничение (эксперимент): AuthV2Activity стартует без startActivityForResult, поэтому её RESULT_OK не
+форвардится контрактно в MainActivity; вход определяется по app.tokenStorage.hasValidToken() в
+MainActivity.onResume (уже реализовано, MainActivity.kt:716). Отмечено для следующей итерации.
+
+Бэкап: backups/auth2-container-start-2026-10-17/.
+Сборку НЕ запускал (только пользователь). Жду проверки :app.
+
+## AUTH2-CONTAINER — мелкие правки (2026-10-17)
+- AuthV2Activity: убран локальный object AppLog, подключён глобальный re.pinok.util.AppLog;
+  тип onResend упрощён до ValidationType (импортирован). Бэкап обновлён.
+
+## CAPTCHA-V2 (2026-10-17) — новая капча VK через WebView (SDK откачен)
+
+Проблема: VK сменил схему капчи — error 14 возвращает redirect_uri (новая VK ID) вместо
+captcha_sid+captcha_img (старая, официально не поддерживается). Пытался подключить официальный
+SDK com.vk.id.captcha:vkid-captcha, но репозиторий artifactory-external.vkpartner.ru НЕДОСТУПЕН
+с этой машины (curl exit 7, AAR не в кэше) → сборка упала бы. SDK ОТКАЧЕН полностью (5 файлов).
+
+Перешёл на WebView-подход (не требует внешних зависимостей/определённой версии WebView):
+1. CaptchaHandler: в интерфейс добавлен solveRedirect(redirectUri) (default null);
+   CaptchaChallenge расширен (sid/img/redirectUri/isV2, submitSuccessToken, await()).
+2. UiCaptchaHandler: реализует solve (classic) и solveRedirect (v2).
+3. VKApiClient error 14: если есть redirect_uri -> solveRedirect -> retry с success_token
+   (вместо captcha_key); иначе классика (sid+img+captcha_key) как fallback.
+4. CaptchaDialog: при isV2 показывает WebView (AndroidView) с redirect_uri, перехватывает
+   success_token из URL (blank.html#success_token=) через WebViewClient; иначе — прежняя картинка+инпут.
+
+Ограничение: OAuth-флоу (AuthV2Activity, выключен по умолчанию) не покрыт новой капчей — там
+останется "Требуется капча" (прямой HTTP идёт не через callInternal). Основная программа (VKApiClient)
+покрыта. Старый классический fallback сохранён.
+
+Бэкап: backups/captcha-sdk-rollback-2026-10-17/.
+Сборку НЕ запускал. Жду проверки :app.
+
+## CAPTCHA-V2 / AUTH2 — фикс компиляции (2026-10-17)
+1. CaptchaHandler: CaptchaChallenge — параметр deferred получил default (CompletableDeferred()),
+   вызовы с 3 параметрами (sid/img/redirectUri) компилируются.
+2. AuthFlow: добавлен класс DirectHttpAuthFlow (реализация AuthFlow, запускает AuthV2Activity и
+   ждёт результат) — фабрика AuthFlowFactory.resolve() больше не ссылается на отсутствующий класс.
+Бэкап обновлён.
+
+## CAPTCHA-V2 — УСПЕХ (сборка прошла, 2026-10-17)
+
+Новая капча VK через WebView реализована, :app компилируется. SDK официальный не подключался
+(репозиторий недоступен). Классический fallback сохранён. OAuth-флоу (выключен по умолчанию) —
+открытый вопрос, можно доделать позже.
+
+## CAPTCHA-В2-OAUTH (2026-10-17) — новая капча VK в OAuth-флоу (СДЕЛАНО, без сборки)
+
+Доделана поддержка новой капчи VK в прямом HTTP-входе (AuthV2Activity/DirectAuth) — влияет на
+стабильность (раньше пользователь застревал на «Требуется капча»). По плану субагента (6 правок):
+1. AuthModels: добавлен data class NeedCaptcha(redirectUri?, captchaSid?, captchaImg?) : AuthState.
+   Проверено: оба exhaustive-when(state) имеют else — компиляция не ломается.
+2. AuthResponseParser: блок need_captcha теперь возвращает NeedCaptcha (парсит redirect_uri/
+   captcha_sid/captcha_img из err) вместо Error(TOO_MANY_ATTEMPTS).
+3. ExchangeAuthApi.authByPassword: добавлены опц. параметры successToken/captchaSid/captchaKey,
+   условные add() в form body.
+4. ExchangeAuthRepository: новый signInWithCaptchaSuccessToken(phone,pwd,successToken) повторяет
+   authByPassword с success_token (паттерн как signIn, ExponentialBackoff).
+5. AuthViewModel.handleAuthResult: при NeedCaptcha (если есть redirectUri) решает капчу через
+   SovaApp.getOrNull()?.captchaHandler?.solveRedirect(redirect) (WebView->success_token), затем
+   повторяет signInWithCaptchaSuccessToken(lastPhone, lastPassword, token) и рекурсивно
+   handleAuthResult. UI не трогается (Loading/Success/Error/NeedValidation). Отмена капчи -> Error.
+6. AuthV2Activity: добавлен CaptchaDialog() в setContent (+импорт) — глобальный диалог живёт в
+   MainActivity, а V2 — отдельная Activity, иначе капча не была бы видна.
+
+Старый need_captcha без redirect_uri -> Error "Требуется капча" (классика не реализована, но VK
+перешёл на redirect_uri). Бэкап: backups/captcha-oauth-v2-2026-10-17/. Сборку не запускал.
+
+## AUTH2-FIX (2026-10-17) — ошибка «need_validation without sid» при входе через Авторизацию 2
+
+Симптом: при попытке войти через «Авторизацию 2» — ошибка "need_validation without sid"
+(AuthResponseParser:59).
+
+Причина: oauth.vk.com кладёт validation_sid/sid/phone/next_step/redirect_uri/captcha_* НА
+КОРНЕВОЙ уровень ответа, а error — примитивом ("need_validation"). parseAuthResponse строил
+err только из объекта error + сливал из корня лишь error_description/error_code → поля
+validation_sid/redirect_uri терялись → "need_validation without sid".
+
+Исправление (ExchangeAuthRepository.parseAuthResponse): после слияния error_code копируем в err
+ВСЕ корневые ключи, которых там ещё нет (err имеет приоритет). Теперь и validation_sid (2FA), и
+redirect_uri (новая капча) подхватываются с корня. Работает и для примитивного error, и для
+объектного.
+
+Бэкап: backups/captcha-oauth-v2-2026-10-17/. Сборку не запускал.
+
+## WARN-FIX (2026-10-17) — MainActivity: убраны избыточные safe-call
+
+Строки 969-970: snap?.uiHomeEnabled/snap?.uiHomeRoute/snap?.lastRoute — компилятор определил snap
+как non-null в этой точке (smart-cast). Убраны ?. Предупреждения Unnecessary safe call устранены.
+
+## WARN-FIX (2026-10-17) — MainActivity initialRoute: корректная обработка nullable snap
+
+Предыдущий фикс (убрал ?.) дал ОШИБКУ — snap реально nullable (Snapshot?) и smart-cast не работает
+внутри remember{} (не inline). Теперь: локальный val s = snap; if (s==null) fallback на Feed;
+иначе используем s.* без ?. Так устранены и предупреждение, и ошибка, и безопасность сохранена.
+
+## AUTH-OFFLINE-BLOCK (2026-10-17) — блокировка кнопок входа при отсутствии сети
+
+Требование: если приложение открыто без интернета, кнопки авторизации должны быть заблокированы
+(приглушены), при нажатии — уведомление «Подключитесь к интернету», исчезающее по тапу.
+
+Реализация (2 файла):
+1. LandingScreen: добавлен параметр isOnline (default true). При offline:
+   - кнопки «Войти через VK» и «Войти через Яндекс/Chrome»: enabled = !isLoading && !offline,
+     приглушённые цвета (onSurface alpha 0.15/0.38);
+   - onClick через хелпер authAction: офлайн -> showOfflineNotice=true (не запускает вход);
+   - уведомление Surface (inverseSurface) «Подключитесь к интернету», клик по нему закрывает.
+   - «Офлайн-режим» НЕ блокируется (это и есть офлайн-функция).
+2. AuthActivity: собрано isOnline из app.networkObserver.isOnlineFlow (collectAsState), передано в
+   LandingScreen. Добавлен импорт clickable в LandingScreen.
+
+Бэкап: backups/auth-offline-block-2026-10-17/. Сборку не запускал.
+
+## AUTH-DNS-FIX (2026-10-17) — вход падал "Unable to resolve host oauth.vk.com"
+
+По логу: POST https://oauth.vk.com/access_token FAILED: Unable to resolve host "oauth.vk.com"
+(сеть была, но системный DNS не резолвит oauth.vk.com на устройстве). signIn → network error.
+
+Причина: кастомный Dns в SovaApp (okhttp3.Dns) имел fallback IP только для api.vk.ru/
+web.api.vk.ru и calls-хостов, а oauth.vk.com/login.vk.ru (эндпоинты входа) НЕ покрыты →
+использовался системный DNS, который на некот. сетях/устройствах не отвечает.
+
+Исправление: в fallbackIps добавлены oauth.vk.com и login.vk.ru (известные пулы IP VK). При сбое
+системного DNS вход резолвится через хардкод-IP. Бэкап обновлён. Сборку не запускал.
+
+## ## 2026-10-17 � ������ RU + ���� 2FA-����� � ����������� 2
+- ������ ������� auth-������� � SovaPrefs �� .ru: oauth.vk.com>oauth.vk.ru, id.vk.com>id.vk.ru, login.vk.com>login.vk.ru, api.vk.com>api.vk.ru (����� ������ mweb/vkdomain ���� .ru). ������� ����������� � SovaPrefs � AuthDomainsConfig.Defaults.
+- ��� �������: �� oauth.vk.ru ���������� �������� (��� DNS/TLS-������ ��� �� .com), VK ��������� ������ � ����������� 2FA: need_validation validation_type=2fa_sms, validation_sid, phone_mask. �.�. �������� ������� ������� ����� �� .com ���� ������ DNS+TLS (�������-IP fallback ����� Trust anchor not found).
+- ����� ����: ����� need_validation (2fa_sms) AuthV2Activity ������: "Vertically scrollable component was measured with infinity maximum height" � ������� Column � AuthV2Screen ����� verticalScroll, � ValidationCodeForm ������ ����� ���� verticalScroll (��������� ������). ����������: ����� verticalScroll �� ������� Column AuthV2Screen (#AUTH2-NESTED-SCROLL), ����� �������������� �������.
+- � AuthActivity (�������� ����) ValidationCodeForm ���������� � fillMaxSize ��� �������� ������� � ��� ����� ���.
+
+## ## 2026-10-17 � �������� �������� � ������ (����/�����/������/������) �� ����� �������
+- UserProfileScreen: ��������� ���������� ������� ������/������/�����/���� (FRIEND_CONTENT_TABS) ����� ProfileChipsRow + ������� �������� �� ������� (audioGetWithCount/videoGet/photosGetAll c ownerId=userId), ������� loading/error/empty ����� Tab*Row. ���� ��������� CountersRow (onPhotosClick/onVideosClick/onAudiosClick) ����������� �������.
+- ��� �������� �� ����� ������� > ��������� ����� ������ ������ ������������ X: �������� MODE_FRIENDS � Screen.FollowList + ����� friends.get � FollowersSubscriptionsScreen.fetchPage (title ��������, ������ ������� ���, isFriendsMode � refresh/loadFirst).
+- ProfileScreen: ���������� ���������������� ���������� ������� internal (PROFILE_TAB_* ���������, ProfileChipsRow, TabProgressRow/TabErrorRow/TabEmptyRow/TabShowMoreRow, ProfileTrackRow, ProfileVideoCard, PhotoGridRow, extractPhotoAllUrl) � ��� UserProfileScreen (��� �� �����).
+- �������������: ������ � total=-1 (����) > ������� ������ � lastApiErrorHuman; �����/���� � ������ ������ ����� ��������� ������ (��� �� ���� �������). SovaNavHost: UserProfileScreen.onFriendsClick > FollowList MODE_FRIENDS.
+- �����: backups/friend-content-tabs-2026-10-17/. �� ������ :app �� ��������� � ������������ ���������.
+
+## ## 2026-10-17 � ���������� �������� ������������ 2�
+- ���������>����������: ������� ������������ 2� ������������ � ����������� ��������� (���������� auth2 �����������). ������ ToggleRow � ��������� Card: title+������� �����, ������� ������� �������������� (MaterialTheme.colorScheme.error), Switch(checked=false, disabled). �����: backups/auth2-toggle-blocked-2026-10-17/.
+
+## ## 2026-10-17 � ����������� 2 ���������� � WebView-���� (��� vk-lite)
+- Stop ������� HTTP-���� auth2. AuthV2Activity ������ �� �������� ����� ��������+������ (submitCredentials/2FA). ������ �������� ������� WebView-���� VkAuthWebViewScreenV2 � startUrl=vkIdLoginUrl(): m.vk.ru � WebView, VK ��� ��������� �����/������/2FA/�����, ������ ������ web_token �� localStorage (WebTokenAuth) � ��������� ����� users.get (AuthViewModel.submitWebToken). onSilentTokenExchanged > submitOAuthToken � �������� cookie-set (��� AuthActivity).
+- ������� ������������ 2� � ���������� �������������: ��������� ������� ToggleRow (enabled), ������� ������� �������������� ������. �����: ���� � WebView-���� ��� � vk-lite...�.
+- ������ ������� �������: AuthActivity ��� authV2Enabled=true � ��-silent ������� �� AuthV2Activity.
+- �����: backups/auth2-webview-vklite-2026-10-17/. �� ������ �� ��������� � ��������� :app.
+
+## ## 2026-10-17 � ������������ 2� ����������� ����� ������ ������ � ������� 2�
+- ����� ����-���� AuthActivity>AuthV2Activity ��� authV2Enabled. ������ AuthActivity ������ ���������� ���� LandingScreen ��� ���.
+- �� LandingScreen ��������� ������ ������ � ������� 2� (����� ������ ��� authV2Enabled=true), ��������� AuthV2Activity ����� startActivityForResult (REQUEST_CODE_AUTH2=77).
+- AuthActivity.onActivityResult ������������ RESULT_OK �� AuthV2Activity � MainActivity (setResult+finish), �.�. ����� ����� ����������� ���� ���� �����������.
+- ������ ����� VK� (������� WebView � AuthActivity) ������� ��� ���.
+- ������� ������������ 2� �������������. AuthV2Activity � WebView-���� (VkAuthWebViewScreenV2, ��� vk-lite).
+- �����: backups/auth2-webview-vklite-2026-10-17/ (+ LandingScreen.kt). �� ������ �� ��������� � ��������� :app.
+
+## ## 2026-10-17 � ����� ����� ������ � ������� 2�: app_id 7879029
+- �������: AuthV2Activity ���������� m.vk.ru/login?app_id=6287487 > VK ID SDK ������ �� id.vk.ru/auth?app_id=7934655, ���� ������ ������, �� SDK �� ��������� �����: WebView ������� �� id.vk.ru, web_token � localStorage �� ���������, parseSilentToken �� ���������� > ����������� polling > ����� �����.
+- ����: ��������� URL AuthV2Activity ������ �� m.vk.ru/login?app_id=7879029 (��� vk-lite). �������� ���� ����� web_token � localStorage ��� 7879029:web_token:login:auth, WebTokenAuth ��� ������. (Backup pre-7879029 � ��� �� �����.)
+
+## ## 2026-10-17 � ����� ����� ������ � ������� 2�: ���������� vk-lite WebView-�����
+- ������� ������ ������ �� � app_id: VkAuthWebViewScreenV2 ��� ���� ����� � ��� ������� ��������� remixsid-polling + WebTokenAuth.fullAuthFlow, ������� ������������� ������ m.vk.ru/login?app_id=6287487 ������ �������� ����� ����� id.vk.ru/auth > ����� �����.
+- ����: ����� ���������� ����� VkLiteWebViewAuthScreen.kt (�� ������� vk-lite WebVkActivity): ������ m.vk.ru/login?app_id=7879029, �� ����������� � ����, ������� polling (750��) ������ web_token �� localStorage � trusted-origin (m.vk.ru/m.vk.com), ��� ���������� � onTokenReady>submitOAuthToken. AuthV2Activity ����������� �� ����. ���� ����� ������� VkAuthWebViewScreenV2/WebTokenAuth �� ��������.
+- Backup: backups/auth2-webview-vklite-2026-10-17/AuthV2Activity-before-vklite-screen.kt.
+
+## ## 2026-10-17 � ������ � ������� 2�: ��������� �� ����������� ����� �����
+- �������: ����� ����� �������� (silent-refresh Path 1.5, user_id=152094335) � ����� �����������, �� AuthV2Activity ���������� foreground � WebView ����� ������, ��������� PinoK �� ����������.
+- ����� � VkLiteWebViewAuthScreen.kt / AuthV2Activity:
+  1) �uthV2Activity ��� ������: ���� tokenStorage.hasValidToken() � ����� finish(RESULT_OK) ��� ������ WebView (��������� ��������� ���� � ������ ����� silent-����� �������� ����� ������ ����� ������).
+  2) Polling ������ web_token � � id.vk.ru/id.vk.com (VK ID SDK ����� ����� � localStorage id.vk.ru ����� ������, � �� ������ m.vk.ru).
+  3) BackHandler: ����� � ������� WebView, ����� onDismiss().
+- Backup: backups/auth2-webview-vklite-2026-10-17/.
+
+## ## 2026-10-18 � IP-mismatch: �������� ������ remixsid ��� ���������� �����
+- ��������: ������������ (Android 16, ������ ����� VK� �� ���������� WebView) ������, �� ����� ����� no remixsid � CookieManager > ��� IP-����� err 5/1130 > #RELOGIN-FORCE (���������).
+- ������� ��������: getRemixSidFromCookieManager (CookieHelpers) ����� remixsid ������ �� vk.com/m.vk.com/vk.ru/m.vk.ru/login.vk.*/login.vk.ru � ��� id.vk.ru/id.vk.com � ��� remixnsid (����� VK ID ������). VK ID flow ������ session cookie �� id.vk.ru > ���� ���������� ��� remixsid.
+- ����: getRemixSidFromCookieManager ������ ���������� ������ �������� RemixsidCapturer.snapshotCookies() (�������� id.vk.ru/remixnsid/p), fallback �� ����������� COOKIE_CHECK_URLS (+id.vk.ru/id.vk.com, +remixnsid).
+- Backup: backups/ipmismatch-remixsid-capture-2026-10-18/. �� ������: app/:debug.
+
+����������: silentRefreshViaRemixsidLive ������� ������ remixsid ���� (�� remixnsid/p). ���� � ������������ ������ remixnsid � ����� �� ����� �� ����������; ��� ����� ����� �� ���������� ����.
+
+## ## 2026-10-18 � IP-mismatch: remixnsid-������ ��� silent-�������� (������)
+- ������: ���� auth-��� ������ �silent-��������� ������ remixsid/p. ����� VK ID-������ ����� ����� �� ���������� WebView ������ � CookieManager ������ remixnsid > ��� IP-mismatch (err 5/1130) ��� silent-������� > #RELOGIN-FORCE > ���������.
+- HTTP-�������� login.vk.ru/?act=web_token remixnsid �� ���������; ���������� ���� � WebView silent_token ����� (auth.getAuthData), ������� ��������� HiddenSessionRefresher.
+- ������ (��� � re.pinok.auth.exchange):
+  1. RemixsidCapturer.readAllCookiesFromCookieManager: �� ���������� � null ��� remixnsid-only; ������ = remixsid|p|remixnsid.
+  2. ExchangeAuthRepository.hasSilentReloginMeans: ���� remixnsid.
+  3. ExchangeAuthRepository.silentRefreshViaRemixsidLive: ��� remixsid-empty+remixnsid/p � return null ��� cooldown (������������� � WebView-path � ensureFreshToken).
+  4. HiddenSessionRefresher.refresh: 90�-������ �� ��������� ��� remixnsid/p-������.
+- ���� ����������� read-only ������� (explore) + ���������� ������� (general); ������� �������� ��� 4 ������.
+- Backup: backups/ipmismatch-remixnsid-2026-10-18-0917/. �� ������: app/:debug.
+
+## ## 2026-10-18 � �����������: ������ �� �������� loadMore (���������)
+- ������� (Android 16): ��� �������� ����������� ���� ��������� ����� �����. � ���� ������ start_from (cursor) ������������ ������ (���� L4264/L4291 � �.�.).
+- �������: loadingMore=true �������� ������ scope.launch (����������). snapshotFlow �� filteredNotifications.size ������� ������ loadMore �������� �� ��������� ����� � ���� cursor ������, �����.
+- ����: loadingMore=true ������ �������� ��������� �� scope.launch � loadMoreNotifications; guard � ������ ������� ��������� ��������� ��������� �����. finally { loadingMore=false } ��� ����.
+- ������� ��� ��������� ������� ������������� � ��������� ����������� ��������� �� ����� (������ ������ �� CommunityPostsPoller).
+- Backup: backups/notif-pagination-double-load-2026-10-18/. �� ������: app/:debug.
+
+## ## 2026-10-18 � ������ �������� �������� �� newsfeed.getLikesFeed (�����-implementation)
+- ������� �������� ����� � ������� (������� �� HAR docs/users/�������/�������.har): ������ �������� � PinoK �������� ����� likes.getList (������ ������ ��� ����������� �����, ������� owner_id+item_id) � �� ����� ���������� ����� ���-������ newsfeed.getLikesFeed. ��-�� ����� ������ ��������� �����/�����, ��������� �������� � ������.
+- ������:
+  1. VKApiClient: �������� likesFeedGet(count, startFrom, likeTypes) > Triple<Int, String, List<JsonObject>> = newsfeed.getLikesFeed (count, next_from, items). v �� ��������� (callInternal �������������� �� VKEndpoints.API_VERSION).
+  2. FeedScreen: loadReactions()/loadReactionsCore(startFrom, append) ���������� �� likesFeedGet. ������� LikesFilter>like_types (ALL=post,comment,video,clip,market; WALL=post; WALL_REPLY=comment; CLIPS=clip; VIDEO=video). ��������� likesItems (����� ����� wallGetById), likesVideos (�����/�����), likedComments (+ ������). ��������� ���������: likesNextFrom/likesHasMore/likesLoadingMore + loadMoreReactions() ��� ������� � �����.
+  3. ������� likesFeedItemTarget(o) (owner_id+item_id �� item, ��������� ��������� ������) � likesFeedCommentObject(o).
+- likesGetList �� ������ (����� ��� ������ ������ � ����� �������������� ����). ������ �� �������.
+- Backup: backups/likesfeed-2026-10-18-1314/. �� ������: app/:debug.
+
+
+## ## 2026-10-18 — Боковая панель: «Реакции» и «Лента» подсвечивались вместе
+- Симптом: при нажатии «Реакции» раздел открывался корректно, но на боковой/нижней панели одновременно были «нажаты» и «Лента», и «Реакции».
+- Причина: у пункта «Реакции» (PanelAction.FeedFilter) и обычной «Ленты» (Route(Feed)) ОДИН destinationRoute = Screen.Feed.route (PanelItems.kt:58). Панель считала selected по currentRoute == destinationRoute → оба пункта «выбраны», когда открыт Feed.
+- Фикс (обратный канал FeedScreen -> панель, паттерн FeedOpenRequest):
+  1. PanelItems.kt: добавлен object FeedSectionHolder { update(name) / current() / clear() } — публикует активный раздел ленты (FeedFilter.name).
+  2. FeedScreen.kt: в LaunchedEffect(feedFilterName, likesFilterName, reactionsReloadKey) первым оператором FeedSectionHolder.update(feedFilterName) + import.
+  3. SovaNavHost.kt: добавлен private fun NavHostController.panelItemSelected(currentRoute, item): «Реакции» — selected, если Feed открыт И текущий раздел == a.filterName ("LIKES"); «Лента» (Route(Feed)) — если Feed открыт И раздел != "LIKES"; прочие — как раньше (currentRoute == destinationRoute). Применён в 3 местах: drawer (NavigationDrawerItem), bottom (NavigationBarItem), scroll-button (BottomNavScrollButton).
+- Нюанс: раздел публикуется асинхронно (LaunchedEffect FeedScreen), поэтому на холодном старте current()==null → подсвечена только «Лента». При переключении через пункты панели (drawer закрывается/открывается) панель перекомпозируется и читает свежее значение.
+- Backup: backups/sectionselect-2026-10-18/. На сборку: app/:debug.
+### Дополнение к предыдущей записи (тот же день)
+- После фикса подсветки остался баг: клик по «Лента» не возвращал раздел с LIKES на обычную ленту (контент Реакций оставался, «Реакции» оставалась подсвеченной).
+- Причина: в navigatePanelItem ветка Route(Screen.Feed) НЕ вызывала FeedOpenRequest.request, в отличие от FeedFilter. Клик по «Ленте» просто навигировал на feed без смены seed → feedFilterName оставался "LIKES".
+- Фикс: в ветке `is PanelAction.Route` для `a.screen == Screen.Feed` добавлен `FeedOpenRequest.request("ALL")` (строкой, т.к. enum FeedFilter приватный в FeedScreen.kt — SovaNavHost не может сослаться на FeedFilter.ALL). version++ триггерит LaunchedEffect(FeedOpenRequest.version) в FeedScreen → feedFilterName="ALL" → FeedSectionHolder.update("ALL") → контент и подсветка возвращаются на «Ленту».
+- На сборку: app/:debug.
+
+
+## 2026-10-18 — «Реакции» вынесены в отдельный маршрут feed_likes (полное разделение с «Лентой»)
+- Проблема: «Реакции» были спец-действием (PanelAction.FeedFilter) на том же маршруте feed, что и «Лента». Различались только in-memory seed (FeedOpenRequest) + обратным каналом подсветки (FeedSectionHolder). Это не давало достоверно разделить их: общий destinationRoute ломал подсветку, а возврат на ленту был сбросом seed, а не навигацией.
+- Решение (по согласованию с пользователем): отдельный маршрут `feed_likes`, рендерящий ТОЛЬКО раздел реакций (без ленты/stories). Реализовано автономным режимом FeedScreen (НЕ новым файлом).
+- Правки:
+  1. Screen.kt: добавлен `object FeedLikes : Screen("feed_likes", "Реакции", Icons.Filled.ThumbUp)` (+ импорт filled.ThumbUp). Непараметризованный, как FeedHidden.
+  2. PanelItems.kt: удалены `PanelAction.FeedFilter` и обе ветки `destinationRoute`; пункт "reactions" стал `PanelAction.Route(Screen.FeedLikes)`; удалены объекты `FeedOpenRequest` и `FeedSectionHolder` (больше не нужны).
+  3. SovaNavHost.kt: `navigatePanelItem` упрощён (только Route, без FeedOpenRequest/FeedFilter); удалён `panelItemSelected` — три места заменены на `selected = currentRoute == item.destinationRoute`; добавлен `composable(Screen.FeedLikes.route){ FeedScreen(likesOnly=true, ...) }`; `Screen.FeedLikes` добавлен в allScreens (заголовок «Реакции», back-кнопка глобального TopAppBar работает штатно).
+  4. FeedScreen.kt: параметр `likesOnly: Boolean=false`. При likesOnly: feedFilterName форсируется в LIKES; первичная загрузка ленты (LaunchedEffect(Unit)) пропускается; stories/FeedFilterBar/поиск скрыты (if !likesOnly); подтабы реакций вынесены в отдельный item (рендерится и в likesOnly); «Реакции» убраны из FeedFilterBar (dropdown) — раздел больше не доступен из переключателя ленты.
+- Эффект: Лента и Реакции полностью разнесены. Клик по «Реакции» открывает feed_likes (подсветка пункта штатная), «Лента» — feed. Возврат — реальная навигация (popBackStack/back-кнопка) или клик по «Лента».
+- Backup: backups/sep-reactions-2026-10-18-1517/. На сборку: app/:debug.
+### Исправление кодировки (тот же день, дополнение)
+- При первом проходе правок SovaNavHost.kt часть кириллицы была повреждена: я использовал Set-Content -Encoding UTF8 для массовой замены, а файл хранился в иной кодировке → вся кириллица «раздулась», появились Syntax error на строке 275 и Unresolved 'peerNameВ' (2132).
+- Фикс: восстановил SovaNavHost.kt из backups/sep-reactions-2026-10-18-1517/ (исходная, корректная копия) и заново применил те же 4 правки ТОЛЬКО через Edit-tool (лексический, корректно работает с файлом; Set-Content больше не использую): упрощение navigatePanelItem, удаление panelItemSelected + замена 3 мест на selected = currentRoute == item.destinationRoute, добавление composable(Screen.FeedLikes.route) с likesOnly=true, добавление Screen.FeedLikes в allScreens.
+- Проверено: PanelItems.kt (7242b, холдеры удалены, пункт reactions->Route(FeedLikes)), Screen.kt (42085b, FeedLikes на стр.547), FeedScreen.kt (232162b, likesOnly на месте) — кириллица читается, остатков FeedOpenRequest/FeedSectionHolder нет. На сборку повторно: app/:debug.
+
+## 2026-10-18 — Устранены предупреждения deprecated API (AuthActivity, CaptchaDialog)
+- Проблема: три предупреждения компилятора.
+  1. AuthActivity.kt:271 startActivityForResult deprecated (запуск AuthV2Activity по REQUEST_CODE_AUTH2).
+  2. AuthActivity.kt:399 onActivityResult deprecated (проброс результата AuthV2Activity в MainActivity).
+  3. CaptchaDialog.kt:192 override shouldOverrideUrlLoading(view, url:String) — перекрывает deprecated член без аннотации.
+- Решение (согласовано с пользователем): НЕ переписывать на Activity Result API (рискованно для авторизации, флоу auth2 остановлен), а подавить через @Suppress("DEPRECATION"):
+  - AuthActivity.kt: над классом добавлен @Suppress("DEPRECATION") — убирает оба предупреждения.
+  - CaptchaDialog.kt:192: над методом добавлен @Suppress("DEPRECATION") (старый String-оверрайд сохранён — нужен для старых WebView).
+- Backup: backups/deprecation-2026-10-18-1725/. Только предупреждения, поведение не изменилось. Сборка не нужна (или на всякий случай app/:debug).
+### Дополнение: предупреждение CaptchaDialog:193 не ушло полностью
+- Причина: @Suppress("DEPRECATION") подавляет использование deprecated-API, но НЕ предупреждение "This declaration overrides a deprecated member": ему соответствует отдельная диагностика OVERRIDE_DEPRECATION.
+- Фикс: заменил на @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION") на методе shouldOverrideUrlLoading(view: WebView, url: String).
+- Проверено: другие файлы (OAuthWebViewActivity, VkAuthWebViewScreenV2, RemixsidCapturer, InternalBrowserScreen, CallsWebViewScreen) используют новую сигнатуру (view, request: WebResourceRequest) — предупреждения не дают. Только CaptchaDialog использовал deprecated String-версию.
+- Backup: backups/deprecation-2026-10-18-1725/. На сборку: app/:debug.
+
+## 2026-10-18 — Разбор Path 1.5 (silent HTTP refresh) по логу + документация в docs/
+- Контекст: после входа через VK ID во встроенный WebView приложение показывает «обновление сессии (попытка N)» каждые ~30-45с, хотя работает. Токен формально истёк (~3ч), но VK его принимает (мягкое истечение).
+- Лог 19:04:22-19:05:02 показал: на телефоне есть полный cookie-набор (remixsid 88 символов + p + remixnsid + httoken). При смене сети → FORCE refresh → HTTP Path 1.5 отработал за ~40мс («Path 1.5 live-cookie OK — renderer не понадобился») → токен обновлён → предупреждение пропало. Возврат на Wi-Fi: токен свежий (884с) → предупреждение не появилось.
+- Корень: предупреждение появляется только когда Path 1.5 не успевает/падает → уход на WebView с 5с таймаутом JS → null → цикл. Значит фиксить надо Path 1.5, а не таймаут WebView.
+- Слабые места Path 1.5 (кандидаты на доработку): (1) нет явного таймаута на HTTP-запрос doSilentRefreshHttpLive (решает только 5с WebView-порог); (2) 2 стратегии с доменами, вторая хардкодит login.vk.ru; (3) cooldown 90с груб (блокирует весь HTTP-путь при чередовании сетей); (4) НЕсогласованность remixnsid: doRefresh классифицирует «мёртвую сессию» по remixsid||p БЕЗ remixnsid, хотя вход по hasNsidSession её учитывает → риск ухода в guest; (5) нет замеров длительности стратегий в логе.
+- Документация: docs/auth-silent-refresh-path1.5-2026-10-18.md (полный разбор + рекомендации). Код не менялся.
+### Дополнение к разбору Path 1.5: гибкие стратегии обновления (docs/auth-silent-refresh-path1.5-2026-10-18.md, раздел 2)
+- Пользователь попросил: как гибко обойти таймеры / обновлять по факту запросов-ответов.
+- Добавлен раздел с 5 стратегиями:
+  A) решать исход по HTTP-ответу с явным тайм-аутом 3с на Path 1.5 (до WebView-порога 5с) + HTTP-only при успехе.
+  B) метка lastSuccessfulRequestAt в VKApiClient: доверять живому токену пока нет err 5/1117/1130 → NOT_NEEDED в keepAlive → убирает цикл предупреждений.
+  C) обрабатывать err 5 subcode 1130 внутри Path 1.5 (пробовать вторую стратегию без WebView).
+  D) единая hasLiveSession(cookies) через все места (remixsid||p||remixnsid) — убирает риск ложного guest из-за расхождения doRefresh.
+- Рекомендуемый порядок: D → A1 → B → A2/C.
+- Код не менялся; файл обновлён.
+
+### Реализация стратегии D (2026-10-18) — единая hasLiveSession для remixnsid
+- Проблема: HiddenSessionRefresher.doRefresh классифицировал «мёртвую сессию» по remixsid||p БЕЗ учёта remixnsid, тогда как остальной код (вход, hasSilentReloginMeans, cooldown-решение) учитывал remixnsid. Чистая remixnsid-сессия (VK ID после входа во встроенный WebView) ошибочно помечалась «доказанно мёртвой» → риск ухода в guest-режим при живой сессии.
+- Фикс (3 файла):
+  1. RemixsidCapturer.kt: в data class CapturedCookies добавлено свойство hasLiveSession = remixsid.isNotBlank() || pCookie.isNotBlank() || remixnsid.isNotBlank() — единая точка истины «есть ли живая web-сессия».
+  2. HiddenSessionRefresher.kt: классификация мёртвой сессии (noSessionCookies) теперь через !cookies.hasLiveSession. Cooldown-решение (hasNsidSession) оставлено как было (remixnsid||p) — оно локально и корректно для пропуска cooldown при VK ID.
+  3. ExchangeAuthRepository.kt: hasSilentReloginMeans() теперь возвращает cookies.hasLiveSession (вместо ручной проверки трёх полей).
+- KDoc-комментарий в CapturedCookies уточнён: Path 1.5 (silentRefreshViaRemixsidLive) НЕ использует hasLiveSession — там своя строгая проверка «есть ли remixsid для HTTP» (endpoint принимает только remixsid).
+- Backup: backups/strategy-d-haslivesession-2026-10-18-1937/. На сборку: app/:debug.

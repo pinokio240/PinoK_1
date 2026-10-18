@@ -44,6 +44,16 @@ sealed interface AuthState {
         val sendOtpInfo: SendOtpInfo? = null,
     ) : AuthState
 
+    /**
+     * #CAPTCHA-V2 (2026-10-17): капча (error 14 / need_captcha) при входе.
+     * Новая схема VK — [redirectUri] (WebView → success_token), классика — [captchaSid]+[captchaImg].
+     */
+    data class NeedCaptcha(
+        val redirectUri: String? = null,
+        val captchaSid: String? = null,
+        val captchaImg: String? = null,
+    ) : AuthState
+
     /** User is banned / deactivated / needs sign up. */
     data class Error(val kind: AuthErrorKind, val message: String) : AuthState
 

@@ -103,7 +103,31 @@ object RemixsidCapturer {
         // §57 #COOKIE-CAPTURE-UNIFY: домен, на котором найден remixsid —
         // для логов (раньше было только в ExternalBrowserAuth.source).
         val source: String? = null,
-    )
+    ) {
+        /**
+         * #STRATEGY-D (2026-10-18): единая проверка «есть ли живая web-сессия».
+         *
+         * Источник истины для ВСЕХ мест, где решается, считать ли сессию живой:
+         *  - [re.pinok.auth.exchange.ExchangeAuthRepository.hasSilentReloginMeans]
+         *    (есть ли средства для silent re-login на старте);
+         *  - [re.pinok.auth.exchange.HiddenSessionRefresher] (классификация
+         *    «мёртвой сессии» после провала WebView-refresh).
+         *
+         * Примечание: [re.pinok.auth.exchange.ExchangeAuthRepository.silentRefreshViaRemixsidLive]
+         * НЕ использует это свойство — там отдельная, более строгая проверка «есть ли
+         * remixsid для HTTP-обмена» (HTTP web_token endpoint принимает только remixsid,
+         * а не remixnsid/p).
+         *
+         * Ключ: сессия жива, если есть ЛЮБОЙ из трёх маркеров — классический remixsid,
+         * persistent p (см. также remixsid), либо новая VK ID сессия remixnsid
+         * (после входа во встроенный WebView). Раньше в HiddenSessionRefresher
+         * remixnsid НЕ учитывался в классификации «мёртвой сессии» (только remixsid
+         * и p), из-за чего чистая remixnsid-сессия ошибочно помечалась как
+         * «доказанно мёртвая» и сессия уводилась в guest-режим, хотя была жива.
+         */
+        val hasLiveSession: Boolean
+            get() = remixsid.isNotBlank() || !pCookie.isNullOrBlank() || !remixnsid.isNullOrBlank()
+    }
 
     /** Таймаут для hidden WebView capture. 10 секунд — достаточно для
      *  silent OAuth redirect (обычно 1-3с), но не слишком долго чтобы
@@ -311,8 +335,9 @@ object RemixsidCapturer {
      * и login-домены. remixnsid на vk.ru (без leading dot). Обходим все URL
      * и собираем каждое cookie с первого домена, где найдено.
      *
-     * @return [CapturedCookies] если remixsid найден (минимум для Path 1.5),
-     *         null если remixsid не найден (p/remixnsid без remixsid бесполезны)
+     * @return [CapturedCookies] если есть хотя бы одна из remixsid/p/remixnsid
+     *         (remixsid может отсутствовать при VK ID-сессии remixnsid-only),
+     *         иначе null.
      */
     private fun readAllCookiesFromCookieManager(): CapturedCookies? {
         val cm = CookieManager.getInstance()
@@ -418,24 +443,32 @@ object RemixsidCapturer {
             } catch (_: Exception) {}
         }
 
-        // remixsid — обязательный минимум. p/remixnsid без remixsid бесполезны
-        // (Path 1.5 не запустится без remixsid).
-        return remixsid?.let {
-            CapturedCookies(
-                remixsid = it,
-                pCookie = pCookie,
-                remixnsid = remixnsid,
-                httoken = httoken,
-                remixnttpid = remixnttpid,
-                remixuacck = remixuacck,
-                remixuas = remixuas,
-                remixdmgr = remixdmgr,
-                remixmvkFp = remixmvkFp,
-                remixstid = remixstid,
-                remixstlid = remixstlid,
-                source = remixsidSource,
-            )
-        }
+        // #IP-MISMATCH-REMIXNSID (2026-10-18): «есть сессия» = remixsid ИЛИ p ИЛИ
+        // remixnsid. VK ID-сессия после входа во встроенный WebView бывает
+        // remixnsid-only (remixsid отсутствует) — её надо отдать caller'у для
+        // WebView silent_token обмена, а не скрыть null'ом.
+        val capturedRemixsid = remixsid
+        val capturedP = pCookie
+        val capturedNsid = remixnsid
+        val hasSession = !capturedRemixsid.isNullOrBlank() ||
+            !capturedP.isNullOrBlank() ||
+            !capturedNsid.isNullOrBlank()
+        if (!hasSession) return null
+        val sessionRemixsid = if (capturedRemixsid != null) capturedRemixsid else ""
+        return CapturedCookies(
+            remixsid = sessionRemixsid,
+            pCookie = capturedP,
+            remixnsid = capturedNsid,
+            httoken = httoken,
+            remixnttpid = remixnttpid,
+            remixuacck = remixuacck,
+            remixuas = remixuas,
+            remixdmgr = remixdmgr,
+            remixmvkFp = remixmvkFp,
+            remixstid = remixstid,
+            remixstlid = remixstlid,
+            source = remixsidSource,
+        )
     }
 
     /**

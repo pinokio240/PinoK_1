@@ -125,12 +125,10 @@ import re.pinok.util.toRelativeTime
 // П-1 (#PROFILE-SNAP): вкладки контента профиля. Статический набор — web-набор
 // users.getContentTabs известен (инвентарь §1.1.3: music,videos,photos,…),
 // вызывать usersGetContentTabs для этого не обязательно.
-private const val PROFILE_TAB_WALL = "wall"
-private const val PROFILE_TAB_MUSIC = "music"
-private const val PROFILE_TAB_VIDEO = "video"
-private const val PROFILE_TAB_PHOTO = "photo"
-
-// П-6b (#PROFILE-GAP-6b): остаток вкладок §3.2 снапшота — Клипы/Статьи/Закладки.
+internal const val PROFILE_TAB_WALL = "wall"
+internal const val PROFILE_TAB_MUSIC = "music"
+internal const val PROFILE_TAB_VIDEO = "video"
+internal const val PROFILE_TAB_PHOTO = "photo"
 private const val PROFILE_TAB_CLIPS = "clips"
 private const val PROFILE_TAB_ARTICLES = "articles"
 private const val PROFILE_TAB_BOOKMARKS = "bookmarks"
@@ -2437,7 +2435,7 @@ fun WallPostCard(
 
 /** Единый ряд чипов (вкладки контента + подвкладки стены). */
 @Composable
-private fun ProfileChipsRow(
+internal fun ProfileChipsRow(
     options: List<Pair<String, String>>,
     selected: String,
     onSelect: (String) -> Unit,
@@ -2490,7 +2488,7 @@ private fun WallFilterRow(selected: String, showArchive: Boolean, onSelect: (Str
 }
 
 @Composable
-private fun TabProgressRow() {
+internal fun TabProgressRow() {
     Box(
         modifier = Modifier.fillMaxWidth().padding(24.dp),
         contentAlignment = Alignment.Center,
@@ -2500,7 +2498,7 @@ private fun TabProgressRow() {
 }
 
 @Composable
-private fun TabErrorRow(message: String, onRetry: () -> Unit) {
+internal fun TabErrorRow(message: String, onRetry: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2516,7 +2514,7 @@ private fun TabErrorRow(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun TabEmptyRow(message: String) {
+internal fun TabEmptyRow(message: String) {
     Box(
         modifier = Modifier.fillMaxWidth().padding(24.dp),
         contentAlignment = Alignment.Center,
@@ -2533,7 +2531,7 @@ private fun TabEmptyRow(message: String) {
  *  виртуализируется общим LazyColumn профиля; тап — playTrackList всей
  *  загруженной очереди, семантика плейлиста волны 31 #AUDIO-QUEUE-PLAYLIST). */
 @Composable
-private fun ProfileTrackRow(track: Track, isPlaying: Boolean, onClick: () -> Unit) {
+internal fun ProfileTrackRow(track: Track, isPlaying: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -2592,7 +2590,7 @@ private fun ProfileTrackRow(track: Track, isPlaying: Boolean, onClick: () -> Uni
 /** W33-c: строка «Показать ещё» пагинации вкладок профиля (честные
  *  состояния: спиннер при дозагрузке, кнопка — когда есть что грузить). */
 @Composable
-private fun TabShowMoreRow(loading: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun TabShowMoreRow(loading: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
@@ -2608,7 +2606,7 @@ private fun TabShowMoreRow(loading: Boolean, onClick: () -> Unit, modifier: Modi
 /** W33-c: карточка видео сетки раздела «Видео» (вертикальная сетка 2 колонки;
  *  ширина задаёт вызывающий через [modifier] — weight(1f) в строке-чанке). */
 @Composable
-private fun ProfileVideoCard(
+internal fun ProfileVideoCard(
     video: Video,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2673,7 +2671,7 @@ private fun ProfileVideoCard(
  *  LazyColumn (виртуализация полного раздела). Тап открывает PhotoViewer
  *  с ПОЛНЫМ списком URL и глобальным индексом ([startIndex] + колонка). */
 @Composable
-private fun PhotoGridRow(
+internal fun PhotoGridRow(
     urls: List<String>,
     startIndex: Int,
     fullList: List<String>,
@@ -2704,7 +2702,7 @@ private fun PhotoGridRow(
 }
 
 /** URL лучшего размера из item photos.getAll (sizes[] — max по площади). */
-private fun extractPhotoAllUrl(photo: JsonObject): String? {
+internal fun extractPhotoAllUrl(photo: JsonObject): String? {
     return try {
         var bestUrl: String? = null
         var bestArea = 0L

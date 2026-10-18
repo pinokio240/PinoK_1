@@ -236,6 +236,38 @@ class ExchangeAuthRepository(
         }
     }
 
+    /**
+     * #CAPTCHA-V2 (2026-10-17): повторный password-login после решения НОВОЙ капчи VK
+     * (success_token, полученный через CaptchaHandler.solveRedirect). Вызывается из
+     * AuthViewModel при AuthState.NeedCaptcha. Идемпотентно — просто повторяет authByPassword
+     * с добавленным success_token в form.
+     */
+    suspend fun signInWithCaptchaSuccessToken(
+        phone: String,
+        password: String,
+        successToken: String,
+    ): AuthState {
+        val deviceId = storage.deviceId()
+        return try {
+            val json = ExponentialBackoff.retryOnTransient(
+                strategy = ExponentialBackoff.AUTH_DEFAULT,
+                tag = "authByPasswordCaptcha",
+            ) {
+                api.authByPassword(phone, password, deviceId, successToken = successToken)
+            } ?: return AuthState.Error(
+                AuthErrorKind.NETWORK,
+                "Нет связи с VK. Попробуйте ещё раз.",
+            )
+            parseAuthResponse(json)
+        } catch (e: VKAuthException) {
+            AppLog.e(TAG, "signInWithCaptcha error: ${e.javaClass.simpleName}", e)
+            AuthResponseParser.authStateException(e)
+        } catch (e: Exception) {
+            AppLog.e(TAG, "signInWithCaptcha network error", e)
+            AuthState.Error(AuthErrorKind.NETWORK, e.message ?: "network error")
+        }
+    }
+
     /** Step 2a — submit the 2FA code. Mirrors VkAuthState.b(sid!=null). */
     suspend fun submit2FaCode(phone: String, sid: String, code: String): AuthState {
         val deviceId = storage.deviceId()
@@ -1133,8 +1165,10 @@ class ExchangeAuthRepository(
      */
     fun hasSilentReloginMeans(): Boolean {
         val cookies = runCatching { RemixsidCapturer.snapshotCookies() }.getOrNull()
-        return cookies != null &&
-            (!cookies.remixsid.isNullOrBlank() || !cookies.pCookie.isNullOrBlank())
+        // #STRATEGY-D (2026-10-18): единая проверка через CapturedCookies.hasLiveSession
+        // (remixsid || p || remixnsid) — источник истины для всех мест, где решается
+        // «есть ли живая web-сессия».
+        return cookies != null && cookies.hasLiveSession
     }
 
     // #SESSION-WEB-MECHANISM (2026-09-24): canTrustedHashLogin / tryTrustedHashLogin*
@@ -1320,6 +1354,17 @@ class ExchangeAuthRepository(
             }
         }
 
+        // #AUTH2-FIX (2026-10-17): oauth.vk.com при "need_validation"/need_captcha кладёт
+        // validation_sid/sid/phone/next_step/redirect_uri/captcha_* НА КОРНЕВОЙ уровень,
+        // а `error` — примитивом ("need_validation"). Раньше мы теряли эти поля →
+        // parseErrorState возвращал "need_validation without sid". Копируем в err все
+        // корневые ключи, которых там ещё нет (err имеет приоритет, если поле есть в обоих).
+        json.keySet().forEach { k ->
+            if (!err.has(k)) {
+                json.get(k)?.takeIf { !it.isJsonNull }?.let { err.add(k, it) }
+            }
+        }
+
         return AuthResponseParser.parseErrorState(err)
     }
 
@@ -1368,8 +1413,20 @@ class ExchangeAuthRepository(
             AppLog.w(TAG, "silentRefreshViaRemixsidLive: snapshotCookies failed: ${e.message}")
             null
         }
-        if (cookies == null || cookies.remixsid.isBlank()) {
-            AppLog.w(TAG, "silentRefreshViaRemixsidLive: нет remixsid в CookieManager — нечего обменивать")
+        if (cookies == null) {
+            AppLog.w(TAG, "silentRefreshViaRemixsidLive: нет сессии в CookieManager — нечего обменивать")
+            return null
+        }
+        // #IP-MISMATCH-REMIXNSID (2026-10-18): remixsid пуст, но есть
+        // remixnsid/p — VK ID-сессия (после входа во встроенный WebView).
+        // HTTP web_token endpoint remixnsid не принимает; единственный путь —
+        // WebView silent_token обмен, который ensureFreshToken запускает
+        // следующей строкой (HiddenSessionRefresher.refresh). Cooldown здесь
+        // не ставим — просто уходим на WebView-path.
+        if (cookies.remixsid.isNullOrBlank()) {
+            AppLog.w(TAG, "silentRefreshViaRemixsidLive: remixsid нет, но есть " +
+                (if (!cookies.remixnsid.isNullOrBlank()) "remixnsid" else "p") +
+                " — HTTP-обмен невозможен, пробуем WebView-path (silent_token)")
             return null
         }
 

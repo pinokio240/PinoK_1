@@ -966,8 +966,10 @@ class MainActivity : ComponentActivity() {
             // переход должен происходить только при следующем запуске. remember сохраняет
             // значение первых вычислений на время жизни комозиции/Activity.
             val initialRoute = remember {
-                if (snap?.uiHomeEnabled == true && !snap?.uiHomeRoute.isNullOrBlank())
-                    snap?.uiHomeRoute.orEmpty() else snap?.lastRoute ?: re.pinok.ui.navigation.Screen.Feed.route
+                val s = snap
+                if (s == null) re.pinok.ui.navigation.Screen.Feed.route
+                else if (s.uiHomeEnabled && !s.uiHomeRoute.isNullOrBlank()) s.uiHomeRoute
+                else s.lastRoute
             }
             var bootLocal by rememberSaveable { mutableStateOf(false) }
 

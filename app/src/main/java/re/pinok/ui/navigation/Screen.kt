@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
@@ -324,6 +325,10 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         const val ARG_MODE = "mode"
         const val MODE_FOLLOWERS = "followers"
         const val MODE_SUBSCRIPTIONS = "subscriptions"
+        // #FRIEND-CONTENT-TABS: режим «друзья пользователя X» (friends.get с
+        // user_id) — чип «Друзья» на чужом профиле ведёт сюда; раньше экрана
+        // «друзья пользователя X» в репо не было (честное отклонение в KDoc).
+        const val MODE_FRIENDS = "friends"
         fun buildRoute(userId: Long, mode: String = MODE_FOLLOWERS): String =
             "follow_list/$userId?mode=$mode"
     }
@@ -521,6 +526,25 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * Scaffold+TopAppBar. Без параметров — данные свои (getBanned не требует входа).
      */
     object FeedHidden : Screen("feed_hidden", "Скрытые источники", Icons.Outlined.VisibilityOff)
+
+    /**
+     * #PANEL-SEPARATE-REACTIONS (2026-10-18): отдельный маршрут «Реакции» —
+     * раздел FeedFilter.LIKES, вынесенный из ленты в самостоятельный экран.
+     *
+     * Причина: раньше «Реакции» были спец-действием (PanelAction.FeedFilter) на
+     * том же маршруте feed, что и «Лента», и различались только in-memory seed'ом
+     * (FeedOpenRequest) + обратным каналом подсветки (FeedSectionHolder). Из-за
+     * этого нельзя было достоверно разделить их на панели (общий destinationRoute)
+     * и вернуть с «Реакций» на обычную ленту.
+     *
+     * Теперь: непараметризованный маршрут (как FeedHidden) — суб-экран без пункта
+     * в навбаре, открываемый из панели; данные раздел передаёт через in-memory
+     * холдер начального фильтра (ReactionsSeed), а сам раздел рендерит переиспользуемый
+     * блок LIKES из FeedScreen в принудительном режиме. Маршрут НЕ в mainRoutes
+     * (историческая оговорка про параметризацию к нему неприменима, но чтобы не
+     * сохранять как lastRoute при холодном старте — по образцу детализации).
+     */
+    object FeedLikes : Screen("feed_likes", "Реакции", Icons.Filled.ThumbUp)
 
     /**
      * IMP-VKID: экран «Аккаунт VK ID» — мультипрофили (account.getMulti,

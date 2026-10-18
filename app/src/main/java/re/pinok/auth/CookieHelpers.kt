@@ -1,6 +1,7 @@
 package re.pinok.auth
 
 import android.webkit.CookieManager
+import re.pinok.auth.exchange.RemixsidCapturer
 
 /**
  * Cookie helpers — извлечение remixsid и userId из CookieManager WebView.
@@ -18,17 +19,34 @@ internal val COOKIE_CHECK_URLS = listOf(
     "https://m.vk.ru",
     "https://login.vk.com",
     "https://login.vk.ru",
+    // #IP-MISMATCH-REMIXSID (2026-10-18): VK ID flow авторизует на id.vk.ru —
+    // session cookie (remixsid/remixnsid) может ставиться на id.vk.ru/id.vk.com,
+    // которых раньше в списке не было → вход завершался без remixsid → IP-mismatch.
+    "https://id.vk.ru",
+    "https://id.vk.com",
 )
 
 /**
  * Ищет remixsid в CookieManager WebView.
  * remixsid появляется ТОЛЬКО после полной авторизации (включая 2FA).
  *
- * Пробегает по [COOKIE_CHECK_URLS] — VK может поставить remixsid на любом
- * из доменов в зависимости от flow (m.vk.ru / vk.com / login.vk.com).
+ * Единый источник — [RemixsidCapturer.snapshotCookies] (понимает id.vk.ru,
+ * remixnsid/new VK ID session и p cookie). Если его нет — fallback на прямое
+ * сканирование [COOKIE_CHECK_URLS] (как раньше).
+ *
  * Возвращает первый найденный не-empty и не-«deleted» value.
  */
 internal fun getRemixSidFromCookieManager(): String? {
+    // #IP-MISMATCH-REMIXSID: сначала пробуем единый источник (id.vk.ru/remixnsid).
+    val unified = runCatching { RemixsidCapturer.snapshotCookies() }.getOrNull()
+    if (unified != null) {
+        if (!unified.remixsid.isNullOrBlank()) return unified.remixsid
+        // VK ID ставит remixnsid вместо remixsid (похожий по роли) — тоже годится
+        // как silent-средство (RemixsidCapturer собирает его в cookie-set).
+        if (!unified.remixnsid.isNullOrBlank()) return unified.remixnsid
+        if (!unified.pCookie.isNullOrBlank()) return unified.pCookie
+    }
+    // Fallback: прямое сканирование.
     val cm = CookieManager.getInstance()
     for (url in COOKIE_CHECK_URLS) {
         try {
@@ -36,7 +54,7 @@ internal fun getRemixSidFromCookieManager(): String? {
             val cookies = rawCookie.split(";").map { it.trim() }
             for (cookie in cookies) {
                 val parts = cookie.split("=", limit = 2)
-                if (parts.size == 2 && parts[0].trim() == "remixsid") {
+                if (parts.size == 2 && (parts[0].trim() == "remixsid" || parts[0].trim() == "remixnsid")) {
                     val value = parts[1].trim()
                     if (value.isNotEmpty() && value != "deleted") {
                         return value

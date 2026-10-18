@@ -1166,6 +1166,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 private val fallbackIps = mapOf(
                     "web.api.vk.ru" to listOf("87.240.137.208", "87.240.137.206", "87.240.129.140", "87.240.137.207"),
                     "api.vk.ru" to listOf("87.240.137.208", "87.240.137.206", "87.240.129.140", "87.240.137.207"),
+                    // #AUTH-DNS-FIX (2026-10-17): oauth.vk.com / login.vk.ru — эндпоинты входа
+                    // (DirectAuth/WebTokenAuth). Системный DNS на некот. устройствах/сетях не
+                    // резолвит их ("Unable to resolve host") → вход падал. Fallback на IP VK.
+                    "oauth.vk.com" to listOf("87.240.129.171", "87.240.129.172", "87.240.140.74", "95.213.181.49"),
+                    "login.vk.ru" to listOf("87.240.137.177", "87.240.137.178", "87.240.129.100"),
                 )
                 override fun lookup(hostname: String): List<java.net.InetAddress> {
                     val h = hostname.lowercase()

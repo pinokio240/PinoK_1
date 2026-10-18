@@ -121,7 +121,16 @@ object HiddenSessionRefresher {
         }
         try {
             val now = System.currentTimeMillis()
-            if (lastFailMs != 0L && now - lastFailMs < FAIL_COOLDOWN_MS) {
+            // #IP-MISMATCH-REMIXNSID (2026-10-18): при remixnsid/p-сессии (VK ID
+            // после входа в WebView) кулдаун НЕ блокирует — silent_token обмен
+            // в WebView единственный шанс, частые смены IP не должны его глушить
+            // (для чистой remixsid-сессии коолдаун сохранён). Определение «есть
+            // nsid/p-сессия» — локальное, отдельно от классификации «мёртвой
+            // сессии» ниже (см. #STRATEGY-D).
+            val nsidCookies = runCatching { RemixsidCapturer.snapshotCookies() }.getOrNull()
+            val hasNsidSession = nsidCookies != null &&
+                (!nsidCookies.remixnsid.isNullOrBlank() || !nsidCookies.pCookie.isNullOrBlank())
+            if (!hasNsidSession && lastFailMs != 0L && now - lastFailMs < FAIL_COOLDOWN_MS) {
                 AppLog.i(
                     TAG,
                     "refresh: cooldown active (${FAIL_COOLDOWN_MS - (now - lastFailMs)}ms left) — skip"
@@ -176,9 +185,12 @@ object HiddenSessionRefresher {
         }
 
         // Провал: классифицируем по ЖИВЫМ cookies (не по парсингу ответов, как раньше).
+        // #STRATEGY-D (2026-10-18): используем единый CapturedCookies.hasLiveSession
+        // (remixsid || p || remixnsid). Раньше remixnsid НЕ учитывался → чистая
+        // remixnsid-сессия (VK ID) ошибочно помечалась «мёртвой» и уводилась в
+        // guest, хотя была жива (расхождение с hasNsidSession выше — исправлено).
         val cookies = runCatching { RemixsidCapturer.snapshotCookies() }.getOrNull()
-        val noSessionCookies = cookies == null ||
-            (cookies.remixsid.isNullOrBlank() && cookies.pCookie.isNullOrBlank())
+        val noSessionCookies = cookies == null || !cookies.hasLiveSession
         lastAttemptDefinitivelyDead = noSessionCookies
         lastFailMs = System.currentTimeMillis()
         AppLog.w(

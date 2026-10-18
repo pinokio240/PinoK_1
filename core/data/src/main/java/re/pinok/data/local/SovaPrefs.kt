@@ -619,6 +619,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             music2Enabled = p[Keys.MUSIC2_ENABLED] ?: false,
             // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false).
             callsEnabled = p[Keys.CALLS_ENABLED] ?: false,
+            // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный флоу входа (прямой HTTP).
+            // Default false = прежний WebView-вход. Только для ручного входа (не silent).
+            authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
             callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: false,
@@ -1350,6 +1353,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setMusic2Enabled(v: Boolean)           = put(Keys.MUSIC2_ENABLED, v)
     // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков.
     suspend fun setCallsEnabled(v: Boolean)          = put(Keys.CALLS_ENABLED, v)
+    /** #AUTH2: включить «Авторизацию 2» (альтернативный флоу входа, default false). */
+    suspend fun setAuthV2Enabled(v: Boolean)         = put(Keys.AUTH_V2_ENABLED, v)
     // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv без камеры).
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
     // #CALLS-SWDECODE: принудительный программный декодер видео.
@@ -1928,6 +1933,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val music2Enabled: Boolean,
         // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false).
         val callsEnabled: Boolean,
+        // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный флоу входа (прямой HTTP).
+        val authV2Enabled: Boolean,
         /** #CALLS-SYMMETRIC (01.09, Этап 2-заготовка): отправлять чёрную видеозаглушку
          *  (320×180@10fps, БЕЗ камеры и разрешения CAMERA) — answer m=video становится
          *  sendrecv, звонок симметричен как у офиц. клиента. Гипотеза: официальный
@@ -2323,6 +2330,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // ВЫКЛЮЧЕН (false). Когда выключен — весь функционал звонков скрыт (кнопки
         // аудио/видео в чатах, раздел «Звонки» в настройках/меню, incoming-оверлей).
         val CALLS_ENABLED           = booleanPreferencesKey("calls_enabled")
+        // #AUTH2 (2026-10-17): экспериментальный флоу входа «Авторизация 2» (прямой HTTP OAuth).
+        val AUTH_V2_ENABLED          = booleanPreferencesKey("auth_v2_enabled")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
         val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
         /** #CALLS-AEC-TOGGLE: hardware AEC/NS аудиодвижка звонков. */
@@ -2371,14 +2380,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         const val CHAT_BG_COLOR_ARGB_DEFAULT = 0
         // Размеры шрифта текста диалога (в sp), индекс = CHAT_FONT_SIZE_INDEX.
         val CHAT_FONT_SIZES_SP: List<Int> = listOf(12, 13, 14, 15, 16, 17, 18, 20, 22, 24)
-        const val AUTH_OAUTH_HOST_DEFAULT      = "oauth.vk.com"
-        const val AUTH_ID_HOST_DEFAULT         = "id.vk.com"
-        const val AUTH_LOGIN_HOST_DEFAULT      = "login.vk.com"
+        const val AUTH_OAUTH_HOST_DEFAULT      = "oauth.vk.ru"
+        const val AUTH_ID_HOST_DEFAULT         = "id.vk.ru"
+        const val AUTH_LOGIN_HOST_DEFAULT      = "login.vk.ru"
         const val AUTH_MOBILE_WEB_HOST_DEFAULT = "m.vk.ru"
-        const val AUTH_API_HOST_DEFAULT        = "api.vk.com"
+        const val AUTH_API_HOST_DEFAULT        = "api.vk.ru"
         const val AUTH_WEB_CLIENT_ID_DEFAULT   = "6287487"  // vk.com desktop web
         // #SETTINGS-DOMAINS (2026-10-14): дефолты доп. доменов. Проект реально ходит
-        // на .ru для web-gateway/queuev4/eh и на .com для api/oauth/userapi/media.
+        // на .ru для web-gateway/queuev4/eh/api/oauth и на .com для userapi/части CDN.
+        // VK мигрирует вход и API на .ru (Fix #189): oauth/id/login/api — по умолчанию .ru.
         const val AUTH_WEB_API_HOST_DEFAULT    = "web.api.vk.ru"
         const val AUTH_USERAPI_HOST_DEFAULT    = "userapi.com"
         const val AUTH_MEDIA_CDN_HOST_DEFAULT  = "vkuserphoto.ru"

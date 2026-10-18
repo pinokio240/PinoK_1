@@ -125,6 +125,7 @@ import re.pinok.util.AppLog
  *     [ExchangeAuthRepository.signIn] (Direct Auth deep fallback),
  *     [OAuthWebViewActivity] (устаревший OAuth flow).
  */
+@Suppress("DEPRECATION")
 class AuthActivity : ComponentActivity() {
 
     @Suppress("DEPRECATION")
@@ -254,6 +255,30 @@ class AuthActivity : ComponentActivity() {
             AppLog.d(TAG, "onCreate: clipboard pre-check failed: ${e.message}")
         }
 
+        // #AUTH2 (2026-10-17): «Авторизация 2» больше НЕ форкается здесь автоматически.
+        // Теперь это отдельная кнопка «Войти в аккаунт 2» на LandingScreen (видна ТОЛЬКО
+        // при включённом authV2Enabled). Обычный «Войти через VK» остаётся как был.
+        // Silent re-login всегда идёт по прежнему пути (кнопка не касается авто-входа).
+        val silentModeEarly = intent?.getBooleanExtra(EXTRA_SILENT_MODE, false) ?: false
+
+        // #AUTH2: запуск AuthV2Activity (WebView-флоу по образцу vk-lite) — вызывается
+        // из кнопки «Войти в аккаунт 2» на LandingScreen. Только для ручного входа.
+        // startActivityForResult: результат AuthV2Activity пробрасывается в MainActivity
+        // через onActivityResult этого экрана.
+        val launchAuthV2: () -> Unit = {
+            if (!silentModeEarly) {
+                try {
+                    AppLog.i(TAG, "AUTH2: запуск AuthV2Activity из кнопки «Войти в аккаунт 2»")
+                    startActivityForResult(
+                        android.content.Intent(this, re.pinok.auth.auth2.AuthV2Activity::class.java),
+                        REQUEST_CODE_AUTH2,
+                    )
+                } catch (t: Throwable) {
+                    AppLog.w(TAG, "AUTH2: AuthV2Activity не запустился (${t.message})")
+                }
+            }
+        }
+
         setContent {
             SOVATheme {
                 // Fix #107: silent re-login режим — запускается MainActivity при
@@ -274,6 +299,9 @@ class AuthActivity : ComponentActivity() {
                         AuthScreen(
                             viewModel = viewModel,
                             silentMode = silentMode,
+                            // #AUTH2: кнопка «Войти в аккаунт 2» → запуск AuthV2Activity
+                            // (WebView-флоу по образцу vk-lite). Только если включена.
+                            onStartAuthV2 = launchAuthV2,
                             // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: запуск после logout —
                             // WebView-шаг 1 очистит старые web_token-ключи.
                             clearStoredWebToken = clearStoredWebToken,
@@ -360,6 +388,21 @@ class AuthActivity : ComponentActivity() {
             AppLog.i(TAG, "onResume: PendingAuthResult found — processing token (user_id=$uid) on fresh viewModel")
             viewModel.submitOAuthToken(token, uid)
             return
+        }
+    }
+
+    // #AUTH2 (2026-10-17): AuthV2Activity запускается из кнопки «Войти в аккаунт 2»
+    // поверх AuthActivity. Пробрасываем её результат дальше в MainActivity:
+    // RESULT_OK (успешный вход) → завершаем AuthActivity с RESULT_OK, MainActivity
+    // увидит вход и закроет экран авторизации. RESULT_CANCELED → остаёмся на входе.
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_AUTH2 && resultCode == RESULT_OK) {
+            AppLog.i(TAG, "AUTH2: AuthV2Activity вернула RESULT_OK — пробрасываем в MainActivity")
+            PendingAuthResult.clear()
+            setResult(RESULT_OK)
+            finish()
         }
     }
 
@@ -482,6 +525,10 @@ class AuthActivity : ComponentActivity() {
     companion object {
         const val TAG = "AuthActivity"
 
+        // #AUTH2 (2026-10-17): requestCode запуска AuthV2Activity из кнопки
+        // «Войти в аккаунт 2». Результат пробрасывается в MainActivity.
+        private const val REQUEST_CODE_AUTH2 = 77
+
         /**
          * #34: Кастомный результат AuthActivity — пользователь выбрал
          * «Офлайн-режим» на LandingScreen. MainActivity получает этот код
@@ -561,9 +608,18 @@ private fun AuthScreen(
     // Fix #187: запуск внешнего браузера (Chrome/Яндекс) для OAuth.
     // AuthActivity передаёт сюда лямбду, которая вызывает ExternalBrowserLauncher.
     onLaunchExternalBrowser: () -> Unit = {},
+    // #AUTH2 (2026-10-17): запуск AuthV2Activity из кнопки «Войти в аккаунт 2»
+    // на LandingScreen (WebView-флоу по образцу vk-lite). Обычный вход не трогает.
+    onStartAuthV2: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+    // #AUTH-OFFLINE: флаг доступности сети — блокирует кнопки входа на LandingScreen.
+    val isOnline by SovaApp.get(context).networkObserver.isOnlineFlow.collectAsState(initial = SovaApp.get(context).networkObserver.isOnline())
+    // #AUTH2: включена ли «Авторизация 2» — показывать ли кнопку «Войти в аккаунт 2».
+    val authV2Enabled = runCatching {
+        SovaApp.get(context).prefsSnapshot?.authV2Enabled == true
+    }.getOrDefault(false)
 
     // Fix #190: показываем поле «Вставьте ссылку» после запуска внешнего
     // браузера. Пользователь копирует URL из адресной строки браузера
@@ -684,8 +740,14 @@ private fun AuthScreen(
             AuthPhase.LANDING -> Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                 LandingScreen(
                     state = state,
+                    // #AUTH-OFFLINE: если нет сети — кнопки входа заблокированы.
+                    isOnline = isOnline,
                     // #VKAUTH-V2 Primary CTA: переход к WebView m.vk.ru.
                     onStartWebView = { phase = AuthPhase.WEBVIEW },
+                    // #AUTH2: кнопка «Войти в аккаунт 2» (видна только если включена)
+                    // → запуск AuthV2Activity (WebView-флоу vk-lite).
+                    onStartAuthV2 = onStartAuthV2,
+                    authV2Enabled = authV2Enabled,
                     // Fix #190: при запуске внешнего браузера показываем подсказку
                     // «Поделиться → PinoK» (Fix #191 — основной способ).
                     onLaunchExternalBrowser = {

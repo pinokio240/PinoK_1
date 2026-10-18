@@ -270,9 +270,8 @@ private fun Screen.navRoute(): String =
         route
     }
 
-// ── #PANELEDIT: навигация по пункту панели (PanelItem) ─────────────────
-// Обычные пункты — навигация на Screen; спец-пункт «Реакции» (FeedFilter) —
-// запрос на открытие Ленты на разделе LIKES (см. FeedOpenRequest).
+// ---- #PANELEDIT: navigation by panel item (PanelItem) ----
+// All panel items navigate to a Screen (including "Reactions" -> Screen.FeedLikes).
 
 /** Общие NavOptions для пунктов панелей (как у dock/drawer-кнопок). */
 private fun NavHostController.panelItemNavOptions(): androidx.navigation.NavOptions =
@@ -286,11 +285,6 @@ private fun NavHostController.panelItemNavOptions(): androidx.navigation.NavOpti
 private fun NavHostController.navigatePanelItem(item: PanelItem) {
     when (val a = item.action) {
         is PanelAction.Route -> navigate(a.screen.navRoute(), panelItemNavOptions())
-        is PanelAction.FeedFilter -> {
-            // «Реакции» — открыть Ленту на разделе LIKES (in-memory seed).
-            FeedOpenRequest.request(a.filterName)
-            navigate(Screen.Feed.navRoute(), panelItemNavOptions())
-        }
     }
 }
 
@@ -931,7 +925,7 @@ fun SovaNavHost(
     // Авторизация при этом сохраняется — при следующем запуске пользователь
     // сразу попадёт в ленту без повторного логина.
     var showExitAppDialog by remember { mutableStateOf(false) }
-    val allScreens: List<Screen> = dockScreens + drawerScreens + listOf(Screen.About)
+    val allScreens: List<Screen> = dockScreens + drawerScreens + listOf(Screen.About) + listOf(Screen.FeedLikes)
     // #ARCH-CONTAINERS (Этап 1.4/1.5-а): заголовок может прийти и из контейнерного
     // NavEntry (routes "calls_history"/"photos" больше не в ядерном списке — см.
     // drawerScreens). Неизвестный роут — как раньше, "PinoK". #NULL-EXPLICIT:
@@ -1247,7 +1241,7 @@ fun SovaNavHost(
                             } else 0
                             NavigationDrawerItem(
                                 label = { Text(item.title) },
-                                selected = currentRoute == itemDest,
+                                selected = currentRoute == item.destinationRoute,
                                 onClick = {
                                     // #30 (nav fix): popUpTo + saveState — как в dock items.
                                     if (itemDest == Screen.Clips.route && clipsBadge > 0) {
@@ -1545,7 +1539,7 @@ fun SovaNavHost(
                                             0
                                         }
                                         NavigationBarItem(
-                                            selected = currentRoute == itemDest,
+                                            selected = currentRoute == item.destinationRoute,
                                             onClick = {
                                                 nav.navigatePanelItem(item)
                                             },
@@ -1745,6 +1739,30 @@ fun SovaNavHost(
                         // #ARCH-CONTAINERS (Этап 1.4): запуск звонка — только через
                         // реестр (CallStarter). callClick == null → кнопка звонка
                         // в ленте НЕ рендерится (условие композиции).
+                        onCallClick = callClick,
+                    )
+                }
+                // #PANEL-SEPARATE-REACTIONS (2026-10-18): отдельный маршрут «Реакции».
+                // Открывает тот же FeedScreen, но в автономном режиме (likesOnly=true) —
+                // рендерится ТОЛЬКО раздел реакций (подтабы + контент) без обычной ленты,
+                // stories и их фоновой загрузки. Маршрут НЕ в mainRoutes → не сохраняется
+                // в lastRoute (как другие под-экраны), при холодном старте возвращается лента.
+                composable(Screen.FeedLikes.route) {
+                    FeedScreen(
+                        likesOnly = true,
+                        onVideoClick = { video -> VideoHolder.open(video) },
+                        onGroupClick = { groupId ->
+                            nav.navigate(Screen.Community.buildRoute(groupId))
+                        },
+                        onPostClick = { post ->
+                            PostHolder.last = post
+                            nav.navigate(Screen.PostDetail.buildRoute(post.ownerId, post.id))
+                        },
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
+                        onStoryViewerClick = { nav.navigate(Screen.StoryViewer.route) },
+                        onOpenOfflineManager = { nav.navigate(Screen.OfflineManager.route) },
                         onCallClick = callClick,
                     )
                 }
@@ -3044,6 +3062,12 @@ composable(Screen.CallsHistory.route) {
                         },
                         onSubscriptionsClick = { targetId ->
                             nav.navigate(Screen.FollowList.buildRoute(targetId, Screen.FollowList.MODE_SUBSCRIPTIONS))
+                        },
+                        // #FRIEND-CONTENT-TABS: чип «Друзья» → список друзей
+                        // пользователя X (FollowList MODE_FRIENDS). Раньше экрана
+                        // «друзья пользователя X» не было — чип не проводился.
+                        onFriendsClick = { targetId ->
+                            nav.navigate(Screen.FollowList.buildRoute(targetId, Screen.FollowList.MODE_FRIENDS))
                         },
                         // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора в шапке
                         // поста чужой стены — группа/канал → сообщество, пользователь

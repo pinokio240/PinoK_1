@@ -55,6 +55,7 @@ import coil3.compose.AsyncImage
 import com.google.gson.JsonObject
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
+import re.pinok.data.model.Friend
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.Screen
@@ -260,7 +261,9 @@ fun FollowersSubscriptionsScreen(
     val app = SovaApp.get()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // #FRIEND-CONTENT-TABS: режим «друзья пользователя X» (friends.get с user_id).
     val isSubscriptionsMode = mode == Screen.FollowList.MODE_SUBSCRIPTIONS
+    val isFriendsMode = mode == Screen.FollowList.MODE_FRIENDS
 
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
@@ -276,6 +279,26 @@ fun FollowersSubscriptionsScreen(
 
     /** Страница по offset → (элементы, total; total=-1 если API его не отдаёт). */
     suspend fun fetchPage(offset: Int): Pair<List<FollowListEntry>, Int> {
+        // #FRIEND-CONTENT-TABS: режим «друзья пользователя X» — друзья являются
+        // только пользователями (isGroup=false), список/пагинация/render те же,
+        // что у подписчиков (FollowListEntry + FollowListRow).
+        if (isFriendsMode) {
+            val friends: List<Friend> = app.apiClient.friendsGet(
+                userId = userId,
+                count = FOLLOW_LIST_PAGE_SIZE,
+                offset = offset,
+            )
+            return friends.mapNotNull { f ->
+                if (f.id <= 0L) return@mapNotNull null
+                FollowListEntry(
+                    id = f.id,
+                    isGroup = false,
+                    title = f.fullName,
+                    photo = f.photo200 ?: f.photo100,
+                    subtitle = f.status?.takeIf { it.isNotBlank() },
+                )
+            } to -1
+        }
         if (isSubscriptionsMode) {
             // ДЕФОЛТ VKA count=5 перекрыт: страницы по [FOLLOW_LIST_PAGE_SIZE].
             val response = app.apiClient.usersGetSubscriptions(
@@ -306,7 +329,7 @@ fun FollowersSubscriptionsScreen(
             error = null
             try {
                 val (page, pageTotal) = fetchPage(0)
-                if (page.isEmpty() && !isSubscriptionsMode && app.apiClient.lastApiError != null) {
+                if (page.isEmpty() && !isSubscriptionsMode && !isFriendsMode && app.apiClient.lastApiError != null) {
                     // usersGetFollowers «глотает» ошибку в emptyList — различаем
                     // по lastApiError, чтобы не показывать «нет подписчиков»
                     // при сетевой ошибке (no-stub).
@@ -370,7 +393,15 @@ fun FollowersSubscriptionsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isSubscriptionsMode) "Подписки" else "Подписчики") },
+                title = {
+                    Text(
+                        when {
+                            isFriendsMode -> "Друзья"
+                            isSubscriptionsMode -> "Подписки"
+                            else -> "Подписчики"
+                        },
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
@@ -418,7 +449,7 @@ fun FollowersSubscriptionsScreen(
                             refreshing = true
                             try {
                                 val (page, pageTotal) = fetchPage(0)
-                                if (page.isNotEmpty() || isSubscriptionsMode || app.apiClient.lastApiError == null) {
+                                if (page.isNotEmpty() || isSubscriptionsMode || isFriendsMode || app.apiClient.lastApiError == null) {
                                     entries = page.distinctBy { "${it.isGroup}_${it.id}" }
                                     total = pageTotal
                                     endReached = if (pageTotal >= 0) {
@@ -458,7 +489,11 @@ fun FollowersSubscriptionsScreen(
                             item(key = "empty") {
                                 Text(
                                     if (entries.isEmpty()) {
-                                        if (isSubscriptionsMode) "Подписок нет" else "Подписчиков нет"
+                                        when {
+                                            isFriendsMode -> "Друзей нет"
+                                            isSubscriptionsMode -> "Подписок нет"
+                                            else -> "Подписчиков нет"
+                                        }
                                     } else {
                                         "По фильтру ничего не найдено"
                                     },

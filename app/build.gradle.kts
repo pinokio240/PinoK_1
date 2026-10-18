@@ -35,9 +35,9 @@ android {
         // #RELEASE-V223-BUMP (2026-10-16): bump 222→223 — накопленные фиксы:
         // настройки мессенджера (шрифт/фон диалога, фиксация панели, домашний экран),
         // редактор панелей (Лента), flood-control (rps 3 + retry 6/9), навигация назад.
-        versionCode = 223
-        versionName = "2.2.3"
-        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-16T18:26:47+03:00\"")
+        versionCode = 224
+        versionName = "2.2.4"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-18T20:13:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

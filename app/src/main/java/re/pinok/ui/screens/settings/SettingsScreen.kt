@@ -570,6 +570,17 @@ private fun DevTab(
                 checked = s.callsEnabled,
             ) { v -> scope.launch { app.prefs.setCallsEnabled(v) } }
         }
+        item {
+            // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный WebView-флоу входа
+            // (по образцу vk-lite-auth: m.vk.ru в WebView, чтение web_token из localStorage).
+            // Включается по желанию; по умолчанию выключен — прежний WebView-вход AuthActivity.
+            // Применяется к ручному входу (не к silent re-login).
+            ToggleRow(
+                title = "Авторизация 2",
+                subtitle = "Вкл — WebView-вход как в vk-lite (VK сам принимает номер/пароль/2FA). Выкл — прежний WebView-вход. Не влияет на авто-вход.",
+                checked = s.authV2Enabled,
+            ) { v -> scope.launch { app.prefs.setAuthV2Enabled(v) } }
+        }
     }
 }
 

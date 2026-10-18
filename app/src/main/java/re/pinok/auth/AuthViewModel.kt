@@ -578,6 +578,34 @@ class AuthViewModel(
             pendingSid = result.validationSid
             pendingValidationType = result.validationType
         }
+        // #CAPTCHA-V2 (2026-10-17): VK требует капчу при входе (need_captcha). Решаем её
+        // здесь (В ВИДЕМОДЕЛИ) через глобальный CaptchaHandler.solveRedirect (WebView →
+        // success_token), затем повторяем password-login с success_token. UI не трогается:
+        // пользователь видит только Loading / Success / Error / NeedValidation.
+        if (result is AuthState.NeedCaptcha) {
+            val redirect = result.redirectUri
+            if (redirect.isNullOrBlank()) {
+                // Нет redirect_uri — новая схема неприменима; без классики fallback не решаем.
+                _state.value = AuthState.Error(AuthErrorKind.UNKNOWN, "Требуется капча")
+                return
+            }
+            _state.value = AuthState.Loading
+            currentJob = viewModelScope.launch {
+                val token = withContext(Dispatchers.IO) {
+                    SovaApp.getOrNull()?.captchaHandler?.solveRedirect(redirect)
+                }
+                val next = if (token.isNullOrBlank()) {
+                    AuthState.Error(AuthErrorKind.UNKNOWN, "Капча не решена или отменена")
+                } else {
+                    withContext(Dispatchers.IO) {
+                        repo.signInWithCaptchaSuccessToken(lastPhone, lastPassword, token)
+                    }
+                }
+                // Рекурсия: Success / NeedValidation / Error / (редко) новая капча.
+                handleAuthResult(next)
+            }
+            return
+        }
         _state.value = result
         if (result is AuthState.Success) {
             prefetchLongPoll()

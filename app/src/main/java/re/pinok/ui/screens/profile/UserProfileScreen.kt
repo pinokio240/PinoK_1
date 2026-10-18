@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -70,8 +71,10 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Post
+import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.media.PlayerConnection
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.RepostGroupCache
 import re.pinok.ui.components.ScrollToTopFab
@@ -157,6 +160,9 @@ fun UserProfileScreen(
     // (глобальный Screen.Friends показывает СВОИХ друзей — отклонение в KDoc).
     onFollowersClick: (Long) -> Unit = {},
     onSubscriptionsClick: (Long) -> Unit = {},
+    // #FRIEND-CONTENT-TABS: чип «Друзья» → список друзей собеседника
+    // (Screen.FollowList MODE_FRIENDS; на своём профиле — Screen.Friends).
+    onFriendsClick: (Long) -> Unit = {},
     // POSTCARD-REFACTOR-PLAN: тап по имени/аватару автора в шапке поста чужой
     // стены. Группа/канал (fromId<0) → сообщество; пользователь (fromId>0) →
     // его профиль (на чужой стене чужие посты-репосты от групп/других людей).
@@ -210,6 +216,30 @@ fun UserProfileScreen(
     // П-7-AB: «Пожаловаться» на запись чужой стены (wall.markAsSpam).
     val reportingPost = remember { mutableStateOf<Post?>(null) }
     var reportInFlight by remember { mutableStateOf(false) }
+
+    // #FRIEND-CONTENT-TABS (2026-10-17): контентные вкладки чужих разделов.
+    // Паттерн — ProfileScreen (свой профиль) W33-c: «Стена/Музыка/Видео/Фото»,
+    // чипы счётчиков переключают selectedContentTab, ленивая загрузка при
+    // первом выборе вкладки, статусы loading/error/empty через Tab*Row.
+    // Раздел «Друзья» НЕ вкладка — чип ведёт на отдельный экран
+    // (Screen.FollowList, MODE_FRIENDS, см. FollowersSubscriptionsScreen).
+    var selectedTab by remember { mutableStateOf(PROFILE_TAB_WALL) }
+    var tabRetryTick by remember { mutableStateOf(0) }
+    // Музыка (audio.getWithCount → total + tracks).
+    var musicTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var musicLoading by remember { mutableStateOf(false) }
+    var musicError by remember { mutableStateOf<String?>(null) }
+    var musicLoaded by remember { mutableStateOf(false) }
+    // Видео (video.get).
+    var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var videoLoading by remember { mutableStateOf(false) }
+    var videoError by remember { mutableStateOf<String?>(null) }
+    var videoLoaded by remember { mutableStateOf(false) }
+    // Фото (photos.getAll → URLs).
+    var photoUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var photoLoading by remember { mutableStateOf(false) }
+    var photoError by remember { mutableStateOf<String?>(null) }
+    var photoLoaded by remember { mutableStateOf(false) }
 
     // Свой профиль? Если да — не показываем «Добавить в друзья».
     val currentUserId = app.exchangeAuthRepository.userId()
@@ -275,6 +305,61 @@ fun UserProfileScreen(
             )
         } catch (e: Exception) {
             AppLog.w("UserProfileScreen", "subscriptions count failed: ${e.message}")
+        }
+    }
+
+    // #FRIEND-CONTENT-TABS: ленивая загрузка разделов чужого пользователя
+    // при первом выборе вкладки (паттерн ProfileScreen W33-c). Каждая вкладка
+    // грузится ОДИН раз (loaded-флаг); «Повторить» сбрасывает ошибку через
+    // tabRetryTick. Недоступность раздела (error 15 / total=-1) → честная
+    // ошибка с текстом lastApiErrorHuman, а не молчаливая пустота.
+    LaunchedEffect(selectedTab, tabRetryTick) {
+        if (isSelf) return@LaunchedEffect
+        when (selectedTab) {
+            PROFILE_TAB_MUSIC -> if (!musicLoaded && !musicLoading) {
+                musicLoading = true
+                musicError = null
+                try {
+                    val (total, page) = app.apiClient.audioGetWithCount(50, 0, userId)
+                    if (total < 0 && page.isEmpty()) {
+                        musicError = "Не удалось загрузить музыку: " +
+                            (app.apiClient.lastApiErrorHuman() ?: "раздел недоступен")
+                        AppLog.w("UserProfileScreen", "Music tab: silent fail for uid=$userId")
+                    } else {
+                        musicTracks = page.filter { it.id > 0L && !it.url.isNullOrBlank() }
+                        musicLoaded = true
+                    }
+                } catch (e: Exception) {
+                    musicError = "Ошибка: ${e.message}"
+                } finally {
+                    musicLoading = false
+                }
+            }
+            PROFILE_TAB_VIDEO -> if (!videoLoaded && !videoLoading) {
+                videoLoading = true
+                videoError = null
+                try {
+                    videos = app.apiClient.videoGet(ownerId = userId, count = 30).filter { it.id > 0L }
+                    videoLoaded = true
+                } catch (e: Exception) {
+                    videoError = "Ошибка: ${e.message}"
+                } finally {
+                    videoLoading = false
+                }
+            }
+            PROFILE_TAB_PHOTO -> if (!photoLoaded && !photoLoading) {
+                photoLoading = true
+                photoError = null
+                try {
+                    val photos = app.apiClient.photosGetAll(ownerId = userId, count = 30)
+                    photoUrls = photos.mapNotNull { extractPhotoAllUrl(it) }
+                    photoLoaded = true
+                } catch (e: Exception) {
+                    photoError = "Ошибка: ${e.message}"
+                } finally {
+                    photoLoading = false
+                }
+            }
         }
     }
 
@@ -564,6 +649,10 @@ fun UserProfileScreen(
         // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
         // над лентой стены чужого профиля (пагинация loadMoreWall).
         Box(modifier = Modifier.fillMaxSize()) {
+        // #FRIEND-CONTENT-TABS: состояние плеера выносится из LazyColumn-scope
+        // (collectAsState в LazyListScope-items — НЕ composable-контекст, ошибка
+        // компиляции). Один observable на весь экран, как в ProfileScreen.
+        val friendPlayerState = PlayerConnection.playerState.collectAsState().value
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { refreshWall() },
@@ -578,9 +667,16 @@ fun UserProfileScreen(
                 CountersRow(
                     profile = p,
                     // П-7-AB: тап по чипу «Подписчики» → подписчики СОБЕСЕДНИКА.
-                    // «Друзья» НЕ проводим: глобальный Screen.Friends показывает
-                    // СВОИХ друзей (отклонение — KDoc экрана выше).
                     onFollowersClick = { onFollowersClick(p.id) },
+                    // #FRIEND-CONTENT-TABS: чипы счётчиков → переключение вкладки
+                    // контента внутри профиля (паттерн ProfileScreen W33-c).
+                    onPhotosClick = { selectedTab = PROFILE_TAB_PHOTO },
+                    onVideosClick = { selectedTab = PROFILE_TAB_VIDEO },
+                    onAudiosClick = { selectedTab = PROFILE_TAB_MUSIC },
+                    // «Друзья» — чип ведёт на отдельный экран списка друзей
+                    // пользователя X (на своём профиле — Screen.Friends; здесь —
+                    // FollowersSubscriptionsScreen MODE_FRIENDS, см. ниже).
+                    onFriendsClick = { onFriendsClick(p.id) },
                 )
             }
             // П-7-AB: строка «Подписки» собеседника (чипа в CountersRow нет —
@@ -655,7 +751,7 @@ fun UserProfileScreen(
                                             "Ошибка: ${e.message}",
                                             Toast.LENGTH_SHORT,
                                         ).show()
-                                    } finally {
+} finally {
                                         friendActionInProgress = false
                                     }
                                 }
@@ -724,9 +820,101 @@ fun UserProfileScreen(
                 }
             }
 
+            // #FRIEND-CONTENT-TABS: ряд чипов вкладок «Стена/Музыка/Видео/Фото»
+            // (как свой профиль — ProfileChipsRow; активируется тапом по чипу
+            // счётчика или по самому чипу). Контент вкладок ниже, между
+            // чипами и секцией «Информация» (для WALL секции остаются как есть).
+            item(key = "friend_content_tabs") {
+                ProfileChipsRow(
+                    options = FRIEND_CONTENT_TABS,
+                    selected = selectedTab,
+                    onSelect = { selectedTab = it },
+                )
+            }
+
+            // Контент выбранной вкладки (неактивные секции рендерятся при WALL).
+            if (selectedTab == PROFILE_TAB_MUSIC) {
+                val me = musicError
+                if (musicLoading) {
+                    item(key = "friend_music_progress") { TabProgressRow() }
+                } else if (me != null) {
+                    item(key = "friend_music_error") {
+                        TabErrorRow(message = me, onRetry = { tabRetryTick++ })
+                    }
+                } else if (musicTracks.isEmpty()) {
+                    item(key = "friend_music_empty") {
+                        TabEmptyRow("У этого пользователя нет музыки")
+                    }
+                } else {
+                    itemsIndexed(musicTracks, key = { idx, t ->
+                        "friend_music_${idx}_${t.ownerId}_${t.id}"
+                    }) { idx, track ->
+                        val current = friendPlayerState.currentTrack
+                        val isCurrent = current != null &&
+                            track.id == current.id && track.ownerId == current.ownerId
+                        ProfileTrackRow(
+                            track = track,
+                            isPlaying = isCurrent && friendPlayerState.isPlaying,
+                            onClick = {
+                                if (isCurrent) PlayerConnection.togglePlayPause()
+                                else PlayerConnection.playTrackList(musicTracks, idx)
+                            },
+                        )
+                    }
+                }
+            } else if (selectedTab == PROFILE_TAB_VIDEO) {
+                val ve = videoError
+                if (videoLoading) {
+                    item(key = "friend_video_progress") { TabProgressRow() }
+                } else if (ve != null) {
+                    item(key = "friend_video_error") {
+                        TabErrorRow(message = ve, onRetry = { tabRetryTick++ })
+                    }
+                } else if (videos.isEmpty()) {
+                    item(key = "friend_video_empty") { TabEmptyRow("У этого пользователя нет видео") }
+                } else {
+                    val rows = videos.chunked(2)
+                    itemsIndexed(rows, key = { idx, _ -> "friend_video_row_$idx" }) { _, rowVideos ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            rowVideos.forEach { video ->
+                                ProfileVideoCard(
+                                    video = video,
+                                    onClick = { onVideoClick(video) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (selectedTab == PROFILE_TAB_PHOTO) {
+                val pe = photoError
+                if (photoLoading) {
+                    item(key = "friend_photo_progress") { TabProgressRow() }
+                } else if (pe != null) {
+                    item(key = "friend_photo_error") {
+                        TabErrorRow(message = pe, onRetry = { tabRetryTick++ })
+                    }
+                } else if (photoUrls.isEmpty()) {
+                    item(key = "friend_photo_empty") { TabEmptyRow("У этого пользователя нет фотографий") }
+                } else {
+                    val rows = photoUrls.chunked(3)
+                    itemsIndexed(rows, key = { idx, _ -> "friend_photo_row_$idx" }) { idx, rowUrls ->
+                        PhotoGridRow(
+                            urls = rowUrls,
+                            startIndex = idx * 3,
+                            fullList = photoUrls,
+                            onPhotoClick = { urls, i -> photoViewerState.value = urls to i },
+                        )
+                    }
+                }
+            }
+
             // #OPVK-EXTRACT: секция «Информация» (label/value из уже загруженного
             // UserProfile) — между действиями и «Подарками», как инфо-блок веба.
-            if (infoRows.isNotEmpty()) {
+            if (selectedTab == PROFILE_TAB_WALL && infoRows.isNotEmpty()) {
                 item(key = "profile_info") {
                     ProfileInfoSection(rows = infoRows)
                 }
@@ -734,7 +922,7 @@ fun UserProfileScreen(
 
             // Этап П-2: секция «Подарки» над лентой записей (gifts.get, count=9,
             // инвентарь §1.1.6). Рисуется только при непустом ответе — no-stub.
-            if (gifts.isNotEmpty()) {
+            if (selectedTab == PROFILE_TAB_WALL && gifts.isNotEmpty()) {
                 item {
                     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Text(
@@ -763,6 +951,8 @@ fun UserProfileScreen(
                 }
             }
 
+            // Блок стены (заголовок, посты, пагинация) — только на вкладке «Стена».
+            if (selectedTab == PROFILE_TAB_WALL) {
             item {
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -853,6 +1043,7 @@ fun UserProfileScreen(
                     }
                 }
             }
+            } // if (selectedTab == PROFILE_TAB_WALL)
         }
         } // PullToRefreshBox (Fix #86)
 
@@ -995,3 +1186,13 @@ private fun ProfileInfoSection(rows: List<Pair<String, String>>) {
         }
     }
 }
+
+// #FRIEND-CONTENT-TABS: вкладки контента чужого профиля. Только Стена/Музыка/
+// Видео/Фото — Клипы/Статьи/Закладки (для своего профиля, ProfileScreen) для
+// чужого пользователя обычно недоступны или не нужны (no-stub).
+private val FRIEND_CONTENT_TABS: List<Pair<String, String>> = listOf(
+    PROFILE_TAB_WALL to "Стена",
+    PROFILE_TAB_MUSIC to "Музыка",
+    PROFILE_TAB_VIDEO to "Видео",
+    PROFILE_TAB_PHOTO to "Фото",
+)

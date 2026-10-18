@@ -23,18 +23,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * Что делает пункт панели при тапе.
- * [Route] — обычная навигация на top-level экран.
- * [FeedFilter] — специальный пункт «Реакции»: открыть Ленту на разделе LIKES.
+ * [Route] — навигация на экран.
  */
 sealed class PanelAction {
     data class Route(val screen: Screen) : PanelAction()
-
-    /**
-     * Открыть Ленту (Screen.Feed) и переключить её на указанный раздел.
-     * [filterName] — это FeedFilter.name ("LIKES"), задаётся строкой, т.к.
-     * enum FeedFilter приватный (в FeedScreen.kt) и не доступен из навигации.
-     */
-    data class FeedFilter(val filterName: String) : PanelAction()
 }
 
 /**
@@ -55,7 +47,6 @@ data class PanelItem(
     val destinationRoute: String
         get() = when (val a = action) {
             is PanelAction.Route -> a.screen.route
-            is PanelAction.FeedFilter -> Screen.Feed.route
         }
 }
 
@@ -96,7 +87,7 @@ object PanelItems {
         PanelItem("bookmarks", "Закладки", Screen.Bookmarks.icon, PanelAction.Route(Screen.Bookmarks)),
         PanelItem("files", "Файлы", Screen.Documents.icon, PanelAction.Route(Screen.Documents)),
         PanelItem("search", "Поиск", Screen.Search.icon, PanelAction.Route(Screen.Search)),
-        PanelItem("reactions", "Реакции", Icons.Filled.ThumbUp, PanelAction.FeedFilter("LIKES")),
+        PanelItem("reactions", "Реакции", Icons.Filled.ThumbUp, PanelAction.Route(Screen.FeedLikes)),
         PanelItem("services", "Сервисы", Screen.Services.icon, PanelAction.Route(Screen.Services)),
         PanelItem("logs", "Логи", Screen.Logs.icon, PanelAction.Route(Screen.Logs)),
     )
@@ -106,38 +97,4 @@ object PanelItems {
 
     /** Те же keys в каноническом порядке. */
     val allKeys: List<String> = all.map { it.key }
-}
-
-/**
- * #PANELEDIT: запрос на открытие Ленты в конкретном разделе (для спец-пункта
- * «Реакции» → FeedFilter.LIKES). Маршрут Ленты не параметризован (Screen.Feed
- * "feed" — main-роут, параметризация ломает lastRoute/currentRoute restore,
- * см. #FEED-MENU-NOTIF в SovaNavHost), поэтому seed передаётся через in-memory
- * holder (паттерн PostHolder/StoryHolder этого же пакета).
- *
- * FeedScreen читает желаемый раздел в LaunchedEffect(FeedOpenRequest.version):
- *  - на первой композиции применяет как initial filterName;
- *  - если Лента уже на экране — version++ заставляет перечитать (второй тап
- *    по «Реакции» переключает прямо на месте, без пересоздания screen).
- */
-object FeedOpenRequest {
-    /** Желаемое имя раздела ленты (FeedFilter.name) или null = без запроса. */
-    @Volatile private var filterName: String? = null
-
-    /** Монотонно растёт при каждом запросе — ключ LaunchedEffect-перечитывания. */
-    @Volatile var version: Int = 0
-        private set
-
-    /** Запросить открытие Ленты на разделе [filter]. */
-    fun request(filter: String) {
-        filterName = filter
-        version++
-    }
-
-    /** Забрать и сбросить текущий запрос (вызывается FeedScreen). */
-    fun consume(): String? {
-        val f = filterName
-        filterName = null
-        return f
-    }
 }

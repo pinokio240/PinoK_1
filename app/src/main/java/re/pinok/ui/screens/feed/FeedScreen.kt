@@ -148,7 +148,6 @@ import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.navigation.FeedDataHolder
 import re.pinok.ui.navigation.FeedScrollHolder
-import re.pinok.ui.navigation.FeedOpenRequest
 import re.pinok.ui.navigation.FeedPanelState
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.ui.navigation.ScrollPosition
@@ -234,6 +233,12 @@ fun FeedScreen(
     // в реестре есть CallStarter (контейнер звонков). null → кнопка НЕ рендерится
     // (условие композиции, graceful-деградация без контейнера).
     onCallClick: ((peerId: Long, title: String, photo: String?) -> Unit)? = null,
+    // #PANEL-SEPARATE-REACTIONS (2026-10-18): автономный режим «только реакции».
+    // Маршрут feed_likes открывает тот же FeedScreen, но рендерит ИСКЛЮЧИТЕЛЬНО
+    // раздел LIKES (табы + контент реакций) БЕЗ обычной ленты, stories и их
+    // фоновой загрузки — полное разделение «Ленты» и «Реакций» на уровне панели.
+    // Обычный маршрут feed передаёт false.
+    likesOnly: Boolean = false,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -437,6 +442,8 @@ fun FeedScreen(
             // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false) —
             // FeedScreen должен передать initial-значение, иначе Snapshot не соберётся.
             callsEnabled = false,
+            // #AUTH2: «Авторизация 2» — альтернативный флоу входа (default off).
+            authV2Enabled = false,
             // Fix #237: showLogFab добавлен в Snapshot — FeedScreen тоже должен
             // передавать initial-значение, иначе компилятор падает:
             // «No value passed for parameter 'showLogFab'».
@@ -613,21 +620,14 @@ fun FeedScreen(
 
     // #FEED-FILTER: активный раздел ленты (VK rightmenu). Храним имя enum-а в
     // rememberSaveable — переживает навигацию (VideoPlayer/PostDetail) и поворот.
+    // #PANEL-SEPARATE-REACTIONS: в автономном режиме (маршрут feed_likes) фиксируем
+    // раздел LIKES — экран показывает ТОЛЬКО реакции, без переключателя и обычной
+    // ленты. В обычном режиме (маршрут feed) — раздел ALL (раздел LIKES из ленты
+    // убран; см. FeedFilterBar ниже).
     var feedFilterName by rememberSaveable {
-        // #PANELEDIT: «Реакции» из панели навигации → старт Ленты на разделе LIKES.
-        mutableStateOf(FeedOpenRequest.consume()?.takeIf { it.isNotEmpty() } ?: FeedFilter.ALL.name)
+        mutableStateOf(if (likesOnly) FeedFilter.LIKES.name else FeedFilter.ALL.name)
     }
     val feedFilter = runCatching { FeedFilter.valueOf(feedFilterName) }.getOrDefault(FeedFilter.ALL)
-    // #PANELEDIT: если Лента УЖЕ на экране (навигация launchSingleTop/restoreState
-    // не создаёт новую композицию), version-инкремент FeedOpenRequest заставляет
-    // перечитать запрос и переключить раздел прямо на месте; раздел LIKES к тому же
-    // сам перезапускает свой загрузчик (LaunchedEffect(feedFilterName, ...) ниже).
-    LaunchedEffect(FeedOpenRequest.version) {
-        val requested = FeedOpenRequest.consume()?.takeIf { it.isNotEmpty() }
-        if (requested != null && requested != feedFilterName) {
-            feedFilterName = requested
-        }
-    }
 
     // #FEED-FILTER-SEARCH: поисковый запрос для вкладки «Поиск».
     var feedSearchQuery by remember { mutableStateOf("") }
@@ -660,6 +660,14 @@ fun FeedScreen(
     // полные объекты (превью/длительность/название) догружаются
     // video.get(videos=…) → сюда. Сбрасывается при каждой загрузке вкладки.
     var likesVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
+
+    // §FEED-REACTIONS-NEWFEED: пагинация ленты реакций (newsfeed.getLikesFeed).
+    // Курсор из response.next_from (likesNextFrom); hasMore = есть следующая
+    // страница. Основной загрузчик (loadReactions) сбрасывает их на первой
+    // странице, loadMoreReactions() дочитывает через start_from=likesNextFrom.
+    var likesNextFrom by remember { mutableStateOf("") }
+    var likesHasMore by remember { mutableStateOf(false) }
+    var likesLoadingMore by remember { mutableStateOf(false) }
 
     // #FEED-SUBSCRIBE (IMP-FEED-1, п.2): оптимистичное состояние подписки
     // на авторов постов (key = fromId). Значение: true → «Отписаться»,
@@ -771,98 +779,153 @@ fun FeedScreen(
     // объекты не удалось» (count>0, но items пустые).
     var reactionsReloadKey by remember { mutableIntStateOf(0) }
 
-    // Загрузка реакций (likes.getList). Выделена из LaunchedEffect в отдельную
-    // suspend-функцию с собственным likesLoading-гардом, чтобы её можно было
-    // перезапускать при pull-to-refresh (reactionsReloadKey++), не полагаясь на
-    // смену раздела/подтаба.
+    // Загрузка реакций (newsfeed.getLikesFeed). Выделена из LaunchedEffect в
+    // отдельную suspend-функцию с собственным likesLoading-гардом, чтобы её
+    // можно было перезапускать при pull-to-refresh (reactionsReloadKey++), не
+    // полагаясь на смену раздела/подтаба.
     // IMP-FEED-1: подтаб «Комментарии» (WALL_REPLY) → type="comment" возвращает
     // ПОЛНЫЕ объекты комментариев (id/from_id/text/date/likes.count) — рендерим
-    // CommentCard (см. ниже), а не wallGetById-посты.
+    // CommentCard, а не wallGetById-посты.
+    // §FEED-REACTIONS-NEWFEED: источник данных переключён с likes.getList
+    // (список ЮЗЕРОВ конкретного поста) на newsfeed.getLikesFeed (лента реакций).
+    // likesFeedGet возвращает (count, nextFrom, сырые items) — по подтабу
+    // выбираем like_types и маршрутизируем items в likesItems/likesVideos/
+    // likedComments. Курсор likesNextFrom + likesHasMore для пагинации.
+    // Ядро загрузки одной страницы реакций. reset-режим (startFrom="") очищает
+    // списки; append-режим добавляет следующую страницу и дедуплицирует.
+    // По подтабу выбирается like_types: «Все» — все типы (посты кладём в
+    // likesItems, остальные типы рендер «Все» не показывает); «Посты»/«Комменты»/
+    // «Клипы»/«Видео» — соответствующий тип.
+    suspend fun loadReactionsCore(startFrom: String, append: Boolean) {
+        val likeTypes = when (likesFilter) {
+            LikesFilter.ALL -> "post,comment,video,clip,market"
+            LikesFilter.WALL -> "post"
+            LikesFilter.WALL_REPLY -> "comment"
+            LikesFilter.CLIPS -> "clip"
+            LikesFilter.VIDEO -> "video"
+        }
+        val (totalCount, nextFrom, items) = app.apiClient.likesFeedGet(
+            count = 30,
+            startFrom = startFrom,
+            likeTypes = likeTypes,
+        )
+        likesTotalCount = totalCount
+        likesNextFrom = nextFrom
+        if (!append) {
+            likesHasMore = false
+        }
+
+        when {
+            // Подтаб «Комментарии»: сырые items (или вложенный блок comment)
+            // → LikedComment patient-парсинг. Авторы — отдельным usersGetByIds.
+            likesFilter == LikesFilter.WALL_REPLY -> {
+                if (!append) {
+                    likedComments = emptyList()
+                    likedCommentAuthors = emptyMap()
+                }
+                val parsed = items.mapNotNull { likesFeedCommentObject(it)?.let { c -> parseLikedComment(c) } }
+                likedComments = if (append) (likedComments + parsed).distinctBy { "${it.ownerId}_${it.commentId}" }
+                else parsed
+                // Авторов догружаем только для НОВЫХ комментариев страницы
+                // (append-режим не перезапрашивает уже загруженных).
+                val newFromIds = parsed.map { it.fromId }.filter { it > 0 }.distinct()
+                val missingAuthors = newFromIds.filterNot { likedCommentAuthors.containsKey(it) }
+                if (missingAuthors.isNotEmpty()) {
+                    likedCommentAuthors = likedCommentAuthors + app.apiClient.usersGetByIds(missingAuthors)
+                }
+                likesHasMore = nextFrom.isNotBlank() && parsed.isNotEmpty()
+                AppLog.i("FeedScreen", "likesFeedGet(comment): $totalCount total, nextFrom=$nextFrom, ${likedComments.size} parsed")
+            }
+            // Подтабы «Клипы»/«Видео»: owner_id+item_id → video.get(videos=…)
+            // → полные Video (превью/длительность). Моб. API клипы/видео не
+            // различает — обе вкладки честно работают через videoFeed.
+            likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO -> {
+                if (!append) {
+                    // Сброс всех состояний подтабов: ветка постов ниже НЕ гейтится
+                    // по likesFilter (else-цепочка рендера) — не убрав likesItems,
+                    // получили бы посты прошлой вкладки на «Клипах».
+                    likesItems = emptyList()
+                    likesGroups = emptyMap()
+                    likedComments = emptyList()
+                    likedCommentAuthors = emptyMap()
+                    likesVideos = emptyList()
+                }
+                // NULL-ЯВНО: элементы likesFeed могут не иметь owner_id/item_id
+                // (или JsonNull) — likesFeedItemTarget возвращает null для битых.
+                val newVideoIds = items.mapNotNull { likesFeedItemTarget(it) }
+                    .map { (ownerId, itemId) -> "${ownerId}_${itemId}" }
+                    .distinct()
+                // video.get возвращает только ДОСТУПНЫЕ видео (удалённые/приватные
+                // VK молча пропускает) — результат может быть меньше newVideoIds.
+                val newVideos = if (newVideoIds.isEmpty()) emptyList()
+                else app.apiClient.videoGet(newVideoIds)
+                likesVideos = if (append) (likesVideos + newVideos).distinctBy { "${it.ownerId}_${it.id}" }
+                else newVideos
+                likesHasMore = nextFrom.isNotBlank() && newVideoIds.isNotEmpty()
+                AppLog.i("FeedScreen", "likesFeedGet(video): $totalCount total, nextFrom=$nextFrom, ${likesVideos.size} videos loaded")
+            }
+            // Подтабы «Все»/«Посты»: из items берём только post-типы и догружаем
+            // через wall.getById; «Все» запрашивает все like_types, но рендер
+            // раздела «Все» показывает только посты (остальные типы пропускаем).
+            else -> {
+                if (!append) {
+                    likesItems = emptyList()
+                    likesGroups = emptyMap()
+                    likedComments = emptyList()
+                    likedCommentAuthors = emptyMap()
+                    likesVideos = emptyList()
+                }
+                val postItems = items.filter { it.get("type")?.takeIf { !it.isJsonNull }?.asString == "post" }
+                val postIds = postItems.mapNotNull { likesFeedItemTarget(it) }
+                if (postIds.isNotEmpty()) {
+                    val result = app.apiClient.wallGetById(postIds)
+                    likesItems = if (append) (likesItems + result.posts).distinctBy { "${it.ownerId}_${it.id}" }
+                    else result.posts
+                    likesGroups = if (append) likesGroups + result.groups else result.groups
+                    likesHasMore = nextFrom.isNotBlank() && postIds.isNotEmpty()
+                    AppLog.i("FeedScreen", "likesFeedGet: $totalCount total, nextFrom=$nextFrom, ${likesItems.size} posts loaded")
+                } else {
+                    if (!append) {
+                        likesItems = emptyList()
+                        likesGroups = emptyMap()
+                    }
+                    likesHasMore = false
+                }
+            }
+        }
+    }
+
+    // §FEED-REACTIONS-NEWFEED: первая страница реакций (сброс, start_from="").
     suspend fun loadReactions() {
         if (likesLoading) return
         likesLoading = true
         try {
-            if (likesFilter == LikesFilter.WALL_REPLY) {
-                // #FEED-LIKES-COMMENTS: сырые JsonObject → LikedComment
-                // patient-парсинг (parseLikedComment). Профили: likesGetList
-                // запрашивает extended=1, НО VKA-сигнатура возвращает только
-                // items (Pair<Int, List<JsonObject>>) — profiles[] ответа
-                // теряются; VKA в IMP-FEED-1 заморожен, поэтому авторы
-                // обогащаются отдельным usersGetByIds по from_id; не найден →
-                // дефолт-карточка (буква-фоллбэк, см. KDoc CommentCard).
-                likedComments = emptyList()
-                likedCommentAuthors = emptyMap()
-                val (totalCount, items) = app.apiClient.likesGetList(type = "comment", count = 30)
-                likesTotalCount = totalCount
-                val parsed = items.mapNotNull { parseLikedComment(it) }
-                likedComments = parsed
-                val fromIds = parsed.map { it.fromId }.filter { it > 0 }.distinct()
-                likedCommentAuthors = if (fromIds.isEmpty()) emptyMap() else app.apiClient.usersGetByIds(fromIds)
-                AppLog.i("FeedScreen", "likesGetList(comment): $totalCount total, ${parsed.size} parsed")
-            } else if (likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO) {
-                // Fix #364 #FEED-REACTIONS-VIDEO: подтабы «Клипы»/«Видео».
-                // Раньше owner_id/item_id видео прогонялись через wallGetById
-                // (ожидает ПОСТЫ) → вкладки были пустыми/мусорными. Теперь:
-                // likes.getList(type="video") → список «ownerId_itemId» →
-                // video.get(videos=…) → полные Video (превью/длительность).
-                // Моб. API клипы/видео не различает (LikesFilter выше) — обе
-                // вкладки показывают одно и то же, соответствие эталону по
-                // возможностям API (снапшот §3.3/§5.7).
-                // Сброс всех состояний подтабов: ветка постов ниже НЕ гейтится
-                // по likesFilter (else-цепочка рендера) — не убрав likesItems,
-                // получили бы посты прошлой вкладки на «Клипах».
-                likesItems = emptyList()
-                likesGroups = emptyMap()
-                likedComments = emptyList()
-                likedCommentAuthors = emptyMap()
-                likesVideos = emptyList()
-                val (totalCount, items) = app.apiClient.likesGetList(type = "video", count = 30)
-                likesTotalCount = totalCount
-                // NULL-ЯВНО: элементы likes.getList могут не иметь owner_id/item_id
-                // (или JsonNull) — явные проверки вместо ?./?:.
-                val videoIds = items.mapNotNull { raw ->
-                    val ownerIdEl = raw.get("owner_id")
-                    if (ownerIdEl == null || ownerIdEl.isJsonNull) return@mapNotNull null
-                    val itemIdEl = raw.get("item_id")
-                    if (itemIdEl == null || itemIdEl.isJsonNull) return@mapNotNull null
-                    "${ownerIdEl.asLong}_${itemIdEl.asLong}"
-                }.distinct()
-                // video.get возвращает только ДОСТУПНЫЕ видео (удалённые/приватные
-                // VK молча пропускает) — результат может быть меньше videoIds.
-                likesVideos = if (videoIds.isEmpty()) emptyList()
-                else app.apiClient.videoGet(videoIds).distinctBy { "${it.ownerId}_${it.id}" }
-                AppLog.i("FeedScreen", "likesGetList(video): $totalCount total, ${likesVideos.size} videos loaded")
-            } else {
-                val (totalCount, items) = app.apiClient.likesGetList(
-                    type = likesFilter.apiType,
-                    count = 30,
-                )
-                likesTotalCount = totalCount
-                // Преобразуем items в посты через wall.getById
-                if (items.isNotEmpty()) {
-                    val postIds = items.mapNotNull { it ->
-                        val ownerId = it.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
-                        val itemId = it.get("item_id")?.takeIf { !it.isJsonNull }?.asLong ?: return@mapNotNull null
-                        ownerId to itemId
-                    }
-                    if (postIds.isNotEmpty()) {
-                        val result = app.apiClient.wallGetById(postIds)
-                        likesItems = result.posts
-                        likesGroups = result.groups
-                        AppLog.i("FeedScreen", "likesGetList: $totalCount total, ${likesItems.size} posts loaded")
-                    } else {
-                        likesItems = emptyList()
-                        likesGroups = emptyMap()
-                    }
-                } else {
-                    likesItems = emptyList()
-                    likesGroups = emptyMap()
-                }
-            }
+            loadReactionsCore(startFrom = "", append = false)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            AppLog.e("FeedScreen", "likesGetList error", e)
+            AppLog.e("FeedScreen", "loadReactions error", e)
         } finally {
             likesLoading = false
+        }
+    }
+
+    // §FEED-REACTIONS-NEWFEED: пагинация реакций — дочитать следующую страницу
+    // через start_from=likesNextFrom (курсор response.next_from). Триггер —
+    // loadMoreReactionsLauncher (скролл к концу раздела, аналог loadMore ленты).
+    fun loadMoreReactions() {
+        if (likesLoading || likesLoadingMore || !likesHasMore || likesNextFrom.isBlank()) return
+        scope.launch {
+            likesLoadingMore = true
+            try {
+                loadReactionsCore(startFrom = likesNextFrom, append = true)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("FeedScreen", "loadMoreReactions error", e)
+            } finally {
+                likesLoadingMore = false
+            }
         }
     }
 
@@ -1289,6 +1352,10 @@ fun FeedScreen(
     }
 
     LaunchedEffect(Unit) {
+        // #PANEL-SEPARATE-REACTIONS: в автономном режиме (feed_likes) обычная лента
+        // не грузится вообще — раздел реакций тянет свой LaunchedEffect(feedFilterName,
+        // likesFilterName, reactionsReloadKey). Ранний выход исключает фоновый fetchFeedPage.
+        if (likesOnly) return@LaunchedEffect
         // Fix #100: первичная загрузка только если кэша НЕТ.
         // При возврате из VideoPlayer FeedDataHolder уже содержит allPosts —
         // LazyColumn сразу отрисуется с восстановленной позицией, без skeleton.
@@ -1361,6 +1428,28 @@ fun FeedScreen(
         .distinctUntilChanged()
         .filter { it }
         .collect { loadMore() }
+    }
+
+    // §FEED-REACTIONS-NEWFEED: пагинация раздела «Реакции» — детектим скролл
+    // к концу списка текущего подтаба (аналог loadMore для основной ленты) и
+    // дочитываем следующую страницу через start_from=likesNextFrom.
+    // На других разделах — no-op (feedFilter != LIKES → predicate false).
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            if (feedFilter != FeedFilter.LIKES) return@snapshotFlow false
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            // Считаем только item-ы текущего подтаба (без header/tabs/фото-блока).
+            val totalLikesItems = when {
+                likesFilter == LikesFilter.WALL_REPLY -> likedComments.size
+                likesFilter == LikesFilter.CLIPS || likesFilter == LikesFilter.VIDEO -> likesVideos.size
+                else -> likesItems.size
+            }
+            lastVisible >= totalLikesItems - 3 && totalLikesItems > 0
+        }
+        .distinctUntilChanged()
+        .filter { it }
+        .collect { loadMoreReactions() }
     }
 
     // Fix #99: сохраняем позицию скролла ленты при каждом изменении.
@@ -1649,7 +1738,33 @@ fun FeedScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
+            // #PANEL-SEPARATE-REACTIONS: подтабы раздела «Реакции» вынесены в
+            // собственный item (а не в stories_header), чтобы рендериться и в
+            // автономном режиме (feed_likes), когда stories/заголовок ленты скрыты.
+            if (likesOnly || feedFilter == FeedFilter.LIKES) {
+                item(key = "reactions_tabs") {
+                    ScrollableTabRow(
+                        selectedTabIndex = LikesFilter.entries.indexOf(likesFilter),
+                        edgePadding = 12.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                        divider = {},
+                    ) {
+                        LikesFilter.entries.forEachIndexed { index, lf ->
+                            Tab(
+                                selected = likesFilter == lf,
+                                onClick = { likesFilterName = lf.name },
+                                text = { Text(lf.label, maxLines = 1) },
+                            )
+                        }
+                    }
+                }
+            }
             item(key = "stories_row") {
+                // #PANEL-SEPARATE-REACTIONS: в автономном режиме (feed_likes) header
+                // с переключателем разделов/поиском/историями НЕ рендерится — вверху
+                // сразу подтабы реакций. Обычная лента, stories и их загрузка на фоне
+                // этого маршрута полностью отключены.
+                if (!likesOnly) {
                 Column {
                     // Fix #359 → Fix #363: кнопка «меню ленты» ПЕРЕНЕСЕНА из этого
                     // item сначала в закреплённую панель (#359), затем на глобальный
@@ -1710,23 +1825,6 @@ fun FeedScreen(
                             },
                         )
                     }
-                    // #FEED-REACTIONS: подтабы для раздела «Реакции».
-                    if (feedFilter == FeedFilter.LIKES) {
-                        ScrollableTabRow(
-                            selectedTabIndex = LikesFilter.entries.indexOf(likesFilter),
-                            edgePadding = 12.dp,
-                            modifier = Modifier.fillMaxWidth(),
-                            divider = {},
-                        ) {
-                            LikesFilter.entries.forEachIndexed { index, lf ->
-                                Tab(
-                                    selected = likesFilter == lf,
-                                    onClick = { likesFilterName = lf.name },
-                                    text = { Text(lf.label, maxLines = 1) },
-                                )
-                            }
-                        }
-                    }
                     // #STORY-TOGGLE: раздел «Истории» скрывается настройкой
                     // (storiesShown == false). StoriesRow сам тянет данные через
                     // LaunchedEffect → storiesGet — при скрытии ряда не вызываем
@@ -1746,6 +1844,7 @@ fun FeedScreen(
                         )
                     }
                 }
+                } // if (!likesOnly)
             }
             // #FEED-REACTIONS: список реакций (likes.getList).
             if (feedFilter == FeedFilter.LIKES) {
@@ -2198,7 +2297,9 @@ private fun FeedFilterBar(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
             ) {
-                FeedFilter.values().forEach { f ->
+                // #PANEL-SEPARATE-REACTIONS: «Реакции» (LIKES) убраны из переключателя
+                // ленты — теперь это отдельный маршрут feed_likes, открываемый из панели.
+                FeedFilter.values().filter { it != FeedFilter.LIKES }.forEach { f ->
                     DropdownMenuItem(
                         text = { Text(f.label) },
                         leadingIcon = if (f == currentFilter) {
@@ -2445,6 +2546,49 @@ private fun parseLikedPhoto(o: JsonObject): LikedPhoto? {
         AppLog.w("FeedScreen", "parseLikedPhoto failed: ${e.message}")
         null
     }
+}
+
+/**
+ * §FEED-REACTIONS-NEWFEED: из сырого item newsfeed.getLikesFeed извлекает
+ * (ownerId, itemId) для догрузки полного объекта (wallGetById / videoGet).
+ * Приоритет: вложенный блок (post/video/comment/clip) → верхнеуровневые
+ * owner_id/item_id (или id). Битые элементы (нет id/owner_id) → null
+ * (mapNotNull отфильтрует).
+ */
+private fun likesFeedItemTarget(o: JsonObject): Pair<Long, Long>? {
+    return try {
+        val nested = o.get("post")
+            ?: o.get("video")
+            ?: o.get("comment")
+            ?: o.get("clip")
+        val ownerEl = if (nested != null && nested.isJsonObject) {
+            nested.asJsonObject.get("owner_id") ?: o.get("owner_id")
+        } else {
+            o.get("owner_id")
+        }
+        // item_id — как в likes.getList; у вложенного блока обычно `id`.
+        val itemEl = if (nested != null && nested.isJsonObject) {
+            nested.asJsonObject.get("id") ?: o.get("item_id") ?: o.get("id")
+        } else {
+            o.get("item_id") ?: o.get("id")
+        }
+        val owner = ownerEl?.takeIf { !it.isJsonNull }?.asLong ?: return null
+        val item = itemEl?.takeIf { !it.isJsonNull }?.asLong ?: return null
+        owner to item
+    } catch (e: Exception) {
+        AppLog.w("FeedScreen", "likesFeedItemTarget failed: ${e.message}")
+        null
+    }
+}
+
+/**
+ * §FEED-REACTIONS-NEWFEED: из item newsfeed.getLikesFeed (type="comment")
+ * возвращает объект комментария для parseLikedComment: вложенный блок
+ * `comment`, если он есть, иначе сам item.
+ */
+private fun likesFeedCommentObject(o: JsonObject): JsonObject? {
+    val nested = o.get("comment")
+    return if (nested != null && nested.isJsonObject) nested.asJsonObject else o
 }
 
 /**

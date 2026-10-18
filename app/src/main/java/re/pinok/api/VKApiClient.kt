@@ -5957,6 +5957,47 @@ class VKApiClient(
     }
 
     /**
+     * §FEED-REACTIONS: newsfeed.getLikesFeed — лента реакций (раздел «Реакции»).
+     * В отличие от likes.getList (список ЮЗЕРОВ, лайкнувших конкретный объект —
+     * требует owner_id+item_id), это НАСТОЯЩИЙ поток реакций пользователя:
+     * items типа post/video/clip/comment с owner_id+item_id и вложенными
+     * блоками (post/comment/video/clip).
+     *
+     * Пагинация курсорная: startFrom ← response.next_from (пусто — первая страница).
+     * `v` НЕ передаём явно — callInternal добавляет VKEndpoints.API_VERSION сам.
+     *
+     * @param count Количество (страница, дефолт 30).
+     * @param startFrom Курсор пагинации из response.next_from ("" — первая страница).
+     * @param likeTypes Типы через запятую: post,comment,video,clip,market.
+     * @return Triple(count, nextFrom, items) где items — сырые JsonObject.
+     */
+    suspend fun likesFeedGet(
+        count: Int = 30,
+        startFrom: String = "",
+        likeTypes: String = "post,comment,video,clip,market",
+    ): Triple<Int, String, List<JsonObject>> {
+        if (isOffline()) return Triple(0, "", emptyList())
+        val args = mutableMapOf(
+            "count" to count.toString(),
+            "like_types" to likeTypes,
+            "fields" to "photo_100,photo_200,photo_base,sex,friend_status,first_name_gen,last_name_gen,screen_name,verified,can_write_private_message",
+        )
+        if (startFrom.isNotBlank()) args["start_from"] = startFrom
+        val json = call("newsfeed.getLikesFeed", args) ?: return Triple(0, "", emptyList())
+        return try {
+            val resp = json.getAsJsonObject("response")
+            val total = resp?.get("count")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+            val nextFrom = resp?.get("next_from")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            val items = resp?.getAsJsonArray("items") ?: return Triple(total, nextFrom, emptyList())
+            val list = items.mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+            Triple(total, nextFrom, list)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "likesFeedGet parse error", e)
+            Triple(0, "", emptyList())
+        }
+    }
+
+    /**
      * Добавить комментарий к посту. VK: wall.createComment — owner_id, post_id, message.
      * Возвращает id нового комментария или -1 при ошибке.
      *
@@ -13147,6 +13188,31 @@ class VKApiClient(
             if (code == 14 && handler != null && captchaAttempt < MAX_CAPTCHA_RETRIES) {
                 val sid = err.get("captcha_sid")?.takeIf { !it.isJsonNull }?.asString
                 val img = err.get("captcha_img")?.takeIf { !it.isJsonNull }?.asString
+                val redirectUri = err.get("redirect_uri")?.takeIf { !it.isJsonNull }?.asString
+                // #CAPTCHA-V2 (2026-10-17): VK перешёл на новую схему капчи — error 14
+                // возвращает redirect_uri вместо captcha_img. Обрабатываем через WebView
+                // (solveRedirect -> success_token), классика (sid+img) остаётся fallback.
+                if (!redirectUri.isNullOrBlank()) {
+                    AppLog.w("VKApiClient",
+                        "Captcha V2 (redirect_uri) on $method — opening VK ID captcha " +
+                            "(attempt ${captchaAttempt + 1}/$MAX_CAPTCHA_RETRIES)")
+                    val successToken = handler.solveRedirect(redirectUri)
+                    if (!successToken.isNullOrBlank()) {
+                        val newArgs = args.toMutableMap().apply {
+                            put("success_token", successToken)
+                        }
+                        return callInternal(
+                            method, newArgs, captchaAttempt + 1,
+                            skipOffline = skipOffline, silent = silent,
+                            forceWebGateway = forceWebGateway,
+                            skipTelemetryDrop = skipTelemetryDrop,
+                        )
+                    }
+                    AppLog.w("VKApiClient", "Captcha V2 cancelled/failed by user on $method")
+                    lastApiError = "$method: captcha cancelled"
+                    lastApiErrorCode = 14
+                    return null
+                }
                 if (sid != null && img != null) {
                     AppLog.w("VKApiClient",
                         "Captcha required (sid=${sid.take(8)}…) on $method — " +

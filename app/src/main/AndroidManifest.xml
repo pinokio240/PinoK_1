@@ -348,6 +348,16 @@
             android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density|uiMode|navigation"
             android:theme="@style/Theme.PinoK" />
 
+        <!-- #AUTH2: «Авторизация 2» — альтернативный флоу входа (прямой HTTP OAuth, без WebView).
+             Запускается из AuthActivity по тумблеру authV2Enabled. Только ручной вход (не silent). -->
+        <activity
+            android:name=".auth.auth2.AuthV2Activity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density|uiMode|navigation"
+            android:theme="@style/Theme.PinoK" />
+
         <!-- OAuth WebView — открывает oauth.vk.com/authorize, пароль вводится на VK.
              configChanges ОБЯЗАТЕЛЬНО: VK ID страница (id.vk.com/auth) триггерит
              orientation change через JS screen.orientation API. Без configChanges
