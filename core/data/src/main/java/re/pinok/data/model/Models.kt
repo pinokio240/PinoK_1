@@ -1348,7 +1348,10 @@ data class Bookmark(
     val objectTitle: String? = null,
 ) {
     val title: String get() = when (type) {
-        "user" -> user?.fullName ?: ""
+        // #P0.44-bookmarks-fix: type="page" — fave.get(item_type=page) возвращает
+        // MIX users (id>0) + groups (id<0). Парсер ставит user ИЛИ group; title
+        // берёт имя из той сущности, что заполнена (раньше возвращал "page").
+        "user", "page" -> user?.fullName ?: group?.name ?: ""
         "group" -> group?.name ?: ""
         "post" -> post?.text?.take(60) ?: ""
         "photo" -> photo?.text?.take(60) ?: "Фото"
@@ -1360,7 +1363,8 @@ data class Bookmark(
         else -> type
     }
     val thumbUrl: String? get() = when (type) {
-        "user" -> user?.photo100
+        // #P0.44-bookmarks-fix: type="page" — аватар из user ИЛИ group.
+        "user", "page" -> user?.photo100 ?: group?.photo100
         "group" -> group?.photo100
         "photo" -> photo?.mediumUrl
         "video", "clip" -> video?.thumbUrl

@@ -10554,9 +10554,21 @@ class VKApiClient(
         // сообщество (id<0) различаются знаком id. Нормализуем user/group → page,
         // чтобы старые вызовы не падали, но актуальный код передаёт "page" напрямую.
         if (itemType != null) {
-            args["item_type"] = when (itemType) {
+            // #P0.44-bookmarks-fix: нормализация "user"/"group" → "page" (VK API
+            // error 100 для item_type=user/group; единственное корректное значение
+            // для людей И групп — "page"; знак id различает их: id>0 человек,
+            // id<0 группа). Fave.get(item_type=page) возвращает MIX users + groups.
+            val normalizedItemType = when (itemType) {
                 "user", "group" -> "page"
                 else -> itemType
+            }
+            args["item_type"] = normalizedItemType
+            // #P0.44-bookmarks-fix: fields гарантирует присутствие photo_100,
+            // screen_name, online (user), members_count (group) и т.д. в page-элементах.
+            // Без fields VK может вернуть минимальный набор → вкладки показывают
+            // строки без аватаров/имён (видны как «page»).
+            if (normalizedItemType == "page") {
+                args["fields"] = "photo_50,photo_100,photo_200,screen_name,online,status,members_count,verified,is_member,city"
             }
         }
         // #BOOKMARKS-FIX: крошка провала fave.get (раньше — молчаливый emptyList,
@@ -10684,14 +10696,28 @@ class VKApiClient(
                         // содержат id со ЗНАКОМ (id>0 человек, id<0 группа), а не
                         // user_id/group_id. Добавлен fallback по знаку id (как в вебе
                         // — закладки.har), иначе люди/группы с type=page терялись.
+                        // #P0.44-bookmarks-fix: VK fave.get(item_type=page) возвращает
+                        // ОТРИЦАТЕЛЬНЫЙ id для групп. Но Group.id во всём приложении
+                        // ожидается ПОЛОЖИТЕЛЬНЫМ (groups.getById, onGroupClick,
+                        // fave.removePage с group_id). Нормализуем знак → позитив.
                         val pageUserId = safeLongNullable(entity.get("user_id"))
                         val pageGroupId = safeLongNullable(entity.get("group_id"))
                         val pageSignedId = safeLongNullable(entity.get("id"))
                         when {
                             pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(entity)
-                            pageGroupId != null && pageGroupId > 0L -> group = parseGroupMini(entity)
+                            pageGroupId != null && pageGroupId > 0L -> {
+                                group = parseGroupMini(entity)
+                            }
                             pageSignedId != null && pageSignedId > 0L -> user = parseUserProfileMini(entity)
-                            pageSignedId != null && pageSignedId < 0L -> group = parseGroupMini(entity)
+                            pageSignedId != null && pageSignedId < 0L -> {
+                                group = parseGroupMini(entity)
+                                // Нормализация: Group.id должен быть положительным
+                                // (VK отдаёт -id для групп в fave.get(item_type=page),
+                                // но fave.removePage/group screens ожидают +id).
+                                if (group != null && group.id < 0L) {
+                                    group = group.copy(id = -group.id)
+                                }
+                            }
                             // Не распознано — строка с типом «page»: заголовок честно
                             // подставится типом, удаление вернёт понятную причину.
                             else -> Unit
