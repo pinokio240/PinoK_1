@@ -4473,7 +4473,9 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp)),
+                            // P0.46-IME-UNIFY: тот же padding что PostDetailScreen (8.dp/6.dp),
+                            // без UiScale.scaled — единый паттерн панели ввода.
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Fix #200: поле ввода расширено — убраны 3 отдельные
@@ -4493,11 +4495,11 @@ fun ChatDetailScreen(
                                 )
                             },
                             maxLines = 4,
-                            shape = RoundedCornerShape(20.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                cursorColor = MaterialTheme.colorScheme.primary,
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
+                            // P0.46-IME-UNIFY: убран кастомный shape (RoundedCornerShape 20dp)
+                            // и кастомные colors (focusedBorderColor=primary) — теперь
+                            // default Material3 стиль, как в PostDetailScreen. Раньше
+                            // панель диалога выглядела отлично от постов (скруглённое поле
+                            // с цветной рамкой vs прямоугольное с тонкой рамкой).
                             keyboardOptions = KeyboardOptions(
                                 imeAction = ImeAction.Send,
                             ),
