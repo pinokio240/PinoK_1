@@ -100,8 +100,10 @@ import java.util.Locale
  */
 
 /** Уникальный ключ закладки для дедупликации и LazyColumn keys. */
+// P0.45-TRACER B6: prefix 'u'/'g' чтобы избежать коллизии user_id vs group_id
+// (оба могут быть 12345 — user 12345 и group 12345 в разных namespaces).
 private fun bookmarkKey(bm: Bookmark): String =
-    "${bm.type}_${bm.user?.id ?: bm.group?.id ?: bm.post?.id ?: bm.photo?.id ?: bm.video?.id ?: bm.linkId ?: bm.objectId ?: bm.link?.url ?: "id"}"
+    "${bm.type}_${bm.user?.let { "u${it.id}" } ?: bm.group?.let { "g${it.id}" } ?: bm.post?.id ?: bm.photo?.id ?: bm.video?.id ?: bm.linkId ?: bm.objectId ?: bm.link?.url ?: "id"}"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

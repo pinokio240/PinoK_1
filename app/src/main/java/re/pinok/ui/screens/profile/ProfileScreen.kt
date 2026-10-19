@@ -3257,6 +3257,8 @@ private fun ProfileBookmarkRow(bookmark: Bookmark, onClick: () -> Unit, onLongCl
 /** Тип закладки → человекочитаемая метка. */
 private fun bookmarkTypeLabel(type: String): String = when (type) {
     "user" -> "Пользователь"
+    // P0.45-TRACER B8: "page" — fave.get(item_type=page) MIX users+groups.
+    "page" -> "Страница"
     "group" -> "Сообщество"
     "post" -> "Запись"
     "photo" -> "Фотография"
@@ -3276,7 +3278,9 @@ private fun bookmarkIsOpenable(bookmark: Bookmark): Boolean = when (bookmark.typ
     "video" -> bookmark.video != null
     "photo" -> bookmark.photo?.largestUrl != null
     "link" -> !bookmark.link?.url.isNullOrBlank()
-    "user" -> bookmark.user != null
+    // P0.45-TRACER B7: "page" — MIX users+groups, открывается если есть user ИЛИ group.
+    "user", "page" -> bookmark.user != null || bookmark.group != null
+    "group" -> bookmark.group != null
     else -> false
 }
 

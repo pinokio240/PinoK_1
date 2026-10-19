@@ -10553,15 +10553,19 @@ class VKApiClient(
         // page, post, video, clip, ...; user/group НЕ существуют). Человек (id>0) и
         // сообщество (id<0) различаются знаком id. Нормализуем user/group → page,
         // чтобы старые вызовы не падали, но актуальный код передаёт "page" напрямую.
+        // P0.45-TRACER: вынесено за if — normalizedItemType используется как fallback
+        // для type поля в response items (VK может опустить type, если item_type задан в запросе).
+        val normalizedItemType = itemType?.let {
+            when (it) {
+                "user", "group" -> "page"
+                else -> it
+            }
+        }
         if (itemType != null) {
             // #P0.44-bookmarks-fix: нормализация "user"/"group" → "page" (VK API
             // error 100 для item_type=user/group; единственное корректное значение
             // для людей И групп — "page"; знак id различает их: id>0 человек,
             // id<0 группа). Fave.get(item_type=page) возвращает MIX users + groups.
-            val normalizedItemType = when (itemType) {
-                "user", "group" -> "page"
-                else -> itemType
-            }
             args["item_type"] = normalizedItemType
             // #P0.44-bookmarks-fix: fields гарантирует присутствие photo_100,
             // screen_name, online (user), members_count (group) и т.д. в page-элементах.
@@ -10579,8 +10583,24 @@ class VKApiClient(
             return emptyList()
         }
         return try {
-            val resp = json.getAsJsonObject("response") ?: return emptyList()
-            val items = resp.getAsJsonArray("items") ?: return emptyList()
+            val resp = json.getAsJsonObject("response") ?: run {
+                // P0.45-TRACER B3: endpoint-discovery — логируем RAW response keys
+                // если response не JsonObject (возможно error или unexpected structure).
+                AppLog.w("VKApiClient", "fave.get: no 'response' object, top-level keys=${json.keySet().joinToString(",")}")
+                return emptyList()
+            }
+            val items = resp.getAsJsonArray("items") ?: run {
+                AppLog.w("VKApiClient", "fave.get: no 'items' array, response keys=${resp.keySet().joinToString(",")}")
+                return emptyList()
+            }
+            // P0.45-TRACER B3: endpoint-discovery — логируем RAW items count + first item keys
+            AppLog.i("VKApiClient", "fave.get(item_type=$normalizedItemType) → items=${items.size()}, count=${resp.get("count")}, resp keys=${resp.keySet().joinToString(",")}")
+            if (items.size() > 0) {
+                val firstItem = items[0].takeIf { it.isJsonObject }?.asJsonObject
+                if (firstItem != null) {
+                    AppLog.i("VKApiClient", "fave.get first item keys=${firstItem.keySet().joinToString(",")}, type=${firstItem.get("type")}, id=${firstItem.get("id")}")
+                }
+            }
             // Волна 40 #BOOKMARKS-POST-AUTHOR: fave.get(extended=1) возвращает
             // авторов вложенных постов в response.profiles[]/groups[], а НЕ в
             // item. Собираем их в карты id→профиль/группа, чтобы для типа "post"
@@ -10602,7 +10622,11 @@ class VKApiClient(
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
-                val type = safeString(o.get("type")) ?: return@mapNotNull null
+                // P0.45-TRACER B1: VK может опустить поле type в response items
+                // (item_type уже указан в запросе — VK не дублирует). Без fallback
+                // ВСЕ items молча дропаются через return@mapNotNull null → вкладки пустые.
+                // Fallback на normalizedItemType (из запроса) — "page" для users/groups.
+                val type = safeString(o.get("type")) ?: normalizedItemType ?: return@mapNotNull null
                 val seen = o.get("seen")?.takeIf { !it.isJsonNull }?.let {
                     if (it.isJsonPrimitive) {
                         val p = it.asJsonPrimitive
@@ -10700,23 +10724,27 @@ class VKApiClient(
                         // ОТРИЦАТЕЛЬНЫЙ id для групп. Но Group.id во всём приложении
                         // ожидается ПОЛОЖИТЕЛЬНЫМ (groups.getById, onGroupClick,
                         // fave.removePage с group_id). Нормализуем знак → позитив.
-                        val pageUserId = safeLongNullable(entity.get("user_id"))
-                        val pageGroupId = safeLongNullable(entity.get("group_id"))
-                        val pageSignedId = safeLongNullable(entity.get("id"))
+                        // P0.45-TRACER B2: используем userEntity/groupEntity (могут
+                        // содержать сущность под sub-object "user"/"group"/"page"),
+                        // fallback на top-level entity.
+                        val pageObj = userEntity ?: groupEntity ?: entity
+                        val pageUserId = safeLongNullable(pageObj.get("user_id")) ?: safeLongNullable(entity.get("user_id"))
+                        val pageGroupId = safeLongNullable(pageObj.get("group_id")) ?: safeLongNullable(entity.get("group_id"))
+                        val pageSignedId = safeLongNullable(pageObj.get("id")) ?: safeLongNullable(entity.get("id"))
                         when {
-                            pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(entity)
+                            pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(pageObj)
                             pageGroupId != null && pageGroupId > 0L -> {
                                 // P0.44-audit B1: нормализация знака для симметрии с pageSignedId<0L веткой.
                                 // parseGroupMini читает entity.id — если он отрицательный, group.id будет <0,
                                 // что ломает fave.removePage(group_id=+) и onGroupClick.
-                                group = parseGroupMini(entity)
+                                group = parseGroupMini(pageObj)
                                 if (group.id < 0L) {
                                     group = group.copy(id = -group.id)
                                 }
                             }
-                            pageSignedId != null && pageSignedId > 0L -> user = parseUserProfileMini(entity)
+                            pageSignedId != null && pageSignedId > 0L -> user = parseUserProfileMini(pageObj)
                             pageSignedId != null && pageSignedId < 0L -> {
-                                group = parseGroupMini(entity)
+                                group = parseGroupMini(pageObj)
                                 // Нормализация: Group.id должен быть положительным
                                 // (VK отдаёт -id для групп в fave.get(item_type=page),
                                 // но fave.removePage/group screens ожидают +id).
@@ -12342,23 +12370,22 @@ class VKApiClient(
     private fun parseUserProfileMini(o: JsonObject): UserProfile {
         val countersObj = o.get("counters")?.takeIf { obj -> obj.isJsonObject }?.asJsonObject
         return UserProfile(
-            id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-            // P0.44-audit I1: JsonNull.asString бросает UnsupportedOperationException.
-            // takeIf { !it.isJsonNull } guard предотвращает молчаливый emptyList
-            // (outer try/catch в faveGet ловил бы исключение и возвращал пусто).
-            firstName = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: "",
-            lastName = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: "",
-            photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
-            photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-            online = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+            // P0.45-TRACER B5: safeString/safeLong guard от JsonNull + JsonObject/Array
+            // (takeIf{!isJsonNull} НЕ гардит от ClassCastException на non-primitive).
+            id = safeLong(o.get("id")),
+            firstName = safeString(o.get("first_name")) ?: "",
+            lastName = safeString(o.get("last_name")) ?: "",
+            photo100 = safeString(o.get("photo_100")),
+            photo200 = safeString(o.get("photo_200")),
+            online = safeInt(o.get("online")),
             lastSeen = o.get("last_seen")?.takeIf { it.isJsonObject }?.asJsonObject?.let {
                 UserProfile.LastSeen(
-                    time = it.get("time")?.asLong ?: 0L,
+                    time = safeLong(it.get("time")),
                     platform = it.get("platform")?.takeIf { x -> !x.isJsonNull }?.asInt,
                 )
             },
-            status = o.get("status")?.takeIf { !it.isJsonNull }?.asString,
-            bdate = o.get("bdate")?.takeIf { !it.isJsonNull }?.asString,
+            status = safeString(o.get("status")),
+            bdate = safeString(o.get("bdate")),
             city = o.get("city")?.takeIf { it.isJsonObject }?.asJsonObject?.let {
                 UserProfile.City(it.get("title")?.asString ?: "")
             },
@@ -12369,18 +12396,17 @@ class VKApiClient(
 
     private fun parseGroupMini(o: JsonObject): Group {
         return Group(
-            // P0.44-audit I1: JsonNull.asLong бросает, takeIf guard предотвращает.
-            id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-            // P0.44-audit I1: JsonNull.asString бросает UnsupportedOperationException.
-            name = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
-            screenName = o.get("screen_name")?.takeIf { !it.isJsonNull }?.asString,
-            isClosed = o.get("is_closed")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-            type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,
-            photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
-            photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
+            // P0.45-TRACER B5: safeString/safeLong guard от JsonNull + non-primitive.
+            id = safeLong(o.get("id")),
+            name = safeString(o.get("name")) ?: "",
+            screenName = safeString(o.get("screen_name")),
+            isClosed = safeInt(o.get("is_closed")),
+            type = safeString(o.get("type")),
+            photo100 = safeString(o.get("photo_100")),
+            photo200 = safeString(o.get("photo_200")),
             membersCount = safeInt(o.get("members_count")),
-            verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-            isMember = o.get("is_member")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+            verified = safeInt(o.get("verified")),
+            isMember = safeInt(o.get("is_member")),
         )
     }
 
