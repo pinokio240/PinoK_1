@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
@@ -4200,7 +4201,13 @@ fun ChatDetailScreen(
                     onLeave = { leaveChannel() },
                 )
             } else {
-            Column {
+            // P0.46-IME-UNIFY: input Column сам управляет IME через windowInsetsPadding.
+            // Scaffold имеет contentWindowInsets=0 (строка 3850) — иначе двойной подъём.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+            ) {
                 // #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» из панели канала.
                 // Только в этой ветке рендерится обычный композер (админ канала
                 // может писать), поэтому FocusRequester валиден здесь. Когда
