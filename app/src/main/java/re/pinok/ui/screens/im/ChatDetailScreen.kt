@@ -4203,9 +4203,14 @@ fun ChatDetailScreen(
             } else {
             // P0.46-IME-UNIFY: input Column сам управляет IME через windowInsetsPadding.
             // Scaffold имеет contentWindowInsets=0 (строка 3850) — иначе двойной подъём.
+            // P0.46-navbar-color: background ПЕРЕД windowInsetsPadding — заливает navbar
+            // область цветом surface (без этого видна системная navigation bar с жёлтым
+            // цветом кнопок жестов Android). windowInsetsPadding оставляет пустое место
+            // снизу под navbar — без background оно прозрачное → просвечивает системный цвет.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
                     .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
             ) {
                 // #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» из панели канала.
