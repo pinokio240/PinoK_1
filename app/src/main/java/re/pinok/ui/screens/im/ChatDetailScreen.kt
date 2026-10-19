@@ -4203,15 +4203,17 @@ fun ChatDetailScreen(
             } else {
             // P0.46-IME-UNIFY: input Column сам управляет IME через windowInsetsPadding.
             // Scaffold имеет contentWindowInsets=0 (строка 3850) — иначе двойной подъём.
-            // P0.46-navbar-color: background ПЕРЕД windowInsetsPadding — заливает navbar
-            // область цветом surface (без этого видна системная navigation bar с жёлтым
-            // цветом кнопок жестов Android). windowInsetsPadding оставляет пустое место
-            // снизу под navbar — без background оно прозрачное → просвечивает системный цвет.
+            // P0.46-navbar-trim: убран WindowInsets.navigationBars из union — раньше
+            // оставлял ~48dp пустого пространства внизу когда клавиатура скрыта
+            // (пользователь: 'прямоугольник выделенный жёлтым'). Теперь когда IME
+            // закрыт → padding=0, контент в самом низу (как в Telegram — системные
+            // кнопки жестов налегают на поле ввода). Когда IME открыт → padding
+            // = высота клавиатуры (IME включает navbar автоматически).
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                    .windowInsetsPadding(WindowInsets.ime),
             ) {
                 // #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» из панели канала.
                 // Только в этой ветке рендерится обычный композер (админ канала
