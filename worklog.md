@@ -16138,3 +16138,227 @@ val hasMore = usersHasMore || groupsHasMore
 **Причина**: Двойной подъём IME — Scaffold применял `contentWindowInsets` к `bottomBar` (системное поведение Material3), и дополнительно Row имел `.windowInsetsPadding(ime.union(navbar))`. Padding применялся 2 раза.
 
 **Фикс**: `PostDetailScreen.kt:657` — `contentWindowInsets = WindowInsets(0, 0, 0, 0)` на Scaffold. Теперь только Row управляет IME через `windowInsetsPadding(ime.union(navbar))` — единая точка управления (как в ChatDetailScreen, P0.39-IME-UNIFY).
+
+---
+
+## P0.46 — Комплексное улучшение комментариев и IME (2026-10-19, 10 коммитов)
+
+### Обзор
+
+Реализованы паттерны редактирования/ответа на комментарии, унифицирован IME-паттерн
+для всех экранов с input-полями, исправлены визуальные несоответствия панели ввода.
+
+### Коммиты (в порядке применения)
+
+| # | Коммит | Файл | Что |
+|---|--------|------|-----|
+| 1 | `79c111a` | VKApiClient.kt, PostDetailScreen.kt | **feat(comments): P0.46 — reply mention-prefix + from_group/sticker_id params.** Mention-префикс `[id<uid>\|<firstName>], ` при reply (VK web паттерн). wallCreateComment дополнен параметрами fromGroup, stickerId, attachments="" (пустая строка по умолчанию). |
+| 2 | `c450386` | PostDetailScreen.kt | **fix(comments): P0.46 — поле ввода поднимается слишком высоко при IME.** Причина: двойной подъём IME — Scaffold применяет contentWindowInsets к bottomBar + Row имеет windowInsetsPadding(ime). Фикс: `contentWindowInsets = WindowInsets(0, 0, 0, 0)` на Scaffold. |
+| 3 | `c9d4ff8` | VKApiClient.kt, PostDetailScreen.kt, worklog.md | **feat(comments): P0.46 — wall.getComment after reply + long-press menu.** Новый метод `wallGetComment(ownerId, commentId)` — POST wall.getComment с extended=1 и полным fields. После wallCreateComment → wallGetComment для полного объекта (с profiles/groups, replyToUser, parentsStack, likes, can_edit). Long-press меню на CommentItem через `combinedClickable`: для своего — Ответить/Редактировать/Удалить, для чужого — Ответить. |
+| 4 | `aabed46` | worklog.md | **docs: P0.46-IME-gap — УСТРАНЁН зазор поля ввода над клавиатурой.** Отметил в worklog что проблема устранена коммитом c450386. |
+| 5 | `b3adf03` | SovaNavHost.kt | **fix(ime): P0.46 — убрать глобальный .imePadding() на bottomBar (истинная причина зазора).** SovaNavHost.kt:1480 — глобальный bottomBar Scaffold'а (MiniPlayer + NavigationBar) имел .imePadding(). При открытии клавиатуры поднимался ВЕСЬ bottomBar + PostDetailScreen Row имеет свой windowInsetsPadding = двойной подъём. Фикс: убран .imePadding(), оставлен .windowInsetsPadding(navigationBars). |
+| 6 | `a77bded` | ChatDetailScreen.kt | **fix(ime): P0.46 — contentWindowInsets=0 на ChatDetailScreen Scaffold.** Тот же паттерн что PostDetailScreen: отключить авто-insets Scaffold, чтобы клавиатура не скрывала текстовое поле диалога. |
+| 7 | `560985e` | EditProfileScreen.kt, AuthDomainsScreen.kt, worklog.md | **fix(ime): unify IME handling to pattern A across input screens (P0.46).** Субагент привёл EditProfileScreen (паттерн B) и AuthDomainsScreen (паттерн C) к эталонному паттерну A. NotificationsScreen/FeedScreen/VideoPlayerScreen уже на паттерне A. |
+| 8 | `d495872` | ChatDetailScreen.kt | **fix(ime): P0.46 — добавить windowInsetsPadding(ime) на input Column в ChatDetailScreen.** Моя ошибка: в коммите a77bded добавил contentWindowInsets=0, но забыл windowInsetsPadding(ime) на input Column → клавиатура полностью закрывала input. Фикс: добавлен `.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))` на input Column. |
+| 9 | `8135d2f` | ChatDetailScreen.kt | **fix(ime): P0.46 — залить navbar-область цветом surface в ChatDetailScreen.** Пустая navbar-область под input Column просвечивала системным цветом. Фикс: `.background(MaterialTheme.colorScheme.surface)` перед windowInsetsPadding. |
+| 10 | `2997d27` | ChatDetailScreen.kt, PostDetailScreen.kt | **fix(ime): P0.46 — убрать пустой прямоугольник под полем ввода (убрать navbar из union).** Причина: windowInsetsPadding(ime.union(navigationBars)) оставлял ~48dp пустого пространства когда клавиатура скрыта. Фикс: убран .union(navigationBars), оставлен только WindowInsets.ime — клавиатура закрыта → padding=0, открыта → padding=высота клавиатуры. |
+| 11 | `bfc9696` | ChatDetailScreen.kt | **fix(chat): P0.46 — унифицировать стиль OutlinedTextField с PostDetailScreen.** Убран кастомный shape (RoundedCornerShape 20dp) и colors (focusedBorderColor=primary) — теперь default Material3 стиль, идентично постам. Padding Row унифицирован к 8.dp/6.dp без UiScale.scaled. |
+
+---
+
+### Эталонный IME паттерн A (применён ко ВСЕМ экранам с input-полями)
+
+```kotlin
+Scaffold(
+    contentWindowInsets = WindowInsets(0, 0, 0, 0),  // ← отключить авто-insets Scaffold
+    topBar = { ... },
+    bottomBar = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)   // ← заливка фоном
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .windowInsetsPadding(WindowInsets.ime),            // ← ТОЛЬКО ime (без navigationBars)
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                // БЕЗ shape и colors — default Material3
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("...") },
+                maxLines = 3-4,
+            )
+            // кнопки ...
+        }
+    },
+)
+```
+
+**Поведение:**
+- Клавиатура закрыта → `ime=0` → padding=0 → контент в самом низу (как в Telegram)
+- Клавиатура открыта → `ime=высота клавиатуры` → поле прижато к клавиатуре
+- Нет пустого прямоугольника под полем ввода
+- Нет двойного подъёма
+
+**Файлы с паттерном A:**
+- ✅ `PostDetailScreen.kt` (коммиты c450386, 2997d27)
+- ✅ `ChatDetailScreen.kt` (коммиты a77bded, d495872, 8135d2f, 2997d27, bfc9696)
+- ✅ `EditProfileScreen.kt` (коммит 560985e)
+- ✅ `AuthDomainsScreen.kt` (коммит 560985e)
+- ✅ `NotificationsScreen.kt` (уже был)
+- ✅ `FeedScreen.kt` (input в ModalBottomSheet, уже был)
+- ✅ `VideoPlayerScreen.kt` (input в ModalBottomSheet, главный Scaffold — display-only)
+- ✅ `SovaNavHost.kt` (глобальный bottomBar — убран .imePadding())
+
+---
+
+### Паттерны VK web для комментариев (из HAR + JS-бандлов)
+
+#### 1. Редактирование комментария (wall.editComment)
+
+```
+POST https://web.api.vk.ru/method/wall.editComment?v=5.289&client_id=6287487
+Content-Type: application/x-www-form-urlencoded
+
+post_id=<postId>&owner_id=<ownerId>&comment_id=<commentId>
+&message=<urlencodedText>&attachments=<csv_or_empty>
+&access_token=<vk1.a.*>
+```
+**Response**: `{"response":1}` — успех если равно 1.
+**После успеха**: вызвать `wall.getComment(comment_id=<SAME>)` для рефреша can_edit/likes.
+**UI gate**: `comment.can_edit == 1`.
+
+#### 2. Ответ пользователю (wall.createComment с reply_to_comment)
+
+```
+POST https://web.api.vk.ru/method/wall.createComment?v=5.289&client_id=6287487
+Content-Type: application/x-www-form-urlencoded
+
+post_id=<postId>&owner_id=<ownerId>
+&message=<urlencoded "[id<userId>|<firstName>], <userText>">
+&reply_to_comment=<parentCommentId>
+&attachments=&from_group=0&sticker_id=
+&entry_point=&track_code=&ref=
+&access_token=<vk1.a.*>
+```
+**Response**: `{"response":{"comment_id":11325,"parents_stack":[11206]}}`
+**После успеха**: вызвать `wall.getComment(comment_id=<NEW>)` для полного объекта.
+**UI**: mention-префикс `[id<uid>|<firstName>], ` в начале message (literal в message, не отдельное API-поле).
+
+#### 3. Получение полного объекта (wall.getComment)
+
+```
+POST https://web.api.vk.ru/method/wall.getComment?v=5.289&client_id=6287487
+Content-Type: application/x-www-form-urlencoded
+
+extended=1
+&fields=photo_50,photo_100,photo_200,first_name_dat,first_name_gen,last_name_gen,
+        sex,verified,is_verified,image_status,can_message,last_seen,mutual,
+        can_write_private_message,deactivated,friend_status,status,activity,
+        members_preview,has_unseen_stories,members_count,member_status,is_member
+&owner_id=<ownerId>
+&comment_id=<commentId>
+&access_token=<vk1.a.*>
+```
+**Response**: `{items:[<comment>], profiles:[...], groups:[...]}`
+**Comment содержит**: id, from_id, date, text, can_edit, can_delete, post_id, owner_id, parents_stack, likes, reply_to_user, reply_to_comment, thread.
+
+#### 4. Скрытые паттерны (важно)
+
+- **Параметр `reply_to_comment`** (НЕ `reply_to_comment_id`). НЕ существует `reply_to_user_id` — сервер сам выводит reply_to_user из from_id родителя.
+- **Mention — literal в message**: `[id<uid>|<firstName>], ` (с запятой+пробелом). Для групп: `[club<abs(gid)>|<name>], `.
+- **`from_group` = 0** (от user) ИЛИ `+abs(group_id)` (от group-as-admin). НЕ `-group_id`.
+- **`sticker_id=` (пустая строка)** отправляется ВСЕГДА, даже без стикера.
+- **`attachments=` (пустая строка)** аналогично — всегда отправляется.
+- **После edit/create нужен wall.getComment** — сервер возвращает только id.
+- **`parents_stack`** — цепочка родительских comment_id, для определения уровня вложенности.
+- **Auth через `access_token` в body** — без cookies, без CSRF, без per-method hash.
+- **Long-press меню** (Android): VK web использует ⋮-кнопку (desktop), но Android-стандарт — long-press. PinoK добавил оба варианта через `combinedClickable`.
+
+#### 5. Полный набор WallApi методов (из core_spa.be7f7d43.js @ pos 3182349)
+
+- `wall.editComment` — редактировать
+- `wall.createComment` — создать/ответить
+- `wall.deleteComment` — удалить (БЕЗ hash!)
+- `wall.restoreComment` — восстановить (БЕЗ hash!)
+- `wall.deleteThread` — удалить ветку
+- `wall.restoreThread` — восстановить ветку
+- `wall.getComment` — получить один комментарий (extended=1 + fields=...)
+- `wall.getComments` — список (need_likes=1, extended=1, thread_items_count=2, sort=asc, next_from)
+- `wall.getCommentOrder` — доступные порядки (smart/desc/asc)
+- `wall.getCommentsForPosts` — batch для нескольких постов
+
+---
+
+### PinoK реализация комментариев
+
+#### API методы (VKApiClient.kt)
+
+1. **`wallEditComment(ownerId, commentId, message, attachments)`** (строка 4456) — без изменений (был корректен).
+
+2. **`wallCreateComment(ownerId, postId, message, attachments, replyToComment, fromGroup, stickerId)`** (строка 6016):
+   - `fromGroup: Long? = null` — 0 = от user, +abs(gid) = от group-as-admin
+   - `stickerId: Long? = null` — VK web всегда отправляет sticker_id= (даже пустой)
+   - `attachments = ""` если null (VK web паттерн — всегда отправляет attachments=)
+
+3. **`wallGetComment(ownerId, commentId)`** (строка 7742) — НОВЫЙ метод:
+   - POST wall.getComment с extended=1, fields=photo_50,photo_100,...,members_count
+   - Response: {items:[comment], profiles:[...], groups:[...]}
+   - Парсинг через общий `parseComment()`
+
+#### UI (PostDetailScreen.kt)
+
+1. **Редактирование комментария** (строки 1190-1265):
+   - AlertDialog с OutlinedTextField, prefilled `comment.text`
+   - Кнопка «Редактировать» в ⋮-меню если `comment.fromId == currentUserId`
+   - На «Сохранить» → wallEditComment → обновление локальных списков
+
+2. **Ответ (reply)** с mention-префиксом (строки 745-765):
+   - При клике «Ответить» → `replyingToComment = comment`
+   - `inputText = "[id${comment.fromId}|${firstName}], "` — VK web паттерн
+   - Для group-comment: `"[club${-comment.fromId}|${name}], "`
+   - VK API не имеет reply_to_user_id — mention даёт UI-подсказку (кликабельная ссылка)
+
+3. **Обновление списка после reply** (строки 1181-1222):
+   - После wallCreateComment → wallGetComment(serverCommentId) для полного объекта
+   - Слить profiles в локальный кеш
+   - Заменить optimistic на реальный (с replyToUser, parentsStack, likes, can_edit, can_delete)
+   - Если parents_stack непустой → вставить в threadReplies[parent] (ветка)
+   - Иначе → в корневой localComments
+   - Инкремент post.comments.count
+
+4. **Long-press меню** (CommentItem, строки 1548-1559):
+   - `combinedClickable(onLongClick = { menuOpen = true })` на Row
+   - Свой комментарий: «Ответить», «Редактировать», «Удалить» (⋮ + long-press)
+   - Чужой: «Ответить» (только long-press, ⋮-кнопка не видна)
+
+#### UI (ChatDetailScreen.kt)
+
+1. **IME паттерн A** (строки 3850, 4212-4216):
+   - `contentWindowInsets = WindowInsets(0, 0, 0, 0)` на Scaffold
+   - input Column с `.background(surface).windowInsetsPadding(WindowInsets.ime)`
+
+2. **Унифицированный стиль OutlinedTextField** (строки 4483-4507):
+   - default Material3 (БЕЗ кастомного shape/colors) — идентично PostDetailScreen
+   - padding Row: 8.dp/6.dp (без UiScale.scaled)
+   - placeholder «Сообщение…»
+   - maxLines=4, imeAction=Send, onSend=doSend
+
+---
+
+### Итог
+
+**11 коммитов** за сессию P0.46:
+- ✅ Редактирование комментария (было + работало)
+- ✅ Ответ с mention-префиксом (новое)
+- ✅ wall.getComment после reply (новое — комментарий виден сразу)
+- ✅ Long-press меню на комментариях (новое)
+- ✅ IME паттерн A унифицирован для всех экранов (7 файлов)
+- ✅ Стиль OutlinedTextField унифицирован (диалоги = посты)
+- ✅ Убран пустой прямоугольник под полем ввода
+- ✅ Убран двойной подъём IME (глобальный + локальный)
+
+**Эталонный паттерн A** теперь применяется ко всем 7 экранам с input-полями:
+PostDetailScreen, ChatDetailScreen, EditProfileScreen, AuthDomainsScreen,
+NotificationsScreen, FeedScreen, VideoPlayerScreen.
