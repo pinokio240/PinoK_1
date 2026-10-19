@@ -5,13 +5,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -68,6 +72,11 @@ import re.pinok.data.local.SovaPrefs
 fun AuthDomainsScreen(onBack: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     Scaffold(
+        // P0.46-IME-unify: паттерн A — contentWindowInsets=0 на Scaffold (отключаем
+        // auto-insets), windowInsetsPadding(ime.union(navbar)) на input-контенте
+        // (Box ниже оборачивает AuthDomainsContent с OutlinedTextField-полями).
+        // Раньше использовался .imePadding() на Box — устаревший паттерн C.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
                 title = { Text("Настройки доменов VK", fontWeight = FontWeight.SemiBold) },
@@ -84,7 +93,7 @@ fun AuthDomainsScreen(onBack: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding(),
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
             AuthDomainsContent(snackbar = snackbar)
         }
