@@ -10677,7 +10677,7 @@ class VKApiClient(
                     online = if (isOnline) 1 else 0,
                     screenName = screenName,
                 ),
-                objectId = signedId.toString(),
+                objectId = signedId,
                 objectOwnerId = 0L,
             )
         } else {
@@ -10693,7 +10693,7 @@ class VKApiClient(
                     photo200 = photoUrl,
                     screenName = screenName,
                 ),
-                objectId = signedId.toString(),
+                objectId = signedId,
                 objectOwnerId = 0L,
             )
         }
