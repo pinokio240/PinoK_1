@@ -15901,3 +15901,19 @@ web.api.vk.ru и calls-хостов, а oauth.vk.com/login.vk.ru (эндпоин
   1. VKApiClient.faveGet: нормализация item_type "user"/"group" → "page" (чтобы старые вызовы не падали); актуальный код шлёт "page" напрямую. Парсер ветки "page": по знаку прямого поля id (id>0 → user, id<0 → group), + fallback на user_id/group_id.
   2. BookmarksScreen: убраны костыльные раздельные peopleBookmarks/groupsBookmarks. Введён ЕДИНЫЙ поток страниц pageBookmarks (item_type=page, пагинация по offset); вкладки «Люди» (id>0) и «Сообщества» (id<0) фильтруют его. «Все закладки» = (bookmarks + pageBookmarks).distinctBy — люди и группы теперь видны и там. Чистые currentList/currentMore/refresh/removeBookmark (учитывают оба потока).
 - Backup: backups/bookmarks-people-groups-page/. Файлы: VKApiClient.kt, BookmarksScreen.kt. Сборка BUILD SUCCESSFUL (проверено субагентом).
+
+### P0.44-bookmarks: fields param + group id normalization (2026-10-19, коммит 265180a)
+
+**Источник:** HAR `/home/z/my-project/upload/Закладки.zip` (21 MB, 367 entries) — анализ субагентом P0.44-bookmarks-har показал, что VK web использует legacy `vk.ru/al_bookmarks.php` с web cookies (remixsid) → HTML response. PinoK (Bearer token, VK Android API) не может вызывать этот endpoint. Альтернатива — официальный VK API `fave.get(item_type="page")` с MIX users (id>0) + groups (id<0).
+
+**3 бага найдены и исправлены (коммит 265180a, +35/-5 строк, 2 файла):**
+
+1. **VKApiClient.faveGet: не передавался `fields` параметр для `item_type=page`** — VK возвращал минимальный набор полей, вкладки показывали строки без аватаров/online-статуса/имён. Фикс: `args["fields"] = "photo_50,photo_100,photo_200,screen_name,online,status,members_count,verified,is_member,city"` (только для item_type=page).
+
+2. **VKApiClient.faveGet парсер: group.id оставался отрицательным** — VK `fave.get(item_type=page)` возвращает отрицательный `id` для групп (для различия от users), но `Group.id` во всём приложении ожидается ПОЛОЖИТЕЛЬНЫМ (`groups.getById`, `onGroupClick`, `fave.removePage(group_id=+)`). Без нормализации группы нельзя было открыть или удалить. Фикс: `group = group.copy(id = -group.id)` для `id < 0L`.
+
+3. **Models.kt Bookmark: `title` и `thumbUrl` для `type="page"` возвращали мусор** — `title` возвращал строку `"page"` (диалог удаления показывал «Удалить page?»), `thumbUrl` возвращал `null` (аватар не показывался). Фикс: `"user", "page" -> user?.fullName ?: group?.name ?: ""` для title, `"user", "page" -> user?.photo100 ?: group?.photo100` для thumbUrl.
+
+**Commit:** `265180a` (pushed to origin/PinoK).
+
+**Backup:** backups/bookmarks-people-groups-page/ (от предыдущего коммита add5f40, этот фикс поверх).
