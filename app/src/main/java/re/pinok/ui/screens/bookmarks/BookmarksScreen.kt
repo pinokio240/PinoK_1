@@ -1368,7 +1368,11 @@ private fun TagFilterChip(label: String, selected: Boolean, onClick: () -> Unit)
 }
 
 private fun iconForType(type: String): ImageVector = when (type) {
-    "user", "profile" -> Icons.Outlined.Person
+    // P0.44-audit I4: "page" — fave.get(item_type=page) MIX users+groups.
+    // Иконка выбирается по заполненной сущности (user → Person, group → Group).
+    // Но здесь type приходит как строка, поэтому fallback на Person
+    // (большинство page-bookmarks — это users; для групп тоже приемлемо).
+    "user", "profile", "page" -> Icons.Outlined.Person
     "group" -> Icons.Outlined.Group
     "photo" -> Icons.Outlined.InsertPhoto
     "video", "clip" -> Icons.Outlined.PlayCircle
@@ -1380,6 +1384,8 @@ private fun iconForType(type: String): ImageVector = when (type) {
 
 private fun typeLabel(type: String): String = when (type) {
     "user", "profile" -> "Пользователь"
+    // P0.44-audit I4: "page" — label для MIX users+groups.
+    "page" -> "Страница"
     "group" -> "Сообщество"
     "post" -> "Запись"
     "photo" -> "Фото"

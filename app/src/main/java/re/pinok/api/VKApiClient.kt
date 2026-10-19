@@ -10706,7 +10706,13 @@ class VKApiClient(
                         when {
                             pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(entity)
                             pageGroupId != null && pageGroupId > 0L -> {
+                                // P0.44-audit B1: нормализация знака для симметрии с pageSignedId<0L веткой.
+                                // parseGroupMini читает entity.id — если он отрицательный, group.id будет <0,
+                                // что ломает fave.removePage(group_id=+) и onGroupClick.
                                 group = parseGroupMini(entity)
+                                if (group.id < 0L) {
+                                    group = group.copy(id = -group.id)
+                                }
                             }
                             pageSignedId != null && pageSignedId > 0L -> user = parseUserProfileMini(entity)
                             pageSignedId != null && pageSignedId < 0L -> {
@@ -10714,7 +10720,9 @@ class VKApiClient(
                                 // Нормализация: Group.id должен быть положительным
                                 // (VK отдаёт -id для групп в fave.get(item_type=page),
                                 // но fave.removePage/group screens ожидают +id).
-                                if (group != null && group.id < 0L) {
+                                // parseGroupMini возвращает non-null Group (не Group?),
+                                // поэтому проверяем только group.id < 0L.
+                                if (group.id < 0L) {
                                     group = group.copy(id = -group.id)
                                 }
                             }
@@ -12334,9 +12342,12 @@ class VKApiClient(
     private fun parseUserProfileMini(o: JsonObject): UserProfile {
         val countersObj = o.get("counters")?.takeIf { obj -> obj.isJsonObject }?.asJsonObject
         return UserProfile(
-            id = o.get("id")?.asLong ?: 0L,
-            firstName = o.get("first_name")?.asString ?: "",
-            lastName = o.get("last_name")?.asString ?: "",
+            id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            // P0.44-audit I1: JsonNull.asString бросает UnsupportedOperationException.
+            // takeIf { !it.isJsonNull } guard предотвращает молчаливый emptyList
+            // (outer try/catch в faveGet ловил бы исключение и возвращал пусто).
+            firstName = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: "",
+            lastName = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: "",
             photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
             photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
             online = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
@@ -12358,8 +12369,10 @@ class VKApiClient(
 
     private fun parseGroupMini(o: JsonObject): Group {
         return Group(
-            id = o.get("id")?.asLong ?: 0L,
-            name = o.get("name")?.asString ?: "",
+            // P0.44-audit I1: JsonNull.asLong бросает, takeIf guard предотвращает.
+            id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            // P0.44-audit I1: JsonNull.asString бросает UnsupportedOperationException.
+            name = o.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
             screenName = o.get("screen_name")?.takeIf { !it.isJsonNull }?.asString,
             isClosed = o.get("is_closed")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
             type = o.get("type")?.takeIf { !it.isJsonNull }?.asString,

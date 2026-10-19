@@ -1008,7 +1008,13 @@ fun ProfileScreen(
                 if (url != null) photoViewerState.value = listOf(url) to 0
             }
             "link" -> bookmark.link?.url?.takeIf { it.isNotBlank() }?.let { openUrlExternal(context, it) }
-            "user" -> bookmark.user?.let { onUserClick(it.id) }
+            // P0.44-audit B2: "page" — fave.get(item_type=page) MIX users+groups.
+            // user (id>0) → onUserClick, group (id<0, после нормализации +) → onGroupClick.
+            "user", "page" -> {
+                bookmark.user?.let { onUserClick(it.id) }
+                    ?: bookmark.group?.let { onGroupClick(it.id) }
+            }
+            "group" -> bookmark.group?.let { onGroupClick(it.id) }
         }
     }
 
