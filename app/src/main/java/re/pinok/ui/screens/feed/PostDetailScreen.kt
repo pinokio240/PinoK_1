@@ -8,6 +8,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1179,11 +1180,53 @@ fun PostDetailScreen(
                                 replyToComment = replyToCommentId,
                             )
                             if (serverCommentId > 0L) {
-                                // Заменяем optimistic ID на server ID — теперь
-                                // дедупликация (Fix #231) корректно смёржет с
-                                // freshly-fetched comments при reload.
-                                localComments = localComments.map { c ->
-                                    if (c.id == optimisticId) c.copy(id = serverCommentId) else c
+                                // P0.46-comments-display: VK web паттерн — после createComment
+                                // вызвать wall.getComment для полного объекта (с profiles/groups).
+                                // Это даёт корректные can_edit/can_delete/likes/thread И сразу
+                                // подтягивает профиль автора (имя/аватар) — раньше optimistic
+                                // комментарий показывался без аватара/имени до ручного reload.
+                                val fetched = app.apiClient.wallGetComment(
+                                    ownerId = post.ownerId,
+                                    commentId = serverCommentId,
+                                )
+                                if (fetched.comments.isNotEmpty()) {
+                                    val realComment = fetched.comments.first()
+                                    // Сливаем профили в локальный кеш.
+                                    profiles = (profiles + fetched.profiles)
+                                    // Заменяем optimistic на реальный объект (с replyToUser,
+                                    // replyToComment, parents_stack, likes, can_edit, can_delete).
+                                    localComments = localComments.map { c ->
+                                        if (c.id == optimisticId) realComment else c
+                                    }
+                                    // Если это ответ (reply) с parents_stack — вставляем в ветку
+                                    // родителя, а не в корень списка.
+                                    val parentStack = realComment.replyToComment
+                                        ?: realComment.parentsStack?.firstOrNull()
+                                    if (parentStack != null && parentStack > 0L) {
+                                        val existing = threadReplies[parentStack].orEmpty()
+                                        threadReplies = threadReplies.toMutableMap().apply {
+                                            // Удаляем optimistic из ветки (если был) и добавляем реальный.
+                                            put(parentStack, (existing.filterNot { it.id == optimisticId } + realComment))
+                                        }
+                                        // Из корневого списка убираем (он теперь в ветке).
+                                        localComments = localComments.filterNot { it.id == serverCommentId }
+                                    }
+                                    // Инкремент счётчика комментариев поста.
+                                    // post это val (fetchedPost ?: holderPost) — обновляем
+                                    // через fetchedPost, если он был задан; иначе holderPost
+                                    // остаётся как есть (счётчик обновится при следующем reload).
+                                    val currentPost = fetchedPost ?: holderPost
+                                    if (currentPost != null) {
+                                        fetchedPost = currentPost.copy(comments = currentPost.comments?.copy(
+                                            count = (currentPost.comments?.count ?: 0) + 1,
+                                        ))
+                                    }
+                                } else {
+                                    // Fallback: wallGetComment не вернул данные — оставляем
+                                    // optimistic с заменой ID (старое поведение).
+                                    localComments = localComments.map { c ->
+                                        if (c.id == optimisticId) c.copy(id = serverCommentId) else c
+                                    }
                                 }
                             } else {
                                 // Fix #233 (P1-7): откатываем optimistic при ошибке.
@@ -1505,6 +1548,15 @@ private fun CommentItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // P0.46-comments-menu: long-press → показать контекстное меню (⋯).
+            // VK web использует ⋮-кнопку (для desktop) или dropdown; PinoK Android
+            // добавляет long-press как альтернативный триггер (стандартный Android
+            // паттерн для контекстных меню). Long-press открывает ТОТ ЖЕ DropdownMenu,
+            // что и ⋮-кнопка — пункты зависят от isOwnComment (can_edit/can_delete).
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { menuOpen = true },
+            )
             // Fix #237: отступ слева для reply-комментариев — визуальная
             // вложенность, как в Telegram/VK. Плюс тонкая вертикальная
             // линия-connector слева, чтобы было видно «это ответ в ветке».
@@ -1560,7 +1612,8 @@ private fun CommentItem(
                 if (isOwnComment) {
                     Spacer(modifier = Modifier.weight(1f))
                     // #COMMENT-EDIT: ⋮-меню «Редактировать/Удалить» для своих
-                    // комментариев. Для чужих кнопка не выводится.
+                    // комментариев. Для чужих кнопка не выводится (но long-press
+                    // на всём Row всё равно открывает меню — там только «Ответить»).
                     Box {
                         IconButton(
                             onClick = { menuOpen = true },
@@ -1577,18 +1630,48 @@ private fun CommentItem(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false },
                         ) {
+                            // P0.46-comments-menu: «Ответить» доступно для ВСЕХ
+                            // комментариев (свой/чужой) — стандартный паттерн VK web.
                             DropdownMenuItem(
-                                text = { Text("Редактировать") },
+                                text = { Text("Ответить") },
                                 onClick = {
                                     menuOpen = false
-                                    onEditComment(comment)
+                                    onReply()
                                 },
                             )
+                            if (isOwnComment) {
+                                DropdownMenuItem(
+                                    text = { Text("Редактировать") },
+                                    onClick = {
+                                        menuOpen = false
+                                        onEditComment(comment)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Удалить") },
+                                    onClick = {
+                                        menuOpen = false
+                                        onDeleteComment(comment)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // P0.46-comments-menu: для чужих комментариев ⋮-кнопка не видна,
+                    // но long-press на Row открывает меню с «Ответить» (через menuOpen).
+                    // DropdownMenu привязан к невидимому Box-якорю (size 0dp).
+                    Spacer(modifier = Modifier.weight(1f))
+                    Box(modifier = Modifier.size(0.dp)) {
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false },
+                        ) {
                             DropdownMenuItem(
-                                text = { Text("Удалить") },
+                                text = { Text("Ответить") },
                                 onClick = {
                                     menuOpen = false
-                                    onDeleteComment(comment)
+                                    onReply()
                                 },
                             )
                         }

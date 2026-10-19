@@ -7726,6 +7726,62 @@ class VKApiClient(
     }
 
     /**
+     * P0.46-comments-display: Получить ОДИН комментарий по comment_id.
+     * VK: wall.getComment — owner_id, comment_id, extended=1, fields=...
+     *
+     * VK web паттерн: после wall.createComment (reply) ИЛИ wall.editComment
+     * браузер ВСЕГДА вызывает wall.getComment для получения полного объекта
+     * нового/изменённого комментария (с profiles[]/groups[] для аватаров/имён).
+     *
+     * Response: { items:[<comment>], profiles:[...], groups:[...] }
+     *
+     * @param ownerId owner_id поста (может быть отрицательным для групп)
+     * @param commentId ID комментария (новый из wall.createComment response,
+     *   или тот же после wall.editComment для рефреша can_edit/likes)
+     */
+    suspend fun wallGetComment(
+        ownerId: Long,
+        commentId: Long,
+    ): CommentsResult {
+        if (isOffline()) return CommentsResult(emptyList(), emptyMap())
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "comment_id" to commentId.toString(),
+            "extended" to "1",
+            // P0.46-comments-display: fields из HAR — полный набор для аватаров,
+            // имён, online-статусов, verified, friend_status, etc.
+            "fields" to "photo_50,photo_100,photo_200,first_name_dat,first_name_gen," +
+                "last_name_gen,sex,verified,is_verified,image_status,can_message," +
+                "last_seen,mutual,can_write_private_message,deactivated,friend_status," +
+                "status,activity,members_preview,has_unseen_stories,members_count," +
+                "member_status,is_member",
+        )
+        val json = call("wall.getComment", args)
+            ?: return CommentsResult(emptyList(), emptyMap())
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return CommentsResult(emptyList(), emptyMap())
+            val items = resp.getAsJsonArray("items") ?: return CommentsResult(emptyList(), emptyMap())
+            val profilesArr = resp.getAsJsonArray("profiles")
+            val profiles = mutableMapOf<Long, UserProfile>()
+            if (profilesArr != null) {
+                for (el in profilesArr) {
+                    if (!el.isJsonObject) continue
+                    val o = el.asJsonObject
+                    val uid = o.get("id")?.asLong ?: continue
+                    profiles[uid] = parseUserProfileMini(o)
+                }
+            }
+            val comments = items.mapNotNull { el ->
+                if (!el.isJsonObject) null else parseComment(el.asJsonObject)
+            }
+            CommentsResult(comments, profiles)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "wallGetComment parse error", e)
+            CommentsResult(emptyList(), emptyMap())
+        }
+    }
+
+    /**
      * Получить заявки в друзья. VK: friends.getRequests — count, offset, extended=1.
      * Возвращает список пользователей, которые хотят добавить вас в друзья.
      */

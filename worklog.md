@@ -16081,3 +16081,50 @@ val hasMore = usersHasMore || groupsHasMore
    - Reply preview (replyTarget header) уже был реализован (PostDetailScreen.kt:859-915)
 
 **Коммит:** <будет после push>
+
+### P0.46-comments-display-menu: обновление списка + long-press меню (2026-10-19)
+
+**Проблемы:**
+1. После отправки ответа (reply) комментарий не показывался в списке — нужно выйти и зайти снова.
+2. Нет long-press меню для редактирования/удаления/ответа.
+
+**Анализ снапшотов** (субагент P0.46-comments-display-menu):
+
+#### 1. Обновление списка после reply (VK web паттерн):
+- После `wall.createComment` → браузер ВСЕГДА вызывает `wall.getComment(comment_id=<NEW>)`
+- Response: `{items:[comment], profiles:[...], groups:[...]}`
+- Comment содержит `parents_stack`, `reply_to_user`, `reply_to_comment`, `can_edit`, `can_delete`, `likes`
+- Алгоритм: создать optimistic → получить server_id → вызвать wall.getComment → заменить optimistic на реальный объект → вставить в ветку родителя (если parents_stack непустой) или в корень
+
+#### 2. Контекстное меню (VK web):
+- **НЕ long-press** — VK web использует ⋮-кнопку (desktop) или dropdown (compact)
+- Но Android-стандарт для контекстных меню — long-press → PinoK добавил оба варианта
+- Пункты для своего комментария: «Ответить», «Редактировать», «Удалить»
+- Пункты для чужого: «Ответить»
+- `wall.deleteComment(owner_id, comment_id)` — БЕЗ hash (в отличие от legacy al_bookmarks.php)
+- `wall.restoreComment(owner_id, comment_id)` — восстановление
+
+**Реализация:**
+
+1. **VKApiClient.wallGetComment(ownerId, commentId)** — новый метод:
+   - POST `wall.getComment` с `extended=1`, `fields=photo_50,photo_100,photo_200,...,members_count,member_status,is_member`
+   - Response: `{items:[comment], profiles:[...], groups:[...]}`
+   - Парсинг через общий `parseComment()`
+
+2. **PostDetailScreen** — после `wallCreateComment`:
+   - Вызвать `wallGetComment(ownerId, serverCommentId)` для получения полного объекта
+   - Слить profiles в локальный кеш
+   - Заменить optimistic comment на реальный (с replyToUser, replyToComment, parentsStack, likes, can_edit, can_delete)
+   - Если `parents_stack` непустой → вставить в `threadReplies[parent]` (в конец ветки)
+   - Иначе → оставить в корневом `localComments`
+   - Инкремент счётчика `post.comments.count`
+   - Fallback: если wallGetComment не вернул данные — оставляем optimistic с заменой ID (старое поведение)
+
+3. **CommentItem long-press меню**:
+   - `combinedClickable(onClick = {}, onLongClick = { menuOpen = true })` на Row
+   - Для своего комментария: «Ответить», «Редактировать», «Удалить»
+   - Для чужого: «Ответить» (через невидимый Box-якорь size 0dp для DropdownMenu)
+   - ⋮-кнопка осталась для своего комментария (как раньше)
+   - Long-press работает для ВСЕХ комментариев
+
+**Коммит:** <будет после push>
