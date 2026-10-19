@@ -10537,6 +10537,168 @@ class VKApiClient(
         }
     }
 
+    /**
+     * P0.45-bookmarks-legacy: Закладки people/groups через vk.ru/al_bookmarks.php (web-scraping).
+     *
+     * VK API fave.get(item_type=page) возвращает 0 items (проверено логом: items=0, count=0) —
+     * закладки users/groups хранятся в ОТДЕЛЬНОЙ legacy системе, доступной только через
+     * web endpoint al_bookmarks.php с cookies (remixsid). PinoK имеет VkCookieJar —
+     * может вызывать этот endpoint напрямую.
+     *
+     * VK web JS (bookmarks.b2241ec1.js): _loadPagesAll → POST al_bookmarks.php?act=load_all
+     * Body: act=load_all&al=1&offset=N&type=user|group
+     * Response: {"payload":[0,[["<html_item1>","<html_item2>",...], next_offset_or_null]]}
+     *
+     * HTML item structure (из снапшотов Закладки_люди.html / Закладки_сообщества.html):
+     *   <div class="bookmark_page_item _bookmark_page_item_{id}" data-id="{id}" data-tags="[]">
+     *     <a href="https://vk.ru/id{positive_id}" ИЛИ href="https://vk.ru/{screen_name}">
+     *       <div class="bookmark_page_item__image [_online]" style="background-image: url({photo_url})"></div>
+     *     </a>
+     *     <button class="bookmarks_item_toggle" data-item-type="page" data-item-id="{signed_id}" data-hash="{hash}">
+     *     <div class="bookmark_page_item__name">
+     *       <a class="mem_link|group_link" href="...">{NAME}</a>
+     *     </div>
+     *   </div>
+     *
+     * @param type "user" для вкладки «Люди», "group" для «Сообщества».
+     * @param offset пагинация (0, 30, 60, ...).
+     * @return Pair(list of Bookmark, hasMore).
+     */
+    suspend fun bookmarksGetLegacyPages(type: String, offset: Int = 0): Pair<List<Bookmark>, Boolean> = withContext(Dispatchers.IO) {
+        if (isOffline()) return@withContext emptyList<Bookmark>() to false
+        if (type != "user" && type != "group") return@withContext emptyList<Bookmark>() to false
+        val uid = exchangeAuthRepository?.userId() ?: 0L
+        val form = okhttp3.FormBody.Builder()
+            .add("act", "load_all")
+            .add("al", "1")
+            .add("offset", offset.toString())
+            .add("type", type)
+            .build()
+        // #C9-DNS-FIX: vk.ru может не резолвиться — пробуем несколько хостов.
+        val hosts = listOf("https://vk.ru", "https://m.vk.ru", "https://vk.com")
+        var rawBody: String? = null
+        for (host in hosts) {
+            if (rawBody != null) break
+            // Прогрев сессии (GET страницы закладок).
+            runCatching {
+                val getReq = okhttp3.Request.Builder()
+                    .url("$host/bookmarks?type=$type")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+                    .header("Referer", "$host/bookmarks")
+                    .build()
+                httpClient.newCall(getReq).execute().use { it.body?.string() }
+            }
+            val req = okhttp3.Request.Builder()
+                .url("$host/al_bookmarks.php?act=load_all")
+                .post(form)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .header("Accept", "*/*")
+                .header("Origin", host)
+                .header("Referer", "$host/bookmarks?type=$type")
+                .build()
+            try {
+                val bb = httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        AppLog.w("VKApiClient", "bookmarksGetLegacyPages($type): HTTP ${resp.code} host=$host")
+                        null
+                    } else {
+                        resp.body?.string()
+                    }
+                }
+                if (!bb.isNullOrBlank()) {
+                    AppLog.i("VKApiClient", "bookmarksGetLegacyPages($type): OK len=${bb.length} host=$host offset=$offset")
+                    rawBody = bb
+                }
+            } catch (e: Exception) {
+                AppLog.w("VKApiClient", "bookmarksGetLegacyPages($type): network error host=$host: ${e.message}")
+            }
+        }
+        if (rawBody.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "bookmarksGetLegacyPages($type): empty body after all hosts")
+            return@withContext emptyList<Bookmark>() to false
+        }
+        // Парсим JSON: {"payload":[0,[["<html1>","<html2>",...], next_offset_or_null]]}
+        return@withContext try {
+            val parsed = com.google.gson.JsonParser.parseString(rawBody).takeIf { it.isJsonObject }?.asJsonObject
+            val payload = parsed?.getAsJsonArray("payload") ?: return@withContext emptyList<Bookmark>() to false
+            if (payload.size() < 2) return@withContext emptyList<Bookmark>() to false
+            val innerArr = payload[1].takeIf { it.isJsonArray }?.asJsonArray ?: return@withContext emptyList<Bookmark>() to false
+            // innerArr[0] = array of HTML strings, innerArr[1] = next_offset (null = no more)
+            val htmlItems = innerArr[0].takeIf { it.isJsonArray }?.asJsonArray
+            val nextOffset = innerArr[1].takeIf { !it.isJsonNull }?.asString
+            val hasMore = !nextOffset.isNullOrBlank()
+            if (htmlItems == null || htmlItems.size() == 0) {
+                AppLog.i("VKApiClient", "bookmarksGetLegacyPages($type): 0 items (offset=$offset, nextOffset=$nextOffset)")
+                return@withContext emptyList<Bookmark>() to false
+            }
+            val bookmarks = htmlItems.mapNotNull { htmlEl ->
+                val html = htmlEl.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
+                parseLegacyBookmarkHtml(html, type, uid)
+            }
+            AppLog.i("VKApiClient", "bookmarksGetLegacyPages($type): parsed ${bookmarks.size} items (offset=$offset, hasMore=$hasMore)")
+            bookmarks to hasMore
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "bookmarksGetLegacyPages($type): parse error: ${e.message}")
+            emptyList<Bookmark>() to false
+        }
+    }
+
+    // P0.45-bookmarks-legacy: парсинг HTML bookmark_page_item в Bookmark модель.
+    private fun parseLegacyBookmarkHtml(html: String, type: String, currentUid: Long): Bookmark? {
+        // Извлекаем signed id из data-item-id (positive=user, negative=group).
+        val signedId = Regex("""data-item-id="(-?\d+)"""").find(html)?.groupValues?.get(1)?.toLongOrNull()
+            ?: return null
+        // Avatar URL из style="background-image: url(URL)" — unescape &amp; → &.
+        val photoUrl = Regex("""background-image:\s*url\(([^)]+)\)""").find(html)?.groupValues?.get(1)
+            ?.replace("&amp;", "&")
+        // Online status: _online class on bookmark_page_item__image.
+        val isOnline = Regex("""bookmark_page_item__image\s+_online""").containsMatchIn(html)
+        // Name: <a class="mem_link|group_link" href="...">NAME</a>.
+        val nameMatch = Regex("""<a[^>]*class="(?:mem_link|group_link)"[^>]*>([^<]+)</a>""").find(html)
+        val name = nameMatch?.groupValues?.get(1)?.trim() ?: ""
+        // Screen name: href="https://vk.ru/id123" → "id123", или href="https://vk.ru/funny_comix_rus" → "funny_comix_rus".
+        val href = Regex("""href="https://vk\.ru/([^"?]+)"""").find(html)?.groupValues?.get(1)
+        val screenName = href?.let { if (it.startsWith("id") && it.substring(2).all { c -> c.isDigit() }) null else it }
+        return if (signedId > 0L) {
+            // User
+            Bookmark(
+                type = "page",
+                seen = false,
+                addedDate = 0L,
+                user = UserProfile(
+                    id = signedId,
+                    firstName = name.substringBeforeLast(" ").ifBlank { name },
+                    lastName = name.substringAfterLast(" ").takeIf { name.contains(" ") } ?: "",
+                    photo100 = photoUrl,
+                    photo200 = photoUrl,
+                    online = if (isOnline) 1 else 0,
+                    screenName = screenName,
+                ),
+                objectId = signedId.toString(),
+                objectOwnerId = 0L,
+            )
+        } else {
+            // Group (signedId < 0, normalize to positive for Group.id)
+            Bookmark(
+                type = "page",
+                seen = false,
+                addedDate = 0L,
+                group = Group(
+                    id = -signedId,
+                    name = name,
+                    photo100 = photoUrl,
+                    photo200 = photoUrl,
+                    screenName = screenName,
+                ),
+                objectId = signedId.toString(),
+                objectOwnerId = 0L,
+            )
+        }
+    }
+
     /** fave.get — закладки (люди, группы, посты, фото, видео, ссылки). */
     suspend fun faveGet(count: Int = 30, offset: Int = 0, tagId: Long? = null, itemType: String? = null): List<Bookmark> {
         if (isOffline()) return emptyList()

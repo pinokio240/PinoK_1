@@ -213,18 +213,28 @@ fun BookmarksScreen(
     // VK API не разделяет людей/сообщества фильтром — они приходят одним потоком и
     // разделяются знаком id (id>0 человек, id<0 группа). Вкладки «Люди»/«Сообщества»
     // фильтруют этот поток; «Все закладки» добавляют его к общему списку.
+    // P0.45-bookmarks-legacy: fave.get(item_type=page) возвращает 0 items —
+    // users/groups хранятся в legacy al_bookmarks.php. Загружаем ОБА типа
+    // (user + group) и объединяем.
+    suspend fun loadLegacyPages(offset: Int): Pair<List<Bookmark>, Boolean> {
+        val (users, usersHasMore) = app.apiClient.bookmarksGetLegacyPages("user", offset = offset)
+        val (groups, groupsHasMore) = app.apiClient.bookmarksGetLegacyPages("group", offset = offset)
+        val combined = (users + groups).distinctBy { bookmarkKey(it) }
+        val hasMore = usersHasMore || groupsHasMore
+        return combined to hasMore
+    }
+
     suspend fun loadPageFirstPage(tagId: Long?) {
         pageLoading = true
         pageEndReached = false
         pageErrorText = null
         try {
-            val list = app.apiClient.faveGet(count = pageSize, tagId = tagId, itemType = "page")
-            pageBookmarks = list.distinctBy { bookmarkKey(it) }
-            if (list.size < pageSize) pageEndReached = true
-            AppLog.i("BookmarksScreen", "Loaded ${list.size} pages (people/groups, tag=$tagId)")
+            val (list, hasMore) = loadLegacyPages(offset = 0)
+            pageBookmarks = list
+            pageEndReached = !hasMore
+            AppLog.i("BookmarksScreen", "Loaded ${list.size} pages via legacy (people/groups, tag=$tagId)")
             if (list.isEmpty()) {
-                val human = app.apiClient.lastApiErrorHuman()
-                pageErrorText = if (human != null) "Страницы не загрузились: $human" else "Нет закладок людей и сообществ"
+                pageErrorText = "Нет закладок людей и сообществ"
             }
         } catch (e: Exception) {
             AppLog.e("BookmarksScreen", "Failed to load pages", e)
@@ -260,9 +270,10 @@ fun BookmarksScreen(
             when (typeFilter) {
                 "people", "groups" -> {
                     try {
-                        val list = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId, itemType = "page")
-                        pageBookmarks = list.distinctBy { bookmarkKey(it) }
-                        pageEndReached = list.size < pageSize
+                        // P0.45-bookmarks-legacy: use al_bookmarks.php instead of fave.get(item_type=page)
+                        val (list, hasMore) = loadLegacyPages(offset = 0)
+                        pageBookmarks = list
+                        pageEndReached = !hasMore
                         pageErrorText = null
                     } catch (e: Exception) {
                         AppLog.w("BookmarksScreen", "refreshPages failed: ${e.message}")
@@ -278,9 +289,10 @@ fun BookmarksScreen(
                         AppLog.w("BookmarksScreen", "refreshBookmarks failed: ${e.message}")
                     }
                     try {
-                        val pages = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId, itemType = "page")
-                        pageBookmarks = pages.distinctBy { bookmarkKey(it) }
-                        pageEndReached = pages.size < pageSize
+                        // P0.45-bookmarks-legacy: use al_bookmarks.php instead of fave.get(item_type=page)
+                        val (pages, hasMore) = loadLegacyPages(offset = 0)
+                        pageBookmarks = pages
+                        pageEndReached = !hasMore
                         pageErrorText = null
                     } catch (e: Exception) {
                         AppLog.w("BookmarksScreen", "refreshPages failed: ${e.message}")
@@ -325,22 +337,25 @@ fun BookmarksScreen(
         }
     }
 
-    // #BOOKMARKS-PEOPLE-GROUPS: пагинация потока страниц (item_type=page).
+    // #BOOKMARKS-PEOPLE-GROUPS: пагинация потока страниц (legacy al_bookmarks.php).
     fun loadMorePages() {
         if (loadingMore || pageEndReached || pageBookmarks.isEmpty()) return
         scope.launch {
             loadingMore = true
             try {
-                val offset = pageBookmarks.size
-                val page = app.apiClient.faveGet(count = pageSize, offset = offset, tagId = selectedTagId, itemType = "page")
-                    .filter { np ->
-                        val npKey = bookmarkKey(np)
-                        pageBookmarks.none { bookmarkKey(it) == npKey }
-                    }
-                if (page.isNotEmpty()) {
-                    pageBookmarks = (pageBookmarks + page).distinctBy { bookmarkKey(it) }
+                // P0.45-bookmarks-legacy: use al_bookmarks.php for pagination.
+                // Offset = count of users and groups separately (legacy pagination is per-type).
+                val userOffset = pageBookmarks.count { it.user != null }
+                val groupOffset = pageBookmarks.count { it.group != null }
+                val (page, hasMore) = loadLegacyPages(offset = maxOf(userOffset, groupOffset))
+                val newPages = page.filter { np ->
+                    val npKey = bookmarkKey(np)
+                    pageBookmarks.none { bookmarkKey(it) == npKey }
                 }
-                if (page.size < pageSize) pageEndReached = true
+                if (newPages.isNotEmpty()) {
+                    pageBookmarks = (pageBookmarks + newPages).distinctBy { bookmarkKey(it) }
+                }
+                pageEndReached = !hasMore
             } catch (e: Exception) {
                 AppLog.w("BookmarksScreen", "loadMorePages failed: ${e.message}")
             } finally {
@@ -370,16 +385,19 @@ fun BookmarksScreen(
                     if (page.size < pageSize) endReached = true
                 }
                 if (!pageEndReached && pageBookmarks.isNotEmpty()) {
-                    val offset = pageBookmarks.size
-                    val page = app.apiClient.faveGet(count = pageSize, offset = offset, tagId = selectedTagId, itemType = "page")
-                        .filter { np ->
-                            val npKey = bookmarkKey(np)
-                            pageBookmarks.none { bookmarkKey(it) == npKey }
-                        }
-                    if (page.isNotEmpty()) {
-                        pageBookmarks = (pageBookmarks + page).distinctBy { bookmarkKey(it) }
+                    // P0.45-bookmarks-legacy: use al_bookmarks.php for pagination.
+                    val userOffset = pageBookmarks.count { it.user != null }
+                    val groupOffset = pageBookmarks.count { it.group != null }
+                    val offset = maxOf(userOffset, groupOffset)
+                    val (page, hasMore) = loadLegacyPages(offset = offset)
+                    val newPages = page.filter { np ->
+                        val npKey = bookmarkKey(np)
+                        pageBookmarks.none { bookmarkKey(it) == npKey }
                     }
-                    if (page.size < pageSize) pageEndReached = true
+                    if (newPages.isNotEmpty()) {
+                        pageBookmarks = (pageBookmarks + newPages).distinctBy { bookmarkKey(it) }
+                    }
+                    pageEndReached = !hasMore
                 }
             } catch (e: Exception) {
                 AppLog.w("BookmarksScreen", "loadMoreAll failed: ${e.message}")
