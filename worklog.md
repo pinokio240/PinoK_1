@@ -16128,3 +16128,13 @@ val hasMore = usersHasMore || groupsHasMore
    - Long-press работает для ВСЕХ комментариев
 
 **Коммит:** <будет после push>
+
+### P0.46-IME-gap: УСТРАНЁН зазор поля ввода над клавиатурой (2026-10-19)
+
+**Проблема** (скриншот `Screenshot_20261019_212316.png`): при открытии клавиатуры поле ввода комментария поднималось слишком высоко (под заголовок поста), между ним и клавиатурой — большой пустой зазор.
+
+**Статус: ✅ УСТРАНЁН** (коммит `c450386`).
+
+**Причина**: Двойной подъём IME — Scaffold применял `contentWindowInsets` к `bottomBar` (системное поведение Material3), и дополнительно Row имел `.windowInsetsPadding(ime.union(navbar))`. Padding применялся 2 раза.
+
+**Фикс**: `PostDetailScreen.kt:657` — `contentWindowInsets = WindowInsets(0, 0, 0, 0)` на Scaffold. Теперь только Row управляет IME через `windowInsetsPadding(ime.union(navbar))` — единая точка управления (как в ChatDetailScreen, P0.39-IME-UNIFY).
