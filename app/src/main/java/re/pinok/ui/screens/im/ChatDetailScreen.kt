@@ -3843,6 +3843,11 @@ fun ChatDetailScreen(
         LocalChatAppearance provides chatAppearance,
     ) {
     Scaffold(
+        // P0.46-IME-GAP: тот же паттерн что в PostDetailScreen — отключаем auto
+        // contentWindowInsets на bottomBar, иначе Scaffold поднимает bottomBar над
+        // IME + Row внутри имеет windowInsetsPadding(ime) = ДВОЙНОЙ подъём →
+        // клавиатура скрывает текстовое поле диалога. Row сам управляет IME.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             if (selectionMode) {
                 // P2.5: selection-mode TopAppBar — «Выбрано: N» + Forward/Delete/Close.
