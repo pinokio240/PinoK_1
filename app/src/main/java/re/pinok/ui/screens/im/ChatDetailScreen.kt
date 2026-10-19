@@ -245,6 +245,8 @@ import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.PhotosFeedResult
 import re.pinok.data.model.ReactionItem
 import re.pinok.data.model.MessageReaction
+import re.pinok.data.model.ReactionAsset
+import re.pinok.data.model.ReactionAssets
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
@@ -470,19 +472,14 @@ private fun isReadUpTo(msg: Message, upToCmid: Long): Boolean {
         // Fallback: message_id. Положительные id — реальные серверные.
         // Отрицательные (optimistic id = -System.currentTimeMillis())
         // никогда не считаем прочитанными — ждём серверного подтверждения.
-        msg.id > 0 && msg.id <= upToCmid
+msg.id > 0 && msg.id <= upToCmid
     }
 }
 
 /**
- * P1.1: Элемент списка чата — sealed class для унифицированного рендера
- * сообщений, date-separator'ов и unread-divider'а в одном LazyColumn.
- *
- * Список строится в порядке reverseLayout (индекс 0 = новейшее = внизу экрана).
- * DateSeparator вставляется ПОСЛЕ последнего сообщения дня группы (т.е. выше
- * визуально, что правильно для sticky-header паттерна).
- * UnreadDivider вставляется ПОСЛЕ последнего непрочитанного (разделяет
- * непрочитанные снизу от прочитанных сверху).
+ * P1.1: ChatListItem — элемент ленты диалога: сообщение с pre-computed
+ * isGrouped флагом, дата-сепаратор или разделитель непрочитанных.
+ * (Восстановлен вместе с правкой #IM-REACTIONS-GRID — был случайно удалён.)
  */
 sealed class ChatListItem {
     /** Дата-сепаратор: «Сегодня», «Вчера», «12 июля». */
@@ -653,6 +650,8 @@ fun ChatDetailScreen(
     var contextMsgId by remember { mutableStateOf<Long?>(null) }
     // Sprint 3: Показывать ли пикер реакций.
     var showReactionPicker by remember { mutableStateOf<Long?>(null) }
+    // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯») — для id сообщения.
+    var showReactionGridFor by remember { mutableStateOf<Long?>(null) }
     // Sprint 3: режим редактирования.
     var editingMsgId by remember { mutableStateOf<Long?>(null) }
     // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01): вложения
@@ -5429,6 +5428,9 @@ fun ChatDetailScreen(
                                     showReactionPicker = showReactionPicker == msg.id,
                                     onShowReactionPicker = { showReactionPicker = msg.id },
                                     onHideReactionPicker = { showReactionPicker = null },
+                                    showReactionGrid = showReactionGridFor == msg.id,
+                                    onShowReactionGrid = { showReactionGridFor = msg.id },
+                                    onHideReactionGrid = { showReactionGridFor = null },
                                     showContextMenu = contextMsgId == msg.id,
                                     onDismissContextMenu = { contextMsgId = null },
                                     // P2.5: multi-select.
@@ -6217,6 +6219,10 @@ private fun MessageBubble(
     showReactionPicker: Boolean,
     onShowReactionPicker: () -> Unit,
     onHideReactionPicker: () -> Unit,
+    // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯»).
+    showReactionGrid: Boolean = false,
+    onShowReactionGrid: (() -> Unit)? = null,
+    onHideReactionGrid: () -> Unit = {},
     showContextMenu: Boolean,
     onDismissContextMenu: () -> Unit,
     // P1.3: message grouping — текущее сообщение группируется с предыдущим
@@ -7189,6 +7195,22 @@ private fun MessageBubble(
                             Text(text = emoji, fontSize = 20.sp)
                         }
                     }
+                    // #IM-REACTIONS-GRID: кнопка «⋯» — расширенная сетка реакций
+                    // (все реакции с картинками из messages.getReactionsAssets).
+                    if (onShowReactionGrid != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    onDismissContextMenu()
+                                    onShowReactionGrid()
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(text = "\u22EF", fontSize = 20.sp, textAlign = TextAlign.Center)
+                        }
+                    }
                 }
                 // Снапшот: vkme_messages_action_reply.
                 DropdownMenuItem(
@@ -7300,6 +7322,16 @@ private fun MessageBubble(
                 currentReaction = message.reactions?.userReaction,
                 onReact = onReact,
                 onDismiss = onHideReactionPicker,
+                onShowMore = onShowReactionGrid,
+            )
+        }
+
+        // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯»).
+        if (showReactionGrid) {
+            ReactionGridDialog(
+                message = message,
+                onReact = onReact,
+                onDismiss = onHideReactionGrid,
             )
         }
     }  // closes Column (with swipe offset)
@@ -7387,6 +7419,19 @@ private fun ReactionBar(
     onTap: () -> Unit,
 ) {
     if (reactions == null || reactions.count <= 0) return
+    // #IM-REACTIONS-VIEW (2026-10-19): показываем РАЗБИВКУ по эмодзи (items),
+    // а не только своё recent_reactions/user_reaction — так видны реакции
+    // ДРУГИХ участников. Источник: message.reactions[] (массив агрегатов) →
+    // items отсортирован по убыванию count (как в снапшоте веба).
+    val chipItems = reactions.items
+        .filter { it.count > 0 }
+        .sortedByDescending { it.count }
+        .take(6)
+    if (chipItems.isEmpty()) {
+        // Fallback: агрегированный счётчик без разбивки (старый объектный формат).
+        renderAggregatedReactionBar(reactions, isOut, onTap)
+        return
+    }
     val bg = if (isOut)
         MaterialTheme.colorScheme.primaryContainer
     else
@@ -7402,17 +7447,65 @@ private fun ReactionBar(
             .clip(RoundedCornerShape(12.dp))
         .background(bg)
         .clickable { onTap() }
+        .padding(horizontal = 6.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        for (chip in chipItems) {
+            val active = reactions.userReactionActive(chip.id)
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (active) fg.copy(alpha = 0.15f) else Color.Transparent)
+                    .clickable { onTap() }
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(text = reactionEmoji(chip.id), fontSize = 13.sp)
+                Text(
+                    text = chip.count.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+    }
+}
+
+/** #IM-REACTIONS-VIEW: агрегированный ReactionBar (счётчик без разбивки) —
+ *  fallback, когда у реакции только count без items (объектный формат). */
+@Composable
+private fun renderAggregatedReactionBar(
+    reactions: MessageReaction,
+    isOut: Boolean,
+    onTap: () -> Unit,
+) {
+    val bg = if (isOut)
+        MaterialTheme.colorScheme.primaryContainer
+    else
+        MaterialTheme.colorScheme.secondaryContainer
+    val fg = if (isOut)
+        MaterialTheme.colorScheme.onPrimaryContainer
+    else
+        MaterialTheme.colorScheme.onSecondaryContainer
+    val recentIds = (reactions.recentReactions ?: emptyList())
+        .map { it.reactionId }
+        .distinct()
+        .take(3)
+    val displayEmojis = if (recentIds.isNotEmpty()) recentIds
+    else listOfNotNull(reactions.userReaction)
+    Row(
+        modifier = Modifier
+            .padding(top = 2.dp, start = if (isOut) 0.dp else 4.dp, end = if (isOut) 4.dp else 0.dp)
+            .clip(RoundedCornerShape(12.dp))
+        .background(bg)
+        .clickable { onTap() }
         .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        // Показываем основные эмодзи из recent_reactions (макс. 3).
-        val recentIds = (reactions.recentReactions ?: emptyList())
-            .map { it.reactionId }
-            .distinct()
-            .take(3)
-        val displayEmojis = if (recentIds.isNotEmpty()) recentIds
-        else listOfNotNull(reactions.userReaction)
         for (rid in displayEmojis) {
             Text(text = reactionEmoji(rid), fontSize = 14.sp)
         }
@@ -8392,6 +8485,7 @@ private fun ReactionPicker(
     currentReaction: Int?,
     onReact: (Int) -> Unit,
     onDismiss: () -> Unit,
+    onShowMore: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -8422,7 +8516,108 @@ private fun ReactionPicker(
                 Text(text = emoji, fontSize = 22.sp)
             }
         }
+        // #IM-REACTIONS-GRID: кнопка «⋯» — расширенная сетка.
+        if (onShowMore != null) {
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable {
+                        onDismiss()
+                        onShowMore()
+                    }
+                    .padding(6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(text = "\u22EF", fontSize = 22.sp)
+            }
+        }
     }
+}
+
+
+/**
+ * #IM-REACTIONS-GRID (2026-10-19): расширенная сетка реакций, открываемая
+ * кнопкой «⋯» в палитре (меню long-press + ReactionPicker). Полный набор
+ * реакций и их картинки берём с сервера `messages.getReactionsAssets`
+ * (кэш 1ч в prefs — метод messagesGetReactionsAssets). Если картинок нет —
+ * fallback на юникод-эмодзи базовой карты REACTION_EMOJIS.
+ * Тап по активу — выбор реакции (onReact), после чего скрывает диалог.
+ */
+@Composable
+private fun ReactionGridDialog(
+    message: re.pinok.data.model.Message,
+    onReact: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val app = SovaApp.get()
+    var assets by remember { mutableStateOf<ReactionAssets?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        loading = true
+        error = null
+        try {
+            assets = app.apiClient.messagesGetReactionsAssets()
+        } catch (e: Exception) {
+            error = e.message
+        }
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Реакция") },
+        text = {
+            when {
+                loading -> {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator() }
+                }
+                else -> {
+                    val ids = assets?.reactionIds?.takeIf { it.isNotEmpty() }
+                        ?: REACTION_EMOJIS.map { it.first }
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(6),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        gridItems(ids) { rid ->
+                            val asset = assets?.assetFor(rid)
+                            val img = asset?.staticUrl
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        onReact(rid)
+                                        onDismiss()
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (img != null && img.isNotBlank()) {
+                                    AsyncImage(
+                                        model = img,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(34.dp).clip(CircleShape),
+                                    )
+                                } else {
+                                    Text(text = reactionEmoji(rid), fontSize = 26.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            error?.let { Text("Не удалось загрузить реакции: $it", fontSize = 12.sp) }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть") }
+        },
+    )
 }
 
 

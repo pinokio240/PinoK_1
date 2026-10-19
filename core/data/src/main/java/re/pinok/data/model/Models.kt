@@ -952,6 +952,29 @@ data class ReactionItem(
     @SerializedName("count") val count: Int,
 )
 
+/**
+ * #IM-REACTIONS-GRID (2026-10-19): актив (картинка/анимация) реакции сообщения.
+ * Ответ messages.getReactionsAssets: assets[] = [{reaction_id, links:{static,
+ * small_animation, big_animation}}] + reaction_ids[] (все допустимые id).
+ * Базовая палитра (REACTION_EMOJIS 1-7) — юникод; расширенная сетка «⋯»
+ * использует эти картинки (как в вебе).
+ */
+data class ReactionAsset(
+    @SerializedName("reaction_id") val id: Int,
+    @SerializedName("static")      val staticUrl: String? = null,
+    @SerializedName("small_animation") val smallAnimationUrl: String? = null,
+    @SerializedName("big_animation")   val bigAnimationUrl: String? = null,
+)
+
+/** #IM-REACTIONS-GRID: полный набор известных реакций (id + активы). */
+data class ReactionAssets(
+    @SerializedName("reaction_ids") val reactionIds: List<Int> = emptyList(),
+    @SerializedName("assets")       val assets: List<ReactionAsset> = emptyList(),
+) {
+    fun assetFor(id: Int): ReactionAsset? = assets.firstOrNull { it.id == id }
+    fun emojiFor(id: Int): String? = assetFor(id)?.staticUrl
+}
+
 // ============================================================================
 //  #43: Доп. сущности для полнофункциональной соцсети — комментарии к постам
 //  и заявки в друзья. Comment зеркалирует wall.getComments ответ VK API 5.243.
@@ -1329,7 +1352,7 @@ data class Bookmark(
         "group" -> group?.name ?: ""
         "post" -> post?.text?.take(60) ?: ""
         "photo" -> photo?.text?.take(60) ?: "Фото"
-        "video" -> video?.title ?: ""
+        "video", "clip" -> video?.title ?: ""
         "link" -> link?.title ?: ""
         // Волна 40: статьи/товары — заголовок из entity (objectTitle),
         // раньше строка показывала сырой тип.
@@ -1340,7 +1363,7 @@ data class Bookmark(
         "user" -> user?.photo100
         "group" -> group?.photo100
         "photo" -> photo?.mediumUrl
-        "video" -> video?.thumbUrl
+        "video", "clip" -> video?.thumbUrl
         "link" -> link?.photo?.largestUrl
         else -> null
     }

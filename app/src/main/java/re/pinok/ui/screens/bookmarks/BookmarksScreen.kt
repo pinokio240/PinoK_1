@@ -137,6 +137,48 @@ fun BookmarksScreen(
     var removeTarget by remember { mutableStateOf<Bookmark?>(null) }
     var removeTrackTarget by remember { mutableStateOf<Track?>(null) }
 
+    // #BOOKMARKS-TYPE-TABS (2026-10-19): вкладки-фильтры по типу закладки.
+    // Значение — ключ вкладки: "all" / "post" / "video" / "people" / "groups" / "clip".
+    var typeFilter by remember { mutableStateOf("all") }
+
+    // #BOOKMARKS-PEOPLE-GROUPS (2026-10-19): люди и группы НЕ приходят в общем
+    // списке fave.get (там только post/video/link/clip — см. закладки.har). VK API
+    // отдаёт их ТОЛЬКО при item_type="page", причём ОДНИМ потоком: человек (id>0) и
+    // сообщество (id<0) различаются только ЗНАКОМ id (эталон веб-Закладки_люди/группы,
+    // закладки.har). Поэтому держим ЕДИНЫЙ поток страниц pageBookmarks
+    // (item_type=page, пагинация по offset), из которого вкладки «Люди»/«Сообщества»
+    // фильтруются по знаку, а общий bookmarks обслуживает all/post/video/clip.
+    // «Все закладки» = общий список + поток страниц (люди и группы видны и там).
+    var pageBookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
+    var pageLoading by remember { mutableStateOf(false) }
+    var pageErrorText by remember { mutableStateOf<String?>(null) }
+    var pageEndReached by remember { mutableStateOf(false) }
+
+    // Текущий отображаемый список и его состояния зависят от активной вкладки.
+    // people — пользователи (страницы с id>0), groups — сообщества (страницы с
+    // id<0); post/video/clip — локальная фильтрация общего списка; all — общий
+    // список + весь поток страниц.
+    val currentList: List<Bookmark> = when (typeFilter) {
+        "people" -> pageBookmarks.filter { it.user != null }
+        "groups" -> pageBookmarks.filter { it.group != null }
+        "post" -> bookmarks.filter { it.type == "post" }
+        "video" -> bookmarks.filter { it.type == "video" }
+        "clip" -> bookmarks.filter { it.type == "clip" }
+        else -> (bookmarks + pageBookmarks).distinctBy { bookmarkKey(it) }
+    }
+    val currentLoading: Boolean = when (typeFilter) {
+        "people", "groups" -> pageLoading
+        else -> loading
+    }
+    val currentErrorText: String? = when (typeFilter) {
+        "people", "groups" -> pageErrorText
+        else -> errorText
+    }
+    val currentEndReached: Boolean = when (typeFilter) {
+        "people", "groups" -> pageEndReached
+        else -> endReached
+    }
+
     // Загрузка тегов (один раз).
     LaunchedEffect(Unit) {
         try {
@@ -144,53 +186,120 @@ fun BookmarksScreen(
         } catch (_: Exception) {}
     }
 
-    // Загрузка закладок — перезапускается при смене тега; только в разделе «Закладки VK».
-    LaunchedEffect(selectedTagId, section) {
+    suspend fun loadBookmarksFirstPage(tagId: Long?) {
+        loading = true
+        endReached = false
+        errorText = null
+        try {
+            val list = app.apiClient.faveGet(count = pageSize, tagId = tagId)
+            bookmarks = list.distinctBy { bookmarkKey(it) }
+            if (list.size < pageSize) endReached = true
+            AppLog.i("BookmarksScreen", "Loaded ${list.size} bookmarks (tag=$tagId)")
+            if (list.isEmpty()) {
+                val human = app.apiClient.lastApiErrorHuman()
+                errorText = if (human != null) "Закладки не загрузились: $human" else "Нет закладок"
+            }
+        } catch (e: Exception) {
+            AppLog.e("BookmarksScreen", "Failed to load bookmarks", e)
+            errorText = "Ошибка: ${e.message}"
+        } finally {
+            loading = false
+        }
+    }
+
+    // #BOOKMARKS-PEOPLE-GROUPS: серверная загрузка потока страниц (item_type=page).
+    // VK API не разделяет людей/сообщества фильтром — они приходят одним потоком и
+    // разделяются знаком id (id>0 человек, id<0 группа). Вкладки «Люди»/«Сообщества»
+    // фильтруют этот поток; «Все закладки» добавляют его к общему списку.
+    suspend fun loadPageFirstPage(tagId: Long?) {
+        pageLoading = true
+        pageEndReached = false
+        pageErrorText = null
+        try {
+            val list = app.apiClient.faveGet(count = pageSize, tagId = tagId, itemType = "page")
+            pageBookmarks = list.distinctBy { bookmarkKey(it) }
+            if (list.size < pageSize) pageEndReached = true
+            AppLog.i("BookmarksScreen", "Loaded ${list.size} pages (people/groups, tag=$tagId)")
+            if (list.isEmpty()) {
+                val human = app.apiClient.lastApiErrorHuman()
+                pageErrorText = if (human != null) "Страницы не загрузились: $human" else "Нет закладок людей и сообществ"
+            }
+        } catch (e: Exception) {
+            AppLog.e("BookmarksScreen", "Failed to load pages", e)
+            pageErrorText = "Ошибка: ${e.message}"
+        } finally {
+            pageLoading = false
+        }
+    }
+
+    // Загрузка закладок — перезапускается при смене тега или вкладки; только
+    // в разделе «Закладки VK». Стоит ПОСЛЕ load*FirstPage (локальные функции
+    // не поддерживают forward reference в теле composable).
+    LaunchedEffect(selectedTagId, section, typeFilter) {
         if (section != 0) return@LaunchedEffect
-        scope.launch {
-            loading = true
-            endReached = false
-            errorText = null
-            try {
-                val list = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId)
-                // Fix #53: защитная дедупликация — LazyColumn keys должны быть уникальны.
-                bookmarks = list.distinctBy { bookmarkKey(it) }
-                if (list.size < pageSize) endReached = true
-                AppLog.i("BookmarksScreen", "Loaded ${list.size} bookmarks (tag=$selectedTagId)")
-                if (list.isEmpty()) {
-                    // #BOOKMARKS-FIX (2026-09-12): вместо сырой английской VK-ошибки
-                    // («Access denied…» — «пишет какую-то ошибку на англ») — понятная
-                    // русская причина с кодом; сырое значение остаётся в AppLog.
-                    val human = app.apiClient.lastApiErrorHuman()
-                    errorText = if (human != null) "Закладки не загрузились: $human" else "Нет закладок"
-                }
-            } catch (e: Exception) {
-                AppLog.e("BookmarksScreen", "Failed to load bookmarks", e)
-                errorText = "Ошибка: ${e.message}"
-            } finally {
-                loading = false
+        // Загружаем секцию только если она ещё пуста (не перезагружаем уже
+        // загруженный список при повторном переключении вкладки).
+        when (typeFilter) {
+            // people/groups — один поток страниц; all — общий список + поток страниц,
+            // поэтому грузим обе секции, если они ещё пусты.
+            "people", "groups" -> if (pageBookmarks.isEmpty()) loadPageFirstPage(selectedTagId)
+            else -> {
+                if (bookmarks.isEmpty()) loadBookmarksFirstPage(selectedTagId)
+                if (pageBookmarks.isEmpty()) loadPageFirstPage(selectedTagId)
             }
         }
     }
 
-    // Fix #83: pull-to-refresh — перезагрузка первой страницы.
+    // Fix #83: pull-to-refresh — перезагрузка первой страницы текущей вкладки.
+    // Для «Все закладки» обновляем и общий список, и поток страниц (люди/группы).
     fun refreshBookmarks() {
         scope.launch {
             isRefreshing = true
-            try {
-                val list = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId)
-                bookmarks = list.distinctBy { bookmarkKey(it) }
-                endReached = (list.size < pageSize)
-                errorText = null
-            } catch (e: Exception) {
-                AppLog.w("BookmarksScreen", "refreshBookmarks failed: ${e.message}")
-            } finally {
-                isRefreshing = false
+            when (typeFilter) {
+                "people", "groups" -> {
+                    try {
+                        val list = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId, itemType = "page")
+                        pageBookmarks = list.distinctBy { bookmarkKey(it) }
+                        pageEndReached = list.size < pageSize
+                        pageErrorText = null
+                    } catch (e: Exception) {
+                        AppLog.w("BookmarksScreen", "refreshPages failed: ${e.message}")
+                    }
+                }
+                "all" -> {
+                    try {
+                        val list = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId)
+                        bookmarks = list.distinctBy { bookmarkKey(it) }
+                        endReached = (list.size < pageSize)
+                        errorText = null
+                    } catch (e: Exception) {
+                        AppLog.w("BookmarksScreen", "refreshBookmarks failed: ${e.message}")
+                    }
+                    try {
+                        val pages = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId, itemType = "page")
+                        pageBookmarks = pages.distinctBy { bookmarkKey(it) }
+                        pageEndReached = pages.size < pageSize
+                        pageErrorText = null
+                    } catch (e: Exception) {
+                        AppLog.w("BookmarksScreen", "refreshPages failed: ${e.message}")
+                    }
+                }
+                else -> {
+                    try {
+                        val list = app.apiClient.faveGet(count = pageSize, tagId = selectedTagId)
+                        bookmarks = list.distinctBy { bookmarkKey(it) }
+                        endReached = (list.size < pageSize)
+                        errorText = null
+                    } catch (e: Exception) {
+                        AppLog.w("BookmarksScreen", "refreshBookmarks failed: ${e.message}")
+                    }
+                }
             }
+            isRefreshing = false
         }
     }
 
-    // Fix #83: пагинация — подгрузка следующих закладок через offset.
+    // Fix #83: пагинация — подгрузка следующих закладок общего списка.
     fun loadMoreBookmarks() {
         if (loadingMore || endReached || bookmarks.isEmpty()) return
         scope.launch {
@@ -214,17 +323,90 @@ fun BookmarksScreen(
         }
     }
 
-    // Fix #83: бесконечная пагинация — триггер при скролле к концу.
-    LaunchedEffect(listState, bookmarks.size, section) {
+    // #BOOKMARKS-PEOPLE-GROUPS: пагинация потока страниц (item_type=page).
+    fun loadMorePages() {
+        if (loadingMore || pageEndReached || pageBookmarks.isEmpty()) return
+        scope.launch {
+            loadingMore = true
+            try {
+                val offset = pageBookmarks.size
+                val page = app.apiClient.faveGet(count = pageSize, offset = offset, tagId = selectedTagId, itemType = "page")
+                    .filter { np ->
+                        val npKey = bookmarkKey(np)
+                        pageBookmarks.none { bookmarkKey(it) == npKey }
+                    }
+                if (page.isNotEmpty()) {
+                    pageBookmarks = (pageBookmarks + page).distinctBy { bookmarkKey(it) }
+                }
+                if (page.size < pageSize) pageEndReached = true
+            } catch (e: Exception) {
+                AppLog.w("BookmarksScreen", "loadMorePages failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
+
+    // #BOOKMARKS-PEOPLE-GROUPS: «Все закладки» — пагинация ОБОИХ потоков
+    // (общий список + страницы), чтобы люди и группы подгружались и в «Все».
+    fun loadMoreAll() {
+        if (loadingMore) return
+        if (endReached && pageEndReached) return
+        scope.launch {
+            loadingMore = true
+            try {
+                if (!endReached && bookmarks.isNotEmpty()) {
+                    val offset = bookmarks.size
+                    val page = app.apiClient.faveGet(count = pageSize, offset = offset, tagId = selectedTagId)
+                        .filter { np ->
+                            val npKey = bookmarkKey(np)
+                            bookmarks.none { bookmarkKey(it) == npKey }
+                        }
+                    if (page.isNotEmpty()) {
+                        bookmarks = (bookmarks + page).distinctBy { bookmarkKey(it) }
+                    }
+                    if (page.size < pageSize) endReached = true
+                }
+                if (!pageEndReached && pageBookmarks.isNotEmpty()) {
+                    val offset = pageBookmarks.size
+                    val page = app.apiClient.faveGet(count = pageSize, offset = offset, tagId = selectedTagId, itemType = "page")
+                        .filter { np ->
+                            val npKey = bookmarkKey(np)
+                            pageBookmarks.none { bookmarkKey(it) == npKey }
+                        }
+                    if (page.isNotEmpty()) {
+                        pageBookmarks = (pageBookmarks + page).distinctBy { bookmarkKey(it) }
+                    }
+                    if (page.size < pageSize) pageEndReached = true
+                }
+            } catch (e: Exception) {
+                AppLog.w("BookmarksScreen", "loadMoreAll failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
+
+    // Текущая стратегия подгрузки следующей страницы зависит от активной вкладки.
+    // Объявлена ПОСЛЕ loadMore* — локальные функции вызываются только после
+    // объявления (forward reference в теле composable не работает).
+    fun currentMore() = when (typeFilter) {
+        "all" -> loadMoreAll()
+        "people", "groups" -> loadMorePages()
+        else -> loadMoreBookmarks()
+    }
+
+    // Fix #83: бесконечная пагинация — триггер при скролле к концу текущей вкладки.
+    LaunchedEffect(listState, currentList.size, section, typeFilter) {
         if (section != 0) return@LaunchedEffect
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisible >= bookmarks.size - 3 && bookmarks.isNotEmpty()
+            lastVisible >= currentList.size - 3 && currentList.isNotEmpty()
         }
         .distinctUntilChanged()
         .filter { it }
-        .collect { loadMoreBookmarks() }
+        .collect { currentMore() }
     }
 
     // S6-3 + волна 40 #BOOKMARKS-REMOVE-ALL: удаление серверной закладки через
@@ -234,7 +416,9 @@ fun BookmarksScreen(
         scope.launch {
             val (ok, err) = app.apiClient.bookmarkRemove(bm)
             if (ok) {
+                // Удаляем из всех списков (общий + поток страниц) по ключу.
                 bookmarks = bookmarks.filter { bookmarkKey(it) != bookmarkKey(bm) }
+                pageBookmarks = pageBookmarks.filter { bookmarkKey(it) != bookmarkKey(bm) }
                 AppLog.i("BookmarksScreen", "Removed bookmark: type=${bm.type}")
                 Toast.makeText(context, "Удалено из закладок", Toast.LENGTH_SHORT).show()
             } else {
@@ -351,25 +535,64 @@ fun BookmarksScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Волна 40 #BOOKMARKS-TRACKS: переключатель разделов — «Закладки VK» /
-        // «Треки». Треки — локальные (у fave.* нет аудио-раздела), поэтому
-        // отдельный раздел вместо подмешивания в серверный список.
-        Row(
+        // #BOOKMARKS-TYPE-TABS (2026-10-19): единый ряд вкладок закладок —
+        // «Треки» (раздел локальных треков, section=1) и фильтры по типу
+        // серверных закладок (Все закладки/Посты/Видео/Люди/Сообщества,
+        // section=0; эталон веб-версии fave.get). Заменяет прежний
+        // переключатель «Закладки VK»/«Треки».
+        LazyRow(
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            SectionChip(
-                label = "Закладки VK",
-                selected = section == 0,
-                onClick = { section = 0 },
-                modifier = Modifier.weight(1f),
-            )
-            SectionChip(
-                label = "Треки",
-                selected = section == 1,
-                onClick = { section = 1 },
-                modifier = Modifier.weight(1f),
-            )
+            item {
+                TagFilterChip(
+                    label = "Все закладки",
+                    selected = section == 0 && typeFilter == "all",
+                    onClick = { section = 0; typeFilter = "all" },
+                )
+            }
+            item {
+                TagFilterChip(
+                    label = "Посты",
+                    selected = section == 0 && typeFilter == "post",
+                    onClick = { section = 0; typeFilter = "post" },
+                )
+            }
+            item {
+                TagFilterChip(
+                    label = "Видео",
+                    selected = section == 0 && typeFilter == "video",
+                    onClick = { section = 0; typeFilter = "video" },
+                )
+            }
+            item {
+                TagFilterChip(
+                    label = "Люди",
+                    selected = section == 0 && typeFilter == "people",
+                    onClick = { section = 0; typeFilter = "people" },
+                )
+            }
+            item {
+                TagFilterChip(
+                    label = "Сообщества",
+                    selected = section == 0 && typeFilter == "groups",
+                    onClick = { section = 0; typeFilter = "groups" },
+                )
+            }
+            item {
+                TagFilterChip(
+                    label = "Клипы",
+                    selected = section == 0 && typeFilter == "clip",
+                    onClick = { section = 0; typeFilter = "clip" },
+                )
+            }
+            item {
+                TagFilterChip(
+                    label = "Треки",
+                    selected = section == 1,
+                    onClick = { section = 1 },
+                )
+            }
         }
 
         if (section == 0) {
@@ -397,14 +620,14 @@ fun BookmarksScreen(
                 }
             }
 
-            if (loading) {
+            if (currentLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-            } else if (bookmarks.isEmpty()) {
+            } else if (currentList.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
                     Text(
-                        text = errorText ?: "Нет закладок",
+                        text = currentErrorText ?: "Нет закладок",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -420,7 +643,7 @@ fun BookmarksScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
-                        items(bookmarks, key = { "${bookmarkKey(it)}_${it.addedDate}" }) { bm ->
+                        items(currentList, key = { "${bookmarkKey(it)}_${it.addedDate}" }) { bm ->
                             BookmarkRow(
                                 bm = bm,
                                 onLongClick = { removeTarget = bm },
@@ -430,13 +653,15 @@ fun BookmarksScreen(
                                         "post" -> bm.post?.let { p ->
                                             onPostClick?.invoke(p.ownerId, p.id)
                                         }
-                                        "user", "profile" -> bm.user?.let { u ->
+                                        "user", "profile", "page" -> bm.user?.let { u ->
                                             onUserClick?.invoke(u.id)
+                                        } ?: bm.group?.let { g ->
+                                            onGroupClick?.invoke(g.id)
                                         }
                                         "group" -> bm.group?.let { g ->
                                             onGroupClick?.invoke(g.id)
                                         }
-                                        "video" -> bm.video?.let { v ->
+                                        "video", "clip" -> bm.video?.let { v ->
                                             onVideoClick?.invoke(v.ownerId, v.id)
                                         }
                                         "link" -> {
@@ -472,7 +697,7 @@ fun BookmarksScreen(
                                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                                     }
                                 }
-                                endReached -> {
+                                currentEndReached -> {
                                     Text(
                                         text = "Это все закладки",
                                         modifier = Modifier.fillMaxWidth().padding(20.dp),
@@ -571,7 +796,7 @@ private fun BookmarkRow(
     val bmG = bm.group
     val bmL = bm.link
     when (bm.type) {
-        "video" -> if (bmV != null) {
+        "video", "clip" -> if (bmV != null) {
             BookmarkVideoCard(
                 bm = bm,
                 video = bmV,
@@ -602,6 +827,14 @@ private fun BookmarkRow(
             BookmarkGroupRow(bm, bmG, onLongClick, onRemoveClick, onClick)
         } else {
             BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
+        }
+        // #BOOKMARKS-CLIPS_TABS: type="page" — авторы клипов (fave.addPage),
+        // распознаются эвристикой парсера в user/group. Рендерим как
+        // пользователя/сообщество, иначе они показывались как generic-строки.
+        "page" -> when {
+            bmU != null -> BookmarkUserRow(bm, bmU, onLongClick, onRemoveClick, onClick)
+            bmG != null -> BookmarkGroupRow(bm, bmG, onLongClick, onRemoveClick, onClick)
+            else -> BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
         }
         "link" -> if (bmL != null) {
             BookmarkLinkRow(bm, bmL, onLongClick, onRemoveClick, onClick)
@@ -1115,26 +1348,6 @@ private fun BookmarkedTrackRow(
     }
 }
 
-/** Волна 40: чип переключателя разделов («Закладки VK» / «Треки»). */
-@Composable
-private fun SectionChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val bg = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(16.dp),
-        modifier = modifier.clickable(onClick = onClick),
-    ) {
-        Text(
-            text = label,
-            color = fg,
-            style = MaterialTheme.typography.labelLarge,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
-        )
-    }
-}
-
 /** S6-2: чип фильтра тегов закладок. */
 @Composable
 private fun TagFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
@@ -1158,7 +1371,7 @@ private fun iconForType(type: String): ImageVector = when (type) {
     "user", "profile" -> Icons.Outlined.Person
     "group" -> Icons.Outlined.Group
     "photo" -> Icons.Outlined.InsertPhoto
-    "video" -> Icons.Outlined.PlayCircle
+    "video", "clip" -> Icons.Outlined.PlayCircle
     "link" -> Icons.Outlined.Link
     "article" -> Icons.AutoMirrored.Outlined.Article
     "product" -> Icons.Outlined.ShoppingBag
@@ -1171,6 +1384,7 @@ private fun typeLabel(type: String): String = when (type) {
     "post" -> "Запись"
     "photo" -> "Фото"
     "video" -> "Видео"
+    "clip" -> "Клип"
     "link" -> "Ссылка"
     "article" -> "Статья"
     "product" -> "Товар"

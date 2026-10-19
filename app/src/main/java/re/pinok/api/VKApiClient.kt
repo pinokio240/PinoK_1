@@ -38,6 +38,8 @@ import re.pinok.data.model.Message
 // (см. parseMessageReactions) — до волны 32 поле НЕ парсилось.
 import re.pinok.data.model.MessageReaction
 import re.pinok.data.model.ReactionItem
+import re.pinok.data.model.ReactionAsset
+import re.pinok.data.model.ReactionAssets
 import re.pinok.data.model.RecentReaction
 import re.pinok.data.model.Post
 import re.pinok.data.model.CatalogPlaylist
@@ -6168,6 +6170,87 @@ class VKApiClient(
         return json.has("response")
     }
 
+    // #IM-REACTIONS-GRID: TTL кэша полного набора реакций (как в вебе,
+    // vkm_reactions_sync_time = 3600000 мс = 1 час — субагент-анализ HAR).
+    private val REACTIONS_ASSETS_TTL_MS = 3_600_000L
+
+    /**
+     * #IM-REACTIONS-GRID (2026-10-19): полный набор реакций сообщений для
+     * расширенной сетки «⋯». VK web parity: messages.getReactionsAssets —
+     * вызов БЕЗ параметров, ответ:
+     *   {"reaction_ids":[...], "assets":[{reaction_id, links:{static,
+     *    small_animation, big_animation}}]}
+     * Реакции в вебе — картинки/анимации (не юникод). Кэшируем сырой JSON в
+     * prefs на 1 час (реакции редко меняются; сетка не должна дёргать сервер).
+     * @return полный набор активов или минимум с id (при сбое сети).
+     */
+    suspend fun messagesGetReactionsAssets(force: Boolean = false): ReactionAssets {
+        // Кэш в SharedPreferences (SovaPrefs — DataStore, не подходит для простого
+        // кэша; используем context напрямую). Храним СЫРОЙ JSON ответа и всегда
+        // парсим через parseReactionAssets — единый путь (Gson-десериализация
+        // модели не понимает вложенный links.static → я бы потерял URL картинок).
+        val rp = context.getSharedPreferences("reactions_cache", Context.MODE_PRIVATE)
+        val cacheKey = "assets_json"
+        val now = System.currentTimeMillis()
+        val cachedRaw = rp.getString(cacheKey, null)
+        if (!force && cachedRaw != null) {
+            try {
+                val cached = parseReactionAssets(JsonParser.parseString(cachedRaw).asJsonObject)
+                val savedAt = rp.getLong("assets_ts", 0L)
+                if (cached != null && cached.reactionIds.isNotEmpty() && (now - savedAt) < REACTIONS_ASSETS_TTL_MS) {
+                    return cached
+                }
+            } catch (_: Exception) {}
+        }
+        val json = if (isOffline()) null else call("messages.getReactionsAssets", emptyMap())
+        val parsed = try {
+            if (json == null) null else parseReactionAssets(json)
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "messagesGetReactionsAssets parse error: ${e.message}")
+            null
+        }
+        val result = parsed ?: ReactionAssets()
+        if (parsed != null && parsed.reactionIds.isNotEmpty()) {
+            try {
+                rp.edit()
+                    .putString(cacheKey, json.toString())
+                    .putLong("assets_ts", now)
+                    .apply()
+            } catch (_: Exception) {}
+        }
+        return result
+    }
+
+    private fun parseReactionAssets(json: JsonObject): ReactionAssets? {
+        val resp = json.get("response")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+        val idsArr = resp.get("reaction_ids")?.takeIf { it.isJsonArray }?.asJsonArray
+        val ids = ArrayList<Int>()
+        if (idsArr != null) {
+            for (el in idsArr) {
+                if (el.isJsonPrimitive) ids.add(el.asInt)
+            }
+        }
+        val assetsArr = resp.get("assets")?.takeIf { it.isJsonArray }?.asJsonArray
+        val assets = ArrayList<ReactionAsset>()
+        if (assetsArr != null) {
+            for (el in assetsArr) {
+                if (!el.isJsonObject) continue
+                val a = el.asJsonObject
+                val rid = a.get("reaction_id")?.takeIf { !it.isJsonNull }?.asInt ?: continue
+                val links = a.get("links")?.takeIf { it.isJsonObject }?.asJsonObject
+                assets.add(
+                    ReactionAsset(
+                        id = rid,
+                        staticUrl = links?.get("static")?.takeIf { !it.isJsonNull }?.asString,
+                        smallAnimationUrl = links?.get("small_animation")?.takeIf { !it.isJsonNull }?.asString,
+                        bigAnimationUrl = links?.get("big_animation")?.takeIf { !it.isJsonNull }?.asString,
+                    )
+                )
+            }
+        }
+        return ReactionAssets(reactionIds = ids, assets = assets)
+    }
+
     /**
      * Удалить сообщение. VK: messages.delete.
      * @param messageId ID сообщения (для ЛС). Для групповых — через peerId + messageId.
@@ -6712,6 +6795,16 @@ class VKApiClient(
                 if (!key.isNullOrBlank()) args["access_key"] = key
                 "fave.addVideo"
             }
+            // Раздел «Клипы» (#BOOKMARKS-CLIPS): клип-закладка — split-метод
+            // fave.addClip (сосед удаления fave.removeClip). Иначе ушёл бы в
+            // addPost с id клипа — VK-ошибка, «закладка клипа не работает».
+            "clip" -> {
+                args["owner_id"] = ownerId.toString()
+                args["id"] = itemId.toString()
+                val key = accessKey
+                if (!key.isNullOrBlank()) args["access_key"] = key
+                "fave.addClip"
+            }
             "link" -> {
                 args["link"] = "${ownerId}_$itemId"
                 "fave.addLink"
@@ -6744,6 +6837,15 @@ class VKApiClient(
                 val key = accessKey
                 if (!key.isNullOrBlank()) args["access_key"] = key
                 "fave.removeVideo"
+            }
+            // Раздел «Клипы» (#BOOKMARKS-CLIPS): удаление клип-закладки —
+            // split-метод fave.removeClip (сосед добавления fave.addClip).
+            "clip" -> {
+                args["owner_id"] = ownerId.toString()
+                args["id"] = itemId.toString()
+                val key = accessKey
+                if (!key.isNullOrBlank()) args["access_key"] = key
+                "fave.removeClip"
             }
             "link" -> {
                 args["link_id"] = itemId.toString()
@@ -6808,12 +6910,12 @@ class VKApiClient(
                     val photo = bm.photo
                     if (photo != null) faveRemove(type = "photo", ownerId = photo.ownerId, itemId = photo.id) else false
                 }
-                "video" -> {
-                    // #BOOKMARKS-FIX: access_key обязателен для чужих видео.
+                "video", "clip" -> {
+                    // #BOOKMARKS-FIX: access_key обязателен для чужих видео/клипов.
                     val video = bm.video
                     if (video != null) {
                         val key = video.accessKey
-                        faveRemove(type = "video", ownerId = video.ownerId, itemId = video.id, accessKey = key)
+                        faveRemove(type = type, ownerId = video.ownerId, itemId = video.id, accessKey = key)
                     } else {
                         false
                     }
@@ -10436,7 +10538,7 @@ class VKApiClient(
     }
 
     /** fave.get — закладки (люди, группы, посты, фото, видео, ссылки). */
-    suspend fun faveGet(count: Int = 30, offset: Int = 0, tagId: Long? = null): List<Bookmark> {
+    suspend fun faveGet(count: Int = 30, offset: Int = 0, tagId: Long? = null, itemType: String? = null): List<Bookmark> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf(
             "count" to count.toString(),
@@ -10444,6 +10546,19 @@ class VKApiClient(
             "extended" to "1",
         )
         tagId?.let { args["tag_id"] = it.toString() }
+        // #BOOKMARKS-PEOPLE-GROUPS (2026-10-19): люди и группы НЕ приходят в общем
+        // списке fave.get (там только post/video/link/clip — см. закладки.har). Их надо
+        // запрашивать ОТДЕЛЬНО с параметром item_type, а корректное значение для
+        // людей И групп — "page" (ошибка 100 подсказывает допустимые значения:
+        // page, post, video, clip, ...; user/group НЕ существуют). Человек (id>0) и
+        // сообщество (id<0) различаются знаком id. Нормализуем user/group → page,
+        // чтобы старые вызовы не падали, но актуальный код передаёт "page" напрямую.
+        if (itemType != null) {
+            args["item_type"] = when (itemType) {
+                "user", "group" -> "page"
+                else -> itemType
+            }
+        }
         // #BOOKMARKS-FIX: крошка провала fave.get (раньше — молчаливый emptyList,
         // экран показывал «Нет закладок»/сырую английскую ошибку без следов в логе).
         val json = call("fave.get", args)
@@ -10498,9 +10613,16 @@ class VKApiClient(
                 var objectOwnerId: Long? = null
                 var objectTitle: String? = null
                 val entity = o.getAsJsonObject(type) ?: o
+                // #BOOKMARKS-PEOPLE-GROUPS: для людей/групп сущность может лежать
+                // под ключом "page" (веб/мобильный отдают страницы), а не под
+                // type-ключом. Пробуем явные варианты, чтобы вкладки не пустели.
+                val userEntity = entity.takeIf { type == "user" || type == "profile" || type == "page" }
+                    ?.let { o.getAsJsonObject("user") ?: o.getAsJsonObject("page") ?: it }
+                val groupEntity = entity.takeIf { type == "group" || type == "page" }
+                    ?.let { o.getAsJsonObject("group") ?: o.getAsJsonObject("page") ?: it }
                 when (type) {
-                    "user", "profile" -> user = parseUserProfileMini(entity)
-                    "group" -> group = parseGroupMini(entity)
+                    "user", "profile" -> user = parseUserProfileMini(userEntity ?: entity)
+                    "group" -> group = parseGroupMini(groupEntity ?: entity)
                     "post" -> {
                         val postEntity = parsePostMini(entity)
                         post = postEntity
@@ -10526,6 +10648,11 @@ class VKApiClient(
                     }
                     "photo" -> photo = parsePhotoItem(entity)
                     "video" -> video = parseVideoMini(entity)
+                    // Раздел «Клипы» (#BOOKMARKS-CLIPS): fave.get для type="clip"
+                    // кладёт сущность под ключом clip и нормализуется теми же
+                    // clips-полями, что и видео (parseVideoFull — §37.12 Phase 1).
+                    // Кладём в Bookmark.video → карточка и открытие работают как у видео.
+                    "clip" -> video = parseVideoFull(entity)
                     "link" -> {
                         link = Attachment.Link(
                             // NULL-ЯВНО: JsonNull.asString кидал бы исключение →
@@ -10553,11 +10680,18 @@ class VKApiClient(
                         // отдаёт сущность под ключом page; эвристика user_id/group_id
                         // → профиль/сообщество, чтобы работало открытие и удаление
                         // (fave.removePage требует user_id или group_id).
+                        // #BOOKMARKS-PEOPLE-GROUPS (2026-10-19): реальные page-элементы
+                        // содержат id со ЗНАКОМ (id>0 человек, id<0 группа), а не
+                        // user_id/group_id. Добавлен fallback по знаку id (как в вебе
+                        // — закладки.har), иначе люди/группы с type=page терялись.
                         val pageUserId = safeLongNullable(entity.get("user_id"))
                         val pageGroupId = safeLongNullable(entity.get("group_id"))
+                        val pageSignedId = safeLongNullable(entity.get("id"))
                         when {
                             pageUserId != null && pageUserId > 0L -> user = parseUserProfileMini(entity)
                             pageGroupId != null && pageGroupId > 0L -> group = parseGroupMini(entity)
+                            pageSignedId != null && pageSignedId > 0L -> user = parseUserProfileMini(entity)
+                            pageSignedId != null && pageSignedId < 0L -> group = parseGroupMini(entity)
                             // Не распознано — строка с типом «page»: заголовок честно
                             // подставится типом, удаление вернёт понятную причину.
                             else -> Unit
@@ -12007,34 +12141,46 @@ class VKApiClient(
      * (ChatDetailScreen, 1=❤️ 2=🔥 3=😂 4=👍 5=💩 6=❓ 7=😭).
      */
     private fun parseMessageReactions(o: JsonObject): MessageReaction? {
-        // Fix: reactions может прийти МАССИВОМ (JsonArray), а не объектом —
-        // getAsJsonObject("reactions") кидал ClassCastException и ронял историю
-        // (messagesGetHistory parse error после messages.edit). Неподходящий
-        // тип узла (массив/null/примитив) → реакций нет, исключение не бросаем.
-        val r = o.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
-        val countEl = r.get("count")
-        val count = if (countEl != null && !countEl.isJsonNull) countEl.asInt else 0
-        val userEl = r.get("user_reaction")
-        val userReaction = if (userEl != null && !userEl.isJsonNull) userEl.asInt else null
-        val recentArr = r.get("recent_reactions")?.takeIf { it.isJsonArray }?.asJsonArray
-        var recent: List<RecentReaction> = emptyList()
-        if (recentArr != null) {
-            val list = ArrayList<RecentReaction>()
-            for (el in recentArr) {
+        // #IM-REACTIONS-VIEW (2026-10-19): реакция стала НЕВИДИМОЙ на чужих
+        // сообщениях — разбор реального формата VK (сверен с web-версией:
+        // «Мессенжер реакции.har», chunk 14397/mapReactions):
+        //   message.reactions  → МАССИВ [{reaction_id, count, user_ids}, ...]
+        //   message.reaction_id → id моей реакции на этом сообщении (или нет).
+        // Старый код ждал ОБЪЕКТ {count, user_reaction, recent_reactions} —
+        // сервер таких не шлёт в messages.getHistory (extended=1), поэтому
+        // ReactionBar всегда прятался (reactions == null из-за isJsonObject=null).
+        val reactionsArr = o.get("reactions")?.takeIf { it.isJsonArray }?.asJsonArray
+        val items = ArrayList<ReactionItem>()
+        var totalCount = 0
+        if (reactionsArr != null) {
+            for (el in reactionsArr) {
                 if (!el.isJsonObject) continue
                 val ro = el.asJsonObject
-                val uidEl = ro.get("user_id")
-                val ridEl = ro.get("reaction_id")
-                val uid = if (uidEl != null && !uidEl.isJsonNull) uidEl.asLong else 0L
-                val rid = if (ridEl != null && !ridEl.isJsonNull) ridEl.asInt else 0
-                list.add(RecentReaction(userId = uid, reactionId = rid))
+                val rid = ro.get("reaction_id")?.takeIf { !it.isJsonNull }?.asInt
+                if (rid == null || rid <= 0) continue
+                val cnt = ro.get("count")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                if (cnt <= 0) continue
+                items.add(ReactionItem(id = rid, count = cnt))
+                totalCount += cnt
             }
-            recent = list
         }
+        // Моя реакция — отдельное поле message.reaction_id (как в вебе), либо,
+        // если его нет, fallback: попытка прочитать старый объектный формат
+        // {user_reaction} (возможен на иных шлюзах). Приоритет — reaction_id.
+        val myReaction = o.get("reaction_id")?.takeIf { it.isJsonPrimitive }?.asInt
+        val userReaction: Int? = if (myReaction != null && myReaction > 0) {
+            myReaction
+        } else {
+            val legacy = o.get("reactions")?.takeIf { it.isJsonObject }?.asJsonObject
+            legacy?.get("user_reaction")?.takeIf { !it.isJsonNull }?.asInt
+        }
+        if (items.isEmpty() && userReaction == null) return null
+        val sorted = if (items.isEmpty()) emptyList() else
+            items.sortedByDescending { it.count }
         return MessageReaction(
-            count = count,
+            count = if (totalCount > 0) totalCount else (sorted.sumOf { it.count }),
             userReaction = userReaction,
-            recentReactions = if (recent.isNotEmpty()) recent else null,
+            items = sorted,
         )
     }
 

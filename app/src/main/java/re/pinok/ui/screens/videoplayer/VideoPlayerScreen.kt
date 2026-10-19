@@ -1856,12 +1856,17 @@ fun VideoPlayerScreen(
         val newFav = !inBookmarks
         inBookmarks = newFav
         scope.launch {
+            val v = resolvedVideo
+            // #BOOKMARKS-CLIPS: клипы кладём в закладки как "clip" (fave.addClip /
+            // fave.removeClip), иначе из fave.get они придут с type="video" и
+            // попадут в раздел «Видео», а не «Клипы». Обычные видео — "video".
+            val bmType = if (v.isClip) "clip" else "video"
             val ok = if (newFav) {
                 // #BOOKMARKS-FIX: access_key для чужих видео (лента/поиск) —
                 // без него VK отвечает ошибкой доступа, «закладки не работают».
-                app.apiClient.faveAdd("video", v.ownerId, v.id, v.accessKey)
+                app.apiClient.faveAdd(bmType, v.ownerId, v.id, v.accessKey)
             } else {
-                app.apiClient.faveRemove("video", v.ownerId, v.id, v.accessKey)
+                app.apiClient.faveRemove(bmType, v.ownerId, v.id, v.accessKey)
             }
             if (ok) {
                 if (newFav) toast("Добавлено в закладки") else toast("Удалено из закладок")
