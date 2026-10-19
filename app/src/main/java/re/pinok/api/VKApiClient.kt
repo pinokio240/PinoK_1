@@ -10566,7 +10566,10 @@ class VKApiClient(
             // error 100 для item_type=user/group; единственное корректное значение
             // для людей И групп — "page"; знак id различает их: id>0 человек,
             // id<0 группа). Fave.get(item_type=page) возвращает MIX users + groups.
-            args["item_type"] = normalizedItemType
+            // P0.45-fix: normalizedItemType — String? (из itemType?.let), но внутри
+            // if (itemType != null) гарантированно non-null. Kotlin smart cast НЕ
+            // распространяется на val из ?.let — нужен !! или явный non-null assert.
+            args["item_type"] = normalizedItemType!!
             // #P0.44-bookmarks-fix: fields гарантирует присутствие photo_100,
             // screen_name, online (user), members_count (group) и т.д. в page-элементах.
             // Без fields VK может вернуть минимальный набор → вкладки показывают
