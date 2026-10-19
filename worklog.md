@@ -15917,3 +15917,138 @@ web.api.vk.ru и calls-хостов, а oauth.vk.com/login.vk.ru (эндпоин
 **Commit:** `265180a` (pushed to origin/PinoK).
 
 **Backup:** backups/bookmarks-people-groups-page/ (от предыдущего коммита add5f40, этот фикс поверх).
+
+## ✅ P0.45-bookmarks-legacy: УСПЕХ — вкладки «Люди» и «Сообщества» работают (2026-10-19)
+
+**Проблема решена.** Вкладки «Люди» и «Сообщества» в разделе «Закладки» теперь отображают контент.
+
+### Корень проблемы
+
+VK API `fave.get(item_type=page)` возвращает **0 items** — закладки users/groups хранятся в **отдельной legacy системе** (`vk.ru/al_bookmarks.php`), недоступной через VK API. Подтверждено логом:
+```
+fave.get(item_type=page) → items=0, count=0     ← ПУСТО
+fave.get(item_type=null) → items=28, count=37   ← clips/posts работают
+```
+
+### Решение — web-scraping al_bookmarks.php с cookies
+
+PinoK имеет `VkCookieJar` с `remixsid` cookies — может вызывать `al_bookmarks.php` напрямую (как `groupsEventLogPage`).
+
+---
+
+### 📋 ПАТТЕРНЫ ДЛЯ ЗАКЛАДОК (для будущих задач)
+
+#### 1. Загрузка списка закладок users/groups
+
+```kotlin
+// VKApiClient.kt
+suspend fun bookmarksGetLegacyPages(type: String, offset: Int = 0): Pair<List<Bookmark>, Boolean>
+```
+
+- **Endpoint**: `POST https://vk.ru/al_bookmarks.php?act=load_all`
+- **Body**: `act=load_all&al=1&offset=N&type=user|group`
+- **Headers**: `X-Requested-With: XMLHttpRequest`, `User-Agent: Chrome`, cookies via VkCookieJar
+- **Response**: JSON `{"payload":[0,[["<html_item1>","<html_item2>",...], next_offset_or_null]]}`
+- **Pagination**: offset-based, `next_offset=null` = конец списка
+- **Хосты**: пробовать `vk.ru` → `m.vk.ru` → `vk.com` (DNS fallback)
+- **Прогрев**: GET `/bookmarks?type=user` перед POST (как браузер)
+
+#### 2. Парсинг HTML bookmark_page_item
+
+```kotlin
+// VKApiClient.kt — parseLegacyBookmarkHtml(html, type, currentUid)
+```
+
+HTML структура (из снапшотов `Закладки_люди.html` / `Закладки_сообщества.html`):
+
+```html
+<div class="bookmark_page_item _bookmark_page_item _bookmark_page_item_{ID}" data-id="{ID}" data-tags="[]">
+  <a href="https://vk.ru/id{POSITIVE_ID}"  <!-- ИЛИ href="https://vk.ru/{screen_name}" для group -->
+     <div class="bookmark_page_item__image [_online]"
+          style="background-image: url({PHOTO_URL})"></div>
+  </a>
+  <button class="bookmarks_item_toggle"
+          data-item-type="page"           <!-- ВСЕГДА "page" для users AND groups -->
+          data-item-id="{SIGNED_ID}"     <!-- positive=user, negative=group -->
+          data-item-oid="0"               <!-- ВСЕГДА 0 для page-type -->
+          data-hash="{PER_ITEM_HASH}">    <!-- 18-char hash для toggle -->
+  <div class="bookmark_page_item__name">
+    <a class="mem_link|group_link" href="...">{NAME}</a>
+  </div>
+</div>
+```
+
+**Regex паттерны**:
+- `data-item-id="(-?\d+)"` → signedId (Long)
+- `background-image:\s*url\(([^)]+)\)` → photoUrl (unescape `&amp;` → `&`)
+- `bookmark_page_item__image\s+_online` → isOnline (Boolean)
+- `<a[^>]*class="(?:mem_link|group_link)"[^>]*>([^<]+)</a>` → name (String)
+- `href="https://vk\.ru/([^"?]+)"` → screenName (String?, null если `/id123`)
+
+**Знак id различает user vs group**:
+- `signedId > 0` → User (создаём `UserProfile`)
+- `signedId < 0` → Group (нормализуем `Group.id = -signedId` в положительный)
+
+#### 3. Toggle bookmark (add/remove)
+
+**VK web** использует `al_bookmarks.php?act=bookmark` с per-item `hash` (недоступен через API).
+
+**PinoK** должен использовать VK API (без hash):
+```kotlin
+// Добавить:
+fave.addUser(user_id=<positive>)      // для user
+fave.addGroup(group_id=<positive>)    // для group
+
+// Удалить:
+fave.removeUser(user_id=<positive>)   // для user
+fave.removeGroup(group_id=<positive>) // для group
+```
+
+⚠️ `fave.addPage`/`fave.removePage` — DEPRECATED, web SPA их не использует.
+
+#### 4. Пагинация
+
+```kotlin
+// BookmarksScreen.kt — loadLegacyPages(offset)
+val (users, usersHasMore) = apiClient.bookmarksGetLegacyPages("user", offset)
+val (groups, groupsHasMore) = apiClient.bookmarksGetLegacyPages("group", offset)
+val combined = (users + groups).distinctBy { bookmarkKey(it) }
+val hasMore = usersHasMore || groupsHasMore
+```
+
+- `pageSize` = 30 (фиксирован VK web)
+- Стоп: `hasMore == false` (next_offset=null в response)
+- Для пагинации `loadMore`: `offset = maxOf(userCount, groupCount)`
+
+#### 5. Bookmark key (дедупликация)
+
+```kotlin
+// BookmarksScreen.kt — bookmarkKey
+"${bm.type}_${bm.user?.let { "u${it.id}" } ?: bm.group?.let { "g${it.id}" } ?: ...}"
+```
+
+⚠️ Prefix `u`/`g` обязателен — user_id и group_id в разных namespaces, оба могут быть `12345`.
+
+#### 6. Различия user vs group в UI
+
+| Аспект | User | Group |
+|--------|------|-------|
+| `data-item-id` | positive (1098480020) | negative (-196847141) |
+| CSS class ссылки имени | `mem_link` | `group_link` |
+| href | `/id{N}` | `/{screen_name}` |
+| Online indicator | `_online` class на image | нет |
+| PhotoZoom wrap | есть (`ui_zoom_wrap`) | нет |
+| `Bookmarks.onPagesTabOnlineChoose()` | есть (только Люди) | нет |
+
+---
+
+### Коммиты P0.45 (полная история)
+
+| Коммит | Описание |
+|--------|----------|
+| `35b9643` | P0.45 — B1+B2+B5+B6+B7+B8 (TRACER audit: type fallback, pageObj, safeString, bookmarkKey prefix) |
+| `15b03df` | P0.45 compile — normalizedItemType!! non-null assert |
+| `f0df10e` | P0.45-legacy — al_bookmarks.php web-scraping (bookmarksGetLegacyPages + parseLegacyBookmarkHtml) |
+| `c531df5` | P0.45-legacy compile — objectId is Long? not String |
+
+**Итог:** 4 коммита, ~270 строк добавлено. Вкладки «Люди» и «Сообщества» работают через web-scraping `al_bookmarks.php` с cookies.
