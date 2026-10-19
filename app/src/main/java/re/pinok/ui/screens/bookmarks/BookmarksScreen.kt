@@ -1394,7 +1394,6 @@ private fun typeLabel(type: String): String = when (type) {
     "link" -> "Ссылка"
     "article" -> "Статья"
     "product" -> "Товар"
-    "page" -> "Страница"
     else -> type
 }
 
