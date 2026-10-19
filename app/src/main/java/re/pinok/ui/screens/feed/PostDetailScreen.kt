@@ -744,6 +744,23 @@ fun PostDetailScreen(
                             // Fix #209: кнопка «Ответить» внутри комментария.
                             onReply = {
                                 replyingToComment = comment
+                                // P0.46-comments-reply: VK web паттерн — при reply в начало
+                                // message вставляется mention-префикс [id<uid>|<firstName>], .
+                                // VK API не имеет reply_to_user_id — сервер выводит его из
+                                // from_id родительского комментария, но mention даёт UI-подсказку
+                                // (показывается как кликабельная ссылка на пользователя).
+                                // Формат: [id{fromId}|{firstName}], (с запятой и пробелом).
+                                val replyAuthor = profiles[comment.fromId]
+                                val replyFirstName = replyAuthor?.firstName?.takeIf { it.isNotBlank() }
+                                    ?: replyAuthor?.fullName?.takeIf { it.isNotBlank() }
+                                    ?: "Пользователь"
+                                val mentionPrefix = if (comment.fromId > 0L) {
+                                    "[id${comment.fromId}|$replyFirstName], "
+                                } else {
+                                    // Group comment → mention via club{abs(id)}
+                                    "[club${-comment.fromId}|$replyFirstName], "
+                                }
+                                inputText = mentionPrefix
                                 // Фокус на поле ввода — пользователь сразу печатает ответ.
                             },
                             // Fix #237: клик по видео/фото в комментарии открывает

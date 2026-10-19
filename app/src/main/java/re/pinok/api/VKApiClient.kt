@@ -6006,6 +6006,12 @@ class VKApiClient(
      * Fix #209: reply_to_comment — id комментария, на который отвечаем (threaded replies).
      * VK API: при ответе на другой комментарий передаём reply_to_comment=<id>,
      * также VK автоматически подставит reply_to_user (можно указать явно, но не обязательно).
+     *
+     * P0.46-comments-reply: добавлены from_group и sticker_id (паттерны HAR).
+     * VK web всегда отправляет sticker_id= (пустая строка) даже без стикера.
+     * from_group: 0 = от user, positive = от group-as-admin.
+     * Mention-префикс `[id<uid>|<firstName>], ` должен быть ВНУТРИ message
+     * (VK API не имеет reply_to_user_id — mention даёт UI-подсказку).
      */
     suspend fun wallCreateComment(
         ownerId: Long,
@@ -6013,6 +6019,8 @@ class VKApiClient(
         message: String,
         attachments: String? = null,
         replyToComment: Long? = null,
+        fromGroup: Long? = null,
+        stickerId: Long? = null,
     ): Long {
         val args = mutableMapOf(
             "owner_id" to ownerId.toString(),
@@ -6021,10 +6029,25 @@ class VKApiClient(
         )
         if (!attachments.isNullOrBlank()) {
             args["attachments"] = attachments
+        } else {
+            // P0.46-comments-reply: VK web всегда отправляет пустой attachments=
+            args["attachments"] = ""
         }
         // Fix #209: ответ на комментарий (threaded reply).
         if (replyToComment != null && replyToComment > 0L) {
             args["reply_to_comment"] = replyToComment.toString()
+        }
+        // P0.46-comments-reply: from_group — от имени пользователя (0) или сообщества (+abs(gid))
+        if (fromGroup != null) {
+            args["from_group"] = fromGroup.toString()
+        } else {
+            args["from_group"] = "0"
+        }
+        // P0.46-comments-reply: sticker_id — всегда отправляем (VK web паттерн)
+        if (stickerId != null && stickerId > 0L) {
+            args["sticker_id"] = stickerId.toString()
+        } else {
+            args["sticker_id"] = ""
         }
         val json = call("wall.createComment", args) ?: return -1L
         return try {

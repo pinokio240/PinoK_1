@@ -16052,3 +16052,32 @@ val hasMore = usersHasMore || groupsHasMore
 | `c531df5` | P0.45-legacy compile — objectId is Long? not String |
 
 **Итог:** 4 коммита, ~270 строк добавлено. Вкладки «Люди» и «Сообщества» работают через web-scraping `al_bookmarks.php` с cookies.
+
+### P0.46-comments-edit-reply: реализация в PinoK (2026-10-19)
+
+**Анализ снапшотов** (коменнтарий.html + коменнтарий_редактирование1.html + HAR):
+- 2 HTML страницы + 1 HAR (1.2 MB) + JS-бандлы
+- Субагент [SCOUT/HUNTER/TRACER/BUILDER] нашёл полные API спецификации
+
+**Реализация:**
+
+1. **API методы (уже существовали, дополнены):**
+   - `wallEditComment(ownerId, commentId, message, attachments)` — без изменений (был корректен)
+   - `wallCreateComment(ownerId, postId, message, attachments, replyToComment, fromGroup, stickerId)` — добавлены:
+     - `fromGroup: Long? = null` (0 = от user, +abs(gid) = от group-as-admin)
+     - `stickerId: Long? = null` (всегда отправляется, даже пустой)
+     - `attachments = ""` (пустая строка если null — VK web паттерн)
+
+2. **UI редактирования комментария** (уже был реализован в PostDetailScreen.kt:1190-1265):
+   - AlertDialog с OutlinedTextField, prefilled `comment.text`
+   - Кнопка «Редактировать» в ⋮-меню если `comment.fromId == currentUserId`
+   - На «Сохранить» → wallEditComment → обновление локальных списков
+
+3. **UI ответа (reply)** — добавлен mention-префикс (PostDetailScreen.kt:745-765):
+   - При клике «Ответить» → `replyingToComment = comment`
+   - **P0.46-new**: `inputText = "[id${comment.fromId}|${firstName}], "` — VK web паттерн
+   - Для group-comment: `"[club${-comment.fromId}|${name}], "`
+   - VK API не имеет `reply_to_user_id` — mention даёт UI-подсказку (кликабельная ссылка)
+   - Reply preview (replyTarget header) уже был реализован (PostDetailScreen.kt:859-915)
+
+**Коммит:** <будет после push>
