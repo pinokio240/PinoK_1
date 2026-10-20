@@ -650,12 +650,6 @@ fun PostDetailScreen(
                 },
             )
         },
-        // P0.46-IME-FIX: отключаем auto contentWindowInsets на bottomBar — иначе
-        // Scaffold сам поднимает bottomBar над IME + windowInsetsPadding на Row
-        // даёт ДВОЙНОЙ подъём → поле ввода уезжает слишком высоко, между ним и
-        // клавиатурой большой пустой зазор. Row сам управляет IME через
-        // windowInsetsPadding(ime.union(navbar)).
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         content = { paddingValues ->
             PullToRefreshBox(
                 isRefreshing = isRefreshing,

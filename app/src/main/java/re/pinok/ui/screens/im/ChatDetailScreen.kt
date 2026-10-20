@@ -3844,11 +3844,6 @@ fun ChatDetailScreen(
         LocalChatAppearance provides chatAppearance,
     ) {
     Scaffold(
-        // P0.46-IME-GAP: тот же паттерн что в PostDetailScreen — отключаем auto
-        // contentWindowInsets на bottomBar, иначе Scaffold поднимает bottomBar над
-        // IME + Row внутри имеет windowInsetsPadding(ime) = ДВОЙНОЙ подъём →
-        // клавиатура скрывает текстовое поле диалога. Row сам управляет IME.
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             if (selectionMode) {
                 // P2.5: selection-mode TopAppBar — «Выбрано: N» + Forward/Delete/Close.
@@ -4201,15 +4196,7 @@ fun ChatDetailScreen(
                     onLeave = { leaveChannel() },
                 )
             } else {
-            // P0.46-IME-UNIFY: input Column сам управляет IME через windowInsetsPadding.
-            // Scaffold имеет contentWindowInsets=0 (строка 3850) — иначе двойной подъём.
-            // background ПЕРЕД windowInsetsPadding — заливает navbar-область цветом surface.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
-            ) {
+            Column {
                 // #CHANNEL-PANEL-WRITE (2026-10-11): «Написать» из панели канала.
                 // Только в этой ветке рендерится обычный композер (админ канала
                 // может писать), поэтому FocusRequester валиден здесь. Когда
@@ -4468,9 +4455,7 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surface)
-                            // P0.46-IME-UNIFY: тот же padding что PostDetailScreen (8.dp/6.dp),
-                            // без UiScale.scaled — единый паттерн панели ввода.
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                            .padding(horizontal = UiScale.scaled(8.dp), vertical = UiScale.scaled(6.dp)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Fix #200: поле ввода расширено — убраны 3 отдельные

@@ -1473,16 +1473,11 @@ fun SovaNavHost(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        // #IME-BOTTOMBAR-FIX: убран .imePadding() — он создавал ДВОЙНОЙ подъём
-                        // с локальным windowInsetsPadding(ime) на экранах со своим полем ввода
-                        // (PostDetailScreen, ChatDetailScreen, FeedScreen). Глобальный bottomBar
-                        // (MiniPlayer + NavigationBar) должен оставаться внизу и закрываться
-                        // клавиатурой — стандартное поведение Android. Экраны с input-полями
-                        // сами управляют IME через windowInsetsPadding(ime.union(navbar)).
-                        // P0.46-IME-GAP: ранее .imePadding() здесь поднимал ВЕСЬ экран вверх
-                        // → поле ввода комментария уезжало слишком высоко, между ним и
-                        // клавиатурой появлялся большой пустой зазор.
-                        .windowInsetsPadding(WindowInsets.navigationBars),
+                        // #IME-BOTTOMBAR-FIX: imePadding добавлен, чтобы при открытии клавиатуры
+                        // нижняя панель поднималась вместе с контентом, а не оставляла полосу
+                        // фона между поднятым контентом и клавиатурой (прямоугольник в поиске).
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .imePadding(),
                 ) {
                     if (showMiniPlayer) {
                         GlobalMiniPlayer(

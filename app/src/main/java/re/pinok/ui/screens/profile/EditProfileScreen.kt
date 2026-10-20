@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -560,11 +561,9 @@ fun EditProfileScreen(onBack: () -> Unit) {
     val currentSaveError = saveError
 
     Scaffold(
-        // P0.46-IME-unify: паттерн A — contentWindowInsets=0 на Scaffold (отключаем
-        // auto-insets), windowInsetsPadding(ime.union(navbar)) на input-контенте
-        // (LazyColumn ниже). Раньше windowInsetsPadding был на modifier Scaffold →
-        // topBar уезжал вместе с контентом при открытии IME.
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        // P0.39-IME-UNIFY: windowInsetsPadding(ime.union(navbar)) — самоуправление.
+        // IME закрыт → padding = navbar. IME открыт → padding = ime (включает navbar).
+        modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         topBar = {
             TopAppBar(
                 title = { Text("Редактирование профиля") },
@@ -621,11 +620,7 @@ fun EditProfileScreen(onBack: () -> Unit) {
             }
             else -> {
                 LazyColumn(
-                    // P0.46-IME-unify: input-контент сам управляет IME (паттерн A).
-                    // padding(padding) — topBar height; windowInsetsPadding(ime.union(navbar))
-                    // поднимает последний TextField над клавиатурой/navbar.
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                    modifier = Modifier.fillMaxSize().padding(padding),
                     contentPadding = PaddingValues(bottom = 32.dp),
                 ) {
                     item {
