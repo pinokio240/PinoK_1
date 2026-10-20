@@ -633,10 +633,12 @@ fun PostDetailScreen(
     }
 
     // P0.46-share-comment: ShareSheet для комментария (wall_reply attachment).
+    // Comment не имеет ownerId — используем post.ownerId (владелец стены).
+    // Формат attachment: wall_reply{post.ownerId}_{comment.id}
     val sComment = sharingComment
     if (sComment != null) {
         ShareSheet(
-            attachments = listOf("wall_reply${sComment.ownerId}_${sComment.id}"),
+            attachments = listOf("wall_reply${post?.ownerId ?: 0L}_${sComment.id}"),
             onDismiss = { sharingComment = null },
             onSuccess = { sharingComment = null },
         )
