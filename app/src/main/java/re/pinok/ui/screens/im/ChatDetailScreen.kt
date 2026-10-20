@@ -8610,7 +8610,9 @@ private fun ReactionPicker(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        items(REACTION_EMOJIS) { (id, emoji) ->
+        // P0.46-reactions: показываем только первые 7 (базовые VK реакции),
+        // остальные доступны через кнопку «⋯» → ReactionGridDialog (полная сетка).
+        items(REACTION_EMOJIS.take(7)) { (id, emoji) ->
             val isHighlighted = currentReaction == id
             val bgColor = if (isHighlighted)
                 MaterialTheme.colorScheme.primaryContainer
