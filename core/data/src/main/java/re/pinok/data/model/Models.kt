@@ -996,6 +996,11 @@ data class Comment(
     @SerializedName("reply_to_user") val replyToUser: Long? = null,
     @SerializedName("reply_to_comment") val replyToComment: Long? = null,
     @SerializedName("attachments") val attachments: List<Attachment>? = null,
+    // P0.46-share-comment: owner_id и post_id — есть в wall_reply attachment
+    // (VK API возвращает их в объекте комментария при пересылке в сообщении).
+    // Нужны для построения deep link: wall{ownerId}_{postId}?reply={commentId}.
+    @SerializedName("owner_id")  val ownerId: Long = 0L,
+    @SerializedName("post_id")  val postId: Long = 0L,
     // Fix #234: цепочка ID всех предков в ветке ответов (для глубоких тредов).
     // VK отдаёт это поле только при thread_items_count>0, иначе null.
     @SerializedName("parents_stack") val parentsStack: List<Long>? = null,

@@ -6774,7 +6774,7 @@ private fun MessageBubble(
                 }
                 // P0.46-share-comment: wall_reply — комментарий к посту как вложение.
                 // VK web: AttachWallNew--withReply + AttachWallNew__WallReply «Комментарий к посту».
-                // Тап → переход к оригинальному посту с reply=comment_id.
+                // Тап → переход к оригинальному посту внутри приложения (НЕ внешний браузер).
                 val wallReplyAttachments = message.attachments
                     ?.filter { it.type == "wall_reply" && it.wallReply != null }
                     ?.mapNotNull { it.wallReply }
@@ -6784,10 +6784,20 @@ private fun MessageBubble(
                             comment = replyComment,
                             textColor = textColor,
                             onClick = {
-                                // Переход к оригинальному посту: wall{ownerId}_{postId}?reply={commentId}
-                                val ownerId = replyComment.replyToComment ?: 0L
-                                val postUrl = "https://vk.ru/wall${ownerId}_${replyComment.id}"
-                                onUrlClick(postUrl)
+                                // P0.46-fix: открываем PostDetailScreen внутри приложения,
+                                // а НЕ внешний браузер. Comment имеет ownerId + postId
+                                // (из VK API wall_reply attachment).
+                                if (replyComment.ownerId != 0L && replyComment.postId != 0L) {
+                                    // Создаём Post-заглушку для onWallClick → PostDetailScreen.
+                                    val stubPost = re.pinok.data.model.Post(
+                                        id = replyComment.postId,
+                                        ownerId = replyComment.ownerId,
+                                        fromId = replyComment.ownerId,
+                                        date = replyComment.date,
+                                        text = "",
+                                    )
+                                    onWallClick(stubPost)
+                                }
                             },
                         )
                     }
