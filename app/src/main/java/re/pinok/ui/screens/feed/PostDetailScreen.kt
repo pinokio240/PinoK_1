@@ -1946,6 +1946,11 @@ private fun CommentItem(
                             onVideoClick = onVideoClick,
                             onPhotoClick = onPhotoClick,
                             postOwnerId = postOwnerId,
+                            // P0.46-share-reply: те же действия что и CommentItem.
+                            currentUserId = currentUserId,
+                            onEditComment = onEditComment,
+                            onDeleteComment = onDeleteComment,
+                            onShareComment = onShareComment,
                         )
                     }
                     if (isLoadingReplies) {
@@ -1976,7 +1981,15 @@ private fun ReplyItem(
     onVideoClick: (Video) -> Unit = {},
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
     postOwnerId: Long = 0L,
+    // P0.46-share-reply: те же действия что CommentItem.
+    currentUserId: Long = 0L,
+    onEditComment: (Comment) -> Unit = {},
+    onDeleteComment: (Comment) -> Unit = {},
+    onShareComment: (Comment) -> Unit = {},
 ) {
+    // P0.46-share-reply: long-press меню для ответов в ветке.
+    val isOwnReply = reply.fromId == currentUserId && currentUserId != 0L
+    var menuOpen by remember { mutableStateOf(false) }
     val author = profiles[reply.fromId]
     val authorName = author?.fullName ?: "Неизвестный"
     val authorAvatar = author?.photo100
@@ -1991,6 +2004,10 @@ private fun ReplyItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { menuOpen = true },
+            )
             .padding(start = 0.dp, end = 0.dp, top = 4.dp, bottom = 4.dp),
     ) {
         // Маленький аватар (28dp вместо 36dp).
@@ -2106,6 +2123,33 @@ private fun ReplyItem(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+        }
+        // P0.46-share-reply: контекстное меню для ответов в ветке.
+        Box(modifier = Modifier.size(0.dp)) {
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Ответить") },
+                    onClick = { menuOpen = false; onReply() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Поделиться") },
+                    leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+                    onClick = { menuOpen = false; onShareComment(reply) },
+                )
+                if (isOwnReply) {
+                    DropdownMenuItem(
+                        text = { Text("Редактировать") },
+                        onClick = { menuOpen = false; onEditComment(reply) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Удалить") },
+                        onClick = { menuOpen = false; onDeleteComment(reply) },
+                    )
                 }
             }
         }
