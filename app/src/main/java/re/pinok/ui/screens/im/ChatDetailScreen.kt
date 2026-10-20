@@ -5184,10 +5184,9 @@ fun ChatDetailScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         horizontal = 12.dp, vertical = 8.dp,
                     ),
-                    // P0.46-reactions: spacedBy 8dp — увеличенный зазор между сообщениями,
-                    // чтобы ReactionBar (под bubble) чётко помещался в промежутке и не
-                    // перекрывал контент следующего сообщения.
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    // P0.46-reactions: spacedBy 12dp — зазор между сообщениями
+                    // (достаточный для ReactionPicker высотой ~40dp + отступы).
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                     reverseLayout = true,
                 ) {
                     // reverseLayout=true: индекс 0 (новое) — внизу, конец (старое) — наверху.
@@ -8577,13 +8576,15 @@ private fun ReactionPicker(
 ) {
     // P0.46-reactions: LazyRow вместо Row — 64 реакции не помещаются на экране.
     // Скролл горизонтальный, как в VK web (ConvoMessageFastReactionsMenu — scrollable).
+    // P0.46-reactions: компактный пиалет — помещается в зазоре 12dp между сообщениями.
+    // Box 28dp (тач-таргет), emoji 18sp, padding minimal.
     androidx.compose.foundation.lazy.LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -8596,7 +8597,7 @@ private fun ReactionPicker(
             else Color.Transparent
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(28.dp)
                     .clip(CircleShape)
                     .background(bgColor)
                     .clickable {
@@ -8605,7 +8606,7 @@ private fun ReactionPicker(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(text = emoji, fontSize = 22.sp)
+                Text(text = emoji, fontSize = 18.sp)
             }
         }
         // #IM-REACTIONS-GRID: кнопка «⋯» — расширенная сетка.
@@ -8613,7 +8614,7 @@ private fun ReactionPicker(
             item {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(28.dp)
                         .clip(CircleShape)
                         .clickable {
                             onDismiss()
@@ -8621,7 +8622,7 @@ private fun ReactionPicker(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "\u22EF", fontSize = 22.sp, textAlign = TextAlign.Center)
+                    Text(text = "\u22EF", fontSize = 18.sp, textAlign = TextAlign.Center)
                 }
             }
         }
