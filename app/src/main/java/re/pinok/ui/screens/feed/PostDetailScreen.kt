@@ -638,7 +638,7 @@ fun PostDetailScreen(
     val sComment = sharingComment
     if (sComment != null) {
         ShareSheet(
-            attachments = listOf("wall_reply${post?.ownerId ?: 0L}_${sComment.id}"),
+            attachments = listOf("wall_reply${post.ownerId}_${sComment.id}"),
             onDismiss = { sharingComment = null },
             onSuccess = { sharingComment = null },
         )
