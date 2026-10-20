@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -289,6 +290,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.RepostGroupCache
 // #CHANNEL-WALL-MODE (Fix #393): «Поделиться» поста канала — существующий
@@ -7429,15 +7432,24 @@ private fun MessageBubble(
             }
         }
 
-        // ReactionPicker — панель эмодзи (рендерится под bubble, в зазоре
-        // между сообщениями — spacedBy(8dp) даёт достаточно места).
+        // ReactionPicker — панель эмодзи. Popup — dismiss при тапе вне.
         if (showReactionPicker) {
-            ReactionPicker(
-                currentReaction = message.reactions?.userReaction,
-                onReact = onReact,
-                onDismiss = onHideReactionPicker,
-                onShowMore = onShowReactionGrid,
-            )
+            Popup(
+                alignment = Alignment.BottomCenter,
+                onDismissRequest = onHideReactionPicker,
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                ReactionPicker(
+                    currentReaction = message.reactions?.userReaction,
+                    onReact = onReact,
+                    onDismiss = onHideReactionPicker,
+                    onShowMore = onShowReactionGrid,
+                )
+            }
         }
 
         // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯»).
@@ -8624,13 +8636,11 @@ private fun ReactionPicker(
     onDismiss: () -> Unit,
     onShowMore: (() -> Unit)? = null,
 ) {
-    // P0.46-reactions: LazyRow вместо Row — 64 реакции не помещаются на экране.
-    // Скролл горизонтальный, как в VK web (ConvoMessageFastReactionsMenu — scrollable).
-    // P0.46-reactions: компактный пиалет — помещается в зазоре 12dp между сообщениями.
-    // Box 28dp (тач-таргет), emoji 18sp, padding minimal.
+    // P0.46-reactions: Popup с dismissOnClickOutside. Размер +10% (31dp/20sp).
+    // wrapContentWidth — нет пустоты после «⋯» (fillMaxWidth создавал пустое место).
     androidx.compose.foundation.lazy.LazyRow(
         modifier = Modifier
-            .fillMaxWidth()
+            .wrapContentWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -8638,8 +8648,6 @@ private fun ReactionPicker(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // P0.46-reactions: показываем только первые 7 (базовые VK реакции),
-        // остальные доступны через кнопку «⋯» → ReactionGridDialog (полная сетка).
         items(REACTION_EMOJIS.take(7)) { (id, emoji) ->
             val isHighlighted = currentReaction == id
             val bgColor = if (isHighlighted)
@@ -8647,7 +8655,7 @@ private fun ReactionPicker(
             else Color.Transparent
             Box(
                 modifier = Modifier
-                    .size(28.dp)
+                    .size(31.dp)
                     .clip(CircleShape)
                     .background(bgColor)
                     .clickable {
@@ -8656,15 +8664,14 @@ private fun ReactionPicker(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(text = emoji, fontSize = 18.sp)
+                Text(text = emoji, fontSize = 20.sp)
             }
         }
-        // #IM-REACTIONS-GRID: кнопка «⋯» — расширенная сетка.
         if (onShowMore != null) {
             item {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(31.dp)
                         .clip(CircleShape)
                         .clickable {
                             onDismiss()
@@ -8672,7 +8679,7 @@ private fun ReactionPicker(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "\u22EF", fontSize = 18.sp, textAlign = TextAlign.Center)
+                    Text(text = "\u22EF", fontSize = 20.sp, textAlign = TextAlign.Center)
                 }
             }
         }
