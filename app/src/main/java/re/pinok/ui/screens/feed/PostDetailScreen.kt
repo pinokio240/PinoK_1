@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -219,6 +220,8 @@ fun PostDetailScreen(
     var deletingComment by remember { mutableStateOf<Comment?>(null) }
     var editBusy by remember { mutableStateOf(false) }
     var deleteBusy by remember { mutableStateOf(false) }
+    // P0.46-share-comment: комментарий для «Поделиться» (wall_reply{ownerId}_{commentId}).
+    var sharingComment by remember { mutableStateOf<Comment?>(null) }
     val ctx = LocalContext.current
 
     // Лаунчеры для вложений в комментариях.
@@ -629,6 +632,17 @@ fun PostDetailScreen(
         return
     }
 
+    // P0.46-share-comment: ShareSheet для комментария (wall_reply attachment).
+    val sComment = sharingComment
+    if (sComment != null) {
+        ShareSheet(
+            attachments = listOf("wall_reply${sComment.ownerId}_${sComment.id}"),
+            onDismiss = { sharingComment = null },
+            onSuccess = { sharingComment = null },
+        )
+        return
+    }
+
     // Определяем фото автора поста из профилей/групп.
     val authorAvatarUrl: String? = if (post.fromId > 0) {
         profiles[post.fromId]?.photo100
@@ -819,6 +833,10 @@ fun PostDetailScreen(
                             },
                             onDeleteComment = { c ->
                                 deletingComment = c
+                            },
+                            // P0.46-share-comment: поделиться комментарием.
+                            onShareComment = { c ->
+                                sharingComment = c
                             },
                         )
                     }
@@ -1509,6 +1527,8 @@ private fun CommentItem(
     currentUserId: Long = 0L,
     onEditComment: (Comment) -> Unit = {},
     onDeleteComment: (Comment) -> Unit = {},
+    // P0.46-share-comment: поделиться комментарием (wall_reply{ownerId}_{commentId}).
+    onShareComment: (Comment) -> Unit = {},
 ) {
     val author = profiles[comment.fromId]
     val authorName = author?.fullName ?: "Неизвестный"
@@ -1649,6 +1669,15 @@ private fun CommentItem(
                                     },
                                 )
                             }
+                            // P0.46-share-comment: «Поделиться» — для ВСЕХ комментариев.
+                            DropdownMenuItem(
+                                text = { Text("Поделиться") },
+                                leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onShareComment(comment)
+                                },
+                            )
                         }
                     }
                 } else {
