@@ -99,7 +99,8 @@ internal fun LandingScreen(
     // #AUTH2 (2026-10-17): если включена «Авторизация 2» — на LandingScreen появляется
     // дополнительная кнопка «Войти в аккаунт 2» (WebView-флоу по образцу vk-lite).
     // Обычная кнопка «Войти через VK» остаётся как была.
-    authV2Enabled: Boolean = false,
+    // 2026-10-20: дефолт true — согласован с SovaPrefs (тумблер включён по умолчанию).
+    authV2Enabled: Boolean = true,
     onStartAuthV2: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -249,11 +250,16 @@ internal fun LandingScreen(
                 Spacer(Modifier.width(8.dp))
                 Text("Войти в аккаунт 2", style = MaterialTheme.typography.titleMedium)
             }
+            // #AUTH2-HINT (2026-10-20): инструкция под кнопкой «Войти в аккаунт 2»
+            // (флоу «Авторизация 2»): токен подхватывается при возврате в приложение.
+            // Кегль — bodyLarge (16sp), заметно крупнее прежнего labelSmall.
             Text(
-                text = "Альтернативный WebView-вход (как в vk-lite): VK сам принимает номер/пароль/2FA.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                text = "Авторизуйтесь в ВК, сверните и разверните приложение, появится интерфейс PinoK",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
         }
 

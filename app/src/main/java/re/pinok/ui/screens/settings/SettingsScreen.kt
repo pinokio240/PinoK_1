@@ -573,7 +573,7 @@ private fun DevTab(
         item {
             // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный WebView-флоу входа
             // (по образцу vk-lite-auth: m.vk.ru в WebView, чтение web_token из localStorage).
-            // Включается по желанию; по умолчанию выключен — прежний WebView-вход AuthActivity.
+            // Default true (2026-10-20) — тумблер включён, пока пользователь не выключил.
             // Применяется к ручному входу (не к silent re-login).
             ToggleRow(
                 title = "Авторизация 2",

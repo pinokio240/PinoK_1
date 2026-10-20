@@ -620,8 +620,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false).
             callsEnabled = p[Keys.CALLS_ENABLED] ?: false,
             // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный флоу входа (прямой HTTP).
-            // Default false = прежний WebView-вход. Только для ручного входа (не silent).
-            authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: false,
+            // Default true (2026-10-20) — тумблер в «Разработке» включён, пока пользователь
+            // явно его не выключил (сохранённое значение приоритетнее). Только ручной вход.
+            authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: true,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
             callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: false,

@@ -617,9 +617,11 @@ private fun AuthScreen(
     // #AUTH-OFFLINE: флаг доступности сети — блокирует кнопки входа на LandingScreen.
     val isOnline by SovaApp.get(context).networkObserver.isOnlineFlow.collectAsState(initial = SovaApp.get(context).networkObserver.isOnline())
     // #AUTH2: включена ли «Авторизация 2» — показывать ли кнопку «Войти в аккаунт 2».
+    // Дефолт true (2026-10-20): нет снапшота/ключа — «Авторизация 2» включена.
+    // Сохранённое значение (в т.ч. явное false) приоритетнее дефолта.
     val authV2Enabled = runCatching {
-        SovaApp.get(context).prefsSnapshot?.authV2Enabled == true
-    }.getOrDefault(false)
+        SovaApp.get(context).prefsSnapshot?.authV2Enabled ?: true
+    }.getOrDefault(true)
 
     // Fix #190: показываем поле «Вставьте ссылку» после запуска внешнего
     // браузера. Пользователь копирует URL из адресной строки браузера

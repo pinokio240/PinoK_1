@@ -47,7 +47,9 @@ object AuthFlowFactory {
     fun resolve(app: SovaApp, silent: Boolean): AuthFlow? {
         // Silent re-login — всегда прежний WebView-флоу (не трогаем).
         if (silent) return null
-        val v2 = runCatching { app.prefsSnapshot?.authV2Enabled == true }.getOrDefault(false)
+        // Дефолт true (2026-10-20): нет снапшота/ключа — «Авторизация 2» включена,
+        // сохранённое значение (в т.ч. явное false) приоритетнее.
+        val v2 = runCatching { app.prefsSnapshot?.authV2Enabled ?: true }.getOrDefault(true)
         if (!v2) return null
         return DirectHttpAuthFlow(app)
     }

@@ -199,5 +199,5 @@ object BuildStamp {
     // чат звонка: история messages.getHistory + отправка messages.send (random_id
     // round(2e9·rand)) + сервисные action-типы; записи: переименование video.edit
     // (wire-гипотеза); фасад CallsApi 48→56 членов.
-    const val STAMP: String = "calls-2026.10.18-2.2.4"
+    const val STAMP: String = "calls-2026.10.20-2.2.5"
 }
