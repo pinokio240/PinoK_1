@@ -16362,3 +16362,65 @@ extended=1
 **Эталонный паттерн A** теперь применяется ко всем 7 экранам с input-полями:
 PostDetailScreen, ChatDetailScreen, EditProfileScreen, AuthDomainsScreen,
 NotificationsScreen, FeedScreen, VideoPlayerScreen.
+
+## ✅ P0.46-reactions: УСПЕХ — реакции внутри bubble + пиалет как Popup (2026-10-20)
+
+### Итог по реакциям (14 коммитов)
+
+**Финальная архитектура реакций в PinoK:**
+
+1. **Реакции ВНУТРИ bubble** (как VK web `ConvoMessageWithoutBubble__reactions` внутри `__wrapper`):
+   - Если есть реакции → чипы (emoji + count) внутри bubble, после футера (время/✓✓)
+   - Тап по чипу своей реакции → toggle off (снять)
+   - Тап по чипу чужой реакции → поставить свою
+   - Если реакций нет → маленькая кнопка 😊 (16dp, alpha 0.4) внутри bubble
+
+2. **Пиалет реакций как Popup** (7 базовых + «⋯»):
+   - `Popup(dismissOnClickOutside=true)` — тап вне пиалета → закрытие
+   - 7 базовых реакций (❤️🔥😂👍💩❓😭) + кнопка «⋯»
+   - «⋯» → `ReactionGridDialog` со всеми 64 реакциями (AsyncImage + emoji fallback)
+   - Размер: Box 31dp, fontSize 20sp (+10% от исходного 28dp/18sp)
+   - `wrapContentWidth()` — нет пустоты после «⋯»
+
+3. **Контекстное меню** (long-press):
+   - Пиалет из 7 базовых реакций + «⋯» (как в пиалете)
+   - Пункты: Ответить / Переслать / Отметить как важное / Копировать / Редактировать / Удалить / Выбрать
+
+4. **Иконка реакции рядом с именем автора** (`PeerTitle__icon`):
+   - Emoji реакции (14sp) после имени автора если есть `userReaction`
+
+5. **Полная карта emoji** (64 реакции, IDs 1-64):
+   - Базовые (1-7): ❤️🔥😂👍💩❓😭
+   - Pack-based (8-64): 😊😍😘😎🤣😁😜😉😚😳😱😠😡😴👎👏🙏🤝👀🎉🎂🎁🌸🥳👻🤡🦊🐻🐶🐱🐔🍔🍕☕🍺🎃🎄🎆✨💫🌟🌞🌙☀️☁️🌧️⛈️🌫️🔥❄️🌲🌳🌼🍀🌹🤗
+
+### Коммиты P0.46-reactions (14 штук)
+
+| # | Коммит | Описание |
+|---|--------|----------|
+| 1 | `79c111a` | feat(comments): reply mention-prefix + from_group/sticker_id params |
+| 2 | `c9d4ff8` | feat(comments): wall.getComment after reply + long-press menu |
+| 3 | `bfc9696` | fix(chat): унифицировать стиль OutlinedTextField с PostDetailScreen |
+| 4 | `6241cea` | fix(reactions): emoji fallback ПОД AsyncImage (значки видны) |
+| 5 | `2fce2d4` | fix(reactions): полная карта emoji для pack-based реакций (IDs 8-64) |
+| 6 | `25d7923` | fix(reactions): ReactionPicker: Row → LazyRow (скролл 64 реакций) |
+| 7 | `6b3da73` | fix(reactions): показывать 7 базовых реакций + «⋯» для остальных |
+| 8 | `73a7f15` | fix(reactions): убрать inline-кнопку 😊 (перекрывала контент) |
+| 9 | `05eb8fb` | fix(reactions): контекстное меню: 7 базовых реакций + «⋯» |
+| 10 | `3480d84` | fix(reactions): убрать дублирование emoji в футере сообщения |
+| 11 | `8ef1376` | fix(reactions): ReactionPicker как Popup (не перекрывает аватар) |
+| 12 | `b67c32f` | fix(reactions): compile — Popup import: ui.popup → ui.window |
+| 13 | `0aa999a` | fix(reactions): увеличить зазор между сообщениями до 8dp + ReactionPicker в зазоре |
+| 14 | `8c897bb` | fix(reactions): компактный пиалет (28dp) + зазор 12dp |
+| 15 | `b38172c` | feat(reactions): реакции ВНУТРИ bubble + toggle on tap |
+| 16 | `dd8f0a6` | fix(reactions): убрать unnecessary safe call на non-null List |
+| 17 | `11e7f89` | fix(reactions): 3 фикса — шире на 10%, убрать пустоту, dismiss при тапе вне |
+
+### Паттерны VK web заимствованы
+
+| VK web класс | PinoK реализация |
+|--------------|-----------------|
+| `ConvoMessageWithoutBubble__reactions` | Чипы реакций ВНУТРИ bubble |
+| `ConvoMessageWithoutBubble__postFastReactions` | Кнопка 😊 внутри bubble (когда нет реакций) |
+| `ConvoMessageFastReactionsMenu__trigger` | Тап по 😊 → Popup пиалет |
+| `PeerTitle__icon` | Emoji рядом с именем автора |
+| `ConvoMessageInfoWithoutBubbles` | Время + ✓✓ в футере bubble |
