@@ -12775,6 +12775,13 @@ class VKApiClient(
                         val w = aObj.getAsJsonObject("wall") ?: return@mapNotNull null
                         Attachment(type = type, wall = parsePostMini(w))
                     }
+                    // P0.46-share-comment: wall_reply — комментарий к посту как вложение.
+                    // При «Поделиться комментарием» → messages.send attachment=wall_reply.
+                    // VK API возвращает type="wall_reply" с полем wall_reply (Comment object).
+                    "wall_reply" -> {
+                        val wr = aObj.getAsJsonObject("wall_reply") ?: return@mapNotNull null
+                        Attachment(type = type, wallReply = parseComment(wr))
+                    }
                     "poll" -> {
                         val p = aObj.getAsJsonObject("poll") ?: return@mapNotNull null
                         Attachment(type = type, poll = parsePoll(p))
