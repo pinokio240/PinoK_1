@@ -111,6 +111,10 @@ data class Attachment(
     @SerializedName("video_message") val videoMessage: VideoMessage? = null,
     // Fix #99: wall-вложение в сообщениях (репост поста в ЛС).
     @SerializedName("wall")   val wall: Post? = null,
+    // P0.46-share-comment: wall_reply — комментарий к посту как вложение
+    // (при «Поделиться комментарием» → messages.send attachment=wall_reply).
+    // VK API возвращает type="wall_reply" с полем wall_reply (Comment object).
+    @SerializedName("wall_reply") val wallReply: Comment? = null,
     // Sprint 3 #13: стикеры в сообщениях.
     @SerializedName("sticker") val sticker: StickerAttachment? = null,
     // Sprint 4: опросы в постах.

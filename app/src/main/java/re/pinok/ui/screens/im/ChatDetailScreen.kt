@@ -6772,6 +6772,26 @@ private fun MessageBubble(
                         )
                     }
                 }
+                // P0.46-share-comment: wall_reply — комментарий к посту как вложение.
+                // VK web: AttachWallNew--withReply + AttachWallNew__WallReply «Комментарий к посту».
+                // Тап → переход к оригинальному посту с reply=comment_id.
+                val wallReplyAttachments = message.attachments
+                    ?.filter { it.type == "wall_reply" && it.wallReply != null }
+                    ?.mapNotNull { it.wallReply }
+                if (wallReplyAttachments != null) {
+                    for (replyComment in wallReplyAttachments) {
+                        WallReplyAttachmentCard(
+                            comment = replyComment,
+                            textColor = textColor,
+                            onClick = {
+                                // Переход к оригинальному посту: wall{ownerId}_{postId}?reply={commentId}
+                                val ownerId = replyComment.replyToComment ?: 0L
+                                val postUrl = "https://vk.ru/wall${ownerId}_${replyComment.id}"
+                                onUrlClick(postUrl)
+                            },
+                        )
+                    }
+                }
                 // Sprint 3 #12: голосовые сообщения в пузыре.
                 // Fix #114: VK шлёт голосовые двумя способами:
                 //   1. type="doc" + doc.audio_msg  (старый формат, редко)
@@ -7462,6 +7482,52 @@ private fun MessageBubble(
         }
     }  // closes Column (with swipe offset)
     }  // closes Box (swipe wrapper)
+}
+
+/** P0.46-share-comment: карточка wall_reply (комментарий к посту) в сообщении.
+ *  VK web: AttachWallNew--withReply + AttachWallNew__WallReply «Комментарий к посту». */
+@Composable
+private fun WallReplyAttachmentCard(
+    comment: re.pinok.data.model.Comment,
+    textColor: Color,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(textColor.copy(alpha = 0.06f))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            Icons.AutoMirrored.Outlined.Reply,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = textColor.copy(alpha = 0.5f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Комментарий к посту",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = textColor.copy(alpha = 0.6f),
+            )
+            if (comment.text.isNotBlank()) {
+                Text(
+                    text = comment.text.take(200),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor.copy(alpha = 0.8f),
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
 }
 
 /** Fix #99: мини-карточка wall-вложения в сообщении (превью поста). */
