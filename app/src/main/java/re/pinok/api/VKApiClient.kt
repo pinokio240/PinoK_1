@@ -12586,6 +12586,11 @@ class VKApiClient(
             // Для nullable-семантики оборачиваем: 0 → null (нет ответа).
             replyToUser = safeLong(o.get("reply_to_user")).takeIf { it != 0L },
             replyToComment = safeLong(o.get("reply_to_comment")).takeIf { it != 0L },
+            // P0.46-share-comment: owner_id и post_id — есть в wall_reply attachment
+            // (VK API возвращает их в объекте комментария при пересылке в сообщении).
+            // Нужны для перехода к оригинальному посту: onWallClick(Post(ownerId, postId)).
+            ownerId = safeLong(o.get("owner_id")),
+            postId = safeLong(o.get("post_id")),
             // Fix #234: attachments в комментариях раньше терялись → фото/видео/аудио
             // в комментариях не отображались. Теперь парсятся тем же хелпером, что
             // и для сообщений/постов.
