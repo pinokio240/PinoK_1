@@ -990,10 +990,7 @@ fun PostDetailScreen(
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    // P0.46-navbar-trim: убран .union(navigationBars) — оставлял ~48dp
-                    // пустого пространства внизу когда клавиатура скрыта. Только ime:
-                    // закрыт → padding=0, контент в самом низу; открыт → padding=клавиатура.
-                    .windowInsetsPadding(WindowInsets.ime),
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Кнопка вложения.
