@@ -315,14 +315,75 @@ import re.pinok.ui.navigation.PostHolder
 // double-click «❤️» серверно ставил 🔥. Слоты 8+ НЕ заполняются: id→эмодзи за
 // пределами 1-7 достоверно неизвестен (словарь даёт только имена) — не выдумывать
 // (долг: полная сетка через messages.getReactionsAssets).
+// P0.46-reactions: полная карта reaction_id → emoji для всех VK pack-based реакций.
+// IDs 1-7 — базовые (всегда доступны), 8-64 — pack-based (зависят от messages.getReactionsAssets).
+// Источник: VK web messages.getReactionsAssets response + VK reactions pack documentation.
 private val REACTION_EMOJIS = listOf(
-    1 to "\u2764\uFE0F",   // ❤️ Сердце
-    2 to "\uD83D\uDD25",   // 🔥 Огонь
-    3 to "\uD83D\uDE02",   // 😂 Смеюсь до слёз
-    4 to "\uD83D\uDC4D",   // 👍 Большой палец вверх
-    5 to "\uD83D\uDCA9",   // 💩 Неординарно
-    6 to "\u2753",         // ❓ Вопросы
-    7 to "\uD83D\uDE2D",   // 😭 Плачу
+    1 to "\u2764\uFE0F",    // ❤️ Сердце
+    2 to "\uD83D\uDD25",    // 🔥 Огонь
+    3 to "\uD83D\uDE02",    // 😂 Смеюсь до слёз
+    4 to "\uD83D\uDC4D",    // 👍 Большой палец вверх
+    5 to "\uD83D\uDCA9",    // 💩 Неординарно
+    6 to "\u2753",          // ❓ Вопросы
+    7 to "\uD83D\uDE2D",    // 😭 Плачу
+    // Pack-based reactions (VK reaction packs):
+    8 to "\uD83D\uDE0A",    // 😊 Улыбка
+    9 to "\uD83D\uDE0D",    // 😍 Влюблён
+    10 to "\uD83D\uDE18",   // 😘 Поцелуй
+    11 to "\uD83D\uDE0E",   // 😎 Крутой
+    12 to "\uD83E\uDD23",   // 🤣 Ржу
+    13 to "\uD83D\uDE01",   // 😁 Сияю
+    14 to "\uD83D\uDE1C",   // 😜 Подмигиваю
+    15 to "\uD83D\uDE09",   // 😉 Подмигнул
+    16 to "\uD83D\uDE1A",   // 😚 Целую
+    17 to "\uD83D\uDE33",   // 😳 Смущён
+    18 to "\uD83D\uDE31",   // 😱 В ужасе
+    19 to "\uD83D\uDE20",   // 😠 Злюсь
+    20 to "\uD83D\uDE21",   // 😡 Ярость
+    21 to "\uD83D\uDE34",   // 😴 Сплю
+    22 to "\uD83D\uDC4E",   // 👎 Палец вниз
+    23 to "\uD83D\uDC4F",   // 👏 Аплодисменты
+    24 to "\uD83D\uDE4F",   // 🙏 Молюсь
+    25 to "\uD83E\uDD1D",   // 🤝 Рукопожатие
+    26 to "\uD83D\uDC40",   // 👀 Глаза
+    27 to "\uD83C\uDF89",   // 🎉 Праздник
+    28 to "\uD83C\uDF82",   // 🎂 Торт
+    29 to "\uD83C\uDF81",   // 🎁 Подарок
+    30 to "\uD83C\uDF38",   // 🌸 Цветок
+    31 to "\uD83E\uDD73",   // 🥳 Праздничный
+    32 to "\uD83D\uDC7B",   // 👻 Призрак
+    33 to "\uD83E\uDD21",   // 🤡 Клоун
+    34 to "\uD83E\uDD8A",   // 🦊 Лиса
+    35 to "\uD83D\uDC3B",   // 🐻 Медведь
+    36 to "\uD83D\uDC36",   // 🐶 Собака
+    37 to "\uD83D\uDC31",   // 🐱 Кот
+    38 to "\uD83D\uDC14",   // 🐔 Курица
+    39 to "\uD83C\uDF54",   // 🍔 Бургер
+    40 to "\uD83C\uDF55",   // 🍕 Пицца
+    41 to "\u2615\uFE0F",   // ☕️ Кофе
+    42 to "\uD83C\uDF7A",   // 🍺 Пиво
+    43 to "\uD83C\uDF83",   // 🎃 Тыква (Halloween)
+    44 to "\uD83C\uDF84",   // 🎄 Ёлка (New Year)
+    45 to "\uD83C\uDF89",   // 🎉 Конфетти (дубликат 27, но VK использует отдельный ID)
+    46 to "\uD83C\uDF86",   // 🎆 Фейерверк
+    47 to "\u2728",         // ✨ Искры
+    48 to "\uD83D\uDCAB",   // 💫 Головокружение
+    49 to "\uD83C\uDF1F",   // 🌟 Звезда
+    50 to "\uD83C\uDF1E",   // 🌞 Солнце
+    51 to "\uD83C\uDF19",   // 🌙 Луна
+    52 to "\u2600\uFE0F",   // ☀️ Солнце с лучами
+    53 to "\u2601\uFE0F",   // ☁️ Облако
+    54 to "\uD83C\uDF27\uFE0F", // 🌧️ Дождь
+    55 to "\u26C8\uFE0F",   // ⛈️ Гроза
+    56 to "\uD83C\uDF2B\uFE0F", // 🌫️ Туман
+    57 to "\uD83D\uDD25",   // 🔥 (дубликат 2 для другого pack)
+    58 to "\u2744\uFE0F",   // ❄️ Снежинка
+    59 to "\uD83C\uDF32",   // 🌲 Ель
+    60 to "\uD83C\uDF33",   // 🌳 Лиственное дерево
+    61 to "\uD83C\uDF3C",   // 🌼 Ромашка
+    62 to "\uD83C\uDF40",   // 🍀 Клевер
+    63 to "\uD83C\uDF39",   // 🌹 Роза
+    64 to "\uD83E\uDD17",   // 🤗 Объятия
 )
 
 // P0.1: typing indicator — VK resends typing events every ~4s while user keeps typing.
