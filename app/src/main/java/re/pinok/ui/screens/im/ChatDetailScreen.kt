@@ -7197,39 +7197,14 @@ private fun MessageBubble(
             )
         }
 
-        // P0.46-reactions-inline: VK web паттерн ConvoMessageWithoutBubble__postFastReactions —
-        // inline кнопка 😊 (smile_add_outline) под каждым сообщением для быстрой реакции.
-        // VK web: <button class="ConvoMessageFastReactionsMenu__trigger ConvoMessageWithoutBubble__postFastReactionsTrigger">
-        // Показываем только если: сообщение не в selection mode, нет grid диалога,
-        // и нет активной реакции от текущего пользователя (иначе ReactionBar уже показывает её).
-        if (!selectionMode && !showReactionGrid) {
-            val hasMyReaction = message.reactions?.userReaction != null
-            if (!hasMyReaction) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(
-                            start = if (isOut) 0.dp else 4.dp,
-                            end = if (isOut) 4.dp else 0.dp,
-                            top = 0.dp,
-                            bottom = 2.dp,
-                        ),
-                    horizontalArrangement = if (isOut) Arrangement.End else Arrangement.Start,
-                ) {
-                    IconButton(
-                        onClick = { onShowReactionPicker() },
-                        modifier = Modifier.size(28.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.EmojiEmotions,
-                            contentDescription = "Поставить реакцию",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        )
-                    }
-                }
-            }
-        }
+        // P0.46-reactions-inline: убрана постоянная inline-кнопка 😊 — она перекрывала
+        // контент сообщения (fillMaxWidth + Row занимали место даже когда не нужна).
+        // Реакции доступны через:
+        // 1. Long-press → контекстное меню → пиалет реакций (7 базовых + «⋯»)
+        // 2. ReactionBar под сообщением (если есть реакции) → тап → пиалет
+        // 3. Double-click (если включён) → быстрая реакция
+        // VK web показывает inline-кнопку только при hover (desktop) — на тач-устройствах
+        // это не применимо, long-press — стандартный Android-паттерн.
 
         // #CHANNEL-DONUT (Task 67 #CHANNELS-API/#CHANNEL-WALL-MODE): счётчики
         // просмотров/комментариев и донат-paywall показываем ТОЛЬКО для постов
