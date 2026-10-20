@@ -189,8 +189,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -5186,7 +5184,10 @@ fun ChatDetailScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         horizontal = 12.dp, vertical = 8.dp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    // P0.46-reactions: spacedBy 8dp — увеличенный зазор между сообщениями,
+                    // чтобы ReactionBar (под bubble) чётко помещался в промежутке и не
+                    // перекрывал контент следующего сообщения.
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                     reverseLayout = true,
                 ) {
                     // reverseLayout=true: индекс 0 (новое) — внизу, конец (старое) — наверху.
@@ -7402,25 +7403,15 @@ private fun MessageBubble(
             }
         }
 
-        // ReactionPicker — панель эмодзи (как Popup — не занимает место в layout,
-        // перекрывает контент, закрывается при тапе вне).
+        // ReactionPicker — панель эмодзи (рендерится под bubble, в зазоре
+        // между сообщениями — spacedBy(8dp) даёт достаточно места).
         if (showReactionPicker) {
-            Popup(
-                alignment = Alignment.BottomCenter,
-                onDismissRequest = onHideReactionPicker,
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true,
-                ),
-            ) {
-                ReactionPicker(
-                    currentReaction = message.reactions?.userReaction,
-                    onReact = onReact,
-                    onDismiss = onHideReactionPicker,
-                    onShowMore = onShowReactionGrid,
-                )
-            }
+            ReactionPicker(
+                currentReaction = message.reactions?.userReaction,
+                onReact = onReact,
+                onDismiss = onHideReactionPicker,
+                onShowMore = onShowReactionGrid,
+            )
         }
 
         // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯»).
