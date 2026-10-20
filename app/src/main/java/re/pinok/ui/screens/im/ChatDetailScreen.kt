@@ -8590,7 +8590,7 @@ private fun ChannelHistoryPinnedBanner(
     }
 }
 
-/** Пикер реакций — горизонтальная панель эмодзи. */
+/** Пикер реакций — горизонтальная панель эмодзи (скроллируемая). */
 @Composable
 private fun ReactionPicker(
     currentReaction: Int?,
@@ -8598,30 +8598,32 @@ private fun ReactionPicker(
     onDismiss: () -> Unit,
     onShowMore: (() -> Unit)? = null,
 ) {
-    Row(
+    // P0.46-reactions: LazyRow вместо Row — 64 реакции не помещаются на экране.
+    // Скролл горизонтальный, как в VK web (ConvoMessageFastReactionsMenu — scrollable).
+    androidx.compose.foundation.lazy.LazyRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        for ((id, emoji) in REACTION_EMOJIS) {
+        items(REACTION_EMOJIS) { (id, emoji) ->
             val isHighlighted = currentReaction == id
             val bgColor = if (isHighlighted)
                 MaterialTheme.colorScheme.primaryContainer
             else Color.Transparent
             Box(
                 modifier = Modifier
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(bgColor)
                     .clickable {
                         onReact(id)
                         onDismiss()
-                    }
-                    .padding(6.dp),
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(text = emoji, fontSize = 22.sp)
@@ -8629,17 +8631,19 @@ private fun ReactionPicker(
         }
         // #IM-REACTIONS-GRID: кнопка «⋯» — расширенная сетка.
         if (onShowMore != null) {
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable {
-                        onDismiss()
-                        onShowMore()
-                    }
-                    .padding(6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(text = "\u22EF", fontSize = 22.sp)
+            item {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            onDismiss()
+                            onShowMore()
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(text = "\u22EF", fontSize = 22.sp, textAlign = TextAlign.Center)
+                }
             }
         }
     }
