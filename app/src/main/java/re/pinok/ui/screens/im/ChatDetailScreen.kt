@@ -5184,9 +5184,7 @@ fun ChatDetailScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         horizontal = 12.dp, vertical = 8.dp,
                     ),
-                    // P0.46-reactions: spacedBy 12dp — зазор между сообщениями
-                    // (достаточный для ReactionPicker высотой ~40dp + отступы).
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     reverseLayout = true,
                 ) {
                     // reverseLayout=true: индекс 0 (новое) — внизу, конец (старое) — наверху.
@@ -7173,36 +7171,66 @@ private fun MessageBubble(
                     // PeerTitle__icon показывает emoji рядом с именем (если есть userReaction).
                     // Дублирование в футере закрывало аватар собеседника.
                 }
+
+                // P0.46-reactions-in-bubble: реакции ВНУТРИ bubble (как VK web
+                // ConvoMessageWithoutBubble__reactions внутри __wrapper).
+                // Если есть реакции — показываем чипы (emoji + count).
+                // Тап по чипу своей реакции → снять (toggle off).
+                // Тап по чипу чужой реакции → поставить свою.
+                // Если реакций нет — показываем маленькую кнопку 😊 для вызова пиалета.
+                val msgReactions = message.reactions
+                if (msgReactions != null && msgReactions.count > 0) {
+                    val chipItems = msgReactions.items
+                        ?.filter { it.count > 0 }
+                        ?.sortedByDescending { it.count }
+                        ?.take(6)
+                        ?: emptyList()
+                    if (chipItems.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            for (chip in chipItems) {
+                                val isMine = msgReactions.userReactionActive(chip.id)
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (isMine) textColor.copy(alpha = 0.15f)
+                                            else textColor.copy(alpha = 0.08f)
+                                        )
+                                        .clickable {
+                                            onReact(chip.id)
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(text = reactionEmoji(chip.id), fontSize = 13.sp)
+                                    Text(
+                                        text = chip.count.toString(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = textColor.copy(alpha = 0.8f),
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        InlineReactionButton(isOut = isOut, textColor = textColor, onClick = onShowReactionPicker)
+                    }
+                } else {
+                    InlineReactionButton(isOut = isOut, textColor = textColor, onClick = onShowReactionPicker)
+                }
             }
         }
         } // Fix #244: закрытие CompositionLocalProvider (LocalAttachmentSelection)
 
-        // #CHANNEL-POST-UI: у канального поста с разбивкой реакций по эмодзи
-        // (items) чипы рисуются в футере ChannelPostInfoRow — отдельный
-        // ReactionBar под bubble НЕ дублируем (иначе реакции покажутся дважды:
-        // и чипами, и агрегированным баром). Для обычных сообщений и канальных
-        // постов без items (нет разбивки) ReactionBar остаётся (агрегированный
-        // счётчик + тап по picker). Чипы в футере сами кликабельны (toggle).
-        val channelChipsRender = message.peerId < 0 &&
-            (message.reactions?.items?.isNotEmpty() == true)
-        if (!channelChipsRender) {
-            // ReactionBar — показ реакций под bubble.
-            ReactionBar(
-                reactions = message.reactions,
-                isOut = isOut,
-                onReact = onReact,
-                onTap = { onShowReactionPicker() },
-            )
-        }
-
-        // P0.46-reactions-inline: убрана постоянная inline-кнопка 😊 — она перекрывала
-        // контент сообщения (fillMaxWidth + Row занимали место даже когда не нужна).
-        // Реакции доступны через:
-        // 1. Long-press → контекстное меню → пиалет реакций (7 базовых + «⋯»)
-        // 2. ReactionBar под сообщением (если есть реакции) → тап → пиалет
-        // 3. Double-click (если включён) → быстрая реакция
-        // VK web показывает inline-кнопку только при hover (desktop) — на тач-устройствах
-        // это не применимо, long-press — стандартный Android-паттерн.
+        // P0.46-reactions-in-bubble: реакции теперь ВНУТРИ bubble (чипы + кнопка 😊).
+        // Старый ReactionBar снаружи bubble убран — не нужен (дублировал).
+        // Для канальных постов с items — ChannelPostInfoRow ниже рисует чипы отдельно.
 
         // #CHANNEL-DONUT (Task 67 #CHANNELS-API/#CHANNEL-WALL-MODE): счётчики
         // просмотров/комментариев и донат-paywall показываем ТОЛЬКО для постов
@@ -7492,6 +7520,29 @@ private fun WallAttachmentCard(
                     .height(100.dp)
                     .clip(RoundedCornerShape(4.dp)),
                 contentScale = ContentScale.Crop,
+            )
+        }
+    }
+}
+
+// P0.46-reactions-in-bubble: маленькая inline-кнопка 😊 внутри bubble.
+// Показывается когда нет реакций — тап → onShowReactionPicker (пиалет 7 + «⋯»).
+@Composable
+private fun InlineReactionButton(isOut: Boolean, textColor: Color, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(top = 2.dp),
+        horizontalArrangement = if (isOut) Arrangement.End else Arrangement.Start,
+    ) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.size(24.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.EmojiEmotions,
+                contentDescription = "Поставить реакцию",
+                modifier = Modifier.size(16.dp),
+                tint = textColor.copy(alpha = 0.4f),
             )
         }
     }
