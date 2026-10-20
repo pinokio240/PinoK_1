@@ -16424,3 +16424,68 @@ NotificationsScreen, FeedScreen, VideoPlayerScreen.
 | `ConvoMessageFastReactionsMenu__trigger` | Тап по 😊 → Popup пиалет |
 | `PeerTitle__icon` | Emoji рядом с именем автора |
 | `ConvoMessageInfoWithoutBubbles` | Время + ✓✓ в футере bubble |
+
+## ✅ P0.46-comments-share: УСПЕХ — «Поделиться комментарием» + wall_reply (2026-10-20)
+
+### Что реализовано
+
+1. **«Поделиться комментарием»** (long-press → меню → «Поделиться»):
+   - `messages.send(attachment=wall_reply{ownerId}_{commentId})`
+   - ShareSheet с `attachments = ["wall_reply{ownerId}_{id}"]`
+   - Кнопка в контекстном меню для ВСЕХ комментариев (своих и чужих)
+   - Применено во ВСЕХ экранах (PostDetailScreen, FeedScreen, ClipInteractionsSheet, VideoPlayerScreen, AdminCommentsScreen)
+
+2. **wall_reply парсинг** (parseAttachmentsArray):
+   - Добавлена ветка `"wall_reply" -> parseComment(wr)` в when блок
+   - Model: `Attachment.wallReply: Comment?` (SerializedName "wall_reply")
+   - Раньше: `else -> Attachment(type=type)` — пустой Attachment, wallReply=null
+
+3. **wall_reply рендер в диалогах** (WallReplyAttachmentCard):
+   - Карточка с иконкой ↩ + «Комментарий к посту» + текст (4 строки max)
+   - Тап → `onUrlClick("https://vk.ru/wall{ownerId}_{postId}?reply={commentId}")` — быстрый переход
+   - VK web паттерн: AttachWallNew--withReply + AttachWallNew__WallReply
+
+4. **Унификация CommentItem** (заимствование, не дублирование):
+   - `CommentItem` и `ReplyItem` из PostDetailScreen.kt → `internal`
+   - FeedScreen: CommentCard + CommentRow → CommentItem (-447 строк)
+   - ClipInteractionsSheet: локальный CommentItem → PostDetailScreen.CommentItem
+   - VideoPlayerScreen: VideoCommentItem → CommentItem
+   - AdminCommentsScreen: AdminCommentCard → CommentItem
+   - Итого: -553/+209 строк (удалено ~344 строки дублированного кода)
+
+5. **Long-press меню для ReplyItem** (ответы в ветке):
+   - combinedClickable(onLongClick) на Row
+   - «Ответить» + «Поделиться» (для всех)
+   - «Редактировать» + «Удалить» (для своих)
+
+### Коммиты P0.46-comments-share
+
+| Коммит | Описание |
+|--------|----------|
+| `5d33583` | feat: «Поделиться» комментарием (wall_reply attachment) |
+| `e7bc8ae` | fix: Comment не имеет ownerId, используем post.ownerId |
+| `1f24caf` | fix: post is non-null, убрать ? (Unnecessary safe call) |
+| `67e4362` | fix: добавить «Поделиться» в меню ЧУЖИХ комментариев |
+| `842e004` | fix: long-press меню и «Поделиться» для ответов в ветке |
+| `8aaa6f7` | refactor: унификация CommentItem (заимствование, не дублирование) |
+| `d69b56c` | fix: AdminCommentsScreen onDelete type mismatch |
+| `80aa56a` | feat: wall_reply вложение (комментарий в сообщении) |
+| `47e2908` | fix: parseAttachmentsArray добавить ветку wall_reply |
+
+### Паттерны VK web заимствованы
+
+| VK web | PinoK |
+|--------|-------|
+| `data-testid="comment-share"` | DropdownMenuItem «Поделиться» в long-press меню |
+| `attachment=wall_reply{ownerId}_{commentId}` | ShareSheet attachments |
+| `AttachWallNew--withReply` | WallReplyAttachmentCard |
+| `AttachWallNew__WallReply` «Комментарий к посту» | Text «Комментарий к посту» |
+| `href=wall{ownerId}_{postId}?reply={commentId}` | onUrlClick → быстрый переход |
+| `parseAttachmentsArray` ветка wall_reply | parseComment(wr) → Attachment.wallReply |
+
+### Полный список коммитов P0.46 (все)
+
+Комментарии: 79c111a, c9d4ff8, bfc9696, 5d33583, e7bc8ae, 1f24caf, 67e4362, 842e004, 8aaa6f7, d69b56c, 80aa56a, 47e2908
+Реакции: 6241cea, 2fce2d4, 25d7923, 6b3da73, 73a7f15, 05eb8fb, 3480d84, 8ef1376, b67c32f, 0aa999a, 8c897bb, b38172c, dd8f0a6, 11e7f89, 320100f
+IME (отменены): c450386, b3adf03, a77bded, 560985e, d495872, 8135d2f, 2997d27, 4004b62, 66d6351, b6894a5, 292b163, 2c5d43c, f8fff28, 0aa999a, 8c897bb
+Документация: aabed46, 8e0ad45, 68ddd28
