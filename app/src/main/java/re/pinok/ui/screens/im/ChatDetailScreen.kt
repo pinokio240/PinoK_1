@@ -8614,14 +8614,17 @@ private fun ReactionGridDialog(
                                     },
                                 contentAlignment = Alignment.Center,
                             ) {
+                                // P0.46-reactions-fix: Text(emoji) ПОД AsyncImage как fallback.
+                                // AsyncImage(vkuserphoto.ru URLs) может не загрузиться без
+                                // auth headers → показывает пустоту. Emoji всегда видна.
+                                // Если картинка загрузится — она перекроет emoji.
+                                Text(text = reactionEmoji(rid), fontSize = 26.sp)
                                 if (img != null && img.isNotBlank()) {
                                     AsyncImage(
                                         model = img,
                                         contentDescription = null,
                                         modifier = Modifier.size(34.dp).clip(CircleShape),
                                     )
-                                } else {
-                                    Text(text = reactionEmoji(rid), fontSize = 26.sp)
                                 }
                             }
                         }
