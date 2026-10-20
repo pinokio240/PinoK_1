@@ -7165,15 +7165,11 @@ private fun MessageBubble(
                             tint = textColor.copy(alpha = 0.7f),
                         )
                     }
-                    // #ARCH-CONTAINERS 3.7-1: reactions в :core:data — захват ДО проверки.
-                    val reactions = message.reactions
-                    if (reactions != null && reactions.count > 0) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = reactionEmoji(reactions.userReaction ?: 0),
-                            fontSize = 12.sp,
-                        )
-                    }
+                    // P0.46-reactions: убрана emoji реакции в футере — она дублировала
+                    // ReactionBar (под bubble) и PeerTitle__icon (рядом с именем автора).
+                    // ReactionBar показывает emoji + count (полная информация),
+                    // PeerTitle__icon показывает emoji рядом с именем (если есть userReaction).
+                    // Дублирование в футере закрывало аватар собеседника.
                 }
             }
         }
