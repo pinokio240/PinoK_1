@@ -1505,7 +1505,11 @@ fun PostDetailScreen(
  * чтобы комментарий имел те же функции, что и сообщение.
  */
 @Composable
-private fun CommentItem(
+// P0.46-unify-comments: internal — переиспользуется другими экранами
+// (FeedScreen, ClipInteractionsSheet, VideoPlayerScreen, AdminCommentsScreen).
+// Один общий рендер комментария: аватар, имя, текст, вложения, лайк,
+// long-press меню (Ответить/Редактировать/Удалить/Поделиться), ветка ответов.
+internal fun CommentItem(
     comment: Comment,
     profiles: Map<Long, UserProfile>,
     // Fix #209: callback кнопки «Ответить».
@@ -1973,7 +1977,9 @@ private fun CommentItem(
  * чтобы ветка визуально отличалась от корневых комментариев.
  */
 @Composable
-private fun ReplyItem(
+// P0.46-unify-comments: internal — переиспользуется внешними экранами, где
+// нужна компактная ветка ответов (CommentItem рендерит ReplyItem внутри).
+internal fun ReplyItem(
     reply: Comment,
     profiles: Map<Long, UserProfile>,
     parentComment: Comment?,

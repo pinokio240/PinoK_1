@@ -11,10 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -41,18 +39,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.Comment
+import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.screens.feed.CommentItem
 import re.pinok.util.AppLog
-import re.pinok.util.toAbsoluteTime
 
 // ═══════════════════════════════════════════════════════════════════════════
 // C8 (#ADMIN-COMMENTS): «Комментарии» сообщества — фильтры модерации и лента
@@ -119,6 +116,10 @@ fun AdminCommentsScreen(
     var replyEntry by remember { mutableStateOf<RecentComment?>(null) }
     var banEntry by remember { mutableStateOf<RecentComment?>(null) }
     var busyCommentId by remember { mutableStateOf<Long?>(null) }
+    // P0.46-unify-comments: шаринг комментария (wall_reply{-groupId}_{cid})
+    // и id текущего юзера (для isOwnComment в CommentItem).
+    var sharingComment by remember { mutableStateOf<Comment?>(null) }
+    val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
 
     fun loadCommentsAll() {
         scope.launch {
@@ -514,9 +515,12 @@ fun AdminCommentsScreen(
                     AdminCommentCard(
                         entry = entry,
                         busy = busyCommentId == entry.comment.id,
+                        currentUserId = currentUserId,
+                        postOwnerId = -groupId,
                         onDelete = { deleteComment(entry) },
                         onReply = { replyEntry = entry },
                         onBan = { banEntry = entry },
+                        onShareComment = { sharingComment = it },
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
                 }
@@ -586,6 +590,16 @@ fun AdminCommentsScreen(
             },
         )
     }
+
+    // P0.46-unify-comments: ShareSheet для комментария (wall_reply{-groupId}_{cid}).
+    val sComment = sharingComment
+    if (sComment != null) {
+        ShareSheet(
+            attachments = listOf("wall_reply${-groupId}_${sComment.id}"),
+            onDismiss = { sharingComment = null },
+            onSuccess = { sharingComment = null },
+        )
+    }
 }
 
 /** C8: строка тумблера фильтра (паттерн SwitchRow из AdminSectionsScreen). */
@@ -611,45 +625,52 @@ private fun CommentFilterSwitch(
     }
 }
 
-/** C8: карточка комментария из ленты. */
+/**
+ * C8: карточка комментария из ленты.
+ *
+ * P0.46-unify-comments: рендер самого комментария делегирован общему
+ * [CommentItem] из PostDetailScreen (аватар, имя, текст, вложения, лайк,
+ * long-press меню с «Ответить»/«Поделиться»/«Редактировать»/«Удалить»).
+ * Админ-действия «Удалить/Ответить/Бан автора» остаются как отдельная
+ * Row под CommentItem — они работают даже для ЧУЖИХ комментариев
+ * (CommentItem показывает «Удалить» только для своих).
+ */
 @Composable
 private fun AdminCommentCard(
     entry: RecentComment,
     busy: Boolean,
+    currentUserId: Long,
+    postOwnerId: Long,
     onDelete: () -> Unit,
     onReply: () -> Unit,
     onBan: () -> Unit,
+    onShareComment: (Comment) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            val photo = entry.authorPhoto
-            if (photo != null) {
-                AsyncImage(
-                    model = photo,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(34.dp).clip(CircleShape),
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    entry.authorName,
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
-                )
-                Text(
-                    entry.comment.date.toAbsoluteTime(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        // P0.46-unify-comments: основной рендер комментария — общий CommentItem.
+        // profiles-карта строится из одного автора (entry.authorName/Photo не используются
+        // напрямую — CommentItem берёт профиль из profiles[comment.fromId]).
+        val authorProfile = remember(entry) {
+            UserProfile(
+                id = entry.comment.fromId,
+                firstName = entry.authorName,
+                lastName = "",
+                photo100 = entry.authorPhoto,
+            )
         }
-        Text(
-            entry.comment.text,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 4.dp),
+        val profilesMap = remember(authorProfile) { mapOf(entry.comment.fromId to authorProfile) }
+        CommentItem(
+            comment = entry.comment,
+            profiles = profilesMap,
+            postOwnerId = postOwnerId,
+            currentUserId = currentUserId,
+            onReply = onReply,
+            onShareComment = onShareComment,
+            onEditComment = {},
+            onDeleteComment = onDelete,
         )
+        // Превью поста-источника (админ-контекст: важно видеть, к какому посту
+        // относится комментарий — для модераторских действий).
         val postPreview = entry.postText.ifBlank { "запись без текста" }
         Text(
             "Пост ${entry.postId}: ${postPreview.take(80)}",
@@ -658,6 +679,8 @@ private fun AdminCommentCard(
             maxLines = 1,
             modifier = Modifier.padding(top = 2.dp),
         )
+        // Админ-действия: CommentItem показывает «Удалить» только для своих комментариев;
+        // админ может удалить ЧУЖОЙ — отдельная кнопка ниже.
         Row(modifier = Modifier.padding(top = 2.dp)) {
             TextButton(onClick = onDelete, enabled = !busy) { Text("Удалить") }
             TextButton(onClick = onReply, enabled = !busy) { Text("Ответить") }

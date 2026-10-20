@@ -65,10 +65,9 @@ import re.pinok.api.VKApiClient
 import re.pinok.data.model.Comment
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.screens.feed.CommentItem
 import re.pinok.util.AppLog
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 private const val TAG = "ClipInteractionsSheet"
 
@@ -372,6 +371,9 @@ fun ClipCommentsSheet(
     var loading by remember { mutableStateOf(true) }
     var sending by remember { mutableStateOf(false) }
     var newComment by remember { mutableStateOf("") }
+    // P0.46-unify-comments: шаринг комментария (wall_reply{clip.ownerId}_{cid}).
+    var sharingComment by remember { mutableStateOf<Comment?>(null) }
+    val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
 
     fun loadComments() {
         scope.launch {
@@ -393,6 +395,17 @@ fun ClipCommentsSheet(
     }
 
     LaunchedEffect(clip.id, clip.ownerId) { loadComments() }
+
+    // P0.46-unify-comments: ShareSheet для комментария клипа.
+    val sComment = sharingComment
+    if (sComment != null) {
+        ShareSheet(
+            attachments = listOf("wall_reply${clip.ownerId}_${sComment.id}"),
+            onDismiss = { sharingComment = null },
+            onSuccess = { sharingComment = null },
+        )
+        return
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -452,7 +465,16 @@ fun ClipCommentsSheet(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     items(comments, key = { c -> c.id }) { comment ->
-                        CommentItem(comment = comment, profiles = profiles)
+                        // P0.46-unify-comments: общий CommentItem из PostDetailScreen
+                        // (раньше был локальный simplified рендер — только аватар+имя+текст,
+                        // без лайка, ответов, вложений и long-press меню).
+                        CommentItem(
+                            comment = comment,
+                            profiles = profiles,
+                            postOwnerId = clip.ownerId,
+                            currentUserId = currentUserId,
+                            onShareComment = { sharingComment = it },
+                        )
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 16.dp),
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
@@ -589,67 +611,7 @@ private fun QuickShareButton(
     }
 }
 
-@Composable
-private fun CommentItem(
-    comment: Comment,
-    profiles: Map<Long, UserProfile>,
-) {
-    val p = profiles[comment.fromId]
-    val name = if (comment.fromId > 0) {
-        p?.let { "${it.firstName} ${it.lastName}".trim() } ?: "id${comment.fromId}"
-    } else if (comment.fromId < 0) {
-        "Сообщество"
-    } else "Гость"
-    val timeText = if (comment.date > 0) {
-        try {
-            SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
-                .format(Date(comment.date * 1000L))
-        } catch (_: Exception) { null }
-    } else null
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            p?.photo100?.let { url ->
-                AsyncImage(
-                    model = url,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (timeText != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = timeText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    )
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = comment.text,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
+// P0.46-unify-comments: локальный CommentItem удалён — используется общий
+// re.pinok.ui.screens.feed.CommentItem из PostDetailScreen (с лайком,
+// вложениями, long-press меню, веткой ответов и шарингом wall_reply).
+

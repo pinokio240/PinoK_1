@@ -105,7 +105,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -135,7 +134,6 @@ import re.pinok.ui.navigation.PostHolder
 import re.pinok.ui.navigation.Screen
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
-import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
@@ -155,7 +153,6 @@ import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
 import re.pinok.util.toCountString
 import re.pinok.util.toDurationString
-import re.pinok.util.toRelativeTime
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -1058,6 +1055,14 @@ fun FeedScreen(
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // Sprint 2, P1-3 → ShareSheet: расширенный диалог «Поделиться».
     val sharePost = remember { mutableStateOf<Post?>(null) }
+    // P0.46-unify-comments: шаринг комментария (wall_reply{ownerId}_{cid}).
+    // В FeedScreen используется в подтабе «Реакции» → «Комментарии».
+    // Comment не содержит ownerId стены — храним отдельно (для likes.getList
+    // type=comment ownerId = owner стены, к которой привязан комментарий).
+    val sharingComment = remember { mutableStateOf<Comment?>(null) }
+    val sharingCommentOwnerId = remember { mutableStateOf(0L) }
+    // P0.46-unify-comments: id текущего юзера (для isOwnComment в CommentItem).
+    val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
     // #FEED-RIGHTPANEL (19-A): правое боковое меню ленты открыто.
     // Вместо локального remember — глобальный FeedPanelState.visible (см.
     // ScreenTopBar.kt): кнопка ⋮ живёт в глобальном TopAppBar (другая композиция),
@@ -1893,14 +1898,37 @@ fun FeedScreen(
                         }
                     } else {
                         items(likedComments, key = { "like_comment_${it.ownerId}_${it.commentId}" }) { comment ->
-                            CommentCard(
-                                comment = comment,
-                                author = likedCommentAuthors[comment.fromId],
-                                onAuthorClick = { authorId ->
-                                    // Тап по карточке → профиль автора
-                                    // (юзер → UserProfileScreen, сообщество → CommunityScreen).
-                                    if (authorId < 0) onGroupClickSavePos(-authorId)
-                                    else onUserClickSavePos(authorId)
+                            // P0.46-unify-comments: общий CommentItem из PostDetailScreen.
+                            // Раньше был локальный CommentCard (LikedComment → Comment,
+                            // аватар+имя+текст+лайк). CommentItem даёт то же + вложения,
+                            // long-press меню (Ответить/Поделиться) и ветку ответов.
+                            // Likes.getList(type="comment") уже возвращает liked=true,
+                            // поэтому Post.Likes(userLikes = 1).
+                            val author = likedCommentAuthors[comment.fromId]
+                            val profilesMap = remember(author) {
+                                if (author != null) mapOf(comment.fromId to author) else emptyMap()
+                            }
+                            val asComment = remember(comment) {
+                                Comment(
+                                    id = comment.commentId,
+                                    fromId = comment.fromId,
+                                    date = comment.date,
+                                    text = comment.text,
+                                    likes = Post.Likes(
+                                        count = comment.likesCount,
+                                        userLikes = 1,
+                                        canLike = 0,
+                                    ),
+                                )
+                            }
+                            CommentItem(
+                                comment = asComment,
+                                profiles = profilesMap,
+                                postOwnerId = comment.ownerId,
+                                currentUserId = currentUserId,
+                                onShareComment = { c ->
+                                    sharingComment.value = c
+                                    sharingCommentOwnerId.value = comment.ownerId
                                 },
                             )
                         }
@@ -2229,6 +2257,18 @@ fun FeedScreen(
         ShareSheet(
             post = sharing,
             onDismiss = { sharePost.value = null },
+        )
+    }
+
+    // P0.46-unify-comments: ShareSheet для лайкнутого комментария из подтаба «Реакции».
+    // Comment не имеет ownerId — но LikesFilter.WALL_REPLY хранит ownerId стены
+    // в самом LikedComment (likes.getList type=comment возвращает owner_id стены).
+    val sComment = sharingComment.value
+    if (sComment != null) {
+        ShareSheet(
+            attachments = listOf("wall_reply${sharingCommentOwnerId.value}_${sComment.id}"),
+            onDismiss = { sharingComment.value = null },
+            onSuccess = { sharingComment.value = null },
         )
     }
 
@@ -2695,162 +2735,10 @@ private fun LikedPhotosSection(
     }
 }
 
-/**
- * #FEED-LIKES-COMMENTS (IMP-FEED-1, п.3): карточка лайкнутого комментария
- * в подтабе «Комментарии» раздела «Реакции» (снапшот §1.5:
- * wall_comments_layout_root — автор/текст/дата/`comment-like`).
- *
- * Источник данных: likes.getList(type="comment") — ПОЛНЫЕ объекты
- * комментариев ([parseLikedComment]). VKA-вызов likesGetList уже шлёт
- * extended=1, но сигнатура возвращает только items — profiles[] ответа
- * теряются; VKA в IMP-FEED-1 заморожен, поэтому автор обогащается отдельным
- * usersGetByIds на уровне экрана; не найден → дефолт (буква-фоллбэк).
- *
- * Лайк: ВСЕ элементы likes-фида уже лайкнуты пользователем (likes.getList
- * filter="likes"), поэтому начальное состояние liked=true; тап = toggle:
- *  - снять — likes.delete(type="comment") (String-тип — работает с комментами,
- *    этот путь уже используется в CommentRow CommentsBottomSheet; возвращает
- *    точный новый счётчик),
- *  - вернуть — wallLikeComment (likes.add type="comment"), счётчик
- *    оптимистично +1.
- * Ошибка → откат оптимистичного состояния.
- *
- * Тап по карточке → профиль автора (onUserClick/onGroupClick экрана).
- *
- * ОТКЛОНЕНИЕ (честно): «Пожаловаться» на комментарий НЕ добавлено —
- * web-путь comment_action_report ведёт на reports.php (legacy), в мобильном
- * API аналога нет; wall.markAsSpam работает только с постами.
- */
-@Composable
-private fun CommentCard(
-    comment: LikedComment,
-    author: UserProfile?,
-    onAuthorClick: (Long) -> Unit = {},
-) {
-    val app = SovaApp.get()
-    val scope = rememberCoroutineScope()
-    val name = author?.let { "${it.firstName} ${it.lastName}" }
-        ?: if (comment.fromId < 0) "Сообщество" else "id${comment.fromId}"
-    val photo = author?.photo100
-    // Элементы likes-фида уже лайкнуты (filter="likes") — стартуем liked=true.
-    var isLiked by remember(comment.commentId) { mutableStateOf(true) }
-    var likeCount by remember(comment.commentId) { mutableStateOf(comment.likesCount) }
-    var likeInFlight by remember(comment.commentId) { mutableStateOf(false) }
+// P0.46-unify-comments: локальный CommentCard удалён — используется общий
+// re.pinok.ui.screens.feed.CommentItem из PostDetailScreen (с лайком,
+// вложениями, long-press меню и шарингом wall_reply).
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clickable(enabled = comment.fromId != 0L) { onAuthorClick(comment.fromId) },
-        elevation = CardDefaults.cardElevation(0.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            // Аватар: AsyncImage с фоллбэком-буквой (паттерн CommentRow).
-            if (photo != null) {
-                AsyncImage(
-                    model = photo,
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp).clip(CircleShape),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(
-                    modifier = Modifier.size(36.dp).clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = name.take(1).uppercase(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (comment.text.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = comment.text,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 4,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = comment.date.toRelativeTime(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    // Лайк-кнопка комментария (toggle). Disabled в полёте.
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clickable(enabled = !likeInFlight && comment.ownerId != 0L && comment.commentId > 0) {
-                                likeInFlight = true
-                                val newLiked = !isLiked
-                                isLiked = newLiked
-                                likeCount = (likeCount + if (newLiked) 1 else -1).coerceAtLeast(0)
-                                scope.launch {
-                                    val rolledBack = try {
-                                        if (newLiked) {
-                                            !app.apiClient.wallLikeComment(ownerId = comment.ownerId, commentId = comment.commentId)
-                                        } else {
-                                            val newCount = app.apiClient.likesDelete(type = "comment", ownerId = comment.ownerId, itemId = comment.commentId)
-                                            if (newCount >= 0) {
-                                                // Точный счётчик от сервера.
-                                                likeCount = newCount.coerceAtLeast(0)
-                                                false
-                                            } else true
-                                        }
-                                    } catch (e: Exception) {
-                                        AppLog.e("FeedScreen", "comment like toggle failed", e)
-                                        true
-                                    }
-                                    if (rolledBack) {
-                                        // Ошибка — откат оптимистичного состояния.
-                                        isLiked = !newLiked
-                                        likeCount = (likeCount + if (newLiked) -1 else 1).coerceAtLeast(0)
-                                    }
-                                    likeInFlight = false
-                                }
-                            }
-                            .padding(4.dp),
-                    ) {
-                        Icon(
-                            if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
-                        )
-                        if (likeCount > 0) {
-                            Spacer(Modifier.width(3.dp))
-                            Text(
-                                text = likeCount.toString(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 // POSTCARD-REFACTOR-PLAN (этап 1): VideoThumbnail и ActionIcon вынесены в общие
 // re.pinok.ui.components (см. импорты выше). Лента использует статичное название
@@ -3044,6 +2932,10 @@ private fun CommentsBottomSheet(
     var localComments by remember { mutableStateOf<List<Comment>>(emptyList()) }
     // Волна 22: комментарий, на который отвечаем (reply-режим); null = обычный комментарий.
     var replyingToComment by remember { mutableStateOf<Comment?>(null) }
+    // P0.46-unify-comments: шаринг комментария (wall_reply{post.ownerId}_{cid})
+    // и id текущего юзера (для isOwnComment в CommentItem).
+    var sharingComment by remember { mutableStateOf<Comment?>(null) }
+    val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachmentString by remember { mutableStateOf<String?>(null) }
     var showAttachMenu by remember { mutableStateOf(false) }
@@ -3164,6 +3056,18 @@ private fun CommentsBottomSheet(
         loadComments()
     }
 
+    // P0.46-unify-comments: ShareSheet для комментария из CommentsBottomSheet.
+    // Рендерится ПЕРЕД ModalBottomSheet — поверх всего UI, как диалог «Поделиться».
+    val sComment = sharingComment
+    if (sComment != null) {
+        ShareSheet(
+            attachments = listOf("wall_reply${post.ownerId}_${sComment.id}"),
+            onDismiss = { sharingComment = null },
+            onSuccess = { sharingComment = null },
+        )
+        return
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -3199,16 +3103,20 @@ private fun CommentsBottomSheet(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(allComments, key = { it.id }) { comment ->
-                            CommentRow(
+                            // P0.46-unify-comments: общий CommentItem из PostDetailScreen.
+                            // Раньше был локальный CommentRow (аватар+имя+текст+лайк+
+                            // «Ответить»). CommentItem даёт то же + вложения, long-press
+                            // меню (Ответить/Поделиться/Редактировать/Удалить) и ветку
+                            // ответов (thread.items → ReplyItem).
+                            CommentItem(
                                 comment = comment,
-                                author = profiles[comment.fromId],
-                                postOwnerId = post.ownerId,
-                                // Волна 22: reply-режим — кнопка «Ответить» и «Ответ X»
-                                // (profiles нужен для имени автора цели ответа).
-                                onReply = { replyingToComment = comment },
                                 profiles = profiles,
+                                postOwnerId = post.ownerId,
+                                onReply = { replyingToComment = comment },
                                 onVideoClick = onVideoClick,
                                 onPhotoClick = onPhotoClick,
+                                currentUserId = currentUserId,
+                                onShareComment = { c -> sharingComment = c },
                             )
                         }
                     }
@@ -3534,199 +3442,10 @@ private fun CommentsBottomSheet(
     }
 }
 
-/**
- * Строка комментария в CommentsBottomSheet (аватар/имя/дата/текст/вложения/действия).
- *
- * Волна 22 (#COMMENT-REPLY-FEED + #COMMENT-ATTACH-EVERYWHERE):
- * - onReply — колбэк кнопки «Ответить» рядом с лайком (как в VK web);
- *   null = кнопка скрыта (контекст без reply-режима). Рендерится ТОЛЬКО при
- *   id > 0: оптимистичный комментарий (id < 0) ещё не отправлен — отвечать
- *   на него нельзя.
- * - profiles — профили участников: имя автора комментария-цели для метки
- *   «Ответ {имя}» над текстом; без профиля — честный фолбэк «Ответ
- *   пользователю» (VK скрывает профиль удалённого/закрытого юзера).
- * - onVideoClick/onPhotoClick — переходы из вложений комментария через общий
- *   CommentAttachmentsView; дефолтные пустые = вложения без навигации.
- */
-@Composable
-private fun CommentRow(
-    comment: Comment,
-    author: UserProfile?,
-    postOwnerId: Long = 0L,
-    onReply: (() -> Unit)? = null,
-    profiles: Map<Long, UserProfile> = emptyMap(),
-    onVideoClick: (Video) -> Unit = {},
-    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
-) {
-    val name = author?.let { "${it.firstName} ${it.lastName}" } ?: "id${comment.fromId}"
-    val photo = author?.photo100
-    // Sprint 2, P1-2 (#89): локальное состояние лайка комментария.
-    val app = SovaApp.get()
-    val scope = rememberCoroutineScope()
-    var isLiked by remember(comment.id) { mutableStateOf(comment.isLiked) }
-    var likeCount by remember(comment.id) { mutableStateOf(comment.likesCount) }
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        if (photo != null) {
-            AsyncImage(
-                model = photo,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp).clip(CircleShape),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = Modifier.size(32.dp).clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = name.take(1).uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = comment.date.toRelativeTime(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-            // Волна 22: контекст ответа — «Ответ {имя}» над текстом комментария
-            // (reply_to_user — uid автора родителя; VK web рендерит такую метку).
-            val replyToUserId = comment.replyToUser
-            if (replyToUserId != null) {
-                val replyToProfile = profiles[replyToUserId]
-                val replyLabel: String = if (replyToProfile != null) {
-                    "Ответ ${replyToProfile.fullName}"
-                } else {
-                    // Честный фолбэк: профиль не в выборке / скрыт VK.
-                    "Ответ пользователю"
-                }
-                Text(
-                    text = replyLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = comment.text,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            // Волна 22 (#COMMENT-ATTACH-EVERYWHERE): содержимое комментария —
-            // фото/видео/аудио/doc/voice/link/стикер через общий компонент
-            // (раньше вложения комментариев ленты не отображались вовсе).
-            val commentAttachments = comment.attachments
-            if (commentAttachments != null) {
-                CommentAttachmentsView(
-                    attachments = commentAttachments,
-                    onVideoClick = onVideoClick,
-                    onPhotoClick = onPhotoClick,
-                )
-            }
-            // Действия: «Ответить» + лайк в одной строке (как в VK web).
-            // Sprint 2, P1-2 (#89): лайк кликабелен при postOwnerId != 0 и id > 0;
-            // «Ответить» (волна 22) — при onReply != null и id > 0 (см. KDoc).
-            if (comment.id > 0 && (postOwnerId != 0L || onReply != null)) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (postOwnerId != 0L) {
-                        // Sprint 2, P1-2 (#89): кликабельная кнопка лайка комментария.
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable {
-                                val newLiked = !isLiked
-                                isLiked = newLiked
-                                likeCount = (likeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
-                                scope.launch {
-                                    val newCount = if (newLiked) {
-                                        app.apiClient.likesAdd("comment", postOwnerId, comment.id)
-                                    } else {
-                                        app.apiClient.likesDelete("comment", postOwnerId, comment.id)
-                                    }
-                                    if (newCount >= 0) {
-                                        likeCount = newCount
-                                    } else {
-                                        isLiked = !newLiked
-                                        likeCount = (likeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
-                                    }
-                                }
-                            }.padding(vertical = 2.dp),
-                        ) {
-                            Icon(
-                                if (isLiked) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,
-                                null,
-                                modifier = Modifier.size(14.dp),
-                                tint = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
-                            )
-                            if (likeCount > 0) {
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = likeCount.toString(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.outline,
-                                )
-                            }
-                        }
-                    } else if (likeCount > 0) {
-                        // Лайк недоступен (postOwnerId == 0) — счётчик без клика.
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Outlined.FavoriteBorder,
-                                null,
-                                modifier = Modifier.size(12.dp),
-                                tint = MaterialTheme.colorScheme.outline,
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = likeCount.toString(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                    }
-                    // Волна 22: «Ответить» — labelSmall/primary, кликабельно.
-                    // onReply != null гарантируется условием рендера выше.
-                    if (onReply != null) {
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = "Ответить",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable { onReply() }.padding(vertical = 2.dp),
-                        )
-                    }
-                }
-            } else if (likeCount > 0) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Outlined.FavoriteBorder,
-                        null,
-                        modifier = Modifier.size(12.dp),
-                        tint = MaterialTheme.colorScheme.outline,
-                    )
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text(
-                        text = likeCount.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-            }
-        }
-    }
-}
+// P0.46-unify-comments: локальный CommentRow удалён — используется общий
+// re.pinok.ui.screens.feed.CommentItem из PostDetailScreen (с лайком,
+// вложениями, long-press меню, веткой ответов и шарингом wall_reply).
+
 
 
 /**

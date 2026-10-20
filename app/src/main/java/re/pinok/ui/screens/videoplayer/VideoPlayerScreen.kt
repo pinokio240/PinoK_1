@@ -180,6 +180,8 @@ import re.pinok.media.VideoPlayerConfig
 // W30-2 #VIDEO-BACKGROUND (контракт §2.4 плана W30): хуки контроллера фон-режима
 // (создаёт W30-3: MediaSessionService + MediaStyle-уведомление без видео).
 import re.pinok.service.VideoPlaybackBus
+import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.screens.feed.CommentItem
 import re.pinok.util.AppLog
 import re.pinok.util.HevcSupport
 import re.pinok.util.VkUserAgent
@@ -3610,6 +3612,10 @@ private fun VideoCommentsSheet(
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
     var newComment by remember { mutableStateOf("") }
+    // P0.46-unify-comments: шаринг комментария (wall_reply{video.ownerId}_{cid})
+    // и id текущего юзера (для isOwnComment в CommentItem).
+    var sharingComment by remember { mutableStateOf<Comment?>(null) }
+    val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
 
     // can_comment: 0 = комментарии отключены; null = API не отдал поле — ввод
     // НЕ блокируем (VK вернёт ошибку на createComment, покажем её честно).
@@ -3633,6 +3639,17 @@ private fun VideoCommentsSheet(
     }
 
     LaunchedEffect(video.ownerId, video.id) { loadComments() }
+
+    // P0.46-unify-comments: ShareSheet для комментария видео.
+    val sComment = sharingComment
+    if (sComment != null) {
+        ShareSheet(
+            attachments = listOf("wall_reply${video.ownerId}_${sComment.id}"),
+            onDismiss = { sharingComment = null },
+            onSuccess = { sharingComment = null },
+        )
+        return
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -3717,7 +3734,16 @@ private fun VideoCommentsSheet(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     ) {
                         items(comments, key = { c -> c.id }) { comment ->
-                            VideoCommentItem(comment = comment, authors = authors)
+                            // P0.46-unify-comments: общий CommentItem из PostDetailScreen
+                            // (раньше был локальный VideoCommentItem — только аватар+имя+
+                            // текст, без лайка, ответов, вложений и long-press меню).
+                            CommentItem(
+                                comment = comment,
+                                profiles = authors,
+                                postOwnerId = video.ownerId,
+                                currentUserId = currentUserId,
+                                onShareComment = { sharingComment = it },
+                            )
                             HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = 16.dp),
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
@@ -3814,90 +3840,10 @@ private fun VideoCommentsSheet(
     }
 }
 
-/**
- * Fix #383 #COMMUNITY-VIDEO-PARITY: элемент списка комментариев видео —
- * автор (юзер или сообщество из единой карты authors), время, текст.
- */
-@Composable
-private fun VideoCommentItem(
-    comment: Comment,
-    authors: Map<Long, UserProfile>,
-) {
-    val author = authors[comment.fromId]
-    val name = when {
-        comment.fromId > 0L -> {
-            if (author != null) author.fullName.trim() else "id${comment.fromId}"
-        }
-        comment.fromId < 0L -> {
-            if (author != null && author.firstName.isNotBlank()) author.firstName else "Сообщество"
-        }
-        else -> "Гость"
-    }
-    val timeText = if (comment.date > 0) {
-        try {
-            java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault())
-                .format(java.util.Date(comment.date * 1000L))
-        } catch (_: Exception) {
-            null
-        }
-    } else {
-        null
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
-        ) {
-            val photo = if (author != null) author.photo100 else null
-            if (photo != null) {
-                AsyncImage(
-                    model = photo,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Text(
-                    text = name.take(1).uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (timeText != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = timeText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    )
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = comment.text,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
+// P0.46-unify-comments: локальный VideoCommentItem удалён — используется общий
+// re.pinok.ui.screens.feed.CommentItem из PostDetailScreen (с лайком,
+// вложениями, long-press меню, веткой ответов и шарингом wall_reply).
+
 
 /**
  * Fix #383 #COMMUNITY-VIDEO-PARITY: шторка «Поделиться» для видео.
