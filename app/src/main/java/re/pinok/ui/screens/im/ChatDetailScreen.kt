@@ -189,6 +189,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.popup.Popup
+import androidx.compose.ui.popup.PopupProperties
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -7400,14 +7402,25 @@ private fun MessageBubble(
             }
         }
 
-        // ReactionPicker — панель эмодзи.
+        // ReactionPicker — панель эмодзи (как Popup — не занимает место в layout,
+        // перекрывает контент, закрывается при тапе вне).
         if (showReactionPicker) {
-            ReactionPicker(
-                currentReaction = message.reactions?.userReaction,
-                onReact = onReact,
-                onDismiss = onHideReactionPicker,
-                onShowMore = onShowReactionGrid,
-            )
+            Popup(
+                alignment = Alignment.BottomCenter,
+                onDismissRequest = onHideReactionPicker,
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                ReactionPicker(
+                    currentReaction = message.reactions?.userReaction,
+                    onReact = onReact,
+                    onDismiss = onHideReactionPicker,
+                    onShowMore = onShowReactionGrid,
+                )
+            }
         }
 
         // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯»).
