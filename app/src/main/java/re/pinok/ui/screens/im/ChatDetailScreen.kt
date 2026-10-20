@@ -8580,9 +8580,12 @@ private fun ReactionGridDialog(
                 else -> {
                     val ids = assets?.reactionIds?.takeIf { it.isNotEmpty() }
                         ?: REACTION_EMOJIS.map { it.first }
+                    // P0.46-reactions-fix: heightIn(min=200dp) — AlertDialog.text slot
+                    // даёт loose constraints, LazyVerticalGrid (scrollable) схлопывается
+                    // до 0 высоты → окно пустое. Min height гарантирует видимость.
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(6),
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 320.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
