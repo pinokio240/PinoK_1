@@ -6446,6 +6446,20 @@ private fun MessageBubble(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // P0.46-reactions-inline: VK web PeerTitle__icon — маленькая иконка
+                    // реакции рядом с именем автора (если у сообщения есть реакция).
+                    // VK web: <div class="StatusIcon--size-14 PeerTitle__icon">
+                    //           <img alt="Ой, спасибки!" src="reaction_icon.png">
+                    //         </div>
+                    // Показываем emoji реакции автора (если есть) после имени.
+                    val myReactionEmoji = message.reactions?.userReaction?.let { reactionEmoji(it) }
+                    if (myReactionEmoji != null) {
+                        Spacer(Modifier.width(2.dp))
+                        Text(
+                            text = myReactionEmoji,
+                            fontSize = 14.sp,
+                        )
+                    }
                 }
             }
         }
@@ -7119,6 +7133,40 @@ private fun MessageBubble(
                 onReact = onReact,
                 onTap = { onShowReactionPicker() },
             )
+        }
+
+        // P0.46-reactions-inline: VK web паттерн ConvoMessageWithoutBubble__postFastReactions —
+        // inline кнопка 😊 (smile_add_outline) под каждым сообщением для быстрой реакции.
+        // VK web: <button class="ConvoMessageFastReactionsMenu__trigger ConvoMessageWithoutBubble__postFastReactionsTrigger">
+        // Показываем только если: сообщение не в selection mode, нет grid диалога,
+        // и нет активной реакции от текущего пользователя (иначе ReactionBar уже показывает её).
+        if (!selectionMode && !showReactionGrid) {
+            val hasMyReaction = message.reactions?.userReaction != null
+            if (!hasMyReaction) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = if (isOut) 0.dp else 4.dp,
+                            end = if (isOut) 4.dp else 0.dp,
+                            top = 0.dp,
+                            bottom = 2.dp,
+                        ),
+                    horizontalArrangement = if (isOut) Arrangement.End else Arrangement.Start,
+                ) {
+                    IconButton(
+                        onClick = { onShowReactionPicker() },
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.EmojiEmotions,
+                            contentDescription = "Поставить реакцию",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+            }
         }
 
         // #CHANNEL-DONUT (Task 67 #CHANNELS-API/#CHANNEL-WALL-MODE): счётчики
