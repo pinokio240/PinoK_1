@@ -1699,6 +1699,15 @@ private fun CommentItem(
                                     onReply()
                                 },
                             )
+                            // P0.46-share-comment: «Поделиться» — для чужих тоже.
+                            DropdownMenuItem(
+                                text = { Text("Поделиться") },
+                                leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onShareComment(comment)
+                                },
+                            )
                         }
                     }
                 }
