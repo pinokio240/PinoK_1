@@ -8560,8 +8560,20 @@ private fun ReactionGridDialog(
         error = null
         try {
             assets = app.apiClient.messagesGetReactionsAssets()
+            // P0.46-reactions-diag: логируем что получили — иначе не видно
+            // почему сетка пустая (assets=null? reactionIds пустой? staticUrl null?).
+            val a = assets
+            if (a != null) {
+                AppLog.i("ChatDetail", "ReactionGrid: ids=${a.reactionIds.size}, assets=${a.assets.size}")
+                a.assets.forEach { ast ->
+                    AppLog.d("ChatDetail", "ReactionGrid asset: id=${ast.id} staticUrl=${ast.staticUrl?.take(60) ?: "null"}")
+                }
+            } else {
+                AppLog.w("ChatDetail", "ReactionGrid: assets=null")
+            }
         } catch (e: Exception) {
             error = e.message
+            AppLog.w("ChatDetail", "ReactionGrid: error=${e.message}")
         }
         loading = false
     }
