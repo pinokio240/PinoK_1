@@ -7262,7 +7262,9 @@ private fun MessageBubble(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    for ((rid, emoji) in REACTION_EMOJIS) {
+                // P0.46-reactions: только 7 базовых реакций в контекстном меню,
+                // остальные через «⋯» → ReactionGridDialog (как в пиалете).
+                    for ((rid, emoji) in REACTION_EMOJIS.take(7)) {
                         val isMine = myReactionId != null && myReactionId == rid
                         Box(
                             modifier = Modifier
