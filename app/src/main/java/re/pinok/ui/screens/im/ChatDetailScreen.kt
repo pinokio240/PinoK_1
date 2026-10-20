@@ -81,6 +81,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Done
