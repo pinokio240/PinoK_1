@@ -667,7 +667,7 @@ private fun AdminCommentCard(
             onReply = onReply,
             onShareComment = onShareComment,
             onEditComment = {},
-            onDeleteComment = onDelete,
+            onDeleteComment = { onDelete() },
         )
         // Превью поста-источника (админ-контекст: важно видеть, к какому посту
         // относится комментарий — для модераторских действий).
