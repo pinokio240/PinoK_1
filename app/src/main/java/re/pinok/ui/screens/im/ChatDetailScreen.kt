@@ -7181,10 +7181,9 @@ private fun MessageBubble(
                 val msgReactions = message.reactions
                 if (msgReactions != null && msgReactions.count > 0) {
                     val chipItems = msgReactions.items
-                        ?.filter { it.count > 0 }
-                        ?.sortedByDescending { it.count }
-                        ?.take(6)
-                        ?: emptyList()
+                        .filter { it.count > 0 }
+                        .sortedByDescending { it.count }
+                        .take(6)
                     if (chipItems.isNotEmpty()) {
                         Row(
                             modifier = Modifier
