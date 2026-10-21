@@ -86,6 +86,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.BoardTopic
+import re.pinok.data.model.DocFile
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
@@ -190,17 +191,17 @@ fun CommunityScreen(
     // *EndReached-флаги и старые snapshotFlow-триггеры удалены.
     // P0.47: ВСЕ вкладки — cursor-based через groups.getContentForTabs.
     // start_from → next_from. Конец: next_from == null. Без offset, без list.size < pageSize.
-    val wallState = rememberPagedListState(
+    val wallState = rememberPagedListState<Post>(
         fetcher = { cursor ->
             val startFrom = (cursor as? ServerNextFrom)?.value
             val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
                 groupId = groupId, tab = "wall", count = 30, startFrom = startFrom,
             )
-            val items = tabData.getAsJsonArray("items") ?: emptyList<Post>() to null
-            val page = items.mapNotNull { el ->
+            val items = tabData.getAsJsonArray("items")
+            val page = items?.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
-                parsePostMini(el.asJsonObject)
-            }.filter { it.id > 0 && it.ownerId != 0L }
+                app.apiClient.parsePostMini(el.asJsonObject)
+            }?.filter { it.id > 0 && it.ownerId != 0L } ?: emptyList()
             // Профили из ответа
             tabData.getAsJsonArray("profiles")?.forEach { el ->
                 if (el.isJsonObject) {
@@ -258,7 +259,7 @@ fun CommunityScreen(
                 groupId = groupId, tab = "photos", count = 50, startFrom = startFrom,
             )
             val items = tabData.getAsJsonArray("items")
-            val list = items?.mapNotNull { el -> parsePhotoItem(el) } ?: emptyList()
+            val list = items?.mapNotNull { el -> app.apiClient.parsePhotoItem(el) } ?: emptyList()
             list to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { p -> "photo_${p.ownerId}_${p.id}" },
@@ -277,7 +278,7 @@ fun CommunityScreen(
             val items = tabData.getAsJsonArray("items")
             val list = items?.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
-                parseVideoFull(el.asJsonObject).withDetectedPlatform()
+                app.apiClient.parseVideoFull(el.asJsonObject).withDetectedPlatform()
             } ?: emptyList()
             list to (nextFrom?.let { ServerNextFrom(it) })
         },
