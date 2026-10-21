@@ -127,6 +127,15 @@ data class WallGetExtendedResult(
     val posts: List<Post>,
     /** id профиля → «Имя Фамилия» (только users из ответа). */
     val profileNames: Map<Long, String>,
+    /**
+     * Число элементов items[] ДО фильтра/дедупа (сырой размер ответа сервера).
+     * Дефолт = posts.size — чтобы не ломать существующие вызовы/конструкторы.
+     * Признак конца пагинации стены считается ПО ЭТОМУ значению, а не по
+     * posts.size: сервер мог вернуть полную страницу (30), но часть записей
+     * отсеялась фильтром/дедупом (>0, ownerId!=0, дубли) → posts.size < 30 →
+     * иначе футер «Это все…» появлялся бы раньше времени.
+     */
+    val rawCount: Int = posts.size,
 )
 
 data class ClipsFeedResult(
@@ -134,6 +143,18 @@ data class ClipsFeedResult(
     val nextFrom: String?,
     val profiles: Map<Long, UserProfile>,
     val groups: Map<Long, VKApiClient.GroupInfo>,
+)
+
+/**
+ * Результат shortVideo.getOwnerVideos: отфильтрованные клипы + сырой размер
+ * ответа сервера. После отсева рекламных sdk-клипов [items] может быть меньше
+ * сырого ответа — признак конца пагинации должен считаться по [rawCount],
+ * иначе футер «Это все…» появится раньше времени (см. CommunityScreen, вкладка Клипы).
+ */
+data class OwnerVideosResult(
+    val items: List<Video>,
+    /** Число элементов items[] ДО отсева рекламных sdk-клипов. */
+    val rawCount: Int,
 )
 
 data class VideoLongPollServer(

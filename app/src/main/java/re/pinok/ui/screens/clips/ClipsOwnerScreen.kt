@@ -93,7 +93,7 @@ fun ClipsOwnerScreen(
         val app = SovaApp.get(context)
         try {
             val list = app.apiClient.shortVideoGetOwnerVideos(ownerId = ownerId, count = CLIPS_COUNT)
-            clips = list
+            clips = list.items
         } catch (e: Exception) {
             AppLog.e(TAG, "Ошибка загрузки клипов автора $ownerId: ${e.message}", e)
             error = true

@@ -16840,7 +16840,9 @@ class VKApiClient(
                 if (!seenKeys.add(post.ownerId to post.id)) return@mapNotNull null
                 post
             }
-            WallGetExtendedResult(posts, profileNames)
+            // rawCount = сырой размер ответа ДО фильтра/дедупа (items.size()).
+            // Он задаёт признак конца пагинации и смещение offset (см. CommunityScreen).
+            WallGetExtendedResult(posts, profileNames, items.size())
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "wallGetExtended parse error", e)
             WallGetExtendedResult(emptyList(), emptyMap())
@@ -19625,21 +19627,26 @@ class VKApiClient(
     suspend fun shortVideoGetOwnerVideos(
         ownerId: Long,
         count: Int = 30,
-    ): List<Video> {
-        if (isOffline()) return emptyList()
+        offset: Int = 0,
+    ): OwnerVideosResult {
+        if (isOffline()) return OwnerVideosResult(emptyList(), 0)
         val args = mapOf(
             "owner_id" to ownerId.toString(),
             "count" to count.toString(),
+            "offset" to offset.toString(),
         )
-        val json = call("shortVideo.getOwnerVideos", args) ?: return emptyList()
+        val json = call("shortVideo.getOwnerVideos", args) ?: return OwnerVideosResult(emptyList(), 0)
         return try {
-            val resp = getObj(json, "response") ?: return emptyList()
+            val resp = getObj(json, "response") ?: return OwnerVideosResult(emptyList(), 0)
             val items = getArr(resp, "items")
             if (items == null || items.size() == 0) {
                 AppLog.d("VKApiClient", "shortVideo.getOwnerVideos: no items for owner=$ownerId")
-                return emptyList()
+                return OwnerVideosResult(emptyList(), 0)
             }
-            items.mapNotNull { el ->
+            // rawCount = сырой размер ответа ДО отсева рекламных sdk-клипов.
+            // Признак конца пагинации и offset считаются по нему (см. CommunityScreen).
+            val rawCount = items.size()
+            val clips = items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
                 try {
@@ -19659,9 +19666,10 @@ class VKApiClient(
                     null
                 }
             }
+            OwnerVideosResult(clips, rawCount)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "shortVideo.getOwnerVideos parse error: ${e.message}", e)
-            emptyList()
+            OwnerVideosResult(emptyList(), 0)
         }
     }
 

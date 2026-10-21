@@ -86,19 +86,25 @@ fun SearchScreen(
     var loadingMore by remember { mutableStateOf(false) }
     var endReached by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
+    // Сырое серверное смещение пагинации. Растёт на РАЗМЕР ОТВЕТА (r.size),
+    // а не на число добавленных после дедупа элементов — иначе при дублях
+    // потомков offset «разъезжается» и перетягивает те же страницы, создавая
+    // ложный «конец» (endReached) на пустом дедуп-приросте.
+    var serverOffset by remember { mutableStateOf(0) }
     val listState = rememberLazyListState()
 
     // Debounced search — 500ms after last keystroke.
     LaunchedEffect(query, activeTab) {
         if (query.isBlank()) {
             hints = emptyList(); people = emptyList(); groups = emptyList(); newsfeedPosts = emptyList()
-            errorText = null; loading = false; endReached = false
+            errorText = null; loading = false; endReached = false; serverOffset = 0
             return@LaunchedEffect
         }
         delay(500)
         loading = true
         errorText = null
         endReached = false
+        serverOffset = 0
         scope.launch {
             try {
                 when (activeTab) {
@@ -149,6 +155,7 @@ fun SearchScreen(
         if (isRefreshing || query.isBlank()) return
         scope.launch {
             isRefreshing = true
+            serverOffset = 0
             try {
                 when (activeTab) {
                     SearchTab.HINTS -> {
@@ -188,31 +195,27 @@ fun SearchScreen(
             try {
                 when (activeTab) {
                     SearchTab.PEOPLE -> {
-                        val r = app.apiClient.usersSearch(query, count = 30, offset = people.size)
+                        val r = app.apiClient.usersSearch(query, count = 30, offset = serverOffset)
                         val newItems = r.filter { np -> people.none { it.id == np.id } }.distinctBy { it.id }
-                        if (newItems.isEmpty()) endReached = true
-                        else {
-                            people = (people + newItems).distinctBy { it.id }
-                            if (r.size < 30) endReached = true
-                        }
+                        people = (people + newItems).distinctBy { it.id }
+                        serverOffset += r.size
+                        // Конец — ТОЛЬКО по короткой серверной странице. Не ставим
+                        // конец по пустому newItems (дедуп ещё не значит «больше нет»).
+                        if (r.size < 30) endReached = true
                     }
                     SearchTab.GROUPS -> {
-                        val r = app.apiClient.groupsSearch(query, count = 30, offset = groups.size)
+                        val r = app.apiClient.groupsSearch(query, count = 30, offset = serverOffset)
                         val newItems = r.filter { ng -> groups.none { it.id == ng.id } }.distinctBy { it.id }
-                        if (newItems.isEmpty()) endReached = true
-                        else {
-                            groups = (groups + newItems).distinctBy { it.id }
-                            if (r.size < 30) endReached = true
-                        }
+                        groups = (groups + newItems).distinctBy { it.id }
+                        serverOffset += r.size
+                        if (r.size < 30) endReached = true
                     }
                     SearchTab.NEWSFEED -> {
-                        val r = app.apiClient.newsfeedSearch(query, count = 20, offset = newsfeedPosts.size).second
+                        val r = app.apiClient.newsfeedSearch(query, count = 20, offset = serverOffset).second
                         val newItems = r.filter { np -> newsfeedPosts.none { "${it.ownerId}_${it.id}" == "${np.ownerId}_${np.id}" } }
-                        if (newItems.isEmpty()) endReached = true
-                        else {
-                            newsfeedPosts = (newsfeedPosts + newItems).distinctBy { "${it.ownerId}_${it.id}" }
-                            if (r.size < 20) endReached = true
-                        }
+                        newsfeedPosts = (newsfeedPosts + newItems).distinctBy { "${it.ownerId}_${it.id}" }
+                        serverOffset += r.size
+                        if (r.size < 20) endReached = true
                     }
                     SearchTab.HINTS -> {}
                 }

@@ -1343,7 +1343,11 @@ fun FeedScreen(
                     }
                 }
                 nextFrom = result.nextFrom
-                if (nextFrom == null || newPosts.isEmpty()) endReached = true
+                // Конец списка задаёт ТОЛЬКО серверный курсор nextFrom (== null).
+                // НЕ ставим конец по newPosts.isEmpty(): пустая страница после
+                // дедуп-фильтра ещё не значит, что постов больше нет — nextFrom
+                // указывает на следующую страницу, по которой догрузим дальше.
+                if (nextFrom == null) endReached = true
                 // Fix #100: синхронизируем кэш после пагинации.
                 FeedDataHolder.snapshot(allPosts, profiles, groups, nextFrom, endReached)
             } catch (e: kotlinx.coroutines.CancellationException) {

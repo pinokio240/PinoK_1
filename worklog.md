@@ -16489,3 +16489,54 @@ NotificationsScreen, FeedScreen, VideoPlayerScreen.
 Реакции: 6241cea, 2fce2d4, 25d7923, 6b3da73, 73a7f15, 05eb8fb, 3480d84, 8ef1376, b67c32f, 0aa999a, 8c897bb, b38172c, dd8f0a6, 11e7f89, 320100f
 IME (отменены): c450386, b3adf03, a77bded, 560985e, d495872, 8135d2f, 2997d27, 4004b62, 66d6351, b6894a5, 292b163, 2c5d43c, f8fff28, 0aa999a, 8c897bb
 Документация: aabed46, 8e0ad45, 68ddd28
+
+----------------------------------------------------------------
+
+### P0.47 — Единый паттерн пагинации + фикс ложного «Это все…» + повтор голосовых (2026-10-21)
+
+Связанные доработки в одном заходе: (а) выведен общий каркас пагинации и сообщества переведены на него, (б) признак конца списка переведён на серверный сырой счётчик (убит ложный футер «Это все…»), (в) починен повтор голосовых после дослушивания в диалогах.
+
+#### 1. Единый паттерн пагинации (каркас + внедрение в сообщества)
+
+Новый модуль `app/src/main/java/re/pinok/ui/components/PagedListState.kt` — единый паттерн (эталон — FeedScreen, вариант A Fix #83):
+- `PagedCursor` (маркерный интерфейс), `ServerOffset.offset` (растёт на РАЗМЕР СТРАНИЦЫ, а не на `items.size` — иначе курсор «разъезжается» с серверным смещением при дедупе) и `ServerNextFrom.value` (конец при `== null`).
+- `PagedListState<T>` — состояние бесконечного списка: `items`/`cursor`/`loading`/`loadingMore`/`endReached`/`error` + методы `loadFirst()`/`loadMore()`/`reset()`/`removeById()`. Дедупликация по `keyOf`, конец = серверный курсор пришёл `null` (не `size < pageSize`), `loadMore()` при пустом списке и null-курсоре откатывается на `loadFirst()`.
+- `rememberPagedListState(fetcher, keyOf, rememberKey)` — композ-фабрика.
+- `PagingTrigger(listState, state, enabled)` — канонический триггер скролла: `enabled` (гейт вкладки) ОБЯЗАТЕЛЬНО в ключе `LaunchedEffect` (иначе замыкание держит устаревший гейт при смене вкладки), а `items.size`/`totalItemsCount` НЕ в ключе (иначе каждый `loadMore()` перезапускает эффект → бесконечный цикл → VK error 9).
+- `PagingFooter(state, emptyText)` — спиннер / ошибка+«Повторить» / «Это все …».
+
+Внедрение в `app/src/main/java/re/pinok/ui/screens/community/CommunityScreen.kt` (вкладки, гейт `selectedTab == N`, футеры в конце каждого list-блока):
+- Стена (tab 0) → `wallState` (count=30, ServerOffset, keyOf `"ownerId_id"`, футер «Это все записи»); имена подписей мёржит fetcher.
+- Фото (tab 1) → `photosState` (`photosGet(albumId="wall", count=50)`, ключ `"photo_ownerId_id"`, футер «Это все фото»).
+- Видео (tab 2) → `videosState` (count=30, ключ `"ownerId_id"`, футер «Это все видео»).
+- Клипы (tab 3) → `clipsState` (count=30, ключ `"clip_ownerId_id"`, футер «Это все клипы»).
+- Обсуждения (tab 5) → `topicsState` (`boardGetTopics`, count=30, ключ `"topic_gid_id"`, футер «Тем больше нет»).
+- Файлы (tab 6) → `docsState` (count=30, ключ `"doc_ownerId_id"`, футер «Это все файлы»).
+- Музыка (tab 4) оставлена на старом коде.
+Старые `*LoadingMore`/`*EndReached`-флаги, `*Loading`/`*Loaded`/`*Error`-состояния и ручные snapshotFlow-триггеры удалены.
+
+`VKApiClient.shortVideoGetOwnerVideos` расширен параметром `offset: Int = 0` (передаётся в `args["offset"]`) и теперь возвращает `OwnerVideosResult` вместо `List<Video>` — обновлены вызовы в `ClipsOwnerScreen.kt` (`list.items`) и `ProfileScreen.kt` (`.items.filter { it.id > 0L }`).
+
+#### 2. Фикс ложного «Это все…»: конец по серверному сырому счётчику
+
+Раньше `endReached = (size < pageSize)` считался по списку ПОСЛЕ фильтра/дедупа. Если сервер вернул полную страницу (30), но часть записей отсеялась внутри API-метода (невалидные id (`id<=0`/`ownerId==0`), дубли, рекламные sdk-клипы) → `size < 30` → футер «Это все…» появлялся раньше времени.
+- `WallGetExtendedResult.rawCount: Int = posts.size` (сырой размер `items[]` ДО фильтра/дедупа; дефолт = `posts.size`, старые конструкторы не ломаются). Заполняется `items.size()` в `wallGetExtended`. Стена считает `next` и `offset` по `wp.rawCount`.
+- `OwnerVideosResult(items, rawCount)` — новый тип: `rawCount` = размер ответа ДО отсева рекламных sdk-клипов. Клипы считают `next`/`offset` по `res.rawCount`.
+- `FeedScreen.kt`: `endReached` ставится ТОЛЬКО по `nextFrom == null`, а не по `nextFrom == null || newPosts.isEmpty()`.
+- `SearchScreen.kt`: отдельный `serverOffset` (растёт на `r.size`, а не на число добавленных после дедупа элементов — иначе offset «разъезжается» и перетягивает те же страницы); `endReached` только по короткой серверной странице (`r.size < 30` / `< 20` для новостей), не по пустому `newItems`. Затронуты вкладки Люди/Сообщества/Новости.
+
+#### 3. Фикс повторного воспроизведения голосовых в диалогах
+
+`app/src/main/java/re/pinok/ui/screens/im/ChatDetailScreen.kt`, `VoicePlaybackController`:
+- В `toggle` (при паузе→плей): если `p.playbackState == Player.STATE_ENDED`, вызывается `try { p.seekTo(0) }` перед `p.play()` — иначе `play()` на Media3 после STATE_ENDED — no-op.
+- В обработчике `STATE_ENDED`: после сброса прогресса дополнительно `try { ep.seekTo(0) }` — возврат в начало, чтобы повторный тап запускал воспроизведение с нуля.
+
+#### Бэкапы
+
+- `backups/paging-pattern-phase0-1-2026-10-21/` — CommunityScreen.kt, FeedScreen.kt, VKApiClient.kt
+- `backups/wall-endreached-fix-2026-10-21/` — CommunityScreen.kt, VKApiClient.kt, VKApiResponseModels.kt, ClipsOwnerScreen.kt, ProfileScreen.kt
+- `backups/voice-repeat-fix-2026-10-21/` — ChatDetailScreen.kt
+
+#### Статус
+
+Сборка `:app:compileDebugKotlin` — BUILD SUCCESSFUL. Изменения не закоммичены (ожидают коммита по описанию ниже).

@@ -556,7 +556,7 @@ fun ProfileScreen(
                 clipsError = null
                 try {
                     clips = app.apiClient.shortVideoGetOwnerVideos(ownerId = ownerId, count = 30)
-                        .filter { it.id > 0L }
+                        .items.filter { it.id > 0L }
                     clipsLoaded = true
                     AppLog.i("ProfileScreen", "Clips tab loaded: ${clips.size} clips")
                 } catch (e: Exception) {

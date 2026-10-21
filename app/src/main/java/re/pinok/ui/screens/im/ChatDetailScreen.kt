@@ -12025,6 +12025,11 @@ private class VoicePlaybackController {
                     isPlaying = false
                     stopProgressTracking()
                 } else {
+                    // Fix #VOICE-REPEAT: если плеер дослушал до конца и остался в
+                    // STATE_ENDED, play() без seekTo(0) на Media3 — no-op.
+                    if (p.playbackState == Player.STATE_ENDED) {
+                        try { p.seekTo(0) } catch (_: Exception) {}
+                    }
                     try { p.play() } catch (_: Exception) {}
                     isPlaying = true
                     startProgressTracking()
@@ -12091,6 +12096,10 @@ private class VoicePlaybackController {
                             progress = 0f
                             currentPositionMs = 0L
                             stopProgressTracking()
+                            // Fix #VOICE-REPEAT: после STATE_ENDED плеер остаётся в
+                            // терминальном состоянии; повторный play() без seekTo(0)
+                            // на Media3 — no-op, поэтому возвращаем в начало.
+                            try { ep.seekTo(0) } catch (_: Exception) {}
                         }
                         else -> {}
                     }

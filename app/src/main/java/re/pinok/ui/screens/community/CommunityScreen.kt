@@ -85,6 +85,8 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
+import re.pinok.data.model.BoardTopic
+import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
 import re.pinok.ui.components.CreatePostDialog
@@ -92,9 +94,13 @@ import re.pinok.ui.components.PhotoViewer
 // POSTCARD-REFACTOR-PLAN (этап 2): вертикальная карточка клипа вынесена
 // в общий ui/components/ClipThumbnail.kt.
 import re.pinok.ui.components.ClipThumbnail
+import re.pinok.ui.components.PagingFooter
+import re.pinok.ui.components.PagingTrigger
 import re.pinok.ui.components.PostCard
 import re.pinok.ui.components.PostMenuItem
 import re.pinok.ui.components.ScrollToTopFab
+import re.pinok.ui.components.ServerOffset
+import re.pinok.ui.components.rememberPagedListState
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.navigation.CommunityRestoreHolder
@@ -167,18 +173,36 @@ fun CommunityScreen(
     // NULL-ЯВНО: Snapshot-initial до первого эмита; дефолт true = SovaPrefs default.
     val carouselEnabled: Boolean = prefsSnap?.feedCarouselEnabled ?: true
     var groupInfo by remember { mutableStateOf<VKApiClient.GroupInfo?>(null) }
-    var posts by remember { mutableStateOf<List<Post>>(emptyList()) }
     // #POST-SIGNER (волна 39): имена профилей из wall.get extended=1 —
     // подпись автора под постом сообщества (запрос пользователя: имя автора
     // под постом не писалось в приложении, а на веб-странице ВК писалось).
-    // Копится между страницами пагинации (wallGetExtended.profileNames).
+    // Копится между страницами пагинации (wallState fetcher мёржит profileNames).
     var signerNames by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
-    // Fix #85: pull-to-refresh + infinite scroll стены группы.
+    // Fix #85: pull-to-refresh стены группы.
     var isRefreshing by remember { mutableStateOf(false) }
-    var loadingMore by remember { mutableStateOf(false) }
-    var endReached by remember { mutableStateOf(false) }
+
+    // ФАЗА 0/1 (единый паттерн пагинации, эталон FeedScreen): стена/видео/файлы
+    // переведены на PagedListState. Курсор — ServerOffset (offset += размер страницы),
+    // конец списка = серверный курсор пришёл null. Собственные *LoadingMore/
+    // *EndReached-флаги и старые snapshotFlow-триггеры удалены.
+    val wallState = rememberPagedListState(
+        fetcher = { cursor ->
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val wp = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+            signerNames = signerNames + wp.profileNames
+            val page = wp.posts.filter { it.id > 0 && it.ownerId != 0L }
+            // Признак конца — по СЫРОМУ размеру ответа сервера (wp.rawCount), а не
+            // по posts.size: часть записей могла отсеяться фильтром/дедупом внутри
+            // wallGetExtended. Смещение offset тоже двигаем на rawCount, иначе
+            // из-за дедупа курсор «просядет» и начнёт повторять/пропускать.
+            val next = if (wp.rawCount < 30) null else ServerOffset(offset + wp.rawCount)
+            page to next
+        },
+        keyOf = { p -> "${p.ownerId}_${p.id}" },
+        rememberKey = groupId,
+    )
     val listState = rememberLazyListState()
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
@@ -213,22 +237,32 @@ fun CommunityScreen(
     var groupSections by remember { mutableStateOf<VKApiClient.GroupSections?>(null) }
     var sectionsLoaded by remember { mutableStateOf(false) }
 
-    // Шаг 1 (#32a): state для вкладки «Фото».
-    // Ленивая загрузка при первом открытии вкладки; без пагинации (photosGet возвращает
-    // до 50 за раз — достаточно для первого приближения, пагинацию добавим отдельным шагом).
-    var photos by remember { mutableStateOf<List<re.pinok.data.model.PhotoItem>>(emptyList()) }
-    var photosLoading by remember { mutableStateOf(false) }
-    var photosError by remember { mutableStateOf<String?>(null) }
-    var photosLoaded by remember { mutableStateOf(false) }
+    // Шаг 1 (#32a): state для вкладки «Фото» — единый паттерн пагинации.
+    // photosGet(ownerId=-groupId, albumId="wall", count=50); конец когда page.size < 50.
+    val photosState = rememberPagedListState<PhotoItem>(
+        fetcher = { cursor ->
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val list = app.apiClient.photosGet(ownerId = -groupId, albumId = "wall", count = 50, offset = offset)
+            val next = if (list.size < 50) null else ServerOffset(offset + list.size)
+            list to next
+        },
+        keyOf = { p -> "photo_${p.ownerId}_${p.id}" },
+        rememberKey = groupId,
+    )
 
     // Шаг 2 (#32b): state для вкладки «Видео».
     // С пагинацией (видео «тяжелее», 30 за раз мало для активного сообщества).
-    var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
-    var videosLoading by remember { mutableStateOf(false) }
-    var videosLoadingMore by remember { mutableStateOf(false) }
-    var videosError by remember { mutableStateOf<String?>(null) }
     var videosLoaded by remember { mutableStateOf(false) }
-    var videosEndReached by remember { mutableStateOf(false) }
+    val videosState = rememberPagedListState(
+        fetcher = { cursor ->
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val list = app.apiClient.videoGet(ownerId = -groupId, count = 30, offset = offset)
+            val next = if (list.size < 30) null else ServerOffset(offset + list.size)
+            list to next
+        },
+        keyOf = { v -> "${v.ownerId}_${v.id}" },
+        rememberKey = groupId,
+    )
 
     // Шаг 3 (#32c): state для вкладки «Музыка».
     // #AUDIO-PAGING-ALL (волна 38): была капнута на 50 (одна страница audioGet) —
@@ -245,29 +279,48 @@ fun CommunityScreen(
     var tracksLoadingMore by remember { mutableStateOf(false) }
 
     // #GROUP-CLIPS: state для вкладки «Клипы» (shortVideo.getOwnerVideos).
-    // Без пагинации (30 за раз достаточно для первого приближения).
-    var clips by remember { mutableStateOf<List<Video>>(emptyList()) }
-    var clipsLoading by remember { mutableStateOf(false) }
-    var clipsError by remember { mutableStateOf<String?>(null) }
-    var clipsLoaded by remember { mutableStateOf(false) }
+    // Единый паттерн пагинации: count=30, конец когда page.size < 30.
+    val clipsState = rememberPagedListState<Video>(
+        fetcher = { cursor ->
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val res = app.apiClient.shortVideoGetOwnerVideos(ownerId = -groupId, count = 30, offset = offset)
+            // Признак конца — по СЫРОМУ размеру ответа (res.rawCount), а не по
+            // res.items.size: рекламные sdk-клипы отсеиваются внутри метода.
+            val next = if (res.rawCount < 30) null else ServerOffset(offset + res.rawCount)
+            res.items to next
+        },
+        keyOf = { v -> "clip_${v.ownerId}_${v.id}" },
+        rememberKey = groupId,
+    )
 
     // Шаг 4 (#32d): state для вкладки «Обсуждения».
-    // Без пагинации (30 тем за раз — обычно достаточно;TopicsTab простой список).
-    var topics by remember { mutableStateOf<List<re.pinok.data.model.BoardTopic>>(emptyList()) }
-    var topicsLoading by remember { mutableStateOf(false) }
-    var topicsError by remember { mutableStateOf<String?>(null) }
-    var topicsLoaded by remember { mutableStateOf(false) }
+    // Единый паттерн пагинации: boardGetTopics(groupId, count=30), конец когда page.size < 30.
+    val topicsState = rememberPagedListState<BoardTopic>(
+        fetcher = { cursor ->
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val list = app.apiClient.boardGetTopics(groupId = groupId, count = 30, offset = offset)
+            val next = if (list.size < 30) null else ServerOffset(offset + list.size)
+            list to next
+        },
+        keyOf = { t -> "topic_${groupId}_${t.id}" },
+        rememberKey = groupId,
+    )
 
     // P0.8 (Task 16): state для вкладки «Файлы» (docs.get с ownerId=-groupId).
     // С пагинацией (как у видео): 30 за раз, догрузка по скроллу до конца.
     // docs.get работает для любого сообщества (в отличие от groups.getSettings,
     // который требует админ-прав) → вкладка «Файлы» показывается ВСЕГДА.
-    var docs by remember { mutableStateOf<List<re.pinok.data.model.DocFile>>(emptyList()) }
-    var docsLoading by remember { mutableStateOf(false) }
-    var docsLoadingMore by remember { mutableStateOf(false) }
-    var docsError by remember { mutableStateOf<String?>(null) }
     var docsLoaded by remember { mutableStateOf(false) }
-    var docsEndReached by remember { mutableStateOf(false) }
+    val docsState = rememberPagedListState(
+        fetcher = { cursor ->
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val list = app.apiClient.docsGet(ownerId = -groupId, count = 30, offset = offset)
+            val next = if (list.size < 30) null else ServerOffset(offset + list.size)
+            list to next
+        },
+        keyOf = { d -> "doc_${d.ownerId}_${d.id}" },
+        rememberKey = groupId,
+    )
 
     LaunchedEffect(groupId) {
         scope.launch {
@@ -281,15 +334,8 @@ fun CommunityScreen(
                     errorText = app.apiClient.lastApiError ?: "Сообщество не найдено (id=$groupId)"
                 } else {
                     // wall.get с owner_id = -groupId (VK convention: группы — отрицательные).
-                    // #POST-SIGNER: extended=1 — вместе с постами приходят профили
-                    // (имена авторов подписи).
-                    val wallPage = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30)
-                    posts = wallPage.posts
-                        .filter { it.id > 0 && it.ownerId != 0L }
-                        .distinctBy { "${it.ownerId}_${it.id}" }
-                    signerNames = wallPage.profileNames
-                    endReached = wallPage.posts.size < 30
-                    AppLog.i("CommunityScreen", "Loaded group ${groupInfo?.name} + ${posts.size} posts")
+                    // #POST-SIGNER: extended=1 — имена авторов подписи мержит fetcher wallState.
+                    wallState.loadFirst()
                 }
             } catch (e: Exception) {
                 AppLog.e("CommunityScreen", "Failed to load community", e)
@@ -382,19 +428,19 @@ fun CommunityScreen(
     // #NAV-GROUP-VIDEO-RESTORE (Fix #344): однократная прокрутка стены к позиции
     // до смерти процесса. Индекс сохраняется/восстанавливается в одних координатах
     // LazyColumn (хедер + табы + посты) — пространство индексов идентично.
-    LaunchedEffect(posts) {
+    LaunchedEffect(wallState.items) {
         val target = CommunityRestoreHolder.pendingScroll
-        if (posts.isNotEmpty() && target >= 0 && selectedTab == 0) {
+        if (wallState.items.isNotEmpty() && target >= 0 && selectedTab == 0) {
             CommunityRestoreHolder.pendingScroll = -1
             listState.scrollToItem(target)
         }
     }
     // #NAV-GROUP-VIDEO-RESTORE (Fix #344): позиция стены пишется на каждой
-    // остановке скролла и после каждой загрузки постов (posts в ключах —
+    // остановке скролла и после каждой загрузки постов (wallState.items в ключах —
     // иначе после загрузки без скролла в prefs остался бы протухший индекс).
     // Process death dispose не вызывает, поэтому пишем постоянно, а не в onDispose.
-    LaunchedEffect(listState.isScrollInProgress, selectedTab, posts) {
-        if (selectedTab == 0 && !listState.isScrollInProgress && posts.isNotEmpty()) {
+    LaunchedEffect(listState.isScrollInProgress, selectedTab, wallState.items) {
+        if (selectedTab == 0 && !listState.isScrollInProgress && wallState.items.isNotEmpty()) {
             app.prefs.setLastCommunityScroll(listState.firstVisibleItemIndex)
         }
     }
@@ -405,14 +451,8 @@ fun CommunityScreen(
         scope.launch {
             isRefreshing = true
             try {
-                // #POST-SIGNER: extended=1 (имена авторов подписи).
-                val wallPage = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30)
-                posts = wallPage.posts
-                    .filter { it.id > 0 && it.ownerId != 0L }
-                    .distinctBy { "${it.ownerId}_${it.id}" }
-                signerNames = wallPage.profileNames
-                endReached = wallPage.posts.size < 30
-                AppLog.i("CommunityScreen", "refreshed wall: ${wallPage.posts.size} posts")
+                // #POST-SIGNER: extended=1 — имена авторов подписи мержит fetcher wallState.
+                wallState.loadFirst()
             } catch (e: Exception) {
                 AppLog.e("CommunityScreen", "refreshWall failed", e)
             } finally {
@@ -421,130 +461,38 @@ fun CommunityScreen(
         }
     }
 
-    // Fix #85: infinite scroll стены группы.
-    fun loadMoreWall() {
-        if (loadingMore || endReached || posts.isEmpty()) return
-        scope.launch {
-            loadingMore = true
-            try {
-                // #POST-SIGNER: extended=1; имена профилей копим между страницами.
-                val wallPage = app.apiClient.wallGetExtended(
-                    ownerId = -groupId, count = 30, offset = posts.size)
-                val wall = wallPage.posts
-                signerNames = signerNames + wallPage.profileNames
-                val newPosts = wall
-                    .filter { it.id > 0 && it.ownerId != 0L }
-                    .filter { np -> posts.none { it.ownerId == np.ownerId && it.id == np.id } }
-                    .distinctBy { "${it.ownerId}_${it.id}" }
-                if (newPosts.isEmpty()) {
-                    endReached = true
-                } else {
-                    posts = (posts + newPosts).distinctBy { "${it.ownerId}_${it.id}" }
-                    if (wall.size < 30) endReached = true
-                }
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "loadMoreWall failed", e)
-            } finally {
-                loadingMore = false
-            }
+    // Шаг 1 (#32a): первая загрузка фото при переходе на вкладку 1.
+    // Фаза 0/1: PagedListState + показан список пуст → грузим первую страницу.
+    LaunchedEffect(selectedTab, groupId) {
+        if (selectedTab == 1 && !photosState.loading && photosState.items.isEmpty() && photosState.cursor == null) {
+            photosState.loadFirst()
         }
     }
 
-    // Шаг 1 (#32a): загрузка фото сообщества при первом переходе на вкладку «Фото».
-    // photosLoaded предотвращает повторные запросы при переключении туда-обратно.
-    LaunchedEffect(selectedTab, groupId) {
-        if (selectedTab != 1 || photosLoaded || photosLoading) return@LaunchedEffect
-        scope.launch {
-            photosLoading = true
-            photosError = null
-            try {
-                // VK convention: owner_id группы — отрицательный.
-                photos = app.apiClient.photosGet(ownerId = -groupId, albumId = "wall", count = 50)
-                photosLoaded = true
-                AppLog.i("CommunityScreen", "Loaded ${photos.size} photos for group $groupId")
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "photosGet failed", e)
-                photosError = "Ошибка: ${e.message}"
-            } finally {
-                photosLoading = false
-            }
-        }
-    }
+    // Шаг 1 (#32a): канонический триггер пагинации фото, гейт по вкладке 1.
+    PagingTrigger(listState = listState, state = photosState, enabled = selectedTab == 1)
 
     // Шаг 2 (#32b): первая загрузка видео сообщества при переходе на вкладку 2.
+    // videosLoaded — грузим только один раз (переключение туда-обратно не догружает).
     LaunchedEffect(selectedTab, groupId) {
-        if (selectedTab != 2 || videosLoaded || videosLoading) return@LaunchedEffect
-        scope.launch {
-            videosLoading = true
-            videosError = null
-            try {
-                videos = app.apiClient.videoGet(ownerId = -groupId, count = 30, offset = 0)
-                videosLoaded = true
-                videosEndReached = videos.size < 30
-                AppLog.i("CommunityScreen", "Loaded ${videos.size} videos for group $groupId")
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "videoGet failed", e)
-                videosError = "Ошибка: ${e.message}"
-            } finally {
-                videosLoading = false
-            }
-        }
+        if (selectedTab != 2 || videosLoaded) return@LaunchedEffect
+        videosLoaded = true
+        videosState.loadFirst()
     }
 
-    // Шаг 2 (#32b): пагинация видео.
-    fun loadMoreVideos() {
-        if (videosLoadingMore || videosEndReached || videos.isEmpty()) return
-        scope.launch {
-            videosLoadingMore = true
-            try {
-                val more = app.apiClient.videoGet(ownerId = -groupId, count = 30, offset = videos.size)
-                val newOnes = more.filter { nv -> videos.none { it.id == nv.id && it.ownerId == nv.ownerId } }
-                if (newOnes.isEmpty()) {
-                    videosEndReached = true
-                } else {
-                    videos = (videos + newOnes).distinctBy { "${it.ownerId}_${it.id}" }
-                    if (more.size < 30) videosEndReached = true
-                }
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "loadMoreVideos failed", e)
-            } finally {
-                videosLoadingMore = false
-            }
-        }
-    }
+    // Шаг 2 (#32b): канонический триггер пагинации видео, гейт по вкладке 2.
+    PagingTrigger(listState = listState, state = videosState, enabled = selectedTab == 2)
 
-    // Шаг 2 (#32b): триггер пагинации видео (только когда активна вкладка 2).
-    LaunchedEffect(listState, videos.size, selectedTab) {
-        if (selectedTab != 2) return@LaunchedEffect
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = info.totalItemsCount
-            total > 0 && lastVisible >= total - 3
-        }
-            .distinctUntilChanged()
-            .filter { it }
-            .collect { loadMoreVideos() }
-    }
-
-    // #GROUP-CLIPS: загрузка клипов сообщества при переходе на вкладку 3.
+    // #GROUP-CLIPS: первая загрузка клипов сообщества при переходе на вкладку 3.
+    // Фаза 0/1: PagedListState + показан список пуст → грузим первую страницу.
     LaunchedEffect(selectedTab, groupId) {
-        if (selectedTab != 3 || clipsLoaded || clipsLoading) return@LaunchedEffect
-        scope.launch {
-            clipsLoading = true
-            clipsError = null
-            try {
-                clips = app.apiClient.shortVideoGetOwnerVideos(ownerId = -groupId, count = 30)
-                clipsLoaded = true
-                AppLog.i("CommunityScreen", "Loaded ${clips.size} clips for group $groupId")
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "shortVideoGetOwnerVideos failed", e)
-                clipsError = "Ошибка: ${e.message}"
-            } finally {
-                clipsLoading = false
-            }
+        if (selectedTab == 3 && !clipsState.loading && clipsState.items.isEmpty() && clipsState.cursor == null) {
+            clipsState.loadFirst()
         }
     }
+
+    // #GROUP-CLIPS: канонический триггер пагинации клипов, гейт по вкладке 3.
+    PagingTrigger(listState = listState, state = clipsState, enabled = selectedTab == 3)
 
     // Шаг 3 (#32c): загрузка музыки сообщества при переходе на вкладку 4.
     // #AUDIO-PAGING-ALL: первая страница (100 треков) — дальше догрузка по скроллу.
@@ -612,99 +560,31 @@ fun CommunityScreen(
             .collect { loadMoreCommunityTracks() }
     }
 
-    // Шаг 4 (#32d): загрузка тем обсуждений при переходе на вкладку 5.
+    // Шаг 4 (#32d): первая загрузка тем обсуждений при переходе на вкладку 5.
+    // Фаза 0/1: PagedListState + показан список пуст → грузим первую страницу.
     LaunchedEffect(selectedTab, groupId) {
-        if (selectedTab != 5 || topicsLoaded || topicsLoading) return@LaunchedEffect
-        scope.launch {
-            topicsLoading = true
-            topicsError = null
-            try {
-                topics = app.apiClient.boardGetTopics(groupId = groupId, count = 30, offset = 0)
-                topicsLoaded = true
-                AppLog.i("CommunityScreen", "Loaded ${topics.size} topics for group $groupId")
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "boardGetTopics failed", e)
-                topicsError = "Ошибка: ${e.message}"
-            } finally {
-                topicsLoading = false
-            }
+        if (selectedTab == 5 && !topicsState.loading && topicsState.items.isEmpty() && topicsState.cursor == null) {
+            topicsState.loadFirst()
         }
     }
+
+    // Шаг 4 (#32d): канонический триггер пагинации тем, гейт по вкладке 5.
+    PagingTrigger(listState = listState, state = topicsState, enabled = selectedTab == 5)
 
     // P0.8 (Task 16): загрузка документов сообщества при переходе на вкладку 6.
     // docs.get с ownerId=-groupId (VK convention для групп — отрицательный id).
-    // 30 за раз, догрузка по скроллу — см. loadMoreDocs ниже.
+    // docsLoaded — грузим только один раз (переключение туда-обратно не догружает).
     LaunchedEffect(selectedTab, groupId) {
-        if (selectedTab != 6 || docsLoaded || docsLoading) return@LaunchedEffect
-        scope.launch {
-            docsLoading = true
-            docsError = null
-            try {
-                docs = app.apiClient.docsGet(ownerId = -groupId, count = 30, offset = 0)
-                docsLoaded = true
-                docsEndReached = docs.size < 30
-                AppLog.i("CommunityScreen", "Loaded ${docs.size} docs for group $groupId")
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "docsGet failed", e)
-                docsError = "Ошибка: ${e.message}"
-            } finally {
-                docsLoading = false
-            }
-        }
+        if (selectedTab != 6 || docsLoaded) return@LaunchedEffect
+        docsLoaded = true
+        docsState.loadFirst()
     }
 
-    // P0.8 (Task 16): пагинация документов (как у видео — по скроллу).
-    fun loadMoreDocs() {
-        if (docsLoadingMore || docsEndReached || docs.isEmpty()) return
-        scope.launch {
-            docsLoadingMore = true
-            try {
-                val more = app.apiClient.docsGet(
-                    ownerId = -groupId, count = 30, offset = docs.size)
-                val newOnes = more.filter { nd ->
-                    docs.none { it.id == nd.id && it.ownerId == nd.ownerId }
-                }
-                if (newOnes.isEmpty()) {
-                    docsEndReached = true
-                } else {
-                    docs = (docs + newOnes).distinctBy { "${it.ownerId}_${it.id}" }
-                    if (more.size < 30) docsEndReached = true
-                }
-                AppLog.i("CommunityScreen", "loadMoreDocs: +${newOnes.size} (total=${docs.size})")
-            } catch (e: Exception) {
-                AppLog.e("CommunityScreen", "loadMoreDocs failed", e)
-            } finally {
-                docsLoadingMore = false
-            }
-        }
-    }
+    // P0.8 (Task 16): канонический триггер пагинации документов, гейт по вкладке 6.
+    PagingTrigger(listState = listState, state = docsState, enabled = selectedTab == 6)
 
-    // P0.8 (Task 16): триггер пагинации документов (только когда активна вкладка 6).
-    LaunchedEffect(listState, docs.size, selectedTab) {
-        if (selectedTab != 6) return@LaunchedEffect
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = info.totalItemsCount
-            total > 0 && lastVisible >= total - 3
-        }
-            .distinctUntilChanged()
-            .filter { it }
-            .collect { loadMoreDocs() }
-    }
-
-    // Fix #85: триггер пагинации.
-    LaunchedEffect(listState, posts.size) {
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = info.totalItemsCount
-            total > 0 && lastVisible >= total - 3
-        }
-            .distinctUntilChanged()
-            .filter { it }
-            .collect { loadMoreWall() }
-    }
+    // Fix #85: канонический триггер пагинации стены, гейт по вкладке 0.
+    PagingTrigger(listState = listState, state = wallState, enabled = selectedTab == 0)
 
     if (loading) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -739,12 +619,7 @@ fun CommunityScreen(
                             if (groupInfo == null) {
                                 errorText = app.apiClient.lastApiError ?: "Сообщество не найдено (id=$groupId)"
                             } else {
-                                val wallPage = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30)
-                                posts = wallPage.posts
-                                    .filter { it.id > 0 && it.ownerId != 0L }
-                                    .distinctBy { "${it.ownerId}_${it.id}" }
-                                signerNames = wallPage.profileNames
-                                endReached = wallPage.posts.size < 30
+                                wallState.loadFirst()
                             }
                         } catch (e: Exception) {
                             AppLog.e("CommunityScreen", "Retry failed", e)
@@ -1119,7 +994,7 @@ fun CommunityScreen(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     ) {
                         Text(
-                            text = "Записи (${posts.size})",
+                            text = "Записи (${wallState.items.size})",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Medium,
                         )
@@ -1134,7 +1009,7 @@ fun CommunityScreen(
                 )
             }
         }
-        items(posts.filter { it.id != softDeletedPost?.id }, key = { "${it.ownerId}_${it.id}" }) { post ->
+        items(wallState.items.filter { it.id != softDeletedPost?.id }, key = { "${it.ownerId}_${it.id}" }) { post ->
             val postKey = "${post.ownerId}_${post.id}"
             CommunityPostCard(
                 post = post,
@@ -1257,7 +1132,7 @@ fun CommunityScreen(
                     }
                 },
                 onCommentClick = { ownerId, postId ->
-                    val cPost = posts.find { it.ownerId == ownerId && it.id == postId }
+                    val cPost = wallState.items.find { it.ownerId == ownerId && it.id == postId }
                     if (cPost != null) {
                         PostHolder.last = cPost
                         PostHolder.lastGroups = mapOf(groupId to g)
@@ -1271,28 +1146,11 @@ fun CommunityScreen(
                     .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             )
         }
-        // Fix #85: футер пагинации.
-        item {
-            when {
-                loadingMore -> {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().padding(20.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
-                }
-                endReached && posts.isNotEmpty() -> {
-                    Text(
-                        text = "Это все записи",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    )
-                }
-            }
+        // Фазa 0/1: общий футер пагинации стены.
+        item(key = "wall_paging_footer") {
+            PagingFooter(state = wallState, emptyText = "Это все записи")
         }
-        if (posts.isEmpty()) {
+        if (wallState.items.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -1310,20 +1168,25 @@ fun CommunityScreen(
             1 -> {
                 // Шаг 1 (#32a): Фото сообщества — photosGet(ownerId=-groupId, albumId="wall").
                 // Сетка 3 колонки (FlowRow), тап → PhotoViewer (уже подключён ниже).
+                // Пагинация — канонический PagingTrigger (гейт selectedTab == 1 выше).
                 item {
                     CommunityPhotosTab(
-                        photos = photos,
-                        loading = photosLoading,
-                        error = photosError,
+                        photos = photosState.items,
+                        loading = photosState.loading,
+                        error = photosState.error,
                         onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
                     )
+                }
+                // Фаза 0/1: общий футер пагинации фото.
+                item(key = "photos_paging_footer") {
+                    PagingFooter(state = photosState, emptyText = "Это все фото")
                 }
             }
             2 -> {
                 // Шаг 2 (#32b): Видео сообщества — videoGet(ownerId=-groupId).
                 // Список VideoThumbnail (существующий composable), тап → onVideoClick.
-                // Пагинация по скроллу (loadMoreVideos триггерится выше).
-                if (videosLoading && videos.isEmpty()) {
+                // Пагинация — канонический PagingTrigger (гейт selectedTab == 2 выше).
+                if (videosState.loading && videosState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -1332,9 +1195,9 @@ fun CommunityScreen(
                             CircularProgressIndicator(modifier = Modifier.size(28.dp))
                         }
                     }
-                } else if (videosError != null && videos.isEmpty()) {
+                } else if (videosState.error != null && videosState.items.isEmpty()) {
                     item {
-                        val errMsg = videosError
+                        val errMsg = videosState.error
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
                             contentAlignment = Alignment.Center,
@@ -1347,7 +1210,7 @@ fun CommunityScreen(
                             )
                         }
                     }
-                } else if (videos.isEmpty()) {
+                } else if (videosState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -1366,42 +1229,26 @@ fun CommunityScreen(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         ) {
                             Text(
-                                text = "Видео (${videos.size})",
+                                text = "Видео (${videosState.items.size})",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium,
                             )
                         }
                     }
-                    items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
+                    items(videosState.items, key = { "${it.ownerId}_${it.id}" }) { video ->
                         VideoThumbnail(video = video, titleExpandable = true, onClick = onVideoClick)
                     }
-                    // Футер пагинации видео.
-                    item {
-                        when {
-                            videosLoadingMore -> {
-                                Box(
-                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                }
-                            }
-                            videosEndReached -> {
-                                Text(
-                                    text = "Это все видео",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                )
-                            }
-                        }
+                    // Фаза 0/1: общий футер пагинации видео.
+                    item(key = "videos_paging_footer") {
+                        PagingFooter(state = videosState, emptyText = "Это все видео")
                     }
                 }
             }
             3 -> {
                 // #GROUP-CLIPS: Клипы сообщества — shortVideo.getOwnerVideos.
                 // Сетка/список клипов (вертикальные карточки), тап → onVideoClick.
-                if (clipsLoading && clips.isEmpty()) {
+                // Пагинация — канонический PagingTrigger (гейт selectedTab == 3 выше).
+                if (clipsState.loading && clipsState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -1410,9 +1257,9 @@ fun CommunityScreen(
                             CircularProgressIndicator(modifier = Modifier.size(28.dp))
                         }
                     }
-                } else if (clipsError != null && clips.isEmpty()) {
+                } else if (clipsState.error != null && clipsState.items.isEmpty()) {
                     item {
-                        val errMsg = clipsError
+                        val errMsg = clipsState.error
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
                             contentAlignment = Alignment.Center,
@@ -1425,7 +1272,7 @@ fun CommunityScreen(
                             )
                         }
                     }
-                } else if (clips.isEmpty()) {
+                } else if (clipsState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -1444,14 +1291,18 @@ fun CommunityScreen(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         ) {
                             Text(
-                                text = "Клипы (${clips.size})",
+                                text = "Клипы (${clipsState.items.size})",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium,
                             )
                         }
                     }
-                    items(clips, key = { "clip_${it.ownerId}_${it.id}" }) { clip ->
+                    items(clipsState.items, key = { "clip_${it.ownerId}_${it.id}" }) { clip ->
                         ClipThumbnail(video = clip, onClick = onVideoClick)
+                    }
+                    // Фаза 0/1: общий футер пагинации клипов.
+                    item(key = "clips_paging_footer") {
+                        PagingFooter(state = clipsState, emptyText = "Это все клипы")
                     }
                 }
             }
@@ -1525,7 +1376,8 @@ fun CommunityScreen(
             5 -> {
                 // Шаг 4 (#32d): Обсуждения — boardGetTopics(groupId).
                 // Список тем; тап → onTopicClick → BoardTopicScreen.
-                if (topicsLoading && topics.isEmpty()) {
+                // Пагинация — канонический PagingTrigger (гейт selectedTab == 5 выше).
+                if (topicsState.loading && topicsState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -1534,9 +1386,9 @@ fun CommunityScreen(
                             CircularProgressIndicator(modifier = Modifier.size(28.dp))
                         }
                     }
-                } else if (topicsError != null && topics.isEmpty()) {
+                } else if (topicsState.error != null && topicsState.items.isEmpty()) {
                     item {
-                        val errMsg = topicsError
+                        val errMsg = topicsState.error
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
                             contentAlignment = Alignment.Center,
@@ -1549,7 +1401,7 @@ fun CommunityScreen(
                             )
                         }
                     }
-                } else if (topics.isEmpty()) {
+                } else if (topicsState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -1568,17 +1420,21 @@ fun CommunityScreen(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         ) {
                             Text(
-                                text = "Обсуждения (${topics.size})",
+                                text = "Обсуждения (${topicsState.items.size})",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium,
                             )
                         }
                     }
-                    items(topics, key = { it.id }) { topic ->
+                    items(topicsState.items, key = { "topic_${groupId}_${it.id}" }) { topic ->
                         BoardTopicRow(
                             topic = topic,
                             onClick = { onTopicClick(groupId, topic.id, topic.title) },
                         )
+                    }
+                    // Фаза 0/1: общий футер пагинации тем.
+                    item(key = "topics_paging_footer") {
+                        PagingFooter(state = topicsState, emptyText = "Тем больше нет")
                     }
                 }
             }
@@ -1586,8 +1442,8 @@ fun CommunityScreen(
                 // P0.8 (Task 16): Файлы сообщества — docs.get(ownerId=-groupId).
                 // Список документов (иконка по типу / название / размер / дата),
                 // тап → DownloadManager (как ChannelFilesDialog в ChatDetailScreen).
-                // Пагинация по скроллу (loadMoreDocs триггерится выше).
-                if (docsLoading && docs.isEmpty()) {
+                // Пагинация — канонический PagingTrigger (гейт selectedTab == 6 выше).
+                if (docsState.loading && docsState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -1596,9 +1452,9 @@ fun CommunityScreen(
                             CircularProgressIndicator(modifier = Modifier.size(28.dp))
                         }
                     }
-                } else if (docsError != null && docs.isEmpty()) {
+                } else if (docsState.error != null && docsState.items.isEmpty()) {
                     item {
-                        val errMsg = docsError
+                        val errMsg = docsState.error
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
                             contentAlignment = Alignment.Center,
@@ -1611,7 +1467,7 @@ fun CommunityScreen(
                             )
                         }
                     }
-                } else if (docs.isEmpty()) {
+                } else if (docsState.items.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -1630,35 +1486,18 @@ fun CommunityScreen(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         ) {
                             Text(
-                                text = "Файлы (${docs.size})",
+                                text = "Файлы (${docsState.items.size})",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium,
                             )
                         }
                     }
-                    items(docs, key = { "doc_${it.ownerId}_${it.id}" }) { doc ->
+                    items(docsState.items, key = { "doc_${it.ownerId}_${it.id}" }) { doc ->
                         CommunityDocRow(doc = doc)
                     }
-                    // Футер пагинации документов.
-                    item {
-                        when {
-                            docsLoadingMore -> {
-                                Box(
-                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                }
-                            }
-                            docsEndReached -> {
-                                Text(
-                                    text = "Это все файлы",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                )
-                            }
-                        }
+                    // Фаза 0/1: общий футер пагинации документов.
+                    item(key = "docs_paging_footer") {
+                        PagingFooter(state = docsState, emptyText = "Это все файлы")
                     }
                 }
             }
@@ -1973,10 +1812,10 @@ private fun BoardTopicRow(
  * Сетка 3 колонки (FlowRow) из PhotoItem.largestUrl. Тап → PhotoViewer
  * через onPhotoClick(listOf(urls), index).
  *
- * Без пагинации: photosGet возвращает до 50 за раз. Если фото > 50, добавим
- * пагинацию отдельным шагом (как loadMoreWall).
+ * Пагинация — единый паттерн (PagedListState + PagingTrigger + PagingFooter,
+ * гейт selectedTab == 1): photosGet(ownerId=-groupId, albumId="wall", count=50).
  *
- * @param photos      Список PhotoItem (из photosGet)
+ * @param photos      Список PhotoItem (из photosState.items)
  * @param loading     Состояние загрузки
  * @param error       Текст ошибки (null = OK)
  * @param onPhotoClick Callback (urls, index) → открытие PhotoViewer
