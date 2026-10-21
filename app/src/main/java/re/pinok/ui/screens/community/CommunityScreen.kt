@@ -86,7 +86,6 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.BoardTopic
-import re.pinok.data.model.DocFile
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
@@ -189,29 +188,21 @@ fun CommunityScreen(
     // переведены на PagedListState. Курсор — ServerOffset (offset += размер страницы),
     // конец списка = серверный курсор пришёл null. Собственные *LoadingMore/
     // *EndReached-флаги и старые snapshotFlow-триггеры удалены.
-    // P0.47: ВСЕ вкладки — cursor-based через groups.getContentForTabs.
-    // start_from → next_from. Конец: next_from == null. Без offset, без list.size < pageSize.
+    // P0.47-REVERT: wall.get (offset-based) — единственный надёжный способ получить
+    // записи сообщества. groups.getContentForTabs(tab="wall") через web-шлюз ВК
+    // возвращает ПУСТОЙ ответ (24B) — метод НЕ поддерживает вкладку wall.
+    // Доказано логом (2026-10-21): tabs=photos → 24B (пусто), tabs=short_videos → 497KB.
+    // Только «Клипы» (short_videos) работают через getContentForTabs.
     val wallState = rememberPagedListState<Post>(
         fetcher = { cursor ->
-            val startFrom = (cursor as? ServerNextFrom)?.value
-            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
-                groupId = groupId, tab = "wall", count = 30, startFrom = startFrom,
-            )
-            val items = tabData.getAsJsonArray("items")
-            val page = items?.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
-                app.apiClient.parsePostMini(el.asJsonObject)
-            }?.filter { it.id > 0 && it.ownerId != 0L } ?: emptyList()
-            // Профили из ответа
-            tabData.getAsJsonArray("profiles")?.forEach { el ->
-                if (el.isJsonObject) {
-                    val o = el.asJsonObject
-                    val uid = o.get("id")?.asLong ?: return@forEach
-                    val name = ((o.get("first_name")?.asString ?: "") + " " + (o.get("last_name")?.asString ?: "")).trim()
-                    if (uid > 0 && name.isNotEmpty()) signerNames = signerNames + (uid to name)
-                }
-            }
-            page to (nextFrom?.let { ServerNextFrom(it) })
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val wp = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+            signerNames = signerNames + wp.profileNames
+            val page = wp.posts.filter { it.id > 0 && it.ownerId != 0L }
+            // Конец: rawCount==0 (пустой ответ) ИЛИ offset+rawCount >= totalCount.
+            val next = if (wp.rawCount == 0 || (wp.totalCount > 0 && offset + wp.rawCount >= wp.totalCount))
+                null else ServerOffset(offset + wp.rawCount)
+            page to next
         },
         keyOf = { p -> "${p.ownerId}_${p.id}" },
         rememberKey = groupId,
@@ -254,13 +245,12 @@ fun CommunityScreen(
     // photosGet(ownerId=-groupId, albumId="wall", count=50); конец когда page.size < 50.
     val photosState = rememberPagedListState<PhotoItem>(
         fetcher = { cursor ->
-            val startFrom = (cursor as? ServerNextFrom)?.value
-            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
-                groupId = groupId, tab = "photos", count = 50, startFrom = startFrom,
-            )
-            val items = tabData.getAsJsonArray("items")
-            val list = items?.mapNotNull { el -> app.apiClient.parsePhotoItem(el) } ?: emptyList()
-            list to (nextFrom?.let { ServerNextFrom(it) })
+            // P0.47-REVERT: photos.get(album="wall") — getContentForTabs(tab="photos") → 24B (пусто).
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val (list, totalCount) = app.apiClient.photosGetWithCount(ownerId = -groupId, albumId = "wall", count = 50, offset = offset)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
+            list to next
         },
         keyOf = { p -> "photo_${p.ownerId}_${p.id}" },
         rememberKey = groupId,
@@ -271,16 +261,12 @@ fun CommunityScreen(
     var videosLoaded by remember { mutableStateOf(false) }
     val videosState = rememberPagedListState(
         fetcher = { cursor ->
-            val startFrom = (cursor as? ServerNextFrom)?.value
-            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
-                groupId = groupId, tab = "videos", count = 30, startFrom = startFrom,
-            )
-            val items = tabData.getAsJsonArray("items")
-            val list = items?.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
-                app.apiClient.parseVideoFull(el.asJsonObject).withDetectedPlatform()
-            } ?: emptyList()
-            list to (nextFrom?.let { ServerNextFrom(it) })
+            // P0.47-REVERT: video.get — getContentForTabs(tab="videos") → пусто.
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val (list, totalCount) = app.apiClient.videoGetWithCount(ownerId = -groupId, count = 30, offset = offset)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
+            list to next
         },
         keyOf = { v -> "${v.ownerId}_${v.id}" },
         rememberKey = groupId,
@@ -321,24 +307,12 @@ fun CommunityScreen(
     // Единый паттерн пагинации: boardGetTopics(groupId, count=30), конец когда page.size < 30.
     val topicsState = rememberPagedListState<BoardTopic>(
         fetcher = { cursor ->
-            val startFrom = (cursor as? ServerNextFrom)?.value
-            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
-                groupId = groupId, tab = "topics", count = 30, startFrom = startFrom,
-            )
-            val items = tabData.getAsJsonArray("items")
-            val list = items?.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
-                val o = el.asJsonObject
-                BoardTopic(
-                    id = o.get("id")?.asLong ?: 0L,
-                    title = o.get("title")?.asString ?: "",
-                    created = o.get("created")?.asLong ?: 0L,
-                    creatorId = o.get("created_by")?.asLong ?: 0L,
-                    comments = o.get("comments")?.asInt ?: 0,
-                    isClosed = o.get("is_closed")?.asInt ?: 0,
-                )
-            } ?: emptyList()
-            list to (nextFrom?.let { ServerNextFrom(it) })
+            // P0.47-REVERT: board.getTopics — getContentForTabs(tab="topics") → пусто.
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val (list, totalCount) = app.apiClient.boardGetTopicsWithCount(groupId = groupId, count = 30, offset = offset)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
+            list to next
         },
         keyOf = { t -> "topic_${groupId}_${t.id}" },
         rememberKey = groupId,
@@ -351,27 +325,12 @@ fun CommunityScreen(
     var docsLoaded by remember { mutableStateOf(false) }
     val docsState = rememberPagedListState(
         fetcher = { cursor ->
-            val startFrom = (cursor as? ServerNextFrom)?.value
-            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
-                groupId = groupId, tab = "docs", count = 30, startFrom = startFrom,
-            )
-            val items = tabData.getAsJsonArray("items")
-            val list = items?.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
-                val o = el.asJsonObject
-                DocFile(
-                    id = o.get("id")?.asLong ?: return@mapNotNull null,
-                    ownerId = o.get("owner_id")?.asLong ?: 0L,
-                    title = o.get("title")?.asString ?: "",
-                    ext = o.get("ext")?.asString ?: "",
-                    size = o.get("size")?.asLong ?: 0L,
-                    url = o.get("url")?.asString ?: "",
-                    date = o.get("date")?.takeIf { !it.isJsonNull }?.asLong ?: 0,
-                    type = o.get("type")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
-                )
-            } ?: emptyList()
-            list to (nextFrom?.let { ServerNextFrom(it) })
+            // P0.47-REVERT: docs.get — getContentForTabs(tab="docs") → пусто.
+            val offset = (cursor as? ServerOffset)?.offset ?: 0
+            val (list, totalCount) = app.apiClient.docsGetWithCount(count = 30, offset = offset, ownerId = -groupId)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
+            list to next
         },
         keyOf = { d -> "doc_${d.ownerId}_${d.id}" },
         rememberKey = groupId,
