@@ -136,6 +136,10 @@ data class WallGetExtendedResult(
      * иначе футер «Это все…» появлялся бы раньше времени.
      */
     val rawCount: Int = posts.size,
+    /** P0.47: общее количество элементов на сервере (response.count).
+     *  Конец пагинации: offset + rawCount >= totalCount. Без этого — ложный
+     *  конец если VK вернёт < pageSize на промежуточной странице. */
+    val totalCount: Int = 0,
 )
 
 data class ClipsFeedResult(
@@ -155,6 +159,9 @@ data class OwnerVideosResult(
     val items: List<Video>,
     /** Число элементов items[] ДО отсева рекламных sdk-клипов. */
     val rawCount: Int,
+    /** P0.47: общее количество клипов на сервере (response.count).
+     *  Конец пагинации: offset + rawCount >= totalCount. */
+    val totalCount: Int = 0,
 )
 
 data class VideoLongPollServer(

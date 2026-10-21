@@ -16842,7 +16842,10 @@ class VKApiClient(
             }
             // rawCount = сырой размер ответа ДО фильтра/дедупа (items.size()).
             // Он задаёт признак конца пагинации и смещение offset (см. CommunityScreen).
-            WallGetExtendedResult(posts, profileNames, items.size())
+            // P0.47: totalCount = response.count (общее количество на сервере).
+            // Конец: offset + rawCount >= totalCount (без ограничения по pageSize).
+            val totalCount = safeInt(resp.get("count"))
+            WallGetExtendedResult(posts, profileNames, items.size(), totalCount)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "wallGetExtended parse error", e)
             WallGetExtendedResult(emptyList(), emptyMap())
@@ -19645,7 +19648,10 @@ class VKApiClient(
             }
             // rawCount = сырой размер ответа ДО отсева рекламных sdk-клипов.
             // Признак конца пагинации и offset считаются по нему (см. CommunityScreen).
+            // P0.47: totalCount = response.count (общее количество клипов на сервере).
+            // Конец: offset + rawCount >= totalCount (без ограничения по pageSize).
             val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
             val clips = items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
@@ -19666,7 +19672,7 @@ class VKApiClient(
                     null
                 }
             }
-            OwnerVideosResult(clips, rawCount)
+            OwnerVideosResult(clips, rawCount, totalCount)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "shortVideo.getOwnerVideos parse error: ${e.message}", e)
             OwnerVideosResult(emptyList(), 0)

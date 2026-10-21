@@ -197,7 +197,11 @@ fun CommunityScreen(
             // по posts.size: часть записей могла отсеяться фильтром/дедупом внутри
             // wallGetExtended. Смещение offset тоже двигаем на rawCount, иначе
             // из-за дедупа курсор «просядет» и начнёт повторять/пропускать.
-            val next = if (wp.rawCount < 30) null else ServerOffset(offset + wp.rawCount)
+            // P0.47: конец по totalCount (response.count), а НЕ по rawCount < pageSize.
+            // VK может вернуть < pageSize на промежуточной странице — это НЕ конец.
+            // Конец: rawCount == 0 (пустой ответ) ИЛИ offset + rawCount >= totalCount.
+            val next = if (wp.rawCount == 0 || (wp.totalCount > 0 && offset + wp.rawCount >= wp.totalCount))
+                null else ServerOffset(offset + wp.rawCount)
             page to next
         },
         keyOf = { p -> "${p.ownerId}_${p.id}" },
@@ -284,9 +288,11 @@ fun CommunityScreen(
         fetcher = { cursor ->
             val offset = (cursor as? ServerOffset)?.offset ?: 0
             val res = app.apiClient.shortVideoGetOwnerVideos(ownerId = -groupId, count = 30, offset = offset)
-            // Признак конца — по СЫРОМУ размеру ответа (res.rawCount), а не по
-            // res.items.size: рекламные sdk-клипы отсеиваются внутри метода.
-            val next = if (res.rawCount < 30) null else ServerOffset(offset + res.rawCount)
+            // P0.47: конец по totalCount (response.count), а НЕ по rawCount < pageSize.
+            // VK может вернуть < pageSize на промежуточной странице — это НЕ конец.
+            // Конец: rawCount == 0 ИЛИ offset + rawCount >= totalCount.
+            val next = if (res.rawCount == 0 || (res.totalCount > 0 && offset + res.rawCount >= res.totalCount))
+                null else ServerOffset(offset + res.rawCount)
             res.items to next
         },
         keyOf = { v -> "clip_${v.ownerId}_${v.id}" },
