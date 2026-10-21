@@ -246,8 +246,10 @@ fun CommunityScreen(
     val photosState = rememberPagedListState<PhotoItem>(
         fetcher = { cursor ->
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val list = app.apiClient.photosGet(ownerId = -groupId, albumId = "wall", count = 50, offset = offset)
-            val next = if (list.size < 50) null else ServerOffset(offset + list.size)
+            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
+            val (list, totalCount) = app.apiClient.photosGetWithCount(ownerId = -groupId, albumId = "wall", count = 50, offset = offset)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
             list to next
         },
         keyOf = { p -> "photo_${p.ownerId}_${p.id}" },
@@ -260,8 +262,10 @@ fun CommunityScreen(
     val videosState = rememberPagedListState(
         fetcher = { cursor ->
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val list = app.apiClient.videoGet(ownerId = -groupId, count = 30, offset = offset)
-            val next = if (list.size < 30) null else ServerOffset(offset + list.size)
+            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
+            val (list, totalCount) = app.apiClient.videoGetWithCount(ownerId = -groupId, count = 30, offset = offset)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
             list to next
         },
         keyOf = { v -> "${v.ownerId}_${v.id}" },
@@ -304,8 +308,10 @@ fun CommunityScreen(
     val topicsState = rememberPagedListState<BoardTopic>(
         fetcher = { cursor ->
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val list = app.apiClient.boardGetTopics(groupId = groupId, count = 30, offset = offset)
-            val next = if (list.size < 30) null else ServerOffset(offset + list.size)
+            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
+            val (list, totalCount) = app.apiClient.boardGetTopicsWithCount(groupId = groupId, count = 30, offset = offset)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
             list to next
         },
         keyOf = { t -> "topic_${groupId}_${t.id}" },
@@ -320,8 +326,10 @@ fun CommunityScreen(
     val docsState = rememberPagedListState(
         fetcher = { cursor ->
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val list = app.apiClient.docsGet(ownerId = -groupId, count = 30, offset = offset)
-            val next = if (list.size < 30) null else ServerOffset(offset + list.size)
+            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
+            val (list, totalCount) = app.apiClient.docsGetWithCount(count = 30, offset = offset, ownerId = -groupId)
+            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
+                null else ServerOffset(offset + list.size)
             list to next
         },
         keyOf = { d -> "doc_${d.ownerId}_${d.id}" },

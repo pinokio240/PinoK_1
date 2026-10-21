@@ -4876,6 +4876,40 @@ class VKApiClient(
         }
     }
 
+    // P0.47: boardGetTopics с totalCount — для корректной пагинации.
+    suspend fun boardGetTopicsWithCount(groupId: Long, count: Int = 30, offset: Int = 0): Pair<List<re.pinok.data.model.BoardTopic>, Int> {
+        if (isOffline()) return emptyList<re.pinok.data.model.BoardTopic>() to 0
+        val json = call("board.getTopics", mapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "extended" to "1",
+            "preview_length" to "100",
+        )) ?: return emptyList<re.pinok.data.model.BoardTopic>() to 0
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList<re.pinok.data.model.BoardTopic>() to 0
+            val items = resp.getAsJsonArray("items") ?: return emptyList<re.pinok.data.model.BoardTopic>() to 0
+            val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
+            val parsed = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                re.pinok.data.model.BoardTopic(
+                    id = o.get("id")?.asLong ?: 0L,
+                    title = o.get("title")?.asString ?: "",
+                    created = o.get("created")?.asLong ?: 0L,
+                    creatorId = o.get("created_by")?.asLong ?: 0L,
+                    comments = o.get("comments")?.asInt ?: 0,
+                    isClosed = o.get("is_closed")?.asInt ?: 0,
+                )
+            }
+            parsed to (if (totalCount > 0) totalCount else rawCount)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "boardGetTopicsWithCount parse error", e)
+            emptyList<re.pinok.data.model.BoardTopic>() to 0
+        }
+    }
+
     /** board.getComments — комментарии темы обсуждения. */
     suspend fun boardGetComments(groupId: Long, topicId: Long, count: Int = 30, offset: Int = 0): List<re.pinok.data.model.BoardComment> {
         if (isOffline()) return emptyList()
@@ -9890,6 +9924,35 @@ class VKApiClient(
         }
     }
 
+    // P0.47: videoGet с totalCount — для корректной пагинации.
+    suspend fun videoGetWithCount(
+        ownerId: Long? = null,
+        count: Int = 30,
+        offset: Int = 0,
+        albumId: Long? = null,
+    ): Pair<List<Video>, Int> {
+        if (isOffline()) return emptyList<Video>() to 0
+        val args = mutableMapOf("count" to count.toString(), "extended" to "1")
+        if (ownerId != null) args["owner_id"] = ownerId.toString()
+        if (albumId != null) args["album_id"] = albumId.toString()
+        if (offset > 0) args["offset"] = offset.toString()
+        val json = call("video.get", args) ?: return emptyList<Video>() to 0
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList<Video>() to 0
+            val items = resp.getAsJsonArray("items") ?: return emptyList<Video>() to 0
+            val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
+            val parsed = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                parseVideoFull(el.asJsonObject).withDetectedPlatform()
+            }
+            parsed to (if (totalCount > 0) totalCount else rawCount)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "videoGetWithCount parse error", e)
+            emptyList<Video>() to 0
+        }
+    }
+
     /**
      * Fix #364 #FEED-REACTIONS-VIDEO: video.get по ЯВНОМУ списку
      * идентификаторов «ownerId_itemId» (опционально «ownerId_itemId_accessKey»).
@@ -10511,11 +10574,41 @@ class VKApiClient(
         )
         val json = call("photos.get", args) ?: return emptyList()
         return try {
-            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+            val resp = json.getAsJsonObject("response") ?: return emptyList()
+            val items = resp.getAsJsonArray("items") ?: return emptyList()
             items.mapNotNull { el -> parsePhotoItem(el) }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "photosGet parse error", e)
             emptyList()
+        }
+    }
+
+    // P0.47: photosGet с totalCount — для корректной пагинации (без ложного конца).
+    suspend fun photosGetWithCount(
+        ownerId: Long,
+        albumId: String,
+        count: Int,
+        offset: Int,
+    ): Pair<List<PhotoItem>, Int> {
+        if (isOffline()) return emptyList<PhotoItem>() to 0
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "album_id" to albumId,
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "extended" to "1",
+        )
+        val json = call("photos.get", args) ?: return emptyList<PhotoItem>() to 0
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList<PhotoItem>() to 0
+            val items = resp.getAsJsonArray("items") ?: return emptyList<PhotoItem>() to 0
+            val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
+            val parsed = items.mapNotNull { el -> parsePhotoItem(el) }
+            parsed to (if (totalCount > 0) totalCount else rawCount)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "photosGetWithCount parse error", e)
+            emptyList<PhotoItem>() to 0
         }
     }
 
@@ -11045,6 +11138,39 @@ class VKApiClient(
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "docsGet parse error", e)
             emptyList()
+        }
+    }
+
+    // P0.47: docsGet с totalCount — для корректной пагинации.
+    suspend fun docsGetWithCount(count: Int = 50, offset: Int = 0, ownerId: Long? = null): Pair<List<DocFile>, Int> {
+        if (isOffline()) return emptyList<DocFile>() to 0
+        val args = mutableMapOf("count" to count.toString(), "offset" to offset.toString())
+        if (ownerId != null) args["owner_id"] = ownerId.toString()
+        val json = call("docs.get", args) ?: return emptyList<DocFile>() to 0
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyList<DocFile>() to 0
+            val items = resp.getAsJsonArray("items") ?: return emptyList<DocFile>() to 0
+            val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
+            val parsed = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                DocFile(
+                    id = o.get("id")?.asLong ?: return@mapNotNull null,
+                    ownerId = o.get("owner_id")?.asLong ?: 0L,
+                    title = o.get("title")?.asString ?: "",
+                    ext = o.get("ext")?.asString ?: "",
+                    size = o.get("size")?.asLong ?: 0L,
+                    url = o.get("url")?.asString ?: "",
+                    date = o.get("date")?.takeIf { !it.isJsonNull }?.asLong ?: 0,
+                    type = o.get("type")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
+                )
+            }
+            parsed to (if (totalCount > 0) totalCount else rawCount)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "docsGetWithCount parse error", e)
+            emptyList<DocFile>() to 0
         }
     }
 
