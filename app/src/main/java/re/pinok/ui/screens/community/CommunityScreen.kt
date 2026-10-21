@@ -100,6 +100,7 @@ import re.pinok.ui.components.PostCard
 import re.pinok.ui.components.PostMenuItem
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ServerOffset
+import re.pinok.ui.components.ServerNextFrom
 import re.pinok.ui.components.rememberPagedListState
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.VideoThumbnail
@@ -187,22 +188,29 @@ fun CommunityScreen(
     // переведены на PagedListState. Курсор — ServerOffset (offset += размер страницы),
     // конец списка = серверный курсор пришёл null. Собственные *LoadingMore/
     // *EndReached-флаги и старые snapshotFlow-триггеры удалены.
+    // P0.47: ВСЕ вкладки — cursor-based через groups.getContentForTabs.
+    // start_from → next_from. Конец: next_from == null. Без offset, без list.size < pageSize.
     val wallState = rememberPagedListState(
         fetcher = { cursor ->
-            val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val wp = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
-            signerNames = signerNames + wp.profileNames
-            val page = wp.posts.filter { it.id > 0 && it.ownerId != 0L }
-            // Признак конца — по СЫРОМУ размеру ответа сервера (wp.rawCount), а не
-            // по posts.size: часть записей могла отсеяться фильтром/дедупом внутри
-            // wallGetExtended. Смещение offset тоже двигаем на rawCount, иначе
-            // из-за дедупа курсор «просядет» и начнёт повторять/пропускать.
-            // P0.47: конец по totalCount (response.count), а НЕ по rawCount < pageSize.
-            // VK может вернуть < pageSize на промежуточной странице — это НЕ конец.
-            // Конец: rawCount == 0 (пустой ответ) ИЛИ offset + rawCount >= totalCount.
-            val next = if (wp.rawCount == 0 || (wp.totalCount > 0 && offset + wp.rawCount >= wp.totalCount))
-                null else ServerOffset(offset + wp.rawCount)
-            page to next
+            val startFrom = (cursor as? ServerNextFrom)?.value
+            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
+                groupId = groupId, tab = "wall", count = 30, startFrom = startFrom,
+            )
+            val items = tabData.getAsJsonArray("items") ?: emptyList<Post>() to null
+            val page = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                parsePostMini(el.asJsonObject)
+            }.filter { it.id > 0 && it.ownerId != 0L }
+            // Профили из ответа
+            tabData.getAsJsonArray("profiles")?.forEach { el ->
+                if (el.isJsonObject) {
+                    val o = el.asJsonObject
+                    val uid = o.get("id")?.asLong ?: return@forEach
+                    val name = ((o.get("first_name")?.asString ?: "") + " " + (o.get("last_name")?.asString ?: "")).trim()
+                    if (uid > 0 && name.isNotEmpty()) signerNames = signerNames + (uid to name)
+                }
+            }
+            page to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { p -> "${p.ownerId}_${p.id}" },
         rememberKey = groupId,
@@ -245,12 +253,13 @@ fun CommunityScreen(
     // photosGet(ownerId=-groupId, albumId="wall", count=50); конец когда page.size < 50.
     val photosState = rememberPagedListState<PhotoItem>(
         fetcher = { cursor ->
-            val offset = (cursor as? ServerOffset)?.offset ?: 0
-            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
-            val (list, totalCount) = app.apiClient.photosGetWithCount(ownerId = -groupId, albumId = "wall", count = 50, offset = offset)
-            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
-                null else ServerOffset(offset + list.size)
-            list to next
+            val startFrom = (cursor as? ServerNextFrom)?.value
+            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
+                groupId = groupId, tab = "photos", count = 50, startFrom = startFrom,
+            )
+            val items = tabData.getAsJsonArray("items")
+            val list = items?.mapNotNull { el -> parsePhotoItem(el) } ?: emptyList()
+            list to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { p -> "photo_${p.ownerId}_${p.id}" },
         rememberKey = groupId,
@@ -261,12 +270,16 @@ fun CommunityScreen(
     var videosLoaded by remember { mutableStateOf(false) }
     val videosState = rememberPagedListState(
         fetcher = { cursor ->
-            val offset = (cursor as? ServerOffset)?.offset ?: 0
-            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
-            val (list, totalCount) = app.apiClient.videoGetWithCount(ownerId = -groupId, count = 30, offset = offset)
-            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
-                null else ServerOffset(offset + list.size)
-            list to next
+            val startFrom = (cursor as? ServerNextFrom)?.value
+            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
+                groupId = groupId, tab = "videos", count = 30, startFrom = startFrom,
+            )
+            val items = tabData.getAsJsonArray("items")
+            val list = items?.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                parseVideoFull(el.asJsonObject).withDetectedPlatform()
+            } ?: emptyList()
+            list to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { v -> "${v.ownerId}_${v.id}" },
         rememberKey = groupId,
@@ -286,18 +299,18 @@ fun CommunityScreen(
     var tracksHasMore by remember { mutableStateOf(false) }
     var tracksLoadingMore by remember { mutableStateOf(false) }
 
-    // #GROUP-CLIPS: state для вкладки «Клипы» (shortVideo.getOwnerVideos).
-    // Единый паттерн пагинации: count=30, конец когда page.size < 30.
+    // #GROUP-CLIPS: state для вкладки «Клипы».
+    // P0.47: cursor-based пагинация через groups.getContentForTabs (как VK web).
+    // start_from → next_from, count=45. Конец: next_from == null.
     val clipsState = rememberPagedListState<Video>(
         fetcher = { cursor ->
-            val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val res = app.apiClient.shortVideoGetOwnerVideos(ownerId = -groupId, count = 30, offset = offset)
-            // P0.47: конец по totalCount (response.count), а НЕ по rawCount < pageSize.
-            // VK может вернуть < pageSize на промежуточной странице — это НЕ конец.
-            // Конец: rawCount == 0 ИЛИ offset + rawCount >= totalCount.
-            val next = if (res.rawCount == 0 || (res.totalCount > 0 && offset + res.rawCount >= res.totalCount))
-                null else ServerOffset(offset + res.rawCount)
-            res.items to next
+            val startFrom = (cursor as? ServerNextFrom)?.value
+            val (clips, nextFrom) = app.apiClient.groupsGetClipsForTabs(
+                groupId = groupId,
+                count = 45,
+                startFrom = startFrom,
+            )
+            clips to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { v -> "clip_${v.ownerId}_${v.id}" },
         rememberKey = groupId,
@@ -307,12 +320,24 @@ fun CommunityScreen(
     // Единый паттерн пагинации: boardGetTopics(groupId, count=30), конец когда page.size < 30.
     val topicsState = rememberPagedListState<BoardTopic>(
         fetcher = { cursor ->
-            val offset = (cursor as? ServerOffset)?.offset ?: 0
-            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
-            val (list, totalCount) = app.apiClient.boardGetTopicsWithCount(groupId = groupId, count = 30, offset = offset)
-            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
-                null else ServerOffset(offset + list.size)
-            list to next
+            val startFrom = (cursor as? ServerNextFrom)?.value
+            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
+                groupId = groupId, tab = "topics", count = 30, startFrom = startFrom,
+            )
+            val items = tabData.getAsJsonArray("items")
+            val list = items?.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                BoardTopic(
+                    id = o.get("id")?.asLong ?: 0L,
+                    title = o.get("title")?.asString ?: "",
+                    created = o.get("created")?.asLong ?: 0L,
+                    creatorId = o.get("created_by")?.asLong ?: 0L,
+                    comments = o.get("comments")?.asInt ?: 0,
+                    isClosed = o.get("is_closed")?.asInt ?: 0,
+                )
+            } ?: emptyList()
+            list to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { t -> "topic_${groupId}_${t.id}" },
         rememberKey = groupId,
@@ -325,12 +350,27 @@ fun CommunityScreen(
     var docsLoaded by remember { mutableStateOf(false) }
     val docsState = rememberPagedListState(
         fetcher = { cursor ->
-            val offset = (cursor as? ServerOffset)?.offset ?: 0
-            // P0.47: WithCount — конец по totalCount, не по list.size < pageSize.
-            val (list, totalCount) = app.apiClient.docsGetWithCount(count = 30, offset = offset, ownerId = -groupId)
-            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
-                null else ServerOffset(offset + list.size)
-            list to next
+            val startFrom = (cursor as? ServerNextFrom)?.value
+            val (tabData, nextFrom) = app.apiClient.groupsGetContentForTabsCursor(
+                groupId = groupId, tab = "docs", count = 30, startFrom = startFrom,
+            )
+            val items = tabData.getAsJsonArray("items")
+            val list = items?.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                DocFile(
+                    id = o.get("id")?.asLong ?: return@mapNotNull null,
+                    ownerId = o.get("owner_id")?.asLong ?: 0L,
+                    title = o.get("title")?.asString ?: "",
+                    ext = o.get("ext")?.asString ?: "",
+                    size = o.get("size")?.asLong ?: 0L,
+                    url = o.get("url")?.asString ?: "",
+                    date = o.get("date")?.takeIf { !it.isJsonNull }?.asLong ?: 0,
+                    type = o.get("type")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
+                )
+            } ?: emptyList()
+            list to (nextFrom?.let { ServerNextFrom(it) })
         },
         keyOf = { d -> "doc_${d.ownerId}_${d.id}" },
         rememberKey = groupId,

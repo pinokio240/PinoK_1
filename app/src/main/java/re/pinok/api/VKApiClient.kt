@@ -12785,7 +12785,7 @@ class VKApiClient(
         )
     }
 
-    private fun parsePhotoItem(el: com.google.gson.JsonElement): PhotoItem? {
+    internal fun parsePhotoItem(el: com.google.gson.JsonElement): PhotoItem? {
         if (!el.isJsonObject) return null
         val o = el.asJsonObject
         val sizes = o.getAsJsonArray("sizes")?.mapNotNull { s ->
@@ -13063,7 +13063,7 @@ class VKApiClient(
         return result.takeIf { it.isNotEmpty() }
     }
 
-    private fun parsePostMini(o: JsonObject): Post {
+    internal fun parsePostMini(o: JsonObject): Post {
         // Fix #70: ранее здесь attachments и copy_history НЕ парсились →
         // все посты на стене профиля имели attachments=null → фото/видео/репосты
         // не отображались, посты выглядели пустыми (только текст + статистика).
@@ -13152,7 +13152,7 @@ class VKApiClient(
      * attachments в сообщениях и постах. Старые callers получают те же поля +
      * новые clips-specific (reposts, comments, music_info, is_clips, etc.).
      */
-    private fun parseVideoFull(o: JsonObject): Video {
+    internal fun parseVideoFull(o: JsonObject): Video {
         // §37.12 #324: NEW format (short_video_full) использует engagement{} вместо
         // likes{}/views/comments/reposts, access{} вместо can_*, duration_seconds
         // вместо duration, publish_timestamp вместо date, covers[] вместо image[],
@@ -20692,6 +20692,85 @@ class VKApiClient(
         )
         val json = call("groups.getContentForTabs", args, forceWebGateway = true) ?: return null
         return unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+    }
+
+    // P0.47: groups.getContentForTabs для клипов — cursor-based пагинация
+    // (start_from → next_from), как в VK web (HAR: пагинация в клипах.7z).
+    // Возвращает List<Video> + nextFrom cursor (null = конец).
+    suspend fun groupsGetClipsForTabs(
+        groupId: Long,
+        count: Int = 45,
+        startFrom: String? = null,
+    ): Pair<List<Video>, String?> {
+        if (isOffline()) return emptyList<Video>() to null
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "tabs" to "short_videos",
+            "content" to "short_videos",
+            "extended" to "",
+            "fields" to "",
+            "count" to count.toString(),
+            "start_from" to (startFrom ?: ""),
+        )
+        val json = call("groups.getContentForTabs", args, forceWebGateway = true)
+            ?: return emptyList<Video>() to null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: return emptyList<Video>() to null
+            val sv = resp.getAsJsonObject("short_videos") ?: return emptyList<Video>() to null
+            val items = sv.getAsJsonArray("items") ?: return emptyList<Video>() to null
+            val nextFrom = safeString(sv.get("next_from"))?.takeIf { it.isNotBlank() }
+            val clips = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                try {
+                    val videoObj = o.getAsJsonObject("short_video")
+                        ?: o.getAsJsonObject("video")
+                        ?: o
+                    parseVideoFull(videoObj).withDetectedPlatform()
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            clips to nextFrom
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetClipsForTabs parse error", e)
+            emptyList<Video>() to null
+        }
+    }
+
+    // P0.47: УНИВЕРСАЛЬНЫЙ groups.getContentForTabs для ВСЕХ вкладок.
+    // cursor-based (start_from → next_from), без offset и без list.size < pageSize.
+    // VK web HAR подтверждает: все вкладки сообщества используют этот паттерн.
+    // Возвращает сырой JsonObject (формат зависит от tab) + nextFrom cursor.
+    suspend fun groupsGetContentForTabsCursor(
+        groupId: Long,
+        tab: String,
+        count: Int = 30,
+        startFrom: String? = null,
+    ): Pair<JsonObject, String?> {
+        if (isOffline()) return JsonObject() to null
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "tabs" to tab,
+            "content" to tab,
+            "extended" to "",
+            "fields" to "",
+            "count" to count.toString(),
+            "start_from" to (startFrom ?: ""),
+        )
+        val json = call("groups.getContentForTabs", args, forceWebGateway = true)
+            ?: return JsonObject() to null
+        return try {
+            val resp = unwrapResponse(json)?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: return JsonObject() to null
+            val tabData = resp.getAsJsonObject(tab) ?: resp
+            val nextFrom = safeString(tabData.get("next_from"))?.takeIf { it.isNotBlank() }
+            tabData to nextFrom
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "groupsGetContentForTabsCursor error", e)
+            JsonObject() to null
+        }
     }
 
     /** W35-b: groups.getMembers(filter=managers) — руководители сообщества. */
