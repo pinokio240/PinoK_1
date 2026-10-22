@@ -4,7 +4,8 @@ import android.app.Application
 import re.pinok.contracts.AppContainer
 import re.pinok.contracts.AttachmentRenderer
 import re.pinok.contracts.Capability
-import re.pinok.contracts.NavEntry
+// EQ-PANEL-FIX: NavEntry import удалён — AudioNavEntry больше не определяется
+// (пункт «Эквалайзер» теперь в PanelItems.all, настраивается через редактор панелей).
 import re.pinok.contracts.PermissionNeeds
 import re.pinok.contracts.SettingsSection
 import re.pinok.util.AppLog
@@ -13,27 +14,29 @@ import re.pinok.util.AppLog
  * #ARCH-CONTAINERS (Этап 1.5-б): контейнер «Аудио» (плеер/эквалайзер —
  * вводные: музыка.md, EQUALIZER_INTEGRATION_PLAN.md).
  *
- * Публикует 4 capability (реестр → хост):
- *  1. [AudioNavEntry]           — кнопка «Эквалайзер» в боковой панели (route
- *     "equalizer" — СОВПАДАЕТ с бывшим ядерным пунктом drawer: Screen.Equalizer;
- *     NavHost-destination и экран EqualizerScreen остаются в хосте :app —
- *     блокер EqualizerFeatureFlags/CustomPresetStore/AudioEffectsEngine, см.
- *     контейнеры.план.md, Этап 1.5-б);
- *  2. [AudioSettingsSection]    — вкладка настроек «Эквалайзер» (route
+ * * Публикует 3 capability (реестр → хост):
+ *  1. [AudioSettingsSection]    — вкладка настроек «Эквалайзер» (route
  *     "settings_audio" — новый стабильный маршрут по образцу "settings_calls";
  *     контент рендерит ХОСТ: компосабл EqualizerTab остаётся в :app —
  *     EqualizerFeatureFlags читает SovaApp.get() и EqualizerHelper, которые
  *     фиче-модулю недоступны);
- *  3. [AudioAttachmentRenderer] — рендер аудио-вложений чата (rendererKey
+ *  2. [AudioAttachmentRenderer] — рендер аудио-вложений чата (rendererKey
  *     "audio_inline"): хост мапит ключ на компосабл [AudioInlineRenderer]
  *     (этот же модуль) и передаёт данные/колбэки; ВОЙС-вложения НЕ публикуются
  *     (VoiceMessageBubble тянет data.model.Attachment.Doc + VoicePlaybackController
  *     :app — ветка voice осталась host-inline, реестр для неё не спрашивается);
- *  4. [AudioPermissions]        — MODIFY_AUDIO_SETTINGS (эквалайзер; normal-
+ *  3. [AudioPermissions]        — MODIFY_AUDIO_SETTINGS (эквалайзер; normal-
  *     permission, декларативно). RECORD_AUDIO НЕ публикуем по фактам: запись
  *     войсов — функция чата хоста (ChatDetailScreen + VoiceRecorder из
  *     :core:media), BLUETOOTH_CONNECT — маршрутизация PlayerService (:app);
  *     оба запрашиваются хостом независимо от контейнера.
+ *
+ * Пункт «Эквалайзер» в drawer больше НЕ публикуется через контейнерный NavEntry
+ * (EQ-PANEL-FIX 2026-10-22): теперь он добавлен в PanelItems.all (PanelItems.kt:92)
+ * и настраивается через «Редактор панелей» как все остальные пункты. Drawer
+ * рендерит его через visibleSidebarItems (SovaNavHost.kt:1236) — отдельный
+ * контейнерный NavEntry больше не нужен (был suppressed как дубликат).
+ * NavHost-destination (Screen.Equalizer → EqualizerScreen) остаётся в хосте.
  *
  * Раздел «Музыка» Dock (Screen.Music) — собственность ЯДРА (правило владения
  * UI): NavEntry на него НЕ публикуется. Ядерная вкладка настроек «Музыка»
@@ -51,7 +54,9 @@ class AudioContainer : AppContainer {
     override val id: String = "audio"
 
     override fun capabilities(): List<Capability> = listOf(
-        AudioNavEntry,
+        // EQ-PANEL-FIX: AudioNavEntry удалён — пункт «Эквалайзер» теперь в
+        // PanelItems.all (PanelItems.kt:92) и настраивается через «Редактор
+        // панелей». Drawer рендерит его через visibleSidebarItems.
         AudioSettingsSection,
         AudioAttachmentRenderer,
         AudioPermissions,
@@ -69,21 +74,6 @@ class AudioContainer : AppContainer {
         // эквалайзера принадлежат PlayerService/AudioEffectsEngine в :app).
         AppLog.i("AudioContainer", "release: no-op (идемпотентно)")
     }
-}
-
-/**
- * Кнопка «Эквалайзер» в drawer. route = "equalizer" — прежний route ядерного
- * пункта (Screen.Equalizer); host-маппинг hostDestinationForRoute("equalizer")
- * → Screen.Equalizer, destination в NavHost хоста остаётся (открывается и из
- * плеера — onOpenFullEqualizer — независимо от контейнера).
- * order=30 — после «Звонки»(10) и «Фото»(20).
- */
-private object AudioNavEntry : NavEntry {
-    override val title: String = "Эквалайзер"
-    override val iconKey: String = "equalizer"
-    /** После «Фото» (20); хост сортирует контейнерные пункты по order. */
-    override val order: Int = 30
-    override val route: String = "equalizer"
 }
 
 /**

@@ -230,9 +230,9 @@ private fun hostDestinationForRoute(route: String): Screen? = when (route) {
     // #ARCH-CONTAINERS (Этап 1.5-а): «Фото» — контейнер :feature:photos;
     // destination (Screen.Photos → PhotosScreen) остаётся в NavHost хоста.
     Screen.Photos.route -> Screen.Photos // "photos"
-    // #ARCH-CONTAINERS (Этап 1.5-б): «Эквалайзер» — контейнер :feature:audio;
-    // destination (Screen.Equalizer → EqualizerScreen) остаётся в NavHost хоста
-    // (открывается и из плеера — onOpenFullEqualizer — независимо от контейнера).
+    // EQ-PANEL-FIX: «Эквалайзер» — mapping оставлен для future containers и
+    // hostDestinationForRoute lookup (Photos/Calls тоже здесь). Сам AudioNavEntry
+    // удалён — пункт теперь в PanelItems.all (PanelItems.kt:92).
     Screen.Equalizer.route -> Screen.Equalizer // "equalizer"
     else -> null
 }
@@ -859,11 +859,14 @@ fun SovaNavHost(
         // скачанным аудио/видео без переключения в guest-режим. Маршрут
         // Screen.OfflineManager уже зарегистрирован ниже в NavHost.
         Screen.OfflineManager,
-        // #ARCH-CONTAINERS (Этап 1.5-б): Screen.Equalizer убран из ядерного
-        // хардкода — пункт «Эквалайзер» приходит из реестра (NavEntry контейнера
-        // :feature:audio, route "equalizer", см. containerNavEntries в
-        // drawerContent). Без контейнера пункта нет, остальное живо; экран
-        // остаётся доступен из плеера (onOpenFullEqualizer) — destination ниже.
+        // EQ-PANEL-FIX: Screen.Equalizer возвращён в drawerScreens (для currentTitle
+        // lookup — SovaNavHost.kt:933 allScreens = dockScreens + drawerScreens + ...).
+        // Раньше был убран (#ARCH-CONTAINERS 1.5-б) — пункт приходил из контейнерного
+        // AudioNavEntry. После удаления AudioNavEntry (EQ-PANEL-FIX) — Screen.Equalizer
+        // снова в ядерном списке, что обеспечивает корректный заголовок TopAppBar
+        // при открытом экране эквалайзера. Drawer-кнопка рендерится через
+        // visibleSidebarItems (PanelItems.all), а НЕ через drawerScreens напрямую.
+        Screen.Equalizer,
     )
 
     // ── Fix #337 / #PANELEDIT: редактор панелей ─────────────────────────
