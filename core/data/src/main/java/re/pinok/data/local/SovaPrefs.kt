@@ -631,9 +631,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false).
             callsEnabled = p[Keys.CALLS_ENABLED] ?: false,
             // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный флоу входа (прямой HTTP).
-            // Default true (2026-10-20) — тумблер в «Разработке» включён, пока пользователь
-            // явно его не выключил (сохранённое значение приоритетнее). Только ручной вход.
-            authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: true,
+            // AUTH-WHITESCREEN-FIX (2026-10-23): default CHANGED to false — V2 (VkLiteWebViewAuthScreen)
+            // имеет 13 CRITICAL/HIGH багов (нет WebChromeClient, нет safety-net reload, polling race
+            // condition, нет onRenderProcessGone, нет UA override, нет FixedInputWebView). На Oppo
+            // A17k (ColorOS 12, 3GB RAM, MediaTek G35) V2 даёт белый экран. V1 (VkAuthWebViewScreenV2,
+            // 1108 строк) имеет все 17 safety-mechanisms (#339/#370/#384/#191/#195b/P0-2/P0-3/P1-4/
+            // P1-5/P1-6/#BLACKSCREEN-RENDERER/#WEBVIEW-SAFETY-NET/#DOZE-COOKIE-FLUSH/#SSO-DEEPLINK-FIX/
+            // #WEBVIEW-OUTDATED-FIX). Пользователь может явно включить V2 в «Разработке».
+            authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
             callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: false,

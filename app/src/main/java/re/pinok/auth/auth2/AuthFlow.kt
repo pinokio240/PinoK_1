@@ -47,9 +47,9 @@ object AuthFlowFactory {
     fun resolve(app: SovaApp, silent: Boolean): AuthFlow? {
         // Silent re-login — всегда прежний WebView-флоу (не трогаем).
         if (silent) return null
-        // Дефолт true (2026-10-20): нет снапшота/ключа — «Авторизация 2» включена,
-        // сохранённое значение (в т.ч. явное false) приоритетнее.
-        val v2 = runCatching { app.prefsSnapshot?.authV2Enabled ?: true }.getOrDefault(true)
+        // AUTH-WHITESCREEN-FIX (2026-10-23): default false — V2 даёт белый экран на
+        // budget устройствах (Oppo A17k). V1 (VkAuthWebViewScreenV2) имеет safety-mechanisms.
+        val v2 = runCatching { app.prefsSnapshot?.authV2Enabled ?: false }.getOrDefault(false)
         if (!v2) return null
         return DirectHttpAuthFlow(app)
     }

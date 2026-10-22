@@ -99,8 +99,9 @@ internal fun LandingScreen(
     // #AUTH2 (2026-10-17): если включена «Авторизация 2» — на LandingScreen появляется
     // дополнительная кнопка «Войти в аккаунт 2» (WebView-флоу по образцу vk-lite).
     // Обычная кнопка «Войти через VK» остаётся как была.
-    // 2026-10-20: дефолт true — согласован с SovaPrefs (тумблер включён по умолчанию).
-    authV2Enabled: Boolean = true,
+    // AUTH-WHITESCREEN-FIX (2026-10-23): default false (синхрон с SovaPrefs) —
+    // V2 даёт белый экран на budget устройствах (Oppo A17k).
+    authV2Enabled: Boolean = false,
     onStartAuthV2: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
