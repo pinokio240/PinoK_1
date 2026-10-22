@@ -2401,16 +2401,33 @@ class VKApiClient(
      */
     suspend fun messagesSetConversationPushSettings(
         peerId: Long, disabled: Boolean, sound: Int? = null,
+        // P1.3: per-chat timed mute. untilSec — это UNIX-timestamp окончания
+        // mute (как требует VK API для disabled_until).
+        //   -1L (default) = forever (disabled_until=-1, disabled_forever=1)
+        //    0L           = unmute (только если disabled=false; для disabled=true
+        //                  0 означает «отменить mute» — эквивалентно unmute)
+        //   >0L           = mute до указанного UNIX-timestamp (disabled_until=ts)
+        // Existing callers без untilSec — НЕ сломаны (default -1L = forever).
+        untilSec: Long = -1L,
     ): Chat.PushSettings? {
         if (isOffline()) return null
         val args = mutableMapOf(
             "peer_id" to peerId.toString(),
             "disabled" to if (disabled) "1" else "0",
-            // Fix #122: disabled_until=-1 для permanent mute, 0 для unmute.
-            "disabled_until" to if (disabled) "-1" else "0",
-            // Fix #273: web/m.vk.com flow (VK_IMPORT_API.MD §35.1) использует
-            // disabled_forever. Шлём вместе с disabled для совместимости.
-            "disabled_forever" to if (disabled) "1" else "0",
+            // P1.3: disabled_until — -1 для permanent mute, 0 для unmute,
+            // UNIX-timestamp для timed mute.
+            //   disabled=false (unmute): всегда "0".
+            //   disabled=true  + untilSec<=0: "-1" (forever, backward compat).
+            //   disabled=true  + untilSec>0:  "<timestamp>" (timed mute).
+            "disabled_until" to when {
+                !disabled -> "0"
+                untilSec > 0 -> untilSec.toString()
+                else -> "-1"
+            },
+            // P1.3: disabled_forever — 1 ТОЛЬКО для permanent mute
+            // (disabled=true && untilSec<=0). Для timed mute (untilSec>0) —
+            // 0 (VK сам снимет mute по истечении disabled_until).
+            "disabled_forever" to if (disabled && untilSec <= 0L) "1" else "0",
         )
         sound?.let { args["sound"] = it.toString() }
         val json = call("messages.setConversationPushSettings", args)
@@ -2433,12 +2450,18 @@ class VKApiClient(
             }
             // Case 2: {"response": 1} — успех без push_settings.
             // Синтезируем PushSettings из запрошенного state (Fix #273).
+            // P1.3: для timed mute (untilSec>0) — disabled_until = untilSec,
+            // disabled_forever=false (VK сам снимет mute по таймеру).
             if (respElem != null && respElem.isJsonPrimitive) {
                 val ok = try { respElem.asInt } catch (_: Exception) { 0 }
                 if (ok == 1) {
                     val synthetic = Chat.PushSettings(
-                        disabledForever = disabled,
-                        disabledUntil = if (disabled) -1L else 0L,
+                        disabledForever = disabled && untilSec <= 0L,
+                        disabledUntil = when {
+                            !disabled -> 0L
+                            untilSec > 0 -> untilSec
+                            else -> -1L
+                        },
                         sound = sound,
                         noSound = null,
                         disabledMentions = null,
@@ -2446,7 +2469,7 @@ class VKApiClient(
                     )
                     AppLog.i("VKApiClient",
                         "setConversationPushSettings ok (primary, response=1 → synthetic): " +
-                            "peer=$peerId disabled=$disabled synthetic=$synthetic")
+                            "peer=$peerId disabled=$disabled untilSec=$untilSec synthetic=$synthetic")
                     return synthetic
                 }
             }
@@ -2463,23 +2486,28 @@ class VKApiClient(
         // Case 3: primary не сработал → fallback на account.setSilenceMode.
         // VK_IMPORT_API.MD §18.2 рекомендует именно этот метод для mute/unmute.
         // Работает надёжнее для group chats (где primary иногда даёт err 15).
-        val fallbackOk = accountSetSilentMode(peerId, disabled)
+        // P1.3: пробрасываем untilSec в fallback — timed mute сохраняется.
+        val fallbackOk = accountSetSilentMode(peerId, disabled, timeSec = untilSec)
         if (fallbackOk) {
             val synthetic = Chat.PushSettings(
-                disabledForever = disabled,
-                disabledUntil = if (disabled) -1L else 0L,
+                disabledForever = disabled && untilSec <= 0L,
+                disabledUntil = when {
+                    !disabled -> 0L
+                    untilSec > 0 -> untilSec
+                    else -> -1L
+                },
                 sound = sound,
                 noSound = null,
                 disabledMentions = null,
                 disabledMassMentions = null,
             )
             AppLog.i("VKApiClient",
-                "account.setSilenceMode fallback ok: peer=$peerId disabled=$disabled → synthetic=$synthetic")
+                "account.setSilenceMode fallback ok: peer=$peerId disabled=$disabled untilSec=$untilSec → synthetic=$synthetic")
             return synthetic
         }
 
         AppLog.w("VKApiClient",
-            "Both setConversationPushSettings and setSilenceMode failed for peer=$peerId disabled=$disabled")
+            "Both setConversationPushSettings and setSilenceMode failed for peer=$peerId disabled=$disabled untilSec=$untilSec")
         return null
     }
 
@@ -2493,6 +2521,10 @@ class VKApiClient(
      *  - peer_id (int, required) — ID диалога (user id ИЛИ 2_000_000_000 + chat_id)
      *  - time (int, required) — -1 = навсегда, 0 = unmute, N = на N секунд
      *
+     * P1.3: timeSec — это UNIX-timestamp окончания mute (как требует VK API
+     * для параметра `time`). Default -1L = forever (backward compat).
+     *  -1L = навсегда, 0L = unmute, >0L = до UNIX-timestamp.
+     *
      * VK сам извлекает chat_id = peer_id - 2_000_000_000 для групповых чатов,
      * поэтому отдельный chat_id параметр не нужен (modern API).
      *
@@ -2503,15 +2535,29 @@ class VKApiClient(
      *     падает с err 15 для group chats).
      *  2. Public API для прямого вызова из UI при необходимости.
      */
-    suspend fun accountSetSilentMode(peerId: Long, muted: Boolean): Boolean {
+    suspend fun accountSetSilentMode(
+        peerId: Long, muted: Boolean,
+        // P1.3: timed mute. -1 = forever (default), 0 = unmute,
+        // >0 = UNIX-timestamp окончания mute. Existing callers без timeSec
+        // НЕ сломаны (default -1L = forever).
+        timeSec: Long = -1L,
+    ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
             "peer_id" to peerId.toString(),
-            // -1 = навсегда (mute), 0 = unmute. VK API spec.
-            "time" to if (muted) "-1" else "0",
+            // P1.3: time — -1 для permanent mute, 0 для unmute, UNIX-timestamp
+            // для timed mute.
+            //   muted=false (unmute): всегда "0".
+            //   muted=true  + timeSec<=0: "-1" (forever, backward compat).
+            //   muted=true  + timeSec>0:  "<timestamp>" (timed mute).
+            "time" to when {
+                !muted -> "0"
+                timeSec > 0 -> timeSec.toString()
+                else -> "-1"
+            },
         )
         val json = call("account.setSilenceMode", args) ?: run {
-            AppLog.w("VKApiClient", "account.setSilenceMode failed (null response) for peer=$peerId muted=$muted")
+            AppLog.w("VKApiClient", "account.setSilenceMode failed (null response) for peer=$peerId muted=$muted timeSec=$timeSec")
             return false
         }
         // Response: {"response": 1}
@@ -2521,7 +2567,7 @@ class VKApiClient(
             val errCode = json.get("error")?.takeIf { it.isJsonObject }?.asJsonObject
                 ?.get("error_code")?.takeIf { !it.isJsonNull }?.asInt
             AppLog.w("VKApiClient",
-                "account.setSilenceMode failed (no response=1, err=$errCode) for peer=$peerId muted=$muted")
+                "account.setSilenceMode failed (no response=1, err=$errCode) for peer=$peerId muted=$muted timeSec=$timeSec")
         }
         return ok
     }

@@ -1685,7 +1685,8 @@ fun MessagesScreen(
                                 showListActions = false,
                                 onClick = { onChatClick(favoritesChat) },
                                 onMarkAsRead = { _, _ -> },
-                                onToggleMute = { _, _ -> },
+                                // P1.3: 3-й параметр untilSec (-1=forever, >0=timestamp).
+                                onToggleMute = { _, _, _ -> },
                                 onTogglePin = { _, _ -> },
                                 onToggleChannelPin = { _, _ -> },
                                 onToggleUnread = { _, _ -> },
@@ -1773,20 +1774,31 @@ fun MessagesScreen(
                                 }
                             },
                             // Fix #122: long-press → mute/unmute из списка диалогов.
+                            // P1.3: 3-й параметр untilSec — для timed mute.
+                            //   untilSec = -1L → forever (backward compat, existing путь).
+                            //   untilSec > 0   → mute до UNIX-timestamp (1h / 8h).
                             // Оптимистично обновляем pushSettings, вызываем API, при
                             // ошибке откатываем + Toast.
-                            onToggleMute = { peerId, mute ->
+                            onToggleMute = { peerId, mute, untilSec ->
                                 val oldSettings = chat.pushSettings
                                 val newSettings = re.pinok.data.model.Chat.PushSettings(
-                                    disabledForever = if (mute) true else null,
-                                    disabledUntil = if (mute) -1L else 0L,
+                                    disabledForever = if (mute) untilSec <= 0L else null,
+                                    // P1.3: timed mute — disabled_until = untilSec (ts),
+                                    // forever — disabled_until = -1L, unmute — 0L.
+                                    disabledUntil = when {
+                                        !mute -> 0L
+                                        untilSec > 0 -> untilSec
+                                        else -> -1L
+                                    },
                                 )
                                 chats = chats.map { c ->
                                     if (c.peer.id == peerId) c.copy(pushSettings = newSettings) else c
                                 }
                                 scope.launch {
                                     try {
-                                        val result = app.apiClient.messagesSetConversationPushSettings(peerId, disabled = mute)
+                                        val result = app.apiClient.messagesSetConversationPushSettings(
+                                            peerId, disabled = mute, untilSec = untilSec,
+                                        )
                                         if (result != null) {
                                             // API вернул точные настройки — обновляем из ответа.
                                             chats = chats.map { c ->
@@ -1801,7 +1813,8 @@ fun MessagesScreen(
                                                 if (mute) "Уведомления выключены" else "Уведомления включены",
                                                 Toast.LENGTH_SHORT,
                                             ).show()
-                                            AppLog.i("MessagesScreen", "mute toggled from list: peer=$peerId mute=$mute")
+                                            AppLog.i("MessagesScreen",
+                                                "mute toggled from list: peer=$peerId mute=$mute untilSec=$untilSec")
                                         } else {
                                             // Ошибка — откатываем.
                                             chats = chats.map { c ->
@@ -1813,7 +1826,8 @@ fun MessagesScreen(
                                                 if (mute) "Не удалось выключить уведомления" else "Не удалось включить уведомления",
                                                 Toast.LENGTH_SHORT,
                                             ).show()
-                                            AppLog.w("MessagesScreen", "mute toggle failed: peer=$peerId mute=$mute")
+                                            AppLog.w("MessagesScreen",
+                                                "mute toggle failed: peer=$peerId mute=$mute untilSec=$untilSec")
                                         }
                                     } catch (ce: kotlinx.coroutines.CancellationException) {
                                         throw ce
@@ -1822,7 +1836,7 @@ fun MessagesScreen(
                                             if (c.peer.id == peerId) c.copy(pushSettings = oldSettings) else c
                                         }
                                         re.pinok.realtime.MessageNotifier.setMuted(peerId, oldSettings?.isMuted() == true)
-                                        AppLog.e("MessagesScreen", "mute toggle error", e)
+                                        AppLog.e("MessagesScreen", "mute toggle error: peer=$peerId mute=$mute untilSec=$untilSec", e)
                                         Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                                     }
                                 }
@@ -2121,7 +2135,11 @@ private fun ChatCard(
     typingText: String? = null,
     onClick: () -> Unit = {},
     onMarkAsRead: (peerId: Long, lastMessageId: Long) -> Unit = { _, _ -> },
-    onToggleMute: (peerId: Long, mute: Boolean) -> Unit = { _, _ -> },
+    // P1.3: 3-й параметр untilSec — для timed mute.
+    //   untilSec = -1L → mute навсегда (backward compat).
+    //   untilSec > 0   → mute до UNIX-timestamp (1h / 8h).
+    //   mute=false (unmute) → untilSec игнорируется.
+    onToggleMute: (peerId: Long, mute: Boolean, untilSec: Long) -> Unit = { _, _, _ -> },
     // Fix #274: новые callback-и для закрепления, отметки непрочитанным, drag&drop.
     onTogglePin: (peerId: Long, pin: Boolean) -> Unit = { _, _ -> },
     // #CHANNELS-PIN (П3): закрепить/открепить КАНАЛ в списке каналов через
@@ -2507,20 +2525,64 @@ private fun ChatCard(
                 )
                 }
                 // Fix #122: Заглушить/Включить уведомления (см. showListActions).
+                // P1.3: при unmuted — 3 опции (1ч / 8ч / навсегда), при muted —
+                // один пункт "Включить уведомления".
                 if (showListActions) {
-                DropdownMenuItem(
-                    text = { Text(if (isMuted) "Включить уведомления" else "Заглушить") },
-                    leadingIcon = {
-                        Icon(
-                            if (isMuted) Icons.Outlined.Notifications else Icons.Outlined.NotificationsOff,
-                            contentDescription = null,
+                    if (isMuted) {
+                        DropdownMenuItem(
+                            text = { Text("Включить уведомления") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Notifications,
+                                    contentDescription = null,
+                                )
+                            },
+                            onClick = {
+                                showContextMenu = false
+                                onToggleMute(chat.peer.id, false, -1L)
+                            },
                         )
-                    },
-                    onClick = {
-                        showContextMenu = false
-                        onToggleMute(chat.peer.id, !isMuted)
-                    },
-                )
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text("Заглушить на 1 час") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.NotificationsOff,
+                                    contentDescription = null,
+                                )
+                            },
+                            onClick = {
+                                showContextMenu = false
+                                onToggleMute(chat.peer.id, true, System.currentTimeMillis() / 1000 + 3600)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Заглушить на 8 часов") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.NotificationsOff,
+                                    contentDescription = null,
+                                )
+                            },
+                            onClick = {
+                                showContextMenu = false
+                                onToggleMute(chat.peer.id, true, System.currentTimeMillis() / 1000 + 28800)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Заглушить навсегда") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.NotificationsOff,
+                                    contentDescription = null,
+                                )
+                            },
+                            onClick = {
+                                showContextMenu = false
+                                onToggleMute(chat.peer.id, true, -1L)
+                            },
+                        )
+                    }
                 }
                 // Fix #274: Отметить непрочитанным / прочитанным (см. showListActions).
                 if (showListActions) {

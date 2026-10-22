@@ -1206,7 +1206,19 @@ class MainActivity : ComponentActivity() {
                         app.longPollClient.start()
                         // #EVENTHUB: мгновенная доставка событий — дополнение к LongPoll.
                         // start() идемпотентен и устойчив к отсутствию token (backoff-retry).
-                        app.eventHubClient.start()
+                        //
+                        // #P1.1: EventHub отключён — DEAD-EVENT канал, события не парсятся
+                        // (EventHubEvent = raw String payload, handleFrame без парсера) и
+                        // не используются (0 коллекторов eventHubClient.events вне самого
+                        // класса — подтверждено grep). WS тратил сетевой ресурс и
+                        // eventHub.getToken впустую. LongPoll — PRIMARY (4 коллектора:
+                        // MessageNotifier, startCallNotifier, startNotificationsPoller,
+                        // UnreadMessagesCounter). EventHubWebSocketClient.start() теперь
+                        // disable-stub (см. EventHubWebSocketClient.kt) — covers также
+                        // RealtimeWakeReceiver.kt:49. stop() в cleanup paths оставлен
+                        // (no-op если не running). Реактивация: Вариант B (парсер
+                        // EventHubEvent → LongPollEvent) — отдельная задача.
+                        // app.eventHubClient.start()
                         // #CALLS: автоподключение queuev4 для входящих звонков (LP 115).
                         app.startCallSignaling()
                         // Fix #340: поднимаем foreground-сервис чтобы удержать процесс
@@ -2406,6 +2418,20 @@ class MainActivity : ComponentActivity() {
      * SovaNavHost через LaunchedEffect подхватывает это и навигирует на
      * ChatDetailScreen. После навигации SovaNavHost вызывает onOpenChatConsumed
      * → state сбрасывается в null.
+     *
+     * P1.5-fix #EDGE-CASE-GUARD (DIAG-B2 §7, DIAG-SUMMARY P1 #10):
+     * Перед навигацией проверяем чат через:
+     *   1. Локальный ArchivedConversationsRepository.isArchived(peerId) — если
+     *      чат архивирован локально → Toast «Чат архивирован» + cancel notification.
+     *   2. apiClient.messagesGetConversationsById([peerId]) — если чат не найден
+     *      на сервере (пустой ответ) → Toast «Чат не существует» + cancel notification.
+     * Гuard запускается асинхронно (lifecycleScope) — pendingOpenChatPeerId
+     * устанавливается ТОЛЬКО когда проверка пройдена (валидный чат). Это
+     * гарантирует, что SovaNavHost не навигирует на пустой ChatDetailScreen.
+     *
+     * Fallback: если SovaApp не готов / нет валидного токена / нет сети →
+     * навигируем как раньше (старое поведение) — guard НЕ блокирует нормальный
+     * path, только добавляет checks когда ресурсы доступны.
      */
     private fun handleOpenChatIntent(intent: Intent?) {
         if (intent?.action != re.pinok.realtime.MessageNotifier.ACTION_OPEN_CHAT) return
@@ -2421,8 +2447,78 @@ class MainActivity : ComponentActivity() {
         val title = intent.getStringExtra(re.pinok.realtime.MessageNotifier.EXTRA_TITLE) ?: ""
         AppLog.i("MainActivity",
             "#IM-CHANNEL-OPEN OPEN_CHAT intent: peerId=$peerId title='$title' isChannelPeer=${peerId < 0}")
-        pendingOpenChatPeerId = peerId
-        pendingOpenChatTitle = title
+
+        // P1.5-fix #EDGE-CASE-GUARD: проверяем чат перед навигацией.
+        val app = SovaApp.getOrNull()
+        if (app == null) {
+            // SovaApp не готов (поздний onNewIntent при холодном старте процесса
+            // — Application.onCreate не успел). Fallback на старое поведение.
+            AppLog.w("MainActivity", "#EDGE-CASE-GUARD: SovaApp null — fallback to direct navigation")
+            pendingOpenChatPeerId = peerId
+            pendingOpenChatTitle = title
+            return
+        }
+
+        // Если нет валидного токена / нет сети — guard не имеет смысла (API всё
+        // равно вернёт null/empty). Fallback на старое поведение (навигация как
+        // обычно; ChatDetailScreen покажет свою ошибку/empty state).
+        val tokenOk = try { app.tokenStorage.hasValidToken() } catch (_: Exception) { false }
+        val netOk = try { app.networkObserver.isOnline() } catch (_: Exception) { true }
+        if (!tokenOk || !netOk) {
+            AppLog.i("MainActivity",
+                "#EDGE-CASE-GUARD: tokenOk=$tokenOk netOk=$netOk — skip API check, navigate directly")
+            pendingOpenChatPeerId = peerId
+            pendingOpenChatTitle = title
+            return
+        }
+
+        // Асинхронная проверка в lifecycleScope: pendingOpenChatPeerId ставится
+        // ТОЛЬКО когда guard прошёл (валидный чат). SovaNavHost LaunchedEffect
+        // сработает только после этого.
+        lifecycleScope.launch {
+            // Шаг 1: локальный archive check (быстро, без сети).
+            try {
+                if (app.archivedConvsRepository.isArchived(peerId)) {
+                    AppLog.i("MainActivity",
+                        "#EDGE-CASE-GUARD: chat peerId=$peerId archived (local) — toast + cancel + skip nav")
+                    Toast.makeText(this@MainActivity, "Чат архивирован", Toast.LENGTH_LONG).show()
+                    re.pinok.realtime.MessageNotifier.cancelNotification(this@MainActivity, peerId)
+                    return@launch
+                }
+            } catch (e: Exception) {
+                AppLog.w("MainActivity",
+                    "#EDGE-CASE-GUARD: archive check failed: ${e.message} — continue with API check")
+            }
+
+            // Шаг 2: серверный existence check. messagesGetConversationsById
+            // возвращает emptyList() при ошибке парсинга или при err 5/15 (нет прав).
+            // parse error returns emptyList → рискованный false-positive. Чтобы
+            // избежать блокировки навигации при сетевых сбоях, проверяем
+            // lastApiErrorCode: 0 = OK (chat реально не найден); !=0 = ошибка API
+            // → НЕ блокируем навигацию (fallback к старому поведению).
+            try {
+                val chats = app.apiClient.messagesGetConversationsById(peerIds = listOf(peerId))
+                if (chats.isEmpty() && app.apiClient.lastApiErrorCode == 0) {
+                    // Чат не найден на сервере (response без items или items=[]).
+                    // Возможные причины: peerId удалён, сообщение было удалено,
+                    // чат скрыт сообществом. Показываем Toast + cancel notification.
+                    AppLog.i("MainActivity",
+                        "#EDGE-CASE-GUARD: chat peerId=$peerId not found (deleted/hidden) — toast + cancel + skip nav")
+                    Toast.makeText(this@MainActivity, "Чат не существует", Toast.LENGTH_LONG).show()
+                    re.pinok.realtime.MessageNotifier.cancelNotification(this@MainActivity, peerId)
+                    return@launch
+                }
+                AppLog.i("MainActivity",
+                    "#EDGE-CASE-GUARD: chat peerId=$peerId verified (chats=${chats.size}, lastErr=${app.apiClient.lastApiErrorCode}) — navigate")
+            } catch (e: Exception) {
+                AppLog.w("MainActivity",
+                    "#EDGE-CASE-GUARD: API check failed: ${e.message} — navigate directly (fallback)")
+            }
+
+            // Guard пройден — навигируем как раньше.
+            pendingOpenChatPeerId = peerId
+            pendingOpenChatTitle = title
+        }
     }
 
     /** Fix #208: сброс pending-chat после того, как SovaNavHost навигировал. */

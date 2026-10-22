@@ -55,21 +55,17 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Favorite
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PersonAdd
-import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.CardGiftcard
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.ShoppingCart
@@ -87,9 +83,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -102,7 +96,6 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -144,114 +137,12 @@ import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
 import re.pinok.util.toRelativeTime
 
-// ═══════════════════════════════════════════════════════════
-// #NOTIF-FEED-FILTER (19-B): Фильтры по типам уведомлений.
-//
-// Фильтр = ПАТТЕРН ЛЕНТЫ (ТЗ 18-δ, пересмотрен юзером 2026-09-08).
-// В VK web «Уведомления» — секция ЛЕНТЫ (vk.com/feed?section=notifications,
-// SPA com_web_spa_notifications — лента.снапшоты.парсинг.полный.md:123),
-// поэтому выбор категории воспроизводит ленточный паттерн выбора разделов
-// (FeedScreen #FEED-FILTER: компактный триггер → список разделов с чекмарком
-// на активной). Контейнер — bottom-sheet с заголовком «Фильтр» и чекмарком
-// на активной (прямо указано в ТЗ; FeedScreen при этом открывает DropdownMenu
-// из FeedFilterBar — список+чекмарк перенесён 1:1, см. NotificationFilterSheet).
-// Прежний самодельный dropdown-паттерн (FilterList → FlowRow-чипы в subBar
-// TopAppBar) удалён.
-//
-// Состав списка = «ядро VK web + категории реальных типов getRedesign».
-// Ядро VK web-уведомлений (секция notifications ленты, ТЗ):
-//   Все / Комментарии / Упоминания / Реакции(лайки) / Репосты / Подписки(друзья).
-// Реальные type, приходящие в NotificationItem (сверено по коду парсеров VKA):
-//   • redesign, web-токены (parseRedesignNotificationItem, VKApiClient:14731):
-//     new_posts (entity post/wall/"") , photo, video, clip, comment, topic,
-//     market, story, app, podcast; НЕизвестный entity.type проходит как есть
-//     (VKApiClient:14743 — например gift);
-//   • legacy, не-web токены (parseNotificationItem, VKApiClient:7291 +
-//     buildNotificationText VKApiClient:7495): like_*, comment, reply_comment,
-//     mention*, copy, wall, follow, friend_accepted, friend_requested, gift,
-//     birthday_reminder.
-//   • #NOTIF-FILTER-ACTION (Fix #354): redesign-парсер (parseRedesignNotificationItem)
-//     больше НЕ сводит тип к типу ОБЪЕКТА (было: post→new_posts, photo→photo —
-//     «Костя оценил фотографию» уходил в «Фото», поэтому «Реакции/Репосты/
-//     Подписки/Упоминания» на web-токенах матчили 0 items — «фильтр почти не
-//     работает», репорт юзера 2026-09-08). Теперь категория берётся из
-//     dots_menu.name (категория настроек VK, доказана ЧАСТЬ 34:
-//     {type:"open_setting", name:"new_posts"}), фолбэк — глагол действия в
-//     item.text: «оценил»→like, «прокомментировал»→comment, «ответил»→
-//     reply_comment, «упомянул»→mention, «поделился»→copy, «подписал»→follow,
-//     «в друзья/заявк»→friend_accepted, «подарил»→gift, «пригласил»→
-//     group_invites, «день рождения»→birthday_reminder
-//     (VKApiClient.resolveRedesignNotificationType). Контентные типы без
-//     action-глагола (photo/video/clip/…) сохранены — фильтры «Фото/Видео/
-//     Клипы» работают как раньше; matching-ветки when ниже НЕ менялись:
-//     startsWith("like")/("comment")/("mention")/"copy"/"follow"+
-//     startsWith("friend") уже покрывают новые значения.
-//
-// Честный след по каждому пункту ПРЕЖНЕГО списка (ничего не удалено
-// молча):
-//   • Все/Комментарии/Упоминания/Лайки/Репосты/Подписки — ядро, сохранены;
-//     «Лайки» переименованы в «Реакции» (нейминг ленты: FeedFilter.LIKES =
-//     «Реакции»; матчинг like_* не менялся);
-//   • «Ответы» (reply_comment) — СЛИТ в «Комментарии»: отдельного фильтра
-//     ответов в ядре VK web нет; матч «Комментариев» расширен до
-//     startsWith("comment") + reply_comment (теперь честно покрывает и
-//     legacy comment_*-варианты, если VK их вернёт);
-//   • «Друзья» (friend*) — СЛИТ в «Подписки (друзья)» (ядро VK web:
-//     follow + friend_accepted/friend_requested одним пунктом);
-//   • «Стена» (wall) — УДАЛЕН: строгое подмножество «Новых постов» (тот
-//     матчил wall/post/new_posts и до этого); в redesign wall→new_posts
-//     (VKApiClient:14732), собственного класса типов пункт не имел;
-//   • «Мероприятия» (event*) — УДАЛЕН: ни один парсер VKA не производит
-//     type event* (rg по VKApiClient — 0 вхождений), категория была мёртвой;
-//   • Сохранены архивные категории, отображающие РЕАЛЬНЫЕ типы:
-//     Новые посты (ядро redesign), Фото/Видео/Клипы/Истории/Магазин/Игры
-//     (redesign: photo/video/clip/story/market/app), Подарки (gift: legacy +
-//     redesign pass-through), Дни рождения (birthday_reminder: legacy),
-//     Приглашения (матч расширен на "invite_group" — тип обрабатывается
-//     VkNotificationsNotifier.titleForType/buildActionVerb, прежний матч
-//     group_invites/group_invite его не ловил);
-//   • Сообщения/Групповые чаты — сохранены по ТЗ (класс «диалогов»,
-//     класс A сортировки 19-B.2); честная оговорка: парсеры VKA сегодня
-//     type message*, mail НЕ производят (rg-проверка), но неизвестный
-//     entity.type проходит redesign-парсер как есть (VKApiClient:14743),
-//     поэтому матч оставлен живым; типы topic/podcast фильтра не имеют
-//     и видны в «Все».
-// ═══════════════════════════════════════════════════════════
-
-/**
- * #NOTIF-FEED-FILTER: один пункт bottom-sheet «Фильтр».
- * @param type ключ фильтра (= значение activeFilter; "all" — без фильтра)
- * @param label человекочитаемый заголовок (VK web-нейминг)
- * @param icon иконка пункта
- */
-private data class NotificationFilter(
-    val type: String,
-    val label: String,
-    val icon: ImageVector,
-)
-
-private val NOTIFICATION_FILTERS = listOf(
-    // ── Ядро VK web (секция notifications ленты) ──
-    NotificationFilter("all", "Все", Icons.Outlined.Notifications),
-    NotificationFilter("comment", "Комментарии", Icons.Outlined.ChatBubbleOutline),
-    NotificationFilter("mention", "Упоминания", Icons.Outlined.AlternateEmail),
-    NotificationFilter("like", "Реакции", Icons.Outlined.FavoriteBorder),
-    NotificationFilter("copy", "Репосты", Icons.Outlined.ContentCopy),
-    NotificationFilter("follow", "Подписки (друзья)", Icons.Outlined.PersonAdd),
-    // ── Категории реальных типов getRedesign / legacy ──
-    NotificationFilter("new_posts", "Новые посты", Icons.Outlined.Dashboard),
-    NotificationFilter("photos", "Фото", Icons.Outlined.PhotoLibrary),
-    NotificationFilter("videos", "Видео", Icons.Outlined.PlayCircle),
-    NotificationFilter("clips", "Клипы", Icons.Outlined.VideoCameraBack),
-    NotificationFilter("stories", "Истории", Icons.Outlined.AddAPhoto),
-    NotificationFilter("gifts", "Подарки", Icons.Outlined.CardGiftcard),
-    NotificationFilter("birthday", "Дни рождения", Icons.Outlined.Cake),
-    NotificationFilter("messages", "Сообщения", Icons.Outlined.Email),
-    NotificationFilter("group_chats", "Групповые чаты", Icons.Outlined.Group),
-    NotificationFilter("group_invites", "Приглашения", Icons.Outlined.GroupAdd),
-    NotificationFilter("market", "Магазин", Icons.Outlined.ShoppingCart),
-    NotificationFilter("apps_requests", "Игры", Icons.Outlined.Apps),
-)
+// P1.6 (DIAG-C2 §5): локальный тип-фильтр уведомлений (NOTIFICATION_FILTERS +
+// NotificationFilter data class + NotificationFilterSheet bottom-sheet + activeFilter
+// state + filterMatch-блок в filteredNotifications) УДАЛЁН как мёртвый код —
+// UI-триггер кнопки-фильтра в TopAppBar был убран #NOTIFSHOW, фильтр всегда "all".
+// Серверная категорийная фильтрация (NotificationCategoryBar + NOTIFICATION_CATEGORIES)
+// остаётся рабочей — см. ниже #NOTIF-NFDCAT.
 
 // ═══════════════════════════════════════════════════════════
 // #NOTIF-NFDCAT (категорийный сайдбар): СЕРВЕРНЫЕ категории
@@ -260,8 +151,7 @@ private val NOTIFICATION_FILTERS = listOf(
 //   feedback(«Обратная связь»), friends(«Друзья»), services(«Сервисы»),
 //   communication(«Общение»), account(«Аккаунт»).
 // Выбор категории → серверная перезагрузка через
-// notificationsGetPage(category=serverKey). Локальные типы-фильтры
-// (NOTIFICATION_FILTERS, bottom-sheet «Фильтр») — ДОП. уровень поверх.
+// notificationsGetPage(category=serverKey).
 // ═══════════════════════════════════════════════════════════
 
 /** #NOTIF-NFDCAT: одна серверная категория getRedesign. */
@@ -426,101 +316,6 @@ private fun SectionHeader(text: String, isNew: Boolean) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// #NOTIF-FEED-FILTER (19-B): bottom-sheet «Фильтр»
-// ═══════════════════════════════════════════════════════════
-
-/**
- * #NOTIF-FEED-FILTER (19-B): выбор категории фильтра уведомлений — ленточный
- * визуальный паттерн (аналог FeedScreen #FEED-FILTER, FeedFilterBar): список
- * разделов [NOTIFICATION_FILTERS] с чекмарком на активной. Контейнер —
- * ModalBottomSheet с заголовком «Фильтр» (прямо указано в ТЗ; FeedScreen
- * открывает DropdownMenu — список+чекмарк воспроизведён 1:1, контейнер —
- * bottom-sheet по ТЗ). Прежний самодельный паттерн (FilterList → FlowRow-чипы
- * в subBar) удалён.
- *
- * Поведение как у ленточного DropdownMenu: выбор пункта закрывает список;
- * повторный тап на активную категорию просто закрывает (фильтр не сбрасывается).
- *
- * @param currentFilter текущее значение activeFilter
- * @param onSelect вызван при выборе категории (передаёт type пункта)
- * @param onDismiss закрытие шита (тап мимо / back / после выбора)
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun NotificationFilterSheet(
-    currentFilter: String,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding(),
-        ) {
-            // Заголовок «Фильтр» — по ТЗ (паттерн AttachmentPickerSheet «Прикрепить»).
-            Text(
-                text = "Фильтр",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            HorizontalDivider()
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 480.dp),
-            ) {
-                items(NOTIFICATION_FILTERS, key = { it.type }) { f ->
-                    val selected = currentFilter == f.type
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onSelect(f.type)
-                                onDismiss()
-                            }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            f.icon,
-                            contentDescription = null,
-                            tint = if (selected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = f.label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (selected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
-                        )
-                        // Чекмарк на активной — как в ленточном FeedFilterBar
-                        // (DropdownMenuItem leadingIcon=Check на текущем разделе).
-                        if (selected) {
-                            Icon(
-                                Icons.Outlined.Check,
-                                contentDescription = "Выбрано",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════
 // #NOTIF-NFDCAT: категорийный сайдбар + переключатель Новые/Просмотренные
 // ═══════════════════════════════════════════════════════════
 
@@ -679,7 +474,6 @@ fun NotificationsScreen(
     var endReached by remember { mutableStateOf(false) }
     var nextFrom by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
-    var activeFilter by remember { mutableStateOf("all") }
     var showSearch by remember { mutableStateOf(false) }
     // NOTIF-FIX-1 (Task 5): счётчик непрочитанных уведомлений для бейджа в TopBar.
     // VK web показывает красный круг с числом рядом с заголовком «Уведомления».
@@ -705,7 +499,7 @@ fun NotificationsScreen(
     // двухклассовая сортировка sortDialogsFirst — диалоги (класс A) выше
     // новостных (класс B), внутри классов порядок VK. Поиск/undo/пагинация
     // не затронуты (сортировка меняет только порядок).
-    val filteredNotifications = remember(notifications, searchQuery, activeFilter, hiddenKeys, lastViewed, showViewed) {
+    val filteredNotifications = remember(notifications, searchQuery, hiddenKeys, lastViewed, showViewed) {
         sortDialogsFirst(
             notifications.filter { item ->
                 val keyMatch = item.uniqueKey !in hiddenKeys
@@ -719,43 +513,11 @@ fun NotificationsScreen(
                 } else {
                     item.date >= lastViewedValue
                 }
-                val filterMatch = activeFilter == "all" ||
-                    when (activeFilter) {
-                        // ── Ядро VK web ──
-                        // #NOTIF-FEED-FILTER: «Комментарии» включает ответы
-                        // (reply_comment слит по ядру VK web) и legacy comment_*.
-                        "comment" -> item.type.startsWith("comment") || item.type == "reply_comment"
-                        "mention" -> item.type.startsWith("mention")
-                        "like" -> item.type.startsWith("like")
-                        "copy" -> item.type == "copy" || item.type.startsWith("copy")
-                        // «Подписки (друзья)»: follow + friend_* (слит по ядру).
-                        "follow" -> item.type == "follow" || item.type.startsWith("friend")
-                        // ── Категории реальных типов getRedesign/legacy ──
-                        "new_posts" -> item.type == "wall" || item.type == "post" || item.type == "new_posts"
-                        "birthday" -> item.type == "birthday_reminder"
-                        "gifts" -> item.type == "gift"
-                        // #NOTIF-FEED-FILTER: класс A сортировки 19-B.2. Парсеры
-                        // VKA сегодня message*, mail не производят, но неизвестный
-                        // entity.type проходит redesign как есть (VKApiClient:14743).
-                        "messages" -> item.type.startsWith("message") || item.type == "mail"
-                        "group_chats" -> item.type.startsWith("group") || item.type == "chat"
-                        // #NOTIF-FEED-FILTER: + "invite_group" — тип обрабатывается
-                        // VkNotificationsNotifier (titleForType), прежний матч
-                        // group_invites/group_invite его не покрывал.
-                        "group_invites" -> item.type == "group_invites" || item.type == "group_invite" || item.type == "invite_group"
-                        "market" -> item.type == "market"
-                        "clips" -> item.type.startsWith("clip")
-                        "stories" -> item.type.startsWith("story")
-                        "photos" -> item.type.startsWith("photo")
-                        "videos" -> item.type.startsWith("video")
-                        "apps_requests" -> item.type.startsWith("app")
-                        else -> false
-                    }
                 val searchMatch = searchQuery.isBlank() ||
                     item.text.contains(searchQuery, ignoreCase = true) ||
                     item.parentText.contains(searchQuery, ignoreCase = true) ||
                     item.feedbackProfiles.any { it.name.contains(searchQuery, ignoreCase = true) }
-                keyMatch && viewMatch && filterMatch && searchMatch
+                keyMatch && viewMatch && searchMatch
             },
         )
     }
@@ -1004,21 +766,39 @@ fun NotificationsScreen(
     // Fix #260: showSearch в ключе DisposableEffect — иначе configure()
     // вызывается один раз с showSearch=false → titleOverride=null навсегда;
     // TextField поиска не появляется при тапе на иконку.
-    // #NOTIFSHOW: showFilters и кнопка фильтра-типов удалены (вход в
-    // bottom-sheet был только у иконки-триггера) — ключа showFilters больше нет.
+    // P1.6 (DIAG-C2 §5): локальный тип-фильтр (activeFilter + #NOTIF-FEED-FILTER
+    // bottom-sheet) удалён как мёртвый код — UI-триггер кнопки-фильтра был
+    // убран #NOTIFSHOW, фильтр всегда "all". Серверная категория остаётся.
     // NOTIF-FIX-1 (Task 5): добавлен unreadCount в ключ — иначе бейдж не
     // перерисуется при изменении счётчика (configure() вызовется один раз
     // с unreadCount=0 и останется таким навсегда).
     DisposableEffect(showSearch, unreadCount, serverCategory, showViewed) {
         val token = ScreenTopBar.configure(
-            // Actions: mark-all-read, search toggle, filter toggle
+            // Actions: mark-all-read, search, settings
             actions = {
                 // Кнопка "Прочитать все" (N6)
+                // P1.4 (DIAG-C2 §4): после успешного notificationsMarkAsRead — локально
+                // обнуляем unreadCount (оптимистичное обновление бейджа в заголовке
+                // «Уведомления» — titleOverride Row с красным кругом) и отменяем активные
+                // VK system notifications (аналог входа на экран — LaunchedEffect(serverCategory)
+                // строка 853). Без этого бейдж оставался до следующего перезахода на экран.
                 IconButton(
                     onClick = {
                         scope.launch {
                             val ok = app.apiClient.notificationsMarkAsRead()
                             if (ok) {
+                                // Оптимистично зануляем локальный счётчик непрочитанных
+                                // уведомлений — бейдж в titleOverride перерисуется мгновенно
+                                // (unreadCount есть в ключах DisposableEffect, строка 1012).
+                                unreadCount = 0
+                                // Отменяем активные системные уведомления VK (setNumber-бейджи
+                                // в шторке). Best-effort: неудача cancelAll не откатывает
+                                // серверный markAsRead и не блокирует snackbar.
+                                try {
+                                    re.pinok.realtime.VkNotificationsNotifier.cancelAll(app)
+                                } catch (e: Exception) {
+                                    AppLog.w("NotificationsScreen", "cancelAll after mark-as-read failed: ${e.message}")
+                                }
                                 snackbarHostState.showSnackbar(
                                     "Все уведомления прочитаны",
                                     duration = SnackbarDuration.Short,
@@ -1044,8 +824,9 @@ fun NotificationsScreen(
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                // Кнопка фильтров (N10) убрана (#NOTIFSHOW): фильтр по типам закрыт;
-                // шестерёнка настроек ниже остаётся.
+                // Кнопка фильтров (N10) убрана (#NOTIFSHOW): фильтр по типам закрыт.
+                // P1.6 (DIAG-C2 §5): мёртвый код NOTIFICATION_FILTERS +
+                // NotificationFilterSheet + activeFilter удалён. Шестерёнка настроек ниже.
                 // #NOTIF-NFDCAT: кнопка «Настройки» (шестерёнка) в шапке уведомлений.
                 // Переход к экрану настроек уведомлений (NotificationSettingsScreen).
                 // Если callback не передан (например, экран вне навигационного графа) — скрываем.
@@ -1127,7 +908,6 @@ fun NotificationsScreen(
                     onSelect = { key ->
                         if (key != serverCategory) {
                             serverCategory = key
-                            activeFilter = "all"  // смена серверной категории сбрасывает локальный тип-фильтр
                         }
                     },
                 )
@@ -1155,8 +935,9 @@ fun NotificationsScreen(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
-        // #NOTIFSHOW: bottom-sheet «Фильтр» по типам удалён вместе с кнопкой-триггером
-        // (единственный вход был у иконки в TopBar). activeFilter остаётся "all".
+        // P1.6 (DIAG-C2 §5): bottom-sheet «Фильтр» по типам удалён вместе с
+        // кнопкой-триггером (#NOTIFSHOW). Мёртвый код activeFilter +
+        // NotificationFilterSheet + NOTIFICATION_FILTERS удалён.
         // ─── Loading: Skeleton (N5) ───
         if (loading) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -1178,7 +959,6 @@ fun NotificationsScreen(
                         notifications.isEmpty() -> errorText ?: "Нет новых уведомлений"
                         hiddenKeys.isNotEmpty() -> "Все уведомления скрыты"
                         searchQuery.isNotBlank() -> "Ничего не найдено по запросу «$searchQuery»"
-                        activeFilter != "all" -> "Нет уведомлений этого типа"
                         else -> "Нет новых уведомлений"
                     },
                     onRetry = { refreshNotifications() },

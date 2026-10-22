@@ -1239,6 +1239,14 @@ fun SovaNavHost(
                             val clipsBadge = if (itemDest == Screen.Clips.route) {
                                 re.pinok.realtime.ClipsCounter.count.collectAsState().value
                             } else 0
+                            // P1.7-fix #DRAWER-NOTIF-BADGE (DIAG-C2 §9): badge с кол-вом
+                            // непрочитанных уведомлений VK на пункте «Уведомления». Источник
+                            // — SovaApp.notificationsUnreadCount (StateFlow), обновляемый из
+                            // notifications.getUnreadCounters + LongPoll code 114 (см.
+                            // SovaApp.startNotificationsBadgeRefresh).
+                            val notificationsBadge = if (itemDest == Screen.Notifications.route) {
+                                app.notificationsUnreadCount.collectAsState().value
+                            } else 0
                             NavigationDrawerItem(
                                 label = { Text(item.title) },
                                 selected = currentRoute == item.destinationRoute,
@@ -1257,6 +1265,20 @@ fun SovaNavHost(
                                             BadgedBox(
                                                 badge = {
                                                     Badge { Text(if (clipsBadge > 99) "99+" else clipsBadge.toString()) }
+                                                },
+                                            ) {
+                                                Icon(item.icon, contentDescription = null)
+                                            }
+                                        } else if (notificationsBadge > 0) {
+                                            // P1.7-fix #DRAWER-NOTIF-BADGE: badge для
+                                            // «Уведомления» (NotificationsScreen.markAsRead
+                                            // обнулит серверный счётчик → бейдж исчезнет
+                                            // после следующего refresh).
+                                            BadgedBox(
+                                                badge = {
+                                                    Badge {
+                                                        Text(if (notificationsBadge > 99) "99+" else notificationsBadge.toString())
+                                                    }
                                                 },
                                             ) {
                                                 Icon(item.icon, contentDescription = null)

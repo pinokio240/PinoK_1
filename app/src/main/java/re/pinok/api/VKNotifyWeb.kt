@@ -378,6 +378,7 @@ object VKNotifyWeb {
      *   sn_comments       → comments
      *   sn_replies        → comment_commented  (в PinoK «Ответы на комментарии»)
      *   sn_reposts        → copies             («Поделились»)
+     *   sn_copies         → copies             (P1.2: тот же group, что у sn_reposts)
      *   sn_mentions       → mentions
      *   sn_mass_mentions  → mentions           (веб-группы нет отдельной)
      *   sn_friend_requests→ friends_requests
@@ -396,6 +397,8 @@ object VKNotifyWeb {
      *   sn_private_group_post → private_group_post
      *   sn_gifts          → gifts
      *   sn_video_playlists→ video_playlists
+     *   sn_video_groups_publish → video_subscription (P1.2: семантический match —
+     *                          «Новое видео в сообществах» ≈ подписка на видео)
      *   sn_content_achievements → content_achievements
      *   sn_service_recommend → service_recommend
      *   sn_bookmarks      → bookmarks
@@ -408,8 +411,12 @@ object VKNotifyWeb {
      *   sn_group_invites, sn_group_actions, sn_friend_accepted,
      *   sn_birthdays, sn_stories, sn_photo_tags, sn_friends_follow,
      *   sn_interest, sn_group_recommendation, sn_feed_promo, sn_app_invites,
-     *   sn_events, sn_market_orders, sn_lives, sn_video_groups_publish,
-     *   sn_message_requests, sn_message_requests. Для них возвращаем null.
+     *   sn_events, sn_market_orders, sn_lives, sn_message_requests.
+     *   Для них возвращаем null (VK web genuinely не поддерживает эти типы —
+     *   сообщения/беседы управляются через push_message_save/push_chat_save,
+     *   остальные не имеют веб-группы вовсе).
+     *   P1.2: sn_video_groups_publish переведён из null → video_subscription.
+     *   video_continue_watch — orphan (нет sn_* ключа в ALL_NOTIFY_TOGGLES).
      */
     fun webGroupForPinoKKey(snKey: String): String? {
         val k = if (snKey.startsWith("sn_")) snKey.substring(3) else snKey
@@ -418,6 +425,9 @@ object VKNotifyWeb {
             "comments" -> "comments"
             "replies" -> "comment_commented"
             "reposts" -> "copies"
+            // P1.2: sn_copies (NOTIFY_FEEDBACK «Поделились») → VK group «copies».
+            // Тот же group что у sn_reposts — двойной маппинг как mentions/mass_mentions.
+            "copies" -> "copies"
             "mentions" -> "mentions"
             "mass_mentions" -> "mentions"
             "friend_requests" -> "friends_requests"
@@ -436,6 +446,10 @@ object VKNotifyWeb {
             "private_group_post" -> "private_group_post"
             "gifts" -> "gifts"
             "video_playlists" -> "video_playlists"
+            // P1.2: sn_video_groups_publish (NOTIFY_EXTRA «Новое видео в сообществах»)
+            // → VK group «video_subscription». Семантический match: подписка на видео
+            // от сообществ ≈ уведомления о новых видео. group была orphan (не мапилась).
+            "video_groups_publish" -> "video_subscription"
             "content_achievements" -> "content_achievements"
             "service_recommend" -> "service_recommend"
             "bookmarks" -> "bookmarks"

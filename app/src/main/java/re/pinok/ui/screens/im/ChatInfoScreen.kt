@@ -148,6 +148,10 @@ fun ChatInfoScreen(
 
     // Fix #267 P0-CHAT-1: состояние показа выпадающего меню действий.
     var showActionsMenu by remember { mutableStateOf(false) }
+    // P1.3: состояние показа DropdownMenu выбора длительности mute (1h/8h/forever).
+    // Открывается при попытке включить Switch (mute) — Switch визуально
+    // остаётся в unmuted-состоянии, пока пользователь не выберет опцию.
+    var showMuteMenu by remember { mutableStateOf(false) }
     // Fix #267 P0-CHAT-2: диалоги переименования/изменения описания.
     var showRenameDialog by remember { mutableStateOf(false) }
     var showChangeDescriptionDialog by remember { mutableStateOf(false) }
@@ -160,6 +164,35 @@ fun ChatInfoScreen(
     val muteEnabled by app.prefs.data
         .map { it.msgMute }
         .collectAsState(initial = true)
+
+    // P1.3: helper для применения timed mute с заданным untilSec.
+    // untilSec = -1L → forever (default VK behavior), >0L → UNIX-timestamp
+    // окончания mute. Оптимистично ставим muted=true, при ошибке откатываем.
+    // Серверный ответ (PushSettings) — источник истины (isMuted() helper
+    // корректно учитывает disabled_until > nowSec для timed mute).
+    val applyMute: (Long) -> Unit = { untilSec ->
+        muted = true  // optimistic
+        scope.launch {
+            try {
+                val result = app.apiClient.messagesSetConversationPushSettings(
+                    peerId, disabled = true, untilSec = untilSec,
+                )
+                if (result != null) {
+                    muted = result.isMuted()
+                    AppLog.i("ChatInfoScreen",
+                        "mute applied: untilSec=$untilSec server-confirmed muted=$muted")
+                } else {
+                    muted = false
+                    AppLog.w("ChatInfoScreen", "mute failed (api returned null) untilSec=$untilSec")
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                muted = false
+                AppLog.e("ChatInfoScreen", "mute error untilSec=$untilSec", e)
+            }
+        }
+    }
 
     // Fix #267 P1-CHAT-5: feature flags для ACL-gating пунктов меню.
     // Пустая map = флаги не загружены → UI показывает пункты по умолчанию (fallback).
@@ -373,33 +406,72 @@ fun ChatInfoScreen(
                     ) {
                         // Mute toggle — отдельная prominent ячейка (НЕ в дропдауне).
                         if (muteEnabled) {
-                            ActionToggleRow(
-                                title = if (muted) "Уведомления выключены" else "Уведомления включены",
-                                icon = if (muted) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
-                                checked = muted,
-                                onToggle = { newVal ->
-                                    muted = newVal
-                                    scope.launch {
-                                        try {
-                                            val result = app.apiClient.messagesSetConversationPushSettings(peerId, disabled = newVal)
-                                            if (result != null) {
-                                                // API успех — обновляем state из ответа сервера.
-                                                muted = result.isMuted()
-                                                AppLog.i("ChatInfoScreen", "mute toggled: server-confirmed muted=$muted")
-                                            } else {
-                                                muted = !newVal
-                                                AppLog.w("ChatInfoScreen", "mute failed (api returned null)")
+                            // P1.3: оборачиваем ActionToggleRow в Box, чтобы анкорить
+                            // DropdownMenu выбора длительности mute (1h / 8h / навсегда).
+                            // При тапе на Switch в направлении "mute" — показываем меню
+                            // вместо немедленного API-вызова. Switch визуально остаётся
+                            // OFF (muted не меняется), пока пользователь не выберет опцию.
+                            Box(modifier = Modifier.weight(1f)) {
+                                ActionToggleRow(
+                                    title = if (muted) "Уведомления выключены" else "Уведомления включены",
+                                    icon = if (muted) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+                                    checked = muted,
+                                    onToggle = { newVal ->
+                                        if (newVal) {
+                                            // P1.3: mute → показываем меню выбора длительности.
+                                            showMuteMenu = true
+                                        } else {
+                                            // Unmute — вызываем API сразу (binary, untilSec по умолчанию).
+                                            muted = false
+                                            scope.launch {
+                                                try {
+                                                    val result = app.apiClient.messagesSetConversationPushSettings(
+                                                        peerId, disabled = false,
+                                                    )
+                                                    if (result != null) {
+                                                        muted = result.isMuted()
+                                                        AppLog.i("ChatInfoScreen", "unmute: server-confirmed muted=$muted")
+                                                    } else {
+                                                        muted = true
+                                                        AppLog.w("ChatInfoScreen", "unmute failed (api returned null)")
+                                                    }
+                                                } catch (ce: kotlinx.coroutines.CancellationException) {
+                                                    throw ce
+                                                } catch (e: Exception) {
+                                                    muted = true
+                                                    AppLog.e("ChatInfoScreen", "unmute error", e)
+                                                }
                                             }
-                                        } catch (ce: kotlinx.coroutines.CancellationException) {
-                                            throw ce
-                                        } catch (e: Exception) {
-                                            muted = !newVal
-                                            AppLog.e("ChatInfoScreen", "mute error", e)
                                         }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
+                                    },
+                                )
+                                DropdownMenu(
+                                    expanded = showMuteMenu,
+                                    onDismissRequest = { showMuteMenu = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Заглушить на 1 час") },
+                                        onClick = {
+                                            showMuteMenu = false
+                                            applyMute(System.currentTimeMillis() / 1000 + 3600)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Заглушить на 8 часов") },
+                                        onClick = {
+                                            showMuteMenu = false
+                                            applyMute(System.currentTimeMillis() / 1000 + 28800)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Заглушить навсегда") },
+                                        onClick = {
+                                            showMuteMenu = false
+                                            applyMute(-1L)
+                                        },
+                                    )
+                                }
+                            }
                         } else {
                             Spacer(modifier = Modifier.weight(1f))
                         }

@@ -199,4 +199,22 @@ object UnreadMessagesCounter {
     fun reset() {
         _unreadCount.value = 0
     }
+
+    /**
+     * Принудительно выставить счётчик (P1.4 / DIAG-C2 §4).
+     *
+     * Используется, когда бизнес-событие гарантирует новое значение счётчика
+     * и не нужно ждать долгого [refreshCount] (сетевого пересчёта по
+     * getConversations). В отличие от [refreshCount] — без сети, мгновенно.
+     *
+     * Внимание: НЕ применять для частичных обновлений — следующий LongPollEvent
+     * (ReadInbox / UnreadCountersChanged / Reset) всё равно перетрёт значение
+     * через [refreshCount]; этот метод только для явного «я знаю лучше»
+     * (например, обнуление Messages-бейджа после полного mark-as-read диалогов,
+     * если такая точка появится в UI). Семантически ОТДЕЛЕН от бейджа уведомлений
+     * (NotificationsScreen.unreadCount) — тот обновляется отдельно.
+     */
+    fun forceSetUnread(value: Int) {
+        _unreadCount.value = value.coerceAtLeast(0)
+    }
 }

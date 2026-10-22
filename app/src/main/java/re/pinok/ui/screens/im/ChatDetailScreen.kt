@@ -2160,21 +2160,30 @@ fun ChatDetailScreen(
         showForwardDialog = true
     }
 
-    // P3.2 + Fix #122: mute/unmute chat — optimistic toggle, Toast feedback,
+    // P3.2 + Fix #122 + P1.3: mute/unmute chat — optimistic toggle, Toast feedback,
     // обновление state из ответа API (а не только из optimistic update).
     // Если API вернул PushSettings — используем их (точное состояние сервера).
     // Если API вернул null — откатываем optimistic update + Toast об ошибке.
-    fun toggleMute() {
+    //
+    // P1.3: добавлен optional параметр untilSec для timed mute.
+    //   untilSec = -1L (default) → mute навсегда (backward compat).
+    //   untilSec > 0L            → mute до UNIX-timestamp (1h / 8h).
+    //   untilSec игнорируется, если newState=false (unmute — всегда binary).
+    fun toggleMute(untilSec: Long = -1L) {
         val newState = !muted
         muted = newState
         scope.launch {
             try {
-                val newSettings = app.apiClient.messagesSetConversationPushSettings(peerId, disabled = newState)
+                val newSettings = app.apiClient.messagesSetConversationPushSettings(
+                    peerId, disabled = newState, untilSec = untilSec,
+                )
                 if (newSettings != null) {
                     // API успех + вернул настройки — обновляем state из ответа
-                    // (точное состояние сервера, включая disabled_forever/no_sound).
+                    // (точное состояние сервера, включая disabled_forever/no_sound/
+                    // disabled_until для timed mute).
                     muted = newSettings.isMuted()
-                    AppLog.i("ChatDetailScreen", "mute toggled: $newState (server-confirmed: ${muted})")
+                    AppLog.i("ChatDetailScreen",
+                        "mute toggled: $newState untilSec=$untilSec (server-confirmed: ${muted})")
                     Toast.makeText(
                         ctx,
                         if (muted) "Уведомления выключены" else "Уведомления включены",
@@ -2183,7 +2192,8 @@ fun ChatDetailScreen(
                 } else {
                     // API вернул null — ошибка (token invalid, network, etc.)
                     muted = !newState
-                    AppLog.w("ChatDetailScreen", "mute toggle failed (api returned null)")
+                    AppLog.w("ChatDetailScreen",
+                        "mute toggle failed (api returned null) untilSec=$untilSec")
                     Toast.makeText(
                         ctx,
                         if (newState) "Не удалось выключить уведомления" else "Не удалось включить уведомления",
@@ -2194,7 +2204,7 @@ fun ChatDetailScreen(
                 throw ce
             } catch (e: Exception) {
                 muted = !newState
-                AppLog.e("ChatDetailScreen", "mute toggle error", e)
+                AppLog.e("ChatDetailScreen", "mute toggle error untilSec=$untilSec", e)
                 Toast.makeText(
                     ctx,
                     "Ошибка: ${e.message ?: "network error"}",
@@ -4172,19 +4182,64 @@ fun ChatDetailScreen(
                                             },
                                         )
                                     } else {
-                                        DropdownMenuItem(
-                                            text = { Text(if (muted) "Включить уведомления" else "Заглушить") },
-                                            leadingIcon = {
-                                                Icon(
-                                                    if (muted) Icons.Outlined.Notifications else Icons.Outlined.NotificationsOff,
-                                                    contentDescription = null,
-                                                )
-                                            },
-                                            onClick = {
-                                                showChatMenu = false
-                                                toggleMute()
-                                            },
-                                        )
+                                        // P1.3: при unmuted — показываем 3 опции
+                                        // (1ч / 8ч / навсегда) вместо одного "Заглушить".
+                                        // При muted — один пункт "Включить уведомления".
+                                        if (muted) {
+                                            DropdownMenuItem(
+                                                text = { Text("Включить уведомления") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Outlined.Notifications,
+                                                        contentDescription = null,
+                                                    )
+                                                },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    toggleMute()
+                                                },
+                                            )
+                                        } else {
+                                            DropdownMenuItem(
+                                                text = { Text("Заглушить на 1 час") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Outlined.NotificationsOff,
+                                                        contentDescription = null,
+                                                    )
+                                                },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    toggleMute(System.currentTimeMillis() / 1000 + 3600)
+                                                },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Заглушить на 8 часов") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Outlined.NotificationsOff,
+                                                        contentDescription = null,
+                                                    )
+                                                },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    toggleMute(System.currentTimeMillis() / 1000 + 28800)
+                                                },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Заглушить навсегда") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Outlined.NotificationsOff,
+                                                        contentDescription = null,
+                                                    )
+                                                },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    toggleMute()
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                                 // W30-1 #IM-UNREAD-MENU: «Отметить непрочитанным/

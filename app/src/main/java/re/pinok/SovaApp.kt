@@ -425,6 +425,33 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     val foregroundTicks: MutableStateFlow<Int> = MutableStateFlow(0)
 
     /**
+     * P1.7-fix #DRAWER-NOTIF-BADGE: счётчик непрочитанных уведомлений VK
+     * (лайки/комментарии/репосты/упоминания/…) для бейджа на drawer-пункте
+     * «Уведомления» (SovaNavHost: visibleSidebarItems → BadgedBox).
+     *
+     * Источник: `notifications.getUnreadCounters` (VKApiClient.kt:19066) —
+     * серверный Map<category,count>. Здесь хранится СУММА по всем категориям
+     * (упрощённая модель: на drawer нужен один общий бейдж, не детализация
+     * по категориям — см. DIAG-C2 §9 + TODO #NOTIF-NFDCAT @1140 в
+     * NotificationsScreen.kt про нереализованный маппинг категорий).
+     *
+     * Обновляется из [refreshNotificationsUnreadCount] (см. ниже):
+     *   - периодически (см. [startNotificationsBadgeRefresh]) — каждые
+     *     [NOTIF_BADGE_REFRESH_INTERVAL_MS] (~2 мин, как NotificationsPoller);
+     *   - мгновенно по LongPoll code 114 (см. startNotificationsPoller ниже);
+     *   - из NotificationsScreen после markAsRead (через foregroundTicks).
+     *
+     * MutableStateFlow (не asStateFlow private set) — паттерн как у
+     * [tokenInvalidationTicks] / [foregroundTicks]: Compose-подписчик через
+     * collectAsState, обновление из фоновых корутин. Без throttle — refresh
+     * сам редкий (≤ раз в 2 мин), сетевых всплесков нет.
+     */
+    val notificationsUnreadCount: MutableStateFlow<Int> = MutableStateFlow(0)
+
+    /** Интервал периодического refresh бейджа (мс). См. [startNotificationsBadgeRefresh]. */
+    private val NOTIF_BADGE_REFRESH_INTERVAL_MS = 120_000L
+
+    /**
      * Fix #176-auth-loop: throttle для notifyTokenInvalidated.
      *
      * Сценарий из лога 2026-08-04 12:36:43–12:37:10: после первого error 5
@@ -2815,12 +2842,68 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 if (event is re.pinok.realtime.LongPollEvent.NotificationsCountChanged) {
                     AppLog.d("SovaApp", "LongPoll code 114 → triggerImmediatePoll")
                     poller.triggerImmediatePoll()
+                    // P1.7-fix #DRAWER-NOTIF-BADGE: code 114 = «изменилось кол-во
+                    // непрочитанных уведомлений» → параллельно обновляем бейдж drawer'а,
+                    // не дожидаясь периодического refresh (2 мин может быть долго).
+                    refreshNotificationsUnreadCount()
                 }
             }
         }
         // Запуск периодического poller'а.
         poller.start()
         AppLog.i("SovaApp", "NotificationsPoller started (push notifications)")
+        // P1.7-fix #DRAWER-NOTIF-BADGE: отдельный периодический refresh бейджа.
+        startNotificationsBadgeRefresh()
+    }
+
+    /**
+     * P1.7-fix #DRAWER-NOTIF-BADGE: периодический refresh [notificationsUnreadCount]
+     * для бейджа drawer-пункта «Уведомления». Запускается из [startNotificationsPoller].
+     *
+     * Цикл: initial refresh через 5с (не конкурировать со стартом LongPoll) →
+     * далее каждые [NOTIF_BADGE_REFRESH_INTERVAL_MS] (2 мин, как NotificationsPoller).
+     * Каждый тик проверяет hasValidToken() + network — без валидного токена запрос
+     * пропускается (notifications.getUnreadCounters вернёт err 5, не тратьм сеть).
+     *
+     * НЕ редактирует NotificationsPoller (другой агент работает там) — использует
+     * apiClient напрямую. Сетевые ошибки swallow'ятся (counter остаётся прежним).
+     */
+    private fun startNotificationsBadgeRefresh() {
+        keepAliveScope.launch {
+            delay(5_000L) // first refresh через 5с (после старта LongPoll/Poller)
+            while (true) {
+                try {
+                    if (tokenStorage.hasValidToken() && networkObserver.isOnline()) {
+                        refreshNotificationsUnreadCount()
+                    }
+                } catch (e: Exception) {
+                    AppLog.d("SovaApp", "#DRAWER-NOTIF-BADGE refresh failed: ${e.message}")
+                }
+                delay(NOTIF_BADGE_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * P1.7-fix #DRAWER-NOTIF-BADGE: обновить [notificationsUnreadCount] из
+     * `notifications.getUnreadCounters`. Суммирует значения по всем категориям
+     * (mentions/comments/likes/…). Вызывается из [startNotificationsBadgeRefresh]
+     * периодически + из startNotificationsPoller по LongPoll code 114.
+     *
+     * suspend: обычно зовётся из keepAliveScope. НЕ блокирует UI.
+     * Swallow'ит ошибки — счетчик остаётся прежним (best-effort).
+     */
+    suspend fun refreshNotificationsUnreadCount() {
+        try {
+            val counters = apiClient.notificationsGetUnreadCounters()
+            val total = counters.values.sum()
+            if (total != notificationsUnreadCount.value) {
+                AppLog.d("SovaApp", "#DRAWER-NOTIF-BADGE: ${counters} → total=$total (was ${notificationsUnreadCount.value})")
+                notificationsUnreadCount.value = total
+            }
+        } catch (e: Exception) {
+            AppLog.d("SovaApp", "#DRAWER-NOTIF-BADGE refresh error: ${e.message}")
+        }
     }
 
     /**

@@ -22,6 +22,12 @@ import re.pinok.util.AppLog
  * #EVENTHUB: WebSocket-клиент мгновенной доставки событий мессенджера
  * (wss://eh.vk.ru) — быстрый канал поверх LongPoll (wait=25с).
  *
+ * ⚠️ #P1.1 — КАНАЛ ОТКЛЮЧЁН (DEAD-EVENT). [start] превращён в disable-stub:
+ * WS-соединение открывалось, но events flow НЕ собирается НИКЕМ в проекте
+ * (EventHubEvent — raw payload-строка без парсера). Тратил сетевой ресурс и
+ * eventHub.getToken впустую. LongPoll = PRIMARY. Подробности и план
+ * реактивации (Вариант B) — в KDoc метода [start].
+ *
  * Протокол (эталон VK web, HAR):
  *  - URL: wss://eh.vk.ru/?v=1.002&format=json&app_id={client_id}&payload={base64}
  *    payload = base64({"api_version":"5.289","user_agent":"<UA>"})
@@ -58,12 +64,39 @@ class EventHubWebSocketClient(
     private val _events = MutableSharedFlow<EventHubEvent>(replay = 0, extraBufferCapacity = 64)
     val events: SharedFlow<EventHubEvent> = _events.asSharedFlow()
 
-    /** Запустить EventHub-цикл (идемпотентно). */
+    /**
+     * Запустить EventHub-цикл (идемпотентно).
+     *
+     * #P1.1 — EventHub ОТКЛЮЧЁН (DEAD-EVENT канал):
+     * WS-соединение устанавливалось (auth via eventHub.getToken, ping/pong,
+     * reconnect 1с→30с), тратило сетевой ресурс и короткоживущий token, НО
+     * [events]: SharedFlow<EventHubEvent> НЕ собирается НИКЕМ в проекте
+     * (grep → 0 коллекторов вне этого класса), а [EventHubEvent] — это raw
+     * payload-строка без парсера (см. [handleFrame]). События уходили в void.
+     * LongPoll — PRIMARY и полностью покрывает доставку (4 коллектора:
+     * MessageNotifier, startCallNotifier, startNotificationsPoller,
+     * UnreadMessagesCounter).
+     *
+     * Реактивация (Вариант B из задачи P1.1): реализовать парсер
+     * EventHubEvent → LongPollEvent (NewMessage/ReadInbox/etc.) и собрать
+     * flow в SovaApp рядом с longPollClient.events.collect. После этого
+     * раскомментировать запуск connectLoop ниже — start() останется
+     * идемпотентным. stop() в cleanup paths уже безопасен (no-op если
+     * !running). EventDedup (5s, peerId+msgId) уже есть в MessageNotifier.
+     *
+     * Call sites, покрытые этим stub'ом: MainActivity.kt:1209 (закомментирован
+     * отдельно), RealtimeWakeReceiver.kt:49 (onReceive wake-tick).
+     */
     fun start() {
-        if (running) return
-        running = true
-        AppLog.i(TAG, "start: запускаю EventHub WebSocket")
-        connectJob = scope.launch { connectLoop() }
+        // #P1.1 DEAD-EVENT: канал отключён — см. KDoc выше. LongPoll = PRIMARY.
+        AppLog.w(TAG, "start: EventHub disabled (P1.1 DEAD-EVENT) — LongPoll = PRIMARY. " +
+            "events flow has 0 collectors; EventHubEvent is raw string w/o parser. " +
+            "Reactivate: parse EventHubEvent → LongPollEvent + collect in SovaApp.")
+        // --- original start logic (disabled by P1.1; restore to reactivate) ---
+        // if (running) return
+        // running = true
+        // AppLog.i(TAG, "start: запускаю EventHub WebSocket")
+        // connectJob = scope.launch { connectLoop() }
     }
 
     /** Остановить EventHub-цикл и закрыть соединение. */
