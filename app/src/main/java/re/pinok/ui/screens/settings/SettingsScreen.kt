@@ -2309,8 +2309,13 @@ private fun MessagesTab(
         // - "Execute batching" (msgExecuteBatch) — нет batch-логики в коде,
         //   setter сохраняется но VKApiClient не проверяет флаг.
         // - "WebSocket для каналов" (msgWsChannels) — ChannelWebSocketClient
-        //   существует но не инстанциируется, методы STUB с TODO.
-        // Pref и setter остаются в SovaPrefs (не трогаем — обратная совместимость).
+        //   удалён (P3.2 dead-code cleanup): класс-заглушка был не инстанциирован
+        //   нигде, все методы STUB с TODO, KDoc-пример использовал несуществующую
+        //   сигнатуру конструктора. Pref остаётся в SovaPrefs — см. причину ниже.
+        // P3.2: Pref и setter остаются в SovaPrefs — поле msgWsChannels НЕ удалено,
+        // т.к. FeedScreen.kt (вне зоны P3.2) передаёт msgWsChannels=false в Snapshot
+        // constructor. AppLog.ws() в core/common/.../AppLog.kt стал orphan'ом (раньше
+        // единственный caller был ChannelWebSocketClient) — не трогается (вне зоны).
     }
 
     // #CHAT-SPECTRUM: диалоги выбора цвета текста и фона диалога. Вынесены сюда (после
@@ -8570,8 +8575,9 @@ private fun Modifier.androidx_clickable(onClick: () -> Unit): Modifier =
  *  - запись: settingsGeneral.toggleNotify/setNotifySettings — тот же BFF-контур, что и
  *    у 50 sn_*-тогглов вкладки (оптимистично, откат при ошибке + тост);
  *  - параметры без опций/кнопки/предупреждения — read-only (см. EmailParamRow).
- * Локальный pref emailNotifyFreq больше не читается UI (поле помечено @Deprecated
- * в SovaPrefs — оставлено из-за конструктора Snapshot в FeedScreen).
+ *
+ * P3.1 (2026-10-22): локальный pref emailNotifyFreq полностью удалён из SovaPrefs
+ * (field + key + setter) — DEAD STORE очищен. EmailNotifyCard работает только с BFF.
  */
 @Composable
 private fun EmailNotifyCard(app: SovaApp) {

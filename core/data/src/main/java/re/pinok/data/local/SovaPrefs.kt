@@ -326,9 +326,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             msgExecuteBatch    = p[Keys.MSG_EXECUTE_BATCH]        ?: false,
             // P4.3: WebSocket transport для каналов — VK переводит каналы на WS
             // (frontend.vkm_new_channels_ws_engine:1). Default false (opt-in).
-            // ⚠️ Protocol недокументирован, может измениться без notice. Заготовка
-            // [re.pinok.realtime.ChannelWebSocketClient] — stub для будущего использования.
-            // Не активен в основном flow пока VK не форсирует отказ от LongPoll.
+            // ⚠️ Protocol недокументирован, может измениться без notice.
+            // P3.2 (2026-10-22): ChannelWebSocketClient.kt УДАЛЁН (dead-code stub —
+            // все методы TODO, 0 instantiation, KDoc-пример использовал неверную
+            // сигнатуру конструктора). Поле msgWsChannels остаётся в Snapshot
+            // только ради компиляции FeedScreen.kt:359 (вне зоны P3.2 — хардкод
+            // msgWsChannels=false в Snapshot constructor). Setter setMsgWsChannels
+            // также оставлен — 0 callers, но в зоне P3.2 не трогаем ради
+            // минимального diff (поле нельзя удалить, setter часть того же API).
             msgWsChannels      = p[Keys.MSG_WS_CHANNELS]          ?: false,
             // P4.2: последний сохранённый ts (для backfill при следующем старте).
             lpLastTs           = p[Keys.LP_LAST_TS]              ?: 0L,
@@ -503,8 +508,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // мгновенного отображения состояния при повторном входе на вкладку
             // «Уведомления», без ожидания API-ответа. Пустая строка = нет кэша.
             notifyCacheJson    = p[Keys.NOTIFY_CACHE_JSON]      ?: "",
-            // §1-NOTIF-ARCHIVE: частота email-уведомлений из архива m.vk.ru/settings?act=notify.
-            emailNotifyFreq    = p[Keys.EMAIL_NOTIFY_FREQ]      ?: 0,
+            // P3.1: emailNotifyFreq удалён — DEAD STORE (UI не читал, SettingsScreen.kt:8564
+            // переведён на серверный BFF page=email). FeedScreen.kt больше не передаёт в Snapshot.
 
             // §42 #PUSH-NOTIFICATIONS: локальные push-уведомления.
             pushEnabled            = p[Keys.PUSH_ENABLED]            ?: true,
@@ -1383,8 +1388,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
      */
     suspend fun setCallsDnsPinIp(v: String)            = put(Keys.CALLS_DNS_PIN_IP, v.trim())
     suspend fun setCallsApiKeyWarningShown(v: Boolean)  = put(Keys.CALLS_API_KEY_WARNING_SHOWN, v)
-    /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда). */
-    suspend fun setEmailNotifyFreq(v: Int)              = put(Keys.EMAIL_NOTIFY_FREQ, v)
+    // P3.1: setEmailNotifyFreq удалён — DEAD STORE (UI не вызывал, поле в Snapshot тоже удалено).
 
     /**
      * Волна 45 #SETTINGS-EXPORT: сырой снимок ВСЕХ ключей DataStore — полный дамп
@@ -1647,11 +1651,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val msgExecuteBatch: Boolean,
         /** P4.3: WebSocket transport для каналов (stub, недокументировано, default false).
          *  #SETTINGS-FIX (P3-9, Task 3-b): @Deprecated — мёртвое поле: UI-тумблер удалён
-         *  (Fix #REMOVE-DEAD-TOGGLES), потребителей НЕТ (упоминания в KDoc
-         *  ChannelWebSocketClient.kt:57/74 — комментарии, не чтения; FeedScreen:299 —
-         *  конструктор Snapshot, хардкод false). Поле НЕ удалено ради этого конструктора
-         *  (FeedScreen вне зоны волны 3-b); заготовка ChannelWebSocketClient сохранена
-         *  для будущего WS-перехода. */
+         *  (Fix #REMOVE-DEAD-TOGGLES), потребителей НЕТ. Раньше единственными упоминаниями
+         *  были KDoc-комментарии ChannelWebSocketClient.kt:57/74 (не чтения) и конструктор
+         *  Snapshot в FeedScreen:359 (хардкод false).
+         *  P3.2 (2026-10-22): класс ChannelWebSocketClient.kt УДАЛЁН полностью (dead-code
+         *  stub, 0 instantiation, все методы TODO). Поле msgWsChannels остаётся в Snapshot
+         *  ТОЛЬКО ради компиляции FeedScreen.kt:359 (FeedScreen вне зоны P3.2 — трогать
+         *  нельзя). Setter setMsgWsChannels тоже оставлен (часть того же API, 0 callers).
+         *  Если FeedScreen когда-либо будет переработан — поле+setter+MSG_WS_CHANNELS
+         *  key можно удалить всё разом (см. также AppLog.ws() orphan в core/common). */
         val msgWsChannels: Boolean,
         /** P4.2: последний сохранённый ts LongPoll (для backfill при старте). */
         val lpLastTs: Long,
@@ -1773,13 +1781,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          * кэша (используются defaults из NOTIFY_DEFAULTS в SettingsScreen).
          */
         val notifyCacheJson: String,
-        /** §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда).
-         *  #SETTINGS-FIX (P3-9 + P2-5, Task 3-b): @Deprecated — после перевода секции
-         *  «Уведомления на почту» на серверный BFF page=email (settingsGeneralGetNotifySettings)
-         *  UI больше НЕ читает это поле; setter setEmailNotifyFreq больше не вызывается из UI.
-         *  Поле НЕ удалено: конструктор Snapshot в FeedScreen:401 передаёт хардкод 0
-         *  (FeedScreen вне зоны волны 3-b). */
-        val emailNotifyFreq: Int,
+        // P3.1: emailNotifyFreq field удалён — DEAD STORE. EmailNotifyCard (SettingsScreen.kt:8564)
+        // переведён на серверный BFF page=email (settingsGeneralGetNotifySettings). Поле было
+        // @Deprecated, единственный consumer — Snapshot constructor в FeedScreen.kt:256 (initial).
+        // Реальных readers в app/ — 0.
 
         /**
          * §42 #PUSH-NOTIFICATIONS: локальные push-уведомления для VK-событий
@@ -2283,8 +2288,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val AUTH_VK_DOMAIN       = stringPreferencesKey("auth_vk_domain")        // основной домен: vk.ru / vk.com
         // Fix #302 (Task 2-b): кэш sn_* notification toggles (JSON map).
         val NOTIFY_CACHE_JSON    = stringPreferencesKey("notify_cache_json")
-        // §1-NOTIF-ARCHIVE: частота email-уведомлений (0=всегда, 1=не чаще раза в день, 2=никогда).
-        val EMAIL_NOTIFY_FREQ    = intPreferencesKey("email_notify_freq")
+        // P3.1: EMAIL_NOTIFY_FREQ key удалён — DEAD STORE (поле emailNotifyFreq удалено из Snapshot).
 
         // §42 #PUSH-NOTIFICATIONS: локальные push-уведомления.
         val PUSH_ENABLED            = booleanPreferencesKey("push_enabled")

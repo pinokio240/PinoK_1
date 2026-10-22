@@ -57,6 +57,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.system.measureTimeMillis
 import java.util.concurrent.TimeUnit
 
@@ -268,6 +270,44 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     @Volatile
     var incomingSignalingStarted = false
         private set
+
+    /**
+     * P3.4 (DIAG-A2 §7): Mutex для сериализации обработки incoming call events
+     * из 4 коллекторов (LongPollClient case 115 + queuev4Client +
+     * eventsQueuev4Client + callsQueuev4Client). Гарантирует атомарность
+     * read-modify-write на [pendingIncomingCallPayload] и устраняет
+     * race-condition: 2 коллектора могли одновременно эмитить РАЗНЫЕ
+     * payload'ы одного звонка (LP "-1" marker + calls_queue real
+     * convParams) и оба обрабатывались → двойная навигация на CallScreen
+     * или race в [refreshIncomingCaller].
+     *
+     * Mutex НЕ реентерабельный (kotlinx.coroutines.sync). [handleQueuev4Incoming]
+     * вызывается из коллекторов, но запускает свой `keepAliveScope.launch { ... }`
+     * (отдельную корутину) — поэтому внутри handleQueuev4Incoming mutex
+     * захватывается НЕ повторно в той же корутине (deadlock'а нет).
+     */
+    private val incomingCallMutex = Mutex()
+
+    /**
+     * P3.4 (DIAG-A2 §7): timestamp последней УСПЕШНОЙ обработки incoming call —
+     * для window-based dedup. Если новый event приходит в течение
+     * [INCOMING_CALL_DEDUP_WINDOW_MS] после предыдущей обработки И текущий
+     * pendingIncomingCallPayload уже real (не "-1") — skip нового event
+     * (покрывает случай когда 2 канала присылают РАЗНЫЕ payload'ы ОДНОГО
+     * звонка). Обновляется только при реальной обработке (см.
+     * [markIncomingCallProcessed]), НЕ при skip.
+     */
+    @Volatile
+    private var lastIncomingCallProcessedAt: Long = 0L
+
+    /**
+     * P3.4: окно дедупликации incoming call events. 5с — эмпирическая оценка:
+     * 4 коллектора обычно эмитят с разницей < 1с (network propagation),
+     * но `messagesGetCurrentCalls` в [handleQueuev4Incoming] может задержать
+     * second event на 1-3с (HTTP RTT). 5с покрывает оба сценария без
+     * блокировки легитимных повторных звонков (обычно > 30с между звонками).
+     */
+    private val INCOMING_CALL_DEDUP_WINDOW_MS = 5_000L
 
     /**
      * #CALLS-SNAP (2026-09-05): репозиторий раздела «Звонки» (Этап А2 плана
@@ -1879,6 +1919,67 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     }
 
     /**
+     * P3.4 (DIAG-A2 §7): централизованная логика дедупликации incoming call events.
+     *
+     * Вызывается из `incomingCallMutex.withLock { ... }` в каждом из 4
+     * коллекторов (LP 115 / queuev4 HAR / calls_queue HAR) и в
+     * [handleQueuev4Incoming].
+     *
+     * Skip conditions (по приоритету):
+     *  1. [pendingIncomingCallPayload] null/blank → process (первый event
+     *     звонка).
+     *  2. Same payload (current == new) → skip (dup того же event'а).
+     *  3. Have real payload (current != "-1"), new is "-1"/null/blank marker
+     *     → skip (real > marker; LP "-1" после calls_queue real не должен
+     *     перезаписать pending).
+     *  4. In dedup window (now - [lastIncomingCallProcessedAt] <
+     *     [INCOMING_CALL_DEDUP_WINDOW_MS]), current is real, new is real and
+     *     different → skip (2 канала прислали РАЗНЫЕ payload'ы ОДНОГО звонка;
+     *     V2.1.6 dedup-аналог).
+     *  5. Otherwise → process (placeholder "-1" → real upgrade, или новый
+     *     звонок вне dedup-окна).
+     *
+     * ВАЖНО: НЕ skip'ает placeholder → real upgrade (current="-1", new=real)
+     * — это нужно чтобы calls_queue HAR real convParams мог заменить LP "-1"
+     * placeholder (V2.1.6 flow сохранён).
+     *
+     * @param newPayload новый payload из event ("-1" / null / blank / реальный
+     *                   convParams).
+     * @return true — skip event, false — process.
+     */
+    private fun shouldSkipIncomingCall(newPayload: String?): Boolean {
+        val currentPayload = pendingIncomingCallPayload
+        val now = System.currentTimeMillis()
+        val inDedupWindow = now - lastIncomingCallProcessedAt < INCOMING_CALL_DEDUP_WINDOW_MS
+        val newIsMarker = newPayload == null || newPayload == "-1" || newPayload.isBlank()
+        return when {
+            // 1) Первый event (current null/blank) — process.
+            currentPayload.isNullOrBlank() -> false
+            // 2) Same payload already processed — dup, skip.
+            currentPayload == newPayload -> true
+            // 3) Have real payload (current != "-1"), new is marker — skip (real > marker).
+            currentPayload != "-1" && newIsMarker -> true
+            // 4) In dedup window, both payloads real & different — skip
+            //    (2 канала прислали РАЗНЫЕ payload'ы ОДНОГО звонка).
+            inDedupWindow && currentPayload != "-1" && !newIsMarker && currentPayload != newPayload -> true
+            // 5) Otherwise — process (placeholder "-1" → real upgrade, или
+            //    новый звонок вне dedup-окна, или другой сценарий).
+            else -> false
+        }
+    }
+
+    /**
+     * P3.4: отметить что incoming call обработан (обновить timestamp
+     * [lastIncomingCallProcessedAt]). Вызывать ТОЛЬКО когда реально начали
+     * обработку (после успешного [shouldSkipIncomingCall] == false), НЕ при
+     * skip — иначе легитимный следующий звонок в течение 5с будет ложно
+     * скипнут.
+     */
+    private fun markIncomingCallProcessed() {
+        lastIncomingCallProcessedAt = System.currentTimeMillis()
+    }
+
+    /**
      * #CALLS: слушатель queuev4 — входящие звонки (LP 115).
      *
      * Подписывается на [Queuev4Client.events]. При LP 115 (INCOMING_CALL)
@@ -1917,22 +2018,37 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         // ИЗ ТРЁХ коллекторов (LP 115 / queuev4 / events_queue); повторная
                         // запись того же payload перезапускала LaunchedEffect в SovaNavHost
                         // и пушила вторую копию CallScreen в backstack.
-                        if (pendingIncomingCallPayload.isNullOrBlank() || pendingIncomingCallPayload != event.payload) {
-                            // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
-                            // P0.43-r8: при payload="-1" (маркер без данных) передаём null в
-                            // handleQueuev4Incoming — оно через messagesGetCurrentCalls вытянет
-                            // реальный caller_id (как V2.1.6).
-                            val realPayload = event.payload?.takeIf { it.isNotBlank() && it != "-1" }
-                            if (realPayload != null) {
-                                pendingIncomingCallPayload = realPayload
-                            } else if (pendingIncomingCallPayload.isNullOrBlank()) {
-                                pendingIncomingCallPayload = "-1"  // placeholder, handleQueuev4Incoming вытянет реальный
+                        // P3.4 (DIAG-A2 §7): mutex + window-based dedup для сериализации
+                        // обработки incoming call events из 4 коллекторов. Без mutex
+                        // 2 коллектора могли race'ить pendingIncomingCallPayload (LP "-1"
+                        // + calls_queue real convParams одного звонка) → двойная навигация
+                        // на CallScreen или race в refreshIncomingCaller.
+                        incomingCallMutex.withLock {
+                            // P3.4: централизованный dedup-guard (skip conditions см. в
+                            // shouldSkipIncomingCall). Заменяет старый guard
+                            // `pendingIncomingCallPayload != event.payload`, который
+                            // пропускал только ТОТ ЖЕ payload (не покрывал разные
+                            // payload'ы одного звонка).
+                            if (!shouldSkipIncomingCall(event.payload)) {
+                                markIncomingCallProcessed()
+                                // Сохраняем pending — MainActivity откроет CallScreen по тапу на уведомление.
+                                // P0.43-r8: при payload="-1" (маркер без данных) передаём null в
+                                // handleQueuev4Incoming — оно через messagesGetCurrentCalls вытянет
+                                // реальный caller_id (как V2.1.6).
+                                val realPayload = event.payload?.takeIf { it.isNotBlank() && it != "-1" }
+                                if (realPayload != null) {
+                                    pendingIncomingCallPayload = realPayload
+                                } else if (pendingIncomingCallPayload.isNullOrBlank()) {
+                                    pendingIncomingCallPayload = "-1"  // placeholder, handleQueuev4Incoming вытянет реальный
+                                }
+                                refreshIncomingCaller()
+                                // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу
+                                // (поймать offer) — ТОЛЬКО при реальном payload (не "-1").
+                                if (realPayload != null) ensureIncomingSignalingOnRing(realPayload)
+                                showIncomingCallNotification()
+                            } else {
+                                AppLog.i("SovaApp", "P3.4: LP 115 incoming call SKIPPED by dedup (cur=${pendingIncomingCallPayload?.take(20)} new=${event.payload?.take(20)})")
                             }
-                            refreshIncomingCaller()
-                            // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу
-                            // (поймать offer) — ТОЛЬКО при реальном payload (не "-1").
-                            if (realPayload != null) ensureIncomingSignalingOnRing(realPayload)
-                            showIncomingCallNotification()
                         }
                     } catch (e: Exception) {
                         AppLog.w("SovaApp", "startCallNotifier: ${e.message}")
@@ -1963,21 +2079,30 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             AppLog.i("SovaApp", "INCOMING_CALL (queuev4 HAR): callId=$callId fromId=$fromId convParams.len=${convParams.length}")
                             // Сохраняем conversation_params как payload — CallScreen decode'ит их.
                             if (convParams.isNotBlank()) {
-                                pendingIncomingCallPayload = convParams
-                                pendingIncomingCallPeerId = fromId
-                                // Подтягиваем имя/фото из caller_info (если есть).
-                                if (callerInfo != null) {
-                                    val firstName = callerInfo.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                                    val lastName = callerInfo.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                                    val photo = callerInfo.get("photo_400")?.takeIf { !it.isJsonNull }?.asString
-                                    pendingIncomingCallTitle = "$firstName $lastName".trim().ifBlank { "Входящий звонок" }
-                                    pendingIncomingCallPhoto = photo
-                                } else {
-                                    refreshIncomingCaller()
+                                // P3.4 (DIAG-A2 §7): mutex + window-based dedup — сериализация
+                                // с другими коллекторами (LP 115 / events_queue / calls_queue).
+                                incomingCallMutex.withLock {
+                                    if (!shouldSkipIncomingCall(convParams)) {
+                                        markIncomingCallProcessed()
+                                        pendingIncomingCallPayload = convParams
+                                        pendingIncomingCallPeerId = fromId
+                                        // Подтягиваем имя/фото из caller_info (если есть).
+                                        if (callerInfo != null) {
+                                            val firstName = callerInfo.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                            val lastName = callerInfo.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                            val photo = callerInfo.get("photo_400")?.takeIf { !it.isJsonNull }?.asString
+                                            pendingIncomingCallTitle = "$firstName $lastName".trim().ifBlank { "Входящий звонок" }
+                                            pendingIncomingCallPhoto = photo
+                                        } else {
+                                            refreshIncomingCaller()
+                                        }
+                                        // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
+                                        ensureIncomingSignalingOnRing(convParams)
+                                        showIncomingCallNotification()
+                                    } else {
+                                        AppLog.i("SovaApp", "P3.4: queuev4 HAR incoming call SKIPPED by dedup (callId=$callId)")
+                                    }
                                 }
-                                // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
-                                ensureIncomingSignalingOnRing(convParams)
-                                showIncomingCallNotification()
                             } else {
                                 // Fallback: старый формат payload (строка).
                                 val payload = ev.payload["payload"] as? String
@@ -2050,20 +2175,29 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             val callerInfo = ev.payload["caller_info"] as? com.google.gson.JsonObject
                             AppLog.i("SovaApp", "INCOMING_CALL (calls-очередь HAR): callId=$callId fromId=$fromId convParams.len=${convParams.length}")
                             if (convParams.isNotBlank()) {
-                                pendingIncomingCallPayload = convParams
-                                pendingIncomingCallPeerId = fromId
-                                if (callerInfo != null) {
-                                    val firstName = callerInfo.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                                    val lastName = callerInfo.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                                    val photo = callerInfo.get("photo_400")?.takeIf { !it.isJsonNull }?.asString
-                                    pendingIncomingCallTitle = "$firstName $lastName".trim().ifBlank { "Входящий звонок" }
-                                    pendingIncomingCallPhoto = photo
-                                } else {
-                                    refreshIncomingCaller()
+                                // P3.4 (DIAG-A2 §7): mutex + window-based dedup — сериализация
+                                // с другими коллекторами (LP 115 / queuev4 / events_queue).
+                                incomingCallMutex.withLock {
+                                    if (!shouldSkipIncomingCall(convParams)) {
+                                        markIncomingCallProcessed()
+                                        pendingIncomingCallPayload = convParams
+                                        pendingIncomingCallPeerId = fromId
+                                        if (callerInfo != null) {
+                                            val firstName = callerInfo.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                            val lastName = callerInfo.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                            val photo = callerInfo.get("photo_400")?.takeIf { !it.isJsonNull }?.asString
+                                            pendingIncomingCallTitle = "$firstName $lastName".trim().ifBlank { "Входящий звонок" }
+                                            pendingIncomingCallPhoto = photo
+                                        } else {
+                                            refreshIncomingCaller()
+                                        }
+                                        // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
+                                        ensureIncomingSignalingOnRing(convParams)
+                                        showIncomingCallNotification()
+                                    } else {
+                                        AppLog.i("SovaApp", "P3.4: calls-очередь HAR incoming call SKIPPED by dedup (callId=$callId)")
+                                    }
                                 }
-                                // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
-                                ensureIncomingSignalingOnRing(convParams)
-                                showIncomingCallNotification()
                             } else {
                                 // Fallback: старый формат payload как строка (LP 115 legacy).
                                 val payload = ev.payload["payload"] as? String
@@ -2103,42 +2237,69 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     private fun handleQueuev4Incoming(payload: String?) {
         keepAliveScope.launch {
             try {
-                // 1) Реальный payload (не "-1") — используем как есть (guard перезаписи).
-                val realPayload = payload?.takeIf { it != "-1" }
-                if (!realPayload.isNullOrBlank()) {
-                    if (!pendingIncomingCallPayload.isNullOrBlank() && pendingIncomingCallPayload == realPayload) {
-                        return@launch // дубль того же payload — пропускаем.
+                // P3.4 (DIAG-A2 §7): mutex для сериализации с другими коллекторами
+                // и другими вызовами handleQueuev4Incoming (мульти-коллекторы
+                // могут одновременно делегировать сюда — keepAliveScope
+                // многопоточный). Mutex НЕ реентерабельный, но т.к. это отдельная
+                // корутина (keepAliveScope.launch выше), коллектор, который вызвал
+                // handleQueuev4Incoming, уже отпустил свой mutex (launch — async).
+                // withContext(Dispatchers.IO) внутри withLock — ОК: mutex
+                // привязан к корутине, не к потоку; другие корутины suspend'ят
+                // на withLock пока ждут.
+                incomingCallMutex.withLock {
+                    // 1) Реальный payload (не "-1") — используем как есть (guard перезаписи).
+                    val realPayload = payload?.takeIf { it != "-1" }
+                    if (!realPayload.isNullOrBlank()) {
+                        // P3.4: shouldSkipIncomingCall заменяет старый guard
+                        // `pendingIncomingCallPayload == realPayload` (покрывает и
+                        // window-based dedup, и "have real → skip new marker/dup").
+                        if (shouldSkipIncomingCall(realPayload)) {
+                            AppLog.i("SovaApp", "P3.4: handleQueuev4Incoming real payload SKIPPED by dedup (len=${realPayload.length})")
+                            return@withLock
+                        }
+                        markIncomingCallProcessed()
+                        pendingIncomingCallPayload = realPayload
+                        refreshIncomingCaller()
+                        // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
+                        ensureIncomingSignalingOnRing(realPayload)
+                        showIncomingCallNotification()
+                        return@withLock
                     }
-                    pendingIncomingCallPayload = realPayload
+                    // 2) payload == "-1"/null — маркер без данных: проверяем, есть ли реальный
+                    //    входящий через messagesGetCurrentCalls (caller_id).
+                    val callerId = withContext(Dispatchers.IO) {
+                        apiClient.messagesGetCurrentCalls().firstOrNull()?.get("caller_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                    }
+                    AppLog.i("SovaApp", "handleQueuev4Incoming(-1): callerId=$callerId")
+                    if (callerId <= 0L) {
+                        // Звонка на сервере нет (getCurrentCalls пусто/0) — не показываем ложный входящий.
+                        AppLog.i("SovaApp", "handleQueuev4Incoming: getCurrentCalls пусто/0 — входящего нет, пропускаем")
+                        return@withLock
+                    }
+                    // P3.4: dedup-проверка ПОСЛЕ подтверждения что звонок реальный
+                    // (callerId > 0). Если skip — НЕ обновляем lastIncomingCallProcessedAt
+                    // (другой коллектор уже его обновил), но caller_id всё равно
+                    // запоминаем — он пригодится для refreshIncomingCaller если
+                    // текущий pending = "-1" placeholder (имя/фото ещё не подтянулись).
+                    if (shouldSkipIncomingCall(payload)) {
+                        AppLog.i("SovaApp", "P3.4: handleQueuev4Incoming -1 SKIPPED by dedup (callerId=$callerId, cur=${pendingIncomingCallPayload?.take(20)})")
+                        pendingIncomingCallPeerId = callerId
+                        return@withLock
+                    }
+                    markIncomingCallProcessed()
+                    pendingIncomingCallPeerId = callerId
+                    // Placeholder "-1" — оверлей IncomingCallScreen и decline обрабатывают "-1"
+                    // через HTTP-фолбэк (performIncomingDecline), пока реальный payload не пришёл
+                    // (перезапишется реальным параметризованным payload выше по guard).
+                    if (pendingIncomingCallPayload.isNullOrBlank()) {
+                        pendingIncomingCallPayload = "-1"
+                    }
                     refreshIncomingCaller()
-                    // #CALLS-COMMON-SIGNALING: поднимаем WS на ring сразу.
-                    ensureIncomingSignalingOnRing(realPayload)
+                    // #CALLS-COMMON-SIGNALING: payload=null — метод сам дёрнет
+                    // getCurrentCalls и получит conversation params через vchat.
+                    ensureIncomingSignalingOnRing(null)
                     showIncomingCallNotification()
-                    return@launch
                 }
-                // 2) payload == "-1"/null — маркер без данных: проверяем, есть ли реальный
-                //    входящий через messagesGetCurrentCalls (caller_id).
-                val callerId = withContext(Dispatchers.IO) {
-                    apiClient.messagesGetCurrentCalls().firstOrNull()?.get("caller_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
-                }
-                AppLog.i("SovaApp", "handleQueuev4Incoming(-1): callerId=$callerId")
-                if (callerId <= 0L) {
-                    // Звонка на сервере нет (getCurrentCalls пусто/0) — не показываем ложный входящий.
-                    AppLog.i("SovaApp", "handleQueuev4Incoming: getCurrentCalls пусто/0 — входящего нет, пропускаем")
-                    return@launch
-                }
-                pendingIncomingCallPeerId = callerId
-                // Placeholder "-1" — оверлей IncomingCallScreen и decline обрабатывают "-1"
-                // через HTTP-фолбэк (performIncomingDecline), пока реальный payload не пришёл
-                // (перезапишется реальным параметризованным payload выше по guard).
-                if (pendingIncomingCallPayload.isNullOrBlank()) {
-                    pendingIncomingCallPayload = "-1"
-                }
-                refreshIncomingCaller()
-                // #CALLS-COMMON-SIGNALING: payload=null — метод сам дёрнет
-                // getCurrentCalls и получит conversation params через vchat.
-                ensureIncomingSignalingOnRing(null)
-                showIncomingCallNotification()
             } catch (e: Exception) {
                 AppLog.w("SovaApp", "handleQueuev4Incoming: ${e.message}")
             }
