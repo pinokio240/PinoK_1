@@ -52,6 +52,16 @@ class SecurityAlertsPoller(
 
     private val TAG = "SecurityAlertsPoller"
 
+    // P0.5b (2026-10-22): persistent disable flag — accountPersonal.getSecurityAlerts
+    // НЕ существует ни на api.vk.com, ни на web.api.vk.ru (подтверждено logcat:
+    // err=3 "Unknown method passed" на обоих шлюзах). Это private VK ID API,
+    // недоступный через обычный access_token. Graceful backoff (P0.5) просто
+    // откладывал шум на 1 час, потом poller перезапускался на следующем app launch.
+    // Теперь: после MAX_CONSECUTIVE err=3 → persist flag в SharedPreferences →
+    // start() проверяет флаг и НЕ запускает poller. Флаг можно сбросить только
+    // вручную (clear app data) или если VK добавит метод (проверить через triggerImmediatePoll).
+    private val disablePrefs = context.getSharedPreferences("pinok_security_alerts", Context.MODE_PRIVATE)
+
     private val supervisorJob = SupervisorJob()
     private val pollScope = CoroutineScope(Dispatchers.IO + supervisorJob)
     private var periodicJob: Job? = null
@@ -88,9 +98,12 @@ class SecurityAlertsPoller(
          * Порог graceful-disable: 6 polls × 10 мин (default interval) = 1 час.
          * Если за час VK ни разу не ответил успешно — отключаем poller
          * (он не нужен: метод не существует на текущем шлюзе VK).
-         * Poller поднимется снова при следующем старте SovaApp.onCreate.
+         * P0.5b: теперь также persist'им флаг в SharedPreferences чтобы
+         * poller НЕ перезапускался на следующем app launch (метод стабильно
+         * отсутствует — logcat 2026-10-22 подтверждает err=3 на api.vk.com).
          */
         const val MAX_CONSECUTIVE_METHOD_UNAVAILABLE = 6
+        const val KEY_METHOD_UNAVAILABLE = "method_unavailable_permanent"
     }
 
     /**
@@ -103,6 +116,15 @@ class SecurityAlertsPoller(
     fun start() {
         if (_isRunning.value) {
             AppLog.d(TAG, "start: already running — skip")
+            return
+        }
+        // P0.5b: check persistent disable flag — если метод стабильно возвращал
+        // err=3 в прошлых сессиях, НЕ запускаем poller (экономия батареи/трафика
+        // + чистый logcat без err=3 каждые 10 мин).
+        if (disablePrefs.getBoolean(KEY_METHOD_UNAVAILABLE, false)) {
+            AppLog.i(TAG, "start: permanently disabled — accountPersonal.getSecurityAlerts " +
+                "method unavailable (err=3 persisted from previous session). " +
+                "Clear app data to retry if VK adds the method.")
             return
         }
         _isRunning.value = true
@@ -166,14 +188,17 @@ class SecurityAlertsPoller(
                 if (isMethodUnavailable) {
                     consecutiveMethodUnavailable++
                     if (consecutiveMethodUnavailable >= MAX_CONSECUTIVE_METHOD_UNAVAILABLE) {
-                        // Graceful-disable после 1 часа (6 polls × 10 мин) устойчивых
-                        // err=3 — метод стабильно отсутствует на шлюзе VK.
-                        // INFO (не W/E): это не баг приложения, а контрактный ответ VK.
-                        // Poller поднимется снова при следующем старте SovaApp.onCreate.
+                        // P0.5b: permanent disable — persist flag в SharedPreferences.
+                        // Метод стабильно отсутствует (err=3 на api.vk.com AND web.api.vk.ru,
+                        // подтверждено logcat 2026-10-22). Poller НЕ перезапустится на
+                        // следующем app launch — start() проверит флаг и выйдет с INFO логом.
+                        // Сбросить можно только clear app data (или если VK добавит метод
+                        // и пользователь manually триггернет triggerImmediatePoll после сброса).
+                        disablePrefs.edit().putBoolean(KEY_METHOD_UNAVAILABLE, true).apply()
                         AppLog.i(TAG, "pollOnce: accountPersonal.getSecurityAlerts " +
                             "unavailable for $consecutiveMethodUnavailable consecutive polls " +
-                            "(err=$err) — graceful-disable (method not exposed by VK, " +
-                            "will resume on next app start if VK adds it)")
+                            "(err=$err) — PERMANENT disable (method not exposed by VK on any " +
+                            "gateway, persisting flag — poller will not restart on next app launch)")
                         stop()
                     } else {
                         AppLog.w(TAG, "pollOnce: method unavailable " +

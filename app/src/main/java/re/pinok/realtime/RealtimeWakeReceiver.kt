@@ -45,9 +45,11 @@ class RealtimeWakeReceiver : BroadcastReceiver() {
             } else if (app.tokenStorage.hasValidToken()) {
                 // Пробуждаем LongPoll (сброс backoff + эвикт соединений + отмена in-flight).
                 app.longPollClient.notifyResumed()
-                // EventHub стартуем идемпотентно (no-op если уже работает).
-                app.eventHubClient.start()
-                AppLog.i(TAG, "#DOZE-RELIABILITY realtime woken (LongPoll.notifyResumed + EventHub.start)")
+                // P1.1b: EventHub.start() убран — канал отключён (P1.1 DEAD-EVENT,
+                // EventHubEvent = raw String без парсера, 0 коллекторов). Раньше
+                // вызов start() здесь каждые 15 мин плодил warning-логи от stub'а
+                // (~96/сутки). LongPoll = PRIMARY, полностью покрывает доставку.
+                AppLog.i(TAG, "#DOZE-RELIABILITY realtime woken (LongPoll.notifyResumed)")
             } else {
                 AppLog.d(TAG, "#DOZE-RELIABILITY no valid token — not waking realtime")
             }
