@@ -64,7 +64,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
+// IME-ENTER-FIX: KeyboardActions import удалён — onSend больше не используется
+// (Enter переносит строку, отправка через отдельную кнопку ➤ справа от поля).
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -4600,11 +4601,14 @@ fun ChatDetailScreen(
                             // default Material3 стиль, как в PostDetailScreen. Раньше
                             // панель диалога выглядела отлично от постов (скруглённое поле
                             // с цветной рамкой vs прямоугольное с тонкой рамкой).
+                            //
+                            // IME-ENTER-FIX: многострочное поле — Enter переносит строку
+                            // (не отправляет). Отправка — отдельной кнопкой ➤ справа от поля.
+                            // Раньше imeAction=ImeAction.Send заменял Enter на кнопку отправки
+                            // на клавиатуре — но пользователю нужен перенос строк для длинных
+                            // сообщений. ImeAction.Default показывает обычный Enter на клавиатуре.
                             keyboardOptions = KeyboardOptions(
-                                imeAction = ImeAction.Send,
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onSend = { doSend() },
+                                imeAction = ImeAction.Default,
                             ),
                         )
                         Spacer(modifier = Modifier.width(4.dp))
