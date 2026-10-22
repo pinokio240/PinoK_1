@@ -441,10 +441,8 @@ fun FeedScreen(
             // #SETTINGS-DEVTAB (2026-10-14): глобальный kill-switch звонков (default false) —
             // FeedScreen должен передать initial-значение, иначе Snapshot не соберётся.
             callsEnabled = false,
-            // #AUTH2: «Авторизация 2» — альтернативный флоу входа.
-            // AUTH-WHITESCREEN-FIX: default false (синхрон с SovaPrefs) — V2 даёт белый экран
-            // на Oppo A17k и других budget устройствах (нет safety-mechanisms).
-            authV2Enabled = false,
+            // #AUTH2: «Авторизация 2» — альтернативный флоу входа (default on, как в SovaPrefs).
+            authV2Enabled = true,
             // Fix #237: showLogFab добавлен в Snapshot — FeedScreen тоже должен
             // передавать initial-значение, иначе компилятор падает:
             // «No value passed for parameter 'showLogFab'».
