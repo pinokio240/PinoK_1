@@ -1134,7 +1134,10 @@ object VkNotificationsNotifier {
      * @param snap snapshot с pushQuietHours* настройками
      * @return true если сейчас quiet hours (не показывать уведомления)
      */
-    private fun isInQuietHours(snap: SovaPrefs.Snapshot): Boolean {
+    // P0.2 #QUIET-MSGS: internal (было private) — SovaApp.startMessageNotifier
+    // использует эту же логику для прямых сообщений (MessageNotifier), чтобы
+    // не дублировать вычисление. См. SovaApp.kt:~1715 (effectiveChannelId).
+    internal fun isInQuietHours(snap: SovaPrefs.Snapshot): Boolean {
         if (!snap.pushQuietHoursEnabled) return false
         val now = java.util.Calendar.getInstance()
         val nowMin = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)

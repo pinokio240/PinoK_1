@@ -580,6 +580,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // где они показываются (1/2). Default true — как у сообщений.
             notifyCommunitiesSound = p[Keys.NOTIFY_COMMUNITIES_SOUND] ?: true,
             notifyCommunitiesVibration = p[Keys.NOTIFY_COMMUNITIES_VIBRATION] ?: true,
+            // P0.3 #SERVER-DND: кэш server-side silent_until. 0 = DND выключен
+            // (или ещё не опрошен). Обновляется NotificationsPoller каждые ~2 мин.
+            silentUntil = p[Keys.SILENT_UNTIL] ?: 0L,
             // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера
             // (кнопки «±N сек» на lock-screen/в уведомлении). Секунды, default 10.
             videoSeekStepSec = p[Keys.VIDEO_SEEK_STEP_SEC] ?: 10,
@@ -1314,6 +1317,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     ))
     suspend fun setNotifyCommunitiesSound(v: Boolean)   = put(Keys.NOTIFY_COMMUNITIES_SOUND, v)
     suspend fun setNotifyCommunitiesVibration(v: Boolean) = put(Keys.NOTIFY_COMMUNITIES_VIBRATION, v)
+    // P0.3 #SERVER-DND: кэш server-side silent_until. Пишет NotificationsPoller.
+    suspend fun setSilentUntil(v: Long) = put(Keys.SILENT_UNTIL, v)
 
     /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды). */
     suspend fun setVideoSeekStepSec(v: Int) = put(Keys.VIDEO_SEEK_STEP_SEC, v)
@@ -1888,6 +1893,18 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val notifyCommunitiesSound: Boolean = true,
         /** Fix #390 #NOTIFY-MODES: вибрация уведомлений от сообществ (default true). */
         val notifyCommunitiesVibration: Boolean = true,
+        /**
+         * P0.3 #SERVER-DND: cached server-side silent_until (Unix seconds).
+         * 0 = DND выключен или ещё не опрошен. Пишется NotificationsPoller.pollOnce
+         * (~2 мин), читается SovaApp.startMessageNotifier чтобы локально подавлять
+         * звук push'ей во время server-side DND (PinoK не использует FCM, поэтому
+         * VK-side mute сам по себе ничего не глушит).
+         *
+         * Дефолт 0L задан явно — прецедент notifyMode: существующие именованные
+         * конструкторы Snapshot в чужих файлах (FeedScreen collectAsState initial)
+         * продолжают собираться без правок.
+         */
+        val silentUntil: Long = 0L,
         /** W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера в секундах (default 10). */
         val videoSeekStepSec: Int = 10,
         /** #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео (default true). */
@@ -2273,6 +2290,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val PUSH_QUIET_HOURS_ENABLED= booleanPreferencesKey("push_quiet_hours_enabled")
         val PUSH_QUIET_HOURS_START  = intPreferencesKey("push_quiet_hours_start")
         val PUSH_QUIET_HOURS_END    = intPreferencesKey("push_quiet_hours_end")
+        // P0.3 #SERVER-DND: кэш server-side silent_until (account.getSilentModeStatus).
+        // Пишется NotificationsPoller.pollOnce каждые ~2 мин; читается
+        // SovaApp.startMessageNotifier чтобы локально подавлять звук push'ей
+        // (PinoK не использует FCM, поэтому VK-side mute ничего не глушит).
+        val SILENT_UNTIL            = longPreferencesKey("silent_until")
         val PUSH_SHOW_AVATAR        = booleanPreferencesKey("push_show_avatar")
         val PUSH_SHOW_BIG_PICTURE   = booleanPreferencesKey("push_show_big_picture")
         val PUSH_SOUND_ENABLED      = booleanPreferencesKey("push_sound_enabled")

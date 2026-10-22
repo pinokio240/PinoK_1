@@ -17738,7 +17738,15 @@ class VKApiClient(
         if (isOffline()) return null
         val args = mutableMapOf<String, String>()
         if (!hash.isNullOrBlank()) args["hash"] = hash
-        val json = call("accountPersonal.getSecurityAlerts", args, forceWebGateway = true) ?: return null
+        // P0.5-fix (2026-10-23): forceWebGateway=true УБРАН — web.api.vk.ru
+        // возвращает err=3 "Unknown method passed" для этого метода (DIAG-A2 §2,
+        // DIAG-B2 §10). accountPersonal.* — VK ID account API namespace; метод
+        // отсутствует в web-allowlist'е шлюза (в отличие от соседнего
+        // accountPersonal.getActivityHistoryDevices, который на web-шлюзе работает).
+        // Идём через api.vk.com (default gateway) — если VK прокинул этот endpoint
+        // на основном шлюзе, poller заработает. Иначе SecurityAlertsPoller
+        // graceful-disable'ится после N retries (см. SecurityAlertsPoller.kt).
+        val json = call("accountPersonal.getSecurityAlerts", args) ?: return null
         return try {
             val respEl = json.get("response")
             when {
@@ -19246,6 +19254,27 @@ class VKApiClient(
         if (isOffline()) return false
         // true/all → включено; false/none → выключено.
         val enabled = value == "true" || value == "1" || value == "all"
+
+        // P0.1 (2026-10, DIAG-D2 §10.1): sn_push_send — мастер-тумблер «Получать
+        // push-уведомления». Это НЕ веб-группа (webGroupForPinoKKey вернёт null),
+        // а отдельная веб-форма act=notify_push_save, требующая hashGeneral
+        // (не hashGroup). Делегируем в VKNotifyWeb.savePushMaster — без этого
+        // тумблер в SettingsScreen всегда откатывается с Toast «Не удалось изменить».
+        if (key == "sn_push_send") {
+            val snapMaster = VKNotifyWeb.fetch(httpClient)
+            if (snapMaster == null) {
+                AppLog.w("VKApiClient", "settingsSetNotifyViaWeb(sn_push_send): не получен snapshot (hash/cookies)")
+                return false
+            }
+            val hashMaster = snapMaster.hashGeneral
+            if (hashMaster == null || hashMaster.isBlank()) {
+                AppLog.w("VKApiClient", "settingsSetNotifyViaWeb(sn_push_send): hashGeneral не извлечён")
+                return false
+            }
+            return VKNotifyWeb.savePushMaster(httpClient, hashMaster, enabled)
+        }
+
+        // ОБЩИЙ path: sn_* ключ → веб-группа (notify_group_save).
         val group = VKNotifyWeb.webGroupForPinoKKey(key)
         if (group == null) {
             AppLog.w("VKApiClient", "settingsSetNotifyViaWeb: ключ '$key' НЕ имеет веб-группы (фиктивный)")

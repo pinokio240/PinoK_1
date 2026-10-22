@@ -1710,6 +1710,39 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             else -> re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES
                         }
 
+                        // P0.2 #QUIET-MSGS + P0.3 #SERVER-DND: тихое окно (22:00→08:00
+                        // по prefs) и server-side DND (account.startSilentMode)
+                        // должны подавлять звук для прямых сообщений тоже — раньше
+                        // isInQuietHours проверялся только в VkNotificationsNotifier
+                        // (community/news), а MessageNotifier показывал со звуком.
+                        //
+                        // Подход: НЕ подавляем полностью (пользователь всё равно видит
+                        // сообщение в шторке) — переопределяем channelId на *_silent,
+                        // который IMPORTANCE_HIGH (heads-up остаётся) но без звука и
+                        // вибрации. См. MessageNotifier.init: CHANNEL_MESSAGES_SILENT
+                        // и CHANNEL_COMMUNITIES_SILENT.
+                        //
+                        // Тот же механизм работает для server DND: VK перестаёт слать
+                        // FCM (которые PinoK не использует), но PinoK'у об этом известно
+                        // через silentUntil (кэш из account.getSilentModeStatus,
+                        // обновляется NotificationsPoller каждые ~2 мин).
+                        val nowSec = System.currentTimeMillis() / 1000L
+                        val inQuietHours = snap.pushQuietHoursEnabled &&
+                            re.pinok.realtime.VkNotificationsNotifier.isInQuietHours(snap)
+                        val inServerDnd = snap.silentUntil > 0L && snap.silentUntil > nowSec
+                        val effectiveChannelId = if (inQuietHours || inServerDnd) {
+                            val reason = if (inQuietHours) "quiet_hours" else "server_dnd"
+                            AppLog.d("SovaApp",
+                                "startMessageNotifier: sound suppressed ($reason) " +
+                                    "peer=${event.peerId} quietEnabled=${snap.pushQuietHoursEnabled} " +
+                                    "silentUntil=${snap.silentUntil} now=$nowSec " +
+                                    "isCommunity=$isCommunity mode=$mode")
+                            if (isCommunity) re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES_SILENT
+                            else re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES_SILENT
+                        } else {
+                            pushChannelId
+                        }
+
                         // Fix #135 (2026-XX): РАНЬШЕ было:
                         //   val text = if (event.text.isBlank()) "Вложение" else event.text
                         // Это означало: для сообщения со стикером/фото/голосовым
@@ -1806,7 +1839,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             muted = muted,
                             // Fix #390 #NOTIFY-MODES: канал выбран по режиму
                             // уведомлений + типу отправителя (см. выше).
-                            channelId = pushChannelId,
+                            // P0.2/P0.3: если quiet hours или server DND активны —
+                            // channelId уже переопределён на *_silent выше.
+                            channelId = effectiveChannelId,
                         )
                     } catch (e: Exception) {
                         AppLog.w("SovaApp", "MessageNotifier event handling failed: ${e.message}")

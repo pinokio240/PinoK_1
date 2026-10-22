@@ -1217,6 +1217,10 @@ class MainActivity : ComponentActivity() {
                         AppLog.i("MainActivity", "No token — stopping LongPoll")
                         app.longPollClient.stop()
                         app.queuev4Client.stop()
+                        // #CALLS-EVENTS: останавливаем events_queue-подписку
+                        // (eventsQueuev4Client) при отсутствии токена — иначе
+                        // продолжит long-poll с протухшими кредами → 401 spam (P0.4).
+                        app.eventsQueuev4Client.stop()
                         // #CALLS-INCOMING: останавливаем dedicated calls-очередь при logout.
                         app.callsQueuev4Client.stop()
                         // #EVENTHUB: останавливаем канал вместе с LongPoll (нет токена).
@@ -1544,6 +1548,23 @@ class MainActivity : ComponentActivity() {
                                         } catch (e: Exception) {
                                             AppLog.w("MainActivity", "Logout: EventHubClient.stop failed: ${e.message}")
                                         }
+                                        // #CALLS-QUEUEV4 (P0.4): останавливаем ВСЕ три
+                                        // queuev4-подписки при logout — иначе они продолжат
+                                        // long-poll с протухшими кредами → 401 spam.
+                                        // eventsQueuev4Client — критичный leak (DIAG-E2 Q10):
+                                        // НЕ останавливался НИ В ОДНОМ cleanup path.
+                                        // queuev4Client + callsQueuev4Client — race window
+                                        // (LaunchedEffect else-branch стопает их позже через
+                                        // recomposition, но могли успеть сделать 1 poll с
+                                        // invalid creds). stop() idempotent (Queuev4Client.kt:107).
+                                        try {
+                                            app.queuev4Client.stop()
+                                            app.eventsQueuev4Client.stop()
+                                            app.callsQueuev4Client.stop()
+                                            AppLog.i("MainActivity", "Logout: queuev4Client + eventsQueuev4Client + callsQueuev4Client stopped (P0.4)")
+                                        } catch (e: Exception) {
+                                            AppLog.w("MainActivity", "Logout: queuev4 clients stop failed: ${e.message}")
+                                        }
                                         // #COMMUNITY-POSTS: останавливаем поллер постов
                                         // сообществ при logout — нечего пушить без токена.
                                         try {
@@ -1670,6 +1691,17 @@ class MainActivity : ComponentActivity() {
                                     // #EVENTHUB: останавливаем WS-канал при полном выходе.
                                     try {
                                         app.eventHubClient.stop()
+                                    } catch (_: Exception) { }
+                                    // #CALLS-QUEUEV4 (P0.4): останавливаем ВСЕ три
+                                    // queuev4-подписки при полном выходе — иначе
+                                    // process kill может задержаться и они успеют
+                                    // сделать poll с протухшими кредами → 401 spam.
+                                    // eventsQueuev4Client — критичный leak (DIAG-E2 Q10).
+                                    // stop() idempotent (Queuev4Client.kt:107).
+                                    try {
+                                        app.queuev4Client.stop()
+                                        app.eventsQueuev4Client.stop()
+                                        app.callsQueuev4Client.stop()
                                     } catch (_: Exception) { }
                                     // #COMMUNITY-POSTS: останавливаем поллер постов
                                     // сообществ при полном выходе из приложения.

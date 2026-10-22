@@ -158,6 +158,14 @@ class NotificationsPoller(
                 val snap = prefs.data.first()
                 if (!snap.pushEnabled) return@withLock
 
+                // P0.3 #SERVER-DND: обновляем кэш server-side silent_until
+                // (account.getSilentModeStatus) каждые ~2 мин (частота poller'а).
+                // SovaApp.startMessageNotifier читает snap.silentUntil чтобы
+                // подавлять звук push'ей во время DND. Выносим в отдельный
+                // try-catch — отказ silent-mode-poll не должен рвать основной
+                // notifications.getRedesign поток.
+                refreshSilentUntilCache()
+
                 AppLog.d(TAG, "pollOnce: fetching notifications.getRedesign...")
                 val (items, _) = api.notificationsGetRedesign(count = 30)
                 if (items.isEmpty()) {
@@ -212,6 +220,41 @@ class NotificationsPoller(
             } catch (e: Exception) {
                 AppLog.w(TAG, "pollOnce failed: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * P0.3 #SERVER-DND: опрашивает account.getSilentModeStatus и кэширует
+     * silent_until в SovaPrefs. SovaApp.startMessageNotifier читает
+     * snap.silentUntil чтобы локально подавлять звук push'ей во время
+     * server-side DND (PinoK не использует FCM, поэтому VK-side mute сам
+     * по себе ничего не глушит — нужна клиентская проверка).
+     *
+     * Вызывается из [pollOnce] перед основным notifications.getRedesign —
+     * частота = частота poller'а (~2 мин). Отказ не рвёт основной поток.
+     *
+     * Логирует смену состояния (active → inactive и наоборот) — для дебага
+     * «почему тихий режим не работает / почему пропали звуки».
+     */
+    private suspend fun refreshSilentUntilCache() {
+        try {
+            val status = api.accountGetSilentModeStatus() ?: return
+            val newUntil = status.silentUntil
+            val prevUntil = prefs.data.first().silentUntil
+            val nowSec = System.currentTimeMillis() / 1000L
+            // Логируем только смену состояния, чтобы не засорять лог каждые 2 мин.
+            val wasActive = prevUntil > nowSec
+            val isActive = newUntil > nowSec
+            if (wasActive != isActive || newUntil != prevUntil) {
+                AppLog.d(TAG,
+                    "refreshSilentUntilCache: silent_until ${prevUntil}→${newUntil} " +
+                        "(active: ${wasActive}→${isActive})")
+            }
+            if (newUntil != prevUntil) {
+                prefs.setSilentUntil(newUntil)
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "refreshSilentUntilCache failed: ${e.message}")
         }
     }
 

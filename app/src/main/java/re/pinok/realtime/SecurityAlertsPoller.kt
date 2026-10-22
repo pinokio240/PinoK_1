@@ -62,6 +62,38 @@ class SecurityAlertsPoller(
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
     /**
+     * P0.5-fix (2026-10-23): счётчик последовательных "method unavailable"
+     * (VK API err=3 "Unknown method passed") ответов от accountPersonal.getSecurityAlerts.
+     *
+     * Поведение:
+     *  - err=3 на poll'е → counter++, poller НЕ останавливается (раньше stop()
+     *    убивал poller навсегда, и SecurityAlertNotifier НИКОГДА не вызывался).
+     *  - Каждый следующий poll происходит через safetyNetPollIntervalMin (default 10 мин) —
+     *    это естественный backoff (метод может появиться на стороне VK).
+     *  - После [MAX_CONSECUTIVE_METHOD_UNAVAILABLE] (6 = 1 час при default interval)
+     *    последовательных err=3 — graceful-disable с INFO-логом "method unavailable
+     *    after N polls — disabling poller until next app start".
+     *  - Любой успешный poll (alerts != null) → сброс counter в 0.
+     *
+     * Почему НЕ permanent-stop на первом err=3:
+     *  - VK может выкатить метод позже (web-bundle обновляется).
+     *  - При переключении auth-флоу (web_token ↔ legacy) может временно пропадать.
+     *  - SovaApp.start() вызывается один раз в onCreate — если stop() сработал,
+     *    poller больше никогда не запустится до полного перезапуска приложения.
+     */
+    private var consecutiveMethodUnavailable: Int = 0
+
+    private companion object {
+        /**
+         * Порог graceful-disable: 6 polls × 10 мин (default interval) = 1 час.
+         * Если за час VK ни разу не ответил успешно — отключаем poller
+         * (он не нужен: метод не существует на текущем шлюзе VK).
+         * Poller поднимется снова при следующем старте SovaApp.onCreate.
+         */
+        const val MAX_CONSECUTIVE_METHOD_UNAVAILABLE = 6
+    }
+
+    /**
      * Запускает периодический опрос. Безопасно вызывать многократно.
      *
      * Не запускает poll если:
@@ -118,19 +150,48 @@ class SecurityAlertsPoller(
             val hash = getLogoutHash()
             val alerts = api.accountGetSecurityAlerts(hash)
             if (alerts == null) {
-                // #ADMIN-SECURITY-ALERTS-FIX: метод accountPersonal.getSecurityAlerts
-                // не существует на web-шлюзе (err 3 — Unknown method passed) — не шумим.
+                // P0.5-fix (2026-10-23): #SAFETY-NET-ALERTS-NO-PERM-STOP.
+                // accountPersonal.getSecurityAlerts возвращает err=3 "Unknown
+                // method passed" (DIAG-A2 §2, DIAG-B2 §10). Раньше здесь был
+                // stop() — poller умирал НАВСЕГДА, SecurityAlertNotifier НИКОГДА
+                // не вызывался. Теперь: counter++ и ждём следующий poll
+                // (safetyNetPollIntervalMin = default 10 мин — естественный
+                // backoff). После MAX_CONSECUTIVE_METHOD_UNAVAILABLE (6 = 1 час)
+                // — graceful-disable с INFO (метод стабильно отсутствует).
                 val err = api.lastApiError
-                if (err != null && (
-                        err.contains("Unknown method", ignoreCase = true) ||
-                        err.contains("API error 3", ignoreCase = true)
-                    )) {
-                    AppLog.w(TAG, "pollOnce: method unavailable ($err) — stopping poller")
-                    stop()
+                val isMethodUnavailable = err != null && (
+                    err.contains("Unknown method", ignoreCase = true) ||
+                    err.contains("API error 3", ignoreCase = true)
+                )
+                if (isMethodUnavailable) {
+                    consecutiveMethodUnavailable++
+                    if (consecutiveMethodUnavailable >= MAX_CONSECUTIVE_METHOD_UNAVAILABLE) {
+                        // Graceful-disable после 1 часа (6 polls × 10 мин) устойчивых
+                        // err=3 — метод стабильно отсутствует на шлюзе VK.
+                        // INFO (не W/E): это не баг приложения, а контрактный ответ VK.
+                        // Poller поднимется снова при следующем старте SovaApp.onCreate.
+                        AppLog.i(TAG, "pollOnce: accountPersonal.getSecurityAlerts " +
+                            "unavailable for $consecutiveMethodUnavailable consecutive polls " +
+                            "(err=$err) — graceful-disable (method not exposed by VK, " +
+                            "will resume on next app start if VK adds it)")
+                        stop()
+                    } else {
+                        AppLog.w(TAG, "pollOnce: method unavailable " +
+                            "($consecutiveMethodUnavailable/$MAX_CONSECUTIVE_METHOD_UNAVAILABLE, " +
+                            "err=$err) — will retry on next interval " +
+                            "(api.vk.com / web gateway may be misrouted; backoff via poll interval)")
+                    }
                 } else {
-                    AppLog.d(TAG, "pollOnce: no alerts (null response)")
+                    AppLog.d(TAG, "pollOnce: no alerts (null response, err=$err)")
                 }
                 return@withLock
+            }
+            // Успешный poll (хоть и 0 alerts) — сбрасываем счётчик err=3:
+            // метод доступен, SecurityAlertNotifier chain жив.
+            if (consecutiveMethodUnavailable > 0) {
+                AppLog.i(TAG, "pollOnce: method available again after " +
+                    "$consecutiveMethodUnavailable unavailable polls — counter reset")
+                consecutiveMethodUnavailable = 0
             }
             if (alerts.size() == 0) {
                 AppLog.d(TAG, "pollOnce: 0 alerts")
