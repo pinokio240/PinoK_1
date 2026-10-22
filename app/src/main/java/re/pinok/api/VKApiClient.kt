@@ -13707,6 +13707,12 @@ class VKApiClient(
             if (useWebGateway) {
                 AppLog.d("VKApiClient", "call($method): using WEB gateway web.api.vk.ru")
             }
+            // P1.1c #URL-LOG (Вариант C): логировать URL ТОЛЬКО если toggle включён.
+            // Default false → 0 шума в обычном режиме. Включается из NETWORK-вкладки
+            // SettingsScreen для диагностики (err=3/15/5 — какой host вернул?).
+            if (snap.netLogApiUrls) {
+                AppLog.d("VKApiClient", "call($method): URL=${VKEndpoints.method(method, useWebGateway)}")
+            }
 
             // #33: Детальная трассировка VK API запроса — метод + маскированные
             // параметры + статус подписи. Помогает диагностировать error 5/14/15

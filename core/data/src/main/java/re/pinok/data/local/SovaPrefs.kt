@@ -443,6 +443,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // m.vk.ru mobile-web API gateway (web.api.vk.ru). See VKEndpoints.WEB_API_HOST.
             // Default: false — current api.vk.com Android gateway is the default.
             netUseWebApiGateway= p[Keys.NET_USE_WEB_API_GATEWAY] ?: false,
+            // P1.1c #URL-LOG (Вариант C): по умолчанию OFF — 0 шума в обычном режиме.
+            // Включается из NETWORK-вкладки SettingsScreen для диагностики err=3/15/5.
+            netLogApiUrls     = p[Keys.NET_LOG_API_URLS] ?: false,
             netProxyEnabled    = p[Keys.NET_PROXY_ENABLED]     ?: false,
             netProxyHost       = p[Keys.NET_PROXY_HOST]        ?: "",
             netProxyPort       = p[Keys.NET_PROXY_PORT]        ?: 8080,
@@ -1220,6 +1223,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setNetAdBlock(v: Boolean)                = put(Keys.NET_AD_BLOCK, v)
     /** Mobile-web API gateway toggle (web.api.vk.ru). Default: false (api.vk.com). */
     suspend fun setNetUseWebApiGateway(v: Boolean)       = put(Keys.NET_USE_WEB_API_GATEWAY, v)
+    // P1.1c #URL-LOG: setter для toggle логирования URL (default false).
+    suspend fun setNetLogApiUrls(v: Boolean)            = put(Keys.NET_LOG_API_URLS, v)
     suspend fun setNetProxyEnabled(v: Boolean)           = put(Keys.NET_PROXY_ENABLED, v)
     suspend fun setNetProxyHost(v: String)               = put(Keys.NET_PROXY_HOST, v)
     suspend fun setNetProxyPort(v: Int)                  = put(Keys.NET_PROXY_PORT, v)
@@ -1719,6 +1724,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val netAdBlock: Boolean,
         /** Mobile-web API gateway (web.api.vk.ru). See VKEndpoints.WEB_API_HOST. */
         val netUseWebApiGateway: Boolean,
+        /**
+         * P1.1c #URL-LOG: логировать полный URL каждого VK API-запроса (host + method).
+         * Default false — добавляет ~500 строк/час при включении.
+         * Включается из NETWORK-вкладки SettingsScreen для диагностики:
+         *  - err=3 'Unknown method' — какой host вернул?
+         *  - подозрение на misconfigured apiHost (api.vk.com vs api.vk.ru)
+         *  - проверка forceWebGateway routing
+         */
+        val netLogApiUrls: Boolean,
         val netProxyEnabled: Boolean,
         val netProxyHost: String,
         val netProxyPort: Int,
@@ -2227,6 +2241,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NET_AWAY_BYPASS   = booleanPreferencesKey("net_away_bypass")
         val NET_AD_BLOCK      = booleanPreferencesKey("net_ad_block")
         val NET_USE_WEB_API_GATEWAY = booleanPreferencesKey("net_use_web_api_gateway")
+        // P1.1c #URL-LOG (Вариант C): toggle для логирования URL каждого API-запроса.
+        // Default false — 0 шума. Включается из NETWORK-вкладки SettingsScreen.
+        val NET_LOG_API_URLS        = booleanPreferencesKey("net_log_api_urls")
         val NET_PROXY_ENABLED = booleanPreferencesKey("net_proxy_enabled")
         val NET_PROXY_HOST    = stringPreferencesKey("net_proxy_host")
         val NET_PROXY_PORT    = intPreferencesKey("net_proxy_port")

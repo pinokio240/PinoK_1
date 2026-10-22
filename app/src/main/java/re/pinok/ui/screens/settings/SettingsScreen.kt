@@ -3672,6 +3672,20 @@ private fun NetworkTab(
                 checked = s.netUseWebApiGateway,
             ) { scope.launch { app.prefs.setNetUseWebApiGateway(it) } }
         }
+        // P1.1c #URL-LOG (Вариант C): toggle для логирования URL каждого API-запроса.
+        // Default OFF — 0 шума в обычном режиме. При включении логирует полный URL
+        // (host + method) для каждого call() в D-level. Полезно для диагностики:
+        //  - err=3 "Unknown method" — какой host вернул (api.vk.ru / api.vk.com / web.api.vk.ru)?
+        //  - проверка forceWebGateway routing (некоторые методы форсируют api.vk.com)
+        //  - подозрение на misconfigured apiHost в AuthDomainsConfig
+        // ОЖИДАЕМЫЙ ШУМ: ~500 строк/час (180 вызовов/22мин × 60мин). Выключайте после диагностики.
+        item {
+            ToggleRow(
+                title = "Логировать URL API-запросов",
+                subtitle = "Для диагностики: пишет полный URL (host + method) каждого VK API-запроса. ~500 строк/час — выключайте после отладки.",
+                checked = s.netLogApiUrls,
+            ) { scope.launch { app.prefs.setNetLogApiUrls(it) } }
+        }
 
         // #SETTINGS-FIX (P1-1, аудит настроек ❌1): секция «Прокси» теперь РЕАЛЬНО применяется —
         // SovaApp.onCreate читает netProxyEnabled/Host/Port и ставит builder.proxy(HTTP)
