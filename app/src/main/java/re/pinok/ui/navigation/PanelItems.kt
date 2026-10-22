@@ -82,6 +82,14 @@ object PanelItems {
         PanelItem("profile", "Профиль", Screen.Profile.icon, PanelAction.Route(Screen.Profile)),
         PanelItem("clips", "Клипы", Screen.Clips.icon, PanelAction.Route(Screen.Clips)),
         PanelItem("music", "Музыка", Screen.Music.icon, PanelAction.Route(Screen.Music)),
+        // EQ-PANEL-FIX: «Эквалайзер» был отсутствует в PanelItems.all — рендерился в drawer
+        // только через контейнерный AudioNavEntry (feature/audio/.../AudioContainer.kt:81-87),
+        // что НЕ позволяло настраивать его видимость в «Редакторе панелей». Теперь пункт
+        // добавлен в канон — он автоматически появится в редакторе. Контейнерный NavEntry
+        // будет автоматически suppressed как дубликат (SovaNavHost.kt:1317 panelDestRoutes check).
+        // По умолчанию скрыт в обеих панелях (см. SovaPrefs SIDEBAR/BOTTOMBAR_DEFAULT_HIDDEN) —
+        // дефолтная панель не меняется, пользователь включает через редактор при желании.
+        PanelItem("equalizer", "Эквалайзер", Screen.Equalizer.icon, PanelAction.Route(Screen.Equalizer)),
         // P0.32: Музыка 2 — новый контейнер (pull-to-refresh, визуализатор, 5 вкладок).
         PanelItem("music2", "Музыка 2", Screen.Music2.icon, PanelAction.Route(Screen.Music2)),
         PanelItem("bookmarks", "Закладки", Screen.Bookmarks.icon, PanelAction.Route(Screen.Bookmarks)),

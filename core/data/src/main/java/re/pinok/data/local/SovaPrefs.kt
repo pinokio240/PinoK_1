@@ -2449,7 +2449,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             """["notifications","messenger","groups","photos","friends","video","profile","clips","music","bookmarks","files","search","reactions","services","logs"]"""
         // PANEL-EDIT-FEED: «Лента» добавлена в канон PanelItems.all, но по умолчанию скрыта
         // в обеих панелях (не меняем дефолтную панель) — доступна в «Редакторе панелей».
-        const val SIDEBAR_DEFAULT_HIDDEN = """["feed"]"""
+        const val SIDEBAR_DEFAULT_HIDDEN = """["feed","equalizer"]"""
         // Нижняя панель по умолчанию: те же пункты, но visible только первые 4
         // (Уведомления, Мессенджер, Сообщества, Фотографии) — остальные скрыты.
         const val BOTTOMBAR_DEFAULT_ORDER =
@@ -2458,7 +2458,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Пользователь может включить их через «Редактор панелей» — тогда
         // нижняя панель станет прокручиваемой (см. #BOTTOM-SCROLL в SovaNavHost).
         const val BOTTOMBAR_DEFAULT_HIDDEN =
-            """["feed","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
+            """["feed","equalizer","friends","video","clips","music","bookmarks","files","search","reactions","services","logs"]"""
 
         // Fix #390 #NOTIFY-MODES: константы режима уведомлений.
         // 0 — «Уведомления Сообщений»: всплывающие только от Сообщений (звук+вибрация
