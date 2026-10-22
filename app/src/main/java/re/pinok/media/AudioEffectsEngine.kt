@@ -803,6 +803,31 @@ class AudioEffectsEngine(private val sessionId: Int) {
     /** True если хотя бы один эффект создан (attach прошёл успешно). */
     fun isAttached(): Boolean = synchronized(lock) { attached }
 
+    // ─── C4 (EQ-FIX-C1-C5): availability getters ────────────────────
+    // Каждый AudioEffect может не создаться на конкретном ROM (см. createEffects:
+    // try/catch → null при Error -3 «init failed»). UI использует эти геттеры,
+    // чтобы dim'ить switch и показывать подпись «эффект недоступен на устройстве»
+    // когда эффект не инициализирован. См. EqualizerScreen.BassVirtTab/ReverbTab
+    // /LoudnessTab. Не null-safe геттеры живого состояния (isXxxEnabled) —
+    // возвращают false при null; эти геттеры возвращают факт СОЗДАНИЯ эффекта.
+    //
+    // Внимание: когда engine == null (не attach'ен ещё), availability unknown.
+    // UI трактует null engine как «available=true» (default) — настройки пишутся
+    // в prefs через EqualizerHelper wrappers (C1 fix). Только после attach
+    // становится известно, поддерживается ли эффект устройством.
+
+    /** True если BassBoost создан (init success). False после init failure (Error -3). */
+    fun isBassBoostAvailable(): Boolean = synchronized(lock) { bassBoost != null }
+
+    /** True если Virtualizer создан. */
+    fun isVirtualizerAvailable(): Boolean = synchronized(lock) { virtualizer != null }
+
+    /** True если PresetReverb создан. */
+    fun isReverbAvailable(): Boolean = synchronized(lock) { reverb != null }
+
+    /** True если LoudnessEnhancer создан (API 19+ и init success). */
+    fun isLoudnessAvailable(): Boolean = synchronized(lock) { loudness != null }
+
     // companion открыт: PREF_* константы (internal) нужны EqualizerHelper
     // для снапшотов без живого engine (#EQ-SAVE-NULL-ENGINE)
     companion object {

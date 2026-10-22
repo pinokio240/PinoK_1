@@ -645,6 +645,14 @@ private fun BassVirtTab(
         }
     }
 
+    // C4 (EQ-FIX-C1-C5): runtime-доступность эффектов. engine==null (пользователь
+    // открыл Эквалайзер до воспроизведения) → unknown, трактуем как available=true
+    // (настройки пишутся в prefs через EqualizerHelper wrappers, restoreSettings
+    // подхватит при attach). Если engine attached и эффект init failed (Error -3)
+    // → available=false, UI dim'ится + показывает «недоступен на устройстве».
+    val bassAvailable = engine?.isBassBoostAvailable() ?: true
+    val virtAvailable = engine?.isVirtualizerAvailable() ?: true
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -660,15 +668,19 @@ private fun BassVirtTab(
                 checked = bassOn,
                 onToggle = { on ->
                     bassOn = on
-                    engine?.setBassBoostEnabled(on)
+                    // C1 (EQ-FIX-C1-C5): EqualizerHelper wrapper с prefs-fallback —
+                    // раньше `engine?.setBassBoostEnabled(on)` был no-op при engine==null.
+                    EqualizerHelper.setBassBoostEnabled(on)
                 },
                 value = bassStr.toFloat(),
                 valueRange = 0f..1000f,
                 valueLabel = { "${it.toInt()}" },
                 onValueChange = { v ->
                     bassStr = v.toInt()
-                    engine?.setBassBoostStrength(v.toInt())
+                    // C1: prefs-fallback через wrapper.
+                    EqualizerHelper.setBassBoostStrength(v.toInt())
                 },
+                available = bassAvailable,
             )
         }
         if (virtVisible) {
@@ -679,15 +691,18 @@ private fun BassVirtTab(
                 checked = virtOn,
                 onToggle = { on ->
                     virtOn = on
-                    engine?.setVirtualizerEnabled(on)
+                    // C1: prefs-fallback через wrapper.
+                    EqualizerHelper.setVirtualizerEnabled(on)
                 },
                 value = virtStr.toFloat(),
                 valueRange = 0f..1000f,
                 valueLabel = { "${it.toInt()}" },
                 onValueChange = { v ->
                     virtStr = v.toInt()
-                    engine?.setVirtualizerStrength(v.toInt())
+                    // C1: prefs-fallback через wrapper.
+                    EqualizerHelper.setVirtualizerStrength(v.toInt())
                 },
+                available = virtAvailable,
             )
         }
         if (!bassVisible && !virtVisible) {
@@ -718,6 +733,12 @@ private fun ReverbTab() {
         }
     }
 
+    // C4 (EQ-FIX-C1-C5): runtime-доступность PresetReverb. На некоторых ROM
+    // (см. лог пользователя: «PresetReverb init failed: Error -3») эффект не
+    // создаётся → switch работает визуально, но звук не меняется. engine==null
+    // → unknown, считаем available (настройки пишутся в prefs через wrapper).
+    val reverbAvailable = engine?.isReverbAvailable() ?: true
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -728,7 +749,8 @@ private fun ReverbTab() {
         // Master switch для reverb
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                containerColor = if (reverbAvailable) MaterialTheme.colorScheme.surfaceVariant
+                                 else MaterialTheme.colorScheme.errorContainer,
             ),
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -739,18 +761,29 @@ private fun ReverbTab() {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("PresetReverb", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                     Text(
-                        "Реверберация: эмуляция акустики помещения. " +
-                        "На некоторых устройствах может искажать звук.",
+                        if (reverbAvailable)
+                            "Реверберация: эмуляция акустики помещения. " +
+                            "На некоторых устройствах может искажать звук."
+                        else
+                            "Эффект недоступен на этом устройстве (init failed). " +
+                            "Настройки сохранятся и применятся на поддерживаемом устройстве.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (reverbAvailable) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onErrorContainer,
                     )
                 }
                 Switch(
                     checked = reverbOn,
                     onCheckedChange = { on ->
                         reverbOn = on
-                        PlayerConnection.setReverbEnabled(on)
+                        // C1 (EQ-FIX-C1-C5): EqualizerHelper wrapper с prefs-fallback —
+                        // раньше `PlayerConnection.setReverbEnabled(on)` (→ engine?.
+                        // setReverbEnabled) был no-op при engine==null. После wrapper
+                        // перепривязываем AUX на активном плеере (без engine это no-op).
+                        EqualizerHelper.setReverbEnabled(on)
+                        PlayerConnection.rebindReverbAux()
                     },
+                    enabled = reverbAvailable,
                 )
             }
         }
@@ -768,11 +801,15 @@ private fun ReverbTab() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
+                        if (!reverbAvailable) return@clickable
                         selectedPreset = index
-                        PlayerConnection.setReverbPreset(index)
+                        // C1: prefs-fallback через wrapper.
+                        EqualizerHelper.setReverbPreset(index)
+                        PlayerConnection.rebindReverbAux()
                         if (!reverbOn) {
                             reverbOn = true
-                            PlayerConnection.setReverbEnabled(true)
+                            EqualizerHelper.setReverbEnabled(true)
+                            PlayerConnection.rebindReverbAux()
                         }
                     },
                 colors = CardDefaults.cardColors(
@@ -822,7 +859,11 @@ private fun LoudnessTab() {
     }
 
     // LoudnessEnhancer доступен только на API 19+.
-    val available = Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT
+    val apiOk = Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT
+    // C4 (EQ-FIX-C1-C5): runtime-доступность. Даже на API 19+ LoudnessEnhancer
+    // может не создаться (Error -3). engine==null → unknown, считаем available
+    // (настройки пишутся в prefs через wrapper, restoreSettings подхватит).
+    val available = apiOk && (engine?.isLoudnessAvailable() ?: true)
 
     Column(
         modifier = Modifier
@@ -831,7 +872,7 @@ private fun LoudnessTab() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        if (!available) {
+        if (!apiOk) {
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -853,15 +894,19 @@ private fun LoudnessTab() {
                 checked = loudOn,
                 onToggle = { on ->
                     loudOn = on
-                    engine?.setLoudnessEnabled(on)
+                    // C1 (EQ-FIX-C1-C5): prefs-fallback через wrapper —
+                    // раньше `engine?.setLoudnessEnabled(on)` был no-op при engine==null.
+                    EqualizerHelper.setLoudnessEnabled(on)
                 },
                 value = gainMB.toFloat(),
                 valueRange = 0f..1500f,
                 valueLabel = { mb -> String.format("%.1f dB", mb / 100f) },
                 onValueChange = { v ->
                     gainMB = v.toInt()
-                    engine?.setLoudnessTargetGain(v.toInt())
+                    // C1: prefs-fallback через wrapper.
+                    EqualizerHelper.setLoudnessTargetGain(v.toInt())
                 },
+                available = available,
             )
         }
     }
@@ -874,6 +919,12 @@ private fun LoudnessTab() {
 /**
  * Универсальная карточка эффекта: заголовок + описание + switch + слайдер.
  * Используется для BassBoost / Virtualizer / LoudnessEnhancer.
+ *
+ * C4 (EQ-FIX-C1-C5): параметр [available] — true если эффект создан на
+ * устройстве. False если AudioEffect init failed (Error -3, см.
+ * AudioEffectsEngine.createEffects). При !available: switch dim'ится
+ * (enabled=false), slider disabled, описание заменяется на «Эффект
+ * недоступен на этом устройстве», card-фон → errorContainer.
  */
 @Composable
 private fun EffectCard(
@@ -885,11 +936,13 @@ private fun EffectCard(
     valueRange: ClosedFloatingPointRange<Float>,
     valueLabel: (Float) -> String,
     onValueChange: (Float) -> Unit,
+    available: Boolean = true,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            containerColor = if (available) MaterialTheme.colorScheme.surfaceVariant
+                             else MaterialTheme.colorScheme.errorContainer,
         ),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -900,14 +953,17 @@ private fun EffectCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        description,
+                        if (available) description
+                        else "Эффект недоступен на этом устройстве (init failed).",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (available) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onErrorContainer,
                     )
                 }
                 Switch(
                     checked = checked,
                     onCheckedChange = onToggle,
+                    enabled = available,
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                         checkedTrackColor = MaterialTheme.colorScheme.primary,
@@ -925,7 +981,7 @@ private fun EffectCard(
             Slider(
                 value = value,
                 onValueChange = onValueChange,
-                enabled = checked,
+                enabled = available && checked,
                 valueRange = valueRange,
                 colors = SliderDefaults.colors(
                     thumbColor = MaterialTheme.colorScheme.primary,

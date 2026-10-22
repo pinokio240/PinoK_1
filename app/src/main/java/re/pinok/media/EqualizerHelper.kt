@@ -183,14 +183,21 @@ object EqualizerHelper {
 
     fun applyPreset(preset: EqualizerPreset) {
         val e = engine
-        if (e == null) {
-            // P3.4: без engine — silent no-op был раньше; теперь логируем.
-            // Persist пресета доступен через EqualizerHelper.savePreset() /
-            // applyCustomPresetPersist() — они пишут в prefs без движка.
-            AppLog.w(TAG, "applyPreset(${preset.name}): engine == null — no-op (call after release or before attach)")
+        if (e != null) {
+            e.applyPreset(preset)
             return
         }
-        e.applyPreset(preset)
+        // C3 (EQ-FIX-C1-C5): prefs-fallback при engine==null. Раньше был
+        // silent no-op + warning → выбор built-in пресета терялся, если
+        // пользователь открывал Эквалайзер до начала воспроизведения.
+        // Inconsistent с applyCustomPresetPersist (имеет fallback) — теперь
+        // built-in пресеты тоже пишутся в prefs напрямую, restoreSettings
+        // в AudioEffectsEngine.attachOnce() подхватит при первом attach.
+        savePreset(preset.name)
+        // bands в EqualizerPreset хранятся в dB (Float); в prefs пишем mB
+        // (Short) — тот же формат, что AudioEffectsEngine.saveEqBands.
+        saveBands(preset.bands.map { (it * 100).toInt().toShort() })
+        AppLog.i(TAG, "applyPreset(${preset.name}): engine == null — persisted to prefs (eq_preset + eq_bands)")
     }
 
     /**
@@ -285,12 +292,19 @@ object EqualizerHelper {
         // warning. Persist-флаг в AudioEffectsEngine.setEqEnabled не пишется
         // без engine — но UI обычно вызывает setEnabled для мгновенного эффекта,
         // а persist включения делает EqualizerHelper.saveEnabled()/applyCustomPresetPersist().
+        //
+        // C2 (EQ-FIX-C1-C5): prefs-fallback при engine==null. Раньше master
+        // switch НЕ персистился если пользователь открыл Эквалайзер до начала
+        // воспроизведения (engine==null) → после attach switch сбрасывался в
+        // OFF. Inconsistent с savePreset/saveBands (имеют fallback). Теперь
+        // пишем eq_enabled напрямую в prefs, restoreSettings подхватит.
         val e = engine
-        if (e == null) {
-            AppLog.w(TAG, "setEnabled($enabled): engine == null — no-op (call after release or before attach)")
+        if (e != null) {
+            e.setEqEnabled(enabled)
             return
         }
-        e.setEqEnabled(enabled)
+        prefs()?.edit()?.putBoolean(AudioEffectsEngine.PREF_EQ_ENABLED, enabled)?.apply()
+        AppLog.i(TAG, "setEnabled($enabled): engine == null — persisted to prefs (eq_enabled)")
     }
 
     fun isEnabled(): Boolean = engine?.isEqEnabled() ?: false
@@ -309,6 +323,92 @@ object EqualizerHelper {
     // attach'ен / уже released), и это нормальная ситуация.
     @Synchronized
     fun engine(): AudioEffectsEngine? = engine
+
+    // ─── C1 (EQ-FIX-C1-C5): prefs-fallback wrappers для отдельных эффектов ──
+    // BassBoost / Virtualizer / LoudnessEnhancer / PresetReverb.
+    //
+    // Проблема: EqualizerScreen.BassVirtTab/ReverbTab/LoudnessTab звали
+    // `engine?.setXxx(...)` напрямую. Если engine==null (пользователь открыл
+    // Эквалайзер ДО начала воспроизведения), все сеттеры — silent no-op,
+    // prefs НЕ пишутся → настройки теряются. BandsTab уже использовал
+    // EqualizerHelper.setBand (имеет prefs-fallback), individual-эффекты — нет.
+    //
+    // Фикс: эти обёртки идут в engine если он есть (нормальный path), иначе
+    // пишут значение в SharedPreferences напрямую теми же ключами, что
+    // AudioEffectsEngine.save* (PREF_*). restoreSettings() в AudioEffectsEngine
+    // .attachOnce() подхватит при первом attach — аналогично applyCustomPresetPersist.
+    //
+    // ВНИМАНИЕ: эти обёртки НЕ делают AUX-привязку для Reverb (см. PlayerConnection
+    // .setReverbEnabled/setReverbPreset + applyReverbAux). UI должен вызывать
+    // обёртку + PlayerConnection.rebindReverbAux() отдельно.
+
+    /** BassBoost: включить/выключить (0..1000 strength). */
+    fun setBassBoostEnabled(on: Boolean) {
+        val e = engine
+        if (e != null) { e.setBassBoostEnabled(on); return }
+        prefs()?.edit()?.putBoolean(AudioEffectsEngine.PREF_BASS_ENABLED, on)?.apply()
+        AppLog.i(TAG, "setBassBoostEnabled($on): engine == null — persisted to prefs (bb_switch)")
+    }
+
+    /** BassBoost: сила усиления 0..1000. */
+    fun setBassBoostStrength(strength: Int) {
+        val clamped = strength.coerceIn(0, 1000)
+        val e = engine
+        if (e != null) { e.setBassBoostStrength(clamped); return }
+        prefs()?.edit()?.putInt(AudioEffectsEngine.PREF_BASS_STRENGTH, clamped)?.apply()
+        AppLog.i(TAG, "setBassBoostStrength($clamped): engine == null — persisted to prefs (bb_slider)")
+    }
+
+    /** Virtualizer: включить/выключить (0..1000 strength). */
+    fun setVirtualizerEnabled(on: Boolean) {
+        val e = engine
+        if (e != null) { e.setVirtualizerEnabled(on); return }
+        prefs()?.edit()?.putBoolean(AudioEffectsEngine.PREF_VIRT_ENABLED, on)?.apply()
+        AppLog.i(TAG, "setVirtualizerEnabled($on): engine == null — persisted to prefs (vir_switch)")
+    }
+
+    /** Virtualizer: сила 0..1000. */
+    fun setVirtualizerStrength(strength: Int) {
+        val clamped = strength.coerceIn(0, 1000)
+        val e = engine
+        if (e != null) { e.setVirtualizerStrength(clamped); return }
+        prefs()?.edit()?.putInt(AudioEffectsEngine.PREF_VIRT_STRENGTH, clamped)?.apply()
+        AppLog.i(TAG, "setVirtualizerStrength($clamped): engine == null — persisted to prefs (vir_slider)")
+    }
+
+    /** LoudnessEnhancer: включить/выключить. */
+    fun setLoudnessEnabled(on: Boolean) {
+        val e = engine
+        if (e != null) { e.setLoudnessEnabled(on); return }
+        prefs()?.edit()?.putBoolean(AudioEffectsEngine.PREF_LOUD_ENABLED, on)?.apply()
+        AppLog.i(TAG, "setLoudnessEnabled($on): engine == null — persisted to prefs (loud_switch)")
+    }
+
+    /** LoudnessEnhancer: target gain 0..1500 millibels (0..+15 dB). */
+    fun setLoudnessTargetGain(gainmB: Int) {
+        val clamped = gainmB.coerceIn(0, 1500)
+        val e = engine
+        if (e != null) { e.setLoudnessTargetGain(clamped); return }
+        prefs()?.edit()?.putInt(AudioEffectsEngine.PREF_LOUD_GAIN, clamped)?.apply()
+        AppLog.i(TAG, "setLoudnessTargetGain($clamped): engine == null — persisted to prefs (loud_slider)")
+    }
+
+    /** PresetReverb: включить/выключить. */
+    fun setReverbEnabled(on: Boolean) {
+        val e = engine
+        if (e != null) { e.setReverbEnabled(on); return }
+        prefs()?.edit()?.putBoolean(AudioEffectsEngine.PREF_REVERB_ENABLED, on)?.apply()
+        AppLog.i(TAG, "setReverbEnabled($on): engine == null — persisted to prefs (reverb_switch)")
+    }
+
+    /** PresetReverb: индекс пресета 0..6 (см. AudioEffectsEngine.reverbPresetNames). */
+    fun setReverbPreset(preset: Int) {
+        val clamped = preset.coerceIn(0, 6)
+        val e = engine
+        if (e != null) { e.setReverbPreset(clamped); return }
+        prefs()?.edit()?.putInt(AudioEffectsEngine.PREF_REVERB_PRESET, clamped)?.apply()
+        AppLog.i(TAG, "setReverbPreset($clamped): engine == null — persisted to prefs (reverb_preset)")
+    }
 
     // ─── Backward-compat: старый API Equalizer-объекта ───────────
     // AudioPlayerScreen/PlayerConnection могут звать эти методы.

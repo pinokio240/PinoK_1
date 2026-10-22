@@ -63,6 +63,15 @@ private const val NUM_BARS = 32
 private const val SMOOTHING = 0.65f
 
 /**
+ * Mutable holder для Visualizer — позволяет LaunchedEffect(active) читать ссылку
+ * на Visualizer, созданный в DisposableEffect(sessionId). Без State (не
+ * триггерит recomposition) — visualizer.value меняется только при пересоздании
+ * сессии, что не требует перерисовки UI (Canvas сам инвалидируется через
+ * forceRedraw). См. C5 (EQ-FIX-C1-C5).
+ */
+private class VisualizerHolder { var value: Visualizer? = null }
+
+/**
  * FFT-визуализатор: 32 вертикальные полосы с градиентом по высоте.
  *
  * @param sessionId audio session ID от ExoPlayer (через PlayerConnection).
@@ -94,11 +103,21 @@ fun SpectrumVisualizer(
     // Visualizer может не создаться на некоторых ROM → показываем fallback.
     var visualizerAvailable by remember { mutableStateOf(true) }
 
+    // C5 (EQ-FIX-C1-C5): holder для доступа к Visualizer из LaunchedEffect(active).
+    // Раньше `visualizer.enabled = active` ставился ОДИН раз в DisposableEffect
+    // setup, а `LaunchedEffect(active, sessionId)` был ПУСТОЙ → при смене active
+    // (toggle master switch, play/pause, SCO suspend/restore) Visualizer.enabled
+    // не обновлялся → bars застывали на 0 (active=true но enabled=false) ИЛИ
+    // Visualizer продолжал FFT-capture вхолостую (active=false но enabled=true).
+    // Holder без State (не триггерит recomposition) — см. VisualizerHolder выше.
+    val visualizerRef = remember { VisualizerHolder() }
+
     DisposableEffect(sessionId) {
         if (sessionId == 0) {
             // Нет сессии — Visualizer не инициализируем.
             visualizerAvailable = false
-            onDispose { }
+            visualizerRef.value = null
+            onDispose { visualizerRef.value = null }
         } else {
             val visualizer = try {
                 Visualizer(sessionId)
@@ -108,8 +127,10 @@ fun SpectrumVisualizer(
                 null
             }
             if (visualizer == null) {
+                visualizerRef.value = null
                 onDispose { }
             } else {
+                visualizerRef.value = visualizer
                 try {
                     // Максимальный capture size — больше данных = точнее FFT,
                     // но больше CPU. Берём верхнюю границу диапазона.
@@ -154,17 +175,23 @@ fun SpectrumVisualizer(
                     } catch (e: Exception) {
                         AppLog.w("SpectrumVisualizer", "Visualizer release failed: ${e.message}")
                     }
+                    visualizerRef.value = null
                 }
             }
         }
     }
 
-    // Включаем/выключаем Visualizer при изменении active (play/pause, EQ on/off).
+    // C5 (EQ-FIX-C1-C5): обновляем visualizer.enabled при смене active.
+    // LaunchedEffect re-launches когда active или sessionId меняется. Внутри
+    // читаем visualizerRef.value (установленный DisposableEffect) и ставим
+    // v.enabled = active. disposable + launch работают корректно даже при
+    // concurrent смене sessionId и active: DisposableEffect пересоздаёт
+    // Visualizer первым, потом LaunchedEffect подхватит новый ref.
     LaunchedEffect(active, sessionId) {
-        // Не можем обратиться к visualizer напрямую (он в DisposableEffect),
-        // но Visualizer.enabled управляется через capture listener state.
-        // Упрощение: пересоздаём через re-trigger DisposableEffect не нужно —
-        // active влияет только на отрисовку (когда не active — рисуем 0).
+        val v = visualizerRef.value ?: return@LaunchedEffect
+        try { v.enabled = active } catch (e: Exception) {
+            AppLog.w("SpectrumVisualizer", "Visualizer.enabled update failed (active=$active): ${e.message}")
+        }
     }
 
     if (!visualizerAvailable) {
