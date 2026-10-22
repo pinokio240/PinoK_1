@@ -93,8 +93,6 @@ object VKNotifyWeb {
     data class Snapshot(
         /** hash для act=notify_group_save (совпадает с notify_push_group_save). */
         val hashGroup: String?,
-        /** hash для act=notify_push_message_save / notify_push_chat_save. */
-        val hashPush: String?,
         /** hash для act=notify / notify_push_save (общий). */
         val hashGeneral: String?,
         /** Мастер: получать push-уведомления (push_switcher). */
@@ -159,7 +157,6 @@ object VKNotifyWeb {
         val groups = parseGroupStates(html)
         return Snapshot(
             hashGroup = pickHashFor(allHashes, html, "notify_group_save"),
-            hashPush = pickHashFor(allHashes, html, "notify_push_message_save"),
             hashGeneral = pickHashFor(allHashes, html, "notify_push_save"),
             pushSwitcher = pushSwitcher,
             pushNoText = pushNoText,
@@ -255,56 +252,6 @@ object VKNotifyWeb {
                 "hash" to hash,
             ),
         )
-    }
-
-    /** act=notify_push_group_save: group=<key>, push_switcher=1, hash. */
-    suspend fun savePushGroup(
-        client: OkHttpClient,
-        hash: String,
-        group: String,
-        enabled: Boolean,
-    ): Boolean {
-        if (hash.isBlank()) return false
-        return postForm(
-            client,
-            path = "/settings?act=notify_push_group_save&group=" + group + "&hash=" + hash,
-            fields = mapOf(
-                "push_switcher" to (if (enabled) "1" else "0"),
-                "hash" to hash,
-            ),
-        )
-    }
-
-    /** act=notify_push_message_save: push_switcher, push_no_text, hash. */
-    suspend fun savePushMessage(
-        client: OkHttpClient,
-        hash: String,
-        pushSwitcher: Boolean?,
-        pushNoText: Boolean?,
-    ): Boolean {
-        if (hash.isBlank()) return false
-        val f = HashMap<String, String>()
-        if (pushSwitcher != null) f["push_switcher"] = if (pushSwitcher) "1" else "0"
-        if (pushNoText != null) f["push_no_text"] = if (pushNoText) "1" else "0"
-        f["hash"] = hash
-        if (f.size <= 1) return false
-        return postForm(client, "/settings?act=notify_push_message_save&hash=" + hash, f)
-    }
-
-    /** act=notify_push_chat_save: push_switcher, push_no_text, hash. */
-    suspend fun savePushChat(
-        client: OkHttpClient,
-        hash: String,
-        pushSwitcher: Boolean?,
-        pushNoText: Boolean?,
-    ): Boolean {
-        if (hash.isBlank()) return false
-        val f = HashMap<String, String>()
-        if (pushSwitcher != null) f["push_switcher"] = if (pushSwitcher) "1" else "0"
-        if (pushNoText != null) f["push_no_text"] = if (pushNoText) "1" else "0"
-        f["hash"] = hash
-        if (f.size <= 1) return false
-        return postForm(client, "/settings?act=notify_push_chat_save&hash=" + hash, f)
     }
 
     /** act=notify_push_save (мастер): push_switcher, hash. */

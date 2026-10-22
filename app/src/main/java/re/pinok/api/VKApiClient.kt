@@ -18315,6 +18315,73 @@ class VKApiClient(
         return json.getAsJsonObject("response")
     }
 
+    /**
+     * P2.3: Отписка от stickers-очереди (зеркало [stickersSubscribeToQueue]).
+     *
+     * Вызывается из Queuev4Client.stop() чтобы VK-сервер перестал держать
+     * подписку активной (иначе очередь висит до таймаута key ~5 мин, плодя
+     * пустые events на стороне VK при logout/перелогине).
+     *
+     * Best-effort: ошибки (err=3 unknown method / network / silent) логируются
+     * на D-level (silent=true) и НЕ пробрасываются — stop() не должен блокироваться
+     * или падать, если VK не поддерживает unsubscribe или credential уже невалиден.
+     *
+     * @return true если VK вернул `response` (отписка принята), иначе false.
+     */
+    suspend fun stickersUnsubscribeToQueue(): Boolean {
+        if (isOffline()) return false
+        return try {
+            val json = call("stickers.unsubscribeToQueue", emptyMap(),
+                forceWebGateway = true, silent = true) ?: return false
+            val resp = json.getAsJsonObject("response")
+            if (resp == null) {
+                val errCode = json.getAsJsonObject("error")
+                    ?.get("error_code")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                AppLog.d("VKApiClient", "stickers.unsubscribeToQueue no response (err=$errCode, best-effort ignored)")
+            }
+            resp != null
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "stickers.unsubscribeToQueue failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * P2.3: Отписка от queuev4-очереди (зеркало [queueSubscribe]).
+     *
+     * Вызывается из Queuev4Client.stop() с `key` текущей подписки. VK должен
+     * инвалидировать key на своей стороне, прекратив держать long-poll канал
+     * активным (иначе висит до таймаута key ~5 мин).
+     *
+     * Параметр `queue_ids` НЕ передаётся — [QueueCredential] его не хранит
+     * (он вычисляется на стороне подписки и нужен только для subscribe).
+     * VK идентифицирует подписку по `key`, которого достаточно для отписки.
+     *
+     * Best-effort: ошибки (err=3 unknown method / err=15 / network / silent)
+     * логируются на D-level (silent=true) и НЕ пробрасываются.
+     *
+     * @param key long-poll key из [QueueCredential.key].
+     * @return true если VK вернул `response`, иначе false.
+     */
+    suspend fun queueUnsubscribe(key: String): Boolean {
+        if (isOffline()) return false
+        if (key.isBlank()) return false
+        return try {
+            val json = call("queue.unsubscribe", mapOf("key" to key),
+                forceWebGateway = true, silent = true) ?: return false
+            val resp = json.getAsJsonObject("response")
+            if (resp == null) {
+                val errCode = json.getAsJsonObject("error")
+                    ?.get("error_code")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                AppLog.d("VKApiClient", "queue.unsubscribe no response (err=$errCode, best-effort ignored)")
+            }
+            resp != null
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "queue.unsubscribe failed: ${e.message}")
+            false
+        }
+    }
+
     // ── CUA (Confirm User Action) verification framework ────────────────
 
     /**
@@ -19037,10 +19104,19 @@ class VKApiClient(
      *
      * 4. Пустой entity.type → "new_posts" (прежний fallback, ЧАСТЬ 34).
      *
+     * P1.8 (DIAG-C2 §2, §10 #14): добавлены 4 ранее fallback-типа — audio,
+     *   event_invite, sdk_app_request, wall_reply. Каждый получает приоритетную
+     *   ветку в [settingsName]- и [parentType]-блоках (ДО более общих подстрок
+     *   "invite"/"app"/"wall"/"post"), иначе они поглощались бы смежными
+     *   категориями (event_invite → group_invites, sdk_app_request → app,
+     *   wall_reply → new_posts). В [actionText]-блоке добавлены глаголы для
+     *   event_invite (мероприятие/событие) и audio (аудио/трек).
+     *
      * @return type в терминах NotificationItem/NotificationsScreen
      *   (like/comment/reply_comment/mention/copy/follow/friend_accepted/gift/
      *    birthday_reminder/group_invites + контентные photo/video/clip/story/
-     *    market/app/podcast/topic/new_posts)
+     *    market/app/podcast/topic/new_posts + P1.8: audio/event_invite/
+     *    sdk_app_request/wall_reply)
      */
     private fun resolveRedesignNotificationType(
         settingsName: String?,
@@ -19054,6 +19130,8 @@ class VKApiClient(
                 n.contains("friend") -> "friend_accepted"
                 n.contains("birthday") -> "birthday_reminder"
                 n.contains("gift") -> "gift"
+                // P1.8: event_invite — ДО общего "invite" (иначе уйдёт в group_invites).
+                n.contains("event_invite") || n.contains("event") -> "event_invite"
                 n.contains("invite") -> "group_invites"
                 n.contains("mention") -> "mention"
                 n.contains("like") -> "like"
@@ -19067,7 +19145,13 @@ class VKApiClient(
                 n.contains("clip") -> "clip"
                 n.contains("photo") -> "photo"
                 n.contains("video") -> "video"
+                // P1.8: audio — отдельный контентный тип (до app на случай имени «audio_app»).
+                n.contains("audio") -> "audio"
+                // P1.8: sdk_app_request — ДО общего "app" (иначе уйдёт в app).
+                n.contains("sdk_app_request") || n.contains("sdk_app") -> "sdk_app_request"
                 n.contains("app") -> "app"
+                // P1.8: wall_reply — ДО общих "post"/"wall" (иначе уйдёт в new_posts).
+                n.contains("wall_reply") -> "wall_reply"
                 n.contains("post") || n.contains("wall") -> "new_posts"
                 else -> null
             }
@@ -19086,12 +19170,20 @@ class VKApiClient(
                 t.contains("в друзья") || t.contains("заявк") -> "friend_accepted"
                 t.contains("подарил") || t.contains("подарок") -> "gift"
                 t.contains("день рождения") -> "birthday_reminder"
+                // P1.8: приглашение на мероприятие — ДО общего «пригласил» (иначе уйдёт в group_invites).
+                t.contains("меропри") || t.contains("событи") -> "event_invite"
                 t.contains("пригласил") || t.contains("приглашени") -> "group_invites"
+                // P1.8: аудио-уведомление (добавил трек/аудиозапись).
+                t.contains("аудио") || t.contains("трек") -> "audio"
                 else -> null
             }
             if (byVerb != null) return byVerb
         }
         // 3) Прежний маппинг entity.type (контентные типы).
+        // P1.8: добавлены явные case для audio/event_invite/sdk_app_request/
+        //   wall_reply — раньше они проходили через else -> parentType как есть,
+        //   но если settingsName/глагол их уже сопоставили — сюда мы не дойдём.
+        //   Здесь case — на случай, если VK redesign пришлёт только entity.type.
         return when (parentType) {
             "post", "wall" -> "new_posts"
             "photo" -> "photo"
@@ -19103,6 +19195,12 @@ class VKApiClient(
             "story" -> "story"
             "app" -> "app"
             "podcast_episode" -> "podcast"
+            // P1.8: 4 ранее pass-through-типа теперь явные (читаемость + защита
+            //   от случайного future-редактирования else-ветки).
+            "audio" -> "audio"
+            "event_invite" -> "event_invite"
+            "sdk_app_request" -> "sdk_app_request"
+            "wall_reply" -> "wall_reply"
             "" -> "new_posts"  // неизвестный тип — считаем новым постом
             else -> parentType  // используем как есть
         }

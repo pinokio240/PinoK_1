@@ -461,6 +461,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- P2.4 (DIAG-B2 §1.3, §9 / DIAG-SUMMARY P2 #21): action button
+             «Завершить сессию» из security alert уведомления. Receiver
+             вызывает apiClient.accountResetSessions(deviceId, hash)
+             (VK ID account API: accountPersonal.resetSessions) через goAsync().
+             exported=false — только PendingIntents из этого же app могут
+             запускать receiver. -->
+        <receiver
+            android:name=".realtime.SecurityAlertActionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="re.pinok.action.TERMINATE_SESSION" />
+            </intent-filter>
+        </receiver>
+
         <!-- #DOZE-RELIABILITY (2026-10-10): периодическое пробуждение realtime
              (AlarmManager.setExactAndAllowWhileIdle) — LongPoll/EventHub продолжают
              доставку даже в глубоком Doze. Будильник явный (exported=false,

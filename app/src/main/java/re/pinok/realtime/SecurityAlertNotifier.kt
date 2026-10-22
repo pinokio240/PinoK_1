@@ -27,9 +27,9 @@ import re.pinok.util.AppLog
  *  - category: CATEGORY_MESSAGE (lock-screen messaging)
  *  - autoCancel: true (исчезает по тапу)
  *  - contentIntent: MainActivity + EXTRA_OPEN_DEVICES (deep-link к списку сессий)
- *
- * TODO (§49.6 Sprint VK-ID-1): Action button «Завершить сессию» через
- * accountPersonal.resetSessions({device_id}) + cua verification.
+ *  - P2.4: action button «Завершить сессию» — PendingIntent на SecurityAlertActionReceiver,
+ *    который вызывает accountPersonal.resetSessions({device_id, hash}). Показывается ТОЛЬКО
+ *    если в alert'е есть `device_id` (иначе action button не добавляем — нет цели для сброса).
  *
  * Источник: анализ архива VK ID_веб.zip, см. VK_IMPORT_API.MD §49.5.1.
  */
@@ -37,6 +37,10 @@ object SecurityAlertNotifier {
 
     private const val TAG = "SecurityAlertNotifier"
     private const val NOTIFICATION_ID = 7000  // 7000+ для security alerts (отдельный диапазон)
+    // P2.4: requestCode для action-button PendingIntent. NOTIFICATION_ID + 1 чтобы
+    // не конфликтовать с contentIntent (requestCode=0) и с другими alert'ами
+    // (deviceId.hashCode() добавляется ниже для уникальности per-device).
+    private const val NOTIF_ACTION_REQUEST_BASE = 7001
 
     /**
      * Показать уведомление о подозрительном входе.
@@ -69,6 +73,12 @@ object SecurityAlertNotifier {
             val suspEl = alert.get("is_suspicious")
             val isSuspicious = suspEl != null && !suspEl.isJsonNull && suspEl.isJsonPrimitive && suspEl.asBoolean
 
+            // P2.4: deviceId нужен для action button «Завершить сессию».
+            // VK ID_веб alert содержит `device_id` (см. VK_IMPORT_API.MD §49.5.1,
+            // VKApiClient.accountGetSecurityAlerts docstring line 17771).
+            // Если поле отсутствует — action button НЕ показываем (нет цели для reset).
+            val deviceId = VKApiClient.safeString(alert.get("device_id"))
+
             val title = if (isSuspicious) "⚠ Подозрительный вход" else "Новый вход в аккаунт"
 
             val subtitle = buildString {
@@ -88,6 +98,17 @@ object SecurityAlertNotifier {
                 .setAutoCancel(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setContentIntent(buildContentIntent(context))
+
+            // P2.4: action button «Завершить сессию» — только если есть deviceId.
+            if (!deviceId.isNullOrBlank()) {
+                builder.addAction(
+                    re.pinok.R.drawable.ic_notification,
+                    "Завершить сессию",
+                    buildTerminateSessionIntent(context, deviceId)
+                )
+            } else {
+                AppLog.w(TAG, "showAlert: no device_id in alert — action button «Завершить сессию» skipped")
+            }
 
             val svc = context.getSystemService(Context.NOTIFICATION_SERVICE)
             if (svc !is NotificationManager) {
@@ -123,5 +144,33 @@ object SecurityAlertNotifier {
         else
             PendingIntent.FLAG_UPDATE_CURRENT
         return PendingIntent.getActivity(context, 0, intent, flags)
+    }
+
+    /**
+     * P2.4: PendingIntent для action button «Завершить сессию».
+     *
+     * Отправляет broadcast на [SecurityAlertActionReceiver], который через
+     * `goAsync()` вызывает `apiClient.accountResetSessions(deviceId, hash)`
+     * (VK ID account API `accountPersonal.resetSessions`) и показывает Toast
+     * с результатом. После успешного reset'а уведомление отменяется.
+     *
+     * FLAG_MUTABLE (Android S+) — обязателен, т.к. в intent есть extras,
+     * которые receiver читает обратно. Для pre-S — только FLAG_UPDATE_CURRENT
+     * (все PendingIntents на pre-S фактически mutable).
+     */
+    private fun buildTerminateSessionIntent(context: Context, deviceId: String): PendingIntent {
+        val intent = Intent(context, SecurityAlertActionReceiver::class.java).apply {
+            action = SecurityAlertActionReceiver.ACTION_TERMINATE_SESSION
+            putExtra(SecurityAlertActionReceiver.EXTRA_DEVICE_ID, deviceId)
+            putExtra(SecurityAlertActionReceiver.EXTRA_NOTIF_ID, NOTIFICATION_ID)
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        else
+            PendingIntent.FLAG_UPDATE_CURRENT
+        // requestCode = NOTIF_ACTION_REQUEST_BASE + deviceId.hashCode() для уникальности
+        // per-device (если одновременно показаны 2 alert'а, кнопки не подменяют друг друга).
+        val requestCode = NOTIF_ACTION_REQUEST_BASE + (deviceId.hashCode() and 0x00FFFFFF)
+        return PendingIntent.getBroadcast(context, requestCode, intent, flags)
     }
 }

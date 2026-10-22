@@ -111,6 +111,35 @@ class Queuev4Client(
         // блокировать поток до истечения wait=25с даже после stop().
         currentCall?.cancel()
         currentCall = null
+        // P2.3: отписка от очереди на сервере VK — иначе подписка висит
+        // до таймаута key (~5 мин), плодя пустые events на стороне VK
+        // при logout/перелогине (DIAG-A2 risks #3 / DIAG-SUMMARY P2 #20).
+        //
+        // Best-effort fire-and-forget: scope (private val, Job()+IO) НЕ cancel'ится
+        // в stop() — живёт пока жив Queuev4Client instance (→ весь app lifecycle).
+        // Локальный снимок `cred` захватываем ДО обнуления поля, чтобы корутина
+        // видела валидный key даже после `credential = null`.
+        //
+        // Queuev4Client НЕ знает, через какой метод подписывались:
+        //   - callsQueuev4Client      → queue.subscribe   (зеркало: queue.unsubscribe)
+        //   - queuev4Client           → stickers.subscribeToQueue (зеркало: stickers.unsubscribeToQueue)
+        //   - eventsQueuev4Client     → stickers.subscribeToQueue (зеркало: stickers.unsubscribeToQueue)
+        // Поэтому вызываем ОБА зеркала; «лишний» молча вернёт err=3/15 и будет
+        // проигнорирован (silent=true внутри методов). Это дешевле, чем тащить
+        // enum subscription-source через QueueCredential (data class в feature:calls,
+        // вне разрешённых файлов).
+        val cred = credential
+        if (cred != null) {
+            scope.launch {
+                try {
+                    apiClient.queueUnsubscribe(cred.key)
+                    apiClient.stickersUnsubscribeToQueue()
+                    AppLog.i(TAG, "stop: unsubscribe sent for queue key=${cred.key.take(8)}…")
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "stop: unsubscribe failed: ${e.message}")
+                }
+            }
+        }
         credential = null
     }
 

@@ -267,6 +267,19 @@ private fun getTypeIcon(type: String): TypeIcon {
             Icons.Outlined.Cake to Color(0xFFFF5722)
         type == "app_request" ->
             Icons.Outlined.Notifications to Color(0xFF009688)
+        // P1.8 (DIAG-C2 §2, §10 #14): 4 ранее fallback-типа получили собственные иконки.
+        // Иконки выбраны из уже импортированных Material Icons Outlined (CalendarMonth
+        // ранее был неиспользуемым импортом; MusicNote/Apps/ChatBubbleOutline уже
+        // использовались для podcast/app/comment — здесь задействованы с ДРУГИМ tint,
+        // чтобы тип был визуально различим).
+        type == "audio" ->
+            Icons.Outlined.MusicNote to Color(0xFF00BCD4)
+        type == "event_invite" || type == "event" ->
+            Icons.Outlined.CalendarMonth to Color(0xFF7C4DFF)
+        type == "sdk_app_request" ->
+            Icons.Outlined.Apps to Color(0xFFFF7043)
+        type == "wall_reply" ->
+            Icons.Outlined.ChatBubbleOutline to Color(0xFF607D8B)
         else ->
             Icons.Outlined.Notifications to defaultColor
     }
