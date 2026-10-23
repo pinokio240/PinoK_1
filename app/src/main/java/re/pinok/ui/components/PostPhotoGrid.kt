@@ -75,15 +75,16 @@ fun PostPhotoGrid(
     carouselEnabled: Boolean = true,
 ) {
     val photosWithUrl = photos.mapNotNull { photo ->
+        // PHOTO-QUALITY: mediumUrl (300-600px) для превью в постах — largestUrl
+        // (2560px) не грузится на мобильном. allUrls для PhotoViewer — largestUrl.
+        val url = photo.mediumUrl ?: photo.largestUrl ?: return@mapNotNull null
         val size = PhotoSizes.best(photo.sizes)
-        // NULL-ЯВНО: Gson-цепочка (sizes опциональны по схеме VK) — фото без
-        // подходящего size пропускается (семантика прежнего FeedScreen PhotoGrid).
-        val url = size?.url ?: return@mapNotNull null
-        val ratio = if (size.height > 0) size.width.toFloat() / size.height.toFloat() else 1f
+        val ratio = if (size != null && size.height > 0) size.width.toFloat() / size.height.toFloat() else 1f
         Triple(photo, url, ratio)
     }
     if (photosWithUrl.isEmpty()) return
-    val allUrls = photosWithUrl.map { it.second }
+    // PHOTO-QUALITY: allUrls для PhotoViewer — largestUrl (оригинал при тапе).
+    val allUrls = photos.mapNotNull { it.largestUrl }
 
     // Карусель — для ЛЮБОГО числа фото >1 при включённой настройке.
     if (carouselEnabled && photosWithUrl.size > 1) {
