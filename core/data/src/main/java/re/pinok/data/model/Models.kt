@@ -135,6 +135,9 @@ data class Attachment(
             @SerializedName("type")   val type: String,
         )
         val largestUrl: String? get() = PhotoSizes.bestUrl(sizes)
+        // PHOTO-QUALITY: mediumUrl (300-600px) для превью в чате.
+        val mediumUrl: String? get() = sizes?.filter { it.width >= 300 && it.width <= 600 }
+            ?.minByOrNull { it.width }?.url ?: largestUrl
 
         /**
          * Fix #227: наибольший размер фото (по площади). Null если sizes пуст.
