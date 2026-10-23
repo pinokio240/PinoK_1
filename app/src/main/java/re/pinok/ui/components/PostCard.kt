@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -30,6 +32,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -138,6 +141,12 @@ fun PostCard(
     repostGroupName: String? = null,
     repostGroupPhoto: String? = null,
     onRepostGroupClick: (() -> Unit)? = null,
+    // AUTHOR-STRIP: полоска «Перейти к посту» под header'ом — клик открывает стену,
+    // где ЛЕЖИТ пост (по post.ownerId): user → UserProfileScreen, group →
+    // CommunityScreen. null = полоска НЕ показывается (например на CommunityScreen
+    // — мы уже в сообществе, она избыточна; аналогично на PostDetailScreen).
+    // ВНИМАНИЕ: это ДРУГОЙ сценарий, чем onAuthorClick (fromId → профиль автора).
+    onPostContextClick: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     // ——— ВРЕМЯ (футер, как в эталоне FeedScreen; формат — по showFullDate) ———
@@ -355,6 +364,45 @@ fun PostCard(
                                 )
                             }
                         }
+                    }
+                }
+            }
+            // AUTHOR-STRIP: полоска «Перейти к посту» — кликабельная, ведёт на
+            // стену, где ЛЕЖИТ пост (по ownerId). Размещена ПОД header'ом, ДО текста
+            // поста/вложений. onPostContextClick == null → полоска скрыта (CommunityScreen,
+            // PostDetailScreen — там контекст поста уже открыт).
+            if (onPostContextClick != null) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPostContextClick() },
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Article,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "Перейти к посту",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

@@ -668,6 +668,16 @@ fun BookmarksScreen(
                                 bm = bm,
                                 onLongClick = { removeTarget = bm },
                                 onRemoveClick = { removeTarget = bm },
+                                // AUTHOR-STRIP: полоска «Перейти к посту» — только для
+                                // закладок-постов (bm.post != null); для остальных
+                                // типов null → BookmarkRow не пробрасывает в карточку.
+                                // Клик → стена, где ЛЕЖИТ пост (ownerId).
+                                onPostContextClick = bm.post?.let { p ->
+                                    {
+                                        if (p.ownerId > 0) onUserClick?.invoke(p.ownerId)
+                                        else onGroupClick?.invoke(-p.ownerId)
+                                    }
+                                },
                                 onClick = {
                                     when (bm.type) {
                                         "post" -> bm.post?.let { p ->
@@ -807,6 +817,9 @@ private fun BookmarkRow(
     onLongClick: () -> Unit = {},
     onRemoveClick: () -> Unit = {},
     onClick: () -> Unit = {},
+    // AUTHOR-STRIP: полоска «Перейти к посту». Передаётся только в BookmarkPostCard
+    // (для остальных типов закладок игнорируется). null → полоска не рисуется.
+    onPostContextClick: (() -> Unit)? = null,
 ) {
     // #BOOKMARKS-SMARTCAST: свойства Bookmark (video/post/user/group/link) — public
     // из core/data, поэтому smart-cast невозможен; берём в локальные val (nullable).
@@ -834,6 +847,7 @@ private fun BookmarkRow(
                 onLongClick = onLongClick,
                 onRemoveClick = onRemoveClick,
                 onClick = onClick,
+                onPostContextClick = onPostContextClick,
             )
         } else {
             BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
@@ -977,6 +991,9 @@ private fun BookmarkPostCard(
     onLongClick: () -> Unit,
     onRemoveClick: () -> Unit,
     onClick: () -> Unit,
+    // AUTHOR-STRIP: полоска «Перейти к посту» — клик открывает стену (ownerId).
+    // null → полоска не рисуется (вызывающий может скрыть).
+    onPostContextClick: (() -> Unit)? = null,
 ) {
     // NULL-ЯВНО: автор поста в закладке — из postAuthor/postGroup (fill через
     // fave.get extended profiles/groups), fallback на bm.user (легаси).
@@ -1012,6 +1029,8 @@ private fun BookmarkPostCard(
         // В закладках клик по автору тоже ведёт в пост (как остальное тело).
         onAuthorClick = onClick,
         onPostClick = { onClick() },
+        // AUTHOR-STRIP: проброс клика полоски «Перейти к посту» в единый PostCard.
+        onPostContextClick = onPostContextClick,
         onVideoClick = { onClick() },
         onPhotoClick = { _, _ -> onClick() },
         onLikeToggle = {},

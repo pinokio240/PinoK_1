@@ -2010,6 +2010,12 @@ fun FeedScreen(
                                 if (p.fromId < 0) onGroupClickSavePos(-p.fromId)
                                 else onUserClickSavePos(p.fromId)
                             },
+                            // AUTHOR-STRIP: клик на полоску → стена, где ЛЕЖИТ пост
+                            // (ownerId, не fromId): user → профиль, group → сообщество.
+                            onPostContextClick = { p ->
+                                if (p.ownerId > 0) onUserClickSavePos(p.ownerId)
+                                else onGroupClickSavePos(-p.ownerId)
+                            },
                             onPostClick = onPostClickSavePos,
                             onPhotoClick = { urls, index ->
                                 saveScrollPosition()
@@ -2074,6 +2080,13 @@ fun FeedScreen(
                             // Пользователь — открываем UserProfileScreen.
                             onUserClickSavePos(clickedPost.fromId)
                         }
+                    },
+                    // AUTHOR-STRIP: клик на полоску → стена, где ЛЕЖИТ пост (ownerId).
+                    // fromId = автор (кто написал), ownerId = стена (где лежит) —
+                    // это могут быть разные сущности (юзер пишет на стене группы).
+                    onPostContextClick = { p ->
+                        if (p.ownerId > 0) onUserClickSavePos(p.ownerId)
+                        else onGroupClickSavePos(-p.ownerId)
                     },
                     // Fix #71: тап по тексту поста → детальный экран.
                     // Fix: пробрасываем группы в PostHolder для имени сообщества в PostDetailScreen.
@@ -2403,6 +2416,10 @@ private fun PostCard(
     onSubscribe: (Post) -> Unit = {},
     // П-7-AB: «Пожаловаться» (wall.markAsSpam) — диалог и вызов на уровне экрана.
     onReportSpam: (Post) -> Unit = {},
+    // AUTHOR-STRIP: клик на полоску «Перейти к посту» → стена, где ЛЕЖИТ пост
+    // (по post.ownerId). Это ДРУГОЙ сценарий, чем onAuthorClick (fromId → профиль
+    // автора): ownerId может отличаться от fromId (пользователь пишет на стене группы).
+    onPostContextClick: (Post) -> Unit = {},
 ) {
     // Пост-источник: группа (fromId < 0) или пользователь (fromId > 0).
     val authorIsGroup = post.fromId < 0
@@ -2530,6 +2547,8 @@ private fun PostCard(
         carouselEnabled = carouselEnabled,
         showViews = true,              // лента показывает просмотры
         myUserId = myUserId,
+        // AUTHOR-STRIP: проброс клика полоски «Перейти к посту» в единый PostCard.
+        onPostContextClick = { onPostContextClick(post) },
     )
 }
 

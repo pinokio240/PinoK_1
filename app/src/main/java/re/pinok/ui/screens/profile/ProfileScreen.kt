@@ -2403,6 +2403,18 @@ fun WallPostCard(
                 onPostClick(post)
             }
         },
+        // AUTHOR-STRIP: полоска «Перейти к посту» — клик открывает стену, где
+        // ЛЕЖИТ пост (по post.ownerId, НЕ fromId). user → UserProfileScreen,
+        // group → CommunityScreen. onUserClick/onGroupClick уже проброшены в
+        // WallPostCard вызывающими экранами (Profile/UserProfile/ChatDetail),
+        // поэтому ВСЕ 5 callsites WallPostCard получают полоску автоматически.
+        onPostContextClick = {
+            if (post.ownerId > 0) {
+                onUserClick(post.ownerId)
+            } else {
+                onGroupClick(-post.ownerId)
+            }
+        },
         onPostClick = onPostClick,
         onVideoClick = onVideoClick,
         onPhotoClick = onPhotoClick,
