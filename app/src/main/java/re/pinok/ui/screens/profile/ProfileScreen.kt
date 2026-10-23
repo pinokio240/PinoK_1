@@ -1742,12 +1742,12 @@ fun ProfileScreen(
             // Паттерн — CommunityScreen.kt:1649 (вкладка «Альбомы»).
             val opened = openedAlbum
             if (opened != null) {
+                // PROFILE-ALBUMS: albumUrls вычисляем ВНЕ item{} (remember
+                // нельзя вызывать в LazyListScope — не @Composable).
+                val albumUrls = albumPhotos.mapNotNull { it.largestUrl }
                 // Открыли альбом — фото из этого альбома + «Назад».
                 item(key = "album_back") {
                     AlbumBackRow(title = opened.title) { openedAlbum = null }
-                }
-                val albumUrls = remember(albumPhotos) {
-                    albumPhotos.mapNotNull { it.largestUrl }
                 }
                 if (albumPhotosLoading && albumUrls.isEmpty()) {
                     item(key = "album_photo_progress") { TabProgressRow() }
