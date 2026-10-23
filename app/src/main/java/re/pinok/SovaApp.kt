@@ -1297,6 +1297,76 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             AppLog.i("SovaApp", "SSL Pinning disabled (netSslPinning=false)")
         }
 
+        // SSL-TRUST-USER-CA (2026-10-23): на Android 7.0 (API 24) network_security_config.xml
+        // с <certificates src="user" /> может НЕ работать с OkHttp — system TrustManager
+        // не подхватывает user-installed CAs (сертификаты Минцифры). Создаём кастомный
+        // X509TrustManager который объединяет system + user CA stores.
+        // Фикс для пользователей с сертификатами Минцифры (Huawei BLL-L22, Android 7.0).
+        runCatching {
+            val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(
+                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+            )
+            trustManagerFactory.init(null as java.security.KeyStore?)
+            val systemTrustManagers = trustManagerFactory.trustManagers
+                .filterIsInstance<javax.net.ssl.X509TrustManager>()
+                .toTypedArray()
+
+            // Объединённый TrustManager: system CAs + user CAs (из user KeyStore).
+            val combinedTrustManager = object : javax.net.ssl.X509TrustManager {
+                private val delegates = systemTrustManagers.toList()
+
+                override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {
+                    delegates.firstOrNull()?.checkClientTrusted(chain, authType)
+                }
+
+                override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {
+                    // Сначала пробуем system trust — если OK, выходим.
+                    var trusted = false
+                    for (tm in delegates) {
+                        try {
+                            tm.checkServerTrusted(chain, authType)
+                            trusted = true
+                            break
+                        } catch (_: Exception) { }
+                    }
+                    if (!trusted) {
+                        // System не доверяет — пробуем user CA store.
+                        try {
+                            val userKeyStore = java.security.KeyStore.getInstance("AndroidCAStore")
+                            userKeyStore.load(null)
+                            val userTmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+                            )
+                            userTmf.init(userKeyStore)
+                            userTmf.trustManagers
+                                .filterIsInstance<javax.net.ssl.X509TrustManager>()
+                                .forEach { tm ->
+                                    tm.checkServerTrusted(chain, authType)
+                                    trusted = true
+                                }
+                        } catch (_: Exception) { }
+                    }
+                    if (!trusted) {
+                        throw java.security.cert.CertificateException(
+                            "Trust anchor for certification path not found " +
+                                "(system+user CA stores exhausted)"
+                        )
+                    }
+                }
+
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> {
+                    return delegates.flatMap { it.acceptedIssuers.toList() }.toTypedArray()
+                }
+            }
+
+            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf<javax.net.ssl.TrustManager>(combinedTrustManager), null)
+            builder.sslSocketFactory(sslContext.socketFactory, combinedTrustManager)
+            AppLog.i("SovaApp", "SSL Trust: system+user CA stores (Android 7.0 Минцифры fix)")
+        }.onFailure { e ->
+            AppLog.w("SovaApp", "SSL Trust custom TM setup failed (fallback to system default): ${e.message}")
+        }
+
         // #SETTINGS-FIX (P1-1, аудит настроек ❌1): применяем HTTP-прокси из настроек
         // (netProxyEnabled/netProxyHost/netProxyPort — SovaPrefs, UI: SettingsScreen NetworkTab).
         // Раньше секция «Прокси» только сохраняла значения — потребителей не было вовсе.

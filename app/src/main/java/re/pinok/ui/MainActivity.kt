@@ -1669,6 +1669,19 @@ class MainActivity : ComponentActivity() {
                                         // Fix #233 (P1): launchAuth с reason=logout —
                                         // throttle ОТКЛЮЧЕН для ручного logout (пользователь
                                         // явно хочет войти обратно, не ждём 60с).
+                                        // LOGOUT-CLEAR-AUTH: полностью очищаем токены + cookies
+                                        // ПЕРЕД запуском AuthActivity — иначе hasValidToken()=true
+                                        // и AuthActivity сразу завершается RESULT_OK без показа формы.
+                                        scope.launch {
+                                            try {
+                                                app.tokenStorage.clear()
+                                                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                                                android.webkit.CookieManager.getInstance().flush()
+                                                AppLog.i("MainActivity", "LOGOUT-CLEAR-AUTH: tokenStorage + cookies cleared")
+                                            } catch (e: Exception) {
+                                                AppLog.w("MainActivity", "LOGOUT-CLEAR-AUTH: clear failed: ${e.message}")
+                                            }
+                                        }
                                         launchAuth(
                                             Intent(this@MainActivity, AuthActivity::class.java)
                                                 // Fix #370 #LOGOUT-WEBTOKEN-CLEAR: причина
