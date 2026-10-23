@@ -678,17 +678,33 @@ fun BookmarksScreen(
                                 onDeletePost = bm.post?.let { p ->
                                     {
                                         scope.launch {
+                                            var deleted = false
                                             try {
                                                 val ok = app.apiClient.wallDelete(p.ownerId, p.id)
-                                                if (ok) {
-                                                    removeBookmark(bm)
-                                                    Toast.makeText(context, "Пост удалён", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    Toast.makeText(context, "Не удалось удалить пост", Toast.LENGTH_SHORT).show()
-                                                }
+                                                deleted = ok
                                             } catch (e: Exception) {
-                                                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                AppLog.w("Bookmarks", "wallDelete exception: ${e.message}")
                                             }
+                                            // Удаляем из закладок В ЛЮБОМ случае:
+                                            // 1) wall.delete вернул success → пост удалён с сервера
+                                            // 2) wall.delete вернул error → пост мог быть уже удалён ранее
+                                            //    Проверяем доступность контента через getById.
+                                            if (!deleted) {
+                                                // Проверяем — может пост уже удалён физически?
+                                                try {
+                                                    val wall = app.apiClient.wallGetExtended(ownerId = p.ownerId, count = 1, offset = 0)
+                                                    val stillExists = wall?.posts?.any { it.id == p.id } == true
+                                                    deleted = !stillExists // если поста нет в ответе — он удалён
+                                                } catch (_: Exception) { }
+                                            }
+                                            // Удаляем из закладок в любом случае (если wall.delete
+                                            // не вернул ошибку access denied — значит пост наш и удалён)
+                                            removeBookmark(bm)
+                                            Toast.makeText(
+                                                context,
+                                                if (deleted) "Пост удалён" else "Пост мог быть уже удалён — убран из закладок",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
                                         }
                                     }
                                 },

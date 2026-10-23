@@ -6780,7 +6780,16 @@ class VKApiClient(
         )
         val json = call("wall.delete", args) ?: return false
         return try {
-            json.getAsJsonObject("response")?.get("post_id")?.asLong != null
+            val resp = json.get("response")
+            // VK wall.delete возвращает {"response": 1} (просто число)
+            // или {"response": {"post_id": 123}} (объект).
+            // Принимаем оба формата — любой непустой response = успех.
+            when {
+                resp == null -> false
+                resp.isJsonObject -> resp.asJsonObject.has("post_id") || resp.asJsonObject.entrySet().isNotEmpty()
+                resp.isJsonPrimitive -> resp.asJsonPrimitive.asInt > 0 || resp.asString == "1" || resp.asBoolean
+                else -> false
+            }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "wallDelete parse error", e)
             false
