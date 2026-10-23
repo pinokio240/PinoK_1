@@ -135,6 +135,9 @@ import re.pinok.ui.navigation.Screen
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.PhotoViewer
+// PHOTO-SHARE-WIRE: share intent + ShareToChatSheet для PhotoViewer.
+import android.content.Intent
+import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.components.SkeletonFeedList
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.FeedRightPanel
@@ -1052,6 +1055,10 @@ fun FeedScreen(
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     // photoViewerState = Pair<urls, initialIndex>.
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    // PHOTO-SHARE-WIRE: context для Intent.ACTION_SEND + state для ShareToChatSheet
+    // (открывается из пункта «Отправить» в «⋮»-меню PhotoViewer).
+    val photoShareContext = LocalContext.current
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
     // Sprint 2, P1-3 → ShareSheet: расширенный диалог «Поделиться».
     val sharePost = remember { mutableStateOf<Post?>(null) }
     // P0.46-unify-comments: шаринг комментария (wall_reply{ownerId}_{cid}).
@@ -2251,10 +2258,30 @@ fun FeedScreen(
     // Sprint 2, P1-1 (#88): полноэкранный просмотрщик фото.
     val viewer = photoViewerState.value
     if (viewer != null) {
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewer(
             photos = viewer.first,
             initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
+        )
+    }
+
+    // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer.
+    shareToChatUrl?.let { url ->
+        ShareToChatSheet(
+            sharedText = url,
+            sharedStreamUri = null,
+            sharedMimeType = null,
+            onDismiss = { shareToChatUrl = null },
+            onSuccess = { shareToChatUrl = null },
         )
     }
 

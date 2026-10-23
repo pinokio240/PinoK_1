@@ -109,6 +109,9 @@ import re.pinok.ui.components.AttachmentPickerTab
 // поста и рендер вложений комментария (включая стикеры).
 import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
+// PHOTO-SHARE-WIRE: share intent + ShareToChatSheet для PhotoViewer.
+import android.content.Intent
+import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.UnifiedAttachMenu
 // #POSTCARD-REFACTOR (этап 3e): единый PostCard для поста; алиас UnifiedPostCard —
@@ -352,6 +355,10 @@ fun PostDetailScreen(
     val onGroupClickSavePos: (Long) -> Unit = { g -> saveScrollPosition(); onGroupClick(g) }
     // Полноэкранный просмотр фото из поста.
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    // PHOTO-SHARE-WIRE: URL для ShareToChatSheet — открывается из пункта «Отправить»
+    // в «⋮»-меню PhotoViewer. null → sheet закрыт. Переиспользуется обоими
+    // PhotoViewer callsites ниже (основной пост + ветка комментариев).
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
     // Диалог репоста.
     var showRepostDialog by remember { mutableStateOf(false) }
 
@@ -611,11 +618,32 @@ fun PostDetailScreen(
     val state = photoViewerState.value
     if (state != null) {
         val (photos, startIndex) = state
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewer(
             photos = photos,
             initial = startIndex,
             onDismiss = { photoViewerState.value = null },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
         )
+        // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» — рендерим в этом же
+        // блоке (после PhotoViewer, но до `return`) чтобы sheet был виден поверх
+        // просмотрщика. ctx/LocalContext.current доступен в scope функции.
+        shareToChatUrl?.let { url ->
+            ShareToChatSheet(
+                sharedText = url,
+                sharedStreamUri = null,
+                sharedMimeType = null,
+                onDismiss = { shareToChatUrl = null },
+                onSuccess = { shareToChatUrl = null },
+            )
+        }
         return
     }
 
@@ -1457,10 +1485,31 @@ fun PostDetailScreen(
     // таб «Подарки» скрыт — gifts.send в комментариях недоступен (был dead-таб).
     val pvi = previewPhotoIndex
     if (pvi != null && pendingCommentPhotos.isNotEmpty()) {
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewer(
             photos = pendingCommentPhotos.map { it.uri.toString() },
             initial = pvi.coerceIn(0, pendingCommentPhotos.lastIndex),
             onDismiss = { previewPhotoIndex = null },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
+        )
+    }
+
+    // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer
+    // (переиспользуется state из первого callsite — previewPhotoIndex ветки).
+    shareToChatUrl?.let { url ->
+        ShareToChatSheet(
+            sharedText = url,
+            sharedStreamUri = null,
+            sharedMimeType = null,
+            onDismiss = { shareToChatUrl = null },
+            onSuccess = { shareToChatUrl = null },
         )
     }
     if (showAttachmentPicker) {

@@ -45,6 +45,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+// PHOTO-SHARE-WIRE: LocalContext для Intent.ACTION_SEND в PhotoViewer.
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -63,6 +65,9 @@ import re.pinok.feature.photos.LocalPhotosDeps
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PhotoViewerPhotoItems
+// PHOTO-SHARE-WIRE: share intent + ShareToChatSheet для PhotoViewer.
+import android.content.Intent
+import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.util.AppLog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -265,6 +270,9 @@ private fun PhotoFeedView() {
     val gridState = rememberLazyGridState()
     // #PHOTO-FEED Этап 3: полноэкранный просмотр с подписью/датой (PhotoItem).
     val photoViewerState = remember { mutableStateOf<Pair<List<PhotoItem>, Int>?>(null) }
+    // PHOTO-SHARE-WIRE: context + state для share-меню PhotoViewer (onShare/onSendToChat).
+    val photoShareContext = LocalContext.current
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
 
     fun loadFeed(reset: Boolean) {
         if (feedLoadingMore || feedRefreshing) return
@@ -429,10 +437,30 @@ private fun PhotoFeedView() {
     // #PHOTO-FEED Этап 3: просмотр с подписью/датой через PhotoViewerPhotoItems.
     val viewer = photoViewerState.value
     if (viewer != null) {
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewerPhotoItems(
             photos = viewer.first,
             initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
+        )
+    }
+
+    // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer.
+    shareToChatUrl?.let { url ->
+        ShareToChatSheet(
+            sharedText = url,
+            sharedStreamUri = null,
+            sharedMimeType = null,
+            onDismiss = { shareToChatUrl = null },
+            onSuccess = { shareToChatUrl = null },
         )
     }
 }
@@ -550,6 +578,9 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
     val gridState = rememberLazyGridState()
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    // PHOTO-SHARE-WIRE: context + state для share-меню PhotoViewer (onShare/onSendToChat).
+    val photoShareContext = LocalContext.current
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(album.id) {
         scope.launch {
@@ -731,10 +762,30 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
         // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
         val viewer = photoViewerState.value
         if (viewer != null) {
+            // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
             PhotoViewer(
                 photos = viewer.first,
                 initial = viewer.second,
                 onDismiss = { photoViewerState.value = null },
+                onShare = { url ->
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, url)
+                    }
+                    photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
+                },
+                onSendToChat = { url -> shareToChatUrl = url },
+            )
+        }
+
+        // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer.
+        shareToChatUrl?.let { url ->
+            ShareToChatSheet(
+                sharedText = url,
+                sharedStreamUri = null,
+                sharedMimeType = null,
+                onDismiss = { shareToChatUrl = null },
+                onSuccess = { shareToChatUrl = null },
             )
         }
     }

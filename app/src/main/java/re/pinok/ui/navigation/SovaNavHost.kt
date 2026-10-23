@@ -99,6 +99,9 @@ import re.pinok.contracts.ContainerRegistry
 import re.pinok.contracts.NavEntry
 import re.pinok.data.model.Video
 import re.pinok.ui.components.PhotoViewer
+// PHOTO-SHARE-WIRE: share intent + ShareToChatSheet для overlay-PhotoViewer.
+import android.content.Intent
+import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.screens.bookmarks.BookmarksScreen
 import re.pinok.ui.screens.community.BoardTopicScreen
 import re.pinok.ui.screens.community.CommunityScreen
@@ -690,6 +693,11 @@ fun SovaNavHost(
     // (like_photo / comment_photo) открывается нативно поверх текущего экрана,
     // как в ленте/профиле/чате. PhotoViewer — Dialog с pinch-zoom и swipe.
     val overlayPhoto by PhotoHolder.active.collectAsState()
+    // PHOTO-SHARE-WIRE: state для ShareToChatSheet — открывается из пункта
+    // «Отправить» в «⋮»-меню PhotoViewer overlay. null → sheet закрыт.
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
+    // PHOTO-SHARE-WIRE: context для Intent.ACTION_SEND системного share-chooser.
+    val photoShareContext = LocalContext.current
 
     // Fix #224: глобальный масштаб скорости анимаций (0f..1f).
     // 0f → анимации выключены (snap/мгновенно), 1f — норма. Берётся из prefs
@@ -3399,10 +3407,29 @@ composable(Screen.CallsHistory.route) {
         BackHandler(enabled = true) {
             PhotoHolder.close()
         }
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewer(
             photos = photos,
             initial = initial,
             onDismiss = { PhotoHolder.close() },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
+        )
+    }
+    // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из overlay-PhotoViewer.
+    shareToChatUrl?.let { url ->
+        ShareToChatSheet(
+            sharedText = url,
+            sharedStreamUri = null,
+            sharedMimeType = null,
+            onDismiss = { shareToChatUrl = null },
+            onSuccess = { shareToChatUrl = null },
         )
     }
     // ═══ #CALLS-INCOMING-UI (Этап Е, план §4-Е, реверс §8.1–8.2): входящий звонок ═══

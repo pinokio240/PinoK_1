@@ -294,6 +294,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import re.pinok.ui.components.PhotoViewer
+// PHOTO-SHARE-WIRE: ShareToChatSheet для пункта «Отправить» в PhotoViewer.
+import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.components.RepostGroupCache
 // #CHANNEL-WALL-MODE (Fix #393): «Поделиться» поста канала — существующий
 // компонент (тот же, что в CommunityScreen/UserProfileScreen).
@@ -1113,6 +1115,10 @@ fun ChatDetailScreen(
         .collectAsState(initial = false)
     // P5.1: состояние полноэкранного просмотрщика фото (список URL + начальный индекс).
     var photoViewerState by remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    // PHOTO-SHARE-WIRE: URL для ShareToChatSheet — открывается из пункта «Отправить»
+    // в «⋮»-меню PhotoViewer. null → sheet закрыт. Переиспользуется обоими
+    // PhotoViewer callsites ниже (pendingPhotos + photoViewerState).
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
     // P5.1: единый обработчик клика по ссылке. Внешний браузер — ACTION_VIEW,
     // внутренний — навигация на InternalBrowserScreen (через onOpenUrlInternal).
     val onUrlClick: (String) -> Unit = { url ->
@@ -6207,10 +6213,19 @@ fun ChatDetailScreen(
     // PhotoViewer (из ui/components) — pinch-zoom + swipe между фото.
     val pvi = previewPhotoIndex
     if (pvi != null && pendingPhotos.isNotEmpty()) {
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewer(
             photos = pendingPhotos.map { it.uri.toString() },
             initial = pvi.coerceIn(0, pendingPhotos.lastIndex),
             onDismiss = { previewPhotoIndex = null },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
         )
     }
     if (showSessionExpiredDialog) {
@@ -6253,10 +6268,31 @@ fun ChatDetailScreen(
     // P5.1: полноэкранный просмотрщик фото (zoom/pan/swipe) — переиспользуется
     // из 6 других экранов (FeedScreen, PhotosScreen, …). Состояние photoViewerState.
     photoViewerState?.let { (urls, idx) ->
+        // PHOTO-SHARE-WIRE: wired onShare/onSendToChat (раньше были default {}).
         PhotoViewer(
             photos = urls,
             initial = idx,
             onDismiss = { photoViewerState = null },
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            onSendToChat = { url -> shareToChatUrl = url },
+        )
+    }
+
+    // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer
+    // (оба callsites — pendingPhotos и photoViewerState — переиспользуют state).
+    shareToChatUrl?.let { url ->
+        ShareToChatSheet(
+            sharedText = url,
+            sharedStreamUri = null,
+            sharedMimeType = null,
+            onDismiss = { shareToChatUrl = null },
+            onSuccess = { shareToChatUrl = null },
         )
     }
 
