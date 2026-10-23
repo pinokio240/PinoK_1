@@ -1205,8 +1205,10 @@ fun CommunityScreen(
                         }
                     }
                 } else {
+                    // Превью в сетке — mediumUrl (300-600px), для качества достаточно.
+                    // allUrls (для PhotoViewer) — largestUrl, при тапе грузится оригинал.
                     val withUrl = photosState.items.mapNotNull { p -> p.mediumUrl?.let { url -> p to url } }
-                    val allUrls = withUrl.map { it.second }
+                    val allUrls = photosState.items.mapNotNull { it.largestUrl }
                     val photoRows = withUrl.chunked(3)
                     itemsIndexed(photoRows, key = { idx, _ -> "photo_row_$idx" }) { rowIndex, rowItems ->
                         Row(
