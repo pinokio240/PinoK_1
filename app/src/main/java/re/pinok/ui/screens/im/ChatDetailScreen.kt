@@ -2868,13 +2868,15 @@ fun ChatDetailScreen(
         // caption к batch, поэтому фото группируются в одно сообщение с N
         // attachments + текстом).
         val photos = pendingPhotos
-        if (photos.isNotEmpty() && editingMsgId == null) {
+        val pfiles = pendingFiles
+        if ((photos.isNotEmpty() || pfiles.isNotEmpty()) && editingMsgId == null) {
             if (uploading || sending) return
             scope.launch {
                 uploading = true
                 sending = true
                 // Прячем превью и текст сразу — optimistic UX.
                 pendingPhotos = emptyList()
+                pendingFiles = emptyList()
                 val caption = text
                 inputText = ""
                 try {
@@ -2882,14 +2884,10 @@ fun ChatDetailScreen(
                     val tickBefore = app.tokenInvalidationTicks.value
                     app.suppressNextAuthRelaunch = true
                     // §44 #ATTACH-SUPPRESS-WINDOW (2026-08-03): 60s → 120s.
-                    // При auth-cascade (silent refresh падал каждые ~30s) uploads >30s
-                    // обрывались на authFailed → «Session expired» → user терял файл.
-                    // 120s покрывает large video upload + retry. После FIX-A
-                    // (§44 silentRefreshViaRemixsid multi-strategy) cascade не должен
-                    // возникать — это belt-and-suspenders.
                     app.suppressAuthRelaunchFor(120_000L)
                     val attachments = mutableListOf<String>()
                     var authFailed = false
+                    // PHOTO-BATCH: сначала фото — photos-путь (uploadPhotoForMessage).
                     for (p in photos) {
                         val uri = p.uri
                         // Копируем URI в temp-файл (photos-сервер multipart требует File).
@@ -2922,119 +2920,37 @@ fun ChatDetailScreen(
                             inFile.delete()
                         }
                     }
-                    if (app.tokenInvalidationTicks.value == tickBefore) {
-                        app.suppressNextAuthRelaunch = false
-                    }
-                    if (attachments.isNotEmpty() && !authFailed) {
-                        val attachmentStr = attachments.joinToString(",")
-                        val msgId = app.apiClient.sendWithAttachment(peerId, attachmentStr, caption)
-                        if (msgId > 0) {
-                            AppLog.i("ChatDetailScreen", "batch photos sent: ${attachments.size} photos (msgId=$msgId)")
-                            reloadMessages()
-                        } else {
-                            AppLog.w("ChatDetailScreen", "batch photos send failed (msgId=$msgId)")
-                            errorText = "Не удалось отправить фото"
-                            // Возвращаем фото в превью, чтобы юзер мог повторить.
-                            pendingPhotos = photos
-                            inputText = caption
-                        }
-                    } else if (!authFailed) {
-                        AppLog.w("ChatDetailScreen", "batch photos: no attachments uploaded")
-                        errorText = "Не удалось загрузить фото (VK отклонил)"
-                        pendingPhotos = photos
-                        inputText = caption
-                    }
-                } catch (e: Exception) {
-                    AppLog.e("ChatDetailScreen", "batch photo send error", e)
-                    errorText = "Ошибка отправки фото: ${e.message}"
-                    // Возвращаем фото в превью при ошибке — юзер не теряет выбор.
-                    pendingPhotos = photos
-                    inputText = caption
-                } finally {
-                    uploading = false
-                    sending = false
-                }
-            }
-            return
-        }
-        // Fix #235 (multi-file) + Fix #297 (видео с прогресс-баром):
-        // Батч файлов. Каждый файл грузится отдельно:
-        //  - image → photos-путь
-        //  - video → video.save pipeline с прогресс-колбэком (Fix #297)
-        //  - остальное → docs-путь
-        // затем все attachment-строки склеиваются через запятую и уходят одним
-        // messages.send (VK принимает до 10 attachment за раз).
-        // Текст-подпись уходит с этим же сообщением.
-        //
-        // Fix #297: НЕ прячем pendingFiles сразу — оставляем chips видимыми
-        // во время upload и показываем прогресс-бар на каждом (обновляем
-        // pendingFiles[id].progress). Только после успешной send — очищаем.
-        val pfiles = pendingFiles
-        if (pfiles.isNotEmpty() && editingMsgId == null) {
-            if (uploading || sending) return
-            scope.launch {
-                uploading = true
-                sending = true
-                val caption = text
-                inputText = ""
-                try {
-                    val tickBefore = app.tokenInvalidationTicks.value
-                    app.suppressNextAuthRelaunch = true
-                    // §44 #ATTACH-SUPPRESS-WINDOW: 60s → 120s (см. фото-батч выше).
-                    app.suppressAuthRelaunchFor(120_000L)
-                    val attachments = mutableListOf<String>()
-                    var authFailed = false
-                    for (pf in pfiles) {
-                        // Fix #297: помечаем файл как «загружается» (progress=0.01 → UI сразу показывает бар).
-                        pendingFiles = pendingFiles.map { if (it.id == pf.id) it.copy(progress = 0.01f) else it }
-                        val att = if (pf.isImage) {
-                            app.apiClient.uploadPhotoForMessage(peerId, pf.file, pf.mime)
-                        } else if (pf.isVideo) {
-                            // Fix #297: видео — отдельный pipeline с прогрессом.
-                            // uploadAndSendVideo сам отправляет сообщение (т.к. video_id
-                            // нужно привязать сразу), поэтому НЕ добавляем в attachments[].
-                            val msgId = app.apiClient.uploadAndSendVideo(
-                                peerId = peerId,
-                                file = pf.file,
-                                displayName = pf.displayName,
-                            ) { bytesWritten, totalBytes, fraction ->
-                                // Обновляем прогресс на chip (throttle в ProgressRequestBody ~80ms).
-                                val pct = 0.01f + fraction * 0.99f
-                                pendingFiles = pendingFiles.map {
-                                    if (it.id == pf.id) it.copy(progress = pct) else it
+                    // FILE-BATCH: затем файлы — photos/docs/video-пути.
+                    if (!authFailed) {
+                        for (pf in pfiles) {
+                            // Fix #297: помечаем файл как «загружается».
+                            val att = if (pf.isImage) {
+                                app.apiClient.uploadPhotoForMessage(peerId, pf.file, pf.mime)
+                            } else if (pf.isVideo) {
+                                val msgId = app.apiClient.uploadAndSendVideo(
+                                    peerId = peerId,
+                                    file = pf.file,
+                                    displayName = pf.displayName,
+                                ) { _, _, _ -> }
+                                if (msgId > 0) {
+                                    AppLog.i("ChatDetailScreen", "video sent as separate message: ${pf.displayName} (msgId=$msgId)")
                                 }
-                            }
-                            if (msgId > 0) {
-                                AppLog.i("ChatDetailScreen", "video sent as separate message: ${pf.displayName} (msgId=$msgId)")
-                                // видео уходит отдельным сообщением — caption не прикрепляем сюда
-                                // (он уйдёт со следующим messages.send для остальных файлов).
-                                pendingFiles = pendingFiles.map { if (it.id == pf.id) it.copy(progress = 1f) else it }
+                                null // видео уже отправлено отдельным сообщением
                             } else {
-                                AppLog.w("ChatDetailScreen", "video upload failed for ${pf.displayName}")
+                                app.apiClient.uploadDocForMessage(pf.file, pf.mime)
+                            }
+                            if (att != null) {
+                                attachments += att
+                                AppLog.i("ChatDetailScreen", "batch file uploaded: ${pf.displayName} → $att")
+                            } else if (!pf.isVideo) {
                                 if (app.tokenInvalidationTicks.value != tickBefore) {
+                                    AppLog.w("ChatDetailScreen", "batch file: token invalidated mid-upload — stop")
                                     authFailed = true
                                     scope.launch { showSessionExpiredDialog = true }
                                     break
                                 }
+                                AppLog.w("ChatDetailScreen", "batch file: upload failed for ${pf.displayName} — skip")
                             }
-                            null // видео уже отправлено отдельным сообщением
-                        } else {
-                            app.apiClient.uploadDocForMessage(pf.file, pf.mime)
-                        }
-                        if (att != null) {
-                            attachments += att
-                            pendingFiles = pendingFiles.map { if (it.id == pf.id) it.copy(progress = 1f) else it }
-                            AppLog.i("ChatDetailScreen", "batch file uploaded: ${pf.displayName} → $att")
-                        } else if (pf.isVideo) {
-                            // уже обработано выше (отдельное сообщение или ошибка)
-                        } else {
-                            if (app.tokenInvalidationTicks.value != tickBefore) {
-                                AppLog.w("ChatDetailScreen", "batch file: token invalidated mid-upload — stop")
-                                authFailed = true
-                                scope.launch { showSessionExpiredDialog = true }
-                                break
-                            }
-                            AppLog.w("ChatDetailScreen", "batch file: upload failed for ${pf.displayName} — skip")
                         }
                     }
                     if (app.tokenInvalidationTicks.value == tickBefore) {
@@ -3048,35 +2964,27 @@ fun ChatDetailScreen(
                             app.apiClient.sendWithAttachment(peerId, attachmentStr)
                         }
                         if (msgId > 0) {
-                            AppLog.i("ChatDetailScreen", "batch files sent: ${attachments.size} attachments (msgId=$msgId)")
-                            // Чистим temp-файлы только после успешной отправки.
+                            AppLog.i("ChatDetailScreen", "batch sent: ${attachments.size} attachments (msgId=$msgId)")
                             pfiles.forEach { it.file.delete() }
-                            pendingFiles = emptyList()
                             reloadMessages()
                         } else {
-                            AppLog.w("ChatDetailScreen", "batch files send failed (msgId=$msgId)")
-                            errorText = "Не удалось отправить файлы"
-                            pendingFiles = pfiles.map { it.copy(progress = 0f) }
+                            AppLog.w("ChatDetailScreen", "batch send failed (msgId=$msgId)")
+                            errorText = "Не удалось отправить вложения"
+                            pendingPhotos = photos
+                            pendingFiles = pfiles
                             inputText = caption
                         }
-                    } else if (!authFailed && pfiles.all { it.isVideo }) {
-                        // Все файлы были видео — уже отправлены отдельными сообщениями.
-                        // Если есть caption — отправляем его отдельным текстовым сообщением.
-                        if (caption.isNotBlank()) {
-                            app.apiClient.messagesSend(peerId, caption)
-                        }
-                        pfiles.forEach { it.file.delete() }
-                        pendingFiles = emptyList()
-                        reloadMessages()
                     } else if (!authFailed) {
-                        AppLog.w("ChatDetailScreen", "batch files: no attachments uploaded")
-                        errorText = "Не удалось загрузить файлы (VK отклонил)"
-                        pendingFiles = pfiles.map { it.copy(progress = 0f) }
+                        AppLog.w("ChatDetailScreen", "batch: no attachments uploaded")
+                        errorText = "Не удалось загрузить вложения (VK отклонил)"
+                        pendingPhotos = photos
+                        pendingFiles = pfiles
                         inputText = caption
                     }
                 } catch (e: Exception) {
-                    AppLog.e("ChatDetailScreen", "batch file send error", e)
-                    errorText = "Ошибка отправки файлов: ${e.message}"
+                    AppLog.e("ChatDetailScreen", "batch send error", e)
+                    errorText = "Ошибка отправки: ${e.message}"
+                    pendingPhotos = photos
                     pendingFiles = pfiles
                     inputText = caption
                 } finally {
