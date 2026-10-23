@@ -65,9 +65,9 @@ import re.pinok.feature.photos.LocalPhotosDeps
 import re.pinok.ui.components.ErrorView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.PhotoViewerPhotoItems
-// PHOTO-SHARE-WIRE: share intent + ShareToChatSheet для PhotoViewer.
+// PHOTO-SHARE-WIRE: share intent для PhotoViewer. ShareToChatSheet НЕ доступен —
+// feature/photos module не зависит от :app (цикл). onSendToChat = no-op.
 import android.content.Intent
-import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.util.AppLog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -272,7 +272,7 @@ private fun PhotoFeedView() {
     val photoViewerState = remember { mutableStateOf<Pair<List<PhotoItem>, Int>?>(null) }
     // PHOTO-SHARE-WIRE: context + state для share-меню PhotoViewer (onShare/onSendToChat).
     val photoShareContext = LocalContext.current
-    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
+    
 
     fun loadFeed(reset: Boolean) {
         if (feedLoadingMore || feedRefreshing) return
@@ -449,18 +449,7 @@ private fun PhotoFeedView() {
                 }
                 photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
             },
-            onSendToChat = { url -> shareToChatUrl = url },
-        )
-    }
-
-    // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer.
-    shareToChatUrl?.let { url ->
-        ShareToChatSheet(
-            sharedText = url,
-            sharedStreamUri = null,
-            sharedMimeType = null,
-            onDismiss = { shareToChatUrl = null },
-            onSuccess = { shareToChatUrl = null },
+            
         )
     }
 }
@@ -580,7 +569,7 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
     // PHOTO-SHARE-WIRE: context + state для share-меню PhotoViewer (onShare/onSendToChat).
     val photoShareContext = LocalContext.current
-    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
+    
 
     LaunchedEffect(album.id) {
         scope.launch {
@@ -774,18 +763,7 @@ private fun AlbumPhotosView(album: Album, onBack: () -> Unit) {
                     }
                     photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
                 },
-                onSendToChat = { url -> shareToChatUrl = url },
-            )
-        }
-
-        // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» из PhotoViewer.
-        shareToChatUrl?.let { url ->
-            ShareToChatSheet(
-                sharedText = url,
-                sharedStreamUri = null,
-                sharedMimeType = null,
-                onDismiss = { shareToChatUrl = null },
-                onSuccess = { shareToChatUrl = null },
+                
             )
         }
     }
