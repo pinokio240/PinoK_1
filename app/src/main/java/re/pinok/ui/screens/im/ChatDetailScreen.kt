@@ -9566,9 +9566,13 @@ private fun ForwardedMessageBlock(
             }
 
             // 2) Фото — сетка миниатюр (до 4 шт).
+            // PHOTO-QUALITY: mediumUrl (300-600px) для превью в чате — largestUrl
+            // (2560px) не грузится на мобильном (OOM/timeout). При тапе открывается
+            // PhotoViewer с photoUrls (largestUrl — оригинал).
             val photoAttachments = attachments.filter { it.type == "photo" && it.photo != null }
             if (photoAttachments.isNotEmpty()) {
                 val photoUrls = photoAttachments.mapNotNull { it.photo?.largestUrl }
+                val previewUrls = photoAttachments.mapNotNull { it.photo?.mediumUrl ?: it.photo?.largestUrl }
                 val cols = if (photoAttachments.size == 1) 1 else 2
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -9579,11 +9583,15 @@ private fun ForwardedMessageBlock(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
-                            for (att in row) {
+                            for ((attIdx, att) in row.withIndex()) {
                                 val photo = att.photo
-                                val url = photo?.largestUrl
+                                // PHOTO-QUALITY: previewUrl = mediumUrl для превью.
+                                // photoUrls[idx] = largestUrl для PhotoViewer (оригинал при тапе).
+                                val url = photo?.mediumUrl ?: photo?.largestUrl
                                 val isSingle = cols == 1
                                 if (photo != null && url != null) {
+                                    // Глобальный индекс фото для photoUrls (largestUrl для PhotoViewer).
+                                    val globalIdx = photoAttachments.indexOf(att).coerceAtLeast(0)
                                     AsyncImage(
                                         model = url,
                                         contentDescription = "Фото",
@@ -9595,8 +9603,7 @@ private fun ForwardedMessageBlock(
                                                 onClick = {
                                                     if (sel != null && sel.selectionMode) sel.onToggleSelection()
                                                     else {
-                                                        val idx = photoUrls.indexOf(url).coerceAtLeast(0)
-                                                        onPhotoClick(photoUrls, idx)
+                                                        onPhotoClick(photoUrls, globalIdx)
                                                     }
                                                 },
                                                 onLongClick = { sel?.onLongPress?.invoke() },
