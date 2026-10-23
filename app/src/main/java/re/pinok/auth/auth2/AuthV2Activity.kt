@@ -6,14 +6,22 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.auth.AuthViewModel
 import re.pinok.auth.exchange.AuthDomainsConfig
@@ -21,12 +29,6 @@ import re.pinok.auth.exchange.AuthState
 import re.pinok.ui.components.CaptchaDialog
 import re.pinok.util.AppLog
 
-// #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный экран входа.
-// Переделан ПО ОБРАЗЦУ vk-lite-auth-0.12.0-source.zip: автономный WebView-экран
-// [VkLiteWebViewAuthScreen] грузит m.vk.ru/login?app_id=7879029, VK сам принимает
-// номер/пароль/2FA/капчу, клиент простым polling читает web_token из localStorage
-// и сохраняет его. НЕ использует VkAuthWebViewScreenV2/WebTokenAuth (тот вмешивался
-// в процесс входа и давал белый экран — см. VkLiteWebViewAuthScreen KDoc).
 class AuthV2Activity : ComponentActivity() {
 
     private val viewModel: AuthViewModel by viewModels {
@@ -42,8 +44,6 @@ class AuthV2Activity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         AppLog.i("AuthV2Activity", "onCreate — флоу «Авторизация 2» (автономный WebView, как vk-lite)")
-        // Если токен УЖЕ валиден (повторный вход / silent-обмен успел сохранить) —
-        // показывать WebView не нужно, сразу завершаем успехом (интерфейс PinoK проявится).
         runCatching {
             if (SovaApp.get(this).tokenStorage.hasValidToken()) {
                 AppLog.i("AuthV2Activity", "Токен уже валиден — завершаем сразу (RESULT_OK), без WebView")
@@ -56,31 +56,67 @@ class AuthV2Activity : ComponentActivity() {
         }
         setContent {
             MaterialTheme {
-                // #CAPTCHA-V2: дублируем глобальный CaptchaDialog (мы отдельная Activity).
                 CaptchaDialog()
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    val state = viewModel.state.collectAsState().value
-                    // Стартуем на m.vk.ru/login?app_id=7879029 (собственный app_id m.vk.ru).
-                    VkLiteWebViewAuthScreen(
-                        startUrl = "https://${AuthDomainsConfig.current.mobileWebHost}/login?app_id=7879029",
-                        onTokenReady = { token, uid ->
-                            // Сохраняем токен напрямую (как vk-lite store.save). submitOAuthToken
-                            // умеет сохранять access_token → repo переведёт state в Success.
-                            AppLog.i("AuthV2Activity", "web_token готов (user_id=$uid) — сохраняем через submitOAuthToken")
-                            viewModel.submitOAuthToken(token, uid)
-                        },
-                        onDismiss = {
-                            viewModel.cancel()
-                            setResult(RESULT_CANCELED)
-                            finish()
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    // При AuthState.Success — завершаем с RESULT_OK (пробросится в MainActivity).
-                    LaunchedEffect(state) {
-                        if (state is AuthState.Success) {
-                            setResult(RESULT_OK)
-                            finish()
+                    val app = SovaApp.get(this@AuthV2Activity)
+                    val scope = rememberCoroutineScope()
+
+                    // AUTH2-HINT-DIALOG: показать инструкцию перед WebView
+                    val hintDisabled = app.prefsSnapshot?.authV2HintDisabled ?: false
+                    var showHint by remember { mutableStateOf(!hintDisabled) }
+                    var showWebView by remember { mutableStateOf(hintDisabled) }
+
+                    if (showHint) {
+                        AlertDialog(
+                            onDismissRequest = { },
+                            title = { Text("Авторизация 2") },
+                            text = {
+                                Text(
+                                    "Это не вход во второй аккаунт. " +
+                                    "Это запасной вход, если не сработал первый.\n\n" +
+                                    "Авторизуйтесь в ВК, после успешной авторизации " +
+                                    "СВЕРНИТЕ И РАЗВЕРНИТЕ приложение — " +
+                                    "это нужно для «подхвата» авторизации."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showHint = false
+                                    showWebView = true
+                                }) { Text("ОК") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        app.prefs.setAuthV2HintDisabled(true)
+                                    }
+                                    showHint = false
+                                    showWebView = true
+                                }) { Text("Больше не показывать") }
+                            },
+                        )
+                    }
+
+                    if (showWebView) {
+                        val state = viewModel.state.collectAsState().value
+                        VkLiteWebViewAuthScreen(
+                            startUrl = "https://${AuthDomainsConfig.current.mobileWebHost}/login?app_id=7879029",
+                            onTokenReady = { token, uid ->
+                                AppLog.i("AuthV2Activity", "web_token готов (user_id=$uid) — сохраняем через submitOAuthToken")
+                                viewModel.submitOAuthToken(token, uid)
+                            },
+                            onDismiss = {
+                                viewModel.cancel()
+                                setResult(RESULT_CANCELED)
+                                finish()
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        LaunchedEffect(state) {
+                            if (state is AuthState.Success) {
+                                setResult(RESULT_OK)
+                                finish()
+                            }
                         }
                     }
                 }

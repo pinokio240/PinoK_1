@@ -634,6 +634,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Default true (2026-10-20) — тумблер в «Разработке» включён, пока пользователь
             // явно его не выключил (сохранённое значение приоритетнее). Только ручной вход.
             authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: true,
+            authV2HintDisabled = p[Keys.AUTH_V2_HINT_DISABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
             callsVideoTx = p[Keys.CALLS_VIDEO_TX] ?: false,
@@ -1371,6 +1372,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsEnabled(v: Boolean)          = put(Keys.CALLS_ENABLED, v)
     /** #AUTH2: включить «Авторизацию 2» (альтернативный флоу входа, default false). */
     suspend fun setAuthV2Enabled(v: Boolean)         = put(Keys.AUTH_V2_ENABLED, v)
+    suspend fun setAuthV2HintDisabled(v: Boolean)    = put(Keys.AUTH_V2_HINT_DISABLED, v)
     // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv без камеры).
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
     // #CALLS-SWDECODE: принудительный программный декодер видео.
@@ -1972,6 +1974,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val callsEnabled: Boolean,
         // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный флоу входа (прямой HTTP).
         val authV2Enabled: Boolean,
+        /** AUTH2-HINT-DISMISS: «больше не показывать» инструкцию V2. */
+        val authV2HintDisabled: Boolean = false,
         /** #CALLS-SYMMETRIC (01.09, Этап 2-заготовка): отправлять чёрную видеозаглушку
          *  (320×180@10fps, БЕЗ камеры и разрешения CAMERA) — answer m=video становится
          *  sendrecv, звонок симметричен как у офиц. клиента. Гипотеза: официальный
@@ -2376,6 +2380,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CALLS_ENABLED           = booleanPreferencesKey("calls_enabled")
         // #AUTH2 (2026-10-17): экспериментальный флоу входа «Авторизация 2» (прямой HTTP OAuth).
         val AUTH_V2_ENABLED          = booleanPreferencesKey("auth_v2_enabled")
+        // AUTH2-HINT-DISMISS: «больше не показывать» для инструкции V2
+        val AUTH_V2_HINT_DISABLED    = booleanPreferencesKey("auth_v2_hint_disabled")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
         val CALLS_VIDEO_SW_DECODE   = booleanPreferencesKey("calls_video_sw_decode")
         /** #CALLS-AEC-TOGGLE: hardware AEC/NS аудиодвижка звонков. */
