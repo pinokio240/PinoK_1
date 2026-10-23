@@ -48,10 +48,10 @@ fun ClipThumbnail(video: Video, onClick: (Video) -> Unit, compact: Boolean = fal
     if (compact) {
         // COMPACT-CLIP-GRID: compact режим для сетки клипов в сообществе —
         // только превью + play button, без Card/padding/названия.
-        // weight(1f) обязателен — иначе в Row fillMaxWidth занимает всю ширину.
+        // ВАЖНО: НЕ используем weight здесь — weight доступен только в RowScope.
+        // Caller (CommunityScreen) оборачивает ClipThumbnail в Box(weight(1f)).
         Box(
             modifier = Modifier
-                .weight(1f)
                 .aspectRatio(9f / 16f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
