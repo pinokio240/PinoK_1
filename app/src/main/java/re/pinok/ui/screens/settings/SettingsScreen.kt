@@ -1744,6 +1744,7 @@ private fun InterfaceTab(
             val homeOptions = listOf(
                 Triple(re.pinok.ui.navigation.Screen.Feed.route, "Лента", null),
                 Triple(re.pinok.ui.navigation.Screen.Messages.route, "Сообщения", null),
+                Triple(re.pinok.ui.navigation.Screen.Notifications.route, "Уведомления", null),
                 Triple(re.pinok.ui.navigation.Screen.Music.route, "Музыка", null),
                 Triple(re.pinok.ui.navigation.Screen.Video.route, "Видео", null),
                 Triple(re.pinok.ui.navigation.Screen.Profile.route, "Профиль", null),
