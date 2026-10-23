@@ -42,9 +42,39 @@ import re.pinok.data.model.Video
  * Тап по карточке → [onClick].
  */
 @Composable
-fun ClipThumbnail(video: Video, onClick: (Video) -> Unit) {
+fun ClipThumbnail(video: Video, onClick: (Video) -> Unit, compact: Boolean = false) {
     // #GROUP-CLIPS: вертикальный постер (first_frames → clipPosterUrl), как в веб-VK.
     val thumbUrl = video.clipPosterUrl ?: video.thumbUrl
+    if (compact) {
+        // COMPACT-CLIP-GRID: compact режим для сетки клипов в сообществе —
+        // только превью + play button, без Card/padding/названия.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(9f / 16f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable { onClick(video) },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbUrl != null) {
+                AsyncImage(
+                    model = thumbUrl,
+                    contentDescription = video.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            Box(
+                modifier = Modifier.size(36.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(22.dp))
+            }
+        }
+        return
+    }
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))

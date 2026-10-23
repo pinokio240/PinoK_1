@@ -1328,8 +1328,23 @@ fun CommunityScreen(
                             )
                         }
                     }
-                    items(clipsState.items, key = { "clip_${it.ownerId}_${it.id}" }) { clip ->
-                        ClipThumbnail(video = clip, onClick = onVideoClick)
+                    // COMPACT-CLIP-GRID: клипы в сетке 2 колонки (compact режим —
+                    // только превью + play button, без названия/счётчиков).
+                    item {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            maxItemsInEachRow = 2,
+                        ) {
+                            clipsState.items.forEach { clip ->
+                                ClipThumbnail(
+                                    video = clip,
+                                    onClick = onVideoClick,
+                                    compact = true,
+                                )
+                            }
+                        }
                     }
                     // Фаза 0/1: общий футер пагинации клипов.
                     item(key = "clips_paging_footer") {
