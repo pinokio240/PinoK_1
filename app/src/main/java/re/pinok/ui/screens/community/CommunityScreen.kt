@@ -93,6 +93,7 @@ import re.pinok.data.model.Video
 import re.pinok.data.model.Album
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.PhotoViewerPhotoItems
 // POSTCARD-REFACTOR-PLAN (этап 2): вертикальная карточка клипа вынесена
 // в общий ui/components/ClipThumbnail.kt.
 import re.pinok.ui.components.ClipThumbnail
@@ -1651,7 +1652,6 @@ fun CommunityScreen(
                 // Список альбомов (Card: обложка + название + size + описание);
                 // тап → photos.get(ownerId, albumId) → открывает PhotoViewer с URL'ами.
                 // Пагинация — НЕ курсорная (список альбомов обычно короткий, 1 страница).
-                val albumsContext = LocalContext.current
                 if (albumsLoading && albums.isEmpty()) {
                     item {
                         Box(
@@ -1702,6 +1702,7 @@ fun CommunityScreen(
                         }
                     }
                     items(albums, key = { "album_${it.ownerId}_${it.id}" }) { album ->
+                        val ctx = LocalContext.current
                         CommunityAlbumRow(
                             album = album,
                             isLoading = albumOpening?.id == album.id &&
@@ -1721,7 +1722,7 @@ fun CommunityScreen(
                                             photoViewerState.value = urls to 0
                                         } else {
                                             Toast.makeText(
-                                                albumsContext,
+                                                ctx,
                                                 "В альбоме нет фото",
                                                 Toast.LENGTH_SHORT,
                                             ).show()
@@ -1729,7 +1730,7 @@ fun CommunityScreen(
                                     } catch (e: Exception) {
                                         AppLog.e("CommunityScreen", "album photos load failed", e)
                                         Toast.makeText(
-                                            albumsContext,
+                                            ctx,
                                             "Ошибка: ${e.message}",
                                             Toast.LENGTH_SHORT,
                                         ).show()
