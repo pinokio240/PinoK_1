@@ -1249,8 +1249,25 @@ fun CommunityScreen(
                             )
                         }
                     }
-                    items(videosState.items, key = { "${it.ownerId}_${it.id}" }) { video ->
-                        VideoThumbnail(video = video, titleExpandable = true, onClick = onVideoClick)
+                    // COMPACT-VIDEO-GRID: видео в сетке 2 колонки (compact режим —
+                    // только превью + duration overlay, без названия/счётчиков).
+                    // Раньше было по одному большому VideoThumbnail на строку —
+                    // пользователь жаловался: «открываются сразу большие, замучаешься листать».
+                    item {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            maxItemsInEachRow = 2,
+                        ) {
+                            videosState.items.forEach { video ->
+                                VideoThumbnail(
+                                    video = video,
+                                    onClick = onVideoClick,
+                                    compact = true,
+                                )
+                            }
+                        }
                     }
                     // Фаза 0/1: общий футер пагинации видео.
                     item(key = "videos_paging_footer") {

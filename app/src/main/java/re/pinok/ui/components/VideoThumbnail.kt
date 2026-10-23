@@ -55,8 +55,55 @@ fun VideoThumbnail(
     onClick: (Video) -> Unit,
     showTitle: Boolean = true,
     titleExpandable: Boolean = false,
+    // COMPACT-VIDEO-GRID: compact режим для сетки видео в сообществе — только
+    // превью + duration overlay, без названия/счётчиков. Используется в
+    // CommunityScreen (вкладка Видео) в FlowRow 2 колонки.
+    compact: Boolean = false,
 ) {
     val thumbUrl = video.thumbUrl
+    if (compact) {
+        // Compact: только превью + duration badge, без Card/padding/title.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable { onClick(video) },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbUrl != null) {
+                AsyncImage(
+                    model = thumbUrl,
+                    contentDescription = video.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            Box(
+                modifier = Modifier.size(36.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(22.dp))
+            }
+            if (video.duration > 0) {
+                Box(
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        "${video.duration / 60}:${"%02d".format(video.duration % 60)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
+        return
+    }
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
