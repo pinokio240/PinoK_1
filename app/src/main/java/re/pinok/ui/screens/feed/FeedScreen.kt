@@ -178,7 +178,8 @@ import kotlin.math.roundToInt
 //   друзья»; блок рекомендаций над лентой УДАЛЕН — #FEED-MENU-VKWEB Fix #353,
 //   в VK web раздел «Друзья» — чистая лента постов друзей).
 // SEARCH → newsfeed.search.
-private enum class FeedFilter(val label: String, val apiFilters: String?, val recommended: Boolean) {
+// FEED-MENU-RESTORE: enum сделан public — FeedRightPanel использует для меню ленты
+enum class FeedFilter(val label: String, val apiFilters: String?, val recommended: Boolean) {
     ALL("Все новости", "post,photo,video", false),
     RECOMMENDED("Рекомендации", null, true),
     LIKES("Реакции", null, false),
@@ -1651,20 +1652,16 @@ fun FeedScreen(
     Box(modifier = Modifier.zIndex(1f)) {
         FeedRightPanel(
             visible = FeedPanelState.visible,
+            currentFilter = feedFilter,
+            onSelectFilter = { f ->
+                AppLog.i("FeedScreen", "FeedRightPanel filter → ${f.name}, FeedPanelState.visible = false")
+                FeedPanelState.visible = false
+                feedFilterName = f.name
+                reloadFeed()
+            },
             onDismiss = {
                 AppLog.i("FeedScreen", "FeedRightPanel dismiss → FeedPanelState.visible = false")
                 FeedPanelState.visible = false
-            },
-            // #FEED-MENU-NOTIF: категория уведомлений → NotificationsScreen с категорией.
-            onNavigateCategory = { category ->
-                AppLog.i("FeedScreen", "FeedRightPanel notif category → '$category', FeedPanelState.visible = false")
-                FeedPanelState.visible = false
-                onFeedPanelOpenNotifications(category)
-            },
-            onNavigate = { screen ->
-                AppLog.i("FeedScreen", "FeedRightPanel navigate → ${screen.route}, FeedPanelState.visible = false")
-                FeedPanelState.visible = false
-                onFeedPanelNavigate(screen)
             },
             onOpenHiddenSources = {
                 AppLog.i("FeedScreen", "FeedRightPanel hidden sources → FeedPanelState.visible = false")
