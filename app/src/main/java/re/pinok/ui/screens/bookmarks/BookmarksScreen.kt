@@ -669,14 +669,27 @@ fun BookmarksScreen(
                                 bm = bm,
                                 onLongClick = { removeTarget = bm },
                                 onRemoveClick = { removeTarget = bm },
-                                // AUTHOR-STRIP: полоска «Перейти к посту» — только для
-                                // закладок-постов (bm.post != null); для остальных
-                                // типов null → BookmarkRow не пробрасывает в карточку.
-                                // Клик → стена, где ЛЕЖИТ пост (ownerId).
                                 onPostContextClick = bm.post?.let { p ->
                                     {
                                         if (p.ownerId > 0) onUserClick?.invoke(p.ownerId)
                                         else onGroupClick?.invoke(-p.ownerId)
+                                    }
+                                },
+                                onDeletePost = bm.post?.let { p ->
+                                    {
+                                        scope.launch {
+                                            try {
+                                                val ok = app.apiClient.wallDelete(p.ownerId, p.id)
+                                                if (ok) {
+                                                    removeBookmark(bm)
+                                                    Toast.makeText(context, "Пост удалён", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "Не удалось удалить пост", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
                                 },
                                 onClick = {
@@ -821,6 +834,8 @@ private fun BookmarkRow(
     // AUTHOR-STRIP: полоска «Перейти к посту». Передаётся только в BookmarkPostCard
     // (для остальных типов закладок игнорируется). null → полоска не рисуется.
     onPostContextClick: (() -> Unit)? = null,
+    // WALL-DELETE: удаление поста (wall.delete) — только для постов с canDelete=true.
+    onDeletePost: (() -> Unit)? = null,
 ) {
     // #BOOKMARKS-SMARTCAST: свойства Bookmark (video/post/user/group/link) — public
     // из core/data, поэтому smart-cast невозможен; берём в локальные val (nullable).
@@ -849,21 +864,7 @@ private fun BookmarkRow(
                 onRemoveClick = onRemoveClick,
                 onClick = onClick,
                 onPostContextClick = onPostContextClick,
-                onDeletePost = {
-                    scope.launch {
-                        try {
-                            val ok = app.apiClient.wallDelete(bmP.ownerId, bmP.id)
-                            if (ok) {
-                                removeBookmark(bm)
-                                Toast.makeText(context, "Пост удалён", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Не удалось удалить пост", Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                },
+                onDeletePost = onDeletePost,
             )
         } else {
             BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)

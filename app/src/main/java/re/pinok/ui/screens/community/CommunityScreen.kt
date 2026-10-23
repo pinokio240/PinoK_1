@@ -1786,7 +1786,8 @@ fun CommunityScreen(
     if (viewer != null) {
         // PHOTO-QUALITY: PhotoViewerPhotoItems принимает List<PhotoItem> —
         // имеет (ownerId, photoId, accessKey) для faveAdd/закладок.
-        val viewerPhotos = photosState.items
+        // Если открыт альбом — используем albumPhotos, иначе — photosState.items.
+        val viewerPhotos = if (openedAlbum != null) albumPhotos else photosState.items
         val viewerInitial = viewerPhotos.indexOfFirst { it.largestUrl == viewer.first.getOrNull(viewer.second) }.coerceAtLeast(0)
         val shareContext = LocalContext.current
         PhotoViewerPhotoItems(
