@@ -1306,6 +1306,10 @@ data class PhotoItem(
     val largestUrl: String? get() = sizes?.maxByOrNull { it.width * it.height }?.url
     val mediumUrl: String? get() = sizes?.filter { it.width >= 300 && it.width <= 600 }
         ?.minByOrNull { it.width }?.url ?: largestUrl
+    // PHOTO-QUALITY: smallUrl — тип 'm' (130px) для сетки превью на медленной сети.
+    // Fallback на mediumUrl если 'm' отсутствует.
+    val smallUrl: String? get() = sizes?.firstOrNull { it.type == "m" }?.url
+        ?: sizes?.firstOrNull { it.type == "s" }?.url ?: mediumUrl
 }
 
 /**

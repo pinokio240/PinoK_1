@@ -115,11 +115,12 @@ fun PhotoViewerPhotoItems(
     photos: List<PhotoItem>,
     initial: Int = 0,
     onDismiss: () -> Unit,
-    // PHOTO-MENU (PHOTO-MENU-ALBUMS): те же 4 коллбека «⋮»-меню — проброс в Intern.
+    // PHOTO-MENU: onShare/onSendToChat — URL как String. onBookmark/onFavorite —
+    // PhotoItem? (может быть null если URL не сопоставлен с PhotoItem).
     onShare: (String) -> Unit = {},
     onSendToChat: (String) -> Unit = {},
-    onBookmark: (String) -> Unit = {},
-    onFavorite: (String) -> Unit = {},
+    onBookmark: (PhotoItem?) -> Unit = {},
+    onFavorite: (PhotoItem?) -> Unit = {},
 ) {
     val urls = photos.mapNotNull { it.largestUrl }
     // Подписи по индексу URL (не по индексу PhotoItem — допускаем null-URL):
@@ -140,6 +141,8 @@ fun PhotoViewerPhotoItems(
                 }.takeIf { it.isNotBlank() }
             }
     }
+    // PHOTO-MENU: мапинг URL → PhotoItem для onBookmark/onFavorite.
+    val urlToPhoto = photos.associateBy { it.largestUrl }
     PhotoViewerIntern(
         photos = urls,
         captions = captions,
@@ -147,8 +150,8 @@ fun PhotoViewerPhotoItems(
         onDismiss = onDismiss,
         onShare = onShare,
         onSendToChat = onSendToChat,
-        onBookmark = onBookmark,
-        onFavorite = onFavorite,
+        onBookmark = { url -> onBookmark(urlToPhoto[url]) },
+        onFavorite = { url -> onFavorite(urlToPhoto[url]) },
     )
 }
 

@@ -1249,9 +1249,10 @@ fun CommunityScreen(
                         }
                     }
                 } else {
-                    // Превью в сетке — mediumUrl (300-600px), для качества достаточно.
-                    // allUrls (для PhotoViewer) — largestUrl, при тапе грузится оригинал.
-                    val withUrl = photosState.items.mapNotNull { p -> p.mediumUrl?.let { url -> p to url } }
+                    // PHOTO-QUALITY: превью в сетке — smallUrl (130px, type 'm') —
+                    // быстро грузится даже на медленной сети. 3 колонки = маленькие превью,
+                    // 130px достаточно. allUrls (для PhotoViewer) — largestUrl (оригинал).
+                    val withUrl = photosState.items.mapNotNull { p -> p.smallUrl?.let { url -> p to url } }
                     val allUrls = photosState.items.mapNotNull { it.largestUrl }
                     val photoRows = withUrl.chunked(3)
                     itemsIndexed(photoRows, key = { idx, _ -> "photo_row_$idx" }) { rowIndex, rowItems ->
@@ -1761,14 +1762,15 @@ fun CommunityScreen(
     // вызывается.
     val viewer = photoViewerState.value
     if (viewer != null) {
-        // PHOTO-MENU (PHOTO-MENU-ALBUMS): контекст для Intent.ACTION_SEND в onShare.
+        // PHOTO-QUALITY: PhotoViewerPhotoItems принимает List<PhotoItem> —
+        // имеет (ownerId, photoId, accessKey) для faveAdd/закладок.
+        val viewerPhotos = photosState.items
+        val viewerInitial = viewerPhotos.indexOfFirst { it.largestUrl == viewer.first.getOrNull(viewer.second) }.coerceAtLeast(0)
         val shareContext = LocalContext.current
-        PhotoViewer(
-            photos = viewer.first,
-            initial = viewer.second,
+        PhotoViewerPhotoItems(
+            photos = viewerPhotos,
+            initial = viewerInitial,
             onDismiss = { photoViewerState.value = null },
-            // «Поделиться» → системный share-chooser (Intent.ACTION_SEND text/plain).
-            // URL текущего фото уходит как EXTRA_TEXT — VK/Telegram/почта примут.
             onShare = { url ->
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
@@ -1776,18 +1778,39 @@ fun CommunityScreen(
                 }
                 shareContext.startActivity(Intent.createChooser(send, "Поделиться"))
             },
-            // «Отправить» → ShareToChatSheet (picker диалогов PinoK): sharedText=url.
-            // BottomSheet рендерится ниже по значению shareToChatUrl.
             onSendToChat = { url -> shareToChatUrl = url },
-            // TODO PHOTO-MENU: «В закладки»/«В избранное» фото требуют (ownerId, photoId).
-            // PhotoViewer работает со списком URL без маппинга обратно к PhotoItem.
-            // Реализуется расширением photoViewerState до Pair<List<PhotoItem>?, Int>
-            // (как PhotosScreen.photoViewerState) — но это меняет signature onPhotoClick
-            // во ВСЕХ callsites (PostCard, BookmarksScreen, …), что выходит за рамки ТЗ.
-            // Здесь оставляем no-op; на уровне CommunityPostCard «⋮»-меню поста уже
-            // работает «В закладки» через faveAdd("post", ownerId, id).
-            onBookmark = {},
-            onFavorite = {},
+            // PHOTO-MENU: «В закладки»/«В избранное» — faveAdd(type="photo", ownerId, photoId).
+            // TODO: bookmarks (отличается от fave) — нужен отдельный метод если PinoK различает.
+            onBookmark = { photo ->
+                scope.launch {
+                    val ok = app.apiClient.faveAdd(
+                        type = "photo",
+                        ownerId = photo.ownerId,
+                        itemId = photo.id,
+                        accessKey = photo.accessKey,
+                    )
+                    android.widget.Toast.makeText(
+                        shareContext,
+                        if (ok) "Добавлено в закладки" else "Не удалось добавить в закладки",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
+            onFavorite = { photo ->
+                scope.launch {
+                    val ok = app.apiClient.faveAdd(
+                        type = "photo",
+                        ownerId = photo.ownerId,
+                        itemId = photo.id,
+                        accessKey = photo.accessKey,
+                    )
+                    android.widget.Toast.makeText(
+                        shareContext,
+                        if (ok) "Добавлено в избранное" else "Не удалось добавить в избранное",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
         )
     }
 
