@@ -31,8 +31,6 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.ThumbUp
-import androidx.compose.material.icons.outlined.Recommend
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,11 +80,9 @@ private data class FeedMenuEntry(
 /** Пункты меню ленты — фильтры (1:1 с VK web rightmenu). */
 private val FEED_MENU_ENTRIES = listOf(
     FeedMenuEntry("feed_right_menu_news", "Все новости", Icons.AutoMirrored.Outlined.Article, FeedFilter.ALL),
-    FeedMenuEntry("feed_right_menu_recommended", "Рекомендации", Icons.Outlined.Recommend, FeedFilter.RECOMMENDED),
     FeedMenuEntry("feed_right_menu_sources_photos", "Фото", Icons.Outlined.Image, FeedFilter.PHOTOS),
     FeedMenuEntry("feed_right_menu_sources_friends", "Друзья", Icons.Outlined.Group, FeedFilter.FRIENDS),
     FeedMenuEntry("feed_right_menu_global_search", "Поиск", Icons.Outlined.Search, FeedFilter.SEARCH),
-    FeedMenuEntry("feed_right_menu_wall_likes", "Реакции", Icons.Outlined.ThumbUp, FeedFilter.LIKES),
 )
 
 /**
