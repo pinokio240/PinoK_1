@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -64,10 +63,11 @@ fun VideoThumbnail(
     val thumbUrl = video.thumbUrl
     if (compact) {
         // Compact: только превью + duration badge, без Card/padding/title.
-        // weight(1f) обязателен — иначе в Row fillMaxWidth занимает всю ширину.
+        // ВАЖНО: НЕ используем weight здесь — weight доступен только в RowScope.
+        // Caller (CommunityScreen) оборачивает VideoThumbnail в Row и даёт weight.
+        // Здесь только aspectRatio + кликабельность.
         Box(
             modifier = Modifier
-                .weight(1f)
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)

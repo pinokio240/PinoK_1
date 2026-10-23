@@ -1252,6 +1252,7 @@ fun CommunityScreen(
                     // COMPACT-VIDEO-GRID: видео в сетке 2 колонки (compact режим —
                     // только превью + duration overlay, без названия/счётчиков).
                     // COMPACT-GRID-FIX: chunked rows вместо FlowRow (FlowRow+weight ломался).
+                    // weight(1f) даём через Box-обёртку — VideoThumbnail не в RowScope.
                     item {
                         val videoRows = videosState.items.chunked(2)
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -1261,11 +1262,13 @@ fun CommunityScreen(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     rowVideos.forEach { video ->
-                                        VideoThumbnail(
-                                            video = video,
-                                            onClick = onVideoClick,
-                                            compact = true,
-                                        )
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            VideoThumbnail(
+                                                video = video,
+                                                onClick = onVideoClick,
+                                                compact = true,
+                                            )
+                                        }
                                     }
                                     repeat(2 - rowVideos.size) {
                                         Spacer(modifier = Modifier.weight(1f))
@@ -1337,6 +1340,7 @@ fun CommunityScreen(
                     // COMPACT-CLIP-GRID: клипы в сетке 2 колонки (compact режим —
                     // только превью + play button, без названия/счётчиков).
                     // COMPACT-GRID-FIX: chunked rows вместо FlowRow (FlowRow+weight ломался).
+                    // weight(1f) даём через Box-обёртку — ClipThumbnail не в RowScope.
                     item {
                         val clipRows = clipsState.items.chunked(2)
                         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -1346,11 +1350,13 @@ fun CommunityScreen(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     rowClips.forEach { clip ->
-                                        ClipThumbnail(
-                                            video = clip,
-                                            onClick = onVideoClick,
-                                            compact = true,
-                                        )
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            ClipThumbnail(
+                                                video = clip,
+                                                onClick = onVideoClick,
+                                                compact = true,
+                                            )
+                                        }
                                     }
                                     repeat(2 - rowClips.size) {
                                         Spacer(modifier = Modifier.weight(1f))
