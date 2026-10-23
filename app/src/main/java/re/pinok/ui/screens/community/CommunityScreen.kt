@@ -1073,8 +1073,8 @@ fun CommunityScreen(
                 post = post,
                 authorName = g.name,
                 authorPhoto = g.photo200 ?: g.photo100,
-                // #POST-SIGNER (волна 39): имя автора подписи из wall.get extended=1.
-                signerName = post.signerId?.let { sid -> signerNames[sid] },
+                // SHOW-AUTHOR-ALL: «от [signer name]» — для всех постов с signerId.
+                signerName = post.signerId?.let { sid -> signerNames[sid]?.let { name -> "от $name" } },
                 // #ADMIN-POST-ACTIONS-FLAT: плоское «⋮»-меню поста формируется на
                 // уровне экрана (доступны scope/app/post/groupId/g). Закладка — для
                 // всех пользователей; действия менеджера (редактировать/удалить/

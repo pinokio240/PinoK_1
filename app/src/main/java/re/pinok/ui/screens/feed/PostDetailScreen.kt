@@ -722,7 +722,7 @@ fun PostDetailScreen(
                             authorName = authorName,
                             authorPhoto = authorAvatarUrl,
                             authorIsGroup = authorIsGroup,
-                            signerName = null,
+                            signerName = post.signerId?.let { sid -> profiles[sid]?.let { p -> "от ${p.firstName} ${p.lastName}" } },
                             showFullDate = true,
                             verified = group?.verified == 1,
                             // #POST-DETAIL-SCROLL: тап по автору → экран сообщества

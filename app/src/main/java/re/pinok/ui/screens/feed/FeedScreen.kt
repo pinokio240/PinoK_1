@@ -2442,8 +2442,9 @@ private fun PostCard(
 ) {
     // Пост-источник: группа (fromId < 0) или пользователь (fromId > 0).
     val authorIsGroup = post.fromId < 0
-    // Резолв автора (имя/фото) и подписи (signer) — ветвление 1:1 со старым
-    // inline-телом (fromId > 0 → пользователь, иначе → группа).
+    // SHOW-AUTHOR-ALL: показываем автора для ВСЕХ постов (не только signerId).
+    // fromId > 0 → пользователь-автор (имя из profiles).
+    // fromId < 0 → группа, signerId → конкретный пользователь от имени группы.
     val authorName: String
     val authorPhoto: String?
     val signerName: String?
@@ -2451,17 +2452,20 @@ private fun PostCard(
         val p = profiles[post.fromId]
         authorName = if (p != null) "${p.firstName} ${p.lastName}" else "id${post.fromId}"
         authorPhoto = if (p != null) p.photo100 else null
-        signerName = null
+        // Если есть signerId (пост от имени группы, но опубликовал пользователь) — показываем.
+        signerName = if (post.signerId != null) {
+            val sp = profiles[post.signerId]
+            if (sp != null) "от ${sp.firstName} ${sp.lastName}" else null
+        } else null
     } else {
         val g = groups[-post.fromId]
         authorName = if (g != null) g.name else "Сообщество"
         authorPhoto = if (g != null) g.photo100 else null
+        // SHOW-AUTHOR-ALL: для постов в группе — показываем автора если есть signerId.
         signerName = if (post.signerId != null) {
             val sp = profiles[post.signerId]
-            if (sp != null) "${sp.firstName} ${sp.lastName}" else null
-        } else {
-            null
-        }
+            if (sp != null) "от ${sp.firstName} ${sp.lastName}" else null
+        } else null
     }
     // Подтверждённость группы (verified-бейдж) — для authorIsGroup и g.verified == 1.
     val verified = authorIsGroup && (groups[-post.fromId]?.verified == 1)

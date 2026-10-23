@@ -2545,7 +2545,7 @@ fun WallPostCard(
         authorName = authorName,
         authorPhoto = authorPhoto,
         authorIsGroup = isGroupPost,
-        signerName = null,
+        signerName = post.signerId?.let { sid -> profiles[sid]?.let { p -> "от ${p.firstName} ${p.lastName}" } },
         showFullDate = false,
         // Закладок в WallPostCard не было — иконку и пункт меню не добавляем.
         isBookmarked = null,
