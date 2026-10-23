@@ -306,26 +306,6 @@ private fun PhotoViewerIntern(
                                         onSendToChat(currentUrl)
                                     },
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("В закладки") },
-                                    leadingIcon = {
-                                        Icon(Icons.Outlined.BookmarkBorder, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        onBookmark(currentUrl)
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("В избранное") },
-                                    leadingIcon = {
-                                        Icon(Icons.Outlined.FavoriteBorder, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        onFavorite(currentUrl)
-                                    },
-                                )
                             }
                         }
                     }
