@@ -12314,7 +12314,14 @@ private fun VkAttachmentsBar(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp, vertical = 2.dp),
                 ) {
-                    androidx.compose.foundation.lazy.items(
+                    // #MULTI-SELECT-FIX: было `androidx.compose.foundation.lazy.items(...)`
+                    //   (FQN) — unresolved, т.к. `items` для LazyListScope это member+
+                    //   extension в одном пакете; FQN-вызов top-level extension с
+                    //   implicit `this: LazyListScope` не резолвился компилятором
+                    //   (остальные items() в файле — короткие, через import :58).
+                    //   Каскадно ломало key = { it.att } и { va -> ... } (нет типа
+                    //   у лямбд). Меняем на короткое имя — импорт уже есть :58.
+                    items(
                         items = attachments,
                         // MULTI-SELECT-ATTACH: ключ — att-строка (уникальна для VK-объекта).
                         key = { it.att },

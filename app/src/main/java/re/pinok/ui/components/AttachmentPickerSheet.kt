@@ -342,7 +342,14 @@ private sealed interface PendingPick {
     data class Audio(val track: Track) : PendingPick {
         override val key: String = "audio_${track.ownerId}_${track.id}"
     }
-    data class Video(val video: Video) : PendingPick {
+    // #MULTI-SELECT-FIX: тип поля — re.pinok.data.model.Video (FQN), а НЕ
+    //   голый `Video`: внутри sealed PendingPick голое имя `Video` резолвится
+    //   в сам вложенный PendingPick.Video (рекурсивный тип) → onPickVideo(
+    //   item.video) получал PendingPick.Video вместо model.Video (TS-mismatch
+    //   на :199), toggle(PendingPick.Video(video)) ждал PendingPick.Video, а
+    //   получал model.Video (:286), и `video.ownerId`/`video.id` были
+    //   unresolved (:346). FQN разрывает теневание.
+    data class Video(val video: re.pinok.data.model.Video) : PendingPick {
         override val key: String = "video_${video.ownerId}_${video.id}"
     }
     data class Gift(val gift: GiftItem) : PendingPick {
@@ -589,7 +596,12 @@ private fun VideoPickerTab(
         scope.launch {
             loadingMore = true
             try {
-                val (total, page) = app.apiClient.videoGetWithCount(count = 50, offset = serverOffset)
+                // #MULTI-SELECT-FIX: videoGetWithCount возвращает Pair<List<Video>, Int>
+                //   (page FIRST, total SECOND) — наоборот к audioGetWithCount
+                //   Pair<Int, List<Track>>. Было `val (total, page)` → page: Int,
+                //   page.size/filter/isNotEmpty unresolved (compiler искал
+                //   Modifier.size). Меняем порядок деструктуризации.
+                val (page, total) = app.apiClient.videoGetWithCount(count = 50, offset = serverOffset)
                 serverOffset += page.size
                 val fresh = page
                     .filter { it.id > 0L && it.ownerId != 0L }
@@ -609,7 +621,8 @@ private fun VideoPickerTab(
     LaunchedEffect(Unit) {
         loading = true
         try {
-            val (total, page) = app.apiClient.videoGetWithCount(count = 50, offset = 0)
+            // #MULTI-SELECT-FIX: Pair<List<Video>, Int> — page first (см. loadMore).
+            val (page, total) = app.apiClient.videoGetWithCount(count = 50, offset = 0)
             videos = page.filter { it.id > 0L && it.ownerId != 0L }
                 .distinctBy { "${it.ownerId}_${it.id}" }
             serverOffset = page.size
@@ -1329,7 +1342,11 @@ private fun DocsPickerTab(
         scope.launch {
             loadingMore = true
             try {
-                val (total, page) = app.apiClient.docsGetWithCount(count = 50, offset = serverOffset)
+                // #MULTI-SELECT-FIX: docsGetWithCount возвращает Pair<List<DocFile>, Int>
+                //   (page first, total second) — аналогично videoGetWithCount,
+                //   наоборот к audioGetWithCount. Было `val (total, page)` →
+                //   page: Int, неразрешённые filter/distinctBy/isNotEmpty.
+                val (page, total) = app.apiClient.docsGetWithCount(count = 50, offset = serverOffset)
                 serverOffset += page.size
                 val fresh = page.filter { nv -> docs.none { it.ownerId == nv.ownerId && it.id == nv.id } }
                 docs = (docs + fresh).distinctBy { "${it.ownerId}_${it.id}" }
@@ -1347,7 +1364,8 @@ private fun DocsPickerTab(
     LaunchedEffect(Unit) {
         loading = true
         try {
-            val (total, page) = app.apiClient.docsGetWithCount(count = 50, offset = 0)
+            // #MULTI-SELECT-FIX: Pair<List<DocFile>, Int> — page first (см. loadMore).
+            val (page, total) = app.apiClient.docsGetWithCount(count = 50, offset = 0)
             docs = page.distinctBy { "${it.ownerId}_${it.id}" }
             serverOffset = page.size
             // #AUDIO-PAGING-HOLE (волна 41): неполная страница ≠ конец списка.
