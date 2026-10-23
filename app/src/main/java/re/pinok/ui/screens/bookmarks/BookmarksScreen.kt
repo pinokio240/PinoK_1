@@ -1039,7 +1039,39 @@ private fun BookmarkPostCard(
         onReaction = null,
         likesOverride = null,
         reactionOverride = null,
-        menuItems = emptyList(),
+        // BOOKMARK-MENU: «⋮»-меню — Удалить из закладок, Скопировать ссылку, Удалить
+        menuItems = run {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            buildList {
+                add(re.pinok.ui.components.PostMenuItem(
+                    label = "Удалить из закладок",
+                    icon = androidx.compose.material.icons.Icons.Outlined.BookmarkBorder,
+                    onClick = onRemoveClick,
+                    destructive = true,
+                ))
+                add(re.pinok.ui.components.PostMenuItem(
+                    label = "Скопировать ссылку",
+                    icon = androidx.compose.material.icons.Icons.Outlined.Link,
+                    onClick = {
+                        val url = "https://vk.com/wall${post.ownerId}_${post.id}"
+                        val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Ссылка", url))
+                        Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                    },
+                ))
+                // «Удалить» — только если пост от текущего пользователя (fromId == myUserId)
+                // или админ сообщества (canDelete=true в Post model)
+                val canDelete = post.canDelete == true
+                if (canDelete) {
+                    add(re.pinok.ui.components.PostMenuItem(
+                        label = "Удалить",
+                        icon = androidx.compose.material.icons.Icons.Outlined.Delete,
+                        onClick = { /* TODO: wall.delete(ownerId, postId) — нужен onDelete callback */ },
+                        destructive = true,
+                    ))
+                }
+            }
+        },
         showPinnedBadge = false,
         showAdBadge = false,
         showSubscribeButton = false,

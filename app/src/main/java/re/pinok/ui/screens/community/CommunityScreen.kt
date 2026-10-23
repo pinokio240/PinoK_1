@@ -2270,26 +2270,24 @@ private fun CommunityAlbumRow(
     isLoading: Boolean,
     onClick: () -> Unit,
 ) {
+    // ALBUM-CARD-VERTICAL: вертикальная Card — обложка сверху, подпись снизу
+    // (паттерн VK web / профиль — альбомы в виде вертикальных карточек).
     Card(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .width(140.dp)
             .clickable(enabled = !isLoading) { onClick() },
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Обложка альбома (96dp, RoundedCornerShape 8dp). thumbSrc может быть
-            // null (нет cover) → серый placeholder с иконкой Image.
+        Column {
+            // Обложка альбома (16:9, RoundedCornerShape top).
             val coverUrl = album.thumbSrc
             Box(
                 modifier = Modifier
-                    .size(96.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
@@ -2308,45 +2306,30 @@ private fun CommunityAlbumRow(
                         contentScale = ContentScale.Crop,
                     )
                 }
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            // Подпись снизу.
+            Column(modifier = Modifier.padding(8.dp)) {
                 Text(
                     text = album.title.ifBlank { "Без названия" },
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "${album.size} фото",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
-                )
-                if (!album.description.isNullOrBlank()) {
-                    Text(
-                        text = album.description ?: "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            // Trailing: иконка-стрелка (или прогресс во время загрузки фото альбома).
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp).padding(8.dp),
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(20.dp).padding(8.dp),
                 )
             }
         }
