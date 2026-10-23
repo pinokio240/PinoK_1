@@ -1783,6 +1783,7 @@ fun CommunityScreen(
             // PHOTO-MENU: «В закладки»/«В избранное» — faveAdd(type="photo", ownerId, photoId).
             // TODO: bookmarks (отличается от fave) — нужен отдельный метод если PinoK различает.
             onBookmark = { photo ->
+                if (photo == null) return@PhotoViewerPhotoItems
                 scope.launch {
                     val ok = app.apiClient.faveAdd(
                         type = "photo",
@@ -1798,6 +1799,7 @@ fun CommunityScreen(
                 }
             },
             onFavorite = { photo ->
+                if (photo == null) return@PhotoViewerPhotoItems
                 scope.launch {
                     val ok = app.apiClient.faveAdd(
                         type = "photo",
