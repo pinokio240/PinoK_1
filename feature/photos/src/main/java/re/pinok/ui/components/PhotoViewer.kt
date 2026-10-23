@@ -16,7 +16,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -65,18 +72,35 @@ import re.pinok.util.toRelativeTime
  * @param photos   Список URL для отображения.
  * @param initial  Индекс стартового фото (какой thumbnail нажали).
  * @param onDismiss Закрытие просмотрщика.
+ * @param onShare      Тап «Поделиться» — callback получает URL текущего фото.
+ *                     Default {} — реализация на стороне вызова (Intent.ACTION_SEND и т.п.).
+ * @param onSendToChat Тап «Отправить» — callback получает URL. Default {}.
+ * @param onBookmark   Тап «В закладки» — callback получает URL. Default {}.
+ * @param onFavorite   Тап «В избранное» — callback получает URL. Default {}.
  */
 @Composable
 fun PhotoViewer(
     photos: List<String>,
     initial: Int = 0,
     onDismiss: () -> Unit,
+    // PHOTO-MENU (PHOTO-MENU-ALBUMS): контекстное «⋮»-меню просмотрщика.
+    // Все коллбеки опциональны — дефолт {}, вызов решает что делать (share intent,
+    // ShareToChatSheet, fave.add …). URL текущего фото передаётся как String —
+    // caller при необходимости мапит URL → (ownerId, photoId) через свой контекст.
+    onShare: (String) -> Unit = {},
+    onSendToChat: (String) -> Unit = {},
+    onBookmark: (String) -> Unit = {},
+    onFavorite: (String) -> Unit = {},
 ) {
     PhotoViewerIntern(
         photos = photos,
         captions = null,
         initial = initial,
         onDismiss = onDismiss,
+        onShare = onShare,
+        onSendToChat = onSendToChat,
+        onBookmark = onBookmark,
+        onFavorite = onFavorite,
     )
 }
 
@@ -90,6 +114,11 @@ fun PhotoViewerPhotoItems(
     photos: List<PhotoItem>,
     initial: Int = 0,
     onDismiss: () -> Unit,
+    // PHOTO-MENU (PHOTO-MENU-ALBUMS): те же 4 коллбека «⋮»-меню — проброс в Intern.
+    onShare: (String) -> Unit = {},
+    onSendToChat: (String) -> Unit = {},
+    onBookmark: (String) -> Unit = {},
+    onFavorite: (String) -> Unit = {},
 ) {
     val urls = photos.mapNotNull { it.largestUrl }
     // Подписи по индексу URL (не по индексу PhotoItem — допускаем null-URL):
@@ -115,6 +144,10 @@ fun PhotoViewerPhotoItems(
         captions = captions,
         initial = initial,
         onDismiss = onDismiss,
+        onShare = onShare,
+        onSendToChat = onSendToChat,
+        onBookmark = onBookmark,
+        onFavorite = onFavorite,
     )
 }
 
@@ -124,6 +157,12 @@ private fun PhotoViewerIntern(
     captions: List<String?>?,
     initial: Int,
     onDismiss: () -> Unit,
+    // PHOTO-MENU (PHOTO-MENU-ALBUMS): 4 коллбека «⋮»-меню — пробрасываются из
+    // PhotoViewer / PhotoViewerPhotoItems. Default {} — вызовы без меню совместимы.
+    onShare: (String) -> Unit = {},
+    onSendToChat: (String) -> Unit = {},
+    onBookmark: (String) -> Unit = {},
+    onFavorite: (String) -> Unit = {},
 ) {
     if (photos.isEmpty()) {
         onDismiss()
@@ -133,6 +172,8 @@ private fun PhotoViewerIntern(
     val pagerState = rememberPagerState(initialPage = safeInitial) { photos.size }
     var controlsVisible by remember { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
+    // PHOTO-MENU: развёрнуто ли «⋮»-меню. Видно только когда controlsVisible.
+    var menuExpanded by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -191,32 +232,98 @@ private fun PhotoViewerIntern(
                             .align(Alignment.Center)
                             .padding(vertical = 14.dp),
                     )
-                    // Кнопка «Сохранить оригинал» — правый верхний угол.
-                    IconButton(
-                        onClick = {
-                            val url = photos[pagerState.currentPage]
-                            scope.launch {
-                                if (saving) return@launch
-                                saving = true
-                                val result = ImageSaver.save(context, ImageSaver.toMaxSize(url))
-                                val msg = when (result) {
-                                    is ImageSaver.Result.Ok -> "Сохранено в галерею"
-                                    is ImageSaver.Result.Err -> "Ошибка: ${result.message}"
-                                }
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                saving = false
-                            }
-                        },
-                        enabled = !saving,
+                    // PHOTO-MENU (PHOTO-MENU-ALBUMS): правый верхний угол теперь
+                    // содержит ДВЕ кнопки — «Сохранить» (download) и «⋮» (more).
+                    // Row у правого края: [Save] [⋮ → DropdownMenu].
+                    Row(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            Icons.Filled.Download,
-                            contentDescription = "Сохранить",
-                            tint = Color.White,
-                        )
+                        // Кнопка «Сохранить оригинал».
+                        IconButton(
+                            onClick = {
+                                val url = photos[pagerState.currentPage]
+                                scope.launch {
+                                    if (saving) return@launch
+                                    saving = true
+                                    val result = ImageSaver.save(context, ImageSaver.toMaxSize(url))
+                                    val msg = when (result) {
+                                        is ImageSaver.Result.Ok -> "Сохранено в галерею"
+                                        is ImageSaver.Result.Err -> "Ошибка: ${result.message}"
+                                    }
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    saving = false
+                                }
+                            },
+                            enabled = !saving,
+                        ) {
+                            Icon(
+                                Icons.Filled.Download,
+                                contentDescription = "Сохранить",
+                                tint = Color.White,
+                            )
+                        }
+                        // «⋮» — контекстное меню фото (share/send/bookmark/favorite).
+                        // Box-обёртка нужна, чтобы DropdownMenu привязался к IconButton.
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                            ) {
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "Ещё",
+                                    tint = Color.White,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false },
+                            ) {
+                                val currentUrl = photos[pagerState.currentPage]
+                                DropdownMenuItem(
+                                    text = { Text("Поделиться") },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.Share, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onShare(currentUrl)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Отправить") },
+                                    leadingIcon = {
+                                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onSendToChat(currentUrl)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("В закладки") },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.BookmarkBorder, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onBookmark(currentUrl)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("В избранное") },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.FavoriteBorder, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onFavorite(currentUrl)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }

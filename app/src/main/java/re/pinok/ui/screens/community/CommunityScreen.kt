@@ -90,6 +90,7 @@ import re.pinok.data.model.BoardTopic
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
+import re.pinok.data.model.Album
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
 // POSTCARD-REFACTOR-PLAN (этап 2): вертикальная карточка клипа вынесена
@@ -104,12 +105,14 @@ import re.pinok.ui.components.ServerOffset
 import re.pinok.ui.components.ServerNextFrom
 import re.pinok.ui.components.rememberPagedListState
 import re.pinok.ui.components.ShareSheet
+import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.components.VideoThumbnail
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
 import java.util.Locale
 import android.widget.Toast
+import android.content.Intent
 
 /**
  * Fix #67: Экран сообщества — header (ава + имя + описание) + стена (wall.get).
@@ -211,6 +214,18 @@ fun CommunityScreen(
     val listState = rememberLazyListState()
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     val photoViewerState = remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    // PHOTO-MENU (PHOTO-MENU-ALBUMS): URL для ShareToChatSheet — открывается из
+    // пункта «Отправить» в «⋮»-меню PhotoViewer. null → sheet закрыт.
+    var shareToChatUrl by remember { mutableStateOf<String?>(null) }
+    // #COMMUNITY-ALBUMS (PHOTO-MENU-ALBUMS Задача 2): state для вкладки «Альбомы».
+    // Грузится photos.getAlbums(ownerId=-groupId) при переходе на вкладку 7.
+    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
+    var albumsLoading by remember { mutableStateOf(false) }
+    var albumsError by remember { mutableStateOf<String?>(null) }
+    var albumsLoaded by remember { mutableStateOf(false) }
+    // Какой альбом сейчас открывается (загрузка его фото → PhotoViewer).
+    // null = никакой. Хранит сам Album — для Toast-сообщений.
+    var albumOpening by remember { mutableStateOf<Album?>(null) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
     // #ADMIN-POST-ACTIONS-EDIT: пост в режиме редактирования.
@@ -431,6 +446,11 @@ fun CommunityScreen(
             // «Файлы» (docs) — всегда: docs.get работает для любого сообщества
             // (не требует админ-прав), даже если админ выключил секцию docs=0.
             add(6 to "Файлы")
+            // #COMMUNITY-ALBUMS (PHOTO-MENU-ALBUMS Задача 2): вкладка «Альбомы»
+            // — всегда: photos.getAlbums работает для любого сообщества (как и
+            // docs.get). GroupSections не имеет фильтра albums (его нет в VK
+            // API groups.getSettings) → вкладка не зависит от админ-настроек.
+            add(7 to "Альбомы")
         }
     }
     // P0.8 (Task 16): если текущий selectedTab больше не в списке вкладок
@@ -597,6 +617,30 @@ fun CommunityScreen(
 
     // P0.8 (Task 16): канонический триггер пагинации документов, гейт по вкладке 6.
     PagingTrigger(listState = listState, state = docsState, enabled = selectedTab == 6)
+
+    // #COMMUNITY-ALBUMS (PHOTO-MENU-ALBUMS Задача 2): загрузка альбомов сообщества
+    // при переходе на вкладку 7. photos.getAlbums(ownerId=-groupId, need_covers=1,
+    // need_system=1) — возвращает список альбомов с обложками и счётчиком фото.
+    // albumsLoaded — грузим один раз (как docs/videos); обновление — pull-to-refresh
+    // через refreshWall() (общий триггер для стены; альбомы догрузятся при возврате).
+    LaunchedEffect(selectedTab, groupId) {
+        if (selectedTab != 7 || albumsLoaded) return@LaunchedEffect
+        scope.launch {
+            albumsLoading = true
+            albumsError = null
+            try {
+                val list = app.apiClient.photosGetAlbums(ownerId = -groupId)
+                albums = list
+                AppLog.i("CommunityScreen", "Loaded ${albums.size} albums for group $groupId")
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "photosGetAlbums failed", e)
+                albumsError = "Ошибка: ${e.message}"
+            } finally {
+                albumsLoading = false
+                albumsLoaded = true
+            }
+        }
+    }
 
     // Fix #85: канонический триггер пагинации стены, гейт по вкладке 0.
     PagingTrigger(listState = listState, state = wallState, enabled = selectedTab == 0)
@@ -1600,6 +1644,103 @@ fun CommunityScreen(
                     }
                 }
             }
+            7 -> {
+                // #COMMUNITY-ALBUMS (PHOTO-MENU-ALBUMS Задача 2): Альбомы сообщества
+                // — photos.getAlbums(ownerId=-groupId, need_covers=1, need_system=1).
+                // Список альбомов (Card: обложка + название + size + описание);
+                // тап → photos.get(ownerId, albumId) → открывает PhotoViewer с URL'ами.
+                // Пагинация — НЕ курсорная (список альбомов обычно короткий, 1 страница).
+                val albumsContext = LocalContext.current
+                if (albumsLoading && albums.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        }
+                    }
+                } else if (albumsError != null && albums.isEmpty()) {
+                    item {
+                        val errMsg = albumsError
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = errMsg ?: "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                        }
+                    }
+                } else if (albums.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "В сообществе нет альбомов",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                } else {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = "Альбомы (${albums.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                    items(albums, key = { "album_${it.ownerId}_${it.id}" }) { album ->
+                        CommunityAlbumRow(
+                            album = album,
+                            isLoading = albumOpening?.id == album.id &&
+                                albumOpening?.ownerId == album.ownerId,
+                            onClick = {
+                                if (albumOpening != null) return@CommunityAlbumRow
+                                scope.launch {
+                                    albumOpening = album
+                                    try {
+                                        val photos = app.apiClient.photosGet(
+                                            ownerId = -groupId,
+                                            albumId = album.id.toString(),
+                                            count = 100,
+                                        )
+                                        val urls = photos.mapNotNull { it.largestUrl }
+                                        if (urls.isNotEmpty()) {
+                                            photoViewerState.value = urls to 0
+                                        } else {
+                                            Toast.makeText(
+                                                albumsContext,
+                                                "В альбоме нет фото",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        AppLog.e("CommunityScreen", "album photos load failed", e)
+                                        Toast.makeText(
+                                            albumsContext,
+                                            "Ошибка: ${e.message}",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    } finally {
+                                        albumOpening = null
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
         } // when (selectedTab)
     }
     } // PullToRefreshBox (Fix #85)
@@ -1620,10 +1761,46 @@ fun CommunityScreen(
     // вызывается.
     val viewer = photoViewerState.value
     if (viewer != null) {
+        // PHOTO-MENU (PHOTO-MENU-ALBUMS): контекст для Intent.ACTION_SEND в onShare.
+        val shareContext = LocalContext.current
         PhotoViewer(
             photos = viewer.first,
             initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
+            // «Поделиться» → системный share-chooser (Intent.ACTION_SEND text/plain).
+            // URL текущего фото уходит как EXTRA_TEXT — VK/Telegram/почта примут.
+            onShare = { url ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, url)
+                }
+                shareContext.startActivity(Intent.createChooser(send, "Поделиться"))
+            },
+            // «Отправить» → ShareToChatSheet (picker диалогов PinoK): sharedText=url.
+            // BottomSheet рендерится ниже по значению shareToChatUrl.
+            onSendToChat = { url -> shareToChatUrl = url },
+            // TODO PHOTO-MENU: «В закладки»/«В избранное» фото требуют (ownerId, photoId).
+            // PhotoViewer работает со списком URL без маппинга обратно к PhotoItem.
+            // Реализуется расширением photoViewerState до Pair<List<PhotoItem>?, Int>
+            // (как PhotosScreen.photoViewerState) — но это меняет signature onPhotoClick
+            // во ВСЕХ callsites (PostCard, BookmarksScreen, …), что выходит за рамки ТЗ.
+            // Здесь оставляем no-op; на уровне CommunityPostCard «⋮»-меню поста уже
+            // работает «В закладки» через faveAdd("post", ownerId, id).
+            onBookmark = {},
+            onFavorite = {},
+        )
+    }
+
+    // PHOTO-MENU (PHOTO-MENU-ALBUMS): ShareToChatSheet для «Отправить» из PhotoViewer.
+    // sharedText=url (без файла) — user выбирает диалог, messages.send шлёт текстом.
+    val chatShareUrl = shareToChatUrl
+    if (chatShareUrl != null) {
+        ShareToChatSheet(
+            sharedText = chatShareUrl,
+            sharedStreamUri = null,
+            sharedMimeType = null,
+            onDismiss = { shareToChatUrl = null },
+            onSuccess = { shareToChatUrl = null },
         )
     }
 
@@ -2090,6 +2267,107 @@ private fun CommunityDocRow(doc: re.pinok.data.model.DocFile) {
         }
         IconButton(onClick = { downloadDoc() }) {
             Icon(Icons.Outlined.Download, contentDescription = "Скачать")
+        }
+    }
+}
+
+/**
+ * #COMMUNITY-ALBUMS (PHOTO-MENU-ALBUMS Задача 2): строка альбома во вкладке «Альбомы».
+ *
+ * Card с обложкой (thumbSrc), названием (title), счётчиком фото (size) и описанием.
+ * Тап → photos.get(albumId) → открывает PhotoViewer с URL'ами фото альбома.
+ *
+ * @param album     Альбом (Album)
+ * @param isLoading Идёт загрузка фото этого альбома → заменяем trailing-иконку
+ *                  на прогресс-вертушку (защита от двойного тапа).
+ * @param onClick   Callback тапа — грузит фото и открывает PhotoViewer (реализация
+ *                  на уровне экрана, где доступны scope/app/groupId/photoViewerState).
+ */
+@Composable
+private fun CommunityAlbumRow(
+    album: Album,
+    isLoading: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clickable(enabled = !isLoading) { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Обложка альбома (96dp, RoundedCornerShape 8dp). thumbSrc может быть
+            // null (нет cover) → серый placeholder с иконкой Image.
+            val coverUrl = album.thumbSrc
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (coverUrl.isNullOrBlank()) {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    AsyncImage(
+                        model = coverUrl,
+                        contentDescription = album.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = album.title.ifBlank { "Без названия" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "${album.size} фото",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                if (!album.description.isNullOrBlank()) {
+                    Text(
+                        text = album.description ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            // Trailing: иконка-стрелка (или прогресс во время загрузки фото альбома).
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp).padding(8.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(20.dp).padding(8.dp),
+                )
+            }
         }
     }
 }
