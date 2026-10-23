@@ -18,12 +18,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayCircle
@@ -34,6 +37,8 @@ import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.CardGiftcard
 import com.google.gson.JsonObject
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -63,8 +68,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import re.pinok.SovaApp
+import re.pinok.data.model.Album
 import re.pinok.data.model.DocFile
 import re.pinok.data.model.GiftItem
+import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Track
 import re.pinok.data.model.Video
 import re.pinok.util.AppLog
@@ -367,6 +374,9 @@ private fun AudioTrackRow(track: Track, onClick: () -> Unit) {
 
 // ============================================================================
 //  Tab: Видео — список видео из video.get библиотеки пользователя.
+//  // ATTACH-PICKER-ALBUMS: серверная пагинация по offset (videoGetWithCount)
+//  с автодогрузкой при скролле к концу (snapshotFlow — паттерн AudioPickerTab).
+//  Стоп по неполной странице (page.size < 50) или total < 0 (сбой VK total).
 // ============================================================================
 
 @Composable
@@ -374,17 +384,62 @@ private fun VideoPickerTab(app: SovaApp, onPick: (Video) -> Unit) {
     var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    // ATTACH-PICKER-ALBUMS: серверная пагинация (videoGetWithCount).
+    var serverOffset by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMore() {
+        if (loadingMore || loading || !hasMore) return
+        scope.launch {
+            loadingMore = true
+            try {
+                val (total, page) = app.apiClient.videoGetWithCount(count = 50, offset = serverOffset)
+                serverOffset += page.size
+                val fresh = page
+                    .filter { it.id > 0L && it.ownerId != 0L }
+                    .filter { nv -> videos.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                videos = (videos + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец;
+                // сбой (total=-1) — сохраняем hasMore для повтора по скроллу.
+                hasMore = page.isNotEmpty() || total < 0
+            } catch (e: Exception) {
+                AppLog.e("VideoPicker", "load more failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         loading = true
         try {
-            videos = app.apiClient.videoGet(count = 50)
+            val (total, page) = app.apiClient.videoGetWithCount(count = 50, offset = 0)
+            videos = page.filter { it.id > 0L && it.ownerId != 0L }
+                .distinctBy { "${it.ownerId}_${it.id}" }
+            serverOffset = page.size
+            // #AUDIO-PAGING-HOLE (волна 41): неполная страница ≠ конец списка.
+            hasMore = page.isNotEmpty() || total < 0
         } catch (e: Exception) {
             AppLog.e("VideoPicker", "load failed", e)
             error = e.message
         } finally {
             loading = false
         }
+    }
+
+    // ATTACH-PICKER-ALBUMS: автодогрузка при скролле к концу списка.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 5) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMore() }
     }
 
     when {
@@ -397,9 +452,19 @@ private fun VideoPickerTab(app: SovaApp, onPick: (Video) -> Unit) {
         videos.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text("Нет видео", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+        else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
                 VideoRow(video = video, onClick = { onPick(video) })
+            }
+            if (hasMore) {
+                item(key = "video_picker_more") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
             }
         }
     }
@@ -539,9 +604,23 @@ private fun GiftCell(gift: GiftItem, onClick: () -> Unit) {
 
 // ============================================================================
 //  #ATTACH-UNIFY Tab: Фото — сетка фото из photos.getAll (attach без upload).
+//  // ATTACH-PICKER-ALBUMS: альбомы (photos.getAlbums) + пагинация (offset).
+//  - При открытии таба параллельно грузятся photosGetAlbums(myId) и
+//    photosGetAll(myId, count=50, offset=0).
+//  - Над сеткой фото — горизонтальный LazyRow с карточками альбомов:
+//    «Все фото» (заглушка → photosGetAll) + реальные альбомы из VK
+//    (tap → photosGet(albumId)). Карточка ~108×100: обложка thumbSrc
+//    (fallback — иконка Image) + название + «N фото».
+//  - Кнопка «← Все фото» над сеткой появляется, когда открыт конкретный
+//    альбом (openedAlbum != null) — возврат к photosGetAll.
+//  - Пагинация по скроллу: при достижении конца сетки (lastVisible >=
+//    totalItemsCount - 6) вызывается loadMore (offset += 50). Стоп по
+//    неполной странице (page.size < 50) — VK total не всегда точен.
+//  - Паттерн пагинации тот же, что в AudioPickerTab (snapshotFlow +
+//    distinctUntilChanged + collect → loadMore), только для LazyVerticalGrid.
 // ============================================================================
 
-/** Фото из photos.getAll: данные для attachment-строки + превью. */
+/** Фото из photos.getAll / photos.get: данные для attachment-строки + превью. */
 private data class VkPhotoRef(
     val ownerId: Long,
     val id: Long,
@@ -551,18 +630,65 @@ private data class VkPhotoRef(
 
 @Composable
 private fun PhotoPickerTab(app: SovaApp, onPick: (String, String?) -> Unit) {
+    // ATTACH-PICKER-ALBUMS: альбомы + пагинация.
+    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
+    var albumsLoading by remember { mutableStateOf(true) }
+    var albumsError by remember { mutableStateOf<String?>(null) }
+    // null = «Все фото» (photosGetAll); non-null = открыт конкретный альбом
+    // (photosGet с albumId). Тап по карточке альбома меняет openedAlbum →
+    // LaunchedEffect(openedAlbum) перезагружает сетку фото.
+    var openedAlbum by remember { mutableStateOf<Album?>(null) }
+
     var photos by remember { mutableStateOf<List<VkPhotoRef>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var serverOffset by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
 
+    // Загрузка альбомов — один раз при входе в таб (photos.getAlbums).
+    // Не блокирует фото: photosGetAll грузится параллельно в эффекте ниже.
     LaunchedEffect(Unit) {
-        loading = true
         try {
-            // photos.getAll требует owner_id — берём свою библиотеку
-            // (id текущего пользователя из токена, паттерн PostDetailScreen).
             val myId = app.tokenStorage.load()?.userId ?: 0L
-            photos = app.apiClient.photosGetAll(ownerId = myId, count = 50)
-                .mapNotNull { parseVkPhotoRef(it) }
+            albums = app.apiClient.photosGetAlbums(ownerId = myId)
+        } catch (e: Exception) {
+            AppLog.e("PhotoPicker", "albums load failed", e)
+            albumsError = e.message
+        } finally {
+            albumsLoading = false
+        }
+    }
+
+    // Загрузка фото: photosGetAll (openedAlbum == null) или photosGet(albumId).
+    // Перезапускается при смене openedAlbum — обнуляем offset/hasMore/photos.
+    // myId берём из токена (photos.getAll/get требуют owner_id — своя библиотека).
+    LaunchedEffect(openedAlbum) {
+        val currentAlbum = openedAlbum
+        loading = true
+        error = null
+        serverOffset = 0
+        hasMore = false
+        photos = emptyList()
+        try {
+            val myId = app.tokenStorage.load()?.userId ?: 0L
+            val page: List<VkPhotoRef> = if (currentAlbum == null) {
+                app.apiClient.photosGetAll(ownerId = myId, count = 50, offset = 0)
+                    .mapNotNull { parseVkPhotoRef(it) }
+            } else {
+                app.apiClient.photosGet(
+                    ownerId = myId,
+                    albumId = currentAlbum.id.toString(),
+                    count = 50,
+                    offset = 0,
+                ).mapNotNull { it.toVkPhotoRef() }
+            }
+            photos = page
+            serverOffset = page.size
+            // #AUDIO-PAGING-HOLE (волна 41): неполная страница ≠ конец списка.
+            hasMore = page.size >= 50
         } catch (e: Exception) {
             AppLog.e("PhotoPicker", "load failed", e)
             error = e.message
@@ -571,37 +697,239 @@ private fun PhotoPickerTab(app: SovaApp, onPick: (String, String?) -> Unit) {
         }
     }
 
-    when {
-        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+    fun loadMore() {
+        if (loadingMore || loading || !hasMore) return
+        // Capture в локальный val — открытие другого альбома во время загрузки
+        // не должно подмешать «чужую» страницу в текущую сетку.
+        val currentAlbum = openedAlbum
+        scope.launch {
+            loadingMore = true
+            try {
+                val myId = app.tokenStorage.load()?.userId ?: 0L
+                val page: List<VkPhotoRef> = if (currentAlbum == null) {
+                    app.apiClient.photosGetAll(ownerId = myId, count = 50, offset = serverOffset)
+                        .mapNotNull { parseVkPhotoRef(it) }
+                } else {
+                    app.apiClient.photosGet(
+                        ownerId = myId,
+                        albumId = currentAlbum.id.toString(),
+                        count = 50,
+                        offset = serverOffset,
+                    ).mapNotNull { it.toVkPhotoRef() }
+                }
+                serverOffset += page.size
+                val fresh = page.filter { nv -> photos.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                photos = (photos + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                hasMore = page.size >= 50
+            } catch (e: Exception) {
+                AppLog.e("PhotoPicker", "load more failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
         }
-        error != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Не удалось загрузить: $error", color = MaterialTheme.colorScheme.error)
+    }
+
+    // ATTACH-PICKER-ALBUMS: автодогрузка при скролле к концу сетки фото
+    // (snapshotFlow + distinctUntilChanged — паттерн AudioPickerTab).
+    LaunchedEffect(gridState) {
+        snapshotFlow {
+            val info = gridState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 6) total else -1
         }
-        photos.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Нет фотографий", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        else -> LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
-            contentPadding = PaddingValues(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            items(photos, key = { "${it.ownerId}_${it.id}" }) { ref ->
-                VkPhotoCell(ref = ref, onClick = {
-                    // attachment-строка через единый хелпер (#ATTACH-UNIFY, §3.2).
-                    // #COMPOSER-ATTACH-PREVIEW (волна 39): +превью-URL — композер
-                    // рисует миниатюру выбранного фото вместо слепой скрепки.
-                    onPick(
-                        buildVkAttachment("photo", ref.ownerId, ref.id, ref.accessKey),
-                        ref.previewUrl,
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMore() }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ATTACH-PICKER-ALBUMS: горизонтальная лента альбомов над сеткой фото.
+        // «Все фото» — первый псевдо-альбом (openedAlbum == null → photosGetAll).
+        if (albums.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                item(key = "all_photos") {
+                    AlbumChip(
+                        title = "Все фото",
+                        countText = null,
+                        coverUrl = null,
+                        isSelected = openedAlbum == null,
+                        onClick = { openedAlbum = null },
                     )
-                })
+                }
+                items(albums, key = { it.id }) { album ->
+                    AlbumChip(
+                        title = album.title.ifBlank { "Без названия" },
+                        countText = "${album.size} фото",
+                        coverUrl = album.thumbSrc,
+                        isSelected = openedAlbum?.id == album.id,
+                        onClick = { openedAlbum = album },
+                    )
+                }
+            }
+        } else if (albumsLoading) {
+            // Во время первой загрузки альбомов — тонкий индикатор над сеткой
+            // (не блокируя фото — они грузятся параллельно).
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
+        }
+        // albumsError != null — альбомы опциональны, не блокируем фото
+        // (ошибка уже залогирована в LaunchedEffect выше).
+
+        // Кнопка «← Все фото» — возврат из альбома к photosGetAll.
+        if (openedAlbum != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { openedAlbum = null }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Все фото",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+
+        // Сетка фото (или состояния загрузки/ошибки/пусто).
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                error != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("Не удалось загрузить: $error", color = MaterialTheme.colorScheme.error)
+                }
+                photos.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("Нет фотографий", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    state = gridState,
+                    contentPadding = PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(photos, key = { "${it.ownerId}_${it.id}" }) { ref ->
+                        VkPhotoCell(ref = ref, onClick = {
+                            // attachment-строка через единый хелпер (#ATTACH-UNIFY, §3.2).
+                            // #COMPOSER-ATTACH-PREVIEW (волна 39): +превью-URL — композер
+                            // рисует миниатюру выбранного фото вместо слепой скрепки.
+                            onPick(
+                                buildVkAttachment("photo", ref.ownerId, ref.id, ref.accessKey),
+                                ref.previewUrl,
+                            )
+                        })
+                    }
+                }
             }
         }
     }
 }
+
+/**
+ * ATTACH-PICKER-ALBUMS: карточка альбома в горизонтальной ленте над сеткой
+ * фото. Card ~108×100: обложка (thumbSrc или fallback-иконка Image) +
+ * название + «N фото». isSelected → primaryContainer tint для подсветки.
+ */
+@Composable
+private fun AlbumChip(
+    title: String,
+    countText: String?,
+    coverUrl: String?,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .width(108.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (coverUrl.isNullOrBlank()) {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    AsyncImage(
+                        model = coverUrl,
+                        contentDescription = title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurface,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            if (countText != null) {
+                Text(
+                    text = countText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * ATTACH-PICKER-ALBUMS: конвертация PhotoItem (photos.get) → VkPhotoRef.
+ * Превью — mediumUrl (300-600px) с фолбэком на smallUrl (130px); для сетки
+ * пикара этого достаточно. Для full-size в чате композер использует
+ * attachment-строку (photo{owner}_{id}[_key]), не URL.
+ */
+private fun PhotoItem.toVkPhotoRef(): VkPhotoRef = VkPhotoRef(
+    ownerId = ownerId,
+    id = id,
+    accessKey = accessKey,
+    previewUrl = mediumUrl ?: smallUrl,
+)
 
 @Composable
 private fun VkPhotoCell(ref: VkPhotoRef, onClick: () -> Unit) {
@@ -674,6 +1002,9 @@ private fun parseVkPhotoRef(photo: JsonObject): VkPhotoRef? {
 
 // ============================================================================
 //  #ATTACH-UNIFY Tab: Документы — список документов из docs.get.
+//  // ATTACH-PICKER-ALBUMS: серверная пагинация по offset (docsGetWithCount)
+//  с автодогрузкой при скролле к концу (snapshotFlow — паттерн AudioPickerTab).
+//  Стоп по неполной странице (page.size < 50) или total < 0 (сбой VK total).
 // ============================================================================
 
 @Composable
@@ -681,17 +1012,59 @@ private fun DocsPickerTab(app: SovaApp, onPick: (attachment: String, title: Stri
     var docs by remember { mutableStateOf<List<DocFile>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    // ATTACH-PICKER-ALBUMS: серверная пагинация (docsGetWithCount).
+    var serverOffset by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun loadMore() {
+        if (loadingMore || loading || !hasMore) return
+        scope.launch {
+            loadingMore = true
+            try {
+                val (total, page) = app.apiClient.docsGetWithCount(count = 50, offset = serverOffset)
+                serverOffset += page.size
+                val fresh = page.filter { nv -> docs.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                docs = (docs + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                // #AUDIO-PAGING-HOLE (волна 41): непустая страница ≠ конец;
+                // сбой (total=-1) — сохраняем hasMore для повтора по скроллу.
+                hasMore = page.isNotEmpty() || total < 0
+            } catch (e: Exception) {
+                AppLog.e("DocsPicker", "load more failed: ${e.message}")
+            } finally {
+                loadingMore = false
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         loading = true
         try {
-            docs = app.apiClient.docsGet(count = 50)
+            val (total, page) = app.apiClient.docsGetWithCount(count = 50, offset = 0)
+            docs = page.distinctBy { "${it.ownerId}_${it.id}" }
+            serverOffset = page.size
+            // #AUDIO-PAGING-HOLE (волна 41): неполная страница ≠ конец списка.
+            hasMore = page.isNotEmpty() || total < 0
         } catch (e: Exception) {
             AppLog.e("DocsPicker", "load failed", e)
             error = e.message
         } finally {
             loading = false
         }
+    }
+
+    // ATTACH-PICKER-ALBUMS: автодогрузка при скролле к концу списка.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val total = info.totalItemsCount
+            if (total > 0 && lastVisible >= total - 5) total else -1
+        }
+            .distinctUntilChanged()
+            .collect { if (it > 0) loadMore() }
     }
 
     when {
@@ -704,7 +1077,7 @@ private fun DocsPickerTab(app: SovaApp, onPick: (attachment: String, title: Stri
         docs.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text("Нет документов", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+        else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             items(docs, key = { "${it.ownerId}_${it.id}" }) { doc ->
                 DocRow(doc = doc, onClick = {
                     // doc{owner}_{id}[_{accessKey}] через единый хелпер (#ATTACH-UNIFY).
@@ -713,6 +1086,16 @@ private fun DocsPickerTab(app: SovaApp, onPick: (attachment: String, title: Stri
                         doc.title.ifBlank { "документ" },
                     )
                 })
+            }
+            if (hasMore) {
+                item(key = "docs_picker_more") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
             }
         }
     }
