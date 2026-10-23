@@ -1784,15 +1784,14 @@ fun CommunityScreen(
     // вызывается.
     val viewer = photoViewerState.value
     if (viewer != null) {
-        // PHOTO-QUALITY: PhotoViewerPhotoItems принимает List<PhotoItem> —
-        // имеет (ownerId, photoId, accessKey) для faveAdd/закладок.
-        // Если открыт альбом — используем albumPhotos, иначе — photosState.items.
-        val viewerPhotos = if (openedAlbum != null) albumPhotos else photosState.items
-        val viewerInitial = viewerPhotos.indexOfFirst { it.largestUrl == viewer.first.getOrNull(viewer.second) }.coerceAtLeast(0)
+        // PHOTO-QUALITY: используем PhotoViewer (List<String>) — работает для ВСЕХ
+        // источников фото: посты (PostPhotoGrid allUrls), вкладка «Фото» (smallUrl),
+        // альбомы (albumPhotos largestUrl). PhotoViewerPhotoItems требовал List<PhotoItem>
+        // и не находил фото из постов (они в post.attachments, не в photosState.items).
         val shareContext = LocalContext.current
-        PhotoViewerPhotoItems(
-            photos = viewerPhotos,
-            initial = viewerInitial,
+        PhotoViewer(
+            photos = viewer.first,
+            initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
             onShare = { url ->
                 val send = Intent(Intent.ACTION_SEND).apply {
@@ -1802,40 +1801,6 @@ fun CommunityScreen(
                 shareContext.startActivity(Intent.createChooser(send, "Поделиться"))
             },
             onSendToChat = { url -> shareToChatUrl = url },
-            // PHOTO-MENU: «В закладки»/«В избранное» — faveAdd(type="photo", ownerId, photoId).
-            // TODO: bookmarks (отличается от fave) — нужен отдельный метод если PinoK различает.
-            onBookmark = { photo ->
-                if (photo == null) return@PhotoViewerPhotoItems
-                scope.launch {
-                    val ok = app.apiClient.faveAdd(
-                        type = "photo",
-                        ownerId = photo.ownerId,
-                        itemId = photo.id,
-                        accessKey = photo.accessKey,
-                    )
-                    android.widget.Toast.makeText(
-                        shareContext,
-                        if (ok) "Добавлено в закладки" else "Не удалось добавить в закладки",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                }
-            },
-            onFavorite = { photo ->
-                if (photo == null) return@PhotoViewerPhotoItems
-                scope.launch {
-                    val ok = app.apiClient.faveAdd(
-                        type = "photo",
-                        ownerId = photo.ownerId,
-                        itemId = photo.id,
-                        accessKey = photo.accessKey,
-                    )
-                    android.widget.Toast.makeText(
-                        shareContext,
-                        if (ok) "Добавлено в избранное" else "Не удалось добавить в избранное",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                }
-            },
         )
     }
 
