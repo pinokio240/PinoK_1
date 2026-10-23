@@ -849,6 +849,21 @@ private fun BookmarkRow(
                 onRemoveClick = onRemoveClick,
                 onClick = onClick,
                 onPostContextClick = onPostContextClick,
+                onDeletePost = {
+                    scope.launch {
+                        try {
+                            val ok = app.apiClient.wallDelete(bmP.ownerId, bmP.id)
+                            if (ok) {
+                                removeBookmark(bm)
+                                Toast.makeText(context, "Пост удалён", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Не удалось удалить пост", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
             )
         } else {
             BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
@@ -995,6 +1010,8 @@ private fun BookmarkPostCard(
     // AUTHOR-STRIP: полоска «Перейти к посту» — клик открывает стену (ownerId).
     // null → полоска не рисуется (вызывающий может скрыть).
     onPostContextClick: (() -> Unit)? = null,
+    // WALL-DELETE: удаление поста (wall.delete) — только если canDelete=true.
+    onDeletePost: (() -> Unit)? = null,
 ) {
     // NULL-ЯВНО: автор поста в закладке — из postAuthor/postGroup (fill через
     // fave.get extended profiles/groups), fallback на bm.user (легаси).
@@ -1060,14 +1077,13 @@ private fun BookmarkPostCard(
                         Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
                     },
                 ))
-                // «Удалить» — только если пост от текущего пользователя (fromId == myUserId)
-                // или админ сообщества (canDelete=true в Post model)
+                // «Удалить» — только если пост от текущего пользователя или админ сообщества
                 val canDelete = post.canDelete == true
-                if (canDelete) {
+                if (canDelete && onDeletePost != null) {
                     add(re.pinok.ui.components.PostMenuItem(
                         label = "Удалить",
                         icon = androidx.compose.material.icons.Icons.Outlined.Delete,
-                        onClick = { /* TODO: wall.delete(ownerId, postId) — нужен onDelete callback */ },
+                        onClick = { onDeletePost() },
                         destructive = true,
                     ))
                 }

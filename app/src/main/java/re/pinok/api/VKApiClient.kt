@@ -4497,6 +4497,21 @@ class VKApiClient(
     }
 
     /**
+     * Удалить пост. VK: wall.delete { owner_id, post_id }.
+     * @param ownerId ID владельца стены (отрицательный для групп)
+     * @param postId ID поста
+     * @return true если удалён успешно
+     */
+    suspend fun wallDelete(ownerId: Long, postId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("wall.delete", mapOf(
+            "owner_id" to ownerId.toString(),
+            "post_id" to postId.toString(),
+        ))
+        return json?.has("response") == true
+    }
+
+    /**
      * Редактировать комментарий. VK: wall.editComment.
      */
     suspend fun wallEditComment(ownerId: Long, commentId: Long, message: String, attachments: String? = null): Boolean {
