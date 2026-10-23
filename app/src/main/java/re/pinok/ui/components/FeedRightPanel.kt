@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Image
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import re.pinok.ui.anim.LocalAnimScale
@@ -204,14 +206,14 @@ fun FeedRightPanel(
                                     fontSize = 16.sp,
                                     color = if (isCurrent) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurface,
-                                    fontWeight = if (isCurrent) androidx.compose.ui.text.font.FontWeight.Medium
-                                    else androidx.compose.ui.text.font.FontWeight.Normal,
+                                    fontWeight = if (isCurrent) FontWeight.Medium
+                                    else FontWeight.Normal,
                                     modifier = Modifier.weight(1f),
                                 )
                                 // Галочка для активного фильтра
                                 if (isCurrent) {
                                     Icon(
-                                        androidx.compose.material.icons.Icons.Outlined.Check,
+                                        Icons.Outlined.Check,
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(20.dp),
