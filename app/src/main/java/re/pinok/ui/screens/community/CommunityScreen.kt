@@ -1251,21 +1251,27 @@ fun CommunityScreen(
                     }
                     // COMPACT-VIDEO-GRID: видео в сетке 2 колонки (compact режим —
                     // только превью + duration overlay, без названия/счётчиков).
-                    // Раньше было по одному большому VideoThumbnail на строку —
-                    // пользователь жаловался: «открываются сразу большие, замучаешься листать».
+                    // COMPACT-GRID-FIX: chunked rows вместо FlowRow (FlowRow+weight ломался).
                     item {
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            maxItemsInEachRow = 2,
-                        ) {
-                            videosState.items.forEach { video ->
-                                VideoThumbnail(
-                                    video = video,
-                                    onClick = onVideoClick,
-                                    compact = true,
-                                )
+                        val videoRows = videosState.items.chunked(2)
+                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                            videoRows.forEach { rowVideos ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    rowVideos.forEach { video ->
+                                        VideoThumbnail(
+                                            video = video,
+                                            onClick = onVideoClick,
+                                            compact = true,
+                                        )
+                                    }
+                                    repeat(2 - rowVideos.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
                             }
                         }
                     }
@@ -1330,19 +1336,27 @@ fun CommunityScreen(
                     }
                     // COMPACT-CLIP-GRID: клипы в сетке 2 колонки (compact режим —
                     // только превью + play button, без названия/счётчиков).
+                    // COMPACT-GRID-FIX: chunked rows вместо FlowRow (FlowRow+weight ломался).
                     item {
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            maxItemsInEachRow = 2,
-                        ) {
-                            clipsState.items.forEach { clip ->
-                                ClipThumbnail(
-                                    video = clip,
-                                    onClick = onVideoClick,
-                                    compact = true,
-                                )
+                        val clipRows = clipsState.items.chunked(2)
+                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                            clipRows.forEach { rowClips ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    rowClips.forEach { clip ->
+                                        ClipThumbnail(
+                                            video = clip,
+                                            onClick = onVideoClick,
+                                            compact = true,
+                                        )
+                                    }
+                                    repeat(2 - rowClips.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
                             }
                         }
                     }
@@ -1914,28 +1928,41 @@ private fun CommunityPhotosTab(
                 p to url
             }
             val allUrls = withUrl.map { it.second }
-            FlowRow(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                maxItemsInEachRow = 3,
-            ) {
-                withUrl.forEachIndexed { index, (_, url) ->
-                    Card(
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onPhotoClick(allUrls, index) },
-                        elevation = CardDefaults.cardElevation(0.dp),
+            // COMPACT-GRID-FIX: используем chunked rows вместо FlowRow+weight.
+            // FlowRow с weight(1f) ломался при загрузке — все элементы делили ширину
+            // поровну на всех строках, сетка «улетучивалась».
+            // chunked(3) — фиксированные 3 колонки, Row с weight внутри каждой строки.
+            val rows = withUrl.chunked(3)
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                rows.forEachIndexed { rowIndex, rowItems ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        AsyncImage(
-                            model = url,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
+                        rowItems.forEachIndexed { colIndex, (_, url) ->
+                            val globalIndex = rowIndex * 3 + colIndex
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onPhotoClick(allUrls, globalIndex) },
+                                elevation = CardDefaults.cardElevation(0.dp),
+                            ) {
+                                AsyncImage(
+                                    model = url,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            }
+                        }
+                        // Добиваем пустые ячейки в последней строке
+                        repeat(3 - rowItems.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
                     }
+                    Spacer(modifier = Modifier.height(4.dp))
                 }
             }
         }
