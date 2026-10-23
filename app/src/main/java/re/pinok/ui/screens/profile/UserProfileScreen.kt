@@ -7,6 +7,9 @@ import android.content.Context
 // PHOTO-SHARE-WIRE: Intent.ACTION_SEND для «Поделиться» из PhotoViewer.
 import android.content.Intent
 import android.widget.Toast
+// PROFILE-ALBUMS: обложка альбома + кликабельная карточка.
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,12 +27,16 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+// PROFILE-ALBUMS: clip-скругление углов обложки альбома.
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Call
 // П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи чужой стены.
 import androidx.compose.material.icons.outlined.Flag
+// PROFILE-ALBUMS: иконка-плейсхолдер обложки альбома (как CommunityAlbumRow).
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material3.AlertDialog
@@ -61,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +80,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
+import re.pinok.data.model.Album
+import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
@@ -247,6 +257,22 @@ fun UserProfileScreen(
     var photoLoading by remember { mutableStateOf(false) }
     var photoError by remember { mutableStateOf<String?>(null) }
     var photoLoaded by remember { mutableStateOf(false) }
+    // PROFILE-ALBUMS: альбомы во вкладке «Фото» (photos.getAlbums) —
+    // горизонтальный список карточек над «Все фото». openedAlbum != null →
+    // пользователь тапнул по альбому, рендерим фото этого альбома (photos.get)
+    // в сетке + кнопку «Назад к альбомам». Паттерн — ProfileScreen.kt:301.
+    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
+    var albumsLoading by remember { mutableStateOf(false) }
+    var albumsError by remember { mutableStateOf<String?>(null) }
+    var albumsLoaded by remember { mutableStateOf(false) }
+    var openedAlbum by remember { mutableStateOf<Album?>(null) }
+    var albumPhotos by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
+    var albumPhotosLoading by remember { mutableStateOf(false) }
+    var albumPhotosError by remember { mutableStateOf<String?>(null) }
+    // PROFILE-ALBUMS: счётчик ретраев фото альбома (кнопка «Повторить» в
+    // TabErrorRow) — пробрасывается в ключ LaunchedEffect, чтобы перезапустить
+    // photos.get при той же ссылке на openedAlbum (паттерн tabRetryTick).
+    var albumPhotosRetryTick by remember { mutableStateOf(0) }
 
     // Свой профиль? Если да — не показываем «Добавить в друзья».
     val currentUserId = app.exchangeAuthRepository.userId()
@@ -357,6 +383,24 @@ fun UserProfileScreen(
             PROFILE_TAB_PHOTO -> if (!photoLoaded && !photoLoading) {
                 photoLoading = true
                 photoError = null
+                // PROFILE-ALBUMS: параллельно с «всеми фото» грузим альбомы
+                // (photos.getAlbums) — для горизонтального списка над «Все фото».
+                if (!albumsLoaded && !albumsLoading) {
+                    launch {
+                        albumsLoading = true
+                        albumsError = null
+                        try {
+                            albums = app.apiClient.photosGetAlbums(ownerId = userId)
+                            albumsLoaded = true
+                            AppLog.i("UserProfileScreen", "Albums loaded: ${albums.size} for uid=$userId")
+                        } catch (e: Exception) {
+                            AppLog.e("UserProfileScreen", "Albums load failed", e)
+                            albumsError = "Ошибка: ${e.message}"
+                        } finally {
+                            albumsLoading = false
+                        }
+                    }
+                }
                 try {
                     val photos = app.apiClient.photosGetAll(ownerId = userId, count = 30)
                     photoUrls = photos.mapNotNull { extractPhotoAllUrl(it) }
@@ -367,6 +411,29 @@ fun UserProfileScreen(
                     photoLoading = false
                 }
             }
+        }
+    }
+
+    // PROFILE-ALBUMS: открыли альбом — грузим его фото (photos.get,
+    // album_id = album.id, owner_id = userId). albumPhotosRetryTick — кнопка
+    // «Повторить» в TabErrorRow (паттерн tabRetryTick). Паттерн — ProfileScreen.kt:658.
+    LaunchedEffect(openedAlbum, albumPhotosRetryTick) {
+        val album = openedAlbum ?: return@LaunchedEffect
+        albumPhotosLoading = true
+        albumPhotosError = null
+        try {
+            albumPhotos = app.apiClient.photosGet(
+                ownerId = userId,
+                albumId = album.id.toString(),
+                count = 200,
+                offset = 0,
+            )
+            AppLog.i("UserProfileScreen", "Album photos loaded: ${albumPhotos.size} for «${album.title}»")
+        } catch (e: Exception) {
+            AppLog.e("UserProfileScreen", "Album photos load failed", e)
+            albumPhotosError = "Ошибка: ${e.message}"
+        } finally {
+            albumPhotosLoading = false
         }
     }
 
@@ -897,24 +964,93 @@ fun UserProfileScreen(
                     }
                 }
             } else if (selectedTab == PROFILE_TAB_PHOTO) {
-                val pe = photoError
-                if (photoLoading) {
-                    item(key = "friend_photo_progress") { TabProgressRow() }
-                } else if (pe != null) {
-                    item(key = "friend_photo_error") {
-                        TabErrorRow(message = pe, onRetry = { tabRetryTick++ })
+                // PROFILE-ALBUMS: во вкладке «Фото» сначала показываем альбомы
+                // (photos.getAlbums) — горизонтальный список карточек над
+                // «Все фото». Тап по альбому → openedAlbum (грузим фото через
+                // photos.get) и рендерим их в сетке + кнопку «Назад к альбомам».
+                // Паттерн — ProfileScreen.kt:1731.
+                val opened = openedAlbum
+                if (opened != null) {
+                    // Открыли альбом — фото из этого альбома + «Назад».
+                    item(key = "friend_album_back") {
+                        AlbumBackRow(title = opened.title) { openedAlbum = null }
                     }
-                } else if (photoUrls.isEmpty()) {
-                    item(key = "friend_photo_empty") { TabEmptyRow("У этого пользователя нет фотографий") }
+                    val albumUrls = remember(albumPhotos) {
+                        albumPhotos.mapNotNull { it.largestUrl }
+                    }
+                    if (albumPhotosLoading && albumUrls.isEmpty()) {
+                        item(key = "friend_album_photo_progress") { TabProgressRow() }
+                    } else if (albumPhotosError != null && albumUrls.isEmpty()) {
+                        item(key = "friend_album_photo_error") {
+                            TabErrorRow(
+                                message = albumPhotosError ?: "",
+                                onRetry = { albumPhotosRetryTick++ },
+                            )
+                        }
+                    } else if (albumUrls.isEmpty()) {
+                        item(key = "friend_album_photo_empty") {
+                            TabEmptyRow("В альбоме нет фотографий")
+                        }
+                    } else {
+                        val albumRows = albumUrls.chunked(3)
+                        itemsIndexed(
+                            albumRows,
+                            key = { idx, _ -> "friend_album_photo_row_$idx" },
+                        ) { idx, rowUrls ->
+                            PhotoGridRow(
+                                urls = rowUrls,
+                                startIndex = idx * 3,
+                                fullList = albumUrls,
+                                onPhotoClick = { urls, i -> photoViewerState.value = urls to i },
+                            )
+                        }
+                    }
                 } else {
-                    val rows = photoUrls.chunked(3)
-                    itemsIndexed(rows, key = { idx, _ -> "friend_photo_row_$idx" }) { idx, rowUrls ->
-                        PhotoGridRow(
-                            urls = rowUrls,
-                            startIndex = idx * 3,
-                            fullList = photoUrls,
-                            onPhotoClick = { urls, i -> photoViewerState.value = urls to i },
+                    // Горизонтальный список альбомов (если есть) над «Все фото».
+                    if (albums.isNotEmpty()) {
+                        item(key = "friend_albums_header") {
+                            Text(
+                                text = "Альбомы (${albums.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                        item(key = "friend_albums_row") {
+                            ProfileAlbumsRow(
+                                albums = albums,
+                                onAlbumClick = { openedAlbum = it },
+                            )
+                        }
+                    }
+                    // «Все фото» (photos.getAll) — заголовок + сетка (как раньше).
+                    item(key = "friend_all_photos_header") {
+                        Text(
+                            text = "Все фото",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         )
+                    }
+                    val pe = photoError
+                    if (photoLoading) {
+                        item(key = "friend_photo_progress") { TabProgressRow() }
+                    } else if (pe != null) {
+                        item(key = "friend_photo_error") {
+                            TabErrorRow(message = pe, onRetry = { tabRetryTick++ })
+                        }
+                    } else if (photoUrls.isEmpty()) {
+                        item(key = "friend_photo_empty") { TabEmptyRow("У этого пользователя нет фотографий") }
+                    } else {
+                        val rows = photoUrls.chunked(3)
+                        itemsIndexed(rows, key = { idx, _ -> "friend_photo_row_$idx" }) { idx, rowUrls ->
+                            PhotoGridRow(
+                                urls = rowUrls,
+                                startIndex = idx * 3,
+                                fullList = photoUrls,
+                                onPhotoClick = { urls, i -> photoViewerState.value = urls to i },
+                            )
+                        }
                     }
                 }
             }
