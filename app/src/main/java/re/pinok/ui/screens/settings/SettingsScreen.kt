@@ -1776,51 +1776,6 @@ private fun InterfaceTab(
             }
         }
 
-        // УВЕДОМЛЕНИЯ: раздел с быстрым доступом к настройкам уведомлений.
-        item { SectionHeader("Уведомления") }
-        item {
-            ToggleRow(
-                title = "Push-уведомления",
-                subtitle = "Получать системные уведомления о новых событиях",
-                checked = s.pushEnabled,
-            ) { scope.launch { app.prefs.setPushEnabled(it) } }
-        }
-        item {
-            ToggleRow(
-                title = "Звук push-уведомлений",
-                subtitle = "Воспроизводить звук при получении уведомления",
-                checked = s.pushSoundEnabled,
-            ) { scope.launch { app.prefs.setPushSoundEnabled(it) } }
-        }
-        item {
-            ToggleRow(
-                title = "Вибрация при уведомлении",
-                subtitle = "Вибрировать при получении уведомления",
-                checked = s.pushVibrationEnabled,
-            ) { scope.launch { app.prefs.setPushVibrationEnabled(it) } }
-        }
-        if (s.pushQuietHoursEnabled) {
-            item {
-                androidx.compose.foundation.layout.Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = "Тихие часы: ${s.pushQuietHoursStart / 60}:${"%02d".format(s.pushQuietHoursStart % 60)} – ${s.pushQuietHoursEnd / 60}:${"%02d".format(s.pushQuietHoursEnd % 60)}",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
-                    )
-                }
-            }
-        }
-        item {
-            ToggleRow(
-                title = "Тихие часы",
-                subtitle = "Подавлять звук уведомлений в заданное время (например, 22:00–08:00)",
-                checked = s.pushQuietHoursEnabled,
-            ) { scope.launch { app.prefs.setPushQuietHoursEnabled(it) } }
-        }
-
         item { SectionHeader("Тема") }
         item {
             ToggleRow(
