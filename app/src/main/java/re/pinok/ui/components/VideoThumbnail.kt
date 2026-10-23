@@ -63,9 +63,10 @@ fun VideoThumbnail(
     val thumbUrl = video.thumbUrl
     if (compact) {
         // Compact: только превью + duration badge, без Card/padding/title.
+        // weight(1f) обязателен — иначе в Row fillMaxWidth занимает всю ширину.
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .weight(1f)
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
