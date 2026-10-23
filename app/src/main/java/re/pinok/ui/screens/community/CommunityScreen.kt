@@ -228,6 +228,12 @@ fun CommunityScreen(
     // Какой альбом сейчас открывается (загрузка его фото → PhotoViewer).
     // null = никакой. Хранит сам Album — для Toast-сообщений.
     var albumOpening by remember { mutableStateOf<Album?>(null) }
+    // ALBUMS-IN-PHOTO: openedAlbum — открытый альбом (фото показываются вместо «Все фото»).
+    var openedAlbum by remember { mutableStateOf<Album?>(null) }
+    var albumPhotos by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
+    var albumPhotosLoading by remember { mutableStateOf(false) }
+    var albumPhotosError by remember { mutableStateOf<String?>(null) }
+    var albumPhotosRetryTick by remember { mutableStateOf(0) }
     // Sprint 2, P1-3 (#90): диалог репоста.
     val repostPost = remember { mutableStateOf<Post?>(null) }
     // #ADMIN-POST-ACTIONS-EDIT: пост в режиме редактирования.
@@ -500,6 +506,27 @@ fun CommunityScreen(
     LaunchedEffect(selectedTab, groupId) {
         if (selectedTab == 1 && !photosState.loading && photosState.items.isEmpty() && photosState.cursor == null) {
             photosState.loadFirst()
+        }
+    }
+
+    // ALBUMS-IN-PHOTO: загрузка фото альбома при openedAlbum (как в ProfileScreen).
+    LaunchedEffect(openedAlbum, albumPhotosRetryTick) {
+        val album = openedAlbum ?: return@LaunchedEffect
+        albumPhotosLoading = true
+        albumPhotosError = null
+        try {
+            albumPhotos = app.apiClient.photosGet(
+                ownerId = -groupId,
+                albumId = album.id.toString(),
+                count = 200,
+                offset = 0,
+            )
+            AppLog.i("CommunityScreen", "Album photos loaded: ${albumPhotos.size} for «${album.title}»")
+        } catch (e: Exception) {
+            AppLog.e("CommunityScreen", "Album photos load failed", e)
+            albumPhotosError = "Ошибка: ${e.message}"
+        } finally {
+            albumPhotosLoading = false
         }
     }
 
@@ -1242,42 +1269,80 @@ fun CommunityScreen(
                                     isLoading = albumOpening?.id == album.id &&
                                         albumOpening?.ownerId == album.ownerId,
                                     onClick = {
-                                        if (albumOpening != null) return@CommunityAlbumRow
-                                        scope.launch {
-                                            albumOpening = album
-                                            try {
-                                                val photos = app.apiClient.photosGet(
-                                                    ownerId = -groupId,
-                                                    albumId = album.id.toString(),
-                                                    count = 100,
-                                                )
-                                                val urls = photos.mapNotNull { it.largestUrl }
-                                                if (urls.isNotEmpty()) {
-                                                    photoViewerState.value = urls to 0
-                                                } else {
-                                                    Toast.makeText(
-                                                        ctx,
-                                                        "В альбоме нет фото",
-                                                        Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                }
-                                            } catch (e: Exception) {
-                                                AppLog.e("CommunityScreen", "album photos load failed", e)
-                                                Toast.makeText(
-                                                    ctx,
-                                                    "Ошибка: ${e.message}",
-                                                    Toast.LENGTH_SHORT,
-                                                ).show()
-                                            } finally {
-                                                albumOpening = null
-                                            }
-                                        }
+                                        // ALBUMS-IN-PHOTO: открываем альбом как в профиле —
+                                        // фото показываются в сетке вместо «Все фото» + кнопка «Назад».
+                                        openedAlbum = album
                                     },
                                 )
                             }
                         }
                     }
                 }
+                // ALBUMS-IN-PHOTO: если openedAlbum != null — показываем фото альбома
+                // + кнопку «← Назад к альбомам» (как в ProfileScreen).
+                val opened = openedAlbum
+                if (opened != null) {
+                    val albumUrls = albumPhotos.mapNotNull { it.largestUrl }
+                    item(key = "album_back") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable { openedAlbum = null }.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Назад к альбомам",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = opened.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    if (albumPhotosLoading && albumUrls.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                            }
+                        }
+                    } else if (albumPhotosError != null && albumUrls.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                Text(albumPhotosError ?: "", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    } else if (albumUrls.isNotEmpty()) {
+                        val albumPhotoRows = albumPhotos.mapNotNull { p -> p.smallUrl?.let { url -> p to url } }.chunked(3)
+                        itemsIndexed(albumPhotoRows, key = { idx, _ -> "album_photo_row_$idx" }) { rowIndex, rowItems ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                rowItems.forEachIndexed { colIndex, (_, url) ->
+                                    val globalIndex = rowIndex * 3 + colIndex
+                                    Card(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { photoViewerState.value = albumUrls to globalIndex },
+                                        elevation = CardDefaults.cardElevation(0.dp),
+                                    ) {
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop,
+                                        )
+                                    }
+                                }
+                                repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
+                            }
+                        }
+                    }
+                } else {
                 // Шаг 1 (#32a): Фото сообщества — photosGet(ownerId=-groupId, albumId="wall").
                 // Сетка 3 колонки, тап → PhotoViewer (уже подключён ниже).
                 // COMPACT-GRID-FIX: каждая строка — отдельный item() в LazyColumn,
@@ -1339,6 +1404,7 @@ fun CommunityScreen(
                         PagingFooter(state = photosState, emptyText = "Это все фото")
                     }
                 }
+                } // else (openedAlbum == null — показываем «Все фото»)
             }
             2 -> {
                 // Шаг 2 (#32b): Видео сообщества — videoGet(ownerId=-groupId).
