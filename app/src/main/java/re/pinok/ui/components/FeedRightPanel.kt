@@ -27,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Search
@@ -97,8 +96,6 @@ private val FEED_MENU_ENTRIES = listOf(
  * @param currentFilter    текущий активный фильтр (для подсветки/галочки)
  * @param onSelectFilter   выбор фильтра → переключение ленты
  * @param onDismiss        закрыть панель (тап по Scrim / «×» / системный back)
- * @param onOpenHiddenSources «Редактировать» → «Скрытые источники»
- *                         (Screen.FeedHidden, newsfeed.getBanned + unban)
  */
 @Composable
 fun FeedRightPanel(
@@ -106,7 +103,6 @@ fun FeedRightPanel(
     currentFilter: FeedFilter,
     onSelectFilter: (FeedFilter) -> Unit,
     onDismiss: () -> Unit,
-    onOpenHiddenSources: () -> Unit,
 ) {
     // Системный back закрывает панель, а не покидает экран (прецедент 19-A).
     BackHandler(enabled = visible) { onDismiss() }
@@ -216,35 +212,6 @@ fun FeedRightPanel(
                                     )
                                 }
                             }
-                        }
-
-                        HorizontalDivider()
-
-                        // «Редактировать» → «Скрытые источники» (Screen.FeedHidden)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .clickable {
-                                    AppLog.i("FeedRightPanel", "edit -> hidden sources")
-                                    onOpenHiddenSources()
-                                }
-                                .padding(horizontal = 20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Outlined.Edit,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(24.dp),
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            Text(
-                                text = "Редактировать",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontSize = 16.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
                         }
                     }
                 }

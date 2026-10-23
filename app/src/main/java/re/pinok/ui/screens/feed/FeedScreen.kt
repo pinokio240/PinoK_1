@@ -1663,11 +1663,6 @@ fun FeedScreen(
                 AppLog.i("FeedScreen", "FeedRightPanel dismiss → FeedPanelState.visible = false")
                 FeedPanelState.visible = false
             },
-            onOpenHiddenSources = {
-                AppLog.i("FeedScreen", "FeedRightPanel hidden sources → FeedPanelState.visible = false")
-                FeedPanelState.visible = false
-                onOpenHiddenSources()
-            },
         )
     }
 
