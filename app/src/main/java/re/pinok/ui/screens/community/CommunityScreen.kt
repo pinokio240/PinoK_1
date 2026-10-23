@@ -1231,6 +1231,7 @@ fun CommunityScreen(
                 // Альбомы грузятся через LaunchedEffect(selectedTab==1) выше.
                 if (albums.isNotEmpty()) {
                     item(key = "community_albums_row") {
+                        val ctx = LocalContext.current
                         LazyRow(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
