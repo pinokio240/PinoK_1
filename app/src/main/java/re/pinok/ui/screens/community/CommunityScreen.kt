@@ -1205,7 +1205,7 @@ fun CommunityScreen(
                         }
                     }
                 } else {
-                    val withUrl = photosState.items.mapNotNull { p -> p.largestUrl?.let { url -> p to url } }
+                    val withUrl = photosState.items.mapNotNull { p -> p.mediumUrl?.let { url -> p to url } }
                     val allUrls = withUrl.map { it.second }
                     val photoRows = withUrl.chunked(3)
                     itemsIndexed(photoRows, key = { idx, _ -> "photo_row_$idx" }) { rowIndex, rowItems ->
