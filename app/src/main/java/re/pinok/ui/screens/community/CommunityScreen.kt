@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1181,19 +1182,62 @@ fun CommunityScreen(
             } // when (selectedTab) 0 — Wall
             1 -> {
                 // Шаг 1 (#32a): Фото сообщества — photosGet(ownerId=-groupId, albumId="wall").
-                // Сетка 3 колонки (FlowRow), тап → PhotoViewer (уже подключён ниже).
-                // Пагинация — канонический PagingTrigger (гейт selectedTab == 1 выше).
-                item {
-                    CommunityPhotosTab(
-                        photos = photosState.items,
-                        loading = photosState.loading,
-                        error = photosState.error,
-                        onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
-                    )
-                }
-                // Фаза 0/1: общий футер пагинации фото.
-                item(key = "photos_paging_footer") {
-                    PagingFooter(state = photosState, emptyText = "Это все фото")
+                // Сетка 3 колонки, тап → PhotoViewer (уже подключён ниже).
+                // COMPACT-GRID-FIX: каждая строка — отдельный item() в LazyColumn,
+                // чтобы PagingTrigger видел индексы и триггерил пагинацию.
+                if (photosState.loading && photosState.items.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { CircularProgressIndicator(modifier = Modifier.size(28.dp)) }
+                    }
+                } else if (photosState.error != null && photosState.items.isEmpty()) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Text(photosState.error ?: "", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                } else if (photosState.items.isEmpty()) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Text("В сообществе нет фото", color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                } else {
+                    val withUrl = photosState.items.mapNotNull { p -> p.largestUrl?.let { url -> p to url } }
+                    val allUrls = withUrl.map { it.second }
+                    val photoRows = withUrl.chunked(3)
+                    itemsIndexed(photoRows, key = { idx, _ -> "photo_row_$idx" }) { rowIndex, rowItems ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            rowItems.forEachIndexed { colIndex, (_, url) ->
+                                val globalIndex = rowIndex * 3 + colIndex
+                                Card(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .aspectRatio(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { photoViewerState.value = allUrls to globalIndex },
+                                    elevation = CardDefaults.cardElevation(0.dp),
+                                ) {
+                                    AsyncImage(
+                                        model = url,
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                }
+                            }
+                            repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
+                        }
+                    }
+                    // Фаза 0/1: общий футер пагинации фото.
+                    item(key = "photos_paging_footer") {
+                        PagingFooter(state = photosState, emptyText = "Это все фото")
+                    }
                 }
             }
             2 -> {
@@ -1249,32 +1293,26 @@ fun CommunityScreen(
                             )
                         }
                     }
-                    // COMPACT-VIDEO-GRID: видео в сетке 2 колонки (compact режим —
-                    // только превью + duration overlay, без названия/счётчиков).
-                    // COMPACT-GRID-FIX: chunked rows вместо FlowRow (FlowRow+weight ломался).
-                    // weight(1f) даём через Box-обёртку — VideoThumbnail не в RowScope.
-                    item {
-                        val videoRows = videosState.items.chunked(2)
-                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                            videoRows.forEach { rowVideos ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    rowVideos.forEach { video ->
-                                        Box(modifier = Modifier.weight(1f)) {
-                                            VideoThumbnail(
-                                                video = video,
-                                                onClick = onVideoClick,
-                                                compact = true,
-                                            )
-                                        }
-                                    }
-                                    repeat(2 - rowVideos.size) {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
+                    // COMPACT-VIDEO-GRID: видео в сетке 2 колонки. Каждая строка —
+                    // отдельный item() в LazyColumn, чтобы PagingTrigger видел индексы
+                    // и триггерил пагинацию при скролле.
+                    val videoRows = videosState.items.chunked(2)
+                    itemsIndexed(videoRows, key = { idx, _ -> "video_row_$idx" }) { _, rowVideos ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            rowVideos.forEach { video ->
+                                Box(modifier = Modifier.weight(1f)) {
+                                    VideoThumbnail(
+                                        video = video,
+                                        onClick = onVideoClick,
+                                        compact = true,
+                                    )
                                 }
-                                Spacer(modifier = Modifier.height(4.dp))
+                            }
+                            repeat(2 - rowVideos.size) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }
@@ -1337,32 +1375,25 @@ fun CommunityScreen(
                             )
                         }
                     }
-                    // COMPACT-CLIP-GRID: клипы в сетке 2 колонки (compact режим —
-                    // только превью + play button, без названия/счётчиков).
-                    // COMPACT-GRID-FIX: chunked rows вместо FlowRow (FlowRow+weight ломался).
-                    // weight(1f) даём через Box-обёртку — ClipThumbnail не в RowScope.
-                    item {
-                        val clipRows = clipsState.items.chunked(2)
-                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                            clipRows.forEach { rowClips ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    rowClips.forEach { clip ->
-                                        Box(modifier = Modifier.weight(1f)) {
-                                            ClipThumbnail(
-                                                video = clip,
-                                                onClick = onVideoClick,
-                                                compact = true,
-                                            )
-                                        }
-                                    }
-                                    repeat(2 - rowClips.size) {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
+                    // COMPACT-CLIP-GRID: клипы в сетке 2 колонки. Каждая строка —
+                    // отдельный item() в LazyColumn, чтобы PagingTrigger работал.
+                    val clipRows = clipsState.items.chunked(2)
+                    itemsIndexed(clipRows, key = { idx, _ -> "clip_row_$idx" }) { _, rowClips ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            rowClips.forEach { clip ->
+                                Box(modifier = Modifier.weight(1f)) {
+                                    ClipThumbnail(
+                                        video = clip,
+                                        onClick = onVideoClick,
+                                        compact = true,
+                                    )
                                 }
-                                Spacer(modifier = Modifier.height(4.dp))
+                            }
+                            repeat(2 - rowClips.size) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }
