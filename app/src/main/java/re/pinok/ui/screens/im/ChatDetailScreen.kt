@@ -272,6 +272,9 @@ import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.VideoMessageShapes
+// MULTI-SELECT-ATTACH: buildVkAttachment — единый сборщик attachment-строки
+// VK (используется для накопленных audio/video из библиотеки, как в CreatePostDialog).
+import re.pinok.ui.components.buildVkAttachment
 import re.pinok.util.AppLog
 import re.pinok.util.toChatDate
 import re.pinok.util.toDayKey
@@ -792,6 +795,11 @@ fun ChatDetailScreen(
     var pendingPhotos by remember { mutableStateOf<List<PendingPhoto>>(emptyList()) }
     // Индекс фото в pendingPhotos, открытого в полноэкранном просмотрщике (null = закрыт).
     var previewPhotoIndex by remember { mutableStateOf<Int?>(null) }
+    // MULTI-SELECT-ATTACH: VK-вложения из библиотеки (AttachmentPickerSheet).
+    // Накапливаются вместо немедленного sendWithAttachment — preview-bar над
+    // полем ввода + doSend() отправляет всё одним messages.send (как фото/файлы).
+    // Структура 1:1 с CreatePostDialog.VkAttachPreview (att + label + thumb).
+    var vkAttachments by remember { mutableStateOf<List<VkAttachPreview>>(emptyList()) }
     // Sprint 3 #12: голосовые сообщения — запись.
     var isRecording by remember { mutableStateOf(false) }
     var recordingSeconds by remember { mutableIntStateOf(0) }
@@ -2867,9 +2875,15 @@ fun ChatDetailScreen(
         // Если есть текст-подпись — она уходит с ПЕРВЫМ сообщением (VK не умеет
         // caption к batch, поэтому фото группируются в одно сообщение с N
         // attachments + текстом).
+        //
+        // MULTI-SELECT-ATTACH: vkAttachments (VK-объекты из библиотеки) тоже
+        // идут через этот путь — attachment-строки уже готовы (upload не нужен),
+        // добавляются в общий attachments-список и отправляются одним
+        // messages.send вместе с фото/файлами с устройства.
         val photos = pendingPhotos
         val pfiles = pendingFiles
-        if ((photos.isNotEmpty() || pfiles.isNotEmpty()) && editingMsgId == null) {
+        val vkAtts = vkAttachments
+        if ((photos.isNotEmpty() || pfiles.isNotEmpty() || vkAtts.isNotEmpty()) && editingMsgId == null) {
             if (uploading || sending) return
             scope.launch {
                 uploading = true
@@ -2877,6 +2891,7 @@ fun ChatDetailScreen(
                 // Прячем превью и текст сразу — optimistic UX.
                 pendingPhotos = emptyList()
                 pendingFiles = emptyList()
+                vkAttachments = emptyList()
                 val caption = text
                 inputText = ""
                 try {
@@ -2887,6 +2902,10 @@ fun ChatDetailScreen(
                     app.suppressAuthRelaunchFor(120_000L)
                     val attachments = mutableListOf<String>()
                     var authFailed = false
+                    // MULTI-SELECT-ATTACH: VK-вложения (фото/видео/аудио/документы из
+                    // библиотеки) уже готовы как attachment-строки (upload не нужен) —
+                    // добавляем в начало списка, дальше дозагружаются фото/файлы с устройства.
+                    attachments += vkAtts.map { it.att }
                     // PHOTO-BATCH: сначала фото — photos-путь (uploadPhotoForMessage).
                     for (p in photos) {
                         val uri = p.uri
@@ -2972,6 +2991,7 @@ fun ChatDetailScreen(
                             errorText = "Не удалось отправить вложения"
                             pendingPhotos = photos
                             pendingFiles = pfiles
+                            vkAttachments = vkAtts // MULTI-SELECT-ATTACH: restore VK-превью.
                             inputText = caption
                         }
                     } else if (!authFailed) {
@@ -2979,6 +2999,7 @@ fun ChatDetailScreen(
                         errorText = "Не удалось загрузить вложения (VK отклонил)"
                         pendingPhotos = photos
                         pendingFiles = pfiles
+                        vkAttachments = vkAtts // MULTI-SELECT-ATTACH: restore VK-превью.
                         inputText = caption
                     }
                 } catch (e: Exception) {
@@ -2986,6 +3007,7 @@ fun ChatDetailScreen(
                     errorText = "Ошибка отправки: ${e.message}"
                     pendingPhotos = photos
                     pendingFiles = pfiles
+                    vkAttachments = vkAtts // MULTI-SELECT-ATTACH: restore VK-превью.
                     inputText = caption
                 } finally {
                     uploading = false
@@ -4454,6 +4476,22 @@ fun ChatDetailScreen(
                         onSend = { sendPendingVoice() },
                     )
                 } else {
+                    // MULTI-SELECT-ATTACH: бар VK-вложений (фото/видео/аудио/документы
+                    // из библиотеки VK) — появляется над полем ввода выше pendingPhotos.
+                    // Каждый chip: миниатюра/иконка + название + × (удалить).
+                    // Отправка батчем в doSend() (attachments = vkAttachments.joinToString(",")
+                    // вместе с pendingPhotos/pendingFiles одним messages.send).
+                    if (vkAttachments.isNotEmpty()) {
+                        VkAttachmentsBar(
+                            attachments = vkAttachments,
+                            onRemove = { idx ->
+                                vkAttachments = vkAttachments.toMutableList().also { it.removeAt(idx) }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface),
+                        )
+                    }
                     // Fix #234 (multi-photo preview): бар миниатюр выбранных фото.
                     // Появляется анимированно над полем ввода (выше pendingFiles bar).
                     // Каждая миниатюра кликабельна → полноэкранный просмотр через
@@ -4660,7 +4698,7 @@ fun ChatDetailScreen(
                                 editingMsgId != null -> SendButtonState.EDIT
                                 sending || uploading -> SendButtonState.LOADING
                                 inputText.length > MSG_TEXT_LIMIT -> SendButtonState.LIMIT
-                                inputText.isNotBlank() || pendingFiles.isNotEmpty() || pendingPhotos.isNotEmpty() -> SendButtonState.SUBMIT
+                                inputText.isNotBlank() || pendingFiles.isNotEmpty() || pendingPhotos.isNotEmpty() || vkAttachments.isNotEmpty() -> SendButtonState.SUBMIT
                                 else -> SendButtonState.MIC
                             }
                             when (sendState) {
@@ -4699,7 +4737,7 @@ fun ChatDetailScreen(
                                         tint = MaterialTheme.colorScheme.primary)
                                 }
                             }
-                        } else if (inputText.isNotBlank() || editingMsgId != null || pendingFiles.isNotEmpty() || pendingPhotos.isNotEmpty()) {
+                        } else if (inputText.isNotBlank() || editingMsgId != null || pendingFiles.isNotEmpty() || pendingPhotos.isNotEmpty() || vkAttachments.isNotEmpty()) {
                             IconButton(
                                 onClick = { doSend() },
                                 enabled = !sending && !uploading,
@@ -5906,78 +5944,55 @@ fun ChatDetailScreen(
     // #ATTACH-UNIFY (P1.5): + табы «Фото»/«Документы» — существующий объект VK
     // уходит сообщением через sendWithAttachment(peerId, attachment) (messages.send
     // с attachment-строкой из библиотеки, upload не нужен).
+    //
+    // MULTI-SELECT-ATTACH: picker НЕ закрывает себя после первого выбора —
+    // пользователь может выбрать несколько фото/файлов/песен/видео (тапы
+    // toggles выделение). При тапе «Готово (N)» picker вызывает onPickXxx
+    // для каждого выбранного объекта — здесь они НЕ отправляются немедленно
+    // (как раньше sendWithAttachment), а накапливаются в [vkAttachments]
+    // и показываются в [VkAttachmentsBar] над полем ввода. Отправка — одним
+    // messages.send в [doSend] (как pendingPhotos/pendingFiles). Подпись к
+    // вложениям — текст в inputText (если есть).
     if (showAttachmentPicker) {
         AttachmentPickerSheet(
             onDismiss = { showAttachmentPicker = false },
             initialTab = attachmentPickerTab,
+            multiSelect = true,
             showPhotoTab = true,
             showDocsTab = true,
-            onPickPhotoAttachment = { att, _ ->  // _ = thumb (#COMPOSER-ATTACH-PREVIEW): превью тут не нужно, только attachment-строка
-                scope.launch {
-                    uploading = true
-                    try {
-                        val mid = app.apiClient.sendWithAttachment(peerId, att)
-                        if (mid > 0) reloadMessages() else {
-                            AppLog.w("ChatDetailScreen", "sendWithAttachment(photo) returned $mid")
-                        }
-                    } catch (e: Exception) {
-                        AppLog.e("ChatDetailScreen", "send photo-from-vk error", e)
-                    } finally {
-                        uploading = false
-                    }
-                }
+            onPickPhotoAttachment = { att, thumb ->
+                // MULTI-SELECT-ATTACH: накапливаем в vkAttachments (как
+                // CreatePostDialog.kt) — preview-bar над полем ввода + doSend().
+                vkAttachments = vkAttachments + VkAttachPreview(att, "Фото из VK", thumb)
             },
-            onPickDocAttachment = { att, _ ->
-                scope.launch {
-                    uploading = true
-                    try {
-                        val mid = app.apiClient.sendWithAttachment(peerId, att)
-                        if (mid > 0) reloadMessages() else {
-                            AppLog.w("ChatDetailScreen", "sendWithAttachment(doc) returned $mid")
-                        }
-                    } catch (e: Exception) {
-                        AppLog.e("ChatDetailScreen", "send doc-from-vk error", e)
-                    } finally {
-                        uploading = false
-                    }
-                }
+            onPickDocAttachment = { att, title ->
+                vkAttachments = vkAttachments + VkAttachPreview(att, "Документ: $title")
             },
             onPickAudio = { track ->
-                scope.launch {
-                    uploading = true
-                    try {
-                        val mid = app.apiClient.sendAudioToChat(
-                            peerId, track.ownerId, track.id, track.accessKey,
-                        )
-                        if (mid > 0) reloadMessages() else {
-                            AppLog.w("ChatDetailScreen",
-                                "sendAudioToChat returned $mid for ${track.ownerId}_${track.id}")
-                        }
-                    } catch (e: Exception) {
-                        AppLog.e("ChatDetailScreen", "send audio error", e)
-                    } finally {
-                        uploading = false
-                    }
-                }
+                // AUDIO-attach: audio{owner}_{id}[_{accessKey}] — единый хелпер
+                // buildVkAttachment из UnifiedAttachMenu (как в CreatePostDialog).
+                val att = buildVkAttachment("audio", track.ownerId, track.id, track.accessKey)
+                vkAttachments = vkAttachments + VkAttachPreview(
+                    att,
+                    "Музыка: ${track.title}",
+                    track.albumThumb,
+                )
             },
             onPickVideo = { video ->
-                scope.launch {
-                    uploading = true
-                    try {
-                        val mid = app.apiClient.sendVideoToChat(peerId, video)
-                        if (mid > 0) reloadMessages() else {
-                            AppLog.w("ChatDetailScreen",
-                                "sendVideoToChat returned $mid for ${video.ownerId}_${video.id}")
-                        }
-                    } catch (e: Exception) {
-                        AppLog.e("ChatDetailScreen", "send video error", e)
-                    } finally {
-                        uploading = false
-                    }
-                }
+                // VIDEO-attach: video{owner}_{id}[_{accessKey}]. Превью — самый
+                // широкий кадр из image[] (как в CreatePostDialog.kt:778).
+                val poster = video.image?.maxByOrNull { it.width }?.url
+                val att = buildVkAttachment("video", video.ownerId, video.id, video.accessKey)
+                vkAttachments = vkAttachments + VkAttachPreview(
+                    att,
+                    "Видео: ${video.title.ifBlank { "видео" }}",
+                    poster,
+                )
             },
             onPickGift = { gift ->
-                // Подарки отправляются через gifts.send(user_id, gift_id).
+                // Подарки отправляются через gifts.send(user_id, gift_id), а не
+                // как attachment-строка в messages.send — поэтому подарок НЕ
+                // накапливается в vkAttachments, а уходит сразу (как раньше).
                 // Для диалогов peer_id = user_id. Для групповых чатов подарки
                 // не поддерживаются VK API — покажем предупреждение.
                 scope.launch {
@@ -12230,6 +12245,158 @@ data class PendingFileAttachment(
 /** Генератор уникальных id для [PendingFileAttachment]. */
 private val fileIdCounter = java.util.concurrent.atomic.AtomicLong(0)
 fun nextPendingFileId(): Long = fileIdCounter.incrementAndGet()
+
+/**
+ * // MULTI-SELECT-ATTACH: VK-вложение из библиотеки (AttachmentPickerSheet),
+ * ожидающее отправки в чате. Накапливается в [vkAttachments] (как pendingPhotos/
+ * pendingFiles), показывается в [VkAttachmentsBar] над полем ввода (миниатюра +
+ * название + ×), при [ChatDetailScreen.doSend] отправляется одним messages.send
+ * (attachments = vkAttachments.joinToString(",")) вместе с фото/файлами с устройства.
+ *
+ * Структура 1:1 с CreatePostDialog.VkAttachPreview (приватным): att (готовая
+ * attachment-строка VK), label (для подписи), thumb (URL превью из VK или null).
+ */
+data class VkAttachPreview(
+    val att: String,
+    val label: String,
+    val thumb: String? = null,
+)
+
+/**
+ * // MULTI-SELECT-ATTACH: бар VK-вложений над полем ввода — миниатюра/иконка +
+ * название + × для удаления. Аналог PendingPhotosBar/PendingFilesBar, только
+ * для объектов VK (фото/видео/аудио/документ/подарок) — не требует upload,
+ * attachment-строка уже готова. Отправляется батчем в doSend().
+ */
+@Composable
+private fun VkAttachmentsBar(
+    attachments: List<VkAttachPreview>,
+    onRemove: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = attachments.isNotEmpty(),
+        enter = androidx.compose.animation.fadeIn(re.pinok.ui.anim.tweenScaled<Float>(LocalAnimScale.current, 300)) +
+            androidx.compose.animation.expandVertically(re.pinok.ui.anim.tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)),
+        exit = androidx.compose.animation.fadeOut(re.pinok.ui.anim.tweenScaled<Float>(LocalAnimScale.current, 300)) +
+            androidx.compose.animation.shrinkVertically(re.pinok.ui.anim.tweenScaled<androidx.compose.ui.unit.IntSize>(LocalAnimScale.current, 300)),
+        modifier = modifier,
+    ) {
+        androidx.compose.material3.Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            tonalElevation = 1.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "📎 ${attachments.size} из VK",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = "× — убрать",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                androidx.compose.foundation.lazy.LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp, vertical = 2.dp),
+                ) {
+                    androidx.compose.foundation.lazy.items(
+                        items = attachments,
+                        // MULTI-SELECT-ATTACH: ключ — att-строка (уникальна для VK-объекта).
+                        key = { it.att },
+                    ) { va ->
+                        val index = attachments.indexOf(va)
+                        VkAttachChip(
+                            att = va,
+                            onRemove = { onRemove(index) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * // MULTI-SELECT-ATTACH: chip одного VK-вложения (миниатюра/иконка + название + ×).
+ * 56dp ширина, как PendingPhotoThumb — умещается рядом с pendingPhotos/PendingFilesBar.
+ */
+@Composable
+private fun VkAttachChip(
+    att: VkAttachPreview,
+    onRemove: () -> Unit,
+) {
+    Box(modifier = Modifier.size(72.dp, 80.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (att.thumb != null) {
+                coil3.compose.AsyncImage(
+                    model = att.thumb,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+            } else {
+                androidx.compose.material3.Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Outlined.AttachFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(28.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = att.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                fontSize = 10.sp,
+                lineHeight = 11.sp,
+            )
+        }
+        // × в верхнем углу (как в PendingPhotoThumb).
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(22.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(Color.Black.copy(alpha = 0.55f))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            androidx.compose.material3.Icon(
+                imageVector = androidx.compose.material.icons.Icons.Outlined.Close,
+                contentDescription = "Убрать вложение",
+                tint = Color.White,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+    }
+}
 
 /**
  * Fix #235 (multi-file): бар выбранных файлов над полем ввода.

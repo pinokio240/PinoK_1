@@ -27,10 +27,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.CardGiftcard
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MusicNote
@@ -47,10 +49,12 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -114,7 +118,17 @@ enum class AttachmentPickerTab {
  * через общий хелпер [buildVkAttachment] и отдают её вызывающей стороне
  * через onPickPhotoAttachment/onPickDocAttachment (спека §4, п.4).
  *
+ * // MULTI-SELECT-ATTACH: по умолчанию picker НЕ закрывается после первого
+ * выбора. Тап по элементу toggles выделение (check-overlay), а над табами
+ * появляется кнопка «Готово (N)» — по тапу все выбранные элементы уходят
+ * наружу через соответствующие onPickXxx колбеки (по одному вызову на
+ * каждый pick), после чего picker закрывается (onDismiss). Поведение
+ * совместимо со старыми вызовами: если передать `multiSelect = false`,
+ * picker вернётся к legacy-режиму «pick → dismiss» (один выбор за сеанс).
+ *
  * @param initialTab таб, который открыт при показе листа
+ * @param multiSelect true (по умолчанию) — накопление выборов с превью;
+ *                    false — legacy: pick → немедленный onDismiss.
  * @param showGiftTab показывать таб «Подарки» (по умолчанию true — совместимость;
  *                    в комментариях/постах подарки недоступны — таб не рисуется,
  *                    чтобы не оставлять dead-пункт)
@@ -131,6 +145,7 @@ enum class AttachmentPickerTab {
 fun AttachmentPickerSheet(
     onDismiss: () -> Unit,
     initialTab: AttachmentPickerTab = AttachmentPickerTab.Music,
+    multiSelect: Boolean = true,
     showGiftTab: Boolean = true,
     showPhotoTab: Boolean = false,
     showDocsTab: Boolean = false,
@@ -163,6 +178,34 @@ fun AttachmentPickerSheet(
     }
     var activeTab by remember { mutableStateOf(startTab) }
 
+    // MULTI-SELECT-ATTACH: накопленные выборы до тапа «Готово».
+    // Гетерогенный список — типы вкладок разные (Track/Video/GiftItem/…),
+    // оборачиваем в sealed PendingPick с уникальным ключом (dedup по key).
+    val selectedItems = remember { mutableStateListOf<PendingPick>() }
+    val selectedKeys: Set<String> = selectedItems.map { it.key }.toSet()
+
+    fun toggle(item: PendingPick) {
+        val idx = selectedItems.indexOfFirst { it.key == item.key }
+        if (idx >= 0) selectedItems.removeAt(idx) else selectedItems.add(item)
+    }
+
+    // MULTI-SELECT-ATTACH: «Готово (N)» — flush всех накопленных picks наружу
+    // через соответствующие onPickXxx колбеки (по одному вызову на каждый
+    // pick), затем закрытие picker'а. Сохраняем порядок выбора (mutableList).
+    fun flushAndDismiss() {
+        selectedItems.forEach { item ->
+            when (item) {
+                is PendingPick.Audio -> onPickAudio(item.track)
+                is PendingPick.Video -> onPickVideo(item.video)
+                is PendingPick.Gift -> onPickGift(item.gift)
+                is PendingPick.Photo -> onPickPhotoAttachment(item.attachment, item.thumb)
+                is PendingPick.Doc -> onPickDocAttachment(item.attachment, item.title)
+            }
+        }
+        selectedItems.clear()
+        onDismiss()
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -173,12 +216,42 @@ fun AttachmentPickerSheet(
                 .fillMaxWidth()
                 .fillMaxSize(0.85f)
         ) {
-            Text(
-                text = "Прикрепить",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
+            // MULTI-SELECT-ATTACH: верхняя панель. В multi-режиме — заголовок
+            // «Выбрано: N» + кнопка «Готово (N)» (enabled только при N>0). В
+            // legacy-режиме — прежний заголовок «Прикрепить».
+            if (multiSelect) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (selectedItems.isEmpty()) "Выберите вложения"
+                        else "Выбрано: ${selectedItems.size}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    TextButton(
+                        onClick = { flushAndDismiss() },
+                        enabled = selectedItems.isNotEmpty(),
+                    ) {
+                        Text(
+                            text = if (selectedItems.isEmpty()) "Готово"
+                            else "Готово (${selectedItems.size})",
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = "Прикрепить",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
 
             PrimaryTabRow(selectedTabIndex = tabs.indexOf(activeTab).coerceAtLeast(0)) {
                 // forEach (не items!) — PrimaryTabRow не Lazy-контейнер (Fix #284).
@@ -193,13 +266,93 @@ fun AttachmentPickerSheet(
             }
 
             when (activeTab) {
-                AttachmentPickerTab.Music -> AudioPickerTab(app = app, onPick = { onPickAudio(it); onDismiss() })
-                AttachmentPickerTab.Video -> VideoPickerTab(app = app, onPick = { onPickVideo(it); onDismiss() })
-                AttachmentPickerTab.Gifts -> GiftPickerTab(app = app, onPick = { onPickGift(it); onDismiss() })
-                AttachmentPickerTab.Photos -> PhotoPickerTab(app = app, onPick = { att, thumb -> onPickPhotoAttachment(att, thumb); onDismiss() })
-                AttachmentPickerTab.Docs -> DocsPickerTab(app = app, onPick = { att, title -> onPickDocAttachment(att, title); onDismiss() })
+                AttachmentPickerTab.Music -> AudioPickerTab(
+                    app = app,
+                    onPick = { track ->
+                        // MULTI-SELECT-ATTACH: tap toggles selection; в legacy — pick+dismiss.
+                        if (multiSelect) {
+                            toggle(PendingPick.Audio(track))
+                        } else {
+                            onPickAudio(track); onDismiss()
+                        }
+                    },
+                    multiSelect = multiSelect,
+                    selectedKeys = selectedKeys,
+                )
+                AttachmentPickerTab.Video -> VideoPickerTab(
+                    app = app,
+                    onPick = { video ->
+                        if (multiSelect) {
+                            toggle(PendingPick.Video(video))
+                        } else {
+                            onPickVideo(video); onDismiss()
+                        }
+                    },
+                    multiSelect = multiSelect,
+                    selectedKeys = selectedKeys,
+                )
+                AttachmentPickerTab.Gifts -> GiftPickerTab(
+                    app = app,
+                    onPick = { gift ->
+                        if (multiSelect) {
+                            toggle(PendingPick.Gift(gift))
+                        } else {
+                            onPickGift(gift); onDismiss()
+                        }
+                    },
+                    multiSelect = multiSelect,
+                    selectedKeys = selectedKeys,
+                )
+                AttachmentPickerTab.Photos -> PhotoPickerTab(
+                    app = app,
+                    onPick = { att, thumb ->
+                        if (multiSelect) {
+                            toggle(PendingPick.Photo(att, thumb))
+                        } else {
+                            onPickPhotoAttachment(att, thumb); onDismiss()
+                        }
+                    },
+                    multiSelect = multiSelect,
+                    selectedKeys = selectedKeys,
+                )
+                AttachmentPickerTab.Docs -> DocsPickerTab(
+                    app = app,
+                    onPick = { att, title ->
+                        if (multiSelect) {
+                            toggle(PendingPick.Doc(att, title))
+                        } else {
+                            onPickDocAttachment(att, title); onDismiss()
+                        }
+                    },
+                    multiSelect = multiSelect,
+                    selectedKeys = selectedKeys,
+                )
             }
         }
+    }
+}
+
+/**
+ * // MULTI-SELECT-ATTACH: гетерогенный wrapper выбранных в picker'е элементов.
+ * Каждый вариант несёт исходный объект VK (Track/Video/GiftItem/…) и ключ
+ * дедупликации — id объекта (type{owner}_{id}[_key] для photo/doc).
+ */
+private sealed interface PendingPick {
+    val key: String
+    data class Audio(val track: Track) : PendingPick {
+        override val key: String = "audio_${track.ownerId}_${track.id}"
+    }
+    data class Video(val video: Video) : PendingPick {
+        override val key: String = "video_${video.ownerId}_${video.id}"
+    }
+    data class Gift(val gift: GiftItem) : PendingPick {
+        override val key: String = "gift_${gift.id}"
+    }
+    data class Photo(val attachment: String, val thumb: String?) : PendingPick {
+        override val key: String = "photo_$attachment"
+    }
+    data class Doc(val attachment: String, val title: String) : PendingPick {
+        override val key: String = "doc_$attachment"
     }
 }
 
@@ -230,7 +383,13 @@ private fun tabIcon(tab: AttachmentPickerTab) = when (tab) {
 // ============================================================================
 
 @Composable
-private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
+private fun AudioPickerTab(
+    app: SovaApp,
+    onPick: (Track) -> Unit,
+    // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
+    multiSelect: Boolean = false,
+    selectedKeys: Set<String> = emptySet(),
+) {
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -303,7 +462,14 @@ private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
         }
         else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
-                AudioTrackRow(track = track, onClick = { onPick(track) })
+                // MULTI-SELECT-ATTACH: ключ для дедупа совпадает с PendingPick.Audio.key.
+                val key = "audio_${track.ownerId}_${track.id}"
+                AudioTrackRow(
+                    track = track,
+                    onClick = { onPick(track) },
+                    multiSelect = multiSelect,
+                    isSelected = selectedKeys.contains(key),
+                )
             }
             if (hasMore) {
                 item(key = "audio_picker_more") {
@@ -320,10 +486,19 @@ private fun AudioPickerTab(app: SovaApp, onPick: (Track) -> Unit) {
 }
 
 @Composable
-private fun AudioTrackRow(track: Track, onClick: () -> Unit) {
+private fun AudioTrackRow(
+    track: Track,
+    onClick: () -> Unit,
+    // MULTI-SELECT-ATTACH: чекбокс-индикатор справа (весит в multiSelect-режиме).
+    multiSelect: Boolean = false,
+    isSelected: Boolean = false,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // MULTI-SELECT-ATTACH: подсветка выбранной строки (фон).
+            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -369,6 +544,18 @@ private fun AudioTrackRow(track: Track, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.outline,
         )
+        // MULTI-SELECT-ATTACH: чекбокс-индикатор справа от длительности.
+        if (multiSelect) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = if (isSelected) Icons.Filled.CheckCircle
+                else Icons.Outlined.CheckCircle,
+                contentDescription = if (isSelected) "Выбрано" else "Не выбрано",
+                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(22.dp),
+            )
+        }
     }
 }
 
@@ -380,7 +567,13 @@ private fun AudioTrackRow(track: Track, onClick: () -> Unit) {
 // ============================================================================
 
 @Composable
-private fun VideoPickerTab(app: SovaApp, onPick: (Video) -> Unit) {
+private fun VideoPickerTab(
+    app: SovaApp,
+    onPick: (Video) -> Unit,
+    // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
+    multiSelect: Boolean = false,
+    selectedKeys: Set<String> = emptySet(),
+) {
     var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -454,7 +647,14 @@ private fun VideoPickerTab(app: SovaApp, onPick: (Video) -> Unit) {
         }
         else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
-                VideoRow(video = video, onClick = { onPick(video) })
+                // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Video.key.
+                val key = "video_${video.ownerId}_${video.id}"
+                VideoRow(
+                    video = video,
+                    onClick = { onPick(video) },
+                    multiSelect = multiSelect,
+                    isSelected = selectedKeys.contains(key),
+                )
             }
             if (hasMore) {
                 item(key = "video_picker_more") {
@@ -471,10 +671,19 @@ private fun VideoPickerTab(app: SovaApp, onPick: (Video) -> Unit) {
 }
 
 @Composable
-private fun VideoRow(video: Video, onClick: () -> Unit) {
+private fun VideoRow(
+    video: Video,
+    onClick: () -> Unit,
+    // MULTI-SELECT-ATTACH: чекбокс-индикатор справа + фон.
+    multiSelect: Boolean = false,
+    isSelected: Boolean = false,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // MULTI-SELECT-ATTACH: подсветка выбранной строки (фон).
+            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -514,6 +723,18 @@ private fun VideoRow(video: Video, onClick: () -> Unit) {
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
+        // MULTI-SELECT-ATTACH: чекбокс-индикатор справа.
+        if (multiSelect) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = if (isSelected) Icons.Filled.CheckCircle
+                else Icons.Outlined.CheckCircle,
+                contentDescription = if (isSelected) "Выбрано" else "Не выбрано",
+                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(22.dp),
+            )
+        }
     }
 }
 
@@ -522,7 +743,13 @@ private fun VideoRow(video: Video, onClick: () -> Unit) {
 // ============================================================================
 
 @Composable
-private fun GiftPickerTab(app: SovaApp, onPick: (GiftItem) -> Unit) {
+private fun GiftPickerTab(
+    app: SovaApp,
+    onPick: (GiftItem) -> Unit,
+    // MULTI-SELECT-ATTACH: overlay с галочкой поверх ячейки.
+    multiSelect: Boolean = false,
+    selectedKeys: Set<String> = emptySet(),
+) {
     var gifts by remember { mutableStateOf<List<GiftItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -557,37 +784,69 @@ private fun GiftPickerTab(app: SovaApp, onPick: (GiftItem) -> Unit) {
             modifier = Modifier.fillMaxSize(),
         ) {
             items(gifts, key = { it.id }) { gift ->
-                GiftCell(gift = gift, onClick = { onPick(gift) })
+                // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Gift.key.
+                val key = "gift_${gift.id}"
+                GiftCell(
+                    gift = gift,
+                    onClick = { onPick(gift) },
+                    multiSelect = multiSelect,
+                    isSelected = selectedKeys.contains(key),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun GiftCell(gift: GiftItem, onClick: () -> Unit) {
+private fun GiftCell(
+    gift: GiftItem,
+    onClick: () -> Unit,
+    // MULTI-SELECT-ATTACH: чекбокс-overlay в верхнем углу + рамка.
+    multiSelect: Boolean = false,
+    isSelected: Boolean = false,
+) {
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            // MULTI-SELECT-ATTACH: фон при выборе.
+            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             .clickable(onClick = onClick)
             .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (gift.thumbUrl != null) {
-            AsyncImage(
-                model = gift.thumbUrl,
-                contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                contentScale = ContentScale.Fit,
-            )
-        } else {
-            Box(
-                modifier = Modifier.size(80.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Filled.CardGiftcard, contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        // MULTI-SELECT-ATTACH: чекбокс-overlay поверх подарка.
+        Box(contentAlignment = Alignment.TopEnd) {
+            Box {
+                if (gift.thumbUrl != null) {
+                    AsyncImage(
+                        model = gift.thumbUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(80.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.size(80.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.CardGiftcard, contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (multiSelect) {
+                Icon(
+                    imageVector = if (isSelected) Icons.Filled.CheckCircle
+                    else Icons.Outlined.CheckCircle,
+                    contentDescription = if (isSelected) "Выбрано" else "Не выбрано",
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier
+                        .padding(2.dp)
+                        .size(20.dp),
+                )
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -629,7 +888,13 @@ private data class VkPhotoRef(
 )
 
 @Composable
-private fun PhotoPickerTab(app: SovaApp, onPick: (String, String?) -> Unit) {
+private fun PhotoPickerTab(
+    app: SovaApp,
+    onPick: (String, String?) -> Unit,
+    // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
+    multiSelect: Boolean = false,
+    selectedKeys: Set<String> = emptySet(),
+) {
     // ATTACH-PICKER-ALBUMS: альбомы + пагинация.
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
     var albumsLoading by remember { mutableStateOf(true) }
@@ -829,15 +1094,21 @@ private fun PhotoPickerTab(app: SovaApp, onPick: (String, String?) -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(photos, key = { "${it.ownerId}_${it.id}" }) { ref ->
-                        VkPhotoCell(ref = ref, onClick = {
-                            // attachment-строка через единый хелпер (#ATTACH-UNIFY, §3.2).
-                            // #COMPOSER-ATTACH-PREVIEW (волна 39): +превью-URL — композер
-                            // рисует миниатюру выбранного фото вместо слепой скрепки.
-                            onPick(
-                                buildVkAttachment("photo", ref.ownerId, ref.id, ref.accessKey),
-                                ref.previewUrl,
-                            )
-                        })
+                        // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Photo.key
+                        // (buildVkAttachment → "photo{owner}_{id}[_key]").
+                        val att = buildVkAttachment("photo", ref.ownerId, ref.id, ref.accessKey)
+                        val key = "photo_$att"
+                        VkPhotoCell(
+                            ref = ref,
+                            onClick = {
+                                // attachment-строка через единый хелпер (#ATTACH-UNIFY, §3.2).
+                                // #COMPOSER-ATTACH-PREVIEW (волна 39): +превью-URL — композер
+                                // рисует миниатюру выбранного фото вместо слепой скрепки.
+                                onPick(att, ref.previewUrl)
+                            },
+                            multiSelect = multiSelect,
+                            isSelected = selectedKeys.contains(key),
+                        )
                     }
                 }
             }
@@ -932,7 +1203,13 @@ private fun PhotoItem.toVkPhotoRef(): VkPhotoRef = VkPhotoRef(
 )
 
 @Composable
-private fun VkPhotoCell(ref: VkPhotoRef, onClick: () -> Unit) {
+private fun VkPhotoCell(
+    ref: VkPhotoRef,
+    onClick: () -> Unit,
+    // MULTI-SELECT-ATTACH: чекбокс-overlay в верхнем углу + затемнение.
+    multiSelect: Boolean = false,
+    isSelected: Boolean = false,
+) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
@@ -954,6 +1231,28 @@ private fun VkPhotoCell(ref: VkPhotoRef, onClick: () -> Unit) {
                 contentDescription = null,
                 modifier = Modifier.size(32.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // MULTI-SELECT-ATTACH: затемнение + чекбокс-overlay при выборе
+        // (как в системном галерейном multi-select).
+        if (multiSelect && isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.30f)),
+            )
+        }
+        if (multiSelect) {
+            Icon(
+                imageVector = if (isSelected) Icons.Filled.CheckCircle
+                else Icons.Outlined.CheckCircle,
+                contentDescription = if (isSelected) "Выбрано" else "Не выбрано",
+                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(22.dp),
             )
         }
     }
@@ -1008,7 +1307,13 @@ private fun parseVkPhotoRef(photo: JsonObject): VkPhotoRef? {
 // ============================================================================
 
 @Composable
-private fun DocsPickerTab(app: SovaApp, onPick: (attachment: String, title: String) -> Unit) {
+private fun DocsPickerTab(
+    app: SovaApp,
+    onPick: (attachment: String, title: String) -> Unit,
+    // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
+    multiSelect: Boolean = false,
+    selectedKeys: Set<String> = emptySet(),
+) {
     var docs by remember { mutableStateOf<List<DocFile>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1079,13 +1384,18 @@ private fun DocsPickerTab(app: SovaApp, onPick: (attachment: String, title: Stri
         }
         else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             items(docs, key = { "${it.ownerId}_${it.id}" }) { doc ->
-                DocRow(doc = doc, onClick = {
-                    // doc{owner}_{id}[_{accessKey}] через единый хелпер (#ATTACH-UNIFY).
-                    onPick(
-                        buildVkAttachment("doc", doc.ownerId, doc.id, doc.accessKey),
-                        doc.title.ifBlank { "документ" },
-                    )
-                })
+                // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Doc.key.
+                val att = buildVkAttachment("doc", doc.ownerId, doc.id, doc.accessKey)
+                val key = "doc_$att"
+                DocRow(
+                    doc = doc,
+                    onClick = {
+                        // doc{owner}_{id}[_{accessKey}] через единый хелпер (#ATTACH-UNIFY).
+                        onPick(att, doc.title.ifBlank { "документ" })
+                    },
+                    multiSelect = multiSelect,
+                    isSelected = selectedKeys.contains(key),
+                )
             }
             if (hasMore) {
                 item(key = "docs_picker_more") {
@@ -1102,10 +1412,19 @@ private fun DocsPickerTab(app: SovaApp, onPick: (attachment: String, title: Stri
 }
 
 @Composable
-private fun DocRow(doc: DocFile, onClick: () -> Unit) {
+private fun DocRow(
+    doc: DocFile,
+    onClick: () -> Unit,
+    // MULTI-SELECT-ATTACH: чекбокс-индикатор справа + фон.
+    multiSelect: Boolean = false,
+    isSelected: Boolean = false,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // MULTI-SELECT-ATTACH: подсветка выбранной строки (фон).
+            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1128,6 +1447,18 @@ private fun DocRow(doc: DocFile, onClick: () -> Unit) {
                 text = "${doc.ext.uppercase()} · ${formatDocSizeShort(doc.size)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // MULTI-SELECT-ATTACH: чекбокс-индикатор справа.
+        if (multiSelect) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = if (isSelected) Icons.Filled.CheckCircle
+                else Icons.Outlined.CheckCircle,
+                contentDescription = if (isSelected) "Выбрано" else "Не выбрано",
+                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(22.dp),
             )
         }
     }

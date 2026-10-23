@@ -759,10 +759,15 @@ fun CreatePostDialog(
 
     // #ATTACH-UNIFY: пикер библиотеки VK (Фото/Музыка/Видео/Документы).
     // Подарки в постах недоступны — таб скрыт (no-stub).
+    // MULTI-SELECT-ATTACH: multiSelect=true (явно) — пользователь может выбрать
+    // несколько фото/файлов/песен/видео за один сеанс (тапы toggles выделение,
+    // «Готово (N)» flush'ит все picks в vkAttachments). onPick callbacks НЕ
+    // вызывают onDismiss — picker закрывается сам по «Готово»/swipe-down.
     if (showAttachmentPicker) {
         AttachmentPickerSheet(
             onDismiss = { showAttachmentPicker = false },
             initialTab = pickerTab,
+            multiSelect = true,
             showGiftTab = false,
             showPhotoTab = true,
             showDocsTab = true,
