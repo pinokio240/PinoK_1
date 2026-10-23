@@ -693,7 +693,7 @@ fun BookmarksScreen(
                                                 // Проверяем — может пост уже удалён физически?
                                                 try {
                                                     val wall = app.apiClient.wallGetExtended(ownerId = p.ownerId, count = 1, offset = 0)
-                                                    val stillExists = wall?.posts?.any { it.id == p.id } == true
+                                                    val stillExists = wall.posts.any { it.id == p.id }
                                                     deleted = !stillExists // если поста нет в ответе — он удалён
                                                 } catch (_: Exception) { }
                                             }
