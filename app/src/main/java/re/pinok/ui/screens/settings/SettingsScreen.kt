@@ -1727,6 +1727,99 @@ private fun InterfaceTab(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // HOME-SCREEN: выбор «Главного экрана» — перенесён на самый верх по требованию
+        // пользователя. Тумблер включает настройку; при включении появляется список
+        // радио-кнопок для выбора раздела.
+        item { SectionHeader("Начальный экран") }
+        item {
+            ToggleRow(
+                title = "Начальный экран",
+                subtitle = "Выбрать раздел, который открывается при запуске и служит целью «назад»",
+                checked = s.uiHomeEnabled,
+            ) { scope.launch { app.prefs.setUiHomeEnabled(it) } }
+        }
+        if (s.uiHomeEnabled) {
+            // 5 основных разделов (ключи PanelItem.all + feed). При выборе сохраняем
+            // Screen.route-строку (она же используется в startDestination/фолбэках).
+            val homeOptions = listOf(
+                Triple(re.pinok.ui.navigation.Screen.Feed.route, "Лента", null),
+                Triple(re.pinok.ui.navigation.Screen.Messages.route, "Сообщения", null),
+                Triple(re.pinok.ui.navigation.Screen.Music.route, "Музыка", null),
+                Triple(re.pinok.ui.navigation.Screen.Video.route, "Видео", null),
+                Triple(re.pinok.ui.navigation.Screen.Profile.route, "Профиль", null),
+            )
+            item {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    homeOptions.forEach { (route, label, _) ->
+                        androidx.compose.foundation.layout.Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { scope.launch { app.prefs.setUiHomeRoute(route) } }
+                                .padding(vertical = 10.dp, horizontal = 8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = s.uiHomeRoute == route,
+                                onClick = { scope.launch { app.prefs.setUiHomeRoute(route) } },
+                            )
+                            androidx.compose.material3.Text(
+                                text = label,
+                                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // УВЕДОМЛЕНИЯ: раздел с быстрым доступом к настройкам уведомлений.
+        item { SectionHeader("Уведомления") }
+        item {
+            ToggleRow(
+                title = "Push-уведомления",
+                subtitle = "Получать системные уведомления о новых событиях",
+                checked = s.pushEnabled,
+            ) { scope.launch { app.prefs.setPushEnabled(it) } }
+        }
+        item {
+            ToggleRow(
+                title = "Звук push-уведомлений",
+                subtitle = "Воспроизводить звук при получении уведомления",
+                checked = s.pushSoundEnabled,
+            ) { scope.launch { app.prefs.setPushSoundEnabled(it) } }
+        }
+        item {
+            ToggleRow(
+                title = "Вибрация при уведомлении",
+                subtitle = "Вибрировать при получении уведомления",
+                checked = s.pushVibrationEnabled,
+            ) { scope.launch { app.prefs.setPushVibrationEnabled(it) } }
+        }
+        if (s.pushQuietHoursEnabled) {
+            item {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = "Тихие часы: ${s.pushQuietHoursStart / 60}:${"%02d".format(s.pushQuietHoursStart % 60)} – ${s.pushQuietHoursEnd / 60}:${"%02d".format(s.pushQuietHoursEnd % 60)}",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
+                    )
+                }
+            }
+        }
+        item {
+            ToggleRow(
+                title = "Тихие часы",
+                subtitle = "Подавлять звук уведомлений в заданное время (например, 22:00–08:00)",
+                checked = s.pushQuietHoursEnabled,
+            ) { scope.launch { app.prefs.setPushQuietHoursEnabled(it) } }
+        }
+
         item { SectionHeader("Тема") }
         item {
             ToggleRow(
@@ -1800,53 +1893,6 @@ private fun InterfaceTab(
                 subtitle = "Не скрывать панель навигации при просмотре контента",
                 checked = s.uiFixBottomBar,
             ) { scope.launch { app.prefs.setUiFixBottomBar(it) } }
-        }
-
-        // HOME-SCREEN: выбор «Главного экрана» (домашнего раздела). Тумблер включает
-        // настройку; при включении появляется список радио-кнопок для выбора раздела.
-        item { SectionHeader("Главный экран") }
-        item {
-            ToggleRow(
-                title = "Начальный экран",
-                subtitle = "Выбрать раздел, который открывается при запуске и служит целью «назад»",
-                checked = s.uiHomeEnabled,
-            ) { scope.launch { app.prefs.setUiHomeEnabled(it) } }
-        }
-        if (s.uiHomeEnabled) {
-            // 5 основных разделов (ключи PanelItem.all + feed). При выборе сохраняем
-            // Screen.route-строку (она же используется в startDestination/фолбэках).
-            val homeOptions = listOf(
-                Triple(re.pinok.ui.navigation.Screen.Feed.route, "Лента", null),
-                Triple(re.pinok.ui.navigation.Screen.Messages.route, "Сообщения", null),
-                Triple(re.pinok.ui.navigation.Screen.Music.route, "Музыка", null),
-                Triple(re.pinok.ui.navigation.Screen.Video.route, "Видео", null),
-                Triple(re.pinok.ui.navigation.Screen.Profile.route, "Профиль", null),
-            )
-            item {
-                androidx.compose.foundation.layout.Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    homeOptions.forEach { (route, label, _) ->
-                        androidx.compose.foundation.layout.Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { scope.launch { app.prefs.setUiHomeRoute(route) } }
-                                .padding(vertical = 10.dp, horizontal = 8.dp),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = s.uiHomeRoute == route,
-                                onClick = { scope.launch { app.prefs.setUiHomeRoute(route) } },
-                            )
-                            androidx.compose.material3.Text(
-                                text = label,
-                                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                        }
-                    }
-                }
-            }
         }
 
         // Fix #228: масштаб стикер-фото в чате (0..40%, шаг 1%).
