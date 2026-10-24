@@ -286,15 +286,16 @@ fun VideoScreen(
     }
 
     // Fix #81: бесконечная пагинация — триггер при скролле к концу.
-    // VIDEO-GRID: после перехода на chunked(2) — сравниваем lastVisible
-    // с количеством СТРОК (videos.size / 2), а не количеством видео.
-    LaunchedEffect(listState, videos.size) {
+    // VIDEO-GRID: chunked(2) → сравниваем lastVisible с количеством СТРОК.
+    // При поиске — rowCount из searchResults, при обычном списке — из videos.
+    LaunchedEffect(listState, videos.size, searchResults.size) {
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            // chunked(2) → строк = ceil(videos.size / 2). -2 = за 2 строки до конца.
-            val rowCount = (videos.size + 1) / 2
-            lastVisible >= rowCount - 2 && videos.isNotEmpty()
+            // При поиске — rowCount из searchResults, иначе из videos.
+            val sourceList = if (searchQuery.isNotBlank()) searchResults else videos
+            val rowCount = (sourceList.size + 1) / 2
+            lastVisible >= rowCount - 2 && sourceList.isNotEmpty()
         }
         .distinctUntilChanged()
         .filter { it }
@@ -517,23 +518,26 @@ fun VideoScreen(
                         }
                     } else if (searchResults.isNotEmpty()) {
                         item { SectionHeader("РЕЗУЛЬТАТЫ ПОИСКА", vkTextPrimary, vkTextSecondary) }
-                        items(searchResults, key = { "s_${it.ownerId}_${it.id}" }) { video ->
-                            val key = VideoDownloadManager.videoKey(video.ownerId, video.id)
-                            val ds = downloads[key]
-                            // W30-1 #VIDEO-ADD-SELF: тумблер «Добавить себе» — только
-                            // у результатов поиска; список «Мои видео»/альбомы/каталоги
-                            // карточку без коллбека рисуют.
-                            VKVideoCard(
-                                video = video, downloadState = ds, cardColor = vkCard,
-                                textColor = vkTextPrimary, secondaryColor = vkTextSecondary, accentColor = vkAccent,
-                                isAdded = searchAddedKeys.containsKey("${video.ownerId}_${video.id}"),
-                                onToggleAdd = { toggleSearchVideoAdded(video) },
-                                onClick = { onVideoClick(video) },
-                                onDownloadClick = {
-                                    if (ds != null && ds.status != DownloadStatus.FAILED) VideoDownloadManager.removeDownload(video.ownerId, video.id)
-                                    else VideoDownloadManager.enqueueDownload(video)
-                                },
-                            )
+                        // VIDEO-GRID: сетка 2 колонки для результатов поиска.
+                        val searchRows = searchResults.chunked(2)
+                        itemsIndexed(searchRows, key = { idx, _ -> "search_row_$idx" }) { _, rowVideos ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                rowVideos.forEach { video ->
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        VideoThumbnail(
+                                            video = video,
+                                            onClick = onVideoClick,
+                                            compact = true,
+                                        )
+                                    }
+                                }
+                                repeat(2 - rowVideos.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
                         }
                     }
                 }
