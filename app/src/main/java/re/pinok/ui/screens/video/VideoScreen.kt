@@ -295,11 +295,15 @@ fun VideoScreen(
         scope.launch {
             searchLoadingMore = true
             try {
-                val page = app.apiClient.videoSearch(searchQuery, count = 50, offset = searchOffset)
+                // ВАЖНО: offset = сырой offset (сколько запрошено у VK), НЕ размер
+                // после distinctBy — дедуп может убрать дубликаты и смещение отстанет.
+                val rawOffset = searchOffset
+                val page = app.apiClient.videoSearch(searchQuery, count = 50, offset = rawOffset)
                 if (page.isNotEmpty()) {
                     searchResults = (searchResults + page).distinctBy { "${it.id}_${it.ownerId}" }
-                    searchOffset = searchResults.size
                 }
+                // Смещаем на размер СЫРОЙ страницы (не после дедупа).
+                searchOffset = rawOffset + page.size
                 if (page.size < 50) searchEndReached = true
             } catch (e: Exception) {
                 AppLog.w("VideoScreen", "loadMoreSearch failed: ${e.message}")
@@ -367,7 +371,10 @@ fun VideoScreen(
                     }
                     searchResults = result
                     searchOffset = result.size
-                    if (result.size < 50) searchEndReached = true
+                    // НЕ ставим searchEndReached при первом запросе даже если < 50 —
+                    // VK может вернуть меньше, но ещё есть результаты.
+                    // loadMoreSearch проверит — если следующий запрос вернёт 0 → stop.
+                    if (result.isEmpty()) searchEndReached = true
                     if (result.isEmpty()) searchError = "Ничего не найдено"
                 } catch (e: Exception) {
                     AppLog.e("VideoScreen", "videoSearch error", e)
