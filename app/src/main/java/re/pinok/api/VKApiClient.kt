@@ -10139,41 +10139,26 @@ class VKApiClient(
             "q" to query,
             "count" to count.toString(),
             "extended" to "1",
-            // W30-API #VIDEO-SEARCH-GLOBAL (ТЗ юзера «поиск не глобальный»): без
-            // search_global=1 VK ищет в у́зком скоупе (свои/окружение) — по всей
-            // базе не ищет. 1 = глобальный поиск по всем видео VK.
-            "search_global" to "1",
         )
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("video.search", args) ?: return emptyList()
-        return try {
-            val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
-            items.mapNotNull { el ->
-                if (!el.isJsonObject) return@mapNotNull null
-                val o = el.asJsonObject
-                val thumbs = parseVideoThumbs(o)
-                val filesMap = parseVideoFiles(o)
-                val playerUrl = o.get("player")?.takeIf { !it.isJsonNull }?.asString
-                val v = Video(
-                    id = o.get("id")?.asLong ?: 0L,
-                    ownerId = o.get("owner_id")?.asLong ?: 0L,
-                    title = o.get("title")?.asString ?: "",
-                    description = o.get("description")?.takeIf { !it.isJsonNull }?.asString,
-                    duration = o.get("duration")?.asInt ?: 0,
-                    date = o.get("date")?.asLong ?: 0L,
-                    views = o.get("views")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    player = playerUrl,
-                    files = filesMap,
-                    accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
-                    image = thumbs,
-                    likes = parseLikes(o.getAsJsonObject("likes")),
-                )
-                v.withDetectedPlatform()
+        // #VIDEO-SEARCH-FIX: раньше парсер работал инлайн и падал на первой же
+        // битой/нестандартной записи (ClassCastException через asJsonObject/asLong)
+        // → весь список emptyList() → «Ничего не найдено». Теперь каждый элемент
+        // парсится устойчивым parseVideoFull (нормализует legacy + NEW-формат) в
+        // собственный try — одна неудачная запись лишь пропускается (continue),
+        // остальные рендерятся.
+        val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
+        val result = mutableListOf<Video>()
+        for (el in items) {
+            if (!el.isJsonObject) continue
+            try {
+                result.add(parseVideoFull(el.asJsonObject))
+            } catch (e: Exception) {
+                AppLog.e("VKApiClient", "videoSearch item parse error", e)
             }
-        } catch (e: Exception) {
-            AppLog.e("VKApiClient", "videoSearch parse error", e)
-            emptyList()
         }
+        return result
     }
 
     /**
@@ -10687,6 +10672,7 @@ class VKApiClient(
                 var user: UserProfile? = null
                 var group: Group? = null
                 var appId: Long? = null
+                var video: Video? = null
                 if (type == "profile") {
                     val p = o.getAsJsonObject("profile")
                     if (p != null) user = parseUserProfileMini(p)
@@ -10698,8 +10684,20 @@ class VKApiClient(
                     // имеют одинаковый LazyColumn key "app_null" → crash.
                     val a = o.getAsJsonObject("app")
                     appId = a?.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                } else if (type == "video") {
+                    // #VIDEO-SEARCH-FIX: дока не гарантирует, но реальные ответы
+                    // бывают с type="video". Парсим устойчивым parseVideoFull —
+                    // сохраняя запись (иначе она чёрным списком отбрасывалась).
+                    val v = o.getAsJsonObject("video")
+                    if (v != null) {
+                        try {
+                            video = parseVideoFull(v)
+                        } catch (e: Exception) {
+                            AppLog.e("VKApiClient", "searchGetHints video parse error", e)
+                        }
+                    }
                 }
-                SearchHint(type = type, section = section, description = desc, global = 1, user = user, group = group, appId = appId)
+                SearchHint(type = type, section = section, description = desc, global = 1, user = user, group = group, appId = appId, video = video)
             }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "searchGetHints parse error", e)

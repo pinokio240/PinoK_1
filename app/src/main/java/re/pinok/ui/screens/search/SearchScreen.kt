@@ -320,7 +320,7 @@ fun SearchScreen(
         ) {
         LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
             when (activeTab) {
-                SearchTab.HINTS -> items(hints, key = { "${it.type}_${it.user?.id ?: it.group?.id ?: it.appId ?: it.description ?: it.section ?: it.hashCode()}" }) { hint ->
+                SearchTab.HINTS -> items(hints, key = { "${it.type}_${it.user?.id ?: it.group?.id ?: it.appId ?: it.video?.let { v -> "${v.ownerId}_${v.id}" } ?: it.description ?: it.section ?: it.hashCode()}" }) { hint ->
                     HintRow(hint = hint, onUserClick = onUserClick, onGroupClick = onGroupClick)
                     Divider()
                 }

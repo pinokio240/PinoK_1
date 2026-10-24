@@ -485,8 +485,57 @@ fun VideoScreen(
         )
 
         // ─── Контент по вкладке (#VIDEO-PORT) ───
-        when (selectedTab) {
-            1 -> {
+        // #VIDEO-SEARCH-FIX: результаты видео-поиска показываются НА ЛЮБОЙ ВКЛАДКЕ
+        // (0 «Мои видео», 1 «Альбомы», 2 «Каталоги»), а не только в «Мои видео».
+        // Запрос поиска глобальный (LaunchedEffect debounce в шапке) — раньше на
+        // Альбомах/Каталогах он выполнялся, но результаты не рендерились. Пока
+        // searchQuery непуст — показываем API-результаты; пуст — контент вкладки.
+        if (searchQuery.isNotBlank()) {
+            val searchErr = searchError
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
+                    if (searchLoading) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = vkAccent)
+                            }
+                        }
+                    } else if (searchErr != null) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                                Text(searchErr, color = vkTextSecondary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            }
+                        }
+                    } else if (searchResults.isNotEmpty()) {
+                        item { SectionHeader("РЕЗУЛЬТАТЫ ПОИСКА", vkTextPrimary, vkTextSecondary) }
+                        items(searchResults, key = { "s_${it.ownerId}_${it.id}" }) { video ->
+                            val key = VideoDownloadManager.videoKey(video.ownerId, video.id)
+                            val ds = downloads[key]
+                            // W30-1 #VIDEO-ADD-SELF: тумблер «Добавить себе» — только
+                            // у результатов поиска; список «Мои видео»/альбомы/каталоги
+                            // карточку без коллбека рисуют.
+                            VKVideoCard(
+                                video = video, downloadState = ds, cardColor = vkCard,
+                                textColor = vkTextPrimary, secondaryColor = vkTextSecondary, accentColor = vkAccent,
+                                isAdded = searchAddedKeys.containsKey("${video.ownerId}_${video.id}"),
+                                onToggleAdd = { toggleSearchVideoAdded(video) },
+                                onClick = { onVideoClick(video) },
+                                onDownloadClick = {
+                                    if (ds != null && ds.status != DownloadStatus.FAILED) VideoDownloadManager.removeDownload(video.ownerId, video.id)
+                                    else VideoDownloadManager.enqueueDownload(video)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            when (selectedTab) {
+                1 -> {
                 // Альбомы: список альбомов или видео выбранного альбома.
                 if (selectedAlbum == null) {
                     if (albumsLoading) {
@@ -746,47 +795,9 @@ fun VideoScreen(
                     }
                 }
 
-                // #VIDEO-SEARCH: активный поиск → показываем API-результаты.
-                // #NULL-EXPLICIT: захват var-делегата searchError в локальный val —
-                // smart-cast делегированного свойства невозможен; проверка и
-                // использование — одна и та же val, поведение прежнее.
-                val searchErr = searchError
-                if (searchQuery.isNotBlank()) {
-                    if (searchLoading) {
-                        item {
-                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = vkAccent)
-                            }
-                        }
-                    } else if (searchErr != null) {
-                        item {
-                            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                                Text(searchErr, color = vkTextSecondary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                            }
-                        }
-                    } else if (searchResults.isNotEmpty()) {
-                        item { SectionHeader("РЕЗУЛЬТАТЫ ПОИСКА", vkTextPrimary, vkTextSecondary) }
-                        items(searchResults, key = { "s_${it.ownerId}_${it.id}" }) { video ->
-                            val key = VideoDownloadManager.videoKey(video.ownerId, video.id)
-                            val ds = downloads[key]
-                            // W30-1 #VIDEO-ADD-SELF: тумблер «Добавить себе» — только
-                            // у результатов поиска (search_global=1); список «Мои
-                            // видео»/альбомы/каталоги карточку без коллбека рисуют.
-                            VKVideoCard(
-                                video = video, downloadState = ds, cardColor = vkCard,
-                                textColor = vkTextPrimary, secondaryColor = vkTextSecondary, accentColor = vkAccent,
-                                isAdded = searchAddedKeys.containsKey("${video.ownerId}_${video.id}"),
-                                onToggleAdd = { toggleSearchVideoAdded(video) },
-                                onClick = { onVideoClick(video) },
-                                onDownloadClick = {
-                                    if (ds != null && ds.status != DownloadStatus.FAILED) VideoDownloadManager.removeDownload(video.ownerId, video.id)
-                                    else VideoDownloadManager.enqueueDownload(video)
-                                },
-                            )
-                        }
-                    }
-                } else {
-                    val errMsg = apiErrorMessage
+                // #VIDEO-SEARCH-FIX: активный поиск рендерится ВЫШЕ (над when(selectedTab)),
+                // на всех вкладках. Здесь — только обычный контент «Мои видео» (searchQuery пуст).
+                val errMsg = apiErrorMessage
                 if (errMsg != null && filteredVideos.isEmpty() && !loading && searchQuery.isBlank()) {
                     item {
                         Text(
@@ -849,7 +860,6 @@ fun VideoScreen(
                         }
                     }
                 }
-                } // end else (searchQuery blank → обычный список)
             }
         }
 
@@ -861,7 +871,8 @@ fun VideoScreen(
         )
         } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
             } // end else (selectedTab == 0)
-        } // end when (selectedTab)
+            } // end when (selectedTab)
+        } // end else (searchQuery.isBlank() → обычный контент вкладки)
     }
 }
 

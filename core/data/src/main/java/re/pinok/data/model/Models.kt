@@ -1490,15 +1490,21 @@ data class SearchHint(
     // объект app, но ранее он не парсился → все app-hints имели одинаковый
     // LazyColumn key "app_null" → crash "Key N was already used").
     val appId: Long? = null,
+    // #VIDEO-SEARCH-FIX: дока гарантирует лишь profile/group/app, но в реальных
+    // ответах встречается type="video". Видео-объект кладём сюда (nullable) —
+    // не ломает существующие profile/group/app, поиск просто не теряет записи.
+    val video: Video? = null,
 ) {
     val title: String get() = when (type) {
         "profile" -> user?.fullName ?: ""
         "group" -> group?.name ?: ""
+        "video" -> video?.title ?: ""
         else -> description ?: type
     }
     val thumbUrl: String? get() = when (type) {
         "profile" -> user?.photo100
         "group" -> group?.photo100
+        "video" -> video?.image?.firstOrNull()?.url
         else -> null
     }
 }
