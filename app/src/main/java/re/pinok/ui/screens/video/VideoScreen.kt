@@ -280,7 +280,9 @@ fun VideoScreen(
                 if (page.isNotEmpty()) {
                     videos = (videos + page).distinctBy { "${it.id}_${it.ownerId}" }
                 }
-                if (page.size < pageSize) endReached = true
+                // СТОП только если VK вернул 0 (пустой ответ).
+                // < pageSize НЕ значит конец — VK может вернуть меньше.
+                if (page.isEmpty()) endReached = true
             } catch (e: Exception) {
                 AppLog.w("VideoScreen", "loadMoreVideos failed: ${e.message}")
             } finally {
@@ -295,16 +297,15 @@ fun VideoScreen(
         scope.launch {
             searchLoadingMore = true
             try {
-                // ВАЖНО: offset = сырой offset (сколько запрошено у VK), НЕ размер
-                // после distinctBy — дедуп может убрать дубликаты и смещение отстанет.
                 val rawOffset = searchOffset
                 val page = app.apiClient.videoSearch(searchQuery, count = 50, offset = rawOffset)
                 if (page.isNotEmpty()) {
                     searchResults = (searchResults + page).distinctBy { "${it.id}_${it.ownerId}" }
                 }
-                // Смещаем на размер СЫРОЙ страницы (не после дедупа).
                 searchOffset = rawOffset + page.size
-                if (page.size < 50) searchEndReached = true
+                // СТОП только если VK вернул 0 — это точно конец.
+                // < 50 НЕ значит конец — VK может вернуть меньше, но результаты ещё есть.
+                if (page.isEmpty()) searchEndReached = true
             } catch (e: Exception) {
                 AppLog.w("VideoScreen", "loadMoreSearch failed: ${e.message}")
             } finally {
