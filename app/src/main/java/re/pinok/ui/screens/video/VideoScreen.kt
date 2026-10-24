@@ -286,12 +286,15 @@ fun VideoScreen(
     }
 
     // Fix #81: бесконечная пагинация — триггер при скролле к концу.
+    // VIDEO-GRID: после перехода на chunked(2) — сравниваем lastVisible
+    // с количеством СТРОК (videos.size / 2), а не количеством видео.
     LaunchedEffect(listState, videos.size) {
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            // +1 компенсирует item-футер пагинации в конце LazyColumn.
-            lastVisible >= videos.size - 3 && videos.isNotEmpty()
+            // chunked(2) → строк = ceil(videos.size / 2). -2 = за 2 строки до конца.
+            val rowCount = (videos.size + 1) / 2
+            lastVisible >= rowCount - 2 && videos.isNotEmpty()
         }
         .distinctUntilChanged()
         .filter { it }
