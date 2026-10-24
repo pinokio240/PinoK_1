@@ -302,10 +302,12 @@ fun VideoScreen(
                 if (page.isNotEmpty()) {
                     searchResults = (searchResults + page).distinctBy { "${it.id}_${it.ownerId}" }
                 }
+                // offset = rawOffset + page.size (после парсинга). Если parseVideoFull
+                // пропустил битые — offset будет меньше, но VK вернёт те же битые
+                // → следущая страница начнётся с правильной позиции.
                 searchOffset = rawOffset + page.size
-                // СТОП только если VK вернул 0 — это точно конец.
-                // < 50 НЕ значит конец — VK может вернуть меньше, но результаты ещё есть.
                 if (page.isEmpty()) searchEndReached = true
+                AppLog.i("VideoScreen", "loadMoreSearch: offset=$rawOffset+${page.size}=${searchOffset}, total=${searchResults.size}, endReached=$searchEndReached")
             } catch (e: Exception) {
                 AppLog.w("VideoScreen", "loadMoreSearch failed: ${e.message}")
             } finally {
