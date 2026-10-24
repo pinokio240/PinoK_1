@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import re.pinok.ui.components.VideoThumbnail
 // W30-1 #VIDEO-ADD-SELF: иконки тумблера «Добавить себе» (оба — core-набор,
 // как Download/PlayArrow этого файла).
 import androidx.compose.material.icons.filled.AddCircle
@@ -813,26 +815,27 @@ fun VideoScreen(
                     item { SectionHeader("МОИ ВИДЕО", vkTextPrimary, vkTextSecondary) }
                 }
 
-                items(filteredVideos, key = { "${it.ownerId}_${it.id}" }) { video ->
-                    val key = VideoDownloadManager.videoKey(video.ownerId, video.id)
-                    val downloadState = downloads[key]
-
-                    VKVideoCard(
-                        video = video,
-                        downloadState = downloadState,
-                        cardColor = vkCard,
-                        textColor = vkTextPrimary,
-                        secondaryColor = vkTextSecondary,
-                        accentColor = vkAccent,
-                        onClick = { onVideoClick(video) },
-                        onDownloadClick = {
-                            if (downloadState != null && downloadState.status != DownloadStatus.FAILED) {
-                                VideoDownloadManager.removeDownload(video.ownerId, video.id)
-                            } else {
-                                VideoDownloadManager.enqueueDownload(video)
+                // VIDEO-GRID: сетка 2 колонки (compact режим — как в CommunityScreen).
+                // Раньше было по одному большому VKVideoCard на строку.
+                val videoRows = filteredVideos.chunked(2)
+                itemsIndexed(videoRows, key = { idx, _ -> "video_row_$idx" }) { _, rowVideos ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        rowVideos.forEach { video ->
+                            Box(modifier = Modifier.weight(1f)) {
+                                VideoThumbnail(
+                                    video = video,
+                                    onClick = onVideoClick,
+                                    compact = true,
+                                )
                             }
-                        },
-                    )
+                        }
+                        repeat(2 - rowVideos.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
                 }
 
                 // Fix #81: футер пагинации.
