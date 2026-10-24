@@ -669,11 +669,12 @@ fun BookmarksScreen(
                                 bm = bm,
                                 onLongClick = { removeTarget = bm },
                                 onRemoveClick = { removeTarget = bm },
+                                // FIX-POST-CONTEXT: «Перейти к посту» — открывает
+                                // PostDetailScreen (как тап по телу поста), а НЕ
+                                // CommunityScreen. Раньше вызывал onGroupClick →
+                                // открывал группу вместо самого поста.
                                 onPostContextClick = bm.post?.let { p ->
-                                    {
-                                        if (p.ownerId > 0) onUserClick?.invoke(p.ownerId)
-                                        else onGroupClick?.invoke(-p.ownerId)
-                                    }
+                                    { onPostClick?.invoke(p.ownerId, p.id) }
                                 },
                                 onDeletePost = bm.post?.let { p ->
                                     {
