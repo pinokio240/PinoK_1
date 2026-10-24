@@ -62,46 +62,60 @@ fun VideoThumbnail(
 ) {
     val thumbUrl = video.thumbUrl
     if (compact) {
-        // Compact: только превью + duration badge, без Card/padding/title.
-        // ВАЖНО: НЕ используем weight здесь — weight доступен только в RowScope.
-        // Caller (CommunityScreen) оборачивает VideoThumbnail в Row и даёт weight.
-        // Здесь только aspectRatio + кликабельность.
-        Box(
+        // Compact: превью + duration badge + название (1 строка).
+        Column(
             modifier = Modifier
-                .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
                 .clickable { onClick(video) },
-            contentAlignment = Alignment.Center,
         ) {
-            if (thumbUrl != null) {
-                AsyncImage(
-                    model = thumbUrl,
-                    contentDescription = video.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
             Box(
-                modifier = Modifier.size(36.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(22.dp))
-            }
-            if (video.duration > 0) {
-                Box(
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        "${video.duration / 60}:${"%02d".format(video.duration % 60)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        fontSize = 11.sp,
+                if (thumbUrl != null) {
+                    AsyncImage(
+                        model = thumbUrl,
+                        contentDescription = video.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
                     )
                 }
+                Box(
+                    modifier = Modifier.size(36.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+                if (video.duration > 0) {
+                    Box(
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                            .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            "${video.duration / 60}:${"%02d".format(video.duration % 60)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+            // VIDEO-GRID-TITLE: название видео (1 строка, ellipsis).
+            if (video.title.isNotBlank()) {
+                Text(
+                    text = video.title,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                )
             }
         }
         return
