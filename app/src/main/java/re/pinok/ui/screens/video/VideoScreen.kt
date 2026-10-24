@@ -128,6 +128,10 @@ fun VideoScreen(
     var showSearch by remember { mutableStateOf(false) }
     // #VIDEO-SEARCH: результаты поиска (отдельный список, не клиентский фильтр).
     var searchResults by remember { mutableStateOf<List<Video>>(emptyList()) }
+    // VIDEO-SEARCH-PAGINATION: пагинация результатов поиска.
+    var searchOffset by remember { mutableStateOf(0) }
+    var searchLoadingMore by remember { mutableStateOf(false) }
+    var searchEndReached by remember { mutableStateOf(false) }
     var searchLoading by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
     // W30-1 #VIDEO-ADD-SELF: локальное состояние «добавлено у себя» для результатов
@@ -285,21 +289,43 @@ fun VideoScreen(
         }
     }
 
+    // VIDEO-SEARCH-PAGINATION: подгрузка следующих результатов поиска.
+    fun loadMoreSearch() {
+        if (searchLoadingMore || searchEndReached || searchResults.isEmpty()) return
+        scope.launch {
+            searchLoadingMore = true
+            try {
+                val page = app.apiClient.videoSearch(searchQuery, count = 50, offset = searchOffset)
+                if (page.isNotEmpty()) {
+                    searchResults = (searchResults + page).distinctBy { "${it.id}_${it.ownerId}" }
+                    searchOffset = searchResults.size
+                }
+                if (page.size < 50) searchEndReached = true
+            } catch (e: Exception) {
+                AppLog.w("VideoScreen", "loadMoreSearch failed: ${e.message}")
+            } finally {
+                searchLoadingMore = false
+            }
+        }
+    }
+
     // Fix #81: бесконечная пагинация — триггер при скролле к концу.
     // VIDEO-GRID: chunked(2) → сравниваем lastVisible с количеством СТРОК.
-    // При поиске — rowCount из searchResults, при обычном списке — из videos.
+    // При поиске — rowCount из searchResults + loadMoreSearch, иначе videos + loadMoreVideos.
     LaunchedEffect(listState, videos.size, searchResults.size) {
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            // При поиске — rowCount из searchResults, иначе из videos.
             val sourceList = if (searchQuery.isNotBlank()) searchResults else videos
             val rowCount = (sourceList.size + 1) / 2
             lastVisible >= rowCount - 2 && sourceList.isNotEmpty()
         }
         .distinctUntilChanged()
         .filter { it }
-        .collect { loadMoreVideos() }
+        .collect {
+            if (searchQuery.isNotBlank()) loadMoreSearch()
+            else loadMoreVideos()
+        }
     }
 
     // Тёмная тема как в нативном ВК Video — фон почти чёрный.
@@ -327,15 +353,21 @@ fun VideoScreen(
                 if (q.isBlank()) {
                     searchResults = emptyList()
                     searchError = null
+                    searchOffset = 0
+                    searchEndReached = false
                     return@collect
                 }
                 searchLoading = true
                 searchError = null
+                searchOffset = 0
+                searchEndReached = false
                 try {
                     val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         app.apiClient.videoSearch(q, count = 50)
                     }
                     searchResults = result
+                    searchOffset = result.size
+                    if (result.size < 50) searchEndReached = true
                     if (result.isEmpty()) searchError = "Ничего не найдено"
                 } catch (e: Exception) {
                     AppLog.e("VideoScreen", "videoSearch error", e)
@@ -526,7 +558,7 @@ fun VideoScreen(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
                                 rowVideos.forEach { video ->
-                                    Box(modifier = Modifier.weight(1f)) {
+                                    Box(modifier = Modifier.weight(1f).fillMaxWidth(0.5f)) {
                                         VideoThumbnail(
                                             video = video,
                                             onClick = onVideoClick,
@@ -535,8 +567,20 @@ fun VideoScreen(
                                     }
                                 }
                                 repeat(2 - rowVideos.size) {
-                                    Spacer(modifier = Modifier.weight(1f))
+                                    Spacer(modifier = Modifier.weight(1f).fillMaxWidth(0.5f))
                                 }
+                            }
+                        }
+                        // Футер пагинации поиска.
+                        if (searchLoadingMore) {
+                            item {
+                                Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = vkAccent)
+                                }
+                            }
+                        } else if (searchEndReached) {
+                            item {
+                                Text("Это все видео", modifier = Modifier.fillMaxWidth().padding(20.dp), color = vkTextSecondary, fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             }
                         }
                     }
@@ -831,7 +875,7 @@ fun VideoScreen(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         rowVideos.forEach { video ->
-                            Box(modifier = Modifier.weight(1f)) {
+                            Box(modifier = Modifier.weight(1f).fillMaxWidth(0.5f)) {
                                 VideoThumbnail(
                                     video = video,
                                     onClick = onVideoClick,
