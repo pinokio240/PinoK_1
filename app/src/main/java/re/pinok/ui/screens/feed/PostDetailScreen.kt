@@ -2106,8 +2106,14 @@ internal fun ReplyItem(
                 )
             }
             if (reply.text.isNotBlank()) {
+                // FIX-LINK-CLICK: linkify для ответов в комментариях (как в CommentItem).
+                val replyCtx = androidx.compose.ui.platform.LocalContext.current
                 Text(
-                    text = reply.text,
+                    text = re.pinok.util.linkifyVkText(
+                        text = reply.text,
+                        linkColor = MaterialTheme.colorScheme.primary,
+                        onUrlClick = { url -> re.pinok.util.openUrlExternal(replyCtx, url) },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 2.dp),

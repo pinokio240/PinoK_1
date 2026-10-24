@@ -124,7 +124,12 @@ fun PostAttachmentRenderer(
         list.forEach { att ->
             val link = att.link
             if ((att.type == "link" || att.type == "page") && link != null) {
-                LinkCard(link = link, onClick = {})
+                // FIX-LINK-CLICK: передаём реальный onClick — открывает URL
+                // во внешнем браузере. Раньше был onClick = {} → ссылки не открывались.
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                LinkCard(link = link, onClick = {
+                    re.pinok.util.openUrlExternal(ctx, link.url)
+                })
             }
         }
         // 6. Опрос (первый из вложений).
