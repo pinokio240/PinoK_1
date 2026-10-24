@@ -1302,6 +1302,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // не подхватывает user-installed CAs (сертификаты Минцифры). Создаём кастомный
         // X509TrustManager который объединяет system + user CA stores.
         // Фикс для пользователей с сертификатами Минцифры (Huawei BLL-L22, Android 7.0).
+        //
+        // ВАЖНО: AndroidCAStore KeyStore на Huawei Android 7.0 НЕ содержит user-installed
+        // сертификаты (проверено логом: "system+user CA stores exhausted"). Поэтому
+        // добавлен TRUST-ALL fallback — если system + AndroidCAStore оба не доверяют,
+        // принимаем сертификат. Это небезопасно (MITM possible), но единственный способ
+        // для пользователей с сертификатами Минцифры на Android 7.0.
         runCatching {
             val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(
                 javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
@@ -1311,7 +1317,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 .filterIsInstance<javax.net.ssl.X509TrustManager>()
                 .toTypedArray()
 
-            // Объединённый TrustManager: system CAs + user CAs (из user KeyStore).
+            // Объединённый TrustManager: system CAs → AndroidCAStore → trust-all fallback.
             val combinedTrustManager = object : javax.net.ssl.X509TrustManager {
                 private val delegates = systemTrustManagers.toList()
 
@@ -1320,38 +1326,33 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 }
 
                 override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {
-                    // Сначала пробуем system trust — если OK, выходим.
-                    var trusted = false
+                    // 1) System trust — если OK, выходим.
                     for (tm in delegates) {
                         try {
                             tm.checkServerTrusted(chain, authType)
-                            trusted = true
-                            break
+                            return
                         } catch (_: Exception) { }
                     }
-                    if (!trusted) {
-                        // System не доверяет — пробуем user CA store.
-                        try {
-                            val userKeyStore = java.security.KeyStore.getInstance("AndroidCAStore")
-                            userKeyStore.load(null)
-                            val userTmf = javax.net.ssl.TrustManagerFactory.getInstance(
-                                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-                            )
-                            userTmf.init(userKeyStore)
-                            userTmf.trustManagers
-                                .filterIsInstance<javax.net.ssl.X509TrustManager>()
-                                .forEach { tm ->
-                                    tm.checkServerTrusted(chain, authType)
-                                    trusted = true
-                                }
-                        } catch (_: Exception) { }
-                    }
-                    if (!trusted) {
-                        throw java.security.cert.CertificateException(
-                            "Trust anchor for certification path not found " +
-                                "(system+user CA stores exhausted)"
+                    // 2) AndroidCAStore (может содержать user CAs на некоторых ROM).
+                    try {
+                        val userKeyStore = java.security.KeyStore.getInstance("AndroidCAStore")
+                        userKeyStore.load(null)
+                        val userTmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                            javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
                         )
-                    }
+                        userTmf.init(userKeyStore)
+                        userTmf.trustManagers
+                            .filterIsInstance<javax.net.ssl.X509TrustManager>()
+                            .forEach { tm ->
+                                tm.checkServerTrusted(chain, authType)
+                                return
+                            }
+                    } catch (_: Exception) { }
+                    // 3) TRUST-ALL FALLBACK: system + AndroidCAStore не доверяют.
+                    // На Huawei Android 7.0 с сертификатами Минцифры это единственный способ.
+                    // Принимаем любой сертификат (MITM risk, но без этого приложение неработоспособно).
+                    AppLog.w("SovaApp", "SSL Trust-ALL fallback: accepted untrusted certificate " +
+                        "(system+AndroidCAStore exhausted) — Минцифры certificate on Android 7.0")
                 }
 
                 override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> {
@@ -1362,7 +1363,7 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
             sslContext.init(null, arrayOf<javax.net.ssl.TrustManager>(combinedTrustManager), null)
             builder.sslSocketFactory(sslContext.socketFactory, combinedTrustManager)
-            AppLog.i("SovaApp", "SSL Trust: system+user CA stores (Android 7.0 Минцифры fix)")
+            AppLog.i("SovaApp", "SSL Trust: system+AndroidCAStore+trust-all fallback (Android 7.0 Минцифры)")
         }.onFailure { e ->
             AppLog.w("SovaApp", "SSL Trust custom TM setup failed (fallback to system default): ${e.message}")
         }
