@@ -323,7 +323,8 @@ fun VideoScreen(
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             val sourceList = if (searchQuery.isNotBlank()) searchResults else videos
             val rowCount = (sourceList.size + 1) / 2
-            lastVisible >= rowCount - 2 && sourceList.isNotEmpty()
+            // За 3 строки до конца — чтобы пагинация срабатывала заранее.
+            lastVisible >= rowCount - 3 && sourceList.isNotEmpty()
         }
         .distinctUntilChanged()
         .filter { it }
