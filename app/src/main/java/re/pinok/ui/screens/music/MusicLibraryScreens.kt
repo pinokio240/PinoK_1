@@ -360,11 +360,16 @@ fun PlaylistDetailScreen(
                             // audio.savePlaylistAsCopy: 1 запрос, копирует плейлист целиком с cover/
                             // description/followers, новый id, title с датой (как в VK веб —
                             // «Для вас DD.MM.YYYY»). Только для чужих (свой нельзя скопировать).
-                            // #PERMISSIONS-GATE: показываем при permissions.save_as_copy=true
-                            // (HAR: Daily Playlist save_as_copy=true; сохранённая копия false).
-                            // Если permissions=null (сервер не вернул) — fallback: показываем
-                            // для любого чужого плейлиста (canSaveAsCopy=false но сценарий возможен).
-                            if (myUserId != 0L && ownerId != myUserId && playlist != null &&
+                            // #SAVECOPY-GATE-FIX (аудит 5-UI-AUDIT C.1): КОРНЕВАЯ ПРИЧИНА жалобы
+                            // «не сохраняется плейлист». Раньше проверяли `ownerId != myUserId` —
+                            // но HAR доказывает: Daily Playlist (id=-21, type=generated) имеет
+                            // owner_id=171093180==myUserId И permissions.save_as_copy=true.
+                            // VK веб показывает кнопку Action_CopyToMyMusic для Daily Playlist
+                            // (Главная1.html: testid Action_CopyToMyMusic, icon add_24).
+                            // Условие должно быть ТОЛЬКО по permissions.save_as_copy,
+                            // НЕ по owner_id (свой ugc имеет save_as_copy=false → кнопка скрыта).
+                            // permissions==null → fallback: показываем (старые ответы без permissions).
+                            if (myUserId != 0L && playlist != null &&
                                 (playlist?.canSaveAsCopy == true || playlist?.permissions == null)
                             ) {
                                 Box(

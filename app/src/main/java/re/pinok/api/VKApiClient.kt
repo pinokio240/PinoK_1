@@ -5239,19 +5239,23 @@ class VKApiClient(
      * даже при успешном создании → плейлист «не сохранялся» (хотя реально создавался
      * на сервере). Теперь парсим `response.id` напрямую.
      *
-     * #AUDIO-WEB-GATEWAY: web-токены требуют web-шлюз (как все audio.* write).
+     * #AUDIO-WEB-GATEWAY: HAR #164 подтверждает — web.api.vk.ru принимает этот метод
+     * (200 OK). В отличие от createPlaylist/addToPlaylist (err=3 на web-шлюзе),
+     * savePlaylistAsCopy ВХОДИТ в allowlist web-шлюза. forceWebGateway=true.
      *
      * @return ID созданной копии или -1L при ошибке.
      */
     suspend fun audioSavePlaylistAsCopy(ownerId: Long, playlistId: Long): Long {
         if (isOffline()) return -1L
-        // #PLAYLIST-WRITE-GATEWAY-FIX: forceWebGateway УБРАН — web-шлюз даёт err=3
-        // для audio.savePlaylistAsCopy (как все audio.*Playlist write-методы).
-        // Default api.vk.ru работает.
+        // #SAVECOPY-WEB-GATEWAY (аудит 4-API-AUDIT D.1/D.5): HAR #164 подтверждает —
+        // audio.savePlaylistAsCopy идёт через web.api.vk.ru и возвращает 200 OK.
+        // НЕ как createPlaylist (лог err=3 на web-шлюзе). Различие: savePlaylistAsCopy
+        // ВХОДИТ в allowlist web-шлюза, createPlaylist — НЕТ.
+        // Возвращён forceWebGateway=true (ошибочно убран в a139a07 вместе с createPlaylist).
         val json = call("audio.savePlaylistAsCopy", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        )) ?: return -1L
+        ), forceWebGateway = true) ?: return -1L
         return try {
             // #SAVE-COPY-FIX: response — сам плейлист (БЕЗ обёртки "playlist").
             json.getAsJsonObject("response")?.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: -1L
@@ -14450,13 +14454,14 @@ class VKApiClient(
             // default — лог: audio.get 403ms 200 OK через default api.vk.ru).
             // READ-методы (audio.getPlaylistById, audio.getPlaylists, audio.get) работают
             // на обоих шлюзах — НЕ добавляем сюда.
+            // ИСКЛЮЧЕНИЕ: audio.savePlaylistAsCopy РАБОТАЕТ через web.api.vk.ru (HAR #164
+            // 200 OK). Использует forceWebGateway=true напрямую. НЕ добавляем сюда.
             "audio.createPlaylist",
             "audio.addToPlaylist",
             "audio.editPlaylist",
             "audio.deletePlaylist",
             "audio.removeFromPlaylist",
             "audio.followPlaylist",
-            "audio.savePlaylistAsCopy",
         )
 
         /**
