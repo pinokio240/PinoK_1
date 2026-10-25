@@ -751,6 +751,27 @@ fun CommunityScreen(
     // Fix #85: канонический триггер пагинации стены, гейт по вкладке 0.
     PagingTrigger(listState = listState, state = wallState, enabled = selectedTab == 0)
 
+    // COMMUNITY-SEARCH-PAGINATION: триггер догрузки результатов поиска.
+    // wallState использует PagedListState + PagingTrigger, но поиск — отдельный
+    // список searchResults: List<Post> + loadMoreSearch(), поэтому стандартный
+    // PagingTrigger не подходит (требует PagedListState). Здесь ручной
+    // эквивалент: snapshotFlow по layoutInfo → lastVisible >= total-3 →
+    // loadMoreSearch(). Паттерн 1:1 с PagingTrigger (PagedListState.kt:199).
+    // Гейты: selectedTab==0, searchQuery.isNotBlank() (активный поиск),
+    // searchResults непуст, не loadMoreSearch-внутренние гейты (loading/end/
+    // empty — проверяются внутри loadMoreSearch).
+    LaunchedEffect(listState, selectedTab, searchQuery) {
+        snapshotFlow {
+            if (selectedTab != 0 || searchQuery.isBlank()) return@snapshotFlow false
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible >= layoutInfo.totalItemsCount - 3 && searchResults.isNotEmpty()
+        }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { loadMoreSearch() }
+    }
+
     if (loading) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
@@ -1291,26 +1312,33 @@ fun CommunityScreen(
                 )
             }
         }
+        // COMMUNITY-SEARCH: единое поисковое поле — ВСЕГДА рендерится с ОДНИМ
+        // стабильным ключом "search_input". Раньше было два item с разными
+        // ключами ("search_input" для expanded и "search_input_collapsed" для
+        // пустого запроса) → при вводе первой буквы ключ менялся → Compose
+        // уничтожал старый TextField и создавал новый → фокус терялся →
+        // клавиатура закрывалась. Теперь поле одно, trailingIcon (кнопка «×»)
+        // показывается условно внутри — фокус сохраняется при любом вводе.
+        item(key = "search_input") {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                placeholder = { Text("Поиск по записям…") },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Очистить")
+                        }
+                    }
+                },
+                singleLine = true,
+            )
+        }
         // COMMUNITY-SEARCH: если есть поисковый запрос — показываем результаты
         // поиска вместо обычной стены.
         if (searchQuery.isNotBlank()) {
-            item(key = "search_input") {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    placeholder = { Text("Поиск по записям…") },
-                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Очистить")
-                            }
-                        }
-                    },
-                    singleLine = true,
-                )
-            }
             if (searchLoading && searchResults.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -1355,31 +1383,32 @@ fun CommunityScreen(
                             .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                     )
                 }
-                if (searchLoading) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                // COMMUNITY-SEARCH-PAGINATION: футер пагинации результатов поиска.
+                // Раньше loadMoreSearch() БЫЛ определён, но НИКТО его не вызывал —
+                // поиск показывал только первую страницу (20 постов), остальные
+                // «не прогружены». Теперь триггер ниже (searchPaginationTrigger)
+                // вызывает loadMoreSearch() при скролле к концу. Футер показывает
+                // статус догрузки / «Это все результаты».
+                item(key = "search_paging_footer") {
+                    when {
+                        searchLoading -> {
+                            Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
                         }
-                    }
-                }
-                if (searchEndReached) {
-                    item {
-                        Text("Это все результаты", modifier = Modifier.fillMaxWidth().padding(20.dp), color = MaterialTheme.colorScheme.outline, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        searchEndReached -> {
+                            Text(
+                                "Это все результаты",
+                                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                color = MaterialTheme.colorScheme.outline,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
         } else {
         // Обычная стена (без поиска)
-        item(key = "search_input_collapsed") {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                placeholder = { Text("Поиск по записям…") },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                singleLine = true,
-            )
-        }
         items(wallState.items.filter { it.id != softDeletedPost?.id }, key = { "${it.ownerId}_${it.id}" }) { post ->
             val postKey = "${post.ownerId}_${post.id}"
             CommunityPostCard(
