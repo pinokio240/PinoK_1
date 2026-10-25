@@ -13767,8 +13767,18 @@ class VKApiClient(
                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                             "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
                         header("Accept", "*/*")
-                        // #AUDIO-WEB-HEADERS: 6 настраиваемых headers из SovaPrefs.
-                        header("Accept-Encoding", snap.audioAcceptEncoding)
+                        // #ACCEPT-ENCODING-FILTER: OkHttp 4.12 НЕ умеет brotli/zstd
+                        // (нет okhttp-brotli interceptor). Если передать 'gzip, deflate,
+                        // br, zstd' — VK может ответить brotli → OkHttp рвёт соединение
+                        // при чтении (✗NET, 99ms, без apiCode — лог 22:02). Фильтруем
+                        // ОСТАВЛЯЯ только 'gzip' (OkHttp умеет). deflate тоже убираем
+                        // (OkHttp не декодирует raw deflate без wrapper'а).
+                        val safeEncoding = snap.audioAcceptEncoding
+                            .split(",")
+                            .map { it.trim() }
+                            .filter { it.equals("gzip", ignoreCase = true) }
+                            .joinToString(",")
+                        header("Accept-Encoding", if (safeEncoding.isBlank()) "gzip" else safeEncoding)
                         header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
                         header("Sec-Fetch-Site", "same-site")
                         header("Sec-Fetch-Mode", "cors")
