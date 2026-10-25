@@ -194,11 +194,16 @@ object AppLog {
      * in-memory buffer/logcat. PersistentLogger.log сам проверяет enabled —
      * если выключен, ранний no-op (дешев, без lock).
      *
-     * Сигнатура: (level: String, tag: String, msg: String, throwable: Throwable?) -> Unit
+     * Сигнатура: (level: String, tag: String, msg: String, throwable: Throwable?,
+     * context: Map<String,String>?) -> Unit
      * где level — "V"/"D"/"I"/"W"/"E" (см. [levelChar]).
+     *
+     * #PERSIST-CONTEXT-FIX: context Map (params метода, durationMs, apiCode, bytes,
+     * thread, caller) — включается в persistent_log. Раньше hook не передавал context
+     * → persistent_log терял params/durationMs/apiCode (жалоба «неполный захват логов»).
      */
     @Volatile
-    var persistentLogHook: ((String, String, String, Throwable?) -> Unit)? = null
+    var persistentLogHook: ((String, String, String, Throwable?, Map<String, String>?) -> Unit)? = null
 
     /**
      * #ARCH-CONTAINERS (Этап 1.2-а): хост (:app) передаёт идентификацию сборки
@@ -874,7 +879,9 @@ object AppLog {
         // выключен, ранний no-op (дешев, без lock). Это ЕДИНСТВЕННАЯ точка перехвата:
         // все публичные методы (v/d/i/w/e + перегрузки с контекстом + api/lp/
         // backfill/execute/ws) делегируют сюда, поэтому покрывается всё.
-        persistentLogHook?.invoke(levelChar(level), tag, msg, t)
+        // #PERSIST-CONTEXT-FIX: передаём context в hook — теперь persistent_log
+        // пишет params/durationMs/apiCode/bytes/httpStatus (раньше терял их).
+        persistentLogHook?.invoke(levelChar(level), tag, msg, t, context)
 
         // #LOG-CATEGORIES (2026-08-04): per-category gating.
         // Если категория этого тега отключена пользователем в Settings → Log —

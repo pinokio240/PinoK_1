@@ -841,8 +841,8 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         // (+ api/lp/backfill/execute/ws) зеркалится в persistent-лог (если enabled).
         // Hook вызывается ДО гейтов category/section/errors-only — persistent-лог
         // пишет ПОЛНЫЙ лог всего. PersistentLogger.log сам проверяет enabled (no-op если выключен).
-        AppLog.persistentLogHook = { level, tag, msg, t ->
-            re.pinok.util.PersistentLogger.log(level, tag, msg, t)
+        AppLog.persistentLogHook = { level, tag, msg, t, context ->
+            re.pinok.util.PersistentLogger.log(level, tag, msg, t, context)
         }
 
         instance = this

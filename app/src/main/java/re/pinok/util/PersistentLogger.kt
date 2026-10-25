@@ -160,7 +160,13 @@ object PersistentLogger {
      * Вызывается из AppLog.persistentLogHook на КАЖДУЮ log-запись (v/d/i/w/e
      * + api/lp/backfill/execute/ws) — поэтому должна быть дешёвой при выключенном логе.
      */
-    fun log(level: String, tag: String, msg: String, throwable: Throwable? = null) {
+    fun log(
+        level: String,
+        tag: String,
+        msg: String,
+        throwable: Throwable? = null,
+        context: Map<String, String>? = null,
+    ) {
         if (!enabled) return
         synchronized(lock) {
             val w = writer ?: return
@@ -174,6 +180,13 @@ object PersistentLogger {
                     append(tag.take(30)) // ограничиваем длину тега
                     append(": ")
                     append(msg)
+                    // #PERSIST-CONTEXT: дописываем context map (params, durationMs,
+                    // apiCode, bytes, thread, caller) — как в logcat. Раньше context
+                    // не передавался через hook → persistent_log терял params метода.
+                    if (!context.isNullOrEmpty()) {
+                        append("  ")
+                        append(context.entries.joinToString(",", "{", "}") { "${it.key}=${it.value}" })
+                    }
                 }
                 w.println(line)
                 if (throwable != null) {
