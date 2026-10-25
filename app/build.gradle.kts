@@ -194,6 +194,10 @@ dependencies {
     // OkHttp
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+    // #BROTLI-INTERCEPTOR: OkHttp 4.12 не умеет декодировать brotli/zstd ответы.
+    // VK WAF проверяет Accept-Encoding: 'gzip, deflate, br, zstd' (Chrome шлёт это).
+    // Без brotli interceptor PinoK шлёт только 'gzip' → WAF рвёт соединение (✗NET).
+    implementation(libs.okhttp.brotli)
 
     // Coil 3
     implementation(libs.coil.compose)

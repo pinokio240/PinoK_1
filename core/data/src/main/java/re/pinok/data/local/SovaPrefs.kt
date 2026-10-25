@@ -2526,7 +2526,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         const val AUDIO_SEC_CH_UA_PLATFORM_DEFAULT = "\"Windows\""
         const val AUDIO_SEC_GPC_DEFAULT            = "1"
         const val AUDIO_PRIORITY_DEFAULT           = "u=1, i"
-        const val AUDIO_ACCEPT_ENCODING_DEFAULT    = "gzip"
+        const val AUDIO_ACCEPT_ENCODING_DEFAULT    = "gzip, deflate, br"
 
         // Fix #337 / #PANELEDIT (2026-10-02): дефолтный порядок пунктов панелей
         // (JSON-массивы KEY пунктов — PanelItems.key, а НЕ Screen.route, т.к.

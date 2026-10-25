@@ -1412,10 +1412,21 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         }
 
         httpClient = builder
+            // #BROTLI-INTERCEPTOR: OkHttp 4.12 не умеет brotli/zstd. BrotliInterceptor
+            // добавляет Accept-Encoding: gzip, deflate, br (как Chrome) и декодирует
+            // ответы. Без него VK WAF рвёт соединение (✗NET) при Chrome UA + gzip-only.
+            .addInterceptor(okhttp3.brotli.BrotliInterceptor)
             .addInterceptor { chain ->
                 val original = chain.request()
                 val builder2 = original.newBuilder()
-                    .header("Accept-Language", "ru")
+                    // #ACCEPT-LANG-CONDITIONAL (16-OKHTTP-AUDIT): БЕЗУСЛОВНЫЙ overwrite
+                    // 'ru' затирал мой 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7' для web-шлюза.
+                    // Ставим 'ru' ТОЛЬКО если request не задал свой (как User-Agent выше).
+                    .apply {
+                        if (original.header("Accept-Language") == null) {
+                            header("Accept-Language", "ru")
+                        }
+                    }
                 // VK Android UA — только если запрос явно не задал свой
                 // (WebTokenAuth задаёт Chrome UA для login.vk.com web-flow).
                 if (original.header("User-Agent") == null) {
