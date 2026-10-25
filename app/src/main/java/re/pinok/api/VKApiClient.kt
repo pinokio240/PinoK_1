@@ -13688,11 +13688,6 @@ class VKApiClient(
                 else VkSigner.sign(method, allParams, secret)
             } else null
 
-            val form = FormBody.Builder().apply {
-                allParams.forEach { (k, v) -> add(k, v) }
-                sig?.let { add("sig", it) }
-            }.build()
-
             if (sig != null) {
                 AppLog.d("VKApiClient", "call($method): signed with user_secret (sig=${sig.take(8)}…)")
             } else if (VkSigner.isWebToken(tk)) {
@@ -13722,8 +13717,40 @@ class VKApiClient(
             if ((snap.netUseWebApiGateway || forceWebGateway) && WEB_INCOMPATIBLE_METHODS.contains(method)) {
                 AppLog.d("VKApiClient", "call($method): forcing api.vk.com (incompatible with web gateway)")
             }
+
+            // #WEB-CLIENT-ID-FIX (аудит HAR «музыка сохранить плейлист1.7z» 2026-10-25):
+            // VK web-шлюз web.api.vk.ru ТРЕБУЕТ client_id в query URL для идентификации
+            // web-приложения. Без него → err=3 "Unknown method passed" (лог
+            // Новый текстовый документ (2).txt: audio.createPlaylist/editPlaylist/
+            // savePlaylistAsCopy err=3, хотя методы работают в HAR #53/#164 с теми
+            // же params + client_id=6287487 в URL).
+            // api.vk.ru (default) не требует client_id — идентифицирует по access_token.
+            // v — тоже в query для web-шлюза (HAR #53: ?v=5.289&client_id=6287487).
+            // #WEB-BODY-MINIMAL (HAR #53): web-шлюз принимает в body ТОЛЬКО user args +
+            // access_token (БЕЗ v/https/lang/device). Раньше PinoK добавлял все 5 в body
+            // → web-шлюз воспринимал их как неизвестные параметры → err=3.
+            // Для default-шлюза (api.vk.ru) body остаётся как было (v/https/lang/device).
+            val methodUrl = if (useWebGateway) {
+                VKEndpoints.method(method, true) +
+                    "?v=${VKEndpoints.API_VERSION}" +
+                    "&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}"
+            } else {
+                VKEndpoints.method(method, false)
+            }
+            // Для web-шлюза: body = user args + access_token (+ sig если есть).
+            // Для default-шлюза: body = full allParams (v/https/lang/device/access_token).
+            val form = FormBody.Builder().apply {
+                if (useWebGateway) {
+                    args.forEach { (k, v) -> add(k, v) }
+                    add("access_token", tk)
+                    sig?.let { add("sig", it) }
+                } else {
+                    allParams.forEach { (k, v) -> add(k, v) }
+                    sig?.let { add("sig", it) }
+                }
+            }.build()
             val req = Request.Builder()
-                .url(VKEndpoints.method(method, useWebGateway))
+                .url(methodUrl)
                 .post(form)
                 .build()
             if (useWebGateway) {
@@ -13733,7 +13760,7 @@ class VKApiClient(
             // Default false → 0 шума в обычном режиме. Включается из NETWORK-вкладки
             // SettingsScreen для диагностики (err=3/15/5 — какой host вернул?).
             if (snap.netLogApiUrls) {
-                AppLog.d("VKApiClient", "call($method): URL=${VKEndpoints.method(method, useWebGateway)}")
+                AppLog.d("VKApiClient", "call($method): URL=$methodUrl")
             }
 
             // #33: Детальная трассировка VK API запроса — метод + маскированные
