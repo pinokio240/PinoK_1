@@ -238,7 +238,7 @@ private enum class SettingsTab(
     // #TASK-14-AUDIO-UI: вкладка «Аудио» — browser headers для web.api.vk.ru
     // (audio.* методы). VK WAF проверяет их наличие; defaults — из HAR #53
     // (Chrome 156). Содержимое: 6 OutlinedTextField + кнопка «Сбросить к defaults».
-    AUDIO("Аудио", Icons.Outlined.Headphones),
+    AUDIO("headers", Icons.Outlined.Headphones),
     // #CALLS-PERM-TAB (2026-10-15): отдельная вкладка «Разрешения» — запрос любого
     // разрешения вручную (микрофон/камера/уведомления/BT/«Все файлы») + статус.
     PERMISSIONS("Разрешения", Icons.Outlined.Lock),
@@ -749,7 +749,7 @@ private fun AudioTab(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { SectionHeader("Аудио") }
+        item { SectionHeader("headers") }
         item {
             Text(
                 "Browser headers для web.api.vk.ru (audio.* методы). " +
