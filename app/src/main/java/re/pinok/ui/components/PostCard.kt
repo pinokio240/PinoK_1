@@ -147,6 +147,10 @@ fun PostCard(
     // — мы уже в сообществе, она избыточна; аналогично на PostDetailScreen).
     // ВНИМАНИЕ: это ДРУГОЙ сценарий, чем onAuthorClick (fromId → профиль автора).
     onPostContextClick: (() -> Unit)? = null,
+    // #PLAYLIST-OPEN-NOT-PLAY: колбэк открытия экрана плейлиста (audio_playlist
+    // вложение поста/репоста). null = тап no-op (не «сразу играет»). Экраны
+    // пробрасывают nav-колбэк: onOpenPlaylist = { o, p, k -> nav.navigate(...) }.
+    onOpenPlaylist: ((ownerId: Long, playlistId: Long, accessKey: String?) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     // ——— ВРЕМЯ (футер, как в эталоне FeedScreen; формат — по showFullDate) ———
@@ -502,6 +506,7 @@ fun PostCard(
                     consumeClicks = false,
                     clipThumbnailEnabled = false,
                     post = post,
+                    onOpenPlaylist = onOpenPlaylist,
                 )
             }
             // ─── РЕПОСТ (copy_history[0]) ───
@@ -516,6 +521,7 @@ fun PostCard(
                     groupName = repostGroupName,
                     groupPhoto = repostGroupPhoto,
                     onGroupClick = onRepostGroupClick,
+                    onOpenPlaylist = onOpenPlaylist,
                     // NEWS-COLLAPSE: текст репоста следует тому же правилу, что и основной
                     // текст поста (post.textMaxLines). Int.MAX_VALUE (преф выкл) → репост
                     // целиком; иначе — лимит визуальных строк (лента: 6).

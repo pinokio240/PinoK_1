@@ -240,6 +240,11 @@ fun FeedScreen(
     // фоновой загрузки — полное разделение «Ленты» и «Реакций» на уровне панели.
     // Обычный маршрут feed передаёт false.
     likesOnly: Boolean = false,
+    // #PLAYLIST-OPEN-NOT-PLAY: открыть экран плейлиста (audio_playlist вложение
+    // поста ленты). null-паттерн не подходит (нужно дифференцировать «не передан»
+    // от «передан, но no-op») → дефолт {} (PostCard.onOpenPlaylist nullable,
+    // обёрнём ниже). SovaNavHost передаёт nav.navigate(PlaylistDetail).
+    onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -2021,6 +2026,8 @@ fun FeedScreen(
                                 photoViewerState.value = urls to index
                             },
                             onRepostClick = { sharePost.value = it },
+                            // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка плейлиста.
+                            onOpenPlaylist = onOpenPlaylist,
                         )
                     }
                 }
@@ -2161,6 +2168,8 @@ fun FeedScreen(
                             }
                         }
                     },
+                    // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка плейлиста.
+                    onOpenPlaylist = onOpenPlaylist,
                 )
                 Box(
                     modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp)
@@ -2439,6 +2448,9 @@ private fun PostCard(
     // (по post.ownerId). Это ДРУГОЙ сценарий, чем onAuthorClick (fromId → профиль
     // автора): ownerId может отличаться от fromId (пользователь пишет на стене группы).
     onPostContextClick: (Post) -> Unit = {},
+    // #PLAYLIST-OPEN-NOT-PLAY: открыть экран плейлиста (audio_playlist вложение).
+    // Передаётся из FeedScreen (хостом из SovaNavHost).
+    onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
 ) {
     // Пост-источник: группа (fromId < 0) или пользователь (fromId > 0).
     val authorIsGroup = post.fromId < 0
@@ -2572,6 +2584,8 @@ private fun PostCard(
         myUserId = myUserId,
         // AUTHOR-STRIP: проброс клика полоски «Перейти к посту» в единый PostCard.
         onPostContextClick = { onPostContextClick(post) },
+        // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка открытия плейлиста.
+        onOpenPlaylist = onOpenPlaylist,
     )
 }
 

@@ -63,6 +63,11 @@ fun PostAttachmentRenderer(
     clipThumbnailEnabled: Boolean = false, // true для Community — показывать клипы как ClipThumbnail
     // для consumeClicks: пост, который открывает onPostClick (null-безопасно — глушится).
     post: Post? = null,
+    // #PLAYLIST-OPEN-NOT-PLAY: колбэк открытия экрана плейлиста. null = дефолт
+    // (тап по плейлисту-вложению игнорируется — лучше no-op, чем «сразу играет»).
+    // Экраны пробрасывают свой nav-колбэк: onOpenPlaylist = { ownerId, plId, key ->
+    //   nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, plId, key)) }
+    onOpenPlaylist: ((ownerId: Long, playlistId: Long, accessKey: String?) -> Unit)? = null,
 ) {
     val list = attachments
     if (list == null || list.isEmpty()) return
@@ -115,7 +120,9 @@ fun PostAttachmentRenderer(
         // #ARCH-CONTAINERS 3.7-1: audioPlaylist в :core:data — захват в val.
         val playlist = att.audioPlaylist
         if (att.type == "audio_playlist" && playlist != null) {
-            PlaylistAttachmentCard(playlist = playlist)
+            // #PLAYLIST-OPEN-NOT-PLAY: передаём onOpenPlaylist (может быть null —
+            // тогда тап no-op, не «сразу играет»).
+            PlaylistAttachmentCard(playlist = playlist, onOpenPlaylist = onOpenPlaylist)
         }
     }
 

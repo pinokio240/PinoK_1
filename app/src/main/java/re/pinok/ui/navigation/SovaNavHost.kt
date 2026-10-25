@@ -1773,6 +1773,11 @@ fun SovaNavHost(
                         // реестр (CallStarter). callClick == null → кнопка звонка
                         // в ленте НЕ рендерится (условие композиции).
                         onCallClick = callClick,
+                        // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению поста
+                        // ленты → экран плейлиста (как в каталоге музыки).
+                        onOpenPlaylist = { ownerId, playlistId, accessKey ->
+                            nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
+                        },
                     )
                 }
                 // #PANEL-SEPARATE-REACTIONS (2026-10-18): отдельный маршрут «Реакции».
@@ -1797,6 +1802,10 @@ fun SovaNavHost(
                         onStoryViewerClick = { nav.navigate(Screen.StoryViewer.route) },
                         onOpenOfflineManager = { nav.navigate(Screen.OfflineManager.route) },
                         onCallClick = callClick,
+                        // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению (реакции).
+                        onOpenPlaylist = { ownerId, playlistId, accessKey ->
+                            nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
+                        },
                     )
                 }
                 composable(Screen.Messages.route) {
@@ -2797,6 +2806,11 @@ composable(Screen.CallsHistory.route) {
                         onAdminStrikesClick = { adminGroupId ->
                             nav.navigate(Screen.AdminStrikes.buildRoute(adminGroupId))
                         },
+                        // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению поста
+                        // сообщества → экран плейлиста.
+                        onOpenPlaylist = { ownerId, playlistId, accessKey ->
+                            nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
+                        },
                     )
                 }
                 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества» — вход
@@ -3162,6 +3176,11 @@ composable(Screen.CallsHistory.route) {
                         },
                         onGroupClick = { groupId ->
                             nav.navigate(Screen.Community.buildRoute(groupId))
+                        },
+                        // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению поста
+                        // (пост-детейл) → экран плейлиста.
+                        onOpenPlaylist = { ownerId, playlistId, accessKey ->
+                            nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
                         },
                     )
                 }

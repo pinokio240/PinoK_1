@@ -147,6 +147,8 @@ fun PostDetailScreen(
     onBack: () -> Unit,
     onVideoClick: (Video) -> Unit = {},
     onGroupClick: (Long) -> Unit = {},
+    // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению поста → экран плейлиста.
+    onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
 ) {
     val app = SovaApp.get()
     // #COMMENT-EDIT: текущий userId — чтобы определить «свои» комментарии
@@ -740,6 +742,8 @@ fun PostDetailScreen(
                             carouselEnabled = carouselEnabled,
                             showViews = true,
                             myUserId = currentUserId,
+                            // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка плейлиста.
+                            onOpenPlaylist = onOpenPlaylist,
                         )
                     }
 

@@ -170,6 +170,9 @@ fun CommunityScreen(
     onChatsClick: (groupId: Long) -> Unit = {},
     onSectionsClick: (groupId: Long) -> Unit = {},
     onAdminMenuClick: (groupId: Long) -> Unit = {},
+    // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению поста сообщества →
+    // экран плейлиста (как в ленте/каталоге музыки).
+    onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -1411,6 +1414,8 @@ fun CommunityScreen(
                         onLikeToggle = { _, _, currentlyLiked -> handleCommunityPostLike(post, currentlyLiked) },
                         onCommentClick = { _, _ -> handleCommunityPostComment(post) },
                         likesOverride = likesState[postKey],
+                        // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка плейлиста (поиск).
+                        onOpenPlaylist = onOpenPlaylist,
                     )
                     // Разделитель — для визуальной консистентности с обычной стеной.
                     Box(
@@ -1478,6 +1483,8 @@ fun CommunityScreen(
                 // же post, что и items(...){ post -> }).
                 onCommentClick = { _, _ -> handleCommunityPostComment(post) },
                 likesOverride = likesState[postKey],
+                // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка плейлиста (стена).
+                onOpenPlaylist = onOpenPlaylist,
             )
             Box(
                 modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp)
@@ -2195,6 +2202,9 @@ private fun CommunityPostCard(
     // экрана (см. вызов ниже) и пробрасываются в общий PostCard. Дефолт пустой —
     // для вызовов без меню.
     menuItems: List<PostMenuItem> = emptyList(),
+    // #PLAYLIST-OPEN-NOT-PLAY: колбэк открытия экрана плейлиста (audio_playlist
+    // вложение поста). null = тап no-op. Пробрасывается из CommunityScreen.
+    onOpenPlaylist: ((ownerId: Long, playlistId: Long, accessKey: String?) -> Unit)? = null,
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3b): тело CommunityPostCard делегируется
     // единому общему PostCard (ui/components/PostCard.kt). Обёртка сохранена,
@@ -2252,6 +2262,8 @@ private fun CommunityPostCard(
         showViews = (post.views?.count ?: 0) > 0,
         // Community разворачивал текст после 10 строк (было maxLines=10 до «Показать ещё»).
         textMaxLines = 10,
+        // #PLAYLIST-OPEN-NOT-PLAY: проброс колбэка плейлиста.
+        onOpenPlaylist = onOpenPlaylist,
     )
 }
 

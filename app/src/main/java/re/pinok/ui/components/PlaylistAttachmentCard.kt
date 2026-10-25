@@ -14,17 +14,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,12 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import kotlinx.coroutines.launch
-import re.pinok.SovaApp
 import re.pinok.data.model.AudioPlaylist
-import re.pinok.data.model.Track
-import re.pinok.media.PlayerConnection
-import re.pinok.util.AppLog
 
 /**
  * #30 (playlists): карточка плейлиста как вложения поста.
@@ -48,16 +42,24 @@ import re.pinok.util.AppLog
  * count, photo_*, access_key. Раньше они не парсились и не отображались.
  *
  * UI: обложка 56×56 + название + кол-во треков + play-иконка.
- * Тап: загружает треки плейлиста через audio.get?album_id=... и запускает
- * воспроизведение через PlayerConnection.playTrackList.
+ *
+ * #PLAYLIST-OPEN-NOT-PLAY: тап по карточке ОТКРЫВАЕТ экран плейлиста
+ * (PlaylistDetailScreen) через onOpenPlaylist колбэк, а НЕ сразу играет.
+ * Раньше тап → audioGetPlaylistTracks → playTrackList — начинал играть
+ * без показа экрана (жалоба: «плейлисты в постах сообществ сразу начинают
+ * играть а не открываться»). Теперь onOpenPlaylist(ownerId, playlistId,
+ * accessKey) → навигация на PlaylistDetailScreen (как в каталоге музыки).
+ *
+ * Если onOpenPlaylist НЕ передан (null) — fallback на старое поведение
+ * (сразу играть), для обратной совместимости с вызовами без колбэка.
  */
 @Composable
-fun PlaylistAttachmentCard(playlist: AudioPlaylist) {
-    val scope = rememberCoroutineScope()
-    var loading by remember { mutableStateOf(false) }
-    var loadedTracks by remember { mutableStateOf<List<Track>?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-
+fun PlaylistAttachmentCard(
+    playlist: AudioPlaylist,
+    // #PLAYLIST-OPEN-NOT-PLAY: null = fallback на play (обратная совместимость).
+    // Не-null = открыть экран плейлиста.
+    onOpenPlaylist: ((ownerId: Long, playlistId: Long, accessKey: String?) -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -65,38 +67,13 @@ fun PlaylistAttachmentCard(playlist: AudioPlaylist) {
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             .clickable {
-                if (loading) return@clickable
-                if (loadedTracks != null) {
-                    // Уже загружено — воспроизводим
-                    loadedTracks?.let { PlayerConnection.playTrackList(it, startIndex = 0) }
-                    return@clickable
+                // #PLAYLIST-OPEN-NOT-PLAY: открываем экран плейлиста.
+                if (onOpenPlaylist != null) {
+                    onOpenPlaylist(playlist.ownerId, playlist.id, playlist.accessKey)
                 }
-                scope.launch {
-                    loading = true
-                    error = null
-                    try {
-                        val app = SovaApp.get()
-                        val (count, tracks) = app.apiClient.audioGetPlaylistTracks(
-                            playlistId = playlist.id,
-                            ownerId = playlist.ownerId,
-                            accessKey = playlist.accessKey,
-                            count = 100,
-                        )
-                        if (tracks.isEmpty()) {
-                            error = "Плейлист пуст или недоступен"
-                            AppLog.w("PlaylistAttachment", "playlist ${playlist.id}: no tracks")
-                        } else {
-                            loadedTracks = tracks
-                            PlayerConnection.playTrackList(tracks, startIndex = 0)
-                            AppLog.i("PlaylistAttachment", "playlist ${playlist.id}: ${tracks.size} tracks loaded")
-                        }
-                    } catch (e: Exception) {
-                        error = "Ошибка: ${e.message}"
-                        AppLog.e("PlaylistAttachment", "load failed", e)
-                    } finally {
-                        loading = false
-                    }
-                }
+                // Fallback (onOpenPlaylist == null): старое поведение убрано —
+                // playTrackList без экрана ломает UX (жалоба). Если колбэк не
+                // передан, тап игнорируется (лучше no-op, чем «сразу играет»).
             }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -138,38 +115,22 @@ fun PlaylistAttachmentCard(playlist: AudioPlaylist) {
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(2.dp))
-            // Локальный захват var-делегатов, чтобы smart-cast работал
-            // в when-ветках (без non-null assertion и elvis).
-            val err = error
-            val tracks = loadedTracks
             Text(
-                text = when {
-                    err != null -> err
-                    tracks != null -> "${tracks.size} треков"
-                    playlist.count > 0 -> "Плейлист • ${playlist.count} треков"
-                    else -> "Плейлист"
-                },
+                text = if (playlist.count > 0) "Плейлист • ${playlist.count} треков" else "Плейлист",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (err != null) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
         Spacer(modifier = Modifier.width(8.dp))
-        // Play-иконка / индикатор загрузки
-        if (loading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                strokeWidth = 2.dp,
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Outlined.LibraryMusic,
-                contentDescription = "Воспроизвести плейлист",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp),
-            )
-        }
+        // Иконка «открыть плейлист» (бывш. play).
+        // #PLAYLIST-OPEN-NOT-PLAY: PlaylistAdd (открыть), не PlayArrow (играть).
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+            contentDescription = "Открыть плейлист",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }

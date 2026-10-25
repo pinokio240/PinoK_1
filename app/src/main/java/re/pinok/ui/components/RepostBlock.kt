@@ -67,6 +67,9 @@ fun RepostBlock(
     // (весь текст), иначе — лимит визуальных строк (лента: 10). По умолчанию 5
     // (прежнее поведение для прочих экранов, где тумблер неактивен).
     textMaxLines: Int = 5,
+    // #PLAYLIST-OPEN-NOT-PLAY: колбэк открытия экрана плейлиста (audio_playlist
+    // вложение репоста). null = тап no-op. Пробрасывается из PostCard.
+    onOpenPlaylist: ((ownerId: Long, playlistId: Long, accessKey: String?) -> Unit)? = null,
 ) {
     // Fix #373: контекст для linkify-кликов в тексте репоста (openUrlExternal).
     val ctx = LocalContext.current
@@ -259,7 +262,7 @@ fun RepostBlock(
                 ?.forEach { att ->
                     att.audioPlaylist?.let {
                         Spacer(Modifier.height(6.dp))
-                        PlaylistAttachmentCard(playlist = it)
+                        PlaylistAttachmentCard(playlist = it, onOpenPlaylist = onOpenPlaylist)
                     }
                 }
         }
