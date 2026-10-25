@@ -649,38 +649,13 @@ fun MusicScreen(
             }
         } else {
 
-        // #PLAYLIST-OPEN: открыть плейлист каталога — грузим треки через
-        // audio.getPlaylistById и запускаем воспроизведение с первого.
-        fun openPlaylistAndPlay(pl: re.pinok.data.model.CatalogPlaylist) {
-            scope.launch {
-                try {
-                    val (_, plTracks) = app.apiClient.audioGetPlaylistById(
-                        playlistId = pl.id,
-                        ownerId = pl.ownerId,
-                        accessKey = pl.accessKey,
-                        // Fix #283: страницы по 100 (метод сам догружает весь плейлист).
-                        count = 100,
-                    )
-                    val filtered = plTracks.filter { it.id > 0L && !it.url.isNullOrBlank() }
-                    if (filtered.isNotEmpty()) {
-                        PlayerConnection.playTrackList(filtered, 0)
-                        android.widget.Toast.makeText(
-                            app.applicationContext,
-                            "Плейлист «${pl.title}» — ${filtered.size} треков",
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
-                    } else {
-                        android.widget.Toast.makeText(
-                            app.applicationContext,
-                            "Плейлист пуст или недоступен",
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                } catch (e: Exception) {
-                    AppLog.e("MusicScreen", "openPlaylistAndPlay failed: ${e.message}")
-                }
-            }
-        }
+        // #PLAYLIST-OPEN-DEAD-CODE-REMOVED: openPlaylistAndPlay удалена.
+        // Раньше тап по плейлисту в каталоге/дискавери СРАЗУ играл (через эту
+        // функцию). Жалоба: «на главной тапаю по плейлисту, он не открывается,
+        // а сразу начинает играть». Фикс: тап → onOpenPlaylist →
+        // PlaylistDetailScreen (экран плейлиста с кнопкой «Играть»). Play
+        // теперь на экране плейлиста, как и в «Мои плейлисты». Функция
+        // openPlaylistAndPlay стала dead code (0 вызовов) — удалена.
 
         // ─── Контент по выбранной вкладке ──────────────────────────────
         when (selectedTab) {
@@ -771,7 +746,7 @@ fun MusicScreen(
                         TrackDownloadManager.enqueueDownload(track)
                     }
                 },
-                onPlaylistClick = { pl -> openPlaylistAndPlay(pl) },
+                onPlaylistClick = { pl -> onOpenPlaylist(pl.ownerId, pl.id, pl.accessKey) },
                 onShowAll = onShowAll,
             )
             2 -> DiscoverTab(
@@ -781,7 +756,7 @@ fun MusicScreen(
                 cardColor = vkCard,
                 playerState = playerState,
                 downloads = downloads,
-                onPlaylistClick = { pl -> openPlaylistAndPlay(pl) },
+                onPlaylistClick = { pl -> onOpenPlaylist(pl.ownerId, pl.id, pl.accessKey) },
                 onShowAll = onShowAll,
             )
             // #MUSIC-UPDATES: «Обновления» — catalog.getSection(updates),
@@ -793,7 +768,7 @@ fun MusicScreen(
                 cardColor = vkCard,
                 playerState = playerState,
                 downloads = downloads,
-                onPlaylistClick = { pl -> openPlaylistAndPlay(pl) },
+                onPlaylistClick = { pl -> onOpenPlaylist(pl.ownerId, pl.id, pl.accessKey) },
                 onShowAll = onShowAll,
                 section = "updates",
             )
