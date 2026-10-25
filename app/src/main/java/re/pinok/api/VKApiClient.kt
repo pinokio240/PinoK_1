@@ -5114,17 +5114,19 @@ class VKApiClient(
             "title" to title,
         )
         if (!description.isNullOrBlank()) args["description"] = description
-        val json = call("audio.editPlaylist", args) ?: return false
+        // #AUDIO-WEB-GATEWAY: forceWebGateway=true — web-токены требуют web-шлюз.
+        val json = call("audio.editPlaylist", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
     /** audio.deletePlaylist — удалить плейлист. */
     suspend fun audioDeletePlaylist(ownerId: Long, playlistId: Long): Boolean {
         if (isOffline()) return false
+        // #AUDIO-WEB-GATEWAY: forceWebGateway=true.
         val json = call("audio.deletePlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -5162,11 +5164,12 @@ class VKApiClient(
         audioIds: List<String>,
     ): Boolean {
         if (isOffline() || audioIds.isEmpty()) return false
+        // #AUDIO-WEB-GATEWAY: forceWebGateway=true.
         val json = call("audio.removeFromPlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
             "audio_ids" to audioIds.joinToString(","),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -5209,23 +5212,37 @@ class VKApiClient(
     /** audio.followPlaylist — подписаться на обновления плейлиста (бесплатно). */
     suspend fun audioFollowPlaylist(ownerId: Long, playlistId: Long): Boolean {
         if (isOffline()) return false
+        // #AUDIO-WEB-GATEWAY: web-токены vk1.a.* требуют web-шлюз для audio.* write
+        // (как createPlaylist/addToPlaylist). HAR подтверждает: все audio.* идут на web.api.vk.ru.
         val json = call("audio.followPlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
-    /** audio.savePlaylistAsCopy — скопировать плейлист себе. */
+    /**
+     * audio.savePlaylistAsCopy — скопировать чужой/generated плейлист целиком себе.
+     *
+     * #SAVE-COPY-FIX: HAR (#164) доказывает, что VK возвращает НОВЫЙ плейлист
+     * ПРЯМО в `response` ({response:{id:143, owner_id:..., title:"Для вас DD.MM.YYYY"}}),
+     * БЕЗ обёртки `playlist`. Раньше парсили `response.playlist.id` → всегда -1L
+     * даже при успешном создании → плейлист «не сохранялся» (хотя реально создавался
+     * на сервере). Теперь парсим `response.id` напрямую.
+     *
+     * #AUDIO-WEB-GATEWAY: web-токены требуют web-шлюз (как все audio.* write).
+     *
+     * @return ID созданной копии или -1L при ошибке.
+     */
     suspend fun audioSavePlaylistAsCopy(ownerId: Long, playlistId: Long): Long {
         if (isOffline()) return -1L
         val json = call("audio.savePlaylistAsCopy", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        )) ?: return -1L
+        ), forceWebGateway = true) ?: return -1L
         return try {
-            json.getAsJsonObject("response")?.getAsJsonObject("playlist")
-                ?.get("id")?.asLong ?: -1L
+            // #SAVE-COPY-FIX: response — сам плейлист (БЕЗ обёртки "playlist").
+            json.getAsJsonObject("response")?.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: -1L
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "audioSavePlaylistAsCopy error", e)
             -1L

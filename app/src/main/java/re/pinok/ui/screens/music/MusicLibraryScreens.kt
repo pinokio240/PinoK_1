@@ -24,10 +24,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -233,6 +236,10 @@ fun PlaylistDetailScreen(
     var loading by remember { mutableStateOf(true) }
     // #MUSIC-PLAYLIST-FULL (Fix #283): прогресс пагинации для плейлистов 100+.
     var loadProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // #SAVE-COPY: состояние операции «Сохранить копию» (audio.savePlaylistAsCopy).
+    // Показывается только для ЧУЖИХ плейлистов (ownerId != myId).
+    var savingCopy by remember { mutableStateOf(false) }
+    val myUserId = remember { app.exchangeAuthRepository.userId() }
 
     LaunchedEffect(ownerId, playlistId, accessKey) {
         loading = true
@@ -340,6 +347,78 @@ fun PlaylistDetailScreen(
                                     Icon(Icons.Filled.Download, null, tint = VK_ACCENT, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("Скачать", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                            // #SAVE-COPY: «Сохранить копию» — для ЧУЖИХ плейлистов (ownerId != myId).
+                            // audio.savePlaylistAsCopy: 1 запрос, копирует плейлист целиком с cover/
+                            // description/followers, новый id, title с датой (как в VK веб —
+                            // «Для вас DD.MM.YYYY»). Только для чужих (свой нельзя скопировать).
+                            if (myUserId != 0L && ownerId != myUserId && playlist != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(VK_CARD)
+                                        .clickable {
+                                            if (savingCopy) return@clickable
+                                            savingCopy = true
+                                            val pl = playlist ?: return@clickable
+                                            scope.launch {
+                                                try {
+                                                    val newId = app.apiClient.audioSavePlaylistAsCopy(
+                                                        ownerId = pl.ownerId,
+                                                        playlistId = pl.id,
+                                                    )
+                                                    if (newId > 0L) {
+                                                        android.widget.Toast.makeText(
+                                                            app.applicationContext,
+                                                            "Плейлист сохранён в вашу музыку",
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    } else {
+                                                        val err = app.apiClient.lastApiError
+                                                        android.widget.Toast.makeText(
+                                                            app.applicationContext,
+                                                            "Не удалось сохранить: ${err ?: "ошибка"}",
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    }
+                                                } catch (e: Exception) {
+                                                    AppLog.e("PlaylistDetailScreen", "savePlaylistAsCopy failed", e)
+                                                    android.widget.Toast.makeText(
+                                                        app.applicationContext,
+                                                        "Ошибка: ${e.message}",
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                } finally {
+                                                    savingCopy = false
+                                                }
+                                            }
+                                        }
+                                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (savingCopy) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                                color = VK_ACCENT,
+                                            )
+                                        } else {
+                                            Icon(
+                                                Icons.AutoMirrored.Outlined.PlaylistAdd,
+                                                null,
+                                                tint = VK_ACCENT,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            if (savingCopy) "Копирование…" else "Сохранить копию",
+                                            color = VK_TEXT_PRIMARY,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
                                 }
                             }
                         }
