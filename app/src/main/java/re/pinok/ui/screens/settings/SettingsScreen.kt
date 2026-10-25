@@ -131,6 +131,7 @@ import androidx.compose.material.icons.outlined.DashboardCustomize
 import androidx.compose.material.icons.outlined.Equalizer
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Newspaper
@@ -234,6 +235,10 @@ private enum class SettingsTab(
     // #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — инструменты для
     // разработки/экспериментальных функций (тумблер «Музыка 2» и др.).
     DEVELOPMENT("Разработка", Icons.Outlined.Build),
+    // #TASK-14-AUDIO-UI: вкладка «Аудио» — browser headers для web.api.vk.ru
+    // (audio.* методы). VK WAF проверяет их наличие; defaults — из HAR #53
+    // (Chrome 156). Содержимое: 6 OutlinedTextField + кнопка «Сбросить к defaults».
+    AUDIO("Аудио", Icons.Outlined.Headphones),
     // #CALLS-PERM-TAB (2026-10-15): отдельная вкладка «Разрешения» — запрос любого
     // разрешения вручную (микрофон/камера/уведомления/BT/«Все файлы») + статус.
     PERMISSIONS("Разрешения", Icons.Outlined.Lock),
@@ -496,6 +501,9 @@ fun SettingsScreen(
                     // #SETTINGS-DEVTAB (2026-10-14): вкладка «Разработка» — экспериментальные
                     // инструменты/тумблеры (Музыка 2 перенесён из AuthorTab).
                     SettingsTab.DEVELOPMENT -> DevTab(s, app, scope)
+                    // #TASK-14-AUDIO-UI: вкладка «Аудио» — browser headers для
+                    // web.api.vk.ru (audio.* методы).
+                    SettingsTab.AUDIO -> AudioTab(s, app, scope)
                     SettingsTab.PERMISSIONS -> PermissionsTab()
                     SettingsTab.AUTHOR -> AuthorTab(s, app, scope)
                 }
@@ -694,6 +702,143 @@ private fun DevTab(
                     }
                 }
             }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Tab: Аудио
+// ══════════════════════════════════════════════════════════════════════
+/**
+ * #TASK-14-AUDIO-UI (Task 14-AUDIO-UI): вкладка «Аудио» — browser headers для
+ * web.api.vk.ru (audio.* методы). VK WAF проверяет наличие sec-ch-ua/sec-gpc/
+ * priority/accept-encoding; без них WAF возвращает decoy-ответ err=3 "Unknown
+ * method passed" (см. worklog Task #HAR-53-DECODE). Defaults — из HAR #53
+ * (Chrome 156 на Windows).
+ *
+ * Контракт с готовой инфраструктурой SovaPrefs (не правим — уже реализовано):
+ *   snapshot-поля: audioSecChUa / audioSecChUaMobile / audioSecChUaPlatform /
+ *                   audioSecGpc / audioPriority / audioAcceptEncoding
+ *   setters:       setAudioSecChUa(v) / setAudioSecChUaMobile(v) /
+ *                   setAudioSecChUaPlatform(v) / setAudioSecGpc(v) /
+ *                   setAudioPriority(v) / setAudioAcceptEncoding(v) (suspend)
+ *   reset:         resetAudioHeaders() — сброс всех 6 полей к defaults.
+ *
+ * Паттерн: write-through — каждое нажатие клавиши сразу пишет в SovaPrefs
+ * (через scope.launch, см. DevTab). Локальный стейт для отзывчивости UI:
+ * DataStore пишет асинхронно, локальный mutableStateOf отображает введённое
+ * сразу. Ключ remember — snapshot-значение (после resetAudioHeaders локальный
+ * стейт синхронизируется с defaults автоматически).
+ */
+@Composable
+private fun AudioTab(
+    s: SovaPrefs.Snapshot,
+    app: SovaApp,
+    scope: CoroutineScope,
+) {
+    val context = LocalContext.current
+    // Локальный стейт для каждого поля (write-through).
+    var secChUa by remember(s.audioSecChUa) { mutableStateOf(s.audioSecChUa) }
+    var secChUaMobile by remember(s.audioSecChUaMobile) { mutableStateOf(s.audioSecChUaMobile) }
+    var secChUaPlatform by remember(s.audioSecChUaPlatform) { mutableStateOf(s.audioSecChUaPlatform) }
+    var secGpc by remember(s.audioSecGpc) { mutableStateOf(s.audioSecGpc) }
+    var priority by remember(s.audioPriority) { mutableStateOf(s.audioPriority) }
+    var acceptEncoding by remember(s.audioAcceptEncoding) { mutableStateOf(s.audioAcceptEncoding) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item { SectionHeader("Аудио") }
+        item {
+            Text(
+                "Browser headers для web.api.vk.ru (audio.* методы). " +
+                    "VK WAF проверяет их наличие. Defaults — из HAR #53 (Chrome 156). " +
+                    "Меняйте если VK обновил требования (например Chrome 157).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = secChUa,
+                onValueChange = { v ->
+                    secChUa = v
+                    scope.launch { app.prefs.setAudioSecChUa(v) }
+                },
+                label = { Text("Sec-CH-UA") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = secChUaMobile,
+                onValueChange = { v ->
+                    secChUaMobile = v
+                    scope.launch { app.prefs.setAudioSecChUaMobile(v) }
+                },
+                label = { Text("Sec-CH-UA-Mobile") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = secChUaPlatform,
+                onValueChange = { v ->
+                    secChUaPlatform = v
+                    scope.launch { app.prefs.setAudioSecChUaPlatform(v) }
+                },
+                label = { Text("Sec-CH-UA-Platform") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = secGpc,
+                onValueChange = { v ->
+                    secGpc = v
+                    scope.launch { app.prefs.setAudioSecGpc(v) }
+                },
+                label = { Text("Sec-GPC") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = priority,
+                onValueChange = { v ->
+                    priority = v
+                    scope.launch { app.prefs.setAudioPriority(v) }
+                },
+                label = { Text("Priority") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = acceptEncoding,
+                onValueChange = { v ->
+                    acceptEncoding = v
+                    scope.launch { app.prefs.setAudioAcceptEncoding(v) }
+                },
+                label = { Text("Accept-Encoding") },
+                singleLine = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedButton(
+                onClick = {
+                    scope.launch { app.prefs.resetAudioHeaders() }
+                    Toast.makeText(context, "Сброшено к defaults", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Сбросить к defaults") }
         }
     }
 }

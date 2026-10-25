@@ -13752,9 +13752,10 @@ class VKApiClient(
             // #WEB-HEADERS-FULL (HAR #53 + аудит 13-JS-REVERSE): VK WAF проверяет
             // наличие browser-default headers и для scrapers отдаёт decoy err=3
             // "Unknown method" (НЕ реальная ошибка API). JS формирует только
-            // Content-Type (OkHttp FormBody ставит сам), остальные 17 headers
-            // браузер добавляет автоматически. PinoK должен их все добавить.
-            // Точные значения из HAR #53 (entry #53 audio.createPlaylist 200 OK).
+            // Content-Type (OkHttp FormBody ставит сам), остальные headers
+            // браузер добавляет автоматически. PinoK читает их из SovaPrefs
+            // (Настройки → Аудио) — пользователь может менять (напр. Chrome 157).
+            // Defaults — из HAR #53 (audio.createPlaylist 200 OK).
             val req = Request.Builder()
                 .url(methodUrl)
                 .post(form)
@@ -13766,17 +13767,18 @@ class VKApiClient(
                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                             "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
                         header("Accept", "*/*")
-                        header("Accept-Encoding", "gzip, deflate, br, zstd")
+                        // #AUDIO-WEB-HEADERS: 6 настраиваемых headers из SovaPrefs.
+                        header("Accept-Encoding", snap.audioAcceptEncoding)
                         header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
                         header("Sec-Fetch-Site", "same-site")
                         header("Sec-Fetch-Mode", "cors")
                         header("Sec-Fetch-Dest", "empty")
-                        header("Sec-CH-UA", "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
-                        header("Sec-CH-UA-Mobile", "?0")
-                        header("Sec-CH-UA-Platform", "\"Windows\"")
-                        header("Sec-GPC", "1")
+                        header("Sec-CH-UA", snap.audioSecChUa)
+                        header("Sec-CH-UA-Mobile", snap.audioSecChUaMobile)
+                        header("Sec-CH-UA-Platform", snap.audioSecChUaPlatform)
+                        header("Sec-GPC", snap.audioSecGpc)
                         header("DNT", "1")
-                        header("Priority", "u=1, i")
+                        header("Priority", snap.audioPriority)
                     }
                 }
                 .build()
