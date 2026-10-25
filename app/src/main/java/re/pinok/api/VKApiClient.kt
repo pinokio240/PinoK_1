@@ -13784,6 +13784,15 @@ class VKApiClient(
                 .build()
             if (useWebGateway) {
                 AppLog.d("VKApiClient", "call($method): using WEB gateway web.api.vk.ru")
+                // #WEB-DEBUG-DUMP: временный дамп для сверки с HAR (err=3 не уходит).
+                // Логируем точный URL + headers + body, чтобы сравнить с HAR #53.
+                val hdrs = req.headers.joinToString(", ") { "${it.first}=${it.second.take(40)}" }
+                val bodyStr = try {
+                    val sink = okio.Buffer()
+                    req.body?.writeTo(sink)
+                    sink.readUtf8().take(300)
+                } catch (_: Exception) { "<err>" }
+                AppLog.d("VKApiClient", "call($method): WEB-DEBUG URL=$methodUrl | headers=[$hdrs] | body=${bodyStr}")
             }
             // P1.1c #URL-LOG (Вариант C): логировать URL ТОЛЬКО если toggle включён.
             // Default false → 0 шума в обычном режиме. Включается из NETWORK-вкладки
