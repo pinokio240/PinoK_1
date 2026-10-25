@@ -87,7 +87,6 @@ import re.pinok.ui.navigation.PostHolder
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
@@ -373,46 +372,48 @@ fun CommunityScreen(
     )
 
     // COMMUNITY-SEARCH: debounce 500ms → wall.search.
-    // #DEBOUNCE-STABLE: вместо .debounce(500) (@FlowPreview API — генерил warning
-    // «in a preview state, can be changed backwards-incompatible») используем
-    // эквивалент на СТАБИЛЬНОМ API: transformLatest { delay(500); emit(q) }.
-    // Семантика preserved: новый emission отменяет предыдущий delay (transformLatest
-    // отменяет своё тело при новом значении) → таймер 500мс сбрасывается, как у
-    // debounce. distinctUntilChanged не нужен — snapshotFlow уже дедуплит
-    // consecutive-equal значения (читает Snapshot State только при изменении).
+    // #DEBOUNCE-STABLE-v2: устранена ПРИЧИНА warning'а @ExperimentalCoroutinesApi.
+    // Эволюция: .debounce(500) (@FlowPreview) → transformLatest+delay
+    // (@ExperimentalCoroutinesApi) → ТЕПЕРЬ чистый LaunchedEffect+delay
+    // (оба стабильные, никаких opt-in).
+    //
+    // Как работает debounce без Flow API: LaunchedEffect(searchQuery)
+    // АВТОМАТИЧЕСКИ отменяет (cancel) предыдущий блок при смене key. Поэтому
+    // быстрый ввод «абв» → 3 запуска, каждый отменяет предыдущий до истечения
+    // delay(500). Только когда пользователь перестаёт печатать на 500мс,
+    // delay завершается и выполняется wall.search. Семантика 1:1 с debounce.
+    //
+    // Дополнительно: snapshotFlow не нужен — LaunchedEffect(searchQuery)
+    // сам ре-запускается только при изменении searchQuery (Compose
+    // key-based re-launch эквивалентен distinctUntilChanged).
     LaunchedEffect(searchQuery) {
-        snapshotFlow { searchQuery }
-            .transformLatest { q ->
-                kotlinx.coroutines.delay(500)
-                emit(q)
-            }
-            .collect { q ->
-                if (q.isBlank()) {
-                    searchResults = emptyList()
-                    searchSignerNames = emptyMap()
-                    searchOffset = 0
-                    searchEndReached = false
-                    return@collect
-                }
-                searchLoading = true
-                searchOffset = 0
-                searchEndReached = false
-                try {
-                    val result = app.apiClient.wallSearch(
-                        ownerId = -groupId, query = q, count = 20, offset = 0,
-                    )
-                    searchResults = result.posts
-                    searchSignerNames = result.profileNames
-                    signerNames = signerNames + result.profileNames
-                    searchOffset = result.posts.size
-                    if (result.posts.isEmpty()) searchEndReached = true
-                    AppLog.i("CommunityScreen", "wallSearch: ${result.posts.size} posts for «$q»")
-                } catch (e: Exception) {
-                    AppLog.e("CommunityScreen", "wallSearch error", e)
-                } finally {
-                    searchLoading = false
-                }
-            }
+        val q = searchQuery
+        if (q.isBlank()) {
+            searchResults = emptyList()
+            searchSignerNames = emptyMap()
+            searchOffset = 0
+            searchEndReached = false
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(500)
+        searchLoading = true
+        searchOffset = 0
+        searchEndReached = false
+        try {
+            val result = app.apiClient.wallSearch(
+                ownerId = -groupId, query = q, count = 20, offset = 0,
+            )
+            searchResults = result.posts
+            searchSignerNames = result.profileNames
+            signerNames = signerNames + result.profileNames
+            searchOffset = result.posts.size
+            if (result.posts.isEmpty()) searchEndReached = true
+            AppLog.i("CommunityScreen", "wallSearch: ${result.posts.size} posts for «$q»")
+        } catch (e: Exception) {
+            AppLog.e("CommunityScreen", "wallSearch error", e)
+        } finally {
+            searchLoading = false
+        }
     }
 
     // COMMUNITY-SEARCH: подгрузка следующих результатов поиска.
