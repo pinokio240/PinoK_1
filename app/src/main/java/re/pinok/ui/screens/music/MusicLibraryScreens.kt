@@ -240,6 +240,13 @@ fun PlaylistDetailScreen(
     // Показывается только для ЧУЖИХ плейлистов (ownerId != myId).
     var savingCopy by remember { mutableStateOf(false) }
     val myUserId = remember { app.exchangeAuthRepository.userId() }
+    // #PLAYLIST-ACTIONS: состояние операций follow/unfollow/edit/delete.
+    var followPending by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editTitle by remember { mutableStateOf("") }
+    var editDescription by remember { mutableStateOf("") }
+    var actionPending by remember { mutableStateOf(false) }
 
     LaunchedEffect(ownerId, playlistId, accessKey) {
         loading = true
@@ -428,6 +435,90 @@ fun PlaylistDetailScreen(
                                 }
                             }
                         }
+                        // #PLAYLIST-ACTIONS: вторая Row — follow/edit/delete на основе permissions.
+                        // Подписаться (чужие, canFollow) / Редактировать (свои, canEdit) /
+                        // Удалить (свои, canDelete). Все с pending-индикатором.
+                        val pl = playlist
+                        if (pl != null && myUserId != 0L) {
+                            val isOwn = pl.isOwnedBy(myUserId)
+                            val showFollow = !isOwn && (pl.canFollow || pl.permissions == null)
+                            val showEdit = isOwn && pl.canEdit
+                            val showDelete = isOwn && pl.canDelete
+                            if (showFollow || showEdit || showDelete) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    // Подписаться / Отписаться (чужие).
+                                    if (showFollow) {
+                                        val isFollowingNow = pl.isFollowing == true
+                                        PlaylistActionButton(
+                                            label = when {
+                                                followPending -> "…"
+                                                isFollowingNow -> "Вы подписаны"
+                                                else -> "Подписаться"
+                                            },
+                                            icon = Icons.Outlined.BookmarkBorder,
+                                            tint = if (isFollowingNow) VK_TEXT_SECONDARY else VK_ACCENT,
+                                            enabled = !followPending,
+                                            onClick = {
+                                                if (followPending) return@PlaylistActionButton
+                                                followPending = true
+                                                scope.launch {
+                                                    try {
+                                                        val ok = app.apiClient.audioFollowPlaylist(
+                                                            ownerId = pl.ownerId,
+                                                            playlistId = pl.id,
+                                                        )
+                                                        val msg = if (ok && !isFollowingNow) {
+                                                            "Вы подписаны на плейлист"
+                                                        } else if (ok && isFollowingNow) {
+                                                            "Подписка отменена"
+                                                        } else {
+                                                            "Ошибка: ${app.apiClient.lastApiError ?: "не удалось"}"
+                                                        }
+                                                        android.widget.Toast.makeText(
+                                                            app.applicationContext, msg,
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                        // Обновляем isFollowing локально (without reload).
+                                                        playlist = pl.copy(isFollowing = !isFollowingNow)
+                                                    } catch (e: Exception) {
+                                                        AppLog.e("PlaylistDetailScreen", "follow failed", e)
+                                                    } finally {
+                                                        followPending = false
+                                                    }
+                                                }
+                                            },
+                                        )
+                                    }
+                                    // Редактировать (свои, canEdit).
+                                    if (showEdit) {
+                                        PlaylistActionButton(
+                                            label = "Изменить",
+                                            icon = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                                            tint = VK_ACCENT,
+                                            enabled = !actionPending,
+                                            onClick = {
+                                                editTitle = pl.title
+                                                editDescription = pl.description ?: ""
+                                                showEditDialog = true
+                                            },
+                                        )
+                                    }
+                                    // Удалить (свои, canDelete).
+                                    if (showDelete) {
+                                        PlaylistActionButton(
+                                            label = "Удалить",
+                                            icon = Icons.Filled.Delete,
+                                            tint = androidx.compose.ui.graphics.Color(0xFFFF5252),
+                                            enabled = !actionPending,
+                                            onClick = { showDeleteDialog = true },
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         Spacer(Modifier.height(12.dp))
                     }
                 }
@@ -444,6 +535,181 @@ fun PlaylistDetailScreen(
                 }
             }
         }
+    }
+
+    // #PLAYLIST-DELETE: диалог подтверждения удаления плейлиста (audio.deletePlaylist).
+    if (showDeleteDialog) {
+        val pl = playlist
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!actionPending) showDeleteDialog = false },
+            title = { Text("Удалить плейлист?") },
+            text = {
+                Text(
+                    "Плейлист «${pl?.title ?: ""}» будет удалён без возможности восстановления.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = !actionPending,
+                    onClick = {
+                        if (pl == null || actionPending) return@TextButton
+                        actionPending = true
+                        scope.launch {
+                            try {
+                                val ok = app.apiClient.audioDeletePlaylist(
+                                    ownerId = pl.ownerId,
+                                    playlistId = pl.id,
+                                )
+                                if (ok) {
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Плейлист удалён",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                    onBack()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Ошибка: ${app.apiClient.lastApiError ?: "не удалось"}",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } catch (e: Exception) {
+                                AppLog.e("PlaylistDetailScreen", "delete failed", e)
+                            } finally {
+                                actionPending = false
+                                showDeleteDialog = false
+                            }
+                        }
+                    },
+                ) {
+                    Text("Удалить", color = androidx.compose.ui.graphics.Color(0xFFFF5252))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = !actionPending,
+                    onClick = { showDeleteDialog = false },
+                ) { Text("Отмена") }
+            },
+        )
+    }
+
+    // #PLAYLIST-EDIT: диалог редактирования title/description (audio.editPlaylist).
+    if (showEditDialog) {
+        val pl = playlist
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!actionPending) showEditDialog = false },
+            title = { Text("Изменить плейлист") },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = editTitle,
+                        onValueChange = { editTitle = it },
+                        label = { Text("Название") },
+                        singleLine = true,
+                        enabled = !actionPending,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = editDescription,
+                        onValueChange = { editDescription = it },
+                        label = { Text("Описание") },
+                        enabled = !actionPending,
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = !actionPending && editTitle.isNotBlank(),
+                    onClick = {
+                        if (pl == null || actionPending) return@TextButton
+                        actionPending = true
+                        scope.launch {
+                            try {
+                                val ok = app.apiClient.audioEditPlaylist(
+                                    ownerId = pl.ownerId,
+                                    playlistId = pl.id,
+                                    title = editTitle.trim(),
+                                    description = editDescription.trim().ifBlank { null },
+                                )
+                                if (ok) {
+                                    playlist = pl.copy(
+                                        title = editTitle.trim(),
+                                        description = editDescription.trim().ifBlank { null },
+                                    )
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Сохранено",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        app.applicationContext,
+                                        "Ошибка: ${app.apiClient.lastApiError ?: "не удалось"}",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } catch (e: Exception) {
+                                AppLog.e("PlaylistDetailScreen", "edit failed", e)
+                            } finally {
+                                actionPending = false
+                                showEditDialog = false
+                            }
+                        }
+                    },
+                ) { Text("Сохранить") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = !actionPending,
+                    onClick = { showEditDialog = false },
+                ) { Text("Отмена") }
+            },
+        )
+    }
+}
+
+/**
+ * #PLAYLIST-ACTIONS: вспомогательная кнопка-чип для follow/edit/delete.
+ * IconButton + Text, VK-стиль (закруглённая, VK_CARD фон).
+ */
+@Composable
+private fun PlaylistActionButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: androidx.compose.ui.graphics.Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(VK_CARD)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (enabled) {
+            Icon(icon, null, tint = tint, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = tint,
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            label,
+            color = tint,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
