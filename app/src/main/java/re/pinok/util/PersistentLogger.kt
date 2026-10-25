@@ -59,8 +59,8 @@ object PersistentLogger {
      * НЕ связано с SovaPrefs DataStore ("sova_settings") — это отдельный лёгкий
      * store для одного boolean, читаемого синхронно при раннем старте.
      */
-    private const PREFS_FILE = "sova_prefs"
-    private const PREF_KEY_ENABLED = "persist_log_enabled"
+    private const val PREFS_FILE = "sova_prefs"
+    private const val PREF_KEY_ENABLED = "persist_log_enabled"
 
     private var appContext: Context? = null
     private var logFile: File? = null
