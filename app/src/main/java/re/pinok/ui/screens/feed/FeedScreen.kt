@@ -2976,6 +2976,10 @@ private fun CommentsBottomSheet(
     var localComments by remember { mutableStateOf<List<Comment>>(emptyList()) }
     // Волна 22: комментарий, на который отвечаем (reply-режим); null = обычный комментарий.
     var replyingToComment by remember { mutableStateOf<Comment?>(null) }
+    // THREAD-EXPAND: разворачивание ветки ответов (как в PostDetailScreen).
+    var expandedReplies by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var threadReplies by remember { mutableStateOf<Map<Long, List<Comment>>>(emptyMap()) }
+    var loadingThreadFor by remember { mutableStateOf<Long?>(null) }
     // P0.46-unify-comments: шаринг комментария (wall_reply{post.ownerId}_{cid})
     // и id текущего юзера (для isOwnComment в CommentItem).
     var sharingComment by remember { mutableStateOf<Comment?>(null) }
@@ -3159,6 +3163,40 @@ private fun CommentsBottomSheet(
                                 onReply = { replyingToComment = comment },
                                 onVideoClick = onVideoClick,
                                 onPhotoClick = onPhotoClick,
+                                // THREAD-EXPAND: разворачивание ветки ответов
+                                // (1:1 паттерн из PostDetailScreen).
+                                isExpanded = comment.id in expandedReplies,
+                                isLoadingReplies = loadingThreadFor == comment.id,
+                                extraReplies = threadReplies[comment.id] ?: emptyList(),
+                                onExpandThread = {
+                                    if (comment.id in expandedReplies) {
+                                        expandedReplies = expandedReplies - comment.id
+                                    } else {
+                                        expandedReplies = expandedReplies + comment.id
+                                        // Догружаем ответы через wall.getComments(comment_id=...).
+                                        val previewCount = comment.thread?.items?.size ?: 0
+                                        val totalCount = comment.thread?.count ?: 0
+                                        if (previewCount < totalCount) {
+                                            loadingThreadFor = comment.id
+                                            scope.launch {
+                                                try {
+                                                    val r = app.apiClient.wallGetComments(
+                                                        ownerId = post.ownerId,
+                                                        postId = post.id,
+                                                        count = 100,
+                                                        commentId = comment.id,
+                                                    )
+                                                    profiles = profiles + r.profiles
+                                                    threadReplies = threadReplies + (comment.id to r.comments)
+                                                } catch (e: Exception) {
+                                                    AppLog.e("CommentsBottomSheet", "fetch thread replies error", e)
+                                                } finally {
+                                                    loadingThreadFor = null
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
                                 currentUserId = currentUserId,
                                 onShareComment = { c -> sharingComment = c },
                             )
