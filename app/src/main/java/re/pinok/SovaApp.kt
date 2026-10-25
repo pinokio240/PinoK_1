@@ -831,6 +831,20 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
 
     override fun onCreate() {
         super.onCreate()
+        // #PERSIST-LOG (Task 6-LOGGER-INFRA): ранний старт — краш-логгер должен
+        // встать ПЕРЕД любой другой инициализацией (чтобы поймать краш на любом
+        // этапе). Читает SharedPreferences "sova_prefs" синхронно, устанавливает
+        // UncaughtExceptionHandler. Если enabled — открывает filesDir/persistent_log.txt.
+        re.pinok.util.PersistentLogger.init(this)
+        // Wire AppLog → PersistentLogger hook (инверсия зависимостей: :core:common
+        // не может импортировать :app). С этого момента КАЖДЫЙ вызов AppLog.v/d/i/w/e
+        // (+ api/lp/backfill/execute/ws) зеркалится в persistent-лог (если enabled).
+        // Hook вызывается ДО гейтов category/section/errors-only — persistent-лог
+        // пишет ПОЛНЫЙ лог всего. PersistentLogger.log сам проверяет enabled (no-op если выключен).
+        AppLog.persistentLogHook = { level, tag, msg, t ->
+            re.pinok.util.PersistentLogger.log(level, tag, msg, t)
+        }
+
         instance = this
         // #ARCH-CONTAINERS (Этап 1.2-а): AppLog переехал в :core:common и больше не
         // читает BuildConfig хоста — передаём идентификацию сборки ДО первого

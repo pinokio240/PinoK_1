@@ -657,6 +657,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Импорт всегда умеет оба формата: зашифрованный файл по заголовку
             // формата 2 сам откроет диалог ввода кода, тумблер роли не играет.
             settingsExportEncrypt = p[Keys.SETTINGS_EXPORT_ENCRYPT] ?: false,
+            // #PERSIST-LOG (Task 6-LOGGER-INFRA): тумблер «Беспрерывное логирование»
+            // (Настройки → Разработка). UI mirror в DataStore — runtime source of truth
+            // хранится в PersistentLogger (SharedPreferences "sova_prefs", синхронный read).
+            persistLogEnabled = p[Keys.PERSIST_LOG_ENABLED] ?: false,
         )
     }
 
@@ -686,6 +690,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setStickerPhotoScale(v: Int)             = put(Keys.STICKER_PHOTO_SCALE, v)
     /** Fix #237: показ плавающего значка логирования. */
     suspend fun setShowLogFab(v: Boolean)                = put(Keys.SHOW_LOG_FAB, v)
+    /**
+     * #PERSIST-LOG (Task 6-LOGGER-INFRA): тумблер «Беспрерывное логирование».
+     * UI mirror в DataStore (для Snapshot/SettingsScreen). Runtime source of
+     * truth — PersistentLogger (SharedPreferences "sova_prefs", синхронный read
+     * при раннем старте SovaApp.onCreate). UI при переключении тумблера обязан
+     * писать в ОБА хранилища: [setPersistLogEnabled] + [re.pinok.util.PersistentLogger.setEnabled].
+     */
+    suspend fun setPersistLogEnabled(v: Boolean)         = put(Keys.PERSIST_LOG_ENABLED, v)
     /** CHAN-PREFS: показ блока «Рекомендации в каналах» в разделе каналов. */
     suspend fun setChannelRecEnabled(v: Boolean)         = put(Keys.CHANNEL_REC_ENABLED, v)
     /** CHAN-PREFS: показ кнопки «Найти канал» в разделе каналов. */
@@ -2069,6 +2081,20 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
          */
         val chatBgOverride: Boolean = false,
         val chatBgColorArgb: Int = 0,
+        /**
+         * #PERSIST-LOG (Task 6-LOGGER-INFRA): тумблер «Беспрерывное логирование»
+         * (Настройки → Разработка). Default false. При true — PersistentLogger
+         * пишет полный лог всего в filesDir/persistent_log.txt, переживает краш
+         * (UncaughtExceptionHandler пишет crash-стек в файл ПЕРЕД падением процесса).
+         *
+         * ВНИМАНИЕ UI-субагенту (Task 7-LOGGER-UI): это поле — UI mirror в DataStore.
+         * Runtime source of truth = [re.pinok.util.PersistentLogger.isEnabled]
+         * (читает SharedPreferences "sova_prefs" синхронно при старте).
+         * При toggle вызывай ОБА:
+         *   1) [setPersistLogEnabled] (DataStore mirror — для Snapshot)
+         *   2) [re.pinok.util.PersistentLogger.setEnabled] (runtime + SharedPreferences)
+         */
+        val persistLogEnabled: Boolean = false,
     )
 
     private object Keys {
@@ -2114,6 +2140,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val LOG_RETENTION_DAYS = intPreferencesKey("log_retention_days")
         val LOG_AUTO_CLEAN = booleanPreferencesKey("log_auto_clean")
         val LOG_BUFFER_CAPACITY = intPreferencesKey("log_buffer_capacity")
+        // #PERSIST-LOG (Task 6-LOGGER-INFRA): тумблер «Беспрерывное логирование»
+        // (Настройки → Разработка). Default false. DataStore mirror — runtime
+        // source of truth в PersistentLogger (SharedPreferences "sova_prefs",
+        // синхронный read в SovaApp.onCreate до инициализации DataStore).
+        val PERSIST_LOG_ENABLED = booleanPreferencesKey("persist_log_enabled")
         // #238: показ FAB «подняться в верх ленты» в FeedScreen.
         val FEED_SHOW_SCROLL_FAB = booleanPreferencesKey("feed_show_scroll_fab")
         // #FEED-FILTER-TOGGLE: показывать панель разделов ленты.

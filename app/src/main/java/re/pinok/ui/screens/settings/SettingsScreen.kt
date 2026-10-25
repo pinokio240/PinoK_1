@@ -159,6 +159,7 @@ import android.os.PowerManager
 import android.widget.Toast
 import android.os.Environment
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import java.text.DecimalFormat
 import java.io.File
 // #CALLS-Z (2026-09-05, Этап З): серверные тумблеры/персональные настройки + дефолты устройств.
@@ -546,6 +547,7 @@ private fun DevTab(
     app: SovaApp,
     scope: CoroutineScope,
 ) {
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -580,6 +582,118 @@ private fun DevTab(
                 subtitle = "Вкл — WebView-вход как в vk-lite (VK сам принимает номер/пароль/2FA). Выкл — прежний WebView-вход. Не влияет на авто-вход.",
                 checked = s.authV2Enabled,
             ) { v -> scope.launch { app.prefs.setAuthV2Enabled(v) } }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // #TASK-7-LOGGER-UI: «Беспрерывное логирование» — file-based лог,
+        // переживает краш процесса. Тумблер + 3 кнопки (Отправить/Очистить/Сохранить).
+        // Контракт с субагентом 6-LOGGER-INFRA: re.pinok.util.PersistentLogger
+        // (setEnabled/getLogFile/getLogSize/clearLog). Pref-флаг persistLogEnabled.
+        // ════════════════════════════════════════════════════════════════
+        item { SectionHeader("Беспрерывное логирование") }
+        item {
+            ToggleRow(
+                title = "Беспрерывное логирование",
+                subtitle = "Записывает полный лог в файл (переживает краш). Внимание: быстро расходует место.",
+                checked = s.persistLogEnabled,
+            ) { enabled ->
+                // Сначала persist в DataStore (для следующего старта), затем
+                // мгновенный вкл/выкл в PersistentLogger (текущий процесс).
+                scope.launch { app.prefs.setPersistLogEnabled(enabled) }
+                re.pinok.util.PersistentLogger.setEnabled(enabled)
+            }
+        }
+        if (s.persistLogEnabled) {
+            item {
+                // Размер + 3 кнопки. Размер обновляется при входе в секцию
+                // (LaunchedEffect) и после Очистить (локальный стейт).
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        val logSize = remember { mutableLongStateOf(0L) }
+                        LaunchedEffect(Unit) {
+                            logSize.longValue = re.pinok.util.PersistentLogger.getLogSize()
+                        }
+                        Text(
+                            "Размер лога: ${logSize.longValue / 1024} KB",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Кнопка 1: Отправить лог (share sheet через FileProvider).
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    val file = re.pinok.util.PersistentLogger.getLogFile()
+                                    if (file != null && file.exists()) {
+                                        val uri = FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            file,
+                                        )
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_STREAM, uri)
+                                            putExtra(Intent.EXTRA_SUBJECT, "PinoK persistent log")
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(
+                                            Intent.createChooser(intent, "Отправить лог")
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "Лог пуст", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                            ) { Text("Отправить") }
+
+                            // Кнопка 2: Очистить лог.
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    re.pinok.util.PersistentLogger.clearLog()
+                                    logSize.longValue = 0L
+                                    Toast.makeText(context, "Лог очищен", Toast.LENGTH_SHORT).show()
+                                },
+                            ) { Text("Очистить") }
+
+                            // Кнопка 3: Сохранить в Downloads (pinok_log_<ts>.txt).
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    val file = re.pinok.util.PersistentLogger.getLogFile()
+                                    if (file != null && file.exists()) {
+                                        try {
+                                            val timestamp = System.currentTimeMillis()
+                                            val dest = File(
+                                                Environment.getExternalStoragePublicDirectory(
+                                                    Environment.DIRECTORY_DOWNLOADS
+                                                ),
+                                                "pinok_log_$timestamp.txt",
+                                            )
+                                            file.copyTo(dest, overwrite = true)
+                                            Toast.makeText(
+                                                context,
+                                                "Сохранено: ${dest.absolutePath}",
+                                                Toast.LENGTH_LONG,
+                                            ).show()
+                                        } catch (e: Exception) {
+                                            // API 29+: прямой доступ к public Downloads ограничен
+                                            // (нужен MediaStore). Фолбэк — поделиться через кнопку «Отправить».
+                                            Toast.makeText(
+                                                context,
+                                                "Не удалось сохранить: ${e.message}",
+                                                Toast.LENGTH_LONG,
+                                            ).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "Лог пуст", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                            ) { Text("Сохранить") }
+                        }
+                    }
+                }
+            }
         }
     }
 }

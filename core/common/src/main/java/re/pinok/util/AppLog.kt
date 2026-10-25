@@ -183,6 +183,24 @@ object AppLog {
     var debugBuild: Boolean = false
 
     /**
+     * #PERSIST-LOG (Task 6-LOGGER-INFRA): hook для беспрерывного файлового лога,
+     * переживающего краш. :app (PersistentLogger) регистрирует сюда ссылку на
+     * `PersistentLogger.log` в SovaApp.onCreate — :core:common НЕ может зависеть
+     * от :app, поэтому инверсия: AppLog вызывает hook, hook заполняется app-слоем.
+     * null = persistent-лог не инициализирован (no-op).
+     *
+     * Вызывается в [log] ДО любых гейтов (category/section/errors-only) —
+     * persistent-лог пишет ПОЛНЫЙ лог всего, независимо от настроек фильтрации
+     * in-memory buffer/logcat. PersistentLogger.log сам проверяет enabled —
+     * если выключен, ранний no-op (дешев, без lock).
+     *
+     * Сигнатура: (level: String, tag: String, msg: String, throwable: Throwable?) -> Unit
+     * где level — "V"/"D"/"I"/"W"/"E" (см. [levelChar]).
+     */
+    @Volatile
+    var persistentLogHook: ((String, String, String, Throwable?) -> Unit)? = null
+
+    /**
      * #ARCH-CONTAINERS (Этап 1.2-а): хост (:app) передаёт идентификацию сборки
      * ДО первого лог-вызова (SovaApp.onCreate — раньше эти поля читались
      * напрямую из BuildConfig хоста). Вызывается один раз при старте процесса,
@@ -848,6 +866,16 @@ object AppLog {
         t: Throwable?,
         context: Map<String, String>?,
     ) {
+        // #PERSIST-LOG (Task 6-LOGGER-INFRA): зеркало в беспрерывный файловый лог
+        // (переживает краш). Hook регистрируется :app (PersistentLogger) в
+        // SovaApp.onCreate. Вызывается ДО любых гейтов (category/section/errors-only)
+        // — persistent-лог пишет ПОЛНЫЙ лог всего, независимо от настроек фильтрации
+        // in-memory/logcat. PersistentLogger.log сам проверяет enabled — если
+        // выключен, ранний no-op (дешев, без lock). Это ЕДИНСТВЕННАЯ точка перехвата:
+        // все публичные методы (v/d/i/w/e + перегрузки с контекстом + api/lp/
+        // backfill/execute/ws) делегируют сюда, поэтому покрывается всё.
+        persistentLogHook?.invoke(levelChar(level), tag, msg, t)
+
         // #LOG-CATEGORIES (2026-08-04): per-category gating.
         // Если категория этого тега отключена пользователем в Settings → Log —
         // пропускаем запись ВООБЩЕ (buffer + file + logcat), чтобы убрать «шум».
