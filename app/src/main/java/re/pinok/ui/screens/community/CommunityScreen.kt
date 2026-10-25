@@ -789,6 +789,123 @@ fun CommunityScreen(
         return
     }
 
+    // #COMMUNITY-POST-DRY: общие обработчики для карточек постов стены И поиска.
+    // Раньше блок «⋮»-меню (~75 строк) и onLikeToggle/onCommentClick дублировались
+    // между обычной стеной и результатами поиска — поиск при этом ссылался на
+    // несуществующие имена (onLikeToggle/onCommentClick/buildMenuItems/
+    // onPostContextClick) и не компилировался. Здесь три локальные функции,
+    // захватывающие общий scope (g, app, scope, likesState, editingPost,
+    // softDeletedPost/softDeleteSeconds, refreshWall, onPostClick) — оба места
+    // рендера поста (стена + поиск) используют их одинаково. Поведение стены
+    // НЕ изменено: логика 1:1 с прежним inline-кодом (verified: optimistic like
+    // по post.likes, scope.launch likesAdd/Delete, wallState.find заменён на
+    // сам post — эквивалентно, т.к. PostCard вызывает колбэк с тем же post).
+    fun buildCommunityPostMenuItems(post: Post): List<PostMenuItem> = buildList {
+        // Закладка поста — всегда (для всех).
+        add(
+            PostMenuItem(
+                label = if (post.isFavoriteBool) "Убрать из закладок" else "В закладки",
+                icon = if (post.isFavoriteBool) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                onClick = {
+                    scope.launch {
+                        val ok = if (post.isFavoriteBool) {
+                            app.apiClient.faveRemove("post", post.ownerId, post.id)
+                        } else {
+                            app.apiClient.faveAdd("post", post.ownerId, post.id)
+                        }
+                        AppLog.d("CommunityScreen", "bookmark toggle: ok=$ok")
+                    }
+                },
+            )
+        )
+        if (g.isManager) {
+            add(
+                PostMenuItem(
+                    label = "Редактировать",
+                    icon = Icons.Outlined.Edit,
+                    onClick = { editingPost = post; showComposer = true },
+                )
+            )
+            add(
+                PostMenuItem(
+                    label = "Удалить",
+                    icon = Icons.Outlined.Delete,
+                    destructive = true,
+                    // #ADMIN-SOFT-DELETE: мягкое удаление со стрипом восстановления.
+                    onClick = {
+                        softDeletedPost = post
+                        softDeleteSeconds = 10
+                    },
+                )
+            )
+            val commentsClosed = (post.comments?.canPost ?: 1) == 0
+            add(
+                PostMenuItem(
+                    label = if (commentsClosed) "Открыть комментарии" else "Закрыть комментарии",
+                    icon = Icons.Outlined.ChatBubbleOutline,
+                    onClick = {
+                        scope.launch {
+                            val ok = if (commentsClosed) {
+                                app.apiClient.wallOpenComments(groupId, post.id)
+                            } else {
+                                app.apiClient.wallCloseComments(groupId, post.id)
+                            }
+                            AppLog.d("CommunityScreen", "comments toggle: ok=$ok")
+                            if (ok) refreshWall()
+                        }
+                    },
+                )
+            )
+            val pinned = post.isPinned == 1
+            add(
+                PostMenuItem(
+                    label = if (pinned) "Убрать из «Главное»" else "Закрепить в «Главное»",
+                    icon = if (pinned) Icons.Outlined.VisibilityOff else Icons.Outlined.PushPin,
+                    onClick = {
+                        scope.launch {
+                            val ok = if (pinned) {
+                                app.apiClient.ownersRemoveFromMainTab(groupId, post.id)
+                            } else {
+                                app.apiClient.ownersPinToMainTab(groupId, post.id)
+                            }
+                            AppLog.d("CommunityScreen", "pin toggle: ok=$ok")
+                            if (ok) refreshWall()
+                        }
+                    },
+                )
+            )
+        }
+    }
+
+    fun handleCommunityPostLike(post: Post, currentlyLiked: Boolean) {
+        val key = "${post.ownerId}_${post.id}"
+        val base = post.likes?.count ?: 0
+        val prev = likesState[key] ?: (post.likes?.userLikes == 1) to base
+        // Оптимистичное обновление.
+        likesState[key] = (!prev.first) to (if (prev.first) prev.second - 1 else prev.second + 1)
+        scope.launch {
+            try {
+                val newCount = if (currentlyLiked) {
+                    app.apiClient.likesDelete("post", post.ownerId, post.id)
+                } else {
+                    app.apiClient.likesAdd("post", post.ownerId, post.id)
+                }
+                likesState[key] = (!currentlyLiked) to (if (newCount >= 0) newCount else likesState[key]?.second ?: prev.second)
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "like toggle failed for $key", e)
+                likesState[key] = prev
+            }
+        }
+    }
+
+    fun handleCommunityPostComment(post: Post) {
+        PostHolder.last = post
+        // Fix #365: пробрасываем группы в PostHolder для имени сообщества
+        // в PostDetailScreen (тот же паттерн, что в FeedScreen).
+        PostHolder.lastGroups = mapOf(groupId to g)
+        onPostClick(post)
+    }
+
     // Fix #43: statusBarsPadding — контент не уходит под системную панель.
     // CommunityScreen в hasOwnTopBar списке SovaNavHost → глобальный TopAppBar
     // не рисуется, insets нужно применять самому. Аналогично ProfileScreen.
@@ -1198,20 +1315,34 @@ fun CommunityScreen(
                 }
             } else {
                 items(searchResults.filter { it.id != softDeletedPost?.id }, key = { "search_${it.ownerId}_${it.id}" }) { post ->
+                    val postKey = "${post.ownerId}_${post.id}"
                     CommunityPostCard(
                         post = post,
                         authorName = g.name,
                         authorPhoto = g.photo200 ?: g.photo100,
+                        // SHOW-AUTHOR-ALL: «от [signer name]» — для всех постов с signerId.
                         signerName = post.signerId?.let { sid -> signerNames[sid]?.let { name -> "от $name" } },
+                        // #COMMUNITY-POST-DRY: общие обработчики стены/поиска (см. defs выше).
+                        menuItems = buildCommunityPostMenuItems(post),
                         onVideoClick = onVideoClick,
-                        onPostClick = onPostClick,
+                        // Fix #365: пробрасываем группы в PostHolder для имени сообщества
+                        // в PostDetailScreen (тот же паттерн, что в FeedScreen/wall-секции).
+                        onPostClick = { p ->
+                            PostHolder.lastGroups = mapOf(groupId to g)
+                            onPostClick(p)
+                        },
                         onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
-                        onRepostClick = { repostPost.value = it },
-                        onLikeToggle = { ownerId, postId, isLiked -> onLikeToggle(ownerId, postId, isLiked) },
-                        onCommentClick = { ownerId, postId -> onCommentClick(ownerId, postId) },
+                        // 22-B: карусель фото (общий SovaPrefs-флаг).
                         carouselEnabled = carouselEnabled,
-                        menuItems = buildMenuItems(post),
-                        onPostContextClick = null,
+                        onRepostClick = { repostPost.value = it },
+                        onLikeToggle = { _, _, currentlyLiked -> handleCommunityPostLike(post, currentlyLiked) },
+                        onCommentClick = { _, _ -> handleCommunityPostComment(post) },
+                        likesOverride = likesState[postKey],
+                    )
+                    // Разделитель — для визуальной консистентности с обычной стеной.
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                     )
                 }
                 if (searchLoading) {
@@ -1247,87 +1378,9 @@ fun CommunityScreen(
                 authorPhoto = g.photo200 ?: g.photo100,
                 // SHOW-AUTHOR-ALL: «от [signer name]» — для всех постов с signerId.
                 signerName = post.signerId?.let { sid -> signerNames[sid]?.let { name -> "от $name" } },
-                // #ADMIN-POST-ACTIONS-FLAT: плоское «⋮»-меню поста формируется на
-                // уровне экрана (доступны scope/app/post/groupId/g). Закладка — для
-                // всех пользователей; действия менеджера (редактировать/удалить/
-                // комментарии/закрепить) — только при g.isManager. Заменяет старый
-                // костыль «Действия → PostActionsMenu» (меню-в-меню).
-                menuItems = buildList {
-                    // Закладка поста — всегда (для всех).
-                    add(
-                        PostMenuItem(
-                            label = if (post.isFavoriteBool) "Убрать из закладок" else "В закладки",
-                            icon = if (post.isFavoriteBool) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
-                            onClick = {
-                                scope.launch {
-                                    val ok = if (post.isFavoriteBool) {
-                                        app.apiClient.faveRemove("post", post.ownerId, post.id)
-                                    } else {
-                                        app.apiClient.faveAdd("post", post.ownerId, post.id)
-                                    }
-                                    AppLog.d("CommunityScreen", "bookmark toggle: ok=$ok")
-                                }
-                            },
-                        )
-                    )
-                    if (g.isManager) {
-                        add(
-                            PostMenuItem(
-                                label = "Редактировать",
-                                icon = Icons.Outlined.Edit,
-                                onClick = { editingPost = post; showComposer = true },
-                            )
-                        )
-                        add(
-                            PostMenuItem(
-                                label = "Удалить",
-                                icon = Icons.Outlined.Delete,
-                                destructive = true,
-                                // #ADMIN-SOFT-DELETE: мягкое удаление со стрипом восстановления.
-                                onClick = {
-                                    softDeletedPost = post
-                                    softDeleteSeconds = 10
-                                },
-                            )
-                        )
-                        val commentsClosed = (post.comments?.canPost ?: 1) == 0
-                        add(
-                            PostMenuItem(
-                                label = if (commentsClosed) "Открыть комментарии" else "Закрыть комментарии",
-                                icon = Icons.Outlined.ChatBubbleOutline,
-                                onClick = {
-                                    scope.launch {
-                                        val ok = if (commentsClosed) {
-                                            app.apiClient.wallOpenComments(groupId, post.id)
-                                        } else {
-                                            app.apiClient.wallCloseComments(groupId, post.id)
-                                        }
-                                        AppLog.d("CommunityScreen", "comments toggle: ok=$ok")
-                                        if (ok) refreshWall()
-                                    }
-                                },
-                            )
-                        )
-                        val pinned = post.isPinned == 1
-                        add(
-                            PostMenuItem(
-                                label = if (pinned) "Убрать из «Главное»" else "Закрепить в «Главное»",
-                                icon = if (pinned) Icons.Outlined.VisibilityOff else Icons.Outlined.PushPin,
-                                onClick = {
-                                    scope.launch {
-                                        val ok = if (pinned) {
-                                            app.apiClient.ownersRemoveFromMainTab(groupId, post.id)
-                                        } else {
-                                            app.apiClient.ownersPinToMainTab(groupId, post.id)
-                                        }
-                                        AppLog.d("CommunityScreen", "pin toggle: ok=$ok")
-                                        if (ok) refreshWall()
-                                    }
-                                },
-                            )
-                        )
-                    }
-                },
+                // #COMMUNITY-POST-DRY: общие обработчики стены/поиска (см. defs выше).
+                // Поведение стены НЕ изменено: логика 1:1 с прежним inline-кодом.
+                menuItems = buildCommunityPostMenuItems(post),
                 onVideoClick = onVideoClick,
                 // Fix #365: пробрасываем группы в PostHolder для имени сообщества
                 // в PostDetailScreen (тот же паттерн, что в FeedScreen) — работает
@@ -1341,34 +1394,15 @@ fun CommunityScreen(
                 // 22-B: карусель фото (общий SovaPrefs-флаг, см. выше).
                 carouselEnabled = carouselEnabled,
                 onRepostClick = { repostPost.value = it },
-                onLikeToggle = { ownerId, postId, currentlyLiked ->
-                    val key = "${ownerId}_${postId}"
-                    val base = post.likes?.count ?: 0
-                    val prev = likesState[key] ?: (post.likes?.userLikes == 1) to base
-                    // Оптимистичное обновление.
-                    likesState[key] = (!prev.first) to (if (prev.first) prev.second - 1 else prev.second + 1)
-                    scope.launch {
-                        try {
-                            val newCount = if (currentlyLiked) {
-                                app.apiClient.likesDelete("post", ownerId, postId)
-                            } else {
-                                app.apiClient.likesAdd("post", ownerId, postId)
-                            }
-                            likesState[key] = (!currentlyLiked) to (if (newCount >= 0) newCount else likesState[key]?.second ?: prev.second)
-                        } catch (e: Exception) {
-                            AppLog.e("CommunityScreen", "like toggle failed for $key", e)
-                            likesState[key] = prev
-                        }
-                    }
-                },
-                onCommentClick = { ownerId, postId ->
-                    val cPost = wallState.items.find { it.ownerId == ownerId && it.id == postId }
-                    if (cPost != null) {
-                        PostHolder.last = cPost
-                        PostHolder.lastGroups = mapOf(groupId to g)
-                        onPostClick(cPost)
-                    }
-                },
+                // #COMMUNITY-POST-DRY: optimistic like + scope.launch
+                // likesAdd/Delete вынесены в handleCommunityPostLike (общий для
+                // стены и поиска). ownerId/postId из колбэка == post.ownerId/id.
+                onLikeToggle = { _, _, currentlyLiked -> handleCommunityPostLike(post, currentlyLiked) },
+                // #COMMUNITY-POST-DRY: PostHolder.last/lastGroups + onPostClick
+                // вынесены в handleCommunityPostComment. wallState.items.find
+                // заменён на сам post — эквивалентно (PostCard зовёт колбэк с тем
+                // же post, что и items(...){ post -> }).
+                onCommentClick = { _, _ -> handleCommunityPostComment(post) },
                 likesOverride = likesState[postKey],
             )
             Box(

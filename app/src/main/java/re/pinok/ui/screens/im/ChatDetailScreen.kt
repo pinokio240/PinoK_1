@@ -11745,7 +11745,9 @@ private fun ChannelSearchPanel(
         searching = true
         errorMsg = null
         try {
-            val found = app.apiClient.wallSearch(ownerId = ownerId, query = q, count = 30)
+            // COMMUNITY-SEARCH-UNIFY: wallSearch теперь возвращает WallGetExtendedResult
+            // (посты + имена авторов). Берём .posts — для канального поиска имена не нужны.
+            val found = app.apiClient.wallSearch(ownerId = ownerId, query = q, count = 30).posts
             if (seq == searchSeq) results = found
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
