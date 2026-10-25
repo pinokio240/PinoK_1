@@ -13749,9 +13749,38 @@ class VKApiClient(
                     sig?.let { add("sig", it) }
                 }
             }.build()
+            // #WEB-HEADERS (HAR #53 аудита): web-шлюз web.api.vk.ru проверяет
+            // Origin/Referer — без https://vk.ru отклоняет с err=3 "Unknown method"
+            // (НЕ про имя метода, а про идентификацию источника запроса как vk.ru SPA).
+            // HAR #53 headers:
+            //   origin: https://vk.ru
+            //   referer: https://vk.ru/
+            //   user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)... Chrome/156...
+            //   sec-fetch-site: same-site
+            //   sec-fetch-mode: cors
+            //   sec-fetch-dest: empty
+            //   accept: */*
+            //   accept-language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+            //   dnt: 1
+            // Без этих заголовков web-шлюз воспринимает запрос как не-браузерный → err=3.
             val req = Request.Builder()
                 .url(methodUrl)
                 .post(form)
+                .apply {
+                    if (useWebGateway) {
+                        header("Origin", "https://vk.ru")
+                        header("Referer", "https://vk.ru/")
+                        header("User-Agent",
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                            "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
+                        header("Accept", "*/*")
+                        header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+                        header("Sec-Fetch-Site", "same-site")
+                        header("Sec-Fetch-Mode", "cors")
+                        header("Sec-Fetch-Dest", "empty")
+                        header("DNT", "1")
+                    }
+                }
                 .build()
             if (useWebGateway) {
                 AppLog.d("VKApiClient", "call($method): using WEB gateway web.api.vk.ru")
