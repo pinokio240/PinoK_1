@@ -283,22 +283,6 @@ fun AudioAttachmentList(tracks: List<Track>) {
                                     ).show()
                                     return@launch
                                 }
-                                // 1. Создаём плейлист (web-шлюз — #AUDIO-WEB-GATEWAY).
-                                val newPlaylistId = app.apiClient.audioCreatePlaylist(
-                                    ownerId = myId,
-                                    title = title,
-                                    description = "",
-                                )
-                                if (newPlaylistId <= 0L) {
-                                    val err = app.apiClient.lastApiError
-                                    Toast.makeText(
-                                        context,
-                                        "Не удалось создать: ${err ?: "ошибка"}",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    return@launch
-                                }
-                                // 2. Добавляем ВСЕ треки одним запросом.
                                 // audioIds формат: "ownerId_audioId" (VK convention).
                                 // Фильтруем треки без id (некоторые вложения могут
                                 // быть невалидными —VK иногда шлёт мусор).
@@ -313,22 +297,27 @@ fun AudioAttachmentList(tracks: List<Track>) {
                                     ).show()
                                     return@launch
                                 }
-                                val added = app.apiClient.audioAddToPlaylist(
+                                // #CREATE-WITH-TRACKS (HAR #53): audio.createPlaylist принимает
+                                // audio_ids CSV — создаёт плейлист И добавляет треки ОДНИМ
+                                // запросом (как VK веб: audioCreatePlaylist({audio_ids:d.Audios})).
+                                // Раньше было 2 запроса (create + addToPlaylist). Теперь 1.
+                                val newPlaylistId = app.apiClient.audioCreatePlaylist(
                                     ownerId = myId,
-                                    playlistId = newPlaylistId,
+                                    title = title,
+                                    description = "",
                                     audioIds = audioIds,
                                 )
-                                if (added.isNotEmpty()) {
+                                if (newPlaylistId > 0L) {
                                     Toast.makeText(
                                         context,
-                                        "Сохранено: «$title» — ${added.size} из ${audioIds.size} треков",
+                                        "Сохранено: «$title» — ${audioIds.size} треков",
                                         Toast.LENGTH_LONG,
                                     ).show()
                                 } else {
                                     val err = app.apiClient.lastApiError
                                     Toast.makeText(
                                         context,
-                                        "Треки не добавлены: ${err ?: "ошибка"}",
+                                        "Не удалось создать: ${err ?: "ошибка"}",
                                         Toast.LENGTH_SHORT,
                                     ).show()
                                 }

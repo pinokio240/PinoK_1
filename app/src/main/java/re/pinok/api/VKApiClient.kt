@@ -5079,6 +5079,11 @@ class VKApiClient(
         ownerId: Long,
         title: String,
         description: String? = null,
+        // #AUDIO-IDS-IN-CREATE (HAR #53): VK веб передаёт audio_ids CSV в createPlaylist
+        // — создаёт плейлист И добавляет треки одним запросом (audio.e07a1ce1.js:
+        // f.audioCreatePlaylist({owner_id,title,description,no_discover,audio_ids:d.Audios})).
+        // null = создать пустой.
+        audioIds: List<String>? = null,
     ): Long {
         if (isOffline()) return -1L
         val args = mutableMapOf(
@@ -5086,19 +5091,20 @@ class VKApiClient(
             "title" to title,
         )
         if (!description.isNullOrBlank()) args["description"] = description
-        // #CREATE-PLAYLIST-GATEWAY-FIX: web-шлюз web.api.vk.ru НЕ поддерживает
-        // audio.createPlaylist → err=3 "Unknown method passed" (лог пользователя
-        // 1792942073219.txt). Default-шлюз api.vk.ru (SovaPrefs.AUTH_API_HOST_DEFAULT
-        // = "api.vk.ru", VKEndpoints.currentApiHost()) принимает этот метод для
-        // web-токенов vk1.a.* (audio.get/getById работают на default — лог
-        // пользователя: audio.get 403ms 200 OK через default api.vk.ru).
-        // Убрали forceWebGateway=true (ошибочно добавлен в 5c216f7).
-        // WEB_INCOMPATIBLE_METHODS ниже страхует от случайного web-переключения.
-        val json = call("audio.createPlaylist", args) ?: return -1L
+        if (!audioIds.isNullOrEmpty()) {
+            args["audio_ids"] = audioIds.joinToString(",")
+            args["no_discover"] = "0"
+        }
+        // #CREATE-PLAYLIST-HAR (аудит музыка сохранить плейлист1.7z #53):
+        // HAR доказывает — audio.createPlaylist идёт через web.api.vk.ru (200 OK),
+        // v=5.289, client_id=6287487. Response: {response:{id:144, owner_id, type:"ugc",
+        // title, count, photo, is_following, permissions}} — ПРЯМОЙ объект (БЕЗ обёртки
+        // "playlist"!). Раньше PinoK парсил response.playlist.id → всегда -1L.
+        // Старый лог err=3 был из-за отсутствия v=5.289/client_id, НЕ из-за web-шлюза.
+        val json = call("audio.createPlaylist", args, forceWebGateway = true) ?: return -1L
         return try {
-            // audio.createPlaylist возвращает {response:{playlist:{id:N}}}.
-            json.getAsJsonObject("response")?.getAsJsonObject("playlist")
-                ?.get("id")?.asLong ?: -1L
+            // #CREATE-PLAYLIST-PARSE-FIX: response.id напрямую (БЕЗ playlist обёртки).
+            json.getAsJsonObject("response")?.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: -1L
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "audioCreatePlaylist error", e)
             -1L
@@ -5119,20 +5125,19 @@ class VKApiClient(
             "title" to title,
         )
         if (!description.isNullOrBlank()) args["description"] = description
-        // #PLAYLIST-WRITE-GATEWAY-FIX: forceWebGateway УБРАН — web-шлюз даёт err=3
-        // для audio.*Playlist write-методов (лог 1792942073219.txt). Default api.vk.ru OK.
-        val json = call("audio.editPlaylist", args) ?: return false
+        // #PLAYLIST-WEB-GATEWAY (HAR): audio.* через web.api.vk.ru.
+        val json = call("audio.editPlaylist", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
     /** audio.deletePlaylist — удалить плейлист. */
     suspend fun audioDeletePlaylist(ownerId: Long, playlistId: Long): Boolean {
         if (isOffline()) return false
-        // #PLAYLIST-WRITE-GATEWAY-FIX: default api.vk.ru.
+        // #PLAYLIST-WEB-GATEWAY (HAR): audio.* через web.api.vk.ru.
         val json = call("audio.deletePlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -5147,18 +5152,20 @@ class VKApiClient(
         audioIds: List<String>,
     ): List<Long> {
         if (isOffline() || audioIds.isEmpty()) return emptyList()
-        // #ADD-TO-PLAYLIST-GATEWAY-FIX: forceWebGateway УБРАН — web-шлюз даёт
-        // err=3 для audio.addToPlaylist (как и createPlaylist). Default api.vk.ru
-        // работает (лог пользователя: audio.get/addToPlaylist через default OK).
+        // #PLAYLIST-WEB-GATEWAY (HAR #228): audio.addToPlaylist через web.api.vk.ru.
         val json = call("audio.addToPlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
             "audio_ids" to audioIds.joinToString(","),
-        )) ?: return emptyList()
+        ), forceWebGateway = true) ?: return emptyList()
         return try {
-            val arr = json.getAsJsonObject("response")?.getAsJsonArray("audio_ids")
-                ?: return emptyList()
-            arr.mapNotNull { it.asJsonObject?.get("audio_id")?.asLong }
+            // #ADD-TO-PLAYLIST-PARSE-FIX (HAR #228): response = [{audio_id,track_code}]
+            // — массив объектов ПРЯМО в response (БЕЗ обёртки "audio_ids").
+            // Раньше искали response.audio_ids → всегда emptyList (трек реально добавлен).
+            val arr = json.getAsJsonArray("response") ?: return emptyList()
+            arr.mapNotNull { el ->
+                el.takeIf { it.isJsonObject }?.asJsonObject?.get("audio_id")?.asLong
+            }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "audioAddToPlaylist error", e)
             emptyList()
@@ -5172,12 +5179,13 @@ class VKApiClient(
         audioIds: List<String>,
     ): Boolean {
         if (isOffline() || audioIds.isEmpty()) return false
-        // #PLAYLIST-WRITE-GATEWAY-FIX: default api.vk.ru.
+        // #PLAYLIST-WEB-GATEWAY (HAR #230): audio.removeFromPlaylist через web.api.vk.ru.
+        // Response HAR #230: {response:1} (просто число). json.has("response") ОК.
         val json = call("audio.removeFromPlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
             "audio_ids" to audioIds.joinToString(","),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -5220,13 +5228,11 @@ class VKApiClient(
     /** audio.followPlaylist — подписаться на обновления плейлиста (бесплатно). */
     suspend fun audioFollowPlaylist(ownerId: Long, playlistId: Long): Boolean {
         if (isOffline()) return false
-        // #PLAYLIST-WRITE-GATEWAY-FIX: forceWebGateway УБРАН — web-шлюз даёт err=3
-        // для audio.followPlaylist (как все audio.*Playlist write-методы).
-        // Default api.vk.ru работает.
+        // #PLAYLIST-WEB-GATEWAY (HAR): audio.* через web.api.vk.ru.
         val json = call("audio.followPlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -14446,22 +14452,11 @@ class VKApiClient(
             // api.vk.com, т.к. web-шлюз может не знать эти методы.
             "messages.markAsImportantConversation",
             "messages.markAsUnreadConversation",
-            // #PLAYLIST-WRITE-GATEWAY-FIX (2026-10-25): audio.*Playlist write-методы
-            // НЕ поддерживаются web-шлюзом web.api.vk.ru → err=3 "Unknown method".
-            // Подтверждено логом пользователя 1792942073219.txt для audio.createPlaylist.
-            // Default-шлюз api.vk.ru (SovaPrefs.AUTH_API_HOST_DEFAULT = "api.vk.ru")
-            // принимает их для web-токенов vk1.a.* (audio.get/getById работают на
-            // default — лог: audio.get 403ms 200 OK через default api.vk.ru).
-            // READ-методы (audio.getPlaylistById, audio.getPlaylists, audio.get) работают
-            // на обоих шлюзах — НЕ добавляем сюда.
-            // ИСКЛЮЧЕНИЕ: audio.savePlaylistAsCopy РАБОТАЕТ через web.api.vk.ru (HAR #164
-            // 200 OK). Использует forceWebGateway=true напрямую. НЕ добавляем сюда.
-            "audio.createPlaylist",
-            "audio.addToPlaylist",
-            "audio.editPlaylist",
-            "audio.deletePlaylist",
-            "audio.removeFromPlaylist",
-            "audio.followPlaylist",
+            // #PLAYLIST-WEB-GATEWAY (аудит музыка сохранить плейлист1.7z, 2026-10-25):
+            // ВСЕ audio.*Playlist методы ВЕРИФИЦИРОВАНЫ HAR — идут через web.api.vk.ru
+            // (createPlaylist #53, addToPlaylist #228, removeFromPlaylist #230,
+            // savePlaylistAsCopy #164 prev). forceWebGateway=true в каждом методе.
+            // НЕ добавляем сюда — они ДОЛЖНЫ идти через web.api.vk.ru.
         )
 
         /**
