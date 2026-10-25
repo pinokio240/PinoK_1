@@ -5086,7 +5086,11 @@ class VKApiClient(
             "title" to title,
         )
         if (!description.isNullOrBlank()) args["description"] = description
-        val json = call("audio.createPlaylist", args) ?: return -1L
+        // #AUDIO-WEB-GATEWAY: forceWebGateway=true — web-токены vk1.a.* требуют
+        // web-шлюз для audio.* (как audio.add в audioAddReliable). Без этого
+        // audio.createPlaylist возвращает err=5 (authorization failed) для
+        // web-токенов → плейлист «не сохраняется» (жалоба пользователя).
+        val json = call("audio.createPlaylist", args, forceWebGateway = true) ?: return -1L
         return try {
             json.getAsJsonObject("response")?.getAsJsonObject("playlist")
                 ?.get("id")?.asLong ?: -1L
@@ -5135,11 +5139,12 @@ class VKApiClient(
         audioIds: List<String>,
     ): List<Long> {
         if (isOffline() || audioIds.isEmpty()) return emptyList()
+        // #AUDIO-WEB-GATEWAY: forceWebGateway=true — см. audioCreatePlaylist.
         val json = call("audio.addToPlaylist", mapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
             "audio_ids" to audioIds.joinToString(","),
-        )) ?: return emptyList()
+        ), forceWebGateway = true) ?: return emptyList()
         return try {
             val arr = json.getAsJsonObject("response")?.getAsJsonArray("audio_ids")
                 ?: return emptyList()
