@@ -5088,9 +5088,11 @@ class VKApiClient(
         if (!description.isNullOrBlank()) args["description"] = description
         // #CREATE-PLAYLIST-GATEWAY-FIX: web-шлюз web.api.vk.ru НЕ поддерживает
         // audio.createPlaylist → err=3 "Unknown method passed" (лог пользователя
-        // 1792942073219.txt). Default-шлюз api.vk.ru принимает этот метод для
-        // web-токенов vk1.a.* (audio.get/getById работают на default). Убрали
-        // forceWebGateway=true (который я ошибочно добавил) — теперь default.
+        // 1792942073219.txt). Default-шлюз api.vk.ru (SovaPrefs.AUTH_API_HOST_DEFAULT
+        // = "api.vk.ru", VKEndpoints.currentApiHost()) принимает этот метод для
+        // web-токенов vk1.a.* (audio.get/getById работают на default — лог
+        // пользователя: audio.get 403ms 200 OK через default api.vk.ru).
+        // Убрали forceWebGateway=true (ошибочно добавлен в 5c216f7).
         // WEB_INCOMPATIBLE_METHODS ниже страхует от случайного web-переключения.
         val json = call("audio.createPlaylist", args) ?: return -1L
         return try {
@@ -14443,8 +14445,9 @@ class VKApiClient(
             // #PLAYLIST-WRITE-GATEWAY-FIX (2026-10-25): audio.*Playlist write-методы
             // НЕ поддерживаются web-шлюзом web.api.vk.ru → err=3 "Unknown method".
             // Подтверждено логом пользователя 1792942073219.txt для audio.createPlaylist.
-            // Default api.vk.ru принимает их для web-токенов vk1.a.* (audio.get/getById
-            // работают на default — лог: audio.get 403ms 200 OK через default).
+            // Default-шлюз api.vk.ru (SovaPrefs.AUTH_API_HOST_DEFAULT = "api.vk.ru")
+            // принимает их для web-токенов vk1.a.* (audio.get/getById работают на
+            // default — лог: audio.get 403ms 200 OK через default api.vk.ru).
             // READ-методы (audio.getPlaylistById, audio.getPlaylists, audio.get) работают
             // на обоих шлюзах — НЕ добавляем сюда.
             "audio.createPlaylist",
