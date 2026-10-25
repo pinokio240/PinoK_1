@@ -371,21 +371,28 @@ fun CommunityScreen(
         rememberKey = groupId,
     )
 
-    // COMMUNITY-SEARCH: debounce 500ms → wall.search.
-    // #DEBOUNCE-STABLE-v2: устранена ПРИЧИНА warning'а @ExperimentalCoroutinesApi.
-    // Эволюция: .debounce(500) (@FlowPreview) → transformLatest+delay
-    // (@ExperimentalCoroutinesApi) → ТЕПЕРЬ чистый LaunchedEffect+delay
-    // (оба стабильные, никаких opt-in).
+    // COMMUNITY-SEARCH: поиск по записям сообщества.
+    // #SEARCH-LOCAL-FALLBACK: TWO-STAGE search для надёжности.
     //
-    // Как работает debounce без Flow API: LaunchedEffect(searchQuery)
-    // АВТОМАТИЧЕСКИ отменяет (cancel) предыдущий блок при смене key. Поэтому
-    // быстрый ввод «абв» → 3 запуска, каждый отменяет предыдущий до истечения
-    // delay(500). Только когда пользователь перестаёт печатать на 500мс,
-    // delay завершается и выполняется wall.search. Семантика 1:1 с debounce.
+    // Стадия 1 (мгновенно, БЕЗ debounce): ЛОКАЛЬНЫЙ поиск по уже загруженным
+    // постам стены (wallState.items) по ПОДСТРОКЕ (contains, ignoreCase).
+    // Показывает результаты сразу, даже если серверный VK wall.search:
+    //   • не проиндексировал свежий пост,
+    //   • ищет по словам (стемминг) и не находит часть слова,
+    //   • owners_only отсёк пост от подписчика.
+    // Локальный поиск ищет по text + copy_history[0].text (текст репоста),
+    // регистронезависимо, по подстроке → найдёт «рив» в «Привет».
+    // Ограничение: только уже загруженные посты (если пост на 5-й странице
+    // стены и не загружен — локально не найдётся; серверный поиск покрывает).
     //
-    // Дополнительно: snapshotFlow не нужен — LaunchedEffect(searchQuery)
-    // сам ре-запускается только при изменении searchQuery (Compose
-    // key-based re-launch эквивалентен distinctUntilChanged).
+    // Стадия 2 (после debounce 500ms): серверный wall.search. Расширяет/
+    // заменяет результаты. Если серверный нашёл — показываем серверные +
+    // локальные (дедуп). Если серверный пуст — оставляем локальные.
+    //
+    // #OWNERS-ONLY-OFF: ownersOnly=false — искать по ВСЕМ постам стены,
+    // включая репосты от подписчиков (раньше true отсекал их → посты
+    // «от Васи» на стене сообщества не находились). Для поиска релевантнее
+    // охват, а не фильтр «только от имени группы».
     LaunchedEffect(searchQuery) {
         val q = searchQuery
         if (q.isBlank()) {
@@ -395,6 +402,20 @@ fun CommunityScreen(
             searchEndReached = false
             return@LaunchedEffect
         }
+        // Стадия 1: мгновенный локальный поиск по загруженным постам стены.
+        val localMatches = wallState.items.filter { p ->
+            p.text.contains(q, ignoreCase = true) ||
+                (p.copyHistory?.firstOrNull()?.text?.contains(q, ignoreCase = true) == true)
+        }
+        if (localMatches.isNotEmpty()) {
+            searchResults = localMatches
+            searchSignerNames = emptyMap()
+            searchOffset = 0
+            searchEndReached = false
+            searchLoading = true // продолжаем искать на сервере
+            AppLog.i("CommunityScreen", "local search: ${localMatches.size} posts for «$q»")
+        }
+        // Стадия 2: серверный поиск (после debounce 500ms).
         kotlinx.coroutines.delay(500)
         searchLoading = true
         searchOffset = 0
@@ -402,21 +423,31 @@ fun CommunityScreen(
         try {
             val result = app.apiClient.wallSearch(
                 ownerId = -groupId, query = q, count = 20, offset = 0,
+                ownersOnly = false,
             )
-            searchResults = result.posts
+            // MERGE: серверные + локальные (дедуп по ownerId_id). Серверные
+            // ПЕРВЫМИ (релевантность VK выше), локальные добавляем в конец
+            // те, что не пересекаются с серверными.
+            val serverIds = result.posts.map { it.ownerId to it.id }.toHashSet()
+            val localOnly = localMatches.filter { (it.ownerId to it.id) !in serverIds }
+            searchResults = (result.posts + localOnly).distinctBy { it.ownerId to it.id }
             searchSignerNames = result.profileNames
             signerNames = signerNames + result.profileNames
             searchOffset = result.posts.size
-            if (result.posts.isEmpty()) searchEndReached = true
-            AppLog.i("CommunityScreen", "wallSearch: ${result.posts.size} posts for «$q»")
+            if (result.posts.isEmpty() && localOnly.isEmpty()) searchEndReached = true
+            AppLog.i("CommunityScreen", "wallSearch: ${result.posts.size} server + ${localOnly.size} local-only posts for «$q»")
         } catch (e: Exception) {
             AppLog.e("CommunityScreen", "wallSearch error", e)
+            // Сервер упал — оставляем локальные результаты (если есть).
+            if (searchResults.isEmpty()) searchEndReached = true
         } finally {
             searchLoading = false
         }
     }
 
     // COMMUNITY-SEARCH: подгрузка следующих результатов поиска.
+    // #OWNERS-ONLY-OFF: ownersOnly=false — консистентно с первичным поиском
+    // (иначе первая страница без фильтра, следующие — с фильтром → расхождение).
     fun loadMoreSearch() {
         if (searchLoading || searchEndReached || searchResults.isEmpty()) return
         scope.launch {
@@ -425,8 +456,11 @@ fun CommunityScreen(
                 val rawOffset = searchOffset
                 val result = app.apiClient.wallSearch(
                     ownerId = -groupId, query = searchQuery, count = 20, offset = rawOffset,
+                    ownersOnly = false,
                 )
                 if (result.posts.isNotEmpty()) {
+                    // MERGE: серверные догружаются к существующим (включая локальные
+                    // fallback-результаты), дедуп по ownerId_id.
                     searchResults = (searchResults + result.posts).distinctBy { "${it.ownerId}_${it.id}" }
                     signerNames = signerNames + result.profileNames
                     searchSignerNames = searchSignerNames + result.profileNames
