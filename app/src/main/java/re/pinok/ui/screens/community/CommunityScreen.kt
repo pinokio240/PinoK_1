@@ -28,8 +28,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
@@ -49,6 +51,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -82,6 +85,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import re.pinok.ui.navigation.PostHolder
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
@@ -187,6 +191,14 @@ fun CommunityScreen(
     var signerNames by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    // COMMUNITY-SEARCH: поиск постов на стене сообщества (wall.search).
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<Post>>(emptyList()) }
+    var searchSignerNames by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
+    var searchLoading by remember { mutableStateOf(false) }
+    var searchOffset by remember { mutableStateOf(0) }
+    var searchEndReached by remember { mutableStateOf(false) }
     // Fix #85: pull-to-refresh стены группы.
     var isRefreshing by remember { mutableStateOf(false) }
 
@@ -359,6 +371,64 @@ fun CommunityScreen(
         keyOf = { d -> "doc_${d.ownerId}_${d.id}" },
         rememberKey = groupId,
     )
+
+    // COMMUNITY-SEARCH: debounce 500ms → wall.search.
+    LaunchedEffect(searchQuery) {
+        snapshotFlow { searchQuery }
+            .debounce(500)
+            .collect { q ->
+                if (q.isBlank()) {
+                    searchResults = emptyList()
+                    searchSignerNames = emptyMap()
+                    searchOffset = 0
+                    searchEndReached = false
+                    return@collect
+                }
+                searchLoading = true
+                searchOffset = 0
+                searchEndReached = false
+                try {
+                    val result = app.apiClient.wallSearch(
+                        ownerId = -groupId, query = q, count = 20, offset = 0,
+                    )
+                    searchResults = result.posts
+                    searchSignerNames = result.profileNames
+                    signerNames = signerNames + result.profileNames
+                    searchOffset = result.posts.size
+                    if (result.posts.isEmpty()) searchEndReached = true
+                    AppLog.i("CommunityScreen", "wallSearch: ${result.posts.size} posts for «$q»")
+                } catch (e: Exception) {
+                    AppLog.e("CommunityScreen", "wallSearch error", e)
+                } finally {
+                    searchLoading = false
+                }
+            }
+    }
+
+    // COMMUNITY-SEARCH: подгрузка следующих результатов поиска.
+    fun loadMoreSearch() {
+        if (searchLoading || searchEndReached || searchResults.isEmpty()) return
+        scope.launch {
+            searchLoading = true
+            try {
+                val rawOffset = searchOffset
+                val result = app.apiClient.wallSearch(
+                    ownerId = -groupId, query = searchQuery, count = 20, offset = rawOffset,
+                )
+                if (result.posts.isNotEmpty()) {
+                    searchResults = (searchResults + result.posts).distinctBy { "${it.ownerId}_${it.id}" }
+                    signerNames = signerNames + result.profileNames
+                    searchSignerNames = searchSignerNames + result.profileNames
+                }
+                searchOffset = rawOffset + result.posts.size
+                if (result.posts.isEmpty()) searchEndReached = true
+            } catch (e: Exception) {
+                AppLog.w("CommunityScreen", "loadMoreSearch failed: ${e.message}")
+            } finally {
+                searchLoading = false
+            }
+        }
+    }
 
     LaunchedEffect(groupId) {
         scope.launch {
@@ -1094,6 +1164,81 @@ fun CommunityScreen(
                 )
             }
         }
+        // COMMUNITY-SEARCH: если есть поисковый запрос — показываем результаты
+        // поиска вместо обычной стены.
+        if (searchQuery.isNotBlank()) {
+            item(key = "search_input") {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    placeholder = { Text("Поиск по записям…") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Очистить")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                )
+            }
+            if (searchLoading && searchResults.isEmpty()) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    }
+                }
+            } else if (searchResults.isEmpty()) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text("Ничего не найдено", color = MaterialTheme.colorScheme.outline)
+                    }
+                }
+            } else {
+                items(searchResults.filter { it.id != softDeletedPost?.id }, key = { "search_${it.ownerId}_${it.id}" }) { post ->
+                    CommunityPostCard(
+                        post = post,
+                        authorName = g.name,
+                        authorPhoto = g.photo200 ?: g.photo100,
+                        signerName = post.signerId?.let { sid -> signerNames[sid]?.let { name -> "от $name" } },
+                        onVideoClick = onVideoClick,
+                        onPostClick = onPostClick,
+                        onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+                        onRepostClick = { repostPost.value = it },
+                        onLikeToggle = { ownerId, postId, isLiked -> onLikeToggle(ownerId, postId, isLiked) },
+                        onCommentClick = { ownerId, postId -> onCommentClick(ownerId, postId) },
+                        carouselEnabled = carouselEnabled,
+                        menuItems = buildMenuItems(post),
+                        onPostContextClick = null,
+                    )
+                }
+                if (searchLoading) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                    }
+                }
+                if (searchEndReached) {
+                    item {
+                        Text("Это все результаты", modifier = Modifier.fillMaxWidth().padding(20.dp), color = MaterialTheme.colorScheme.outline, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    }
+                }
+            }
+        } else {
+        // Обычная стена (без поиска)
+        item(key = "search_input_collapsed") {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                placeholder = { Text("Поиск по записям…") },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                singleLine = true,
+            )
+        }
         items(wallState.items.filter { it.id != softDeletedPost?.id }, key = { "${it.ownerId}_${it.id}" }) { post ->
             val postKey = "${post.ownerId}_${post.id}"
             CommunityPostCard(
@@ -1249,6 +1394,7 @@ fun CommunityScreen(
                 }
             }
         }
+        } // else (обычная стена без поиска)
             } // when (selectedTab) 0 — Wall
             1 -> {
                 // ALBUMS-IN-PHOTO: альбомы показываются ВНУТРИ вкладки «Фото»

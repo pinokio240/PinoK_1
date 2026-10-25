@@ -17038,6 +17038,65 @@ class VKApiClient(
     }
 
     /**
+     * COMMUNITY-SEARCH: поиск постов на стене сообщества.
+     * VK: wall.search — owner_id, query, owners_only, count, offset, extended.
+     *
+     * @param ownerId ID стены (отрицательный для групп)
+     * @param query поисковый запрос
+     * @param ownersOnly true = только посты от имени группы (не репосты)
+     * @param count по 20 за раз (как VK web)
+     */
+    suspend fun wallSearch(
+        ownerId: Long,
+        query: String,
+        count: Int = 20,
+        offset: Int = 0,
+        ownersOnly: Boolean = true,
+    ): WallGetExtendedResult {
+        if (isOffline() || query.isBlank()) return WallGetExtendedResult(emptyList(), emptyMap())
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "query" to query,
+            "owners_only" to if (ownersOnly) "1" else "0",
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "extended" to "1",
+            "fields" to "photo_100,photo_200,verified,screen_name",
+        )
+        val json = call("wall.search", args, forceWebGateway = true)
+            ?: return WallGetExtendedResult(emptyList(), emptyMap())
+        return try {
+            val resp = json.getAsJsonObject("response")
+                ?: return WallGetExtendedResult(emptyList(), emptyMap())
+            val profileNames = HashMap<Long, String>()
+            resp.getAsJsonArray("profiles")?.forEach { el ->
+                if (!el.isJsonObject) return@forEach
+                val o = el.asJsonObject
+                val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+                val first = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val last = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val name = (first + " " + last).trim()
+                if (id > 0L && name.isNotEmpty()) profileNames[id] = name
+            }
+            val items = resp.getAsJsonArray("items")
+                ?: return WallGetExtendedResult(emptyList(), profileNames)
+            val seenKeys = HashSet<Pair<Long, Long>>()
+            val posts = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val post = parsePostMini(el.asJsonObject)
+                if (post.id <= 0L || post.ownerId == 0L) return@mapNotNull null
+                if (!seenKeys.add(post.ownerId to post.id)) return@mapNotNull null
+                post
+            }
+            val totalCount = safeInt(resp.get("count"))
+            WallGetExtendedResult(posts, profileNames, items.size(), totalCount)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "wallSearch parse error", e)
+            WallGetExtendedResult(emptyList(), emptyMap())
+        }
+    }
+
+    /**
      * VK: users.get с полным набором полей (70+ полей из исследования).
      * Расширенная версия usersGet для ProfileScreen.
      * Audit #40: переименована из usersGetFull в usersGetFullExtended,
