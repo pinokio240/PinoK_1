@@ -85,9 +85,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import re.pinok.ui.navigation.PostHolder
 import coil3.compose.AsyncImage
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
@@ -373,9 +373,19 @@ fun CommunityScreen(
     )
 
     // COMMUNITY-SEARCH: debounce 500ms → wall.search.
+    // #DEBOUNCE-STABLE: вместо .debounce(500) (@FlowPreview API — генерил warning
+    // «in a preview state, can be changed backwards-incompatible») используем
+    // эквивалент на СТАБИЛЬНОМ API: transformLatest { delay(500); emit(q) }.
+    // Семантика preserved: новый emission отменяет предыдущий delay (transformLatest
+    // отменяет своё тело при новом значении) → таймер 500мс сбрасывается, как у
+    // debounce. distinctUntilChanged не нужен — snapshotFlow уже дедуплит
+    // consecutive-equal значения (читает Snapshot State только при изменении).
     LaunchedEffect(searchQuery) {
         snapshotFlow { searchQuery }
-            .debounce(500)
+            .transformLatest { q ->
+                kotlinx.coroutines.delay(500)
+                emit(q)
+            }
             .collect { q ->
                 if (q.isBlank()) {
                     searchResults = emptyList()
