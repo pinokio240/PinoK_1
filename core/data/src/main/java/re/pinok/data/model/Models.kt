@@ -658,9 +658,46 @@ data class AudioPlaylist(
     @SerializedName("access_key")    val accessKey: String? = null,
     @SerializedName("followers")     val followers: Int = 0,
     @SerializedName("plays")         val plays: Int = 0,
+    // #PLAYLIST-PERMISSIONS: VK возвращает permissions{play,share,edit,follow,
+    // delete,boom_download,save_as_copy} — драйвит UI (какие кнопки показывать).
+    // Из HAR getPlaylistById #126: Daily Playlist save_as_copy=true, edit=false,
+    // share=false; сохранённая копия save_as_copy=false, edit=true, share=true.
+    // null = сервер не вернул (старые вызовы) → UI трактует как «все запрещены».
+    @SerializedName("permissions")   val permissions: PlaylistPermissions? = null,
+    // #IS-FOLLOWING: подписан ли текущий юзер на плейлист (followPlaylist toggle).
+    // Из HAR getPlaylistById: true для подписанных чужих, false/null для своих/не-подписанных.
+    @SerializedName("is_following")   val isFollowing: Boolean? = null,
+    // #PLAYLIST-ORIGINAL: id оригинала для daily-плейлистов (type=generated).
+    // Daily Playlist приходит с id=-N (negative), но savePlaylistAsCopy
+    // возвращает копию с original_id=исходный negative-id. null для обычных.
+    @SerializedName("original_id")    val originalId: Long? = null,
 ) {
     val coverUrl: String? get() = photo600 ?: photo300 ?: photo200 ?: photo
+
+    /** Удобные permission-геттеры (null-safe — null permissions → false). */
+    val canSaveAsCopy: Boolean get() = permissions?.saveAsCopy == true
+    val canEdit: Boolean get() = permissions?.edit == true
+    val canDelete: Boolean get() = permissions?.delete == true
+    val canFollow: Boolean get() = permissions?.follow == true
+    val canShare: Boolean get() = permissions?.share == true
+    /** Чужой плейлист (владелец ≠ я) — кандидат на «Сохранить копию»/«Подписаться». */
+    fun isOwnedBy(userId: Long): Boolean = ownerId == userId
 }
+
+/**
+ * #PLAYLIST-PERMISSIONS: права на действия с плейлистом (VK API permissions объект).
+ * Возвращается в audio.getPlaylistById и audio.savePlaylistAsCopy.
+ * null-поля = сервер не вернул → трактуются как false (UI не показывает кнопку).
+ */
+data class PlaylistPermissions(
+    @SerializedName("play")           val play: Boolean? = null,
+    @SerializedName("share")          val share: Boolean? = null,
+    @SerializedName("edit")           val edit: Boolean? = null,
+    @SerializedName("follow")         val follow: Boolean? = null,
+    @SerializedName("delete")         val delete: Boolean? = null,
+    @SerializedName("boom_download")  val boomDownload: Boolean? = null,
+    @SerializedName("save_as_copy")  val saveAsCopy: Boolean? = null,
+)
 
 data class Chat(
     @SerializedName("peer")    val peer: Peer,

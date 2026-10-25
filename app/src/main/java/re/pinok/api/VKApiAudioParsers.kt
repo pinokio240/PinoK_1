@@ -102,6 +102,19 @@ internal fun parseAudioPlaylist(o: JsonObject): re.pinok.data.model.AudioPlaylis
         val id = o.get("id")?.asLong ?: return null
         val ownerId = o.get("owner_id")?.asLong ?: 0L
         val photo = o.getAsJsonObject("photo")
+        // #PLAYLIST-PERMISSIONS: VK возвращает permissions{...} объект — парсим.
+        // null если нет (старые ответы / упрощённые списки getPlaylists).
+        val permissions = o.getAsJsonObject("permissions")?.let { p ->
+            re.pinok.data.model.PlaylistPermissions(
+                play = p.get("play")?.takeIf { !it.isJsonNull }?.asBoolean,
+                share = p.get("share")?.takeIf { !it.isJsonNull }?.asBoolean,
+                edit = p.get("edit")?.takeIf { !it.isJsonNull }?.asBoolean,
+                follow = p.get("follow")?.takeIf { !it.isJsonNull }?.asBoolean,
+                delete = p.get("delete")?.takeIf { !it.isJsonNull }?.asBoolean,
+                boomDownload = p.get("boom_download")?.takeIf { !it.isJsonNull }?.asBoolean,
+                saveAsCopy = p.get("save_as_copy")?.takeIf { !it.isJsonNull }?.asBoolean,
+            )
+        }
         re.pinok.data.model.AudioPlaylist(
             id = id,
             ownerId = ownerId,
@@ -118,6 +131,9 @@ internal fun parseAudioPlaylist(o: JsonObject): re.pinok.data.model.AudioPlaylis
             accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
             followers = o.get("followers")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
             plays = o.get("plays")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+            permissions = permissions,
+            isFollowing = o.get("is_following")?.takeIf { !it.isJsonNull }?.asBoolean,
+            originalId = o.get("original_id")?.takeIf { !it.isJsonNull }?.asLong,
         )
     } catch (e: Exception) {
         AppLog.w("VKApiClient", "parseAudioPlaylist failed: ${e.message}")

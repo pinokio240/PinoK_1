@@ -353,7 +353,13 @@ fun PlaylistDetailScreen(
                             // audio.savePlaylistAsCopy: 1 запрос, копирует плейлист целиком с cover/
                             // description/followers, новый id, title с датой (как в VK веб —
                             // «Для вас DD.MM.YYYY»). Только для чужих (свой нельзя скопировать).
-                            if (myUserId != 0L && ownerId != myUserId && playlist != null) {
+                            // #PERMISSIONS-GATE: показываем при permissions.save_as_copy=true
+                            // (HAR: Daily Playlist save_as_copy=true; сохранённая копия false).
+                            // Если permissions=null (сервер не вернул) — fallback: показываем
+                            // для любого чужого плейлиста (canSaveAsCopy=false но сценарий возможен).
+                            if (myUserId != 0L && ownerId != myUserId && playlist != null &&
+                                (playlist?.canSaveAsCopy == true || playlist?.permissions == null)
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(20.dp))
