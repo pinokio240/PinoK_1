@@ -13791,14 +13791,6 @@ class VKApiClient(
                 .build()
             if (useWebGateway) {
                 AppLog.d("VKApiClient", "call($method): using WEB gateway web.api.vk.ru")
-                // #WEB-DEBUG-DUMP2: ✗NET после всех фиксов — нужен точный дамп.
-                val hdrs = req.headers.joinToString(", ") { "${it.first}=${it.second.take(50)}" }
-                val bodyStr = try {
-                    val sink = okio.Buffer()
-                    req.body?.writeTo(sink)
-                    sink.readUtf8().take(500)
-                } catch (_: Exception) { "<err>" }
-                AppLog.d("VKApiClient", "call($method): WEB-DEBUG2 URL=$methodUrl | headers=[$hdrs] | body=${bodyStr}")
             }
             // P1.1c #URL-LOG (Вариант C): логировать URL ТОЛЬКО если toggle включён.
             // Default false → 0 шума в обычном режиме. Включается из NETWORK-вкладки
@@ -13854,8 +13846,6 @@ class VKApiClient(
                 // #33: Логируем сетевой сбой с длителькой и пробрасываем исключение
                 // наверх (прежнее поведение — обработка в вызывающем методе).
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000L
-                // #NET-DEBUG: логируем тип+message исключения для диагностики ✗NET.
-                AppLog.w("VKApiClient", "call($method): ✗NET exception type=${netErr::class.simpleName} msg=${netErr.message}")
                 AppLog.api(
                     method = method,
                     params = args,
@@ -14934,7 +14924,10 @@ class VKApiClient(
                 // Полный набор браузерных заголовков, как у Chrome/m.vk.ru SPA.
                 .header("Accept", "application/json, text/plain, */*")
                 .header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
-                .header("Accept-Encoding", "gzip, deflate, br")
+                // #ACCEPT-ENCODING-BROTLI: НЕ ставим Accept-Encoding — BrotliInterceptor
+                // (application, SovaApp) сам добавит 'br,gzip' и декодирует ответ.
+                // Если поставить вручную — BrotliInterceptor видит что header есть
+                // и НЕ декодирует → brotli мусор → JSON error.
                 .header("Sec-Fetch-Dest", "empty")
                 .header("Sec-Fetch-Mode", "cors")
                 .header("Sec-Fetch-Site", "same-site")
