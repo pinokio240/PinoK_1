@@ -24373,3 +24373,24 @@ Task: Полный список работ за сессию 2026-10-23
 - Коммитов: ~50
 - Файлов изменено: ~25
 - Строк: ~+4000/-1500
+
+---
+Task ID: PLAYLIST-ERR3-ROOTCAUSE
+Agent: main (Z.ai Code)
+Task: Ответить на «Ты уверен что это решение правильное?» — проверить решение 1a88515 (SAVE-COPY-CREATE) и найти настоящий root cause err=3.
+
+Work Log:
+- Сверил коммит 1a88515 с первоисточниками: его «измерения» токенов (99/209 chars) НЕВЕРНЫ. Фактически: HAR1 #164 токен = 220 chars, HAR2 #53 токен = 220 chars, PinoK = 219 chars. Формат идентичен (vk1.a.*).
+- Распаковал «музыка сохранить плейлист.7z» (снапшот 1), нашёл ЭТАЛОН audio.savePlaylistAsCopy (#164): POST web.api.vk.ru/method/audio.savePlaylistAsCopy?v=5.289&client_id=6287487, body: owner_id=171093180&playlist_id=-21&access_token=... → 200 {response:{id:143, title:"Для вас 25.10.2026", count:100, no_discover:true}}.
+- playlist_id=-21 — КОРРЕКТЕН: SPA шлёт тот же отрицательный id (Daily-плейлисты имеют отрицательные id).
+- Проверил куки: во ВСЕХ 241 записях HAR 2 — 0 Cookie headers на web.api.vk.ru. PinoK же прикладывал сессионные куки (VkCookieJar.loadForRequest, ветка isVkMain матчит web.api.vk.ru).
+- Эксперимент из песочницы: curl replay с HAR-токеном → err=5 subcode=1130 «access_token was given to another ip address» — web-токены VK привязаны к IP. Эксперимент вне устройства невозможен.
+- Из device-логов (Новый текстовый документ (2).txt, 26.10 11:32): savePlaylistAsCopy err=3 302B; из лога 25.10 18:27: createPlaylist err=3 313B при audio.get 200 OK в ту же секунду тем же токеном → гейт только на WRITE.
+- Нашёл корень: ExchangeAuthApi.authByExchangeToken (refresh каждые ~10 мин, «token valid for 598s») жёстко шлёт client_id=2274003 (VK Android) → токен сессии Android-класса → web-шлюз прячет audio-WRITE методы → err=3.
+- Фиксы (коммит 3f8b1d0): #WEB-TOKEN-CLASS (effectiveTk = webviewAccessToken 7879029 для audio-WRITE если основной токен Direct-Auth), GUARD от инвалидации основного токена при err=5/1117 на webview-токене, #WEB-GATEWAY-NOCOOKIES (web.api.vk.ru без кук, как SPA), #ERR-ENVELOPE-LOG (тело error-конверта в лог), откат копирования к audio.savePlaylistAsCopy.
+- TokenStorage: добавлен делегирующий webviewAccessToken().
+
+Stage Summary:
+- err=3 audio-WRITE — это КЛАСС ТОКЕНА (2274003 после refresh), а не метод/параметры/headers/шлюз.
+- Подтверждение возможно только на устройстве: смотреть в лог «Using webview token (7879029...)» или «NO webview token in storage — re-login via Web OAuth» + err-envelope.
+- Если webview_access_token отсутствует в хранилище — нужен re-login через Web OAuth (client 6287487) или m.vk.ru web_token флоу.
