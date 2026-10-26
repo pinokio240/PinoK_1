@@ -13767,10 +13767,15 @@ class VKApiClient(
                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                             "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
                         header("Accept", "*/*")
-                        // #AUDIO-WEB-HEADERS: 6 настраиваемых headers из SovaPrefs.
-                        // BrotliInterceptor (SovaApp) декодирует brotli ответы —
-                        // можно слать полный Accept-Encoding как Chrome (gzip, deflate, br).
-                        header("Accept-Encoding", snap.audioAcceptEncoding)
+                        // #ACCEPT-ENCODING-BROTLI: НЕ ставим Accept-Encoding вручную.
+                        // BrotliInterceptor (application, SovaApp) сам добавит
+                        // 'Accept-Encoding: gzip, deflate, br' если header нет, и
+                        // декодирует Content-Encoding: br в ответе. Если мы ставим
+                        // Accept-Encoding сами — BrotliInterceptor видит что header
+                        // уже есть, НЕ берёт ответственность за декодирование ответа,
+                        // BridgeInterceptor (внутренний) не умеет brotli → бинарный
+                        // мусор → JsonSyntaxException. Убираем — пусть BrotliInterceptor
+                        // полностью управляет.
                         header("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
                         header("Sec-Fetch-Site", "same-site")
                         header("Sec-Fetch-Mode", "cors")
