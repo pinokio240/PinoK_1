@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
 import androidx.annotation.VisibleForTesting
 import re.pinok.SovaApp
 
@@ -91,7 +92,16 @@ object HevcSupport {
             // Только декодеры (не энкодеры).
             if (info.isEncoder) continue
             if (isHevcDecoder(info)) {
-                AppLog.d(TAG, "Found HEVC decoder: ${info.name} (hw=${!info.isSoftwareOnly})")
+                // #HEVC-NO-SUCH-METHOD-FIX: isSoftwareOnly() добавлен в API 29.
+                // На Android 7.0 (API 24) его НЕТ → NoSuchMethodError → краш при
+                // открытии видеоплеера (лог 1792997656286: VideoPlayerScreen → краш).
+                // На API < 29 просто логируем имя без hw/sw — этих полей нет.
+                val hwInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    "hw=${!info.isSoftwareOnly}"
+                } else {
+                    "hw=unknown(API<29)"
+                }
+                AppLog.d(TAG, "Found HEVC decoder: ${info.name} ($hwInfo)")
                 return true
             }
         }
