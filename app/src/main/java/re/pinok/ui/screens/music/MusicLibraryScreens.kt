@@ -382,14 +382,36 @@ fun PlaylistDetailScreen(
                                             val pl = playlist ?: return@clickable
                                             scope.launch {
                                                 try {
-                                                    val newId = app.apiClient.audioSavePlaylistAsCopy(
+                                                    // #SAVE-COPY-CREATE (HAR2 #53): audio.savePlaylistAsCopy
+                                                    // на web-шлюзе возвращает err=3 для exchange-токенов
+                                                    // (VK маскирует ошибку прав). Решение — 2 шага:
+                                                    // 1) tracks уже загружены в tracks (audioGetPlaylistById при открытии экрана)
+                                                    // 2) audio.createPlaylist(ownerId, title="orig DD.MM.YYYY", audioIds=треки)
+                                                    //    — создаёт копию одним запросом (как VK веб делает для нового плейлиста).
+                                                    val dateStr = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+                                                        .format(java.util.Date())
+                                                    val copyTitle = "${pl.title} $dateStr"
+                                                    val audioIds = tracks
+                                                        .filter { it.id > 0L && it.ownerId != 0L }
+                                                        .map { "${it.ownerId}_${it.id}" }
+                                                    if (audioIds.isEmpty()) {
+                                                        android.widget.Toast.makeText(
+                                                            app.applicationContext,
+                                                            "Плейлист пуст — нечего копировать",
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                        return@launch
+                                                    }
+                                                    val newId = app.apiClient.audioCreatePlaylist(
                                                         ownerId = pl.ownerId,
-                                                        playlistId = pl.id,
+                                                        title = copyTitle,
+                                                        description = pl.description ?: "",
+                                                        audioIds = audioIds,
                                                     )
                                                     if (newId > 0L) {
                                                         android.widget.Toast.makeText(
                                                             app.applicationContext,
-                                                            "Плейлист сохранён в вашу музыку",
+                                                            "Плейлист сохранён: «$copyTitle» (${audioIds.size} треков)",
                                                             android.widget.Toast.LENGTH_SHORT,
                                                         ).show()
                                                     } else {
@@ -401,7 +423,7 @@ fun PlaylistDetailScreen(
                                                         ).show()
                                                     }
                                                 } catch (e: Exception) {
-                                                    AppLog.e("PlaylistDetailScreen", "savePlaylistAsCopy failed", e)
+                                                    AppLog.e("PlaylistDetailScreen", "saveCopy failed", e)
                                                     android.widget.Toast.makeText(
                                                         app.applicationContext,
                                                         "Ошибка: ${e.message}",
