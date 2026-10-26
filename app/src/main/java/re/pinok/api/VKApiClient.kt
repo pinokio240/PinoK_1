@@ -13859,6 +13859,19 @@ class VKApiClient(
                 direction = AppLog.ApiDirection.REQUEST,
             )
 
+            // #WEB-HEADERS-DUMP (2026-10-26): для audio-WRITE на web-шлюзе — дамп
+            // ВСЕХ заголовков запроса. err=3 "Unknown method" при байт-идентичных
+            // params означает, что VK режет по заголовкам (Origin/Referer/Sec-CH-UA/
+            // User-Agent/Priority). Без этого дампа невозможно сравнить реально
+            // отправленные заголовки с HAR #53/#164. Логируем только audio-WRITE
+            // (не засоряем лог для READ-методов).
+            if (useWebGateway && WEB_AUDIO_WRITE_METHODS.contains(method)) {
+                val hdrDump = (0 until req.headers.size).joinToString(", ") {
+                    "${req.headers.name(it)}=${req.headers.value(it)}"
+                }
+                AppLog.i("VKApiClient", "WEB-HEADERS-DUMP $method: $hdrDump")
+            }
+
             val startNs = System.nanoTime()
             val raw: JsonObject = try {
                 withContext(Dispatchers.IO) {
