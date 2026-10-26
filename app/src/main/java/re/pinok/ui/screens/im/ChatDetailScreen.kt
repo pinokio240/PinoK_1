@@ -225,12 +225,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -325,8 +328,9 @@ import re.pinok.ui.navigation.PostHolder
 // пределами 1-7 достоверно неизвестен (словарь даёт только имена) — не выдумывать
 // (долг: полная сетка через messages.getReactionsAssets).
 // P0.46-reactions: полная карта reaction_id → emoji для всех VK pack-based реакций.
-// IDs 1-7 — базовые (всегда доступны), 8-64 — pack-based (зависят от messages.getReactionsAssets).
-// Источник: VK web messages.getReactionsAssets response + VK reactions pack documentation.
+// IDs 1-7 — базовые (всегда доступны), 8+ — pack-based (зависят от messages.getReactionsAssets).
+// Источник: реальный набор VK web (Мессенджер_реакции.html, data-testid picker_item_<id>),
+// ~40 реакций; id 25/33/41/43-63 в наборе отсутствуют (не включаем).
 private val REACTION_EMOJIS = listOf(
     1 to "\u2764\uFE0F",    // ❤️ Сердце
     2 to "\uD83D\uDD25",    // 🔥 Огонь
@@ -335,64 +339,40 @@ private val REACTION_EMOJIS = listOf(
     5 to "\uD83D\uDCA9",    // 💩 Неординарно
     6 to "\u2753",          // ❓ Вопросы
     7 to "\uD83D\uDE2D",    // 😭 Плачу
-    // Pack-based reactions (VK reaction packs):
-    8 to "\uD83D\uDE0A",    // 😊 Улыбка
-    9 to "\uD83D\uDE0D",    // 😍 Влюблён
-    10 to "\uD83D\uDE18",   // 😘 Поцелуй
-    11 to "\uD83D\uDE0E",   // 😎 Крутой
-    12 to "\uD83E\uDD23",   // 🤣 Ржу
-    13 to "\uD83D\uDE01",   // 😁 Сияю
-    14 to "\uD83D\uDE1C",   // 😜 Подмигиваю
-    15 to "\uD83D\uDE09",   // 😉 Подмигнул
-    16 to "\uD83D\uDE1A",   // 😚 Целую
-    17 to "\uD83D\uDE33",   // 😳 Смущён
-    18 to "\uD83D\uDE31",   // 😱 В ужасе
-    19 to "\uD83D\uDE20",   // 😠 Злюсь
-    20 to "\uD83D\uDE21",   // 😡 Ярость
-    21 to "\uD83D\uDE34",   // 😴 Сплю
-    22 to "\uD83D\uDC4E",   // 👎 Палец вниз
-    23 to "\uD83D\uDC4F",   // 👏 Аплодисменты
-    24 to "\uD83D\uDE4F",   // 🙏 Молюсь
-    25 to "\uD83E\uDD1D",   // 🤝 Рукопожатие
-    26 to "\uD83D\uDC40",   // 👀 Глаза
-    27 to "\uD83C\uDF89",   // 🎉 Праздник
-    28 to "\uD83C\uDF82",   // 🎂 Торт
-    29 to "\uD83C\uDF81",   // 🎁 Подарок
-    30 to "\uD83C\uDF38",   // 🌸 Цветок
-    31 to "\uD83E\uDD73",   // 🥳 Праздничный
-    32 to "\uD83D\uDC7B",   // 👻 Призрак
-    33 to "\uD83E\uDD21",   // 🤡 Клоун
-    34 to "\uD83E\uDD8A",   // 🦊 Лиса
-    35 to "\uD83D\uDC3B",   // 🐻 Медведь
-    36 to "\uD83D\uDC36",   // 🐶 Собака
-    37 to "\uD83D\uDC31",   // 🐱 Кот
-    38 to "\uD83D\uDC14",   // 🐔 Курица
-    39 to "\uD83C\uDF54",   // 🍔 Бургер
-    40 to "\uD83C\uDF55",   // 🍕 Пицца
-    41 to "\u2615\uFE0F",   // ☕️ Кофе
-    42 to "\uD83C\uDF7A",   // 🍺 Пиво
-    43 to "\uD83C\uDF83",   // 🎃 Тыква (Halloween)
-    44 to "\uD83C\uDF84",   // 🎄 Ёлка (New Year)
-    45 to "\uD83C\uDF89",   // 🎉 Конфетти (дубликат 27, но VK использует отдельный ID)
-    46 to "\uD83C\uDF86",   // 🎆 Фейерверк
-    47 to "\u2728",         // ✨ Искры
-    48 to "\uD83D\uDCAB",   // 💫 Головокружение
-    49 to "\uD83C\uDF1F",   // 🌟 Звезда
-    50 to "\uD83C\uDF1E",   // 🌞 Солнце
-    51 to "\uD83C\uDF19",   // 🌙 Луна
-    52 to "\u2600\uFE0F",   // ☀️ Солнце с лучами
-    53 to "\u2601\uFE0F",   // ☁️ Облако
-    54 to "\uD83C\uDF27\uFE0F", // 🌧️ Дождь
-    55 to "\u26C8\uFE0F",   // ⛈️ Гроза
-    56 to "\uD83C\uDF2B\uFE0F", // 🌫️ Туман
-    57 to "\uD83D\uDD25",   // 🔥 (дубликат 2 для другого pack)
-    58 to "\u2744\uFE0F",   // ❄️ Снежинка
-    59 to "\uD83C\uDF32",   // 🌲 Ель
-    60 to "\uD83C\uDF33",   // 🌳 Лиственное дерево
-    61 to "\uD83C\uDF3C",   // 🌼 Ромашка
-    62 to "\uD83C\uDF40",   // 🍀 Клевер
-    63 to "\uD83C\uDF39",   // 🌹 Роза
-    64 to "\uD83E\uDD17",   // 🤗 Объятия
+    // Pack-based reactions (реальный набор VK web):
+    8 to "\uD83D\uDE20",    // 😠 Злюсь
+    9 to "\uD83D\uDC4E",    // 👎 Большой палец вниз
+    10 to "\uD83D\uDC4C",   // 👌 Окей
+    11 to "\uD83D\uDE06",   // 😆 Смеюсь
+    12 to "\uD83E\uDD14",   // 🤔 Осмысляю
+    13 to "\uD83D\uDE4F",   // 🙏 Сложенные руки
+    14 to "\uD83D\uDE18",   // 😘 Воздушный поцелуй
+    15 to "\uD83D\uDE0D",   // 😍 Смотрю влюблённо
+    16 to "\uD83C\uDF89",   // 🎉 Хлопушка
+    17 to "\uD83E\uDD21",   // 🤡 Маска клоуна
+    18 to "\uD83E\uDD1D",   // 🤝 Рукопожатие
+    19 to "\uD83D\uDE32",   // 😲 Удивляюсь
+    20 to "\uD83D\uDE35",   // 😵 Теряюсь в чувствах
+    21 to "\uD83D\uDDFF",   // 🗿 Статуя с каменным лицом
+    22 to "\uD83D\uDE44",   // 🙄 Закатываю глаза
+    23 to "\uD83D\uDC94",   // 💔 Разбитое сердце
+    24 to "\uD83D\uDD76\uFE0F", // 🕶️ Надеваю тёмные очки
+    26 to "\uD83D\uDC4F",   // 👏 Хлопающие руки
+    27 to "\uD83D\uDE14",   // 😔 Грущу
+    28 to "\u2705",         // ✅ Знак галочки
+    29 to "\uD83C\uDFC6",   // 🏆 Чемпионский кубок
+    30 to "\uD83D\uDE28",   // 😨 В шоке
+    31 to "\uD83E\uDD2C",   // 🤬 Ругаюсь
+    32 to "\uD83D\uDC40",   // 👀 Смотрю
+    34 to "\uD83C\uDF1D",   // 🌝 Луна с улыбкой
+    35 to "\uD83D\uDCAF",   // 💯 Сто процентов
+    36 to "\uD83D\uDC85",   // 💅 Ноготочки
+    37 to "\uD83E\uDD2F",   // 🤯 Взрыв мозга
+    38 to "\uD83D\uDE34",   // 😴 Сплю
+    39 to "\uD83D\uDE08",   // 😈 Чертёнок
+    40 to "\uD83E\uDEE1",   // 🫡 Отдаю честь
+    42 to "\uD83E\uDD22",   // 🤢 Тошнит
+    64 to "\u26A1",         // ⚡ Молния
 )
 
 // P0.1: typing indicator — VK resends typing events every ~4s while user keeps typing.
@@ -436,6 +416,34 @@ data class AttachmentSelectionState(
 val LocalAttachmentSelection = staticCompositionLocalOf<AttachmentSelectionState?> { null }
 private fun reactionEmoji(id: Int): String =
     REACTION_EMOJIS.firstOrNull { it.first == id }?.second ?: "\u2753" // ❓
+
+/** #IM-REACTIONS-ASSETS: реакция в чипе/индикаторе. Если известна серверная
+ *  картинка (ReactionAssets.assetFor(id).staticUrl) — рисуем AsyncImage,
+ *  иначе fallback на unicode-эмодзи из REACTION_EMOJIS. size — размер картинки,
+ *  emojiSize — размер шрифта эмодзи (эквивалент заменяемой картинки). */
+@Composable
+private fun ReactionIcon(
+    id: Int,
+    assets: ReactionAssets?,
+    size: Dp,
+    emojiSize: TextUnit,
+) {
+    val img = assets?.assetFor(id)?.staticUrl
+    if (img != null && img.isNotBlank()) {
+        // #IM-REACTIONS-SVG: реакции VK — SVG-картинки; при сбое загрузки/декодирования
+        // показываем эмодзи из карты, чтобы чип не оставался пустым.
+        SubcomposeAsyncImage(
+            model = img,
+            contentDescription = null,
+            modifier = Modifier.size(size).clip(RoundedCornerShape(6.dp)),
+            error = {
+                Text(text = reactionEmoji(id), fontSize = emojiSize)
+            },
+        )
+    } else {
+        Text(text = reactionEmoji(id), fontSize = emojiSize)
+    }
+}
 
 // ═══ #ARCH-CONTAINERS (Этап 1.4): делегирование рендера вложений контейнеру ═══
 
@@ -724,6 +732,9 @@ fun ChatDetailScreen(
     var showReactionPicker by remember { mutableStateOf<Long?>(null) }
     // #IM-REACTIONS-GRID: расширенная сетка реакций («⋯») — для id сообщения.
     var showReactionGridFor by remember { mutableStateOf<Long?>(null) }
+    // #IM-REACTIONS-ASSETS: серверные картинки реакций (messages.getReactionsAssets),
+    // предзагружаются один раз при открытии чата и переиспользуются в чипах/индикаторах.
+    var reactionAssets by remember { mutableStateOf<ReactionAssets?>(null) }
     // Sprint 3: режим редактирования.
     var editingMsgId by remember { mutableStateOf<Long?>(null) }
     // #IM-EDIT-ATTACH (HAR CHAT-EDIT-ATTACH-HAR-2026-10-01): вложения
@@ -3157,6 +3168,17 @@ fun ChatDetailScreen(
                 // ensureFreshToken в callInternal всё равно сработает.
             }
         }
+        // #IM-REACTIONS-ASSETS: предзагрузка картинок реакций при открытии чата
+        // (parallel, не блокирует загрузку сообщений). Результат кэшируется на 1 час
+        // внутри messagesGetReactionsAssets, так что чипы рендерят серверные картинки,
+        // а не unicode-эмодзи. Сетевой вызов делается один раз на экран.
+        scope.launch {
+            try {
+                reactionAssets = app.apiClient.messagesGetReactionsAssets()
+            } catch (e: Exception) {
+                reactionAssets = null
+            }
+        }
         // ═══ #CHANNEL-WALL-MODE (Fix #393): определение канала ДО messages-истории ═══
         // Root-cause «каналы — диалоги не открываются, ошибки»: контент канала
         // (peer = -<group_id>, can_write.allowed == false) — это ПОСТЫ сообщества
@@ -5374,7 +5396,12 @@ fun ChatDetailScreen(
                                                             verticalAlignment = Alignment.CenterVertically,
                                                             horizontalArrangement = Arrangement.spacedBy(3.dp),
                                                         ) {
-                                                            Text(text = reactionEmoji(chip.id), fontSize = 12.sp)
+                                                            ReactionIcon(
+                                                                id = chip.id,
+                                                                assets = reactionAssets,
+                                                                size = 18.dp,
+                                                                emojiSize = 12.sp,
+                                                            )
                                                             Text(
                                                                 text = channelCounterString(chip.count),
                                                                 style = MaterialTheme.typography.labelSmall,
@@ -6307,6 +6334,8 @@ private fun MessageBubble(
     showReactionGrid: Boolean = false,
     onShowReactionGrid: (() -> Unit)? = null,
     onHideReactionGrid: () -> Unit = {},
+    // #IM-REACTIONS-ASSETS: серверные картинки реакций — для чипов/индикаторов.
+    reactionAssets: ReactionAssets? = null,
     showContextMenu: Boolean,
     onDismissContextMenu: () -> Unit,
     // P1.3: message grouping — текущее сообщение группируется с предыдущим
@@ -6535,12 +6564,14 @@ private fun MessageBubble(
                     //           <img alt="Ой, спасибки!" src="reaction_icon.png">
                     //         </div>
                     // Показываем emoji реакции автора (если есть) после имени.
-                    val myReactionEmoji = message.reactions?.userReaction?.let { reactionEmoji(it) }
-                    if (myReactionEmoji != null) {
+                    val myReactionId = message.reactions?.userReaction
+                    if (myReactionId != null) {
                         Spacer(Modifier.width(2.dp))
-                        Text(
-                            text = myReactionEmoji,
-                            fontSize = 14.sp,
+                        ReactionIcon(
+                            id = myReactionId,
+                            assets = reactionAssets,
+                            size = 18.dp,
+                            emojiSize = 14.sp,
                         )
                     }
                 }
@@ -7258,7 +7289,12 @@ private fun MessageBubble(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
-                                    Text(text = reactionEmoji(chip.id), fontSize = 13.sp)
+                                    ReactionIcon(
+                                        id = chip.id,
+                                        assets = reactionAssets,
+                                        size = 18.dp,
+                                        emojiSize = 13.sp,
+                                    )
                                     Text(
                                         text = chip.count.toString(),
                                         style = MaterialTheme.typography.labelSmall,
@@ -7309,6 +7345,8 @@ private fun MessageBubble(
                 // #CHANNEL-POST-UI: тап по реакционному чипу футера → toggle
                 // (та же отправка messages.sendReaction через onReact).
                 onReact = onReact,
+                // #IM-REACTIONS-ASSETS: серверные картинки реакций канальных чипов.
+                reactionAssets = reactionAssets,
             )
         }
 
@@ -7506,6 +7544,7 @@ private fun MessageBubble(
                 message = message,
                 onReact = onReact,
                 onDismiss = onHideReactionGrid,
+                reactionAssets = reactionAssets,
             )
         }
     }  // closes Column (with swipe offset)
@@ -7660,6 +7699,8 @@ private fun ReactionBar(
     isOut: Boolean,
     onReact: (Int) -> Unit,
     onTap: () -> Unit,
+    // #IM-REACTIONS-ASSETS: серверные картинки реакций.
+    reactionAssets: ReactionAssets? = null,
 ) {
     if (reactions == null || reactions.count <= 0) return
     // #IM-REACTIONS-VIEW (2026-10-19): показываем РАЗБИВКУ по эмодзи (items),
@@ -7672,7 +7713,7 @@ private fun ReactionBar(
         .take(6)
     if (chipItems.isEmpty()) {
         // Fallback: агрегированный счётчик без разбивки (старый объектный формат).
-        renderAggregatedReactionBar(reactions, isOut, onTap)
+        renderAggregatedReactionBar(reactions, isOut, onTap, reactionAssets)
         return
     }
     val bg = if (isOut)
@@ -7705,7 +7746,12 @@ private fun ReactionBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Text(text = reactionEmoji(chip.id), fontSize = 13.sp)
+                ReactionIcon(
+                    id = chip.id,
+                    assets = reactionAssets,
+                    size = 18.dp,
+                    emojiSize = 13.sp,
+                )
                 Text(
                     text = chip.count.toString(),
                     style = MaterialTheme.typography.labelSmall,
@@ -7724,6 +7770,7 @@ private fun renderAggregatedReactionBar(
     reactions: MessageReaction,
     isOut: Boolean,
     onTap: () -> Unit,
+    reactionAssets: ReactionAssets? = null,
 ) {
     val bg = if (isOut)
         MaterialTheme.colorScheme.primaryContainer
@@ -7750,7 +7797,12 @@ private fun renderAggregatedReactionBar(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         for (rid in displayEmojis) {
-            Text(text = reactionEmoji(rid), fontSize = 14.sp)
+            ReactionIcon(
+                id = rid,
+                assets = reactionAssets,
+                size = 18.dp,
+                emojiSize = 14.sp,
+            )
         }
         if (reactions.count > 0) {
             Text(
@@ -7845,6 +7897,8 @@ private fun ChannelPostInfoRow(
     onCommentsClick: () -> Unit = {},
     // #CHANNEL-POST-UI: тап по реакционному чипу → toggle (messages.sendReaction).
     onReact: (Int) -> Unit = {},
+    // #IM-REACTIONS-ASSETS: серверные картинки реакций канальных чипов.
+    reactionAssets: ReactionAssets? = null,
 ) {
     val captionColor = textColor.copy(alpha = 0.7f)
     val views = message.viewsCount?.takeIf { it > 0 }
@@ -7904,7 +7958,12 @@ private fun ChannelPostInfoRow(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
-                            Text(text = reactionEmoji(chip.id), fontSize = 12.sp)
+                            ReactionIcon(
+                                id = chip.id,
+                                assets = reactionAssets,
+                                size = 18.dp,
+                                emojiSize = 12.sp,
+                            )
                             Text(
                                 text = channelCounterString(chip.count),
                                 style = MaterialTheme.typography.labelSmall,
@@ -8794,13 +8853,16 @@ private fun ReactionGridDialog(
     message: re.pinok.data.model.Message,
     onReact: (Int) -> Unit,
     onDismiss: () -> Unit,
+    // #IM-REACTIONS-ASSETS: уже предзагруженные при открытии чата картинки.
+    reactionAssets: ReactionAssets? = null,
 ) {
     val app = SovaApp.get()
-    var assets by remember { mutableStateOf<ReactionAssets?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var assets by remember { mutableStateOf<ReactionAssets?>(reactionAssets) }
+    var loading by remember { mutableStateOf(reactionAssets == null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        if (assets != null) return@LaunchedEffect
         loading = true
         error = null
         try {
@@ -8859,10 +8921,9 @@ private fun ReactionGridDialog(
                                     },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                // P0.46-reactions-fix: Text(emoji) ПОД AsyncImage как fallback.
-                                // AsyncImage(vkuserphoto.ru URLs) может не загрузиться без
-                                // auth headers → показывает пустоту. Emoji всегда видна.
-                                // Если картинка загрузится — она перекроет emoji.
+                                // #IM-REACTIONS-SVG: реакция — SVG-картинка (с SvgDecoder в Coil
+                                // грузится). Text(emoji) — fallback под AsyncImage: если картинка
+                                // не загрузится (сеть/декодирование) — остаётся эмодзи.
                                 Text(text = reactionEmoji(rid), fontSize = 26.sp)
                                 if (img != null && img.isNotBlank()) {
                                     AsyncImage(

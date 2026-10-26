@@ -96,10 +96,17 @@ object HevcSupport {
                 // На Android 7.0 (API 24) его НЕТ → NoSuchMethodError → краш при
                 // открытии видеоплеера (лог 1792997656286: VideoPlayerScreen → краш).
                 // На API < 29 просто логируем имя без hw/sw — этих полей нет.
-                val hwInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    "hw=${!info.isSoftwareOnly}"
-                } else {
-                    "hw=unknown(API<29)"
+                // try/catch(Throwable) — дополнительная страховка: NoSuchMethodError
+                // наследует Error, а не Exception, и стандартный catch (e: Exception)
+                // его НЕ ловит. Ловим Throwable и считаем hw неизвестным.
+                val hwInfo = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        "hw=${!info.isSoftwareOnly}"
+                    } else {
+                        "hw=unknown(API<29)"
+                    }
+                } catch (t: Throwable) {
+                    "hw=unknown(err=${t.javaClass.simpleName})"
                 }
                 AppLog.d(TAG, "Found HEVC decoder: ${info.name} ($hwInfo)")
                 return true

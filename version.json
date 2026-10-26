@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "versionCode": 227,
+      "versionName": "2.2.7",
+      "stamp": "calls-2026.10.26-2.2.7",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/v2.2.7/PinoK_261026227.apk",
+      "sha256": "d50d6fb8701bd062e7763fde563650d4548c1faeee11b8aa8a71e3d450829272",
+      "notes": "# Что выполнено — кратко\n1. **Краш Android 7** исправлен — NoSuchMethodError isSoftwareOnly (гейт API 29 + catch Throwable в HevcSupport и ClipSourceSelector)\n2. **Поиск в сообществах**\n3. **Меню закладок**\n4. **Отображение видео сеткой**\n5. **Прикрепление нескольких файлов**\n6. **Прикрепление фото из альбомов**\n7. **Ремонт реакций** — реальные картинки (messages.getReactionsAssets) + SVG-декодер + карта по актуальному набору VK\n8. **Поиск по сообщениям** — частично\n9. **Отметить не прочитанным**"
+    },
+    {
       "versionCode": 226,
       "versionName": "2.2.6",
       "stamp": "calls-2026.10.22-2.2.6",

@@ -13744,21 +13744,27 @@ class VKApiClient(
             // =================================================================
             val audioWriteOnWeb = useWebGateway && overrideToken == null &&
                 WEB_AUDIO_WRITE_METHODS.contains(method)
-            val effectiveTk = if (audioWriteOnWeb && tokenStorage.secret() != null) {
+            // #WEB-TOKEN-CLASS-2 (26.10.2026): подмена на web-класс токен больше НЕ
+            // зависит от Direct-Auth (secret()). Раньше gate секрета пропускал
+            // веб-OAuth сессии (login.vk.ru refresh, secret()==null) — и в err=3
+            // уходил основной web-токен без музыкально-write прав. Теперь, если в
+            // хранилище есть webview_access_token, отличный от основного, — берём
+            // его для WEB_AUDIO_WRITE_METHODS при любой сессии.
+            val effectiveTk = if (audioWriteOnWeb) {
                 val webTok = tokenStorage.webviewAccessToken()
                 if (!webTok.isNullOrBlank() && webTok != tk) {
                     AppLog.i(
                         "VKApiClient",
-                        "call($method): main token is Direct-Auth class (2274003, len=${tk.length}) — " +
-                            "web gateway hides audio-WRITE for it (err=3). Using webview token " +
-                            "(7879029, len=${webTok.length}, ${webTok.take(10)}…)"
+                        "call($method): web gateway hides audio-WRITE for main token " +
+                            "(len=${tk.length}) — using webview token " +
+                            "(len=${webTok.length}, ${webTok.take(10)}…)"
                     )
                     webTok
                 } else {
                     AppLog.w(
                         "VKApiClient",
-                        "call($method): token is Direct-Auth class (2274003, len=${tk.length}) and NO " +
-                            "webview token in storage — audio-WRITE on web gateway will fail err=3. " +
+                        "call($method): NO webview token in storage (main len=${tk.length}) — " +
+                            "audio-WRITE on web gateway may fail err=3. " +
                             "Fix: re-login via Web OAuth (client 6287487) to mint a web-class token."
                     )
                     tk

@@ -3403,6 +3403,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         return ImageLoader.Builder(context)
             .components {
                 add(OkHttpNetworkFetcherFactory(callFactory = httpClient))
+                // Fix #IM-REACTIONS-SVG: картинки реакций VK (getReactionsAssets
+                // links.static) — SVG с vkuserphoto.ru, без декодера не грузятся.
+                add(coil3.svg.SvgDecoder.Factory())
                 if (android.os.Build.VERSION.SDK_INT >= 28) {
                     add(coil3.gif.AnimatedImageDecoder.Factory())
                 } else {

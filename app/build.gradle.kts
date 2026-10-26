@@ -35,8 +35,8 @@ android {
         // #RELEASE-V223-BUMP (2026-10-16): bump 222→223 — накопленные фиксы:
         // настройки мессенджера (шрифт/фон диалога, фиксация панели, домашний экран),
         // редактор панелей (Лента), flood-control (rps 3 + retry 6/9), навигация назад.
-        versionCode = 226
-        versionName = "2.2.6"
+        versionCode = 227
+        versionName = "2.2.7"
         buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-10-22T12:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -204,6 +204,9 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     // Fix #229: анимированные стикеры (GIF + animated WebP декодеры).
     implementation(libs.coil.gif)
+    // Fix #IM-REACTIONS-SVG: реакции VK рендерятся из SVG (vkuserphoto.ru) — без
+    // SvgDecoder картинки реакций не декодировались, оставался юникод-фолбек.
+    implementation(libs.coil.svg)
 
     // Gson
     implementation(libs.gson)

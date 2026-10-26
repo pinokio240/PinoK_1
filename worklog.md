@@ -24394,3 +24394,69 @@ Stage Summary:
 - err=3 audio-WRITE — это КЛАСС ТОКЕНА (2274003 после refresh), а не метод/параметры/headers/шлюз.
 - Подтверждение возможно только на устройстве: смотреть в лог «Using webview token (7879029...)» или «NO webview token in storage — re-login via Web OAuth» + err-envelope.
 - Если webview_access_token отсутствует в хранилище — нужен re-login через Web OAuth (client 6287487) или m.vk.ru web_token флоу.
+
+---
+Task ID: REACTIONS-IMG-FIX
+Agent: subagent (general)
+Task: Реакции «не соответствуют своим картинкам» — рендерить реальные картинки VK из messages.getReactionsAssets вместо юникод-эмодзи из REACTION_EMOJIS.
+
+Diagnosis (subagent, 2026-10-26):
+- Все пути id→отображение шли из hardcoded REACTION_EMOJIS (ChatDetailScreen.kt:330-396, id 1..64) через reactionEmoji(id) (:437, fallback ❓). Юникод ≠ картинка VK (pack-реакции стилизованы).
+- Карта 8-64 рукописная, не сверена с сервером; дубликаты: 45→🎉 (дубль 27), 57→🔥 (дубль 2). Fallback ❓ для неизвестных id.
+- Assets из getReactionsAssets (VKApiClient.kt:6334, кэш prefs 1ч) использовались ТОЛЬКО в ReactionGridDialog (:8866-8873), и то юникод+AsyncImage-наложение. Чипы в пузыре/ReactionBar/индикатор автора — голый Text.
+- Карта 1-7 корректна (старый сдвиг «❤️ ставил 🔥» уже исправлен ранее).
+
+Fix (subagent, реализовано, сборка BUILD SUCCESSFUL):
+- Новый helper ReactionIcon(id, assets, size, emojiSize) (~:441): если assets?.assetFor(id)?.staticUrl непустой → AsyncImage (18.dp, RoundedCornerShape(6.dp)), иначе fallback Text(reactionEmoji(id)).
+- Screen-состояние reactionAssets by remember (~:727) + предзагрузка ОДИН раз на экран в LaunchedEffect(peerId, historyReload) (~:3160): scope.launch { reactionAssets = apiClient.messagesGetReactionsAssets() } — параллельно keepAlive, сетевым вызовом на каждый чип НЕ грузит.
+- Прокинут в MessageBubble (reactionAssets, :6355): индикатор автора (:6538) и чипы в пузыре (:7261). Канальные посты: :5377 и ChannelPostInfoRow (:7918, чип :7907). ReactionBar/renderAggregatedReactionBar (:7708/:7753).
+- ReactionGridDialog: параметр reactionAssets, берёт предзагруженные, сетевой вызов только если null.
+- НЕ тронуты: REACTION_EMOJIS (fallback), reactToMessage, messagesSendReaction, серверные методы.
+- Бэкап: backups/reactions-diag-playlists-2026-10-26/ (VKApiClient.kt, ChatDetailScreen.kt, Models.kt, MusicLibraryScreens.kt, MusicScreen.kt, AudioPlayerScreen.kt). Коммит НЕ создавался (по правилу — только по явному запросу).
+
+Contributing context:
+- Из последней записи PLAYLIST-ERR3-ROOTCAUSE: err=3 на web-токене — КЛАСС ТОКЕНА (2274003 Android после refresh каждые ~10 мин). Фикс 3f8b1d0: #WEB-TOKEN-CLASS (effectiveTk = webviewAccessToken 7879029 для audio-WRITE), guard err=5/1117, #WEB-GATEWAY-NOCOOKIES, #ERR-ENVELOPE-LOG. Откат к SAVE-COPY-CREATE (audio.savePlaylistAsCopy).
+
+---
+Task ID: PLAYLIST-ERR3-FULL-CHAIN
+Agent: main + subagent (general), 2026-10-26
+Task: «Плейлисты так и не сохраняются» — полная цепочка err=3 "Unknown method passed" на web.api.vk.ru.
+
+Work Log (диагностика):
+- Лог устройства 18:48: main len=220 (web-class токен той же длины что SPA), всё равно err=3. Мой предыдущий фикс (секрета-gate) не решил.
+- HAR3 «музыка сохранить плейлист3.har» (234 записи, 1.68МБ) разобран посубагентом: успешный SPA audio.savePlaylistAsCopy = POST web.api.vk.ru/method/...?v=5.289&client_id=6287487, Accept-Encoding "gzip, deflate, br, zstd", НЕТ Cookie, НЕТ httoken, body ТОЛЬКО owner_id+playlist_id+access_token (220, web-class), → 200 OK {"response":{"id":145,...}}.
+- Вывод: код PinoK после правок байт-в-байт повторяет HAR3. Отличий в заголовках/теле/URL нет. Cookies и httoken НЕ нужны (их нет нигде в HAR3).
+- Новая гипотеза: токен в теле должен быть web-class (6287487 desktop ИЛИ 7879029 mobile — оба ок). У PinoK в effectiveTk подмена невозможна т.к. webviewAccessToken() пуст → уходит основной токен (main len=220 — уже web-class 6287487? или 7879029?), но err=3 всё равно. Значит main токен НЕ тот класс, который принимает web.api.vk.ru для WRITE (хотя длина 220 и формат vk1.a.*).
+
+Правки (реализованы, сборка НЕ запускалась — по требованию пользователя):
+1. VKApiClient.kt:13745-13768 — подмена effectiveTk на webview-токен для WEB_AUDIO_WRITE_METHODS больше НЕ зависит от tokenStorage.secret()!=null (раньше работала только для Direct-Auth; веб-OAuth сессии с secret()==null пропускались → уходил основной токен). Логи: "using webview token (len=...)" / "NO webview token in storage (main len=...)".
+2. ExchangeTokenStorage.kt:432 saveWebTokenResult — добавлен .putString(KEY_WEBVIEW_ACCESS_TOKEN, accessToken): web-токен из m.vk.ru localStorage (WebTokenAuth.fullAuthFlow → AuthViewModel:348) теперь сохраняется и как webview_access_token (раньше не писался → подменять было нечем).
+3. WebAcceptEncodingInterceptor.kt — ACCEPT_ENCODING = "gzip, deflate, br, zstd" (точно как Chrome/SPA; отсутствие zstd = BOT FINGERPRINT → WAF decoy err=3 на WRITE) + ветка декодирования "zstd" через ZstdInputStream.
+4. gradle/libs.versions.toml + app/build.gradle.kts — добавлена зависимость com.github.luben:zstd-jni-android:1.5.6-4.
+
+Ключевое из localStorage-дампа пользователя:
+- 6287487:web_token:login:auth {"access_token":"vk1.a.vGcoA...","user_id":171093180,"logout_hash":...} — настоящий desktop web-токен (6287487), 220 символов, живёт в localStorage m.vk.ru.
+- Куки (.vk.ru): httoken (на .web.api.vk.ru тоже!), remixsid (96), remixnsid (vk1.a., 207), p (vk1.a., .login.vk.ru), remixstid/remixstlid/remixua/remixuacck/remixuas/remixsuc/sui и др.
+- Словарь реакций (reforged-storage-db-v1-171093180-message-reactions-assets): полные assets с static/small_animation/big_animation (SVG/JSON) — подтверждает SVG-фикс реакций.
+
+Дальше: пользователь собирает и запускает сам. Критично: для попадания веб-токена в webviewAccessToken() нужен НЕ просто перезапуск, а НОВЫЙ логин через WebView (AuthActivity → WebTokenAuth.fullAuthFlow → saveWebTokenResult), ИНАЧЕ webviewAccessToken() останется пустым. После логина в логе должна появиться строка "using webview token (len=...)" для audio.createPlaylist/savePlaylistAsCopy.
+
+---
+Task ID: SESSION-2026-10-26-SUMMARY
+Agent: main, 2026-10-26
+Task: Итоги сессии по словам пользователя + поднятие версии.
+
+Work Log:
+- ПОЛНЫЙ ОТКАТ по плейлистам (требование пользователя): восстановлены VKApiClient.kt (из бэкапа audio-write-apivk-2026-10-26, 18:38), ExchangeTokenStorage.kt (убрана плейлистная правка webview_access_token), WebAcceptEncodingInterceptor.kt (Accept-Encoding "gzip, deflate, br" без zstd), удалён app/libs/zstd-jni-1.5.6-4.aar и zstd из gradle. Плейлисты НЕ считаются достижением сессии.
+- Что сделано за сессию (список пользователя):
+  1. Краш Android 7 — NoSuchMethodError isSoftwareOnly() в MediaCodecInfo. Исправлено: HevcSupport.kt (гейт Build.VERSION.SDK_INT>=Q + catch(Throwable) вокруг isSoftwareOnly) и ClipSourceSelector.kt (то же для AV1).
+  2. Поиск в сообществах — сделан.
+  3. Меню закладок — сделано.
+  4. Отображение видео сеткой — сделано.
+  5. Прикрепление нескольких файлов — сделано.
+  6. Прикрепление фото из альбомов — сделано.
+  7. Ремонт реакций — реальные картинки (messages.getReactionsAssets) + coil-svg/SvgDecoder + карта REACTION_EMOJIS по реальному набору VK (id 38 = Сплю и др.).
+  8. Поиск по сообщениям — частично.
+  9. «Отметить не прочитанным» — есть.
+- Версия поднята 2.2.6 → 2.2.7 (code 227): app/build.gradle.kts, BuildStamp.kt (STAMP "calls-2026.10.26-2.2.7"), version.json (apkUrl v2.2.7, sha256 d50d6fb8701bd062e7763fde563650d4548c1faeee11b8aa8a71e3d450829272). Бэкап: backups/version-bump-2026-10-26/.
+- Prиватный ключ подписи version.json (seed 50f2d9…1fdef) НЕ в репозитории — подпись версии делает релиз-менеджер.

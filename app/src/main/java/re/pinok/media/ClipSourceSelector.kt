@@ -85,7 +85,20 @@ object ClipSourceSelector {
         for (info in infos) {
             if (info.isEncoder) continue
             if (isAv1Decoder(info)) {
-                AppLog.d(TAG, "Found AV1 decoder: ${info.name} (hw=${!info.isSoftwareOnly})")
+                // #HEVC-NO-SUCH-METHOD-FIX: isSoftwareOnly() добавлен в API 29.
+                // На Android 7.0 (API 24) его НЕТ → NoSuchMethodError (Error, НЕ
+                // Exception) → краш вне try/catch. Применён тот же паттерн, что в
+                // HevcSupport: гейт по API + catch(Throwable) как страховка.
+                val hwInfo = try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        "hw=${!info.isSoftwareOnly}"
+                    } else {
+                        "hw=unknown(API<29)"
+                    }
+                } catch (t: Throwable) {
+                    "hw=unknown(err=${t.javaClass.simpleName})"
+                }
+                AppLog.d(TAG, "Found AV1 decoder: ${info.name} ($hwInfo)")
                 return true
             }
         }
