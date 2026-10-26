@@ -1412,13 +1412,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         }
 
         httpClient = builder
-            // #BROTLI-INTERCEPTOR (application): BrotliInterceptor ПЕРВЫЙ application.
-            // Он добавляет Accept-Encoding: gzip, deflate, br ЕСЛИ ещё нет в request,
-            // и декодирует Content-Encoding: br в ответе. Как application interceptor
-            // он работает ДО BridgeInterceptor — но BridgeInterceptor видит что
-            // Accept-Encoding уже выставлен и НЕ трогает его. В ответе BrotliInterceptor
-            // декодирует br ДО BridgeInterceptor (gzip layer).
-            .addInterceptor(okhttp3.brotli.BrotliInterceptor)
+            // #WEB-ACCEPT-ENCODING (2026-10-26, ROOT CAUSE err=3 audio-WRITE):
+            // ЗАМЕНА okhttp3.brotli.BrotliInterceptor на WebAcceptEncodingInterceptor.
+            // BrotliInterceptor шлёт "br,gzip" (нет deflate, нет zstd, нет пробелов) —
+            // это bot-fingerprint: VK WAF режет audio-WRITE (err=3 decoy), READ пропускает.
+            // SPA шлёт "gzip, deflate, br, zstd" (HAR #53). WebAcceptEncodingInterceptor
+            // шлёт "gzip, deflate, br" (zstd убран — нет декодера) и ВСЕГДА декодирует
+            // gzip/deflate/br в ответе (BrotliInterceptor скипал если header уже есть).
+            .addInterceptor(re.pinok.mods.network.WebAcceptEncodingInterceptor)
             .addInterceptor { chain ->
                 val original = chain.request()
                 val builder2 = original.newBuilder()
