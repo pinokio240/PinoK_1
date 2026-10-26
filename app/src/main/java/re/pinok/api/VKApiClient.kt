@@ -13718,6 +13718,55 @@ class VKApiClient(
                 AppLog.d("VKApiClient", "call($method): forcing api.vk.com (incompatible with web gateway)")
             }
 
+            // =================================================================
+            // #WEB-TOKEN-CLASS (2026-10-26, ROOT CAUSE err=3 для audio-WRITE):
+            //
+            // Факты (HAR1 #164 + HAR2 #53 vs device-логи 25.10–26.10):
+            //   • Байты запроса PinoK == HAR (URL ?v=5.289&client_id=6287487,
+            //     body из 3 параметров, 16 browser headers) — сверено поштучно.
+            //   • SPA (HAR): savePlaylistAsCopy/createPlaylist → 200 OK.
+            //   • PinoK: те же запросы → err=3 "Unknown method passed" (302–313B),
+            //     но audio.get/audio.getPlaylistById тем же токеном → 200 OK.
+            //   • SPA-токен 220 chars vk1.a.*, токен PinoK 219 chars vk1.a.* —
+            //     формат и длина идентичны. РАЗНИЦА В КЛАССЕ, не в формате.
+            //   • ExchangeAuthApi.authByExchangeToken (refresh каждые ~10 мин,
+            //     keepAlive «token valid for 598s») жёстко шлёт
+            //     client_id=2274003 (VK Android) → токен сессии ANDROID-класса,
+            //     каким бы он ни был при логине (OAuth WebView 6287487 тоже
+            //     перезатирается refresh'ем).
+            //   • web.api.vk.ru экспонирует audio-WRITE методы только web-классу
+            //     токенов (6287487 desktop / 7879029 mobile web); Android-классу —
+            //     чтение да, запись err=3 «Unknown method passed».
+            //
+            // РЕШЕНИЕ: для audio-WRITE на web-шлюзе используем web-класс токен
+            // webview_access_token (7879029, m.vk.ru web_token) из хранилища,
+            // если основной токен Direct-Auth (user_secret != null → 2274003).
+            // =================================================================
+            val audioWriteOnWeb = useWebGateway && overrideToken == null &&
+                WEB_AUDIO_WRITE_METHODS.contains(method)
+            val effectiveTk = if (audioWriteOnWeb && tokenStorage.secret() != null) {
+                val webTok = tokenStorage.webviewAccessToken()
+                if (!webTok.isNullOrBlank() && webTok != tk) {
+                    AppLog.i(
+                        "VKApiClient",
+                        "call($method): main token is Direct-Auth class (2274003, len=${tk.length}) — " +
+                            "web gateway hides audio-WRITE for it (err=3). Using webview token " +
+                            "(7879029, len=${webTok.length}, ${webTok.take(10)}…)"
+                    )
+                    webTok
+                } else {
+                    AppLog.w(
+                        "VKApiClient",
+                        "call($method): token is Direct-Auth class (2274003, len=${tk.length}) and NO " +
+                            "webview token in storage — audio-WRITE on web gateway will fail err=3. " +
+                            "Fix: re-login via Web OAuth (client 6287487) to mint a web-class token."
+                    )
+                    tk
+                }
+            } else {
+                tk
+            }
+
             // #WEB-CLIENT-ID-FIX (аудит HAR «музыка сохранить плейлист1.7z» 2026-10-25):
             // VK web-шлюз web.api.vk.ru ТРЕБУЕТ client_id в query URL для идентификации
             // web-приложения. Без него → err=3 "Unknown method passed" (лог
@@ -13742,7 +13791,9 @@ class VKApiClient(
             val form = FormBody.Builder().apply {
                 if (useWebGateway) {
                     args.forEach { (k, v) -> add(k, v) }
-                    add("access_token", tk)
+                    // #WEB-TOKEN-CLASS: effectiveTk — web-класс токен для audio-WRITE
+                    // (см. комментарий выше), либо основной токен.
+                    add("access_token", effectiveTk)
                     sig?.let { add("sig", it) }
                 } else {
                     allParams.forEach { (k, v) -> add(k, v) }
@@ -13914,6 +13965,31 @@ class VKApiClient(
             // MAX_CAPTCHA_RETRIES=3 — защита от бесконечной рекурсии при упорно
             // неверной captcha. При cancel (solve→null) — return null (отменено
             // пользователем, не ошибка).
+            // #ERR-ENVELOPE-LOG (2026-10-26): логируем ТЕЛО error-конверта.
+            // VK echo'ит request_params — из него видно, ЧТО VK реально получил
+            // (client_id, v, все параметры). Это ключевая диагностика для
+            // err=3 "Unknown method" (класс токена/шлюза): без неё мы гадаем.
+            // Ошибочные конверты маленькие (302–600B), обрезка 600 симв безопасна.
+            AppLog.e(
+                "VKApiClient",
+                "✗ $method err=$code envelope: ${raw.toString().take(600)}"
+            )
+
+            // #WEB-TOKEN-CLASS GUARD: err=5/1117 на WEBVIEW-токене НЕ должен
+            // инвалидировать ОСНОВНОЙ токен. Ниже (isTokenExpiredOrInvalid)
+            // идёт каскад: silent refresh → clearAccessToken → AuthActivity —
+            // это каскад ОСНОВНОГО токена. Если протух только web-токен
+            // (7879029), основной остаётся валидным: выходим с ошибкой,
+            // ничего не чистим. Следующая попытка увидит актуальный webTok.
+            if (audioWriteOnWeb && effectiveTk != tk && (code == 5 || code == 1117)) {
+                AppLog.e(
+                    "VKApiClient",
+                    "✗ $method: webview token rejected (err=$code, subcode=$subcode) — " +
+                        "web token stale. Main token NOT touched (no re-login cascade)."
+                )
+                return null
+            }
+
             val handler = captchaHandler
             if (code == 14 && handler != null && captchaAttempt < MAX_CAPTCHA_RETRIES) {
                 val sid = err.get("captcha_sid")?.takeIf { !it.isJsonNull }?.asString
@@ -14491,6 +14567,27 @@ class VKApiClient(
             "dll", "so", "dylib", "bin", "run", "app",
             "bat", "cmd", "com", "scr", "sh", "ps1", "vbs",
             "iso", "img", "vmdk", "vdi", "wim",
+        )
+
+        /**
+         * #WEB-TOKEN-CLASS (2026-10-26): audio-WRITE методы — единственные,
+         * на которых web-шлюз прячет методы от токенов не-web-класса
+         * (err=3 «Unknown method» при том, что READ тем же токеном → 200 OK).
+         * Эталон: HAR1 #164 + HAR2 #53 — SPA вызывает их с web-токеном
+         * (6287487, 220 chars vk1.a.*) → 200 OK. PinoK с Android-классом
+         * токена (refresh client_id=2274003) → err=3. Для этих методов
+         * callInternal подменяет токен на web-класс (webview_access_token,
+         * 7879029) если основной токен Direct-Auth.
+         */
+        private val WEB_AUDIO_WRITE_METHODS: Set<String> = setOf(
+            "audio.createPlaylist",
+            "audio.addToPlaylist",
+            "audio.removeFromPlaylist",
+            "audio.savePlaylistAsCopy",
+            "audio.editPlaylist",
+            "audio.deletePlaylist",
+            "audio.followPlaylist",
+            "audio.setPlaylistCoverPhoto",
         )
 
         /**

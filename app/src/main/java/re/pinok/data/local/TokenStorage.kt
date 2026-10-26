@@ -51,6 +51,16 @@ class TokenStorage(private val exchange: ExchangeTokenStorage) {
      */
     fun secret(): String? = exchange.secret()
 
+    /**
+     * #WEB-TOKEN-CLASS (2026-10-26): web-класс токен (7879029, m.vk.ru web_token)
+     * для audio-WRITE на web-шлюзе web.api.vk.ru. Хранится при Direct Auth,
+     * если VK вернул webview_access_token в ответе. Основной access_token при
+     * Direct Auth — Android-класса (2274003): web-шлюз прячет от него
+     * audio-WRITE методы (err=3 «Unknown method passed»), читая при этом
+     * audio-READ нормально. Web-токен обходит это ограничение.
+     */
+    fun webviewAccessToken(): String? = exchange.webviewAccessToken()
+
     /** device_id — стабильный per-install UUID, отправляется на каждый запрос. */
     fun deviceId(): String = exchange.deviceId()
 

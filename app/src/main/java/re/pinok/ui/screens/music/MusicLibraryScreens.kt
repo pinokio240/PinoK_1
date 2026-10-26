@@ -382,36 +382,24 @@ fun PlaylistDetailScreen(
                                             val pl = playlist ?: return@clickable
                                             scope.launch {
                                                 try {
-                                                    // #SAVE-COPY-CREATE (HAR2 #53): audio.savePlaylistAsCopy
-                                                    // на web-шлюзе возвращает err=3 для exchange-токенов
-                                                    // (VK маскирует ошибку прав). Решение — 2 шага:
-                                                    // 1) tracks уже загружены в tracks (audioGetPlaylistById при открытии экрана)
-                                                    // 2) audio.createPlaylist(ownerId, title="orig DD.MM.YYYY", audioIds=треки)
-                                                    //    — создаёт копию одним запросом (как VK веб делает для нового плейлиста).
-                                                    val dateStr = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
-                                                        .format(java.util.Date())
-                                                    val copyTitle = "${pl.title} $dateStr"
-                                                    val audioIds = tracks
-                                                        .filter { it.id > 0L && it.ownerId != 0L }
-                                                        .map { "${it.ownerId}_${it.id}" }
-                                                    if (audioIds.isEmpty()) {
-                                                        android.widget.Toast.makeText(
-                                                            app.applicationContext,
-                                                            "Плейлист пуст — нечего копировать",
-                                                            android.widget.Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                        return@launch
-                                                    }
-                                                    val newId = app.apiClient.audioCreatePlaylist(
+                                                    // #SPA-FAITHFUL-COPY (откат SAVE-COPY-CREATE 1a88515):
+                                                    // HAR1 #164 — ЭТАЛОН: кнопка «Сохранить плейлист» в вебе
+                                                    // вызывает audio.savePlaylistAsCopy {owner_id, playlist_id=-21}
+                                                    // → 200 {response:{id:143, title:"Для вас 25.10.2026", count:100}}.
+                                                    // createPlaylist+audioIds здесь НЕВЕРЕН: (а) это НЕ то,
+                                                    // что делает VK веб; (б) err=3 у PinoK был и на createPlaylist
+                                                    // (лог 25.10 18:27) — причина не в методе, а в КЛАССЕ токена
+                                                    // (refresh authByExchangeToken шлёт client_id=2274003 →
+                                                    // web-шлюз прячет audio-WRITE → err=3). Фикс класса токена —
+                                                    // в VKApiClient (#WEB-TOKEN-CLASS), здесь возвращаем эталон.
+                                                    val newId = app.apiClient.audioSavePlaylistAsCopy(
                                                         ownerId = pl.ownerId,
-                                                        title = copyTitle,
-                                                        description = pl.description ?: "",
-                                                        audioIds = audioIds,
+                                                        playlistId = pl.id,
                                                     )
                                                     if (newId > 0L) {
                                                         android.widget.Toast.makeText(
                                                             app.applicationContext,
-                                                            "Плейлист сохранён: «$copyTitle» (${audioIds.size} треков)",
+                                                            "Плейлист сохранён в вашу музыку",
                                                             android.widget.Toast.LENGTH_SHORT,
                                                         ).show()
                                                     } else {
@@ -423,7 +411,7 @@ fun PlaylistDetailScreen(
                                                         ).show()
                                                     }
                                                 } catch (e: Exception) {
-                                                    AppLog.e("PlaylistDetailScreen", "saveCopy failed", e)
+                                                    AppLog.e("PlaylistDetailScreen", "savePlaylistAsCopy failed", e)
                                                     android.widget.Toast.makeText(
                                                         app.applicationContext,
                                                         "Ошибка: ${e.message}",

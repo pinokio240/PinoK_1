@@ -63,6 +63,17 @@ class VkCookieJar(
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
         return try {
             val host = url.host.lowercase()
+            // #WEB-GATEWAY-NOCOOKIES (2026-10-26, HAR-факт): браузерный SPA НИКОГДА
+            // не отправляет Cookie на web.api.vk.ru — проверено по всем 241 записям
+            // двух HAR («музыка сохранить плейлист» 1/2): 0 Cookie headers, включая
+            // audio.savePlaylistAsCopy/createPlaylist → 200 OK.
+            // PinoK прикладывал сессионные куки (remixsid/remixstid/httoken/p из
+            // CookieManager: Domain=.vk.ru матчится на поддомен web.api.vk.ru через
+            // ветку isVkMain ниже) — ЕДИНСТВЕННОЕ байт-отличие от эталона. Куки
+            // идентифицируют браузерную сессию и могут триггерить антифрод-декей
+            // на WRITE-методах. Шлём как SPA: токен в body, кук нет.
+            // saveFromResponse (зеркалирование Set-Cookie → CookieManager) сохранён.
+            if (host == "web.api.vk.ru") return emptyList()
             // P0.11 #VIDEO-CDN-COOKIES (2026-10): расширение домен-фильтра для VK video CDN.
             // Раньше только vk.ru/vk.com — ExoPlayer получал 400 на video URLs вида
             // https://sun9-XX.userapi.com/... (приватные/канальные видео требуют remixsid/
