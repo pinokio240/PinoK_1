@@ -1412,10 +1412,6 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         }
 
         httpClient = builder
-            // #BROTLI-INTERCEPTOR: OkHttp 4.12 не умеет brotli/zstd. BrotliInterceptor
-            // добавляет Accept-Encoding: gzip, deflate, br (как Chrome) и декодирует
-            // ответы. Без него VK WAF рвёт соединение (✗NET) при Chrome UA + gzip-only.
-            .addInterceptor(okhttp3.brotli.BrotliInterceptor)
             .addInterceptor { chain ->
                 val original = chain.request()
                 val builder2 = original.newBuilder()
@@ -1473,6 +1469,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // Должен быть ПОСЛЕДНИМ application interceptor — работает с финальным
             // request после away-bypass/ad-block преобразований.
             .addInterceptor(NetworkInterceptors.NetworkRetryInterceptor())
+            // #BROTLI-NETWORK-INTERCEPTOR: BrotliInterceptor должен быть NETWORK interceptor
+            // (не application). Application interceptors работают ДО OkHttp BridgeInterceptor,
+            // который управляет Accept-Encoding/Content-Encoding. BrotliInterceptor как
+            // application не видит Content-Encoding ответа → не декодирует brotli →
+            // JsonSyntaxException (бинарный мусор).
+            // Как network interceptor — работает ПОСЛЕ BridgeInterceptor, видит
+            // Content-Encoding: br в ответе и декодирует body.
+            .addNetworkInterceptor(okhttp3.brotli.BrotliInterceptor)
             .build()
 
         // 3. Exchange-token auth repository — phone+password+2FA flow, refresh, LongPoll.
