@@ -2,6 +2,7 @@
 package re.pinok.ui.screens.music
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -77,6 +78,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -140,6 +142,8 @@ fun MusicScreen(
     onOpenAlbum: (ownerId: Long, albumId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
     onOpenArtist: (slug: String, name: String) -> Unit = { _, _ -> },
     onShowAll: (sectionId: String, title: String) -> Unit = { _, _ -> },
+    // #MUSIC-FRIENDS-TAB (2026-10-27): открытие музыки друга (music2_friend route).
+    onOpenFriend: (ownerId: Long, name: String) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -171,6 +175,73 @@ fun MusicScreen(
     // audio.edit, только свои треки). track — что правим.
     var editTrackDialog by remember { mutableStateOf<Track?>(null) }
     var selectedTab by remember { mutableStateOf(0) } // 0=Моя музыка, 1=Главная, 2=Обзор
+
+    // #MUSIC-FRIENDS-TAB (2026-10-27): вкладка «Друзья» (5). Перенесена из Music2.
+    // Пагинация через friends.get (count+offset) до конца списка друзей.
+    var friends by remember { mutableStateOf<List<re.pinok.data.model.Friend>>(emptyList()) }
+    var friendsLoading by remember { mutableStateOf(false) }
+    var friendsLoadingMore by remember { mutableStateOf(false) }
+    var friendsEndReached by remember { mutableStateOf(false) }
+    var friendsError by remember { mutableStateOf<String?>(null) }
+    val friendsListState = rememberLazyListState()
+    val friendsPageSize = 100
+    // ОТЛАДКА: какой friendOffset сейчас (логируется в loadFriends)
+    // хранится в friends.size — не отдельной переменной.
+    fun loadFriends(refresh: Boolean = false) {
+        if (friendsLoadingMore && !refresh) return
+        if (refresh) {
+            friendsLoading = true
+            friendsEndReached = false
+        } else {
+            friendsLoadingMore = true
+        }
+        scope.launch {
+            friendsError = null
+            try {
+                val offset = if (refresh) 0 else friends.size
+                val result = app.apiClient.friendsGet(
+                    userId = null,
+                    count = friendsPageSize,
+                    offset = offset,
+                    onlineOnly = false,
+                )
+                if (refresh) {
+                    friends = result
+                } else {
+                    friends = (friends + result).distinctBy { it.id }
+                }
+                // Конец списка: получили меньше pageSize ИЛИ totalCount неизвестен.
+                // VK не возвращает total в friends.get без extended, ориентируемся на
+                // размер страницы: result.size < pageSize → конец.
+                if (result.size < friendsPageSize) {
+                    friendsEndReached = true
+                }
+                AppLog.i("MusicScreen", "loadFriends: +${result.size} (have ${friends.size}, end=$friendsEndReached, refresh=$refresh)")
+            } catch (e: Exception) {
+                AppLog.w("MusicScreen", "loadFriends error: ${e.message}")
+                friendsError = "Ошибка загрузки друзей: ${e.message}"
+            } finally {
+                friendsLoading = false
+                friendsLoadingMore = false
+            }
+        }
+    }
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 5 && friends.isEmpty()) loadFriends()
+    }
+    // Триггер пагинации: за 10 карточек до конца списка → догрузка.
+    val friendsEndReachedTrigger by remember {
+        derivedStateOf {
+            val last = friendsListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = friendsListState.layoutInfo.totalItemsNumber
+            total > 0 && last >= total - 10
+        }
+    }
+    LaunchedEffect(friendsEndReachedTrigger) {
+        if (selectedTab == 5 && friendsEndReachedTrigger && !friendsEndReached && !friendsLoadingMore && friends.isNotEmpty()) {
+            loadFriends(refresh = false)
+        }
+    }
 
     // ─── Поиск (S5-1) ────────────────────────────────────────────────
     // Fix #266: расширенный поиск через audioSearchWithSections.
@@ -783,6 +854,20 @@ fun MusicScreen(
                 accentColor = vkAccent,
                 cardColor = vkCard,
             )
+            // #MUSIC-FRIENDS-TAB (2026-10-27): вкладка «Друзья» — пагинация через
+            // friends.get до конца списка. Тап по карточке → onOpenFriend → music2_friend.
+            5 -> MusicFriendsTab(
+                friends = friends,
+                loading = friendsLoading,
+                loadingMore = friendsLoadingMore,
+                endReached = friendsEndReached,
+                errorText = friendsError,
+                listState = friendsListState,
+                accentColor = vkAccent,
+                secondaryColor = vkTextSecondary,
+                onOpenFriend = onOpenFriend,
+                onRetry = { loadFriends(refresh = true) },
+            )
         }
         } // end else (!searchActive)
 
@@ -1218,7 +1303,8 @@ private fun MusicTabsBar(
     textColor: Color,
     secondaryColor: Color,
 ) {
-    val tabs = listOf("Моя музыка", "Главная", "Обзор", "Обновления", "Радио")
+    // #MUSIC-FRIENDS-TAB (2026-10-27): добавлена вкладка «Друзья» (idx 5).
+    val tabs = listOf("Моя музыка", "Главная", "Обзор", "Обновления", "Радио", "Друзья")
 
     Column(
         modifier = Modifier
@@ -2281,6 +2367,165 @@ private fun RadioStubTab(
                 "Откройте m.vk.ru/feed в браузере чтобы получить section-id",
                 color = secondaryColor.copy(alpha = 0.6f),
                 fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+// ─── #MUSIC-FRIENDS-TAB (2026-10-27): вкладка «Друзья» — пагинация ───────
+// Перенесена из Music2 (Music2Screen.kt:96, вкладка idx 4). В Music2 показывала
+// только catalog.getSection(friends) — один слайдер с первой страницей друзей.
+// Здесь — полноценная пагинация через friends.get (count+offset) до конца списка.
+
+@Composable
+private fun MusicFriendsTab(
+    friends: List<re.pinok.data.model.Friend>,
+    loading: Boolean,
+    loadingMore: Boolean,
+    endReached: Boolean,
+    errorText: String?,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    secondaryColor: Color,
+    accentColor: Color,
+    onOpenFriend: (ownerId: Long, name: String) -> Unit,
+    onRetry: () -> Unit,
+) {
+    if (loading) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = accentColor)
+        }
+        return
+    }
+    if (errorText != null && friends.isEmpty()) {
+        Column(
+            Modifier.fillMaxSize().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(errorText, color = secondaryColor, fontSize = 14.sp, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = onRetry) { Text("Повторить") }
+        }
+        return
+    }
+    if (friends.isEmpty() && !endReached) {
+        // Список пуст, но не конец — ждём загрузки.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = accentColor)
+        }
+        return
+    }
+    // 3 колонки (как в Music2FriendsSliderRow VK web grid-columns=6, на мобиле 3).
+    val columns = 3
+    val rows = (friends.size + columns - 1) / columns
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+    ) {
+        items(rows) { rowIndex ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (colIndex in 0 until columns) {
+                    val idx = rowIndex * columns + colIndex
+                    if (idx < friends.size) {
+                        MusicFriendCard(
+                            friend = friends[idx],
+                            onOpenFriend = onOpenFriend,
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+            if (rowIndex < rows - 1) Spacer(Modifier.height(12.dp))
+        }
+        // Footer: индикатор догрузки или «конец списка».
+        if (loadingMore) {
+            item(key = "friends_loading_more") {
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = accentColor, modifier = Modifier.size(24.dp))
+                }
+            }
+        } else if (endReached && friends.isNotEmpty()) {
+            item(key = "friends_end") {
+                Text(
+                    "Всего друзей: ${friends.size}",
+                    color = secondaryColor.copy(alpha = 0.6f),
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MusicFriendCard(
+    friend: re.pinok.data.model.Friend,
+    onOpenFriend: (ownerId: Long, name: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.clickable { onOpenFriend(friend.id, friend.fullName) },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(contentAlignment = Alignment.BottomEnd) {
+            // Аватар 96dp (VK web 135px, на мобиле чуть меньше).
+            if (friend.photo200 != null || friend.photo100 != null) {
+                AsyncImage(
+                    model = friend.photo200 ?: friend.photo100,
+                    contentDescription = friend.fullName,
+                    modifier = Modifier.size(96.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(96.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        friend.fullName.take(1).uppercase(),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // Индикатор онлайн (зелёная точка в правом нижнем углу).
+            if (friend.isOnline) {
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF4CAF50))
+                        .border(2.dp, Color.White, CircleShape),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            friend.fullName,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!friend.status.isNullOrBlank()) {
+            Text(
+                friend.status,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }

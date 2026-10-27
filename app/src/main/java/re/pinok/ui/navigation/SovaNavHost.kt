@@ -1854,6 +1854,11 @@ fun SovaNavHost(
                         onShowAll = { sectionId, title ->
                             nav.navigate(Screen.CatalogSection.buildRoute(sectionId, title))
                         },
+                        // #MUSIC-FRIENDS-TAB (2026-10-27): тап по карточке друга →
+                        // music2_friend route (тот же что и в Music2).
+                        onOpenFriend = { ownerId, name ->
+                            nav.navigate(Screen.Music2Friend.buildRoute(ownerId, name))
+                        },
                     )
                 }
                 // P0.32 #MUSIC2: новый контейнер «Музыка 2» — обособленный от старого.
