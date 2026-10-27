@@ -3928,6 +3928,18 @@ private fun NetworkTab(
                 checked = s.netUseWebApiGateway,
             ) { scope.launch { app.prefs.setNetUseWebApiGateway(it) } }
         }
+        // #AUDIO-WRITE-ANDROID-GW (2026-10-27): Fenrir-подход — audio-WRITE
+        // (сохранение плейлистов, добавление треков) через api.vk.ru вместо
+        // web.api.vk.ru. Fenrir-for-VK использует этот путь без err=3.
+        // Default OFF — текущее поведение (web-шлюз с err=3). Включи, если
+        // не сохраняются плейлисты — должно помочь.
+        item {
+            ToggleRow(
+                title = "audio-WRITE через api.vk.ru (Fenrir-режим)",
+                subtitle = "Сохранение плейлистов/добавление треков через api.vk.ru вместо web.api.vk.ru. Применяется сразу. Исправляет err=3 «Unknown method».",
+                checked = s.audioWriteUseAndroidGateway,
+            ) { scope.launch { app.prefs.setAudioWriteUseAndroidGateway(it) } }
+        }
         // P1.1c #URL-LOG (Вариант C): toggle для логирования URL каждого API-запроса.
         // Default OFF — 0 шума в обычном режиме. При включении логирует полный URL
         // (host + method) для каждого call() в D-level. Полезно для диагностики:

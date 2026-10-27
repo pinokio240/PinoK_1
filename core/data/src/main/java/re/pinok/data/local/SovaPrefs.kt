@@ -448,6 +448,13 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // m.vk.ru mobile-web API gateway (web.api.vk.ru). See VKEndpoints.WEB_API_HOST.
             // Default: false — current api.vk.com Android gateway is the default.
             netUseWebApiGateway= p[Keys.NET_USE_WEB_API_GATEWAY] ?: false,
+            // #AUDIO-WRITE-ANDROID-GW (2026-10-27): тумблер для Fenrir-подхода —
+            // audio-WRITE методы (savePlaylistAsCopy/createPlaylist/addToPlaylist/...)
+            // идут на api.vk.ru (НЕ web.api.vk.ru), с основным токеном Android-class
+            // (2274003), БЕЗ browser headers. Default: false (текущее поведение web-шлюз).
+            // Если включить — должно убрать err=3 «Unknown method passed» (по аналогии
+            // с Fenrir-for-VK, где все audio-WRITE работают через api.vk.ru).
+            audioWriteUseAndroidGateway = p[Keys.AUDIO_WRITE_USE_ANDROID_GATEWAY] ?: false,
             // P1.1c #URL-LOG (Вариант C): по умолчанию OFF — 0 шума в обычном режиме.
             // Включается из NETWORK-вкладки SettingsScreen для диагностики err=3/15/5.
             netLogApiUrls     = p[Keys.NET_LOG_API_URLS] ?: false,
@@ -1265,6 +1272,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setNetAdBlock(v: Boolean)                = put(Keys.NET_AD_BLOCK, v)
     /** Mobile-web API gateway toggle (web.api.vk.ru). Default: false (api.vk.com). */
     suspend fun setNetUseWebApiGateway(v: Boolean)       = put(Keys.NET_USE_WEB_API_GATEWAY, v)
+    /** #AUDIO-WRITE-ANDROID-GW: audio-WRITE через api.vk.ru (Fenrir-подход). Default: false. */
+    suspend fun setAudioWriteUseAndroidGateway(v: Boolean) = put(Keys.AUDIO_WRITE_USE_ANDROID_GATEWAY, v)
     // P1.1c #URL-LOG: setter для toggle логирования URL (default false).
     suspend fun setNetLogApiUrls(v: Boolean)            = put(Keys.NET_LOG_API_URLS, v)
     suspend fun setNetProxyEnabled(v: Boolean)           = put(Keys.NET_PROXY_ENABLED, v)
@@ -1770,6 +1779,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val netAdBlock: Boolean,
         /** Mobile-web API gateway (web.api.vk.ru). See VKEndpoints.WEB_API_HOST. */
         val netUseWebApiGateway: Boolean,
+        /** #AUDIO-WRITE-ANDROID-GW: audio-WRITE через api.vk.ru (Fenrir-подход). */
+        val audioWriteUseAndroidGateway: Boolean,
         /**
          * P1.1c #URL-LOG: логировать полный URL каждого VK API-запроса (host + method).
          * Default false — добавляет ~500 строк/час при включении.
@@ -2313,6 +2324,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NET_AWAY_BYPASS   = booleanPreferencesKey("net_away_bypass")
         val NET_AD_BLOCK      = booleanPreferencesKey("net_ad_block")
         val NET_USE_WEB_API_GATEWAY = booleanPreferencesKey("net_use_web_api_gateway")
+        // #AUDIO-WRITE-ANDROID-GW: тумблер Fenrir-подхода (audio-WRITE через api.vk.ru).
+        val AUDIO_WRITE_USE_ANDROID_GATEWAY = booleanPreferencesKey("audio_write_use_android_gw")
         // P1.1c #URL-LOG (Вариант C): toggle для логирования URL каждого API-запроса.
         // Default false — 0 шума. Включается из NETWORK-вкладки SettingsScreen.
         val NET_LOG_API_URLS        = booleanPreferencesKey("net_log_api_urls")

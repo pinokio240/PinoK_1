@@ -414,6 +414,8 @@ fun FeedScreen(
             netAdBlock = true,
             // Task #Web-API: web.api.vk.ru toggle — default OFF (api.vk.com).
             netUseWebApiGateway = false,
+            // #AUDIO-WRITE-ANDROID-GW: Fenrir-подход — default OFF.
+            audioWriteUseAndroidGateway = false,
             // P1.1c #URL-LOG: default OFF — 0 шума. Toggle в NETWORK-вкладке SettingsScreen.
             netLogApiUrls = false,
             netProxyEnabled = false,

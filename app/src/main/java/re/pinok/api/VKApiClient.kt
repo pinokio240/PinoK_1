@@ -11140,13 +11140,17 @@ class VKApiClient(
                         } else if (fromId > 0L) {
                             postAuthor = profilesById[fromId]
                         }
-                        // Fallback: если from_id нет/равен 0, но есть владелец-сообщество
-                        // (пост со стены группы, owner_id<0) — берём группу по -owner_id.
-                        if (postGroup == null && postAuthor == null) {
+                        // #BOOKMARKS-POST-GROUP (2026-10-27, FIX): если пост размещён
+                        // на стене группы (owner_id < 0), ВСЕГДА пытаемся найти группу
+                        // по owner_id — даже если postAuthor уже заполнен (пользователь
+                        // опубликовал от своего имени в группе). Раньше fallback
+                        // срабатывал только при (postGroup==null && postAuthor==null),
+                        // что пропускало случай «автор определён, но группа не показана».
+                        if (postGroup == null) {
                             val ow = postEntity.ownerId
                             if (ow < 0L) {
                                 postGroup = groupsById[-ow] ?: groupsById[fromId]
-                            } else if (ow > 0L) {
+                            } else if (ow > 0L && postAuthor == null) {
                                 postAuthor = profilesById[ow]
                             }
                         }
@@ -13753,6 +13757,24 @@ class VKApiClient(
                 AppLog.d("VKApiClient", "call($method): forcing api.vk.com (incompatible with web gateway)")
             }
 
+            // #AUDIO-WRITE-ANDROID-GW (2026-10-27, Fenrir-подход): если тумблер
+            // включён, audio-WRITE методы идут на api.vk.ru (НЕ web.api.vk.ru) с
+            // основным токеном, БЕЗ browser headers, БЕЗ подмены токена.
+            // Причина: web.api.vk.ru прячет audio-WRITE от не-web-класса токенов
+            // (err=3 «Unknown method passed»), а api.vk.ru принимает любой токен
+            // с scope=audio. Fenrir-for-VK так работает — все 8 audio-WRITE
+            // через api.vk.ru без err=3.
+            // Default: false (текущее поведение web-шлюз с err=3). Тумблер в
+            // Settings → NETWORK → «audio-WRITE через api.vk.ru».
+            val audioWriteAndroidGw = snap.audioWriteUseAndroidGateway &&
+                WEB_AUDIO_WRITE_METHODS.contains(method)
+            if (audioWriteAndroidGw) {
+                AppLog.i("VKApiClient", "call($method): Fenrir-mode — using api.vk.ru (audioWriteUseAndroidGateway=true)")
+            }
+            // effectiveWebGateway: false если audioWriteAndroidGw (форс api.vk.ru),
+            // иначе useWebGateway (текущая логика).
+            val effectiveWebGateway = useWebGateway && !audioWriteAndroidGw
+
             // =================================================================
             // #WEB-TOKEN-CLASS (2026-10-26, ROOT CAUSE err=3 для audio-WRITE):
             //
@@ -13777,7 +13799,7 @@ class VKApiClient(
             // webview_access_token (7879029, m.vk.ru web_token) из хранилища,
             // если основной токен Direct-Auth (user_secret != null → 2274003).
             // =================================================================
-            val audioWriteOnWeb = useWebGateway && overrideToken == null &&
+            val audioWriteOnWeb = effectiveWebGateway && overrideToken == null &&
                 WEB_AUDIO_WRITE_METHODS.contains(method)
             // #WEB-TOKEN-CLASS-2 (26.10.2026): подмена на web-класс токен больше НЕ
             // зависит от Direct-Auth (secret()). Раньше gate секрета пропускал
@@ -13820,7 +13842,7 @@ class VKApiClient(
             // access_token (БЕЗ v/https/lang/device). Раньше PinoK добавлял все 5 в body
             // → web-шлюз воспринимал их как неизвестные параметры → err=3.
             // Для default-шлюза (api.vk.ru) body остаётся как было (v/https/lang/device).
-            val methodUrl = if (useWebGateway) {
+            val methodUrl = if (effectiveWebGateway) {
                 VKEndpoints.method(method, true) +
                     "?v=${VKEndpoints.API_VERSION}" +
                     "&client_id=${re.pinok.BuildConfig.VK_WEB_CLIENT_ID}"
@@ -13830,7 +13852,7 @@ class VKApiClient(
             // Для web-шлюза: body = user args + access_token (+ sig если есть).
             // Для default-шлюза: body = full allParams (v/https/lang/device/access_token).
             val form = FormBody.Builder().apply {
-                if (useWebGateway) {
+                if (effectiveWebGateway) {
                     args.forEach { (k, v) -> add(k, v) }
                     // #WEB-TOKEN-CLASS: effectiveTk — web-класс токен для audio-WRITE
                     // (см. комментарий выше), либо основной токен.
@@ -13852,7 +13874,7 @@ class VKApiClient(
                 .url(methodUrl)
                 .post(form)
                 .apply {
-                    if (useWebGateway) {
+                    if (effectiveWebGateway) {
                         header("Origin", "https://vk.ru")
                         header("Referer", "https://vk.ru/")
                         header("User-Agent",
@@ -13881,7 +13903,7 @@ class VKApiClient(
                     }
                 }
                 .build()
-            if (useWebGateway) {
+            if (effectiveWebGateway) {
                 AppLog.d("VKApiClient", "call($method): using WEB gateway web.api.vk.ru")
             }
             // P1.1c #URL-LOG (Вариант C): логировать URL ТОЛЬКО если toggle включён.
@@ -13906,7 +13928,7 @@ class VKApiClient(
             // User-Agent/Priority). Без этого дампа невозможно сравнить реально
             // отправленные заголовки с HAR #53/#164. Логируем только audio-WRITE
             // (не засоряем лог для READ-методов).
-            if (useWebGateway && WEB_AUDIO_WRITE_METHODS.contains(method)) {
+            if (effectiveWebGateway && WEB_AUDIO_WRITE_METHODS.contains(method)) {
                 val hdrDump = (0 until req.headers.size).joinToString(", ") {
                     "${req.headers.name(it)}=${req.headers.value(it)}"
                 }
