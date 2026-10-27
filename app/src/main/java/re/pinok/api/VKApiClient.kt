@@ -3577,8 +3577,10 @@ class VKApiClient(
         // P0.38 #MUSIC2-FRIENDS-PAGINATION: для friends-секции грузим ВСЕ страницы
         // (VK отдаёт по 20 друзей на страницу, всего ~81 друг). Для остальных секций
         // достаточно первой страницы — они меньше и пагинация не критична.
+        // #MUSIC-FRIENDS-FULL (2026-10-27, FIX): maxPages 10→50 (до 1000 друзей),
+        // И catalogGetSectionAllBlocks для friends НЕ дедуплицирует блоки (см. ниже).
         if (section == "friends") {
-            return catalogGetSectionAllBlocks(sectionId, maxPages = 10)
+            return catalogGetSectionAllBlocks(sectionId, maxPages = 50, dedupByBlockId = false)
         }
         return catalogGetSectionById(sectionId, startFrom)
     }
@@ -3614,10 +3616,18 @@ class VKApiClient(
      * первую страницу («Показать все» в каталоге музыки обрезался) — экран
      * CatalogSectionScreen теперь вызывает этот метод и доходит до конца списка.
      * Страховка от бесконечного цикла: maxPages (10 страниц ≈ 100-300 блоков).
+     *
+     * #MUSIC-FRIENDS-FULL (2026-10-27): параметр dedupByBlockId. По умолчанию true
+     * (для catalog/Обзор). Для friends — false: VK возвращает ОДИН блок «Друзья»
+     * (одинаковый blockId) на каждой странице пагинации, но с РАЗНЫМИ друзьями
+     * внутри. Дедуп по blockId скипал все страницы кроме первой → пользователь
+     * видел только ~20 друзей вместо полного списка. При false — собираем все
+     * блоки со всех страниц, дедуп друзей по ownerId делается в UI (MusicScreen).
      */
     suspend fun catalogGetSectionAllBlocks(
         sectionId: String,
         maxPages: Int = 10,
+        dedupByBlockId: Boolean = true,
     ): List<re.pinok.data.model.CatalogBlock> {
         if (isOffline() || sectionId.isBlank()) return emptyList()
         val all = ArrayList<re.pinok.data.model.CatalogBlock>()
@@ -3643,11 +3653,18 @@ class VKApiClient(
             // Дедуп блоков по blockId: разделы каталога могут пересекаться
             // на границе страниц (blocks без blockId пропускаются — не считаем
             // дублем, ключ генерируется по индексу).
+            // #MUSIC-FRIENDS-FULL: для friends дедуп ОТКЛЮЧЕН — VK отдаёт один
+            // и тот же blockId на каждой странице с разными друзьями внутри.
             var fresh = 0
             for (b in blocks) {
-                val key = b.blockId?.takeIf { it.isNotBlank() }
-                    ?: "idx_${all.size + fresh}"
-                if (seenBlockIds.add(key)) {
+                if (dedupByBlockId) {
+                    val key = b.blockId?.takeIf { it.isNotBlank() }
+                        ?: "idx_${all.size + fresh}"
+                    if (seenBlockIds.add(key)) {
+                        all.add(b)
+                        fresh++
+                    }
+                } else {
                     all.add(b)
                     fresh++
                 }
@@ -3659,7 +3676,7 @@ class VKApiClient(
             val nf = sectionObj?.get("next_from")?.takeIf { !it.isJsonNull }?.asString
                 ?: resp.get("next_from")?.takeIf { !it.isJsonNull }?.asString
             AppLog.i("VKApiClient",
-                "#AUDIO-PAGING-ALL section: page=$pages blocks=+${blocks.size} (fresh=$fresh, all=${all.size}) nextFrom=${if (nf.isNullOrBlank()) "нет" else "есть"}")
+                "#AUDIO-PAGING-ALL section: page=$pages blocks=+${blocks.size} (fresh=$fresh, all=${all.size}) nextFrom=${if (nf.isNullOrBlank()) "нет" else "есть"} dedup=$dedupByBlockId")
             if (nf.isNullOrBlank()) break
             startFrom = nf
         }
