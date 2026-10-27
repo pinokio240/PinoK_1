@@ -600,16 +600,16 @@ fun FeedScreen(
             // FeedScreen не использует это поле напрямую — реальное значение
             // подгрузится из SovaPrefs при первом collect. Default "480".
             mobileVideoQualityLimit = "480",
-            // #AUDIO-WEB-HEADERS: 6 полей добавлены в Snapshot — initial обязан
+            // #AUDIO-WEB-HEADERS: 5 полей добавлены в Snapshot — initial обязан
             // передавать их (класс бага Fix #100/#110/#189/#monet-hybrid).
             // Defaults из HAR #53 (Chrome 156). Реальные значения подгрузятся
-            // из SovaPrefs при первом collect.
+            // из SovaPrefs при первом collect. Accept-Encoding исключён (хардкод).
             audioSecChUa = re.pinok.data.local.SovaPrefs.AUDIO_SEC_CH_UA_DEFAULT,
             audioSecChUaMobile = re.pinok.data.local.SovaPrefs.AUDIO_SEC_CH_UA_MOBILE_DEFAULT,
             audioSecChUaPlatform = re.pinok.data.local.SovaPrefs.AUDIO_SEC_CH_UA_PLATFORM_DEFAULT,
             audioSecGpc = re.pinok.data.local.SovaPrefs.AUDIO_SEC_GPC_DEFAULT,
             audioPriority = re.pinok.data.local.SovaPrefs.AUDIO_PRIORITY_DEFAULT,
-            audioAcceptEncoding = re.pinok.data.local.SovaPrefs.AUDIO_ACCEPT_ENCODING_DEFAULT,
+            // #DEAD-CODE-REMOVAL (2026-10-27): audioAcceptEncoding удалён из snapshot.
         )
     )
 

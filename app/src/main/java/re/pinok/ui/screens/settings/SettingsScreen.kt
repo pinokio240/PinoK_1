@@ -712,17 +712,18 @@ private fun DevTab(
 /**
  * #TASK-14-AUDIO-UI (Task 14-AUDIO-UI): вкладка «Аудио» — browser headers для
  * web.api.vk.ru (audio.* методы). VK WAF проверяет наличие sec-ch-ua/sec-gpc/
- * priority/accept-encoding; без них WAF возвращает decoy-ответ err=3 "Unknown
+ * priority; без них WAF возвращает decoy-ответ err=3 "Unknown
  * method passed" (см. worklog Task #HAR-53-DECODE). Defaults — из HAR #53
- * (Chrome 156 на Windows).
+ * (Chrome 156 на Windows). Accept-Encoding НЕ включён — управляется
+ * WebAcceptEncodingInterceptor (хардкод "gzip, deflate, br").
  *
  * Контракт с готовой инфраструктурой SovaPrefs (не правим — уже реализовано):
  *   snapshot-поля: audioSecChUa / audioSecChUaMobile / audioSecChUaPlatform /
- *                   audioSecGpc / audioPriority / audioAcceptEncoding
+ *                   audioSecGpc / audioPriority
  *   setters:       setAudioSecChUa(v) / setAudioSecChUaMobile(v) /
  *                   setAudioSecChUaPlatform(v) / setAudioSecGpc(v) /
- *                   setAudioPriority(v) / setAudioAcceptEncoding(v) (suspend)
- *   reset:         resetAudioHeaders() — сброс всех 6 полей к defaults.
+ *                   setAudioPriority(v) (suspend)
+ *   reset:         resetAudioHeaders() — сброс всех 5 полей к defaults.
  *
  * Паттерн: write-through — каждое нажатие клавиши сразу пишет в SovaPrefs
  * (через scope.launch, см. DevTab). Локальный стейт для отзывчивости UI:
@@ -743,7 +744,8 @@ private fun AudioTab(
     var secChUaPlatform by remember(s.audioSecChUaPlatform) { mutableStateOf(s.audioSecChUaPlatform) }
     var secGpc by remember(s.audioSecGpc) { mutableStateOf(s.audioSecGpc) }
     var priority by remember(s.audioPriority) { mutableStateOf(s.audioPriority) }
-    var acceptEncoding by remember(s.audioAcceptEncoding) { mutableStateOf(s.audioAcceptEncoding) }
+    // #DEAD-CODE-REMOVAL (2026-10-27): audioAcceptEncoding удалён — WebAcceptEncodingInterceptor
+    // хардкодит "gzip, deflate, br" и всегда overwrite, поле в HTTP-запрос не попадало.
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -815,18 +817,6 @@ private fun AudioTab(
                     scope.launch { app.prefs.setAudioPriority(v) }
                 },
                 label = { Text("Priority") },
-                singleLine = false,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = acceptEncoding,
-                onValueChange = { v ->
-                    acceptEncoding = v
-                    scope.launch { app.prefs.setAudioAcceptEncoding(v) }
-                },
-                label = { Text("Accept-Encoding") },
                 singleLine = false,
                 modifier = Modifier.fillMaxWidth(),
             )

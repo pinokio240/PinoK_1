@@ -667,7 +667,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             audioSecChUaPlatform = p[Keys.AUDIO_HEADER_SEC_CH_UA_PLATFORM] ?: SovaPrefs.AUDIO_SEC_CH_UA_PLATFORM_DEFAULT,
             audioSecGpc = p[Keys.AUDIO_HEADER_SEC_GPC] ?: SovaPrefs.AUDIO_SEC_GPC_DEFAULT,
             audioPriority = p[Keys.AUDIO_HEADER_PRIORITY] ?: SovaPrefs.AUDIO_PRIORITY_DEFAULT,
-            audioAcceptEncoding = p[Keys.AUDIO_HEADER_ACCEPT_ENCODING] ?: SovaPrefs.AUDIO_ACCEPT_ENCODING_DEFAULT,
+            // #DEAD-CODE-REMOVAL (2026-10-27): audioAcceptEncoding удалён —
+            // WebAcceptEncodingInterceptor хардкодит и всегда overwrite, в HTTP не попадало.
         )
     }
 
@@ -706,21 +707,20 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
      */
     suspend fun setPersistLogEnabled(v: Boolean)         = put(Keys.PERSIST_LOG_ENABLED, v)
 
-    // #AUDIO-WEB-HEADERS: setters для 6 browser headers (UI «Аудио»).
+    // #AUDIO-WEB-HEADERS: setters для 5 browser headers (UI «headers»).
+    // Accept-Encoding убран (WebAcceptEncodingInterceptor хардкодит).
     suspend fun setAudioSecChUa(v: String)          = put(Keys.AUDIO_HEADER_SEC_CH_UA, v)
     suspend fun setAudioSecChUaMobile(v: String)    = put(Keys.AUDIO_HEADER_SEC_CH_UA_MOBILE, v)
     suspend fun setAudioSecChUaPlatform(v: String) = put(Keys.AUDIO_HEADER_SEC_CH_UA_PLATFORM, v)
     suspend fun setAudioSecGpc(v: String)            = put(Keys.AUDIO_HEADER_SEC_GPC, v)
     suspend fun setAudioPriority(v: String)         = put(Keys.AUDIO_HEADER_PRIORITY, v)
-    suspend fun setAudioAcceptEncoding(v: String)  = put(Keys.AUDIO_HEADER_ACCEPT_ENCODING, v)
-    /** Сбросить все 6 audio headers к defaults (HAR #53). */
+    /** Сбросить все 5 audio headers к defaults (HAR #53). */
     suspend fun resetAudioHeaders() {
         put(Keys.AUDIO_HEADER_SEC_CH_UA, AUDIO_SEC_CH_UA_DEFAULT)
         put(Keys.AUDIO_HEADER_SEC_CH_UA_MOBILE, AUDIO_SEC_CH_UA_MOBILE_DEFAULT)
         put(Keys.AUDIO_HEADER_SEC_CH_UA_PLATFORM, AUDIO_SEC_CH_UA_PLATFORM_DEFAULT)
         put(Keys.AUDIO_HEADER_SEC_GPC, AUDIO_SEC_GPC_DEFAULT)
         put(Keys.AUDIO_HEADER_PRIORITY, AUDIO_PRIORITY_DEFAULT)
-        put(Keys.AUDIO_HEADER_ACCEPT_ENCODING, AUDIO_ACCEPT_ENCODING_DEFAULT)
     }
     /** CHAN-PREFS: показ блока «Рекомендации в каналах» в разделе каналов. */
     suspend fun setChannelRecEnabled(v: Boolean)         = put(Keys.CHANNEL_REC_ENABLED, v)
@@ -1812,13 +1812,14 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val authQueuev4Host: String,    // queuev4.vk.ru / queuev4.vk.com
         val authEhHost: String,         // eh.vk.ru / eh.vk.com
         val authVkDomain: String,       // vk.ru / vk.com (основной домен)
-        // #AUDIO-WEB-HEADERS: 6 browser headers для web.api.vk.ru (настраиваются из UI «Аудио»).
+        // #AUDIO-WEB-HEADERS: 5 browser headers для web.api.vk.ru (настраиваются из UI «headers»).
         val audioSecChUa: String,
         val audioSecChUaMobile: String,
         val audioSecChUaPlatform: String,
         val audioSecGpc: String,
         val audioPriority: String,
-        val audioAcceptEncoding: String,
+        // #DEAD-CODE-REMOVAL (2026-10-27): audioAcceptEncoding field removed
+        // (WebAcceptEncodingInterceptor хардкодит, в HTTP не попадало).
         /**
          * Fix #302 (Task 2-b): JSON-кэш состояний sn_* notification toggles
          * из settingsGeneral.getNotifySettings(page="notify"). Формат:
@@ -2361,7 +2362,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val AUDIO_HEADER_SEC_CH_UA_PLATFORM = stringPreferencesKey("audio_hdr_sec_ch_ua_platform")
         val AUDIO_HEADER_SEC_GPC            = stringPreferencesKey("audio_hdr_sec_gpc")
         val AUDIO_HEADER_PRIORITY            = stringPreferencesKey("audio_hdr_priority")
-        val AUDIO_HEADER_ACCEPT_ENCODING     = stringPreferencesKey("audio_hdr_accept_encoding")
+        // #DEAD-CODE-REMOVAL (2026-10-27): AUDIO_HEADER_ACCEPT_ENCODING removed
+        // (WebAcceptEncodingInterceptor хардкодит, поле не использовалось).
         // Fix #302 (Task 2-b): кэш sn_* notification toggles (JSON map).
         val NOTIFY_CACHE_JSON    = stringPreferencesKey("notify_cache_json")
         // P3.1: EMAIL_NOTIFY_FREQ key удалён — DEAD STORE (поле emailNotifyFreq удалено из Snapshot).
@@ -2520,13 +2522,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         const val AUTH_EH_HOST_DEFAULT         = "eh.vk.ru"
         const val AUTH_VK_DOMAIN_DEFAULT       = "vk.ru"
         // #AUDIO-WEB-HEADERS defaults — из HAR #53 (audio.createPlaylist 200 OK).
-        // VK WAF проверяет эти 6 browser-default headers для web.api.vk.ru.
+        // VK WAF проверяет эти 5 browser-default headers для web.api.vk.ru.
+        // Accept-Encoding исключён (WebAcceptEncodingInterceptor хардкодит).
         const val AUDIO_SEC_CH_UA_DEFAULT          = "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\""
         const val AUDIO_SEC_CH_UA_MOBILE_DEFAULT   = "?0"
         const val AUDIO_SEC_CH_UA_PLATFORM_DEFAULT = "\"Windows\""
         const val AUDIO_SEC_GPC_DEFAULT            = "1"
         const val AUDIO_PRIORITY_DEFAULT           = "u=1, i"
-        const val AUDIO_ACCEPT_ENCODING_DEFAULT    = "gzip, deflate, br"
+        // #DEAD-CODE-REMOVAL (2026-10-27): AUDIO_ACCEPT_ENCODING_DEFAULT removed
+        // (WebAcceptEncodingInterceptor хардкодит "gzip, deflate, br", поле не использовалось).
 
         // Fix #337 / #PANELEDIT (2026-10-02): дефолтный порядок пунктов панелей
         // (JSON-массивы KEY пунктов — PanelItems.key, а НЕ Screen.route, т.к.
