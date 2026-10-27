@@ -240,9 +240,7 @@ fun PlaylistDetailScreen(
     var loading by remember { mutableStateOf(true) }
     // #MUSIC-PLAYLIST-FULL (Fix #283): прогресс пагинации для плейлистов 100+.
     var loadProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    // #SAVE-COPY: состояние операции «Сохранить копию» (audio.savePlaylistAsCopy).
-    // Показывается только для ЧУЖИХ плейлистов (ownerId != myId).
-    var savingCopy by remember { mutableStateOf(false) }
+    // #SAVE-COPY-REMOVED (2026-10-27): savingCopy state удалён вместе с кнопкой.
     val myUserId = remember { app.exchangeAuthRepository.userId() }
     // #PLAYLIST-ACTIONS: состояние операций follow/unfollow/edit/delete.
     var followPending by remember { mutableStateOf(false) }
@@ -375,103 +373,13 @@ fun PlaylistDetailScreen(
                                     Text("Скачать", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                 }
                             }
-                            // #SAVE-COPY: «Сохранить копию» — для ЧУЖИХ плейлистов (ownerId != myId).
-                            // audio.savePlaylistAsCopy: 1 запрос, копирует плейлист целиком с cover/
-                            // description/followers, новый id, title с датой (как в VK веб —
-                            // «Для вас DD.MM.YYYY»). Только для чужих (свой нельзя скопировать).
-                            // #SAVECOPY-GATE-FIX (аудит 5-UI-AUDIT C.1): КОРНЕВАЯ ПРИЧИНА жалобы
-                            // «не сохраняется плейлист». Раньше проверяли `ownerId != myUserId` —
-                            // но HAR доказывает: Daily Playlist (id=-21, type=generated) имеет
-                            // owner_id=171093180==myUserId И permissions.save_as_copy=true.
-                            // VK веб показывает кнопку Action_CopyToMyMusic для Daily Playlist
-                            // (Главная1.html: testid Action_CopyToMyMusic, icon add_24).
-                            // Условие должно быть ТОЛЬКО по permissions.save_as_copy,
-                            // НЕ по owner_id (свой ugc имеет save_as_copy=false → кнопка скрыта).
-                            // permissions==null → fallback: показываем (старые ответы без permissions).
-                            if (myUserId != 0L && playlist != null &&
-                                (playlist?.canSaveAsCopy == true || playlist?.permissions == null)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(VK_CARD)
-                                        .clickable {
-                                            if (savingCopy) return@clickable
-                                            savingCopy = true
-                                            val pl = playlist ?: return@clickable
-                                            scope.launch {
-                                                try {
-                                                    // #SPA-FAITHFUL-COPY (откат SAVE-COPY-CREATE 1a88515):
-                                                    // HAR1 #164 — ЭТАЛОН: кнопка «Сохранить плейлист» в вебе
-                                                    // вызывает audio.savePlaylistAsCopy {owner_id, playlist_id=-21}
-                                                    // → 200 {response:{id:143, title:"Для вас 25.10.2026", count:100}}.
-                                                    // createPlaylist+audioIds здесь НЕВЕРЕН: (а) это НЕ то,
-                                                    // что делает VK веб; (б) err=3 у PinoK был и на createPlaylist
-                                                    // (лог 25.10 18:27) — причина не в методе, а в КЛАССЕ токена
-                                                    // (refresh authByExchangeToken шлёт client_id=2274003 →
-                                                    // web-шлюз прячет audio-WRITE → err=3). Фикс класса токена —
-                                                    // в VKApiClient (#WEB-TOKEN-CLASS), здесь возвращаем эталон.
-                                                    // #ACCESS-KEY-FIX (2026-10-27): передаём access_key плейлиста
-                                                    // для чужих/ограниченных плейлистов. Без него VK возвращает
-                                                    // err=3 «Unknown method» (decoy для прав доступа).
-                                                    val newId = app.apiClient.audioSavePlaylistAsCopy(
-                                                        ownerId = pl.ownerId,
-                                                        playlistId = pl.id,
-                                                        accessKey = pl.accessKey,
-                                                    )
-                                                    if (newId > 0L) {
-                                                        android.widget.Toast.makeText(
-                                                            app.applicationContext,
-                                                            "Плейлист сохранён в вашу музыку",
-                                                            android.widget.Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                    } else {
-                                                        val err = app.apiClient.lastApiError
-                                                        android.widget.Toast.makeText(
-                                                            app.applicationContext,
-                                                            "Не удалось сохранить: ${err ?: "ошибка"}",
-                                                            android.widget.Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                    }
-                                                } catch (e: Exception) {
-                                                    AppLog.e("PlaylistDetailScreen", "savePlaylistAsCopy failed", e)
-                                                    android.widget.Toast.makeText(
-                                                        app.applicationContext,
-                                                        "Ошибка: ${e.message}",
-                                                        android.widget.Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                } finally {
-                                                    savingCopy = false
-                                                }
-                                            }
-                                        }
-                                        .padding(horizontal = 18.dp, vertical = 9.dp),
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (savingCopy) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(16.dp),
-                                                strokeWidth = 2.dp,
-                                                color = VK_ACCENT,
-                                            )
-                                        } else {
-                                            Icon(
-                                                Icons.AutoMirrored.Outlined.PlaylistAdd,
-                                                null,
-                                                tint = VK_ACCENT,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        }
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            if (savingCopy) "Копирование…" else "Сохранить копию",
-                                            color = VK_TEXT_PRIMARY,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        )
-                                    }
-                                }
-                            }
+                            // #SAVE-COPY-REMOVED (2026-10-27): кнопка «Сохранить копию» удалена.
+                            // audio.savePlaylistAsCopy не работает с OAuth WebView токеном
+                            // (client_id=6287487) — VK возвращает err=3 «Unknown method».
+                            // Решение потребовало бы Direct Auth (phone+password), что меняет
+                            // весь auth flow. Функционал отключён до реализации Direct Auth.
+                            // audioSavePlaylistAsCopy в VKApiClient оставлен — может работать
+                            // если пользователь залогинен через Direct Auth в будущем.
                         }
                         // #PL-DATE-DISCRIM (2026-10-27): «Отменить загрузку» — отдельной строкой под
                         // основными кнопками, чтобы не переполнять горизонтальный ряд
