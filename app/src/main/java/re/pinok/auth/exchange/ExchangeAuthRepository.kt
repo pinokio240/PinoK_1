@@ -441,6 +441,14 @@ class ExchangeAuthRepository(
                 userId = userId,
                 expiresIn = 0L,
                 scope = "friends,messages,offline,photos,audio,video,docs,wall,groups",
+                // #SESSION-DERIVED-TOKEN (2026-10-27, PINOK-WEB-SESSION-AUDIT):
+                // remixnsid из CookieManager — это session-derived access_token
+                // (vk1.a.* от VK web-сессии). Имеет audio-WRITE права, которых
+                // НЕТ у основного OAuth-токена (6287487-class). Без него audio.
+                // savePlaylistAsCopy/createPlaylist возвращают err=3 на web.api.vk.ru.
+                // Сохраняем в webviewAccessToken → VKApiClient.callInternal:13832
+                // подставит его для WEB_AUDIO_WRITE_METHODS.
+                webviewAccessToken = remixnsid?.takeIf { it.startsWith("vk1.a.") && it.length >= 50 },
             )
             storage.saveAuthResult(result, storage.deviceId())
 

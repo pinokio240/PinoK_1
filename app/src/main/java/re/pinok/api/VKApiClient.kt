@@ -13787,8 +13787,15 @@ class VKApiClient(
             // через api.vk.ru без err=3.
             // Default: false (текущее поведение web-шлюз с err=3). Тумблер в
             // Settings → NETWORK → «audio-WRITE через api.vk.ru».
+            //
+            // #SESSION-DERIVED-OVERRIDE (2026-10-27): если есть webviewAccessToken
+            // (session-derived токен из remixnsid), он ИМЕЕТ audio-WRITE права
+            // на web.api.vk.ru. В этом случае Fenrir-mode НЕ активируется —
+            // приоритет за web-шлюзом с session-derived токеном (как в VK web SPA).
+            val hasWebviewToken = !tokenStorage.webviewAccessToken().isNullOrBlank()
             val audioWriteAndroidGw = snap.audioWriteUseAndroidGateway &&
-                WEB_AUDIO_WRITE_METHODS.contains(method)
+                WEB_AUDIO_WRITE_METHODS.contains(method) &&
+                !hasWebviewToken  // session-derived токен приоритетнее Fenrir-mode
             if (audioWriteAndroidGw) {
                 AppLog.i("VKApiClient", "call($method): Fenrir-mode — using api.vk.ru (audioWriteUseAndroidGateway=true)")
             }
