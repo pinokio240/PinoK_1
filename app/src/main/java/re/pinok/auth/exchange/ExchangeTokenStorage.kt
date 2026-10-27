@@ -467,6 +467,16 @@ class ExchangeTokenStorage(
                 if (remixuas != null) putString(KEY_REMIX_UAS, remixuas)
                 if (remixdmgr != null) putString(KEY_REMIX_DMGR, remixdmgr)
                 if (remixmvkFp != null) putString(KEY_REMIX_MVK_FP, remixmvkFp)
+                // #SESSION-DERIVED-TOKEN (2026-10-27, PINOK-WEB-SESSION-AUDIT):
+                // access_token от silentRefreshViaRemixsidLive — это 7879029-class
+                // web_token с audio-WRITE правами. Сохраняем его КАК webviewAccessToken
+                // тоже — чтобы VKApiClient.callInternal использовал для audio-WRITE
+                // на web.api.vk.ru. Без этого audio.savePlaylistAsCopy → err=3/err=5.
+                // (silentRefreshViaRemixsidLive получает токен через app_id=7879029
+                // login.vk.ru/?act=web_token — это эквивалент remixnsid из куки.)
+                if (accessToken.startsWith("vk1.a.") && accessToken.length >= 50) {
+                    putString(KEY_WEBVIEW_ACCESS_TOKEN, accessToken)
+                }
                 // §50 #TOKEN-LIFECYCLE-FIX: успешный web_token логин — снимаем
                 // флаг invalidated (если был от предыдущей сессии).
                 clearInvalidatedFlag(this)
