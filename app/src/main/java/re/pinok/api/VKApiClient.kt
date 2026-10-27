@@ -13581,7 +13581,13 @@ class VKApiClient(
                 // ensureFreshToken содержит proactive-блок: если webviewAccessToken
                 // пустой + remixsid есть → запускает фоновый silentRefresh.
                 // Если webviewAccessToken уже есть — short-circuits (быстро).
-                try { er.ensureFreshToken() } catch (_: Exception) {}
+                AppLog.i("VKApiClient", "call($method): PROACTIVE ensureFreshToken (audio-WRITE) — " +
+                    "webviewAccessToken=${if (tokenStorage.webviewAccessToken() != null) "yes(len=${tokenStorage.webviewAccessToken()!!.length})" else "NO"}")
+                try { er.ensureFreshToken() } catch (e: Exception) {
+                    AppLog.w("VKApiClient", "call($method): proactive ensureFreshToken failed: ${e.message}")
+                }
+            } else {
+                AppLog.w("VKApiClient", "call($method): exchangeAuthRepository=NULL — proactive refresh skipped")
             }
         }
         return callInternal(
