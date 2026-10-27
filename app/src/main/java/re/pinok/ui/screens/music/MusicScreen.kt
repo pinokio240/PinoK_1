@@ -1751,7 +1751,9 @@ private fun MyMusicMenuList(
                                                         accessKey = playlist.accessKey,
                                                     )
                                                     val filtered = tracks
-                                                        .filter { it.id > 0L && it.ownerId != 0L && !it.url.isNullOrBlank() }
+                                                        // #NULL-URL-FALLBACK (2026-10-27): убран фильтр !it.url.isNullOrBlank().
+                                                        // null-URL треки резолвятся в processTrackFromQueue через audioGetById.
+                                                        .filter { it.id > 0L && it.ownerId != 0L }
                                                     if (filtered.isNotEmpty()) {
                                                         TrackDownloadManager.enqueuePlaylistDownload(
                                                             playlistTitle = playlist.title,

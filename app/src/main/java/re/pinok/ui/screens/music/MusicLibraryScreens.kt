@@ -273,7 +273,13 @@ fun PlaylistDetailScreen(
                 onProgress = { loaded, total -> loadProgress = loaded to total },
             )
             playlist = pl
-            tracks = plTracks.filter { it.id > 0L && !it.url.isNullOrBlank() }
+            // #NULL-URL-FALLBACK (2026-10-27): убран фильтр !it.url.isNullOrBlank().
+            // Раньше: null-URL треки (гео-ограниченные/протухшие) молча пропадали —
+            // при скачивании плейлиста терялись. Теперь: пропускаем все треки с валидным
+            // id. processTrackFromQueue (TrackDownloadManager.kt:822) резолвит null-URL
+            // через audioGetById (#DL-DISPATCH-RESTORE). Для воспроизведения/отображения
+            // PlayerConnection.playTrackList фильтрует null-URL внутри (Fix #59).
+            tracks = plTracks.filter { it.id > 0L }
             AppLog.i("PlaylistDetailScreen", "Loaded playlist ${plTracks.size} tracks")
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

@@ -672,14 +672,20 @@ object TrackDownloadManager {
     private fun enqueueRequest(request: DownloadRequest, silent: Boolean = false) {
         ensureInitialized()
         val track = request.track
-        val url = track.url ?: run {
-            AppLog.w(TAG, "enqueueDownload: track #${track.id} has no URL — skip")
-            return
-        }
+        // #NULL-URL-FALLBACK (2026-10-27, FIX BUG #2 из DOWNLOAD-MECHANISM-RESEARCH):
+        // Раньше: val url = track.url ?: run { return } — null-URL треки молча skip'ались,
+        // хотя processTrackFromQueue (line 822, #DL-DISPATCH-RESTORE) умеет резолвить их
+        // через audioGetById (с al_audio.php fallback). Это теряло треки в плейлистах
+        // (pre-filter убирал null-URL) и в «Моей музыке» (onDownloadToggle без fallback).
+        // Теперь: НЕ возвращаем — пускаем в очередь. url nullable, используется только
+        // для лога. processTrackFromQueue резолвит свежую ссылку в момент взятия трека.
+        val url: String? = track.url
         if (silent) {
-            AppLog.i(TAG, "enqueueDownload [silent] trackId=${track.id}: ${track.artist} — ${track.title} (${url.take(80)})")
+            AppLog.i(TAG, "enqueueDownload [silent] trackId=${track.id}: ${track.artist} — ${track.title}" +
+                (url?.let { " (${it.take(80)})" } ?: " (no URL — will resolve via audioGetById)"))
         } else {
-            AppLog.i(TAG, "enqueueDownload trackId=${track.id}: ${track.artist} — ${track.title} (${url.take(80)})")
+            AppLog.i(TAG, "enqueueDownload trackId=${track.id}: ${track.artist} — ${track.title}" +
+                (url?.let { " (${it.take(80)})" } ?: " (no URL — will resolve via audioGetById)"))
         }
 
         // Не запускать повторно если уже качается, в очереди или скачано
