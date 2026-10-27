@@ -5286,17 +5286,28 @@ class VKApiClient(
      *
      * @return ID созданной копии или -1L при ошибке.
      */
-    suspend fun audioSavePlaylistAsCopy(ownerId: Long, playlistId: Long): Long {
+    suspend fun audioSavePlaylistAsCopy(
+        ownerId: Long,
+        playlistId: Long,
+        // #ACCESS-KEY-FIX (2026-10-27): лог показал — плейлист id=-25 с access_key
+        // возвращал err=3 без access_key. VK требует access_key для чужих/ограниченных
+        // плейлистов (как и getPlaylistById). HAR #164 (id=-21 «Для вас») работал без
+        // access_key, т.к. это системный плейлист без access_key. Чужие плейлисты — нужно
+        // передавать access_key, иначе err=3 «Unknown method passed» (decoy для прав доступа).
+        accessKey: String? = null,
+    ): Long {
         if (isOffline()) return -1L
         // #SAVECOPY-WEB-GATEWAY (аудит 4-API-AUDIT D.1/D.5): HAR #164 подтверждает —
         // audio.savePlaylistAsCopy идёт через web.api.vk.ru и возвращает 200 OK.
         // НЕ как createPlaylist (лог err=3 на web-шлюзе). Различие: savePlaylistAsCopy
         // ВХОДИТ в allowlist web-шлюза, createPlaylist — НЕТ.
         // Возвращён forceWebGateway=true (ошибочно убран в a139a07 вместе с createPlaylist).
-        val json = call("audio.savePlaylistAsCopy", mapOf(
+        val args = mutableMapOf(
             "owner_id" to ownerId.toString(),
             "playlist_id" to playlistId.toString(),
-        ), forceWebGateway = true) ?: return -1L
+        )
+        if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
+        val json = call("audio.savePlaylistAsCopy", args, forceWebGateway = true) ?: return -1L
         return try {
             // #SAVE-COPY-FIX: response — сам плейлист (БЕЗ обёртки "playlist").
             json.getAsJsonObject("response")?.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: -1L

@@ -411,9 +411,13 @@ fun PlaylistDetailScreen(
                                                     // (refresh authByExchangeToken шлёт client_id=2274003 →
                                                     // web-шлюз прячет audio-WRITE → err=3). Фикс класса токена —
                                                     // в VKApiClient (#WEB-TOKEN-CLASS), здесь возвращаем эталон.
+                                                    // #ACCESS-KEY-FIX (2026-10-27): передаём access_key плейлиста
+                                                    // для чужих/ограниченных плейлистов. Без него VK возвращает
+                                                    // err=3 «Unknown method» (decoy для прав доступа).
                                                     val newId = app.apiClient.audioSavePlaylistAsCopy(
                                                         ownerId = pl.ownerId,
                                                         playlistId = pl.id,
+                                                        accessKey = pl.accessKey,
                                                     )
                                                     if (newId > 0L) {
                                                         android.widget.Toast.makeText(
