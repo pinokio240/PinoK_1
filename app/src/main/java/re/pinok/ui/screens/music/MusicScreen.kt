@@ -2458,12 +2458,17 @@ private fun MusicFriendCard(
     modifier: Modifier = Modifier,
 ) {
     // CatalogFriend.ownerId может быть null — карточка некликабельна (защита).
-    val friendOwnerId = friend.ownerId
+    // Smart cast: clickable = (friendOwnerId != null), Kotlin знает что внутри
+    // if (clickable) friendOwnerId не null.
+    val friendOwnerId: Long? = friend.ownerId
     val clickable = friendOwnerId != null
     Column(
         modifier = modifier.then(
-            if (clickable) Modifier.clickable { onOpenFriend(friendOwnerId!!, friend.name) }
-            else Modifier
+            if (clickable && friendOwnerId != null) {
+                Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
+            } else {
+                Modifier
+            }
         ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
