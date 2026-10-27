@@ -3577,10 +3577,13 @@ class VKApiClient(
         // P0.38 #MUSIC2-FRIENDS-PAGINATION: для friends-секции грузим ВСЕ страницы
         // (VK отдаёт по 20 друзей на страницу, всего ~81 друг). Для остальных секций
         // достаточно первой страницы — они меньше и пагинация не критична.
-        // #MUSIC-FRIENDS-FULL (2026-10-27, FIX): maxPages 10→50 (до 1000 друзей),
-        // И catalogGetSectionAllBlocks для friends НЕ дедуплицирует блоки (см. ниже).
+        // #MUSIC-FRIENDS-FULL (2026-10-27, FIX): БЕЗ ОГРАНИЧЕНИЙ maxPages — грузим
+        // пока VK не вернёт next_from=null. Страховка от бесконечного цикла —
+        // увеличение pages при пустом nf (break). Пользователь хочет полный список.
+        // dedupByBlockId=false: VK отдаёт один blockId на каждой странице с разными
+        // друзьями внутри (дедуп скипал все страницы кроме первой).
         if (section == "friends") {
-            return catalogGetSectionAllBlocks(sectionId, maxPages = 50, dedupByBlockId = false)
+            return catalogGetSectionAllBlocks(sectionId, maxPages = Int.MAX_VALUE, dedupByBlockId = false)
         }
         return catalogGetSectionById(sectionId, startFrom)
     }
@@ -3632,6 +3635,10 @@ class VKApiClient(
         if (isOffline() || sectionId.isBlank()) return emptyList()
         val all = ArrayList<re.pinok.data.model.CatalogBlock>()
         val seenBlockIds = HashSet<String>()
+        // #MUSIC-FRIENDS-FULL: защита от зацикливания при maxPages=Int.MAX_VALUE —
+        // запоминаем виденные next_from. Если VK вернёт уже виденный курсор → break
+        // (защита от бага VK с одинаковым next_from на разных страницах).
+        val seenNextFroms = HashSet<String>()
         var startFrom: String? = null
         var pages = 0
         while (pages < maxPages) {
@@ -3678,6 +3685,11 @@ class VKApiClient(
             AppLog.i("VKApiClient",
                 "#AUDIO-PAGING-ALL section: page=$pages blocks=+${blocks.size} (fresh=$fresh, all=${all.size}) nextFrom=${if (nf.isNullOrBlank()) "нет" else "есть"} dedup=$dedupByBlockId")
             if (nf.isNullOrBlank()) break
+            // #MUSIC-FRIENDS-FULL: защита от зацикливания — если курсор уже видели, break.
+            if (!seenNextFroms.add(nf)) {
+                AppLog.w("VKApiClient", "catalogGetSectionAllBlocks: next_from '$nf' already seen — break (loop protection)")
+                break
+            }
             startFrom = nf
         }
         return all
