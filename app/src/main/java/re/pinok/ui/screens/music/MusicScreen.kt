@@ -2458,13 +2458,14 @@ private fun MusicFriendCard(
     modifier: Modifier = Modifier,
 ) {
     // CatalogFriend.ownerId может быть null — карточка некликабельна (защита).
-    // Smart cast: clickable = (friendOwnerId != null), Kotlin знает что внутри
-    // if (clickable) friendOwnerId не null.
+    // Smart cast: проверяем friendOwnerId != null напрямую — Kotlin smart-cast'ит
+    // к Long в ветке if. Доп. переменная clickable не нужна (была причиной warning:
+    // 'Condition is always true' — clickable = (friendOwnerId != null), компилятор
+    // видит что при friendOwnerId != null clickable всегда true).
     val friendOwnerId: Long? = friend.ownerId
-    val clickable = friendOwnerId != null
     Column(
         modifier = modifier.then(
-            if (clickable && friendOwnerId != null) {
+            if (friendOwnerId != null) {
                 Modifier.clickable { onOpenFriend(friendOwnerId, friend.name) }
             } else {
                 Modifier
