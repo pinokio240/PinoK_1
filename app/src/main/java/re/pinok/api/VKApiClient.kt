@@ -13568,6 +13568,22 @@ class VKApiClient(
         skipTelemetryDrop: Boolean = false,
         overrideToken: String? = null,
     ): JsonObject? {
+        // #PROACTIVE-WEBVIEW-TOKEN (2026-10-27): для audio-WRITE методов
+        // проверяем наличие webviewAccessToken. Если пустой — запускаем
+        // proactive ensureFreshToken (который в фоне вызовет silentRefreshViaRemixsidLive
+        // и сохранит 7879029-class токен в KEY_WEBVIEW_ACCESS_TOKEN).
+        // Без этого audio.savePlaylistAsCopy → err=3 (OAuth токен 6287487
+        // не имеет audio-WRITE прав на web.api.vk.ru, а Fenrir-mode на api.vk.ru
+        // тоже err=3 без Fenrir-specific auth flow).
+        if (overrideToken == null && WEB_AUDIO_WRITE_METHODS.contains(method)) {
+            val er = exchangeAuthRepository
+            if (er != null) {
+                // ensureFreshToken содержит proactive-блок: если webviewAccessToken
+                // пустой + remixsid есть → запускает фоновый silentRefresh.
+                // Если webviewAccessToken уже есть — short-circuits (быстро).
+                try { er.ensureFreshToken() } catch (_: Exception) {}
+            }
+        }
         return callInternal(
             method, args, captchaAttempt = 0,
             skipOffline = skipOffline, silent = silent,
