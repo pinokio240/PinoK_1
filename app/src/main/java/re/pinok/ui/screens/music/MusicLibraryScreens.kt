@@ -369,31 +369,6 @@ fun PlaylistDetailScreen(
                                     Text("Скачать", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                 }
                             }
-                            // #PL-DATE-DISCRIM (2026-10-27): «Отменить загрузку» — показывается,
-                            // пока у этого плейлиста есть активный батч скачивания (QUEUED/DOWNLOADING
-                            // треки с подпапкой sanitize(title)/...). Останавливает весь батч.
-                            activeBatchDir?.let { batchDir ->
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(VK_CARD)
-                                        .clickable {
-                                            TrackDownloadManager.cancelPlaylistBatch(batchDir)
-                                            android.widget.Toast.makeText(
-                                                app.applicationContext,
-                                                "Скачивание плейлиста отменено",
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                        .padding(horizontal = 18.dp, vertical = 9.dp),
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Filled.Clear, null, tint = VK_ACCENT, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("Отменить загрузку", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                    }
-                                }
-                            }
                             // #SAVE-COPY: «Сохранить копию» — для ЧУЖИХ плейлистов (ownerId != myId).
                             // audio.savePlaylistAsCopy: 1 запрос, копирует плейлист целиком с cover/
                             // description/followers, новый id, title с датой (как в VK веб —
@@ -485,6 +460,32 @@ fun PlaylistDetailScreen(
                                             fontWeight = FontWeight.Medium,
                                         )
                                     }
+                                }
+                            }
+                        }
+                        // #PL-DATE-DISCRIM (2026-10-27): «Отменить загрузку» — отдельной строкой под
+                        // основными кнопками, чтобы не переполнять горизонтальный ряд
+                        // (на узких экранах 4 кнопки в Row не влезали и обрезались).
+                        activeBatchDir?.let { batchDir ->
+                            Box(
+                                modifier = Modifier
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(VK_CARD)
+                                    .clickable {
+                                        TrackDownloadManager.cancelPlaylistBatch(batchDir)
+                                        android.widget.Toast.makeText(
+                                            app.applicationContext,
+                                            "Скачивание плейлиста отменено",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                    .padding(horizontal = 18.dp, vertical = 9.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.Clear, null, tint = VK_ACCENT, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Отменить загрузку", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                 }
                             }
                         }
@@ -583,7 +584,7 @@ fun PlaylistDetailScreen(
                     }
                 } else {
                     item {
-                        AudioAttachmentList(tracks = tracks)
+AudioAttachmentList(tracks = tracks, showSaveHeader = false)
                     }
                 }
             }

@@ -75,7 +75,7 @@ import re.pinok.util.toDurationString
  * весь список. Теперь — одной кнопкой.
  */
 @Composable
-fun AudioAttachmentList(tracks: List<Track>) {
+fun AudioAttachmentList(tracks: List<Track>, showSaveHeader: Boolean = true) {
     if (tracks.isEmpty()) return
     // #AUDIO-COMMENTS (волна 37): резолв URL трека без url (audioGetById + al_audio).
     val context = LocalContext.current
@@ -95,32 +95,34 @@ fun AudioAttachmentList(tracks: List<Track>) {
         // #SAVE-PLAYLIST-FROM-POST: шапка блока с кнопкой «Сохранить как плейлист».
         // Показываем всегда (даже для 1 трека) — пользователь может захотеть
         // сохранить и один трек как плейлист.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (showSaveHeader) {
             Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
-                    .clickable { showSavePlaylistDialog = true }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "В плейлист",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                        .clickable { showSavePlaylistDialog = true }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "В плейлист",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
         }
 

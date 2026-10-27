@@ -4183,7 +4183,13 @@ class VKApiClient(
                         }
                         pages++
                         onProgress?.invoke(tracks.size, total)
-                        if (page.size < pageSize) break
+                        // #AUDIO-PAGING-HOLE-2 (2026-10-27): стоп по «короткой
+                        // странице» УБРАН — VK отдаёт страницы меньше pageSize
+                        // (кап ~33 inline/страницу даже при count=100), и это НЕ
+                        // конец плейлиста. Раньше `if (page.size < pageSize) break`
+                        // резал плейлисты на 33 треках (симптом: «почему только 33
+                        // из N»). Конец определяется: page.isEmpty() (выше) либо
+                        // tracks.size >= total (внутри audioGetPlaylistTracks).
                     }
                 }
                 onProgress?.invoke(tracks.size, if (total > 0) total else tracks.size)

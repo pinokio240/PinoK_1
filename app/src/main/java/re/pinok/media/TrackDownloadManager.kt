@@ -1880,7 +1880,7 @@ object TrackDownloadManager {
         while (true) {
             attempt++
             try {
-                downloadDirectWithResume(trackId, url, tempFile)
+                downloadDirectWithResume(trackId, url, tempFile, subDir, index, total)
                 // #AUDIO-INTEGRITY: валидация содержимого ПЕРЕД rename→COMPLETED.
                 // downloadDirectWithResume деревортит только Content-Length обрыв;
                 // но сервер может отдать ПОЛНЫЙ ответ с «битым» контентом (HTML-ошибка,
@@ -1951,7 +1951,14 @@ object TrackDownloadManager {
     }
 
     /** #39 C3: HTTP-загрузка MP3 с поддержкой Range-resume. */
-    private fun downloadDirectWithResume(trackId: Long, url: String, tempFile: File) {
+    private fun downloadDirectWithResume(
+        trackId: Long,
+        url: String,
+        tempFile: File,
+        subDir: String? = null,
+        index: Int? = null,
+        total: Int? = null,
+    ) {
         val existingBytes = if (tempFile.exists()) tempFile.length() else 0L
         val requestBuilder = Request.Builder().url(url)
         if (existingBytes > 0) {
