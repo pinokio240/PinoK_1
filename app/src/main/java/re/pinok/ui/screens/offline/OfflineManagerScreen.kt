@@ -331,6 +331,28 @@ fun OfflineManagerScreen(
     val queuePendingCount = TrackDownloadManager.getQueueSize()
     val queueActive = audioDownloads.values.any { it.isInProgress }
 
+    // #PL-DATE-DISCRIM (2026-10-27): активные батчи скачивания плейлистов.
+    // Группируем треки по subDir — для каждой группы показываем свой прогресс
+    // («Загружено N из M») и кнопку «Стоп» (cancelPlaylistBatch).
+    val activeBatches = remember(audioDownloads) {
+        audioDownloads.values
+            .filter { it.subDir != null }
+            .groupBy { it.subDir!! }
+            .map { (subDir, entries) ->
+                val total = entries.firstNotNullOfOrNull { it.total } ?: entries.size
+                val done = entries.count { it.status == DownloadStatus.COMPLETED }
+                PlaylistBatchInfo(
+                    subDir = subDir,
+                    total = total,
+                    done = done,
+                    remaining = entries.count {
+                        it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.DOWNLOADING
+                    },
+                )
+            }
+            .filter { it.remaining > 0 }
+    }
+
     // Fix #147: при открытии экрана проверяем соответствие сохранённого пути
     // загрузки текущему downloadDir. Если SD card отмонтирована или SAF
     // permission revoked после перезапуска — покажем banner (см. ниже).
@@ -494,7 +516,7 @@ fun OfflineManagerScreen(
         // Показывается, когда есть хоть что-то в очереди / идёт активная загрузка /
         // очередь стоит на паузе. Кнопки: «Пауза» ⇄ «Продолжить» и «Очистить очередь»
         // (с подтверждением). Рядом — счётчик ожидающих треков.
-        if (queueActive || queuePendingCount > 0 || queuePaused) {
+        if (queueActive || queuePendingCount > 0 || queuePaused || activeBatches.isNotEmpty()) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -559,6 +581,51 @@ fun OfflineManagerScreen(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text("Очистить очередь")
+                        }
+                    }
+                    // #PL-DATE-DISCRIM (2026-10-27): прогресс каждого активного плейлист-батча
+                    // с кнопкой «Стоп» (cancelPlaylistBatch). Одиночные загрузки (subDir == null)
+                    // этим списком не затрагиваются.
+                    activeBatches.forEach { batch ->
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = batch.subDir.substringAfterLast('/'),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "Загружено ${batch.done} из ${batch.total}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    TrackDownloadManager.cancelPlaylistBatch(batch.subDir)
+                                    Toast.makeText(
+                                        context,
+                                        "Загрузка плейлиста отменена",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.CloudOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("Стоп")
+                            }
                         }
                     }
                 }
@@ -836,6 +903,17 @@ private data class AudioOfflineItem(
     val file: File?,
     val lastModified: Long,
     val sizeBytes: Long,
+)
+
+/**
+ * #PL-DATE-DISCRIM (2026-10-27): агрегированный прогресс одного активного батча
+ * скачивания плейлиста (группа треков с одинаковым subDir).
+ */
+private data class PlaylistBatchInfo(
+    val subDir: String,
+    val total: Int,
+    val done: Int,
+    val remaining: Int,
 )
 
 /**

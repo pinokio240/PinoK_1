@@ -1217,6 +1217,13 @@ data class DownloadState(
     val artist: String = "",
     val ownerId: Long = 0,
     val deadSinceMs: Long? = null,
+    /** #VK-MUSIC-SAVER-PORT: подпапка плейлиста (относительный путь в downloads/music/),
+     *  null для одиночных загрузок. Группирует треки одного батча плейлиста. */
+    val subDir: String? = null,
+    /** Номер трека в плейлисте (1-based), null вне плейлиста. */
+    val index: Int? = null,
+    /** Всего треков в плейлисте-батче, null вне плейлиста. */
+    val total: Int? = null,
 ) {
     val isCompleted: Boolean get() = status == DownloadStatus.COMPLETED
     val isInProgress: Boolean get() = status == DownloadStatus.QUEUED || status == DownloadStatus.DOWNLOADING

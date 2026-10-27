@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -46,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,7 +67,9 @@ import re.pinok.data.model.CatalogPlaylist
 import re.pinok.data.model.CatalogViewType
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
+import re.pinok.media.FilenameBuilder
 import re.pinok.media.TrackDownloadManager
+import re.pinok.data.model.DownloadStatus
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.util.AppLog
 
@@ -247,6 +251,15 @@ fun PlaylistDetailScreen(
     var editTitle by remember { mutableStateOf("") }
     var editDescription by remember { mutableStateOf("") }
     var actionPending by remember { mutableStateOf(false) }
+    // #PL-DATE-DISCRIM (2026-10-27): следим за скачиванием этого плейлиста —
+    // чтобы показывать кнопку «Отменить загрузку» пока его батч активен.
+    val dlDownloads by TrackDownloadManager.downloads.collectAsState()
+    val activeBatchDir = remember(playlist, dlDownloads) {
+        val title = playlist?.title ?: return@remember null
+        val base = FilenameBuilder.sanitize(title).ifBlank { "playlist" }
+        dlDownloads.values.firstOrNull { it.subDir?.startsWith("$base/") == true &&
+            (it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.DOWNLOADING) }?.subDir
+    }
 
     LaunchedEffect(ownerId, playlistId, accessKey) {
         loading = true
@@ -354,6 +367,31 @@ fun PlaylistDetailScreen(
                                     Icon(Icons.Filled.Download, null, tint = VK_ACCENT, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("Скачать", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                            // #PL-DATE-DISCRIM (2026-10-27): «Отменить загрузку» — показывается,
+                            // пока у этого плейлиста есть активный батч скачивания (QUEUED/DOWNLOADING
+                            // треки с подпапкой sanitize(title)/...). Останавливает весь батч.
+                            activeBatchDir?.let { batchDir ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(VK_CARD)
+                                        .clickable {
+                                            TrackDownloadManager.cancelPlaylistBatch(batchDir)
+                                            android.widget.Toast.makeText(
+                                                app.applicationContext,
+                                                "Скачивание плейлиста отменено",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.Clear, null, tint = VK_ACCENT, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Отменить загрузку", color = VK_TEXT_PRIMARY, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    }
                                 }
                             }
                             // #SAVE-COPY: «Сохранить копию» — для ЧУЖИХ плейлистов (ownerId != myId).

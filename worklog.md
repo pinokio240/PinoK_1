@@ -24460,3 +24460,18 @@ Work Log:
   9. «Отметить не прочитанным» — есть.
 - Версия поднята 2.2.6 → 2.2.7 (code 227): app/build.gradle.kts, BuildStamp.kt (STAMP "calls-2026.10.26-2.2.7"), version.json (apkUrl v2.2.7, sha256 d50d6fb8701bd062e7763fde563650d4548c1faeee11b8aa8a71e3d450829272). Бэкап: backups/version-bump-2026-10-26/.
 - Prиватный ключ подписи version.json (seed 50f2d9…1fdef) НЕ в репозитории — подпись версии делает релиз-менеджер.
+
+---
+Task ID: SESSION-2026-10-27-SUMMARY
+Agent: main (MultiTool), 2026-10-27
+Task: Доработка скачивания плейлистов батчем — подпапка с датой, прогресс, стоп, фикс гонки.
+
+Work Log:
+- enqueuePlaylistDownload (TrackDownloadManager.kt): создаёт вложенную папку downloads/music/<sanitize(title)>/<yyyy-MM-dd>/ через SimpleDateFormat (minSdk 24 — без java.time). При коллизии даты — суффикс (2),(3) через resolveSubdirName.
+- DownloadState (Models.kt) дополнен полями subDir/index/total; прокидываются через все updateState (QUEUED/DOWNLOADING/COMPLETED/FAILED, URL-resolve, restore).
+- cancelPlaylistBatch(subDir): удаляет треки батча из pendingQueue, отменяет активный через activeJobs, снимает их из _downloads, переписывает персистентную очередь.
+- isPlaylistBatchActive(subDir) — для UI.
+- UI: OfflineManagerScreen — пери-батч прогресс «Загружено N из M» + кнопка «Стоп»; PlaylistDetailScreen (MusicLibraryScreens.kt) — кнопка «Отменить загрузку».
+- Фикс дубля метода isPlaylistBatchActive (объявлен дважды → ошибка компиляции; удалён второй).
+- Фикс микро-гонки прогресса при отмене батча (#CANCEL-BATCH-RACE): добавлено @Volatile cancelledBatches: Set<String>; cancelPlaylistBatch помечает subDir отменённым ПЕРВЫМ; updateState игнорирует записи для отменённых subDir — корутина активного трека не «воскрешает» трек в _downloads после фильтрации.
+- Сборка НЕ запускалась (по правилу — только с разрешения пользователя). Живая проверка на устройстве — за пользователем.

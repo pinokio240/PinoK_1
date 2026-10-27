@@ -21,6 +21,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import okhttp3.OkHttpClient
@@ -112,6 +115,11 @@ object TrackDownloadManager {
     @Volatile
     private var documentFileTreeUri: android.net.Uri? = null
     private val activeJobs = ConcurrentHashMap<Long, kotlinx.coroutines.Job>()
+    // #CANCEL-BATCH-RACE (2026-10-27): subDir-и отменённых плейлист-батчей.
+    // updateState игнорирует записи для этих путей, чтобы корутина активного
+    // трека не «воскресила» его в _downloads после cancelPlaylistBatch.
+    @Volatile
+    private var cancelledBatches: Set<String> = emptySet()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -622,7 +630,16 @@ object TrackDownloadManager {
             return
         }
         val subDirName = FilenameBuilder.sanitize(playlistTitle).ifBlank { "playlist" }
-        val subDir = File(downloadDir, subDirName)
+        // #PL-DATE-DISCRIM (2026-10-27): вложенная дата-папка, чтобы повторная
+        // загрузка того же плейлиста не перезаписывала предыдущую.
+        // Дискриминатор — системная дата (yyyy-MM-dd). Дата нужна ТОЛЬКО на диске
+        // (не для пользователя), поэтому SimpleDateFormat с Locale.US — стабильно
+        // и совместимо с minSdk 24 (java.time без desugaring недоступен).
+        // При повторе в ту же дату существующая папка не трогается — создаётся
+        // новый экземпляр с суффиксом (2), (3) — как в FilenameBuilder.resolveCollision.
+        val dateStamp = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val datedName = resolveSubdirName(subDirName, dateStamp)
+        val subDir = File(downloadDir, datedName)
         if (!subDir.exists() && !subDir.mkdirs()) {
             AppLog.w(TAG, "enqueuePlaylistDownload: cannot create folder ${subDir.absolutePath} — fallback to flat downloadDir")
             tracks.forEach { enqueueRequest(DownloadRequest(it), silent = false) }
@@ -631,9 +648,25 @@ object TrackDownloadManager {
         writeTracklist(subDir, tracks)
         downloadPlaylistCover(subDir, coverUrl)
         tracks.forEachIndexed { i, track ->
-            enqueueRequest(DownloadRequest(track, subDirName, i + 1, tracks.size), silent = false)
+            enqueueRequest(DownloadRequest(track, datedName, i + 1, tracks.size), silent = false)
         }
-        AppLog.i(TAG, "enqueuePlaylistDownload: '$playlistTitle' → ${tracks.size} tracks into '$subDirName/'")
+        AppLog.i(TAG, "enqueuePlaylistDownload: '$playlistTitle' → ${tracks.size} tracks into '$datedName/'")
+    }
+
+    /**
+     * #PL-DATE-DISCRIM: уникальная подпапка плейлиста `$sanitized/$yyyy-MM-dd` с
+     * коллизий-суффиксом. Если папка с такой датой уже есть (там лежит .meta —
+     * т.е. треки уже качались сегодня) — берём `(2)`, `(3)` и т.д.
+     */
+    private fun resolveSubdirName(base: String, dateStamp: String): String {
+        val candidate = "$base/$dateStamp"
+        if (!File(downloadDir, candidate).isDirectory) return candidate
+        var i = 2
+        while (true) {
+            val next = "$base/$dateStamp ($i)"
+            if (!File(downloadDir, next).isDirectory) return next
+            i++
+        }
     }
 
     private fun enqueueRequest(request: DownloadRequest, silent: Boolean = false) {
@@ -668,6 +701,9 @@ object TrackDownloadManager {
             title = track.title,
             artist = track.artist,
             ownerId = track.ownerId,
+            subDir = request.subDir,
+            index = request.index,
+            total = request.total,
         ))
         // Fix #134: ВСЕ загрузки (включая silent авто-кеш) запускают foreground
         // service. Раньше silent=true НЕ запускал MusicDownloadService → на
@@ -797,7 +833,8 @@ object TrackDownloadManager {
                 AppLog.w(TAG, "queue: track #${track.id} — URL resolve failed — FAILED(NETWORK)")
                 updateState(track.id, DownloadState(track.id, DownloadStatus.FAILED, 0,
                     reason = "Не удалось получить ссылку на трек (нет сети или трек недоступен)",
-                    failReason = FailReason.NETWORK))
+                    failReason = FailReason.NETWORK,
+                    subDir = request.subDir, index = request.index, total = request.total))
                 maybeStopForegroundService()
                 return
             }
@@ -806,7 +843,8 @@ object TrackDownloadManager {
                 AppLog.w(TAG, "queue: track #${track.id} — audioGetById вернул трек без url — FAILED(NETWORK)")
                 updateState(track.id, DownloadState(track.id, DownloadStatus.FAILED, 0,
                     reason = "Трек недоступен (VK не вернул ссылку)",
-                    failReason = FailReason.NETWORK))
+                    failReason = FailReason.NETWORK,
+                    subDir = request.subDir, index = request.index, total = request.total))
                 maybeStopForegroundService()
                 return
             }
@@ -846,7 +884,8 @@ object TrackDownloadManager {
                                 updateState(currentTrack.id, DownloadState(currentTrack.id,
                                     DownloadStatus.FAILED, 0,
                                     reason = "Файл повреждён (не проходит валидацию после $retryCount повторов)",
-                                    failReason = re.pinok.data.model.FailReason.UNKNOWN))
+                                    failReason = re.pinok.data.model.FailReason.UNKNOWN,
+                                    subDir = request.subDir, index = request.index, total = request.total))
                             }
                             break
                         }
@@ -873,7 +912,8 @@ object TrackDownloadManager {
                                 updateState(currentTrack.id, DownloadState(currentTrack.id,
                                     DownloadStatus.FAILED, 0,
                                     reason = "Не удалось пере-получить ссылку для повтора (контент повреждён)",
-                                    failReason = re.pinok.data.model.FailReason.NETWORK))
+                                    failReason = re.pinok.data.model.FailReason.NETWORK,
+                                    subDir = request.subDir, index = request.index, total = request.total))
                             }
                             break
                         }
@@ -898,7 +938,8 @@ object TrackDownloadManager {
                     val deadTs = if (fr == re.pinok.data.model.FailReason.DEAD_URL)
                         System.currentTimeMillis() else null
                     updateState(track.id, DownloadState(track.id, DownloadStatus.FAILED, 0,
-                        reason = t.message, failReason = fr, deadSinceMs = deadTs))
+                        reason = t.message, failReason = fr, deadSinceMs = deadTs,
+                        subDir = request.subDir, index = request.index, total = request.total))
                 }
             } finally {
                 activeJobs.remove(track.id)
@@ -1137,6 +1178,77 @@ object TrackDownloadManager {
         // ещё активен — сервис останется до его завершения).
         maybeStopForegroundService()
         AppLog.i(TAG, "OFFQ: clearPendingQueue done (cleared=$cleared, queueSize=${pendingQueue.size})")
+    }
+
+    /**
+     * #PL-DATE-DISCRIM (2026-10-27): отменить всю загрузку плейлиста-батча.
+     *
+     * Удаляет из [pendingQueue] все треки заданной подпапки [subDir] (например
+     * "Playlist/2026-10-27") и снимает их QUEUED-статусы из _downloads. Активный
+     * DOWNLOADING-трек этого батча (если есть) отменяется через activeJobs —
+     * partial-файлы НЕ удаляются (переживут до удаления вручную / повторной
+     * загрузки). Уже скачанные COMPLETED-треки батча сохраняются.
+     *
+     * Персистентная очередь перезаписывается, чтобы отменённые треки не
+     * resurrectились при следующем старте (#DL-DISPATCH-RESTORE).
+     */
+    fun cancelPlaylistBatch(subDir: String?) {
+        ensureInitialized()
+        if (subDir == null) return
+
+        // 0) Пометить батч отменённым ПЕРВЫМ — до удаления из очереди/активных.
+        //    updateState для треков этого subDir теперь игнорируется (#CANCEL-BATCH-RACE),
+        //    поэтому корутина активного трека не сможет «воскресить» статус после
+        //    фильтрации в шаге 3.
+        cancelledBatches = cancelledBatches + subDir
+
+        // 1) Убрать ожидающие треки батча из очереди.
+        var cancelled = 0
+        val cancelledIds = mutableListOf<Long>()
+        val it = pendingQueue.iterator()
+        while (it.hasNext()) {
+            val req = it.next()
+            if (req.subDir == subDir) {
+                it.remove()
+                cancelledIds.add(req.track.id)
+                cancelled++
+            }
+        }
+
+        // 2) Отменить активный трек батча, если он сейчас скачивается.
+        val activeId = _downloads.value.entries
+            .firstOrNull { it.value.subDir == subDir && it.value.status == DownloadStatus.DOWNLOADING }
+            ?.key
+        if (activeId != null) {
+            activeJobs[activeId]?.cancel()
+            activeJobs.remove(activeId)
+            cancelledIds.add(activeId)
+            cancelled++
+        }
+
+        // 3) Снять статусы отменённых треков (больше не «висим» в QUEUED/DOWNLOADING).
+        if (cancelledIds.isNotEmpty()) {
+            val idSet = cancelledIds.toSet()
+            _downloads.update { current -> current.filterKeys { it !in idSet } }
+        }
+
+        AppLog.i(TAG, "cancelPlaylistBatch: '$subDir' — removed $cancelled queued/active track(s)")
+
+        // 4) Персистентная очередь — отменённые треки не должны восстановиться.
+        schedulePersistQueue("cancel batch $subDir")
+        maybeStopForegroundService()
+    }
+
+    /**
+     * #PL-DATE-DISCRIM: активна ли загрузка плейлиста-батча (есть QUEUED или
+     * DOWNLOADING трек с подпапкой [subDir]). Используется UI для показа кнопки
+     * «Отменить загрузку».
+     */
+    fun isPlaylistBatchActive(subDir: String?): Boolean {
+        if (subDir == null) return false
+        return _downloads.value.values.any {
+            it.subDir == subDir && (it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.DOWNLOADING)
+        }
     }
 
     /**
@@ -1425,6 +1537,17 @@ object TrackDownloadManager {
         // Раньше `_downloads.value = _downloads.value + (id to state)` —
         // non-atomic read-modify-write: concurrent enqueueDownload + auto-cache +
         // segment-progress updates теряли записи. update{} атомарен.
+        // #CANCEL-BATCH-RACE (2026-10-27): если батч отменён (cancelPlaylistBatch),
+        // НЕ пишем в _downloads никакие обновления для его треков — иначе после
+        // фильтрации корутина активного трека в finally вернёт его обратно
+        // (COMPLETED/FAILED/прогресс) — «микро-гонка». Проверка по subDir:
+        // путь содержит дату и уникален, повторная загрузка создаёт новый subDir.
+        val batchedSubDir = state.subDir
+        if (batchedSubDir != null && batchedSubDir in cancelledBatches) {
+            AppLog.v(TAG, "updateState: skip #$trackId — batch '$batchedSubDir' cancelled")
+            return
+        }
+
         // Сохраняем метаданные (title, artist, ownerId) из предыдущего состояния
         var merged = state
         _downloads.update { current ->
@@ -1671,6 +1794,9 @@ object TrackDownloadManager {
                 title = restoredTrack.title,
                 artist = restoredTrack.artist,
                 ownerId = restoredTrack.ownerId,
+                subDir = entry.subDir,
+                index = entry.index,
+                total = entry.total,
             ))
             pendingQueue.add(DownloadRequest(restoredTrack, entry.subDir, entry.index, entry.total))
             restored++
@@ -1741,7 +1867,8 @@ object TrackDownloadManager {
         index: Int? = null,
         total: Int? = null,
     ) {
-        updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, 0))
+        updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, 0,
+            subDir = subDir, index = index, total = total))
 
         val tempFile = File(downloadDir, "$trackId.mp3.tmp")
         val targetFile = File(downloadDir, "$trackId.mp3")
@@ -1804,7 +1931,8 @@ object TrackDownloadManager {
                 // для быстрого воспроизведения (ExoPlayer → Uri.fromFile).
                 copyToSdCardIfNeeded(trackId, finalFile, finalFilename?.substringAfterLast('/'))
                 updateState(trackId, DownloadState(trackId, DownloadStatus.COMPLETED, 100,
-                    title = track.title, artist = track.artist, ownerId = track.ownerId, codec = "mp3"))
+                    title = track.title, artist = track.artist, ownerId = track.ownerId, codec = "mp3",
+                    subDir = subDir, index = index, total = total))
                 AppLog.i(TAG, "Трек #$trackId скачан (direct, attempt $attempt, codec=mp3)")
                 return
             } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -1859,7 +1987,8 @@ object TrackDownloadManager {
                         if (totalBytes > 0) {
                             val progress = ((bytesRead.toFloat() / totalBytes.toFloat()) * 100f)
                                 .toInt().coerceIn(0, 100)
-                            updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, progress))
+updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, progress,
+                    subDir = subDir, index = index, total = total))
                         }
                     }
                 }
@@ -2098,7 +2227,8 @@ object TrackDownloadManager {
         total: Int? = null,
     ) {
         // Шаг 1: скачиваем m3u8-плейлист
-        updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, 0))
+        updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, 0,
+            subDir = subDir, index = index, total = total))
         AppLog.i(TAG, "HLS track #$trackId: fetching playlist from ${playlistUrl.take(80)}")
 
         val playlistContent = fetchText(playlistUrl)
@@ -2159,7 +2289,8 @@ object TrackDownloadManager {
                 completedSegments.incrementAndGet()
                 val progress = ((completedSegments.get().toFloat() / totalSegments.toFloat()) * 100f)
                     .toInt().coerceIn(0, 99)
-                updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, progress))
+                updateState(trackId, DownloadState(trackId, DownloadStatus.DOWNLOADING, progress,
+                    subDir = subDir, index = index, total = total))
                 segFile.length()
             }
         }
@@ -2446,7 +2577,8 @@ object TrackDownloadManager {
         // завершённую загрузку (кнопка «скачано», список «Скачанная музыка»,
         // isDownloaded=false до рестарта). Теперь фиксируем COMPLETED.
         updateState(trackId, DownloadState(trackId, DownloadStatus.COMPLETED, 100,
-            title = track.title, artist = track.artist, ownerId = track.ownerId, codec = codec))
+            title = track.title, artist = track.artist, ownerId = track.ownerId, codec = codec,
+            subDir = subDir, index = index, total = total))
         AppLog.i(TAG, "HLS track #$trackId: COMPLETED — $totalSegments segments, ${finalSize / 1024} KB, encrypted=${keyBytes != null}, codec=$codec, path=${finalFile.name}")
         } finally {
             // #BT-37SEC-FIX: всегда чистим segDir в finally — если merge уже
