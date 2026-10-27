@@ -233,7 +233,7 @@ fun MusicScreen(
     val friendsEndReachedTrigger by remember {
         derivedStateOf {
             val last = friendsListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = friendsListState.layoutInfo.totalItemsNumber
+            val total = friendsListState.layoutInfo.totalItemsCount
             total > 0 && last >= total - 10
         }
     }
@@ -2516,9 +2516,12 @@ private fun MusicFriendCard(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-        if (!friend.status.isNullOrBlank()) {
+        // #SMART-CAST-FIX (2026-10-27): Friend.status — public property из
+        // другого модуля (core/data), smart cast невозможен. Локальная val.
+        val friendStatus = friend.status
+        if (!friendStatus.isNullOrBlank()) {
             Text(
-                friend.status,
+                friendStatus,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp,
