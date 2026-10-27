@@ -28,6 +28,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 // #AUTH-FIRST-OPEN-GUEST: иконка меню для guest-режима (открывает guest-drawer).
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Pause
@@ -96,11 +98,20 @@ private const val TAG = "OfflineManagerScreen"
  * TITLE_AZ — по алфавиту (title),
  * ARTIST_AZ — по исполнителю (только аудио).
  */
-enum class OfflineSortOption(val label: String) {
-    DATE_NEW("Сначала новые"),
-    SIZE_BIG("Сначала большие"),
-    TITLE_AZ("По названию (А-Я)"),
-    ARTIST_AZ("По исполнителю (А-Я)"),
+enum class OfflineSortOption(val labelAsc: String, val labelDesc: String) {
+    DATE_NEW("Сначала старые", "Сначала новые"),
+    SIZE_BIG("Сначала маленькие", "Сначала большие"),
+    TITLE_AZ("По названию (Я-А)", "По названию (А-Я)"),
+    ARTIST_AZ("По исполнителю (Я-А)", "По исполнителю (А-Я)"),
+}
+
+/**
+ * #OFFLINE-SORT-TOGGLE (2026-10-27): состояние сортировки = option + направление.
+ * При повторном тапе на активном option — инвертируем ascending.
+ * label зависит от направления (см. OfflineSortOption.labelAsc/labelDesc).
+ */
+data class OfflineSortState(val option: OfflineSortOption, val ascending: Boolean = false) {
+    val label: String get() = if (ascending) option.labelAsc else option.labelDesc
 }
 
 /**
@@ -308,11 +319,14 @@ fun OfflineManagerScreen(
     var storyQuery by remember { mutableStateOf("") }
     // §37.12 #330: query для вкладки Клипы.
     var clipQuery by remember { mutableStateOf("") }
-    var audioSort by remember { mutableStateOf(OfflineSortOption.DATE_NEW) }
-    var videoSort by remember { mutableStateOf(OfflineSortOption.DATE_NEW) }
-    var storySort by remember { mutableStateOf(OfflineSortOption.DATE_NEW) }
+    // #OFFLINE-SORT-TOGGLE (2026-10-27): состояние сортировки = OfflineSortState
+    // (option + ascending). При повторном тапе на активной опции — инвертируем
+    // направление. Default: DATE_NEW descending («Сначала новые»).
+    var audioSort by remember { mutableStateOf(OfflineSortState(OfflineSortOption.DATE_NEW, ascending = false)) }
+    var videoSort by remember { mutableStateOf(OfflineSortState(OfflineSortOption.DATE_NEW, ascending = false)) }
+    var storySort by remember { mutableStateOf(OfflineSortState(OfflineSortOption.DATE_NEW, ascending = false)) }
     // §37.12 #330: сортировка для clips (по умолчанию DATE_NEW).
-    var clipSort by remember { mutableStateOf(OfflineSortOption.DATE_NEW) }
+    var clipSort by remember { mutableStateOf(OfflineSortState(OfflineSortOption.DATE_NEW, ascending = false)) }
 
     // Fix #167: state для диалогов проверки кэша.
     var scanMenuOpen by remember { mutableStateOf(false) }
@@ -822,8 +836,8 @@ fun OfflineManagerScreen(
 private fun SearchSortBar(
     query: String,
     onQueryChange: (String) -> Unit,
-    sort: OfflineSortOption,
-    onSortChange: (OfflineSortOption) -> Unit,
+    sort: OfflineSortState,
+    onSortChange: (OfflineSortState) -> Unit,
     sortOptions: List<OfflineSortOption>,
     totalCount: Int,
 ) {
@@ -872,16 +886,45 @@ private fun SearchSortBar(
                 expanded = sortMenuOpen,
                 onDismissRequest = { sortMenuOpen = false },
             ) {
+                // #OFFLINE-SORT-TOGGLE (2026-10-27): каждое option показывает
+                // ДВА возможных состояния (labelAsc + labelDesc). При тапе:
+                //   - если option НЕ активен → выбрать option с default (descending)
+                //   - если option активен → инвертировать ascending (toggle)
+                // Активный пункт показывает стрелку ↑/↓ текущего направления и bold.
+                // Текст пункта = текущее состояние option (а не «что будет при тапе»),
+                // чтобы пользователь видел, в каком режиме он находится.
                 sortOptions.forEach { option ->
+                    val isActive = option == sort.option
+                    // Label пункта: если активен — текущий label, иначе default (desc).
+                    val itemLabel = if (isActive) sort.label else option.labelDesc
                     DropdownMenuItem(
                         text = {
-                            Text(
-                                text = option.label,
-                                fontWeight = if (option == sort) FontWeight.Bold else FontWeight.Normal,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = itemLabel,
+                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                )
+                                // Стрелка-индикатор активного направления.
+                                if (isActive) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Icon(
+                                        imageVector = if (sort.ascending) Icons.Filled.ArrowUpward else Icons.Filled.ArrowDownward,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
                         },
                         onClick = {
-                            onSortChange(option)
+                            if (isActive) {
+                                // Тап на активной опции — инвертируем направление.
+                                // Label кнопки изменится на противоположный (см. enum labelAsc/labelDesc).
+                                onSortChange(sort.copy(ascending = !sort.ascending))
+                            } else {
+                                // Тап на новой опции — выбираем с default (descending).
+                                onSortChange(OfflineSortState(option, ascending = false))
+                            }
                             sortMenuOpen = false
                         },
                     )
@@ -976,8 +1019,8 @@ private fun AudioOfflineTab(
     items: List<AudioOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
-    sort: OfflineSortOption,
-    onSortChange: (OfflineSortOption) -> Unit,
+    sort: OfflineSortState,
+    onSortChange: (OfflineSortState) -> Unit,
     /** Fix #50: открывает [OfflineAudioPlayerScreen] при тапе. */
     onOpenPlayer: () -> Unit = {},
 ) {
@@ -1000,11 +1043,13 @@ private fun AudioOfflineTab(
                         item.state.displayText.lowercase().contains(q)
                 }
             }
-            when (sort) {
-                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.lastModified }
-                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
-                OfflineSortOption.TITLE_AZ -> filtered.sortedBy { it.state.title.lowercase() }
-                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { it.state.artist.lowercase() }
+            // #OFFLINE-SORT-TOGGLE: направление зависит от sort.ascending.
+            // descending (default) = новые/большие/А-Я; ascending = старые/маленькие/Я-А.
+            when (sort.option) {
+                OfflineSortOption.DATE_NEW -> if (sort.ascending) filtered.sortedBy { it.lastModified } else filtered.sortedByDescending { it.lastModified }
+                OfflineSortOption.SIZE_BIG -> if (sort.ascending) filtered.sortedBy { it.sizeBytes } else filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> if (sort.ascending) filtered.sortedByDescending { it.state.title.lowercase() } else filtered.sortedBy { it.state.title.lowercase() }
+                OfflineSortOption.ARTIST_AZ -> if (sort.ascending) filtered.sortedByDescending { it.state.artist.lowercase() } else filtered.sortedBy { it.state.artist.lowercase() }
             }
         }
     }
@@ -1113,8 +1158,8 @@ private fun VideoOfflineTab(
     items: List<VideoOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
-    sort: OfflineSortOption,
-    onSortChange: (OfflineSortOption) -> Unit,
+    sort: OfflineSortState,
+    onSortChange: (OfflineSortState) -> Unit,
     onPlayVideo: ((ownerId: Long, videoId: Long, title: String) -> Unit)?,
 ) {
     // #NULL-EXPLICIT: захват nullable-параметра в локальный val для смарт-каста.
@@ -1130,12 +1175,12 @@ private fun VideoOfflineTab(
             val filtered = if (q.isEmpty()) loaded else {
                 loaded.filter { it.state.title.lowercase().contains(q) }
             }
-            when (sort) {
-                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.lastModified }
-                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
-                OfflineSortOption.TITLE_AZ -> filtered.sortedBy { it.state.title.lowercase() }
+            when (sort.option) {
+                OfflineSortOption.DATE_NEW -> if (sort.ascending) filtered.sortedBy { it.lastModified } else filtered.sortedByDescending { it.lastModified }
+                OfflineSortOption.SIZE_BIG -> if (sort.ascending) filtered.sortedBy { it.sizeBytes } else filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> if (sort.ascending) filtered.sortedByDescending { it.state.title.lowercase() } else filtered.sortedBy { it.state.title.lowercase() }
                 // Для видео ARTIST_AZ не имеет смысла — fallback на TITLE_AZ.
-                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { it.state.title.lowercase() }
+                OfflineSortOption.ARTIST_AZ -> if (sort.ascending) filtered.sortedByDescending { it.state.title.lowercase() } else filtered.sortedBy { it.state.title.lowercase() }
             }
         }
     }
@@ -1347,8 +1392,8 @@ private fun StoryOfflineTab(
     items: List<StoryOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
-    sort: OfflineSortOption,
-    onSortChange: (OfflineSortOption) -> Unit,
+    sort: OfflineSortState,
+    onSortChange: (OfflineSortState) -> Unit,
     /**
      * Fix #111: Колбэк воспроизведения story из кэша.
      * null = guest-режим, тап по строке игнорируется (canPlay = false).
@@ -1369,11 +1414,11 @@ private fun StoryOfflineTab(
             val filtered = if (q.isEmpty()) loaded else {
                 loaded.filter { (it.meta?.ownerName ?: it.state.title).lowercase().contains(q) }
             }
-            when (sort) {
-                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.dateKey }
-                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
-                OfflineSortOption.TITLE_AZ -> filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
-                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
+            when (sort.option) {
+                OfflineSortOption.DATE_NEW -> if (sort.ascending) filtered.sortedBy { it.dateKey } else filtered.sortedByDescending { it.dateKey }
+                OfflineSortOption.SIZE_BIG -> if (sort.ascending) filtered.sortedBy { it.sizeBytes } else filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> if (sort.ascending) filtered.sortedByDescending { (it.meta?.ownerName ?: it.state.title).lowercase() } else filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
+                OfflineSortOption.ARTIST_AZ -> if (sort.ascending) filtered.sortedByDescending { (it.meta?.ownerName ?: it.state.title).lowercase() } else filtered.sortedBy { (it.meta?.ownerName ?: it.state.title).lowercase() }
             }
         }
     }
@@ -1613,8 +1658,8 @@ private fun ClipOfflineTab(
     items: List<ClipOfflineItem>?,
     query: String,
     onQueryChange: (String) -> Unit,
-    sort: OfflineSortOption,
-    onSortChange: (OfflineSortOption) -> Unit,
+    sort: OfflineSortState,
+    onSortChange: (OfflineSortState) -> Unit,
     /**
      * §37.12 #330: Колбэк воспроизведения clip из кэша.
      * null = guest-режим, тап по строке игнорируется (canPlay = false).
@@ -1645,14 +1690,18 @@ private fun ClipOfflineTab(
                         item.state.title.lowercase().contains(q)
                 }
             }
-            when (sort) {
-                OfflineSortOption.DATE_NEW -> filtered.sortedByDescending { it.dateKey }
-                OfflineSortOption.SIZE_BIG -> filtered.sortedByDescending { it.sizeBytes }
-                OfflineSortOption.TITLE_AZ -> filtered.sortedBy {
+            when (sort.option) {
+                OfflineSortOption.DATE_NEW -> if (sort.ascending) filtered.sortedBy { it.dateKey } else filtered.sortedByDescending { it.dateKey }
+                OfflineSortOption.SIZE_BIG -> if (sort.ascending) filtered.sortedBy { it.sizeBytes } else filtered.sortedByDescending { it.sizeBytes }
+                OfflineSortOption.TITLE_AZ -> if (sort.ascending) filtered.sortedByDescending {
+                    (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
+                } else filtered.sortedBy {
                     (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
                 }
                 // Для clips ARTIST_AZ не имеет смысла — fallback на TITLE_AZ (mirror video).
-                OfflineSortOption.ARTIST_AZ -> filtered.sortedBy {
+                OfflineSortOption.ARTIST_AZ -> if (sort.ascending) filtered.sortedByDescending {
+                    (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
+                } else filtered.sortedBy {
                     (it.meta?.title?.ifBlank { null } ?: it.state.title).lowercase()
                 }
             }
