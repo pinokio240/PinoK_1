@@ -669,6 +669,22 @@ fun BookmarksScreen(
                                 bm = bm,
                                 onLongClick = { removeTarget = bm },
                                 onRemoveClick = { removeTarget = bm },
+                                // #BOOKMARK-AUTHOR-NAV (2026-10-27): клик по автору поста —
+                                // переход в сообщество (postGroup) или профиль (postAuthor).
+                                // Раньше onAuthorClick = onClick — ведёт в пост, не в профиль/группу.
+                                onAuthorClick = bm.post?.let { p ->
+                                    {
+                                        val g = bm.postGroup
+                                        val u = bm.postAuthor
+                                        when {
+                                            g != null -> onGroupClick?.invoke(g.id)
+                                            u != null -> onUserClick?.invoke(u.id)
+                                            // Fallback: если owner_id<0 — сообщество, иначе пользователь.
+                                            p.fromId < 0L -> onGroupClick?.invoke(-p.fromId)
+                                            p.fromId > 0L -> onUserClick?.invoke(p.fromId)
+                                        }
+                                    }
+                                },
                                 // FIX-POST-CONTEXT: «Перейти к посту» — открывает
                                 // PostDetailScreen (как тап по телу поста), а НЕ
                                 // CommunityScreen. Раньше вызывал onGroupClick →
@@ -853,6 +869,9 @@ private fun BookmarkRow(
     onPostContextClick: (() -> Unit)? = null,
     // WALL-DELETE: удаление поста (wall.delete) — только для постов с canDelete=true.
     onDeletePost: (() -> Unit)? = null,
+    // #BOOKMARK-AUTHOR-NAV (2026-10-27): клик по автору (аватар/имя) — переход
+    // в профиль/сообщество. Передаётся только в BookmarkPostCard.
+    onAuthorClick: (() -> Unit)? = null,
 ) {
     // #BOOKMARKS-SMARTCAST: свойства Bookmark (video/post/user/group/link) — public
     // из core/data, поэтому smart-cast невозможен; берём в локальные val (nullable).
@@ -882,6 +901,8 @@ private fun BookmarkRow(
                 onClick = onClick,
                 onPostContextClick = onPostContextClick,
                 onDeletePost = onDeletePost,
+                // #BOOKMARK-AUTHOR-NAV: передаём навигацию по автору.
+                onAuthorClick = onAuthorClick,
             )
         } else {
             BookmarkGenericRow(bm, onLongClick, onRemoveClick, onClick)
@@ -1030,6 +1051,10 @@ private fun BookmarkPostCard(
     onPostContextClick: (() -> Unit)? = null,
     // WALL-DELETE: удаление поста (wall.delete) — только если canDelete=true.
     onDeletePost: (() -> Unit)? = null,
+    // #BOOKMARK-AUTHOR-NAV (2026-10-27): клик по автору (аватар/имя) — переход
+    // в профиль пользователя (postAuthor.id) или сообщество (postGroup.id).
+    // Раньше onAuthorClick = onClick — ведёт в пост, не в профиль/группу.
+    onAuthorClick: (() -> Unit)? = null,
 ) {
     // NULL-ЯВНО: автор поста в закладке — из postAuthor/postGroup (fill через
     // fave.get extended profiles/groups), fallback на bm.user (легаси).
@@ -1047,6 +1072,10 @@ private fun BookmarkPostCard(
         else -> typeLabel(bm.type)
     }
     val authorPhoto = if (author != null) author.photo100 else postGroup?.photo100
+    // #BOOKMARK-AUTHOR-NAV: навигация по клику на автора.
+    // Если задан onAuthorClick — используем его (пользователь передаст навигацию).
+    // Иначе fallback на onClick (старое поведение — ведёт в пост).
+    val effectiveAuthorClick = onAuthorClick ?: onClick
     // POSTCARD-REFACTOR-PLAN (этап 3f): BookmarkPostCard — обёртка-делегат
     // единого PostCard. Закладка на карточке (isBookmarked=true) снимает её
     // (onToggleBookmark = onRemoveClick). Открытие поста/вложений — onClick.
@@ -1062,8 +1091,10 @@ private fun BookmarkPostCard(
         isBookmarked = true,
         onToggleBookmark = onRemoveClick,
         verified = false,
-        // В закладках клик по автору тоже ведёт в пост (как остальное тело).
-        onAuthorClick = onClick,
+        // #BOOKMARK-AUTHOR-NAV (2026-10-27): клик по автору (аватар/имя) —
+        // переход в профиль пользователя или сообщество (через effectiveAuthorClick).
+        // Раньше onAuthorClick = onClick — ведёт в пост, не в профиль/группу.
+        onAuthorClick = effectiveAuthorClick,
         onPostClick = { onClick() },
         // AUTHOR-STRIP: проброс клика полоски «Перейти к посту» в единый PostCard.
         onPostContextClick = onPostContextClick,
