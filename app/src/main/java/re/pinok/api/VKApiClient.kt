@@ -13713,6 +13713,16 @@ class VKApiClient(
             allParams["https"] = "1"
             allParams["access_token"] = tk
             allParams["lang"] = "ru"
+            // #FENRIR-DEVICE-ID (2026-10-27, аудит FENRIR-DEEP-AUDIT): Fenrir шлёт
+            // device_id в body каждого VK API запроса (формат <16hex>:<32hex>).
+            // PinoK использует UUID формат (tokenStorage.deviceId()) — VK принимает
+            // оба, главное что device_id совпадает с тем что был при auth (device-bound).
+            // Без device_id VK может возвращать err=3 для audio-WRITE (anti-piracy
+            // device tracking для WRITE-методов). READ работает и без него.
+            val fenrirDeviceId = tokenStorage.deviceId()
+            if (fenrirDeviceId.isNotBlank()) {
+                allParams["device_id"] = fenrirDeviceId
+            }
             // Device masking — подменяем device_model/os_version/build/manufacturer
             // на «Pixel 9 Pro» если privacyDeviceMask=true.
             // VK API принимает параметр `device` как JSON-string с полями устройства.

@@ -1463,6 +1463,28 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 ) {
                     builder2.header("X-VK-Android-Client", "new")
                 }
+                // #FENRIR-ANDROID-HEADERS (2026-10-27, аудит FENRIR-DEEP-AUDIT):
+                // Fenrir-for-VK шлёт 8 Android-app headers на api.vk.ru/api.vk.com
+                // для ВСЕХ method-вызовов. VK WAF fingerprint'ит audio-WRITE по ним —
+                // без них возвращает err=3 «Unknown method passed» (decoy, даже если
+                // метод существует). READ менее strict и работает без них.
+                // Headers: Client-Agent, X-Get-Processing-Time, from, net, os, app, v, b.
+                // Источник: /tmp/fenrir HttpLoggerAndParser.kt:112-134, v=5.186, b=15271
+                // (статичные версии VK Android App 8.15-15271).
+                val isApiVkHost = host == "api.vk.ru" || host == "api.vk.com"
+                if (isApiVkHost) {
+                    if (original.header("Client-Agent") == null) builder2.header("Client-Agent", "cv=1")
+                    if (original.header("X-Get-Processing-Time") == null) builder2.header("X-Get-Processing-Time", "1")
+                    if (original.header("from") == null) builder2.header("from", "mobile")
+                    if (original.header("net") == null) builder2.header("net", "okhttp")
+                    if (original.header("os") == null) builder2.header("os", "android")
+                    if (original.header("app") == null) builder2.header("app", "vk")
+                    if (original.header("v") == null) builder2.header("v", "5.186")
+                    if (original.header("b") == null) builder2.header("b", "15271")
+                    if (original.header("Cache-Control") == null) {
+                        builder2.cacheControl(okhttp3.CacheControl.FORCE_NETWORK)
+                    }
+                }
                 chain.proceed(builder2.build())
             }
             // #29: 3 сетевые настройки теперь реально работают (раньше были UI-only).
