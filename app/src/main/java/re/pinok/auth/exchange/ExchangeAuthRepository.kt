@@ -2,7 +2,10 @@ package re.pinok.auth.exchange
 
 import com.google.gson.JsonParser
 import com.google.gson.JsonObject
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,6 +67,11 @@ class ExchangeAuthRepository(
 ) : CallsAuth {
 
     private val refreshMutex = Mutex()
+
+    // #PROACTIVE-WEBVIEW-TOKEN: scope для фонового silentRefresh (получение
+    // 7879029-class webviewAccessToken когда основной токен валиден но без
+    // audio-WRITE прав). SupervisorJob — дочерние ошибки не роняют parent.
+    private val proactiveScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
      * #NETWORK-RESILIENCE (2026-08-04): ссылка на [NetworkObserver] для
@@ -887,6 +895,42 @@ class ExchangeAuthRepository(
             // #FORCE-REFRESH: force=true (err=5/1130) — токен отвергнут VK,
             // hasValidAccessToken() лжёт (проверяет только timestamp, не IP-binding).
             if (!force && storage.hasValidAccessToken()) {
+                // #PROACTIVE-WEBVIEW-TOKEN (2026-10-27): если webviewAccessToken
+                // пустой, но remixsid есть в CookieManager — запускаем silentRefresh
+                // в фоне чтобы получить 7879029-class токен (с audio-WRITE правами).
+                // Без этого audio.savePlaylistAsCopy → err=3 (OAuth токен 6287487
+                // не имеет audio-WRITE прав). Запускаем БЕЗ блокировки основного
+                // потока — возвращаем основной токен сразу, webviewAccessToken
+                // появится после фонового refresh.
+                if (storage.webviewAccessToken().isNullOrBlank()) {
+                    val snap = try {
+                        re.pinok.auth.exchange.RemixsidCapturer.snapshotCookies()
+                    } catch (e: Exception) { null }
+                    if (snap != null && snap.hasLiveSession) {
+                        AppLog.i(TAG, "ensureFreshToken: webviewAccessToken пустой — " +
+                            "запускаем proactive silentRefresh (remixsid есть в CookieManager)")
+                        // Запускаем в фоне — не блокируем текущий вызов
+                        proactiveScope.launch {
+                            try {
+                                val httpResult = silentRefreshViaRemixsidLive()
+                                if (httpResult != null) {
+                                    saveWebTokenResult(
+                                        accessToken = httpResult.accessToken,
+                                        userId = httpResult.userId,
+                                        expiresAt = httpResult.expiresAt,
+                                        satToken = null,
+                                        logoutHash = httpResult.logoutHash,
+                                        remixsid = null,
+                                    )
+                                    AppLog.i(TAG, "ensureFreshToken: proactive silentRefresh OK — " +
+                                        "webviewAccessToken сохранён (len=${httpResult.accessToken.length})")
+                                }
+                            } catch (e: Exception) {
+                                AppLog.w(TAG, "ensureFreshToken: proactive silentRefresh failed: ${e.message}")
+                            }
+                        }
+                    }
+                }
                 return@withLock storage.accessToken()
             }
 
