@@ -48,6 +48,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Delete
@@ -130,6 +131,7 @@ import re.pinok.ui.components.CreateVideoAlbumDialog
 import re.pinok.ui.components.RenameVideoAlbumDialog
 import re.pinok.ui.components.DeleteVideoAlbumConfirmDialog
 import re.pinok.ui.components.AddVideoToAlbumDialog
+import re.pinok.ui.components.AddVideoToAlbumSearchDialog
 import re.pinok.ui.components.DeleteVideoConfirmDialog
 // П-8-REACT: пикер реакций стены — переиспользование feed-компонента как есть
 // (+ аддитивный selectedReactionId с дефолтом; FeedScreen не затронут).
@@ -362,6 +364,10 @@ fun ProfileScreen(
     var showAlbumVideoMenuFor by remember { mutableStateOf<Video?>(null) }
     var addToAlbumTarget by remember { mutableStateOf<Video?>(null) }
     var deleteVideoTarget by remember { mutableStateOf<Video?>(null) }
+    // B-INT-PROFILE: целевой альбом для диалога «Добавить видео» (album-centric
+    // flow из HAR). Открывается кнопкой «+ Добавить видео» в drill-down открытого
+    // альбома (свой профиль). null = диалог скрыт.
+    var showAddVideoSearchFor by remember { mutableStateOf<VideoAlbum?>(null) }
     val videoCrudContext = LocalContext.current
     // Свой профиль — currentUserId = profile.id (== app.getVkUid() после загрузки).
     val currentUserId = profile?.id ?: 0L
@@ -1803,6 +1809,24 @@ fun ProfileScreen(
                         albumVideos = emptyList()
                     }
                 }
+                // B-INT-PROFILE: кнопка «+ Добавить видео» в drill-down открытого
+                // альбома (свой профиль — canManageAlbums). Открывает
+                // AddVideoToAlbumSearchDialog с глобальным поиском (ownerId=null —
+                // можно добавить любое видео VK, не только свои; свои и так видны в
+                // «Мои видео» ниже). Паритет с VideoScreen/CommunityScreen.
+                item(key = "add_video_to_album_btn") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showAddVideoSearchFor = openedVideoAlbum }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Добавить видео", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                    }
+                }
                 if (albumVideosLoading && albumVideos.isEmpty()) {
                     item(key = "album_video_progress") { TabProgressRow() }
                 } else if (albumVideosError != null && albumVideos.isEmpty()) {
@@ -2626,6 +2650,22 @@ fun ProfileScreen(
                         Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
+            },
+        )
+    }
+    // B-INT-PROFILE: диалог «Добавить видео» в открытый альбом (глобальный поиск
+    // VK-wide, ownerId=null — можно добавить любое видео, не только свои).
+    // Optimistic update: albumVideos += video + videoAlbumsRefreshTick++ для
+    // инвалидации списка альбомов (счётчик видео в «Видеоальбомы (N)»).
+    val addVideoSearchTarget = showAddVideoSearchFor
+    if (addVideoSearchTarget != null) {
+        AddVideoToAlbumSearchDialog(
+            album = addVideoSearchTarget,
+            ownerId = null,
+            onDismiss = { showAddVideoSearchFor = null },
+            onAdded = { video ->
+                albumVideos = albumVideos + video
+                videoAlbumsRefreshTick++
             },
         )
     }
