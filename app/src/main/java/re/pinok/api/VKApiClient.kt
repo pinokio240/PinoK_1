@@ -10363,7 +10363,8 @@ class VKApiClient(
             "video_id" to video.id.toString(),
             "owner_id" to video.ownerId.toString(),  // владелец ВИДЕО (не альбома)
         )
-        if (!video.accessKey.isNullOrBlank()) args["access_key"] = video.accessKey
+        val accessKey = video.accessKey
+        if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
         if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
         val json = call("video.addToAlbum", args) ?: return false
         return json.has("response")
@@ -10379,7 +10380,8 @@ class VKApiClient(
             "video_id" to video.id.toString(),
             "owner_id" to video.ownerId.toString(),
         )
-        if (!video.accessKey.isNullOrBlank()) args["access_key"] = video.accessKey
+        val accessKey = video.accessKey
+        if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
         if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
         val json = call("video.removeFromAlbum", args) ?: return false
         return json.has("response")
