@@ -532,6 +532,10 @@ private fun AddToBlacklistDialog(
     var parseError by remember { mutableStateOf<String?>(null) }
     var preview by remember { mutableStateOf<BlacklistPreview?>(null) }
     var banInProgress by remember { mutableStateOf(false) }
+    // B-BAN-3: подтверждение перед account.ban — раньше бан шёл сразу из превью,
+    // без отдельной модалки (асимметрия с разбаном L403; VK web всегда подтверждает).
+    var showBanConfirmDialog by remember { mutableStateOf(false) }
+    var pendingBanTarget by remember { mutableStateOf<BlacklistPreview?>(null) }
 
     /** Разбор + резолв + превью найденной страницы. */
     fun resolveInput() {
@@ -692,23 +696,12 @@ private fun AddToBlacklistDialog(
             val ready = preview != null && !banInProgress
             Button(
                 onClick = {
+                    // B-BAN-3: НЕ банить сразу — показать модалку подтверждения
+                    // (паритет с разбаном L403 и VK web, где всегда есть confirmation).
                     val p = preview
                     if (p != null) {
-                        banInProgress = true
-                        scope.launch {
-                            val ok = app.apiClient.accountBan(p.ownerId)
-                            banInProgress = false
-                            if (ok) {
-                                onBanned(p.name)
-                            } else {
-                                Toast.makeText(
-                                    context,
-                                    "Не удалось заблокировать: " +
-                                        (app.apiClient.lastApiError ?: "нет ответа сервера"),
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                        }
+                        pendingBanTarget = p
+                        showBanConfirmDialog = true
                     }
                 },
                 enabled = ready,
@@ -727,4 +720,75 @@ private fun AddToBlacklistDialog(
             }
         },
     )
+
+    // B-BAN-3: модалка подтверждения перед account.ban (раньше бан шёл сразу
+    // из кнопки «Заблокировать» превью — без подтверждения, асимметрия с разбаном).
+    if (showBanConfirmDialog) {
+        pendingBanTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = {
+                    showBanConfirmDialog = false
+                    pendingBanTarget = null
+                },
+                title = { Text("Заблокировать?") },
+                text = {
+                    Text(
+                        "«${target.name}» будет добавлен в чёрный список " +
+                            "и больше не сможет писать вам или видеть ваш профиль."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showBanConfirmDialog = false
+                            pendingBanTarget = null
+                            banInProgress = true
+                            val t = target
+                            scope.launch {
+                                try {
+                                    val ok = app.apiClient.accountBan(t.ownerId)
+                                    banInProgress = false
+                                    if (ok) {
+                                        // onBanned в родителе: закрывает превью
+                                        // (showAddDialog=false), тост + loadFirst().
+                                        onBanned(t.name)
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            "Не удалось заблокировать: " +
+                                                (app.apiClient.lastApiError
+                                                    ?: "нет ответа сервера"),
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    banInProgress = false
+                                    AppLog.e("BlacklistScreen", "accountBan error", e)
+                                    Toast.makeText(
+                                        context,
+                                        "Ошибка: ${e.message ?: "неизвестная"}",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.heightIn(min = 44.dp),
+                    ) {
+                        Text("Заблокировать", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showBanConfirmDialog = false
+                            pendingBanTarget = null
+                        },
+                        modifier = Modifier.heightIn(min = 44.dp),
+                    ) {
+                        Text("Отмена")
+                    }
+                },
+            )
+        }
+    }
 }
