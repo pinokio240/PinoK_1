@@ -1047,6 +1047,9 @@ fun UserProfileScreen(
                                             onClick = { onVideoClick(video) },
                                             modifier = Modifier.fillMaxWidth(),
                                             onLongClick = { showAlbumVideoMenuFor = video },
+                                            // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ на
+                                            // видео в открытом альбоме (чужой профиль).
+                                            onMenuClick = { showAlbumVideoMenuFor = video },
                                         )
                                         // VIDEO-ALBUMS-CRUD (B4, чужой профиль):
                                         // только «Добавить себе» (если видео чужое).
@@ -1121,6 +1124,9 @@ fun UserProfileScreen(
                                             onClick = { onVideoClick(video) },
                                             modifier = Modifier.fillMaxWidth(),
                                             onLongClick = { showVideoMenuFor = video },
+                                            // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ на
+                                            // видео в «Все видео» (чужой профиль).
+                                            onMenuClick = { showVideoMenuFor = video },
                                         )
                                         // VIDEO-ALBUMS-CRUD (B3, чужой профиль):
                                         // только «Добавить себе» (если видео чужое).
