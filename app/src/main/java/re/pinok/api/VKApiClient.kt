@@ -10314,12 +10314,12 @@ class VKApiClient(
         )
         // Для группы: ownerId отрицательный → group_id = -ownerId (положительный)
         if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
-        val json = call("video.createAlbum", args) ?: return null
+        val json = call("video.addAlbum", args) ?: return null
         return try {
             val resp = json.getAsJsonObject("response") ?: return null
             safeLongNullable(resp.get("album_id")) ?: safeLongNullable(resp.get("id"))
         } catch (e: Exception) {
-            AppLog.e("VKApiClient", "video.createAlbum parse error: ${e.message}")
+            AppLog.e("VKApiClient", "video.addAlbum parse error: ${e.message}")
             null
         }
     }
@@ -10365,7 +10365,9 @@ class VKApiClient(
         )
         val accessKey = video.accessKey
         if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
-        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        // VK doc: target_id — владелец альбома (со знаком минус для группы).
+        // Для своего альбома не передаём (VK возьмёт из токена).
+        if (ownerId != null) args["target_id"] = ownerId.toString()
         val json = call("video.addToAlbum", args) ?: return false
         return json.has("response")
     }
@@ -10382,7 +10384,9 @@ class VKApiClient(
         )
         val accessKey = video.accessKey
         if (!accessKey.isNullOrBlank()) args["access_key"] = accessKey
-        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        // VK doc: target_id — владелец альбома (со знаком минус для группы).
+        // Для своего альбома не передаём (VK возьмёт из токена).
+        if (ownerId != null) args["target_id"] = ownerId.toString()
         val json = call("video.removeFromAlbum", args) ?: return false
         return json.has("response")
     }
