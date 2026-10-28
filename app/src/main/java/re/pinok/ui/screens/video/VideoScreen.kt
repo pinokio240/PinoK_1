@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -102,7 +103,7 @@ import re.pinok.ui.components.VideoContextMenuDropdown
  * Экран списка видео — нативный интерфейс VK Video mobile.
  *
  * Тёмная тема, single-column список (как в ВК мобильном приложении):
- *  — Шапка с логотипом + вкладками (Мои видео / Альбомы / Каталоги)
+ *  — Шапка с логотипом + вкладками (Видео / Каталоги)
  *  — Поле поиска
  *  — Лента видео-карточек: 16:9 превью + длительность + бейдж "Офлайн"
  *    + заголовок + просмотры/дата + кнопки скачать/меню
@@ -127,10 +128,10 @@ fun VideoScreen(
     var loadingMore by remember { mutableStateOf(false) }
     var endReached by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    // Fix #389 #SCROLL-TOP-PARITY: отдельные состояния для списков вкладок
-    // «Альбомы»/«Каталоги» — у каждого lazy-списка своё состояние скролла,
-    // FAB «наверх» читает/крутит ТЕМ ЖЕ экземпляром, что в LazyColumn.state.
-    val albumsListState = rememberLazyListState()
+    // Fix #389 #SCROLL-TOP-PARITY: отдельные состояния для списков — у каждого
+    // lazy-списка своё состояние скролла, FAB «наверх» читает/крутит ТЕМ ЖЕ
+    // экземпляром, что в LazyColumn.state. (MERGE-ALBUMS-MY-VIDEOS: albumsListState
+    // убран — альбомы теперь в LazyRow вкладки «Видео» без отдельного состояния.)
     val albumVideosListState = rememberLazyListState()
     val sectionsListState = rememberLazyListState()
     val discoverListState = rememberLazyListState()
@@ -152,7 +153,8 @@ fun VideoScreen(
     // плана волны 30).
     val searchAddedKeys = remember { mutableStateMapOf<String, Boolean>() }
 
-    // #VIDEO-PORT: вкладки «Мои видео»(0) / «Альбомы»(1) / «Каталоги»(2).
+    // #VIDEO-PORT: вкладки «Видео»(0) / «Каталоги»(1). Альбомы объединены с
+    // «Видео» (LazyRow над «Мои видео») — MERGE-ALBUMS-MY-VIDEOS (как в ProfileScreen).
     var selectedTab by remember { mutableStateOf(0) }
     var albums by remember { mutableStateOf<List<re.pinok.data.model.VideoAlbum>>(emptyList()) }
     var albumsLoading by remember { mutableStateOf(false) }
@@ -179,9 +181,9 @@ fun VideoScreen(
     // VIDEO-SCREEN-CRUD: текущий юзер — для гейта showDeleteVideo (только свои видео).
     val myUserId = remember { app.exchangeAuthRepository.userId() }
 
-    // #VIDEO-PORT: загрузка альбомов при переключении на вкладку «Альбомы».
+    // #VIDEO-PORT: загрузка альбомов при переключении на вкладку «Видео» (tab 0).
     LaunchedEffect(selectedTab, albumsRefreshTick) {
-        if (selectedTab == 1 && albums.isEmpty() && !albumsLoading) {
+        if (selectedTab == 0 && albums.isEmpty() && !albumsLoading) {
             albumsLoading = true
             try {
                 val (_, list) = app.apiClient.videoGetAlbums(count = 50)
@@ -193,7 +195,7 @@ fun VideoScreen(
                 albumsLoading = false
             }
         }
-        if (selectedTab == 2 && catalogSections.isEmpty() && !catalogLoading) {
+        if (selectedTab == 1 && catalogSections.isEmpty() && !catalogLoading) {
             catalogLoading = true
             try {
                 val list = app.apiClient.videoGetCatalogSections()
@@ -577,9 +579,9 @@ fun VideoScreen(
 
         // ─── Контент по вкладке (#VIDEO-PORT) ───
         // #VIDEO-SEARCH-FIX: результаты видео-поиска показываются НА ЛЮБОЙ ВКЛАДКЕ
-        // (0 «Мои видео», 1 «Альбомы», 2 «Каталоги»), а не только в «Мои видео».
+        // (0 «Видео», 1 «Каталоги»), а не только во «Видео».
         // Запрос поиска глобальный (LaunchedEffect debounce в шапке) — раньше на
-        // Альбомах/Каталогах он выполнялся, но результаты не рендерились. Пока
+        // Каталогах он выполнялся, но результаты не рендерились. Пока
         // searchQuery непуст — показываем API-результаты; пуст — контент вкладки.
         if (searchQuery.isNotBlank()) {
             val searchErr = searchError
@@ -640,103 +642,15 @@ fun VideoScreen(
                 }
             }
         } else {
-            when (selectedTab) {
-                1 -> {
-                // Альбомы: список альбомов или видео выбранного альбома.
-                if (selectedAlbum == null) {
-                    if (albumsLoading) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = vkAccent)
-                        }
-                    } else {
-        // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх».
-        // VIDEO-SCREEN-CRUD: список альбомов + CreateVideoAlbumCard (создание/long-press меню).
-        Box(modifier = Modifier.fillMaxSize()) {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            state = albumsListState,
-                            contentPadding = PaddingValues(bottom = 16.dp),
-                        ) {
-                            // VIDEO-SCREEN-CRUD: карточка «+ Создать альбом» (всегда первый item).
-                            item(key = "create_album_card") {
-                                CreateVideoAlbumCard(onClick = { showCreateAlbumDialog = true })
-                            }
-                            if (albums.isEmpty()) {
-                                item(key = "empty_albums_hint") {
-                                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                        Text("Нет альбомов", color = vkTextSecondary, fontSize = 14.sp)
-                                    }
-                                }
-                            } else {
-                            items(albums, key = { "${it.ownerId}_${it.id}" }) { album ->
-                                Box {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .combinedClickable(
-                                            onClick = { selectedAlbum = album },
-                                            onLongClick = { albumMenuTarget = album },
-                                        )
-                                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box(
-                                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)).background(vkCard),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        val cover = album.coverUrl
-                                        if (cover != null) {
-                                            AsyncImage(model = cover, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                                        } else {
-                                            Icon(Icons.Outlined.VideoLibrary, null, tint = vkAccent, modifier = Modifier.size(26.dp))
-                                        }
-                                    }
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(album.title, color = vkTextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(
-                                            if (album.count > 0) "${album.count} видео" else "0 видео",
-                                            color = vkTextSecondary, fontSize = 13.sp,
-                                        )
-                                    }
-                                    // VISIBLE-MENU-VIDEO-SCREEN: видимая кнопка ⋮ (CRUD-меню
-                                    // альбома: переименовать / удалить). Long-press сохранён
-                                    // как альтернатива (combinedClickable выше).
-                                    IconButton(
-                                        onClick = { albumMenuTarget = album },
-                                        modifier = Modifier.size(40.dp),
-                                    ) {
-                                        Icon(Icons.Filled.MoreVert, contentDescription = "Меню альбома", tint = vkTextSecondary, modifier = Modifier.size(20.dp))
-                                    }
-                                }
-                                // VIDEO-SCREEN-CRUD: long-press меню альбома (переименовать/удалить).
-                                AlbumContextMenuDropdown(
-                                    target = album,
-                                    state = albumMenuTarget,
-                                    onDismiss = { albumMenuTarget = null },
-                                    onRename = {
-                                        albumMenuTarget = null
-                                        albumToRename = album
-                                    },
-                                    onDelete = {
-                                        albumMenuTarget = null
-                                        albumToDelete = album
-                                    },
-                                )
-                                }
-                            }
-                            }
-                        }
-
-        // Fix #389 #SCROLL-TOP-PARITY: FAB «наверх» для списка альбомов.
-        ScrollToTopFab(
-            listState = albumsListState,
-            modifier = Modifier.align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 16.dp),
-        )
-        }
-                    }
-                } else {
+            // MERGE-ALBUMS-MY-VIDEOS: effectiveTab маршрутизирует drill-down (открытый
+            // альбом на вкладке «Видео») в ветку 2; иначе — обычные вкладки 0/1.
+            // Альбомы и «Мои видео» теперь в одной вкладке «Видео» (tab 0).
+            val effectiveTab = if (selectedTab == 0 && selectedAlbum != null) 2 else selectedTab
+            when (effectiveTab) {
+                2 -> {
+                // MERGE-ALBUMS-MY-VIDEOS: drill-down открытого альбома (effectiveTab==2 ⟹
+                // selectedAlbum!=null). Альбомы перенесены в tab 0 «Видео» (LazyRow над
+                // «Мои видео»). Здесь — только видео выбранного альбома + back-row.
                     // Видео выбранного альбома.
                     Column(Modifier.fillMaxSize()) {
                         Row(
@@ -868,9 +782,8 @@ fun VideoScreen(
         }
                         }
                     }
-                }
             }
-            2 -> {
+            1 -> {
                 // Каталоги: список разделов → discovery-видео раздела.
                 if (selectedSection == null) {
                     if (catalogLoading) {
@@ -981,6 +894,76 @@ fun VideoScreen(
                 }
             }
             else -> {
+                // MERGE-ALBUMS-MY-VIDEOS: вкладка «Видео» — альбомы (LazyRow) над «Мои видео»
+                // (как в ProfileScreen). selectedAlbum==null здесь (drill-down — в ветке 2).
+                // Column-обёртка: альбомы сверху + существующий блок «Мои видео» (пагинация не тронута).
+                Column(Modifier.fillMaxSize()) {
+                    // ─── Альбомы (LazyRow над «Мои видео») ───
+                    Text(
+                        text = "Альбомы (${albums.size})",
+                        color = vkTextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                    if (albumsLoading && albums.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = vkAccent)
+                        }
+                    } else {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            item(key = "create_album_card") {
+                                CreateVideoAlbumCard(onClick = { showCreateAlbumDialog = true }, widthDp = 120.dp)
+                            }
+                            items(albums, key = { "${it.ownerId}_${it.id}" }) { album ->
+                                Box {
+                                    Column(
+                                        modifier = Modifier
+                                            .width(120.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(vkCard)
+                                            .combinedClickable(
+                                                onClick = { selectedAlbum = album },
+                                                onLongClick = { albumMenuTarget = album },
+                                            ),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(vkCard),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            val cover = album.coverUrl
+                                            if (!cover.isNullOrBlank()) {
+                                                AsyncImage(model = cover, contentDescription = album.title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                            } else {
+                                                Icon(Icons.Outlined.VideoLibrary, null, tint = vkAccent, modifier = Modifier.size(28.dp))
+                                            }
+                                            // VISIBLE-MENU-VIDEO-SCREEN: видимая кнопка ⋮ (CRUD альбома: переименовать/удалить).
+                                            IconButton(onClick = { albumMenuTarget = album }, modifier = Modifier.align(Alignment.TopEnd).size(32.dp)) {
+                                                Icon(Icons.Filled.MoreVert, contentDescription = "Меню альбома", tint = Color.White, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                        Column(modifier = Modifier.padding(6.dp)) {
+                                            Text(album.title.ifBlank { "Без названия" }, color = vkTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text("${album.count} видео", color = vkTextSecondary, fontSize = 11.sp, maxLines = 1)
+                                        }
+                                    }
+                                    // VIDEO-SCREEN-CRUD: контекстное меню альбома (переименовать/удалить).
+                                    AlbumContextMenuDropdown(
+                                        target = album,
+                                        state = albumMenuTarget,
+                                        onDismiss = { albumMenuTarget = null },
+                                        onRename = { albumMenuTarget = null; albumToRename = album },
+                                        onDelete = { albumMenuTarget = null; albumToDelete = album },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    // ─── Существующий блок «Мои видео» (Box + PullToRefreshBox + LazyColumn + FAB) ───
         // Fix #389 #SCROLL-TOP-PARITY: Box-обёртка — оверлей для FAB «наверх»
         // над списком вкладки «Мои видео» (единственный пагинированный список
         // экрана: loadMoreVideos по offset).
@@ -1106,7 +1089,8 @@ fun VideoScreen(
                 .padding(end = 16.dp, bottom = 16.dp),
         )
         } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
-            } // end else (selectedTab == 0)
+                } // closes Column (MERGE-ALBUMS-MY-VIDEOS — альбомы над «Мои видео»)
+            } // end else (tab 0 «Видео»)
             } // end when (selectedTab)
         } // end else (searchQuery.isBlank() → обычный контент вкладки)
     }
@@ -1364,16 +1348,12 @@ private fun VideoTabsBar(
             horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             VideoTab(
-                "Мои видео", selectedTab == 0, textColor, secondaryColor,
+                "Видео", selectedTab == 0, textColor, secondaryColor,
                 onClick = { onTabSelected(0) },
             )
             VideoTab(
-                "Альбомы", selectedTab == 1, textColor, secondaryColor,
+                "Каталоги", selectedTab == 1, textColor, secondaryColor,
                 onClick = { onTabSelected(1) },
-            )
-            VideoTab(
-                "Каталоги", selectedTab == 2, textColor, secondaryColor,
-                onClick = { onTabSelected(2) },
             )
         }
     }
