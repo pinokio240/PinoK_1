@@ -2442,8 +2442,7 @@ fun ProfileScreen(
                 showCreateAlbumDialog = false
                 if (ownerId == null) {
                     Toast.makeText(videoCrudContext, "Профиль ещё загружается", Toast.LENGTH_SHORT).show()
-                    return@onConfirm
-                }
+                } else {
                 scope.launch {
                     try {
                         val albumId = app.apiClient.videoCreateAlbum(
@@ -2467,6 +2466,7 @@ fun ProfileScreen(
                         Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
+                }
             },
         )
     }
@@ -2480,8 +2480,7 @@ fun ProfileScreen(
                 renameAlbumTarget = null
                 if (ownerId == null) {
                     Toast.makeText(videoCrudContext, "Профиль ещё загружается", Toast.LENGTH_SHORT).show()
-                    return@onConfirm
-                }
+                } else {
                 scope.launch {
                     try {
                         val ok = app.apiClient.videoEditAlbum(
@@ -2511,6 +2510,7 @@ fun ProfileScreen(
                         Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
+                }
             },
         )
     }
@@ -2524,8 +2524,7 @@ fun ProfileScreen(
                 deleteAlbumTarget = null
                 if (ownerId == null) {
                     Toast.makeText(videoCrudContext, "Профиль ещё загружается", Toast.LENGTH_SHORT).show()
-                    return@onConfirm
-                }
+                } else {
                 scope.launch {
                     try {
                         val ok = app.apiClient.videoDeleteAlbum(
@@ -2553,6 +2552,7 @@ fun ProfileScreen(
                         Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
+                }
             },
         )
     }
@@ -2566,8 +2566,7 @@ fun ProfileScreen(
                 addToAlbumTarget = null
                 if (ownerId == null) {
                     Toast.makeText(videoCrudContext, "Профиль ещё загружается", Toast.LENGTH_SHORT).show()
-                    return@onPick
-                }
+                } else {
                 scope.launch {
                     try {
                         val ok = app.apiClient.videoAddToAlbum(
@@ -2584,6 +2583,7 @@ fun ProfileScreen(
                         AppLog.e("ProfileScreen", "videoAddToAlbum failed", e)
                         Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
+                }
                 }
             },
             onCreateAlbum = {
