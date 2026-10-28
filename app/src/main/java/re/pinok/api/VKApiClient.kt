@@ -10234,6 +10234,10 @@ class VKApiClient(
             "q" to query,
             "count" to count.toString(),
             "extended" to "1",
+            // search_global=1: глобальный поиск по всему VK (чужие видео).
+            // Без этого параметра VK возвращает только свои видео / пустой результат.
+            // W30-API: подтверждено рабочим кодом toggleSearchVideoAdded (VideoScreen.kt:441).
+            "search_global" to "1",
         )
         if (ownerId != null) args["owner_id"] = ownerId.toString()
         if (offset > 0) args["offset"] = offset.toString()
