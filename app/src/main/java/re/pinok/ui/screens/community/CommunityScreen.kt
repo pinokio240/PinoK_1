@@ -345,6 +345,14 @@ fun CommunityScreen(
     var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var albumVideosLoading by remember { mutableStateOf(false) }
     var albumVideosError by remember { mutableStateOf<String?>(null) }
+    // B-H: offset-based пагинация видео альбома (эталон — VideoScreen.loadMoreVideos
+    // и канонический PagingTrigger). Без этого для альбомов >50 видео
+    // подгрузка второй/третьей страницы не происходила (videoGet(count=50)
+    // без offset). albumVideosRetryTick НЕ существует (есть videoAlbumsRefreshTick
+    // для CRUD-тиков), поэтому в ключ LaunchedEffect ниже НЕ добавляется.
+    var albumVideosOffset by remember { mutableStateOf(0) }
+    var albumVideosHasMore by remember { mutableStateOf(false) }
+    var albumVideosLoadingMore by remember { mutableStateOf(false) }
     // REVIEWER-2: тик перезагрузки списка альбомов после CRUD (create/rename/
     // delete). LaunchedEffect(selectedTab, groupId) НЕ перезапускается при смене
     // videoAlbumsLoaded (его нет в ключах), поэтому без этого тика список после
@@ -745,12 +753,31 @@ fun CommunityScreen(
 
     // ALBUMS-IN-VIDEO: загрузка видео открытого альбома (video.get с album_id).
     // Паттерн — LaunchedEffect(openedAlbum) для фотоальбомов выше (L646).
+    // B-H: первая страница (count=50, offset=0); следующие страницы — через
+    // loadMoreAlbumVideos() по скроллу. albumVideosRetryTick НЕ заведён в этом
+    // экране (есть только videoAlbumsRefreshTick для CRUD), поэтому в ключе
+    // только (openedVideoAlbum, groupId) — как было до фикса.
     LaunchedEffect(openedVideoAlbum, groupId) {
         val album = openedVideoAlbum ?: return@LaunchedEffect
         albumVideosLoading = true
         albumVideosError = null
+        // B-H: сброс постраничного state перед загрузкой первой страницы.
+        albumVideosOffset = 0
+        albumVideosHasMore = false
         try {
-            albumVideos = app.apiClient.videoGet(ownerId = -groupId, count = 50, albumId = album.id)
+            val page = app.apiClient.videoGet(
+                ownerId = -groupId,
+                count = 50,
+                offset = 0,
+                albumId = album.id,
+            )
+            albumVideos = page
+            albumVideosOffset = page.size
+            // B-H: «есть ещё» — по размеру страницы (эталон VideoScreen: конец
+            // определяет пустой ответ VK, но здесь simpler-check на ≥ pageSize;
+            // последняя короткая страница зафиксирует hasMore=false на следующем
+            // цикле loadMore, когда VK вернёт < 50 или пусто).
+            albumVideosHasMore = page.size >= 50
             AppLog.i("CommunityScreen", "Album videos loaded: ${albumVideos.size} for «${album.title}»")
         } catch (t: Throwable) {
             AppLog.e("CommunityScreen", "Album videos load failed", t)
@@ -758,6 +785,55 @@ fun CommunityScreen(
         } finally {
             albumVideosLoading = false
         }
+    }
+
+    // B-H: подгрузка следующей страницы видео альбома (offset-based, эталон —
+    // VideoScreen.loadMoreVideos). Гuards: не запускать параллельные запросы
+    // (albumVideosLoadingMore), не дёргать во время первой загрузки
+    // (albumVideosLoading), только если hasMore и альбом ещё открыт.
+    fun loadMoreAlbumVideos() {
+        if (albumVideosLoadingMore || albumVideosLoading || !albumVideosHasMore || openedVideoAlbum == null) return
+        val currentAlbum = openedVideoAlbum ?: return
+        scope.launch {
+            albumVideosLoadingMore = true
+            try {
+                val page = app.apiClient.videoGet(
+                    ownerId = -groupId,
+                    count = 50,
+                    offset = albumVideosOffset,
+                    albumId = currentAlbum.id,
+                )
+                // B-H: post-await race-guard — если пользователь закрыл альбом
+                // во время запроса, страница не должна попасть в пустой список.
+                if (openedVideoAlbum != currentAlbum) return@launch
+                val fresh = page.filter { nv -> albumVideos.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                albumVideos = (albumVideos + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                albumVideosOffset += page.size
+                albumVideosHasMore = page.size >= 50
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "album videos load more failed: ${e.message}")
+            } finally {
+                albumVideosLoadingMore = false
+            }
+        }
+    }
+
+    // B-H: триггер подгрузки при скролле к концу списка (эталон — PagingTrigger
+    // в PagedListState.kt:199). albumVideos использует ручной state (НЕ
+    // PagedListState), поэтому отдельный LaunchedEffect. threshold = 3 (как в
+    // каноническом PagingTrigger). ВНИМАНИЕ: albumVideos намеренно НЕ в ключе
+    // LaunchedEffect — иначе каждый loadMore() перезапускает эффект и
+    // получается бесконечный цикл запросов → VK Flood control (error 9).
+    LaunchedEffect(listState, openedVideoAlbum) {
+        snapshotFlow {
+            if (openedVideoAlbum == null) return@snapshotFlow false
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible >= 0 && lastVisible >= layoutInfo.totalItemsCount - 3 && albumVideos.isNotEmpty()
+        }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { loadMoreAlbumVideos() }
     }
 
     // Шаг 2 (#32b): канонический триггер пагинации видео, гейт по вкладке 2.
@@ -1917,6 +1993,17 @@ fun CommunityScreen(
                                 }
                                 repeat(2 - rowVideos.size) {
                                     Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        // B-H: футер подгрузки следующей страницы видео альбома.
+                        if (albumVideosLoadingMore) {
+                            item(key = "album_video_load_more") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
                                 }
                             }
                         }
