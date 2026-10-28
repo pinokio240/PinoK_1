@@ -10225,7 +10225,11 @@ class VKApiClient(
         offset: Int = 0,
         ownerId: Long? = null,   // B-SEARCH-OWNER: scoped поиск (null=глобальный, -groupId=видео сообщества)
     ): List<Video> {
-        if (isOffline() || query.isBlank()) return emptyList()
+        // B-SEARCH-OWNER: пустой q разрешён при scoped-поиске (ownerId!=null) —
+        // VK web SPA (HAR) передаёт q="" + owner_id=-groupId = «все видео сообщества».
+        // Глобальный поиск с пустым q бессмысленен — возвращаем пусто.
+        if (isOffline()) return emptyList()
+        if (query.isBlank() && ownerId == null) return emptyList()
         val args = mutableMapOf(
             "q" to query,
             "count" to count.toString(),
