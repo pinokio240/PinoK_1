@@ -885,7 +885,10 @@ fun CommunityScreen(
         videoSearchOffset = 0
         videoSearchHasMore = false
         try {
-            val page = app.apiClient.videoSearch(query = q, count = 30, offset = 0, ownerId = -groupId)
+            // GLOBAL-VIDEO-SEARCH: ownerId=null = глобальный поиск по всему VK
+            // (паритет с ProfileScreen/VideoScreen). Можно искать любые видео,
+            // не только из сообщества.
+            val page = app.apiClient.videoSearch(query = q, count = 30, offset = 0, ownerId = null)
             videoSearchResults = page
             videoSearchOffset = page.size
             videoSearchHasMore = page.size >= 30
@@ -911,7 +914,7 @@ fun CommunityScreen(
             try {
                 val page = app.apiClient.videoSearch(
                     query = videoSearchQuery, count = 30,
-                    offset = videoSearchOffset, ownerId = -groupId,
+                    offset = videoSearchOffset, ownerId = null,
                 )
                 val fresh = page.filter { nv -> videoSearchResults.none { it.ownerId == nv.ownerId && it.id == nv.id } }
                 videoSearchResults = (videoSearchResults + fresh).distinctBy { "${it.ownerId}_${it.id}" }
@@ -3035,14 +3038,15 @@ fun CommunityScreen(
             },
         )
     }
-    // B-INT-COMMUNITY: диалог scoped-поиска видео сообщества для добавления
-    // в открытый альбом (ownerId=-groupId → video.search с owner_id). Album-
-    // centric UX из HAR. onAdded → optimistic update albumVideos.
+    // B-INT-COMMUNITY: диалог глобального поиска видео для добавления в открытый
+    // альбом сообщества. ownerId=null = глобальный поиск по всему VK (как в
+    // ProfileScreen) — пользователь может добавлять любые видео, не только
+    // из сообщества. Album-centric UX из HAR. onAdded → optimistic update.
     val addVideoSearchTarget = showAddVideoSearchFor
     if (addVideoSearchTarget != null) {
         AddVideoToAlbumSearchDialog(
             album = addVideoSearchTarget,
-            ownerId = -groupId,   // scoped поиск: видео сообщества
+            ownerId = null,   // глобальный поиск VK-wide (паритет с ProfileScreen)
             onDismiss = { showAddVideoSearchFor = null },
             onAdded = { video ->
                 // Optimistic update (albumVideosRefreshTick НЕ заведён —
