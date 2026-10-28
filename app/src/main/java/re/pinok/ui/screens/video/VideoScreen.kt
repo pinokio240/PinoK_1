@@ -699,6 +699,15 @@ fun VideoScreen(
                                             color = vkTextSecondary, fontSize = 13.sp,
                                         )
                                     }
+                                    // VISIBLE-MENU-VIDEO-SCREEN: видимая кнопка ⋮ (CRUD-меню
+                                    // альбома: переименовать / удалить). Long-press сохранён
+                                    // как альтернатива (combinedClickable выше).
+                                    IconButton(
+                                        onClick = { albumMenuTarget = album },
+                                        modifier = Modifier.size(40.dp),
+                                    ) {
+                                        Icon(Icons.Filled.MoreVert, contentDescription = "Меню альбома", tint = vkTextSecondary, modifier = Modifier.size(20.dp))
+                                    }
                                 }
                                 // VIDEO-SCREEN-CRUD: long-press меню альбома (переименовать/удалить).
                                 AlbumContextMenuDropdown(
@@ -775,6 +784,9 @@ fun VideoScreen(
                                         },
                                         // VIDEO-SCREEN-CRUD: long-press → контекстное меню.
                                         onLongClick = { videoMenuTarget = video },
+                                        // VISIBLE-MENU-VIDEO-SCREEN: видимая ⋮ → то же
+                                        // CRUD-меню (expanded = videoMenuTarget == video).
+                                        onMenuClick = { videoMenuTarget = video },
                                     )
                                     // VIDEO-SCREEN-CRUD: long-press меню видео в альбоме
                                     // (убрать из альбома / удалить видео / добавить себе).
@@ -1030,6 +1042,9 @@ fun VideoScreen(
                                     compact = true,
                                     // VIDEO-SCREEN-CRUD: long-press → контекстное меню.
                                     onLongClick = { videoMenuTarget = video },
+                                    // VISIBLE-MENU-VIDEO-SCREEN: видимая ⋮ → то же
+                                    // CRUD-меню (добавить в альбом / удалить видео).
+                                    onMenuClick = { videoMenuTarget = video },
                                 )
                                 // VIDEO-SCREEN-CRUD: long-press меню видео в «Мои видео»
                                 // (добавить в альбом / удалить видео).
@@ -1446,6 +1461,10 @@ private fun VKVideoCard(
     // VIDEO-SCREEN-CRUD: long-press → контекстное меню (убрать из альбома /
     // удалить / добавить себе). null = обычный клик (существующие вызовы не меняются).
     onLongClick: (() -> Unit)? = null,
+    // VISIBLE-MENU-VIDEO-SCREEN: видимая кнопка ⋮ поверх превью → то же CRUD-меню
+    // (VideoContextMenuDropdown снаружи, expanded = videoMenuTarget == video).
+    // null = кнопка не рисуется (существующие вызовы VKVideoCard не меняются).
+    onMenuClick: (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     Box {
@@ -1546,6 +1565,22 @@ private fun VKVideoCard(
                         color = Color.White,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            // VISIBLE-MENU-VIDEO-SCREEN: видимая кнопка ⋮ (CRUD-меню) поверх превью
+            // в top-right углу. NULL-ЯВНО: рендер только при явном колбеке
+            // (существующие вызовы VKVideoCard без onMenuClick не меняются).
+            if (onMenuClick != null) {
+                IconButton(
+                    onClick = onMenuClick,
+                    modifier = Modifier.align(Alignment.TopEnd).size(32.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "Меню видео",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }

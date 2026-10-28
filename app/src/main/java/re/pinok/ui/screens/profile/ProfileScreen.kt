@@ -55,6 +55,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Flag
 // PROFILE-ALBUMS: иконка-плейсхолдер обложки альбома (как CommunityAlbumRow).
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Repeat
@@ -66,6 +67,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 // Fix #378: разделитель над закреплённой кнопкой выхода.
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -1829,6 +1831,9 @@ fun ProfileScreen(
                                         onClick = { onVideoClick(video) },
                                         modifier = Modifier.fillMaxWidth(),
                                         onLongClick = { showAlbumVideoMenuFor = video },
+                                        // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ на
+                                        // видео в открытом альбоме (свой профиль).
+                                        onMenuClick = { showAlbumVideoMenuFor = video },
                                     )
                                     // VIDEO-ALBUMS-CRUD (B4): long-press на видео
                                     // внутри открытого альбома. Свой профиль →
@@ -1964,6 +1969,9 @@ fun ProfileScreen(
                                         onClick = { onVideoClick(video) },
                                         modifier = Modifier.fillMaxWidth(),
                                         onLongClick = { showVideoMenuFor = video },
+                                        // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ на
+                                        // видео в «Все видео» (свой профиль).
+                                        onMenuClick = { showVideoMenuFor = video },
                                     )
                                     // VIDEO-ALBUMS-CRUD (B3): long-press на видео в
                                     // «Все видео». Свой профиль → оба пункта.
@@ -3251,7 +3259,11 @@ internal fun TabShowMoreRow(loading: Boolean, onClick: () -> Unit, modifier: Mod
 /** W33-c: карточка видео сетки раздела «Видео» (вертикальная сетка 2 колонки;
  *  ширина задаёт вызывающий через [modifier] — weight(1f) в строке-чанке).
  *  VIDEO-ALBUMS-CRUD: [onLongClick] — long-press → контекстное меню
- *  (добавить в альбом / убрать / удалить). null = обычный клик. */
+ *  (добавить в альбом / убрать / удалить). null = обычный клик.
+ *  VISIBLE-MENU-PROFILE: [onMenuClick] — видимая кнопка ⋮ (три точки)
+ *  в верхнем-правом углу превью (overlay на cover Box). null = скрыта
+ *  (для чужого профиля на карточках видео из альбома не нужна, но в «Все
+ *  видео» чужого профиля нужна — «Добавить себе»). Long-press сохранён. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ProfileVideoCard(
@@ -3259,6 +3271,9 @@ internal fun ProfileVideoCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
+    // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ (MoreVert) overlay на превью.
+    // null = кнопка скрыта. Long-press (onLongClick) остаётся рабочим.
+    onMenuClick: (() -> Unit)? = null,
 ) {
     Card(
         modifier = modifier.clip(RoundedCornerShape(12.dp))
@@ -3303,6 +3318,24 @@ internal fun ProfileVideoCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White,
                             fontSize = 11.sp,
+                        )
+                    }
+                }
+                // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ (MoreVert) overlay
+                // на превью — для пользователей, не знающих про long-press.
+                // Полупрозрачный scrim-фон (CircleShape) для читаемости на любом
+                // превью. Long-press остаётся рабочим (combinedClickable выше).
+                if (onMenuClick != null) {
+                    IconButton(
+                        onClick = onMenuClick,
+                        modifier = Modifier.align(Alignment.TopEnd).size(32.dp)
+                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = "Меню видео",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
@@ -4045,6 +4078,10 @@ internal fun ProfileVideoAlbumsRow(
                     album = album,
                     onClick = { onAlbumClick(album) },
                     onLongClick = onAlbumLongClick?.let { cb -> { cb(album) } },
+                    // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ на карточке альбома.
+                    // Тот же callback, что и long-press — оба выставляют albumMenuState
+                    // (state=album → AlbumContextMenuDropdown открывается). null = скрыта.
+                    onMenuClick = onAlbumLongClick?.let { cb -> { cb(album) } },
                 )
                 if (onAlbumLongClick != null && onRenameAlbum != null && onDeleteAlbum != null) {
                     AlbumContextMenuDropdown(
@@ -4072,6 +4109,10 @@ private fun ProfileVideoAlbumCard(
     album: VideoAlbum,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ (три точки) для контекстного меню
+    // альбома (переименовать/удалить). null = кнопка скрыта (чужой профиль —
+    // нет прав управления альбомами). Long-press сохранён как альтернатива.
+    onMenuClick: (() -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier.width(120.dp)
@@ -4123,6 +4164,22 @@ private fun ProfileVideoAlbumCard(
                     color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                 )
+            }
+            // VISIBLE-MENU-PROFILE: видимая кнопка ⋮ в конце карточки альбома —
+            // для пользователей, не знающих про long-press. Long-press остаётся
+            // рабочим (combinedClickable выше). Кнопка рисуется только когда
+            // onMenuClick != null (свой профиль; для чужого — null).
+            if (onMenuClick != null) {
+                IconButton(
+                    onClick = onMenuClick,
+                    modifier = Modifier.align(Alignment.End).size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "Меню альбома",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }

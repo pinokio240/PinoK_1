@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,6 +71,11 @@ fun VideoThumbnail(
     // убрать / удалить). null = обычный клик (поведение не меняется для всех
     // существующих вызовов VideoThumbnail).
     onLongClick: ((Video) -> Unit)? = null,
+    // VISIBLE-MENU: видимая кнопка ⋮ (MoreVert) в top-right углу thumbnail.
+    // null = кнопка не рендерится (поведение существующих вызовов не меняется).
+    // В CommunityScreen используется для открытия того же контекстного меню,
+    // что и long-press — но теперь оно видно пользователю.
+    onMenuClick: (() -> Unit)? = null,
 ) {
     val thumbUrl = video.thumbUrl
     if (compact) {
@@ -115,6 +122,23 @@ fun VideoThumbnail(
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White,
                             fontSize = 11.sp,
+                        )
+                    }
+                }
+                // VISIBLE-MENU: видимая кнопка ⋮ поверх превью (compact).
+                if (onMenuClick != null) {
+                    IconButton(
+                        onClick = onMenuClick,
+                        modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            contentDescription = "Меню",
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .padding(2.dp),
                         )
                     }
                 }
@@ -174,6 +198,23 @@ fun VideoThumbnail(
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White,
                             fontSize = 11.sp,
+                        )
+                    }
+                }
+                // VISIBLE-MENU: видимая кнопка ⋮ поверх превью (non-compact).
+                if (onMenuClick != null) {
+                    IconButton(
+                        onClick = onMenuClick,
+                        modifier = Modifier.align(Alignment.TopEnd).size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            contentDescription = "Меню",
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .padding(2.dp),
                         )
                     }
                 }

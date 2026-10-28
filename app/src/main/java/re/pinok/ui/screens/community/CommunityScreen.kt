@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.PushPin
@@ -1926,6 +1927,9 @@ fun CommunityScreen(
                                             onClick = onVideoClick,
                                             compact = true,
                                             onLongClick = { showAlbumVideoMenuFor = video },
+                                            // VISIBLE-MENU: видимая кнопка ⋮ открывает то
+                                            // же меню, что и long-press.
+                                            onMenuClick = { showAlbumVideoMenuFor = video },
                                         )
                                         // VIDEO-ALBUMS-CRUD (B4): long-press на видео
                                         // внутри открытого альбома → меню (убрать из
@@ -2030,12 +2034,17 @@ fun CommunityScreen(
                                 }
                             }
                             items(videoAlbums, key = { "valbum_${it.ownerId}_${it.id}" }) { album ->
+                                // VISIBLE-MENU: видимая кнопка ⋮ открывает то же меню,
+                                // что и long-press — гейт canManageAlbums сохранён
+                                // (для не-админа в меню нет пунктов rename/delete).
+                                val openAlbumMenu: (() -> Unit)? = if (canManageAlbums) {
+                                    { showAlbumMenuFor = album }
+                                } else null
                                 CommunityVideoAlbumRow(
                                     album = album,
                                     onClick = { openedVideoAlbum = album },
-                                    onLongClick = if (canManageAlbums) {
-                                        { showAlbumMenuFor = album }
-                                    } else null,
+                                    onLongClick = openAlbumMenu,
+                                    onMenuClick = openAlbumMenu,
                                 )
                                 // VIDEO-ALBUMS-CRUD (B2): long-press на альбоме →
                                 // контекстное меню (переименовать/удалить).
@@ -2134,6 +2143,9 @@ fun CommunityScreen(
                                         onClick = onVideoClick,
                                         compact = true,
                                         onLongClick = { showVideoMenuFor = video },
+                                        // VISIBLE-MENU: видимая кнопка ⋮ открывает то
+                                        // же меню, что и long-press.
+                                        onMenuClick = { showVideoMenuFor = video },
                                     )
                                     // VIDEO-ALBUMS-CRUD (B3): long-press на видео в
                                     // «Все видео» → меню. «Добавить в альбом» — только
@@ -3259,6 +3271,11 @@ private fun CommunityVideoAlbumRow(
     album: VideoAlbum,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    // VISIBLE-MENU: видимая кнопка ⋮ (MoreVert) в top-right углу обложки альбома.
+    // null = кнопка не рендерится (поведение существующих вызовов не меняется).
+    // В CommunityScreen используется для открытия того же контекстного меню
+    // (переименовать/удалить альбом), что и long-press — но теперь оно видно.
+    onMenuClick: (() -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier
@@ -3294,6 +3311,25 @@ private fun CommunityVideoAlbumRow(
                         modifier = Modifier.size(28.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                // VISIBLE-MENU: видимая кнопка ⋮ поверх обложки альбома.
+                // Открывает то же контекстное меню (переименовать/удалить), что
+                // и long-press — но теперь оно очевидно для пользователя.
+                if (onMenuClick != null) {
+                    IconButton(
+                        onClick = onMenuClick,
+                        modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            contentDescription = "Меню альбома",
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .padding(2.dp),
+                        )
+                    }
                 }
             }
             Column(modifier = Modifier.padding(8.dp)) {
