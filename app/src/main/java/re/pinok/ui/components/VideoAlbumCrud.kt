@@ -4,6 +4,7 @@
 // (одинаковый UI, разница только в правах — show* флаги).
 package re.pinok.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,7 +12,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,35 +25,53 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import android.widget.Toast
+import coil3.compose.AsyncImage
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import re.pinok.SovaApp
 import re.pinok.data.model.Video
 import re.pinok.data.model.VideoAlbum
+import re.pinok.util.toDurationString
 
 /**
  * VIDEO-ALBUMS-CRUD: контекстное меню long-press на карточке видео.
@@ -428,4 +450,246 @@ fun DeleteVideoConfirmDialog(
             TextButton(onClick = onDismiss) { Text("Отмена") }
         },
     )
+}
+
+/**
+ * VIDEO-ALBUMS-CRUD (B-DIALOG-SEARCH): album-centric диалог «Добавить видео в альбом»
+ * по UX из VK web SPA (HAR: открыть альбом → «Добавить видео» → поиск → выбор).
+ *
+ * Полноэкранный Dialog (fillMaxHeight(0.85f)) с полем поиска + списком результатов
+ * (превью + название + duration + views) → тап «Добавить» на видео →
+ * [re.pinok.api.VKApiClient.videoAddToAlbum] → optimistic ✓ (addedIds).
+ *
+ * Переиспользует:
+ *  - [re.pinok.api.VKApiClient.videoSearch] (с параметром ownerId — scoped/глобальный;
+ *    B-SEARCH-OWNER добавил ownerId в сигнатуру videoSearch).
+ *  - [re.pinok.api.VKApiClient.videoAddToAlbum] (albumId + video + ownerId).
+ *
+ * Фиксированная сигнатура (НЕ менять — используют 3 параллельных интегратора в волне 2):
+ *
+ * @param album альбом-цель, в который добавляем видео.
+ * @param ownerId Owner для scoped-поиска: null=глобальный поиск VK-wide (свой профиль),
+ *  -groupId=только видео сообщества (для CommunityScreen). ТАКЖЕ передаётся в
+ *  videoAddToAlbum как ownerId альбома (target_id).
+ * @param onDismiss закрытие диалога.
+ * @param onAdded вызывается после успешного добавления видео в альбом — интегратор
+ *  делает optimistic update (albumVideos += video, count++).
+ */
+@Composable
+fun AddVideoToAlbumSearchDialog(
+    album: VideoAlbum,
+    ownerId: Long?,
+    onDismiss: () -> Unit,
+    onAdded: (video: Video) -> Unit,
+) {
+    val ctx = LocalContext.current
+    // SovaApp не в сигнатуре (фиксированная) — получаем через applicationContext.
+    val app = ctx.applicationContext as? SovaApp
+    val scope = rememberCoroutineScope()
+
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // "ownerId_id" уже добавленных видео (optimistic, локально в рамках диалога).
+    var addedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    LaunchedEffect(query) {
+        // Debounce 400мс — LaunchedEffect cancellит предыдущую корутину при смене query.
+        delay(400)
+        // Пустой запрос + нет scoped owner → не ищем (глобальный пустой поиск бессмысленен).
+        if (query.isBlank() && ownerId == null) {
+            results = emptyList()
+            loading = false
+            error = null
+            return@LaunchedEffect
+        }
+        val a = app
+        if (a == null) {
+            error = "Приложение не готово"
+            loading = false
+            return@LaunchedEffect
+        }
+        loading = true
+        error = null
+        try {
+            // Для группы (ownerId=-groupId) с пустым q — VK вернёт все видео сообщества,
+            // НО videoSearch имеет внутренний guard `query.isBlank() → emptyList()`.
+            // См. риск в worklog: для пустого q при scoped owner список может быть пуст
+            // до фикса videoSearch. При непустом q — scoped-поиск работает корректно.
+            results = a.apiClient.videoSearch(query = query, count = 30, ownerId = ownerId)
+        } catch (e: Exception) {
+            error = e.message ?: "Ошибка поиска"
+            results = emptyList()
+        } finally {
+            loading = false
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Header: «Добавить видео в «{album.title}»» + Close
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Добавить видео в «${album.title.ifBlank { "альбом" }}»",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Закрыть")
+                    }
+                }
+                // Search field
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    placeholder = {
+                        Text(if (ownerId != null) "Поиск видео..." else "Поиск видео по VK...")
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                // Results
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when {
+                        loading && results.isEmpty() -> {
+                            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                        }
+                        error != null -> {
+                            Text(
+                                text = "Ошибка: $error",
+                                modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        results.isEmpty() -> {
+                            Text(
+                                text = if (query.isBlank()) "Введите запрос для поиска" else "Ничего не найдено",
+                                modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        else -> {
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                items(results, key = { "${it.ownerId}_${it.id}" }) { video ->
+                                    VideoSearchResultRow(
+                                        video = video,
+                                        isAdded = addedIds.contains("${video.ownerId}_${video.id}"),
+                                        onAdd = {
+                                            scope.launch {
+                                                val a = app
+                                                if (a == null) {
+                                                    Toast.makeText(ctx, "Приложение не готово", Toast.LENGTH_SHORT).show()
+                                                    return@launch
+                                                }
+                                                try {
+                                                    val ok = a.apiClient.videoAddToAlbum(
+                                                        albumId = album.id,
+                                                        video = video,
+                                                        ownerId = ownerId,
+                                                    )
+                                                    if (ok) {
+                                                        addedIds = addedIds + "${video.ownerId}_${video.id}"
+                                                        onAdded(video)
+                                                        Toast.makeText(ctx, "Добавлено в альбом", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(ctx, "Не удалось добавить", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
+                                if (loading) {
+                                    item {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Строка результата поиска видео для [AddVideoToAlbumSearchDialog].
+ * Превью 80dp (AsyncImage или иконка-заглушка) + название + duration + views +
+ * кнопка «Добавить» (или ✓ если уже добавлено в рамках текущей сессии диалога).
+ */
+@Composable
+private fun VideoSearchResultRow(
+    video: Video,
+    isAdded: Boolean,
+    onAdd: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onAdd).padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Превью 80dp
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            video.thumbUrl?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } ?: Icon(
+                Icons.Outlined.VideoLibrary,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        // Title + duration + views
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = video.title.ifBlank { "Видео" },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${video.duration.toDurationString()} • ${video.views} просм.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // Кнопка «Добавить» / ✓ «Добавлено»
+        if (isAdded) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = "Добавлено",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            TextButton(onClick = onAdd) { Text("Добавить") }
+        }
+    }
 }
