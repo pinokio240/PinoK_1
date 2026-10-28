@@ -33,6 +33,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Call
+// B-BAN-1: Block — иконка пункта «Заблокировать/Разблокировать» в more-menu.
+import androidx.compose.material.icons.outlined.Block
 // П-7-AB: Flag — пункт «Пожаловаться» в «⋯»-меню записи чужой стены.
 import androidx.compose.material.icons.outlined.Flag
 // PROFILE-ALBUMS: иконка-плейсхолдер обложки альбома (как CommunityAlbumRow).
@@ -237,6 +239,11 @@ fun UserProfileScreen(
     // П-7-AB: «Пожаловаться» на запись чужой стены (wall.markAsSpam).
     val reportingPost = remember { mutableStateOf<Post?>(null) }
     var reportInFlight by remember { mutableStateOf(false) }
+    // B-BAN-1: «Заблокировать/Разблокировать» в more-menu (account.ban/unban,
+    // HAR-подтверждено VK web SPA: POST account.ban {owner_id} → {"response":1};
+    // err=15 трактуется как success на уровне VKApiClient). Модалка подтверждения.
+    var showBanConfirmDialog by remember { mutableStateOf(false) }
+    var banActionInProgress by remember { mutableStateOf(false) }
 
     // #FRIEND-CONTENT-TABS (2026-10-17): контентные вкладки чужих разделов.
     // Паттерн — ProfileScreen (свой профиль) W33-c: «Стена/Музыка/Видео/Фото»,
@@ -782,6 +789,21 @@ fun UserProfileScreen(
                                         }
                                     },
                                 )
+                                // B-BAN-1: «Заблокировать/Разблокировать» — account.ban/unban
+                                // (как в VK web SPA ⋮-меню профиля). Текст зависит от
+                                // blacklistedByMe: 1 → «Разблокировать», иначе «Заблокировать».
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(if (p.blacklistedByMe == 1) "Разблокировать" else "Заблокировать")
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.Block, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                    onClick = {
+                                        profileMenuExpanded = false
+                                        showBanConfirmDialog = true
+                                    },
+                                )
                             }
                         }
                     }
@@ -806,6 +828,31 @@ fun UserProfileScreen(
             state = listState,
         ) {
             item { ProfileHeader(profile = p) }
+            // B-BAN-1: бейдж «В чёрном списке» — если я заблокировал этого
+            // пользователя (profile.blacklistedByMe == 1). Опциональная плашка
+            // под именем, как в VK web (визуальный маркер заблокированного).
+            if (p.blacklistedByMe == 1) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Block,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "В чёрном списке",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
             item {
                 CountersRow(
                     profile = p,
@@ -1453,6 +1500,72 @@ fun UserProfileScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { reportingPost.value = null }, enabled = !reportInFlight) {
+                        Text("Отмена")
+                    }
+                },
+            )
+        }
+
+        // B-BAN-1: подтверждение «Заблокировать/Разблокировать» (как в VK web SPA:
+        // title + поясняющий текст + Отмена/Действие; confirm красный для бана,
+        // primary для разбана). account.ban/unban через VKApiClient; err=15
+        // трактуется как success на уровне VKA (другой агент B-BAN-4).
+        if (showBanConfirmDialog) {
+            val isBanned = p.blacklistedByMe == 1
+            AlertDialog(
+                onDismissRequest = { if (!banActionInProgress) showBanConfirmDialog = false },
+                title = { Text(if (isBanned) "Разблокировать?" else "Заблокировать?") },
+                text = {
+                    Text(
+                        if (isBanned) "Пользователь снова сможет писать вам и видеть ваш профиль."
+                        else "${p.firstName} будет добавлен в чёрный список. Он не сможет писать вам и видеть ваш профиль."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            banActionInProgress = true
+                            scope.launch {
+                                try {
+                                    val ok =
+                                        if (isBanned) app.apiClient.accountUnban(p.id)
+                                        else app.apiClient.accountBan(p.id)
+                                    if (ok) {
+                                        // Optimistic: обновляем blacklistedByMe локально
+                                        // (UserProfile — data class, copy доступен; p
+                                        // пересчитается из profile при recomposition).
+                                        profile = p.copy(blacklistedByMe = if (isBanned) 0 else 1)
+                                        Toast.makeText(
+                                            context,
+                                            if (isBanned) "Разблокирован" else "Заблокирован",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                        showBanConfirmDialog = false
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    AppLog.e("UserProfileScreen", "account ban/unban failed", e)
+                                    Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    banActionInProgress = false
+                                }
+                            }
+                        },
+                        enabled = !banActionInProgress,
+                    ) {
+                        Text(
+                            if (banActionInProgress) "…" else if (isBanned) "Разблокировать" else "Заблокировать",
+                            color = if (isBanned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBanConfirmDialog = false }, enabled = !banActionInProgress) {
                         Text("Отмена")
                     }
                 },
