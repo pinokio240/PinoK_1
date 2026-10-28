@@ -666,6 +666,23 @@ fun VideoScreen(
                         ) {
                             Text("← Альбомы", color = vkAccent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
+                        // B-INT-VIDEO (REVIEWER-6): кнопка «+ Добавить видео» ВЫНЕСЕНА
+                        // из LazyColumn в родительский Column — видна ВСЕГДА в drill-down
+                        // (вкл. пустой альбом; раньше была в ветке `else` LazyColumn и
+                        // скрывалась при albumVideos.isEmpty() → пользователь не мог
+                        // добавить видео в пустой альбом). Паритет с ProfileScreen /
+                        // CommunityScreen, где кнопка — отдельный item над if/else.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showAddVideoSearchFor = selectedAlbum }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Add, contentDescription = null, tint = vkAccent)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Добавить видео", color = vkAccent, fontWeight = FontWeight.Medium)
+                        }
                         if (albumVideosLoading) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = vkAccent)
@@ -682,21 +699,6 @@ fun VideoScreen(
                                 state = albumVideosListState,
                                 contentPadding = PaddingValues(bottom = 16.dp),
                             ) {
-                                // B-INT-VIDEO: кнопка «+ Добавить видео» в начале списка —
-                                // album-centric flow (открыть альбом → найти видео → addToAlbum).
-                                item(key = "add_video_to_album_btn") {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { showAddVideoSearchFor = selectedAlbum }
-                                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(Icons.Outlined.Add, contentDescription = null, tint = vkAccent)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Добавить видео", color = vkAccent, fontWeight = FontWeight.Medium)
-                                    }
-                                }
                                 items(albumVideos, key = { "${it.ownerId}_${it.id}" }) { video ->
                                     Box {
                                     VKVideoCard(
