@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
@@ -94,6 +95,7 @@ import re.pinok.data.model.BoardTopic
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
+import re.pinok.data.model.VideoAlbum
 import re.pinok.data.model.Album
 import re.pinok.ui.components.CreatePostDialog
 import re.pinok.ui.components.PhotoViewer
@@ -309,6 +311,20 @@ fun CommunityScreen(
         keyOf = { v -> "${v.ownerId}_${v.id}" },
         rememberKey = groupId,
     )
+
+    // ALBUMS-IN-VIDEO: state для видеоальбомов внутри вкладки «Видео»
+    // (паттерн ALBUMS-IN-PHOTO → ALBUMS-IN-VIDEO, зеркало albums/openedAlbum).
+    // Грузится video.getAlbums(ownerId=-groupId) при первом переходе на tab 2.
+    // openedVideoAlbum != null → рендерим видео этого альбома (video.get с
+    // album_id) в сетке + кнопку «← Видеоальбомы».
+    var videoAlbums by remember { mutableStateOf<List<VideoAlbum>>(emptyList()) }
+    var videoAlbumsLoading by remember { mutableStateOf(false) }
+    var videoAlbumsError by remember { mutableStateOf<String?>(null) }
+    var videoAlbumsLoaded by remember { mutableStateOf(false) }
+    var openedVideoAlbum by remember { mutableStateOf<VideoAlbum?>(null) }
+    var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var albumVideosLoading by remember { mutableStateOf(false) }
+    var albumVideosError by remember { mutableStateOf<String?>(null) }
 
     // Шаг 3 (#32c): state для вкладки «Музыка».
     // #AUDIO-PAGING-ALL (волна 38): была капнута на 50 (одна страница audioGet) —
@@ -657,6 +673,46 @@ fun CommunityScreen(
         if (selectedTab != 2 || videosLoaded) return@LaunchedEffect
         videosLoaded = true
         videosState.loadFirst()
+    }
+
+    // ALBUMS-IN-VIDEO: загрузка видеоальбомов сообщества при переходе на вкладку 2.
+    // video.getAlbums(ownerId=-groupId, count=100) — ownerId отрицательный для групп
+    // (конвенция VK, та же что в photosGetAlbums для сообщества). Грузим один раз
+    // (videoAlbumsLoaded-флаг); переключение туда-обратно не перезапрашивает.
+    // openedVideoAlbum != null → блокируем фоновую (пере)загрузку, т.к. пользователь
+    // уже открыл конкретный альбом (его фото грузит LaunchedEffect ниже).
+    LaunchedEffect(selectedTab, groupId) {
+        if (selectedTab != 2 || videoAlbumsLoaded || videoAlbumsLoading || openedVideoAlbum != null) return@LaunchedEffect
+        videoAlbumsLoading = true
+        videoAlbumsError = null
+        try {
+            val (total, list) = app.apiClient.videoGetAlbums(ownerId = -groupId, count = 100)
+            videoAlbums = list
+            videoAlbumsLoaded = true
+            AppLog.i("CommunityScreen", "Loaded ${videoAlbums.size} video albums for group $groupId (total=$total)")
+        } catch (t: Throwable) {
+            AppLog.e("CommunityScreen", "videoGetAlbums failed", t)
+            videoAlbumsError = t.message ?: "Ошибка загрузки видеоальбомов"
+        } finally {
+            videoAlbumsLoading = false
+        }
+    }
+
+    // ALBUMS-IN-VIDEO: загрузка видео открытого альбома (video.get с album_id).
+    // Паттерн — LaunchedEffect(openedAlbum) для фотоальбомов выше (L646).
+    LaunchedEffect(openedVideoAlbum, groupId) {
+        val album = openedVideoAlbum ?: return@LaunchedEffect
+        albumVideosLoading = true
+        albumVideosError = null
+        try {
+            albumVideos = app.apiClient.videoGet(ownerId = -groupId, count = 50, albumId = album.id)
+            AppLog.i("CommunityScreen", "Album videos loaded: ${albumVideos.size} for «${album.title}»")
+        } catch (t: Throwable) {
+            AppLog.e("CommunityScreen", "Album videos load failed", t)
+            albumVideosError = t.message ?: "Ошибка загрузки видео альбома"
+        } finally {
+            albumVideosLoading = false
+        }
     }
 
     // Шаг 2 (#32b): канонический триггер пагинации видео, гейт по вкладке 2.
@@ -1668,6 +1724,124 @@ fun CommunityScreen(
                 } // else (openedAlbum == null — показываем «Все фото»)
             }
             2 -> {
+                // ALBUMS-IN-VIDEO: видеоальбомы показываются ВНУТРИ вкладки «Видео»
+                // (паттерн из ALBUMS-IN-PHOTO для tab 1). Сначала — горизонтальный
+                // список видеоальбомов над «Все видео», тап → открывает видео альбома
+                // через video.get(albumId) → VideoHolder.open (через onVideoClick).
+                // Альбомы грузятся через LaunchedEffect(selectedTab==2) выше.
+                val openedVAlbum = openedVideoAlbum
+                if (openedVAlbum != null) {
+                    // Открыли видеоальбом — видео из этого альбома + «← Видеоальбомы».
+                    item(key = "album_video_back") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                openedVideoAlbum = null
+                                albumVideos = emptyList()
+                            }.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Назад к видеоальбомам",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = openedVAlbum.title.ifBlank { "Видеоальбом" },
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (albumVideosLoading && albumVideos.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                            }
+                        }
+                    } else if (albumVideosError != null && albumVideos.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = albumVideosError ?: "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                )
+                            }
+                        }
+                    } else if (albumVideos.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "В альбоме нет видео",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                        }
+                    } else {
+                        val albumVideoRows = albumVideos.chunked(2)
+                        itemsIndexed(albumVideoRows, key = { idx, _ -> "album_video_row_$idx" }) { _, rowVideos ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                rowVideos.forEach { video ->
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        VideoThumbnail(
+                                            video = video,
+                                            onClick = onVideoClick,
+                                            compact = true,
+                                        )
+                                    }
+                                }
+                                repeat(2 - rowVideos.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                } else {
+                // ALBUMS-IN-VIDEO: горизонтальный список видеоальбомов (если есть)
+                // над «Все видео». Не блокируем «Все видео» — показываем и альбомы,
+                // и сетку; загрузка альбомов идёт параллельно с видео.
+                if (videoAlbums.isNotEmpty()) {
+                    item(key = "community_video_albums_row") {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(videoAlbums, key = { "valbum_${it.ownerId}_${it.id}" }) { album ->
+                                CommunityVideoAlbumRow(
+                                    album = album,
+                                    onClick = { openedVideoAlbum = album },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (videoAlbumsLoading && videoAlbums.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                    }
+                }
                 // Шаг 2 (#32b): Видео сообщества — videoGet(ownerId=-groupId).
                 // Список VideoThumbnail (существующий composable), тап → onVideoClick.
                 // Пагинация — канонический PagingTrigger (гейт selectedTab == 2 выше).
@@ -1748,6 +1922,7 @@ fun CommunityScreen(
                         PagingFooter(state = videosState, emptyText = "Это все видео")
                     }
                 }
+                } // else (openedVideoAlbum == null — показываем альбомы + «Все видео»)
             }
             3 -> {
                 // #GROUP-CLIPS: Клипы сообщества — shortVideo.getOwnerVideos.
@@ -2626,6 +2801,70 @@ private fun CommunityAlbumRow(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "${album.size} фото",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * ALBUMS-IN-VIDEO: карточка видеоальбома в горизонтальной LazyRow во вкладке
+ * «Видео» сообщества. Card-стиль — обложка 1:1 (coverUrl из video.getAlbums
+ * extended=1: image[] maxBy area, fallback на photo_320 / photo_160) или
+ * серый placeholder с иконкой VideoLibrary; под ней название и счётчик видео.
+ * Тап → [onClick] (открывает видеоальбом: video.get(albumId) → VideoHolder).
+ *
+ * Паттерн — [CommunityAlbumRow] (фотоальбом), стиль — вертикальная Card 140dp.
+ */
+@Composable
+private fun CommunityVideoAlbumRow(album: VideoAlbum, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .width(140.dp)
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                val cover = album.coverUrl
+                if (!cover.isNullOrBlank()) {
+                    AsyncImage(
+                        model = cover,
+                        contentDescription = album.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.VideoLibrary,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    text = album.title.ifBlank { "Без названия" },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${album.count} видео",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )

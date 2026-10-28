@@ -86,6 +86,7 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.Track
 import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
+import re.pinok.data.model.VideoAlbum
 import re.pinok.media.PlayerConnection
 import re.pinok.ui.components.PhotoViewer
 // PHOTO-SHARE-WIRE: ShareToChatSheet для пункта «Отправить» в PhotoViewer.
@@ -273,6 +274,19 @@ fun UserProfileScreen(
     // TabErrorRow) — пробрасывается в ключ LaunchedEffect, чтобы перезапустить
     // photos.get при той же ссылке на openedAlbum (паттерн tabRetryTick).
     var albumPhotosRetryTick by remember { mutableStateOf(0) }
+    // ALBUMS-IN-VIDEO: state для видеоальбомов внутри вкладки «Видео»
+    // (паттерн PROFILE-ALBUMS для фотоальбомов → видеоальбомы). Грузится
+    // video.getAlbums(ownerId=userId — ПОЛОЖИТЕЛЬНЫЙ для чужого профиля).
+    // openedVideoAlbum != null → рендерим видео этого альбома (video.get с
+    // album_id) в сетке + кнопку «← Видеоальбомы» (AlbumBackRow).
+    var videoAlbums by remember { mutableStateOf<List<VideoAlbum>>(emptyList()) }
+    var videoAlbumsLoading by remember { mutableStateOf(false) }
+    var videoAlbumsError by remember { mutableStateOf<String?>(null) }
+    var videoAlbumsLoaded by remember { mutableStateOf(false) }
+    var openedVideoAlbum by remember { mutableStateOf<VideoAlbum?>(null) }
+    var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var albumVideosLoading by remember { mutableStateOf(false) }
+    var albumVideosError by remember { mutableStateOf<String?>(null) }
 
     // Свой профиль? Если да — не показываем «Добавить в друзья».
     val currentUserId = app.exchangeAuthRepository.userId()
@@ -371,6 +385,26 @@ fun UserProfileScreen(
             PROFILE_TAB_VIDEO -> if (!videoLoaded && !videoLoading) {
                 videoLoading = true
                 videoError = null
+                // ALBUMS-IN-VIDEO: параллельно с «всеми видео» грузим видеоальбомы
+                // (video.getAlbums) — для горизонтального списка над «Все видео»
+                // (паттерн PROFILE-ALBUMS для фото → видеоальбомы).
+                if (!videoAlbumsLoaded && !videoAlbumsLoading) {
+                    launch {
+                        videoAlbumsLoading = true
+                        videoAlbumsError = null
+                        try {
+                            val (total, list) = app.apiClient.videoGetAlbums(ownerId = userId, count = 100)
+                            videoAlbums = list
+                            videoAlbumsLoaded = true
+                            AppLog.i("UserProfileScreen", "Video albums loaded: ${videoAlbums.size} for uid=$userId (total=$total)")
+                        } catch (e: Exception) {
+                            AppLog.e("UserProfileScreen", "Video albums load failed", e)
+                            videoAlbumsError = "Ошибка: ${e.message}"
+                        } finally {
+                            videoAlbumsLoading = false
+                        }
+                    }
+                }
                 try {
                     videos = app.apiClient.videoGet(ownerId = userId, count = 30).filter { it.id > 0L }
                     videoLoaded = true
@@ -434,6 +468,23 @@ fun UserProfileScreen(
             albumPhotosError = "Ошибка: ${e.message}"
         } finally {
             albumPhotosLoading = false
+        }
+    }
+
+    // ALBUMS-IN-VIDEO: открыли видеоальбом — грузим его видео (video.get с
+    // album_id, owner_id = userId). Паттерн — LaunchedEffect(openedAlbum) выше.
+    LaunchedEffect(openedVideoAlbum) {
+        val album = openedVideoAlbum ?: return@LaunchedEffect
+        albumVideosLoading = true
+        albumVideosError = null
+        try {
+            albumVideos = app.apiClient.videoGet(ownerId = userId, count = 50, albumId = album.id)
+            AppLog.i("UserProfileScreen", "Album videos loaded: ${albumVideos.size} for «${album.title}»")
+        } catch (e: Exception) {
+            AppLog.e("UserProfileScreen", "Album videos load failed", e)
+            albumVideosError = "Ошибка: ${e.message}"
+        } finally {
+            albumVideosLoading = false
         }
     }
 
@@ -937,28 +988,92 @@ fun UserProfileScreen(
                     }
                 }
             } else if (selectedTab == PROFILE_TAB_VIDEO) {
-                val ve = videoError
-                if (videoLoading) {
-                    item(key = "friend_video_progress") { TabProgressRow() }
-                } else if (ve != null) {
-                    item(key = "friend_video_error") {
-                        TabErrorRow(message = ve, onRetry = { tabRetryTick++ })
+                // ALBUMS-IN-VIDEO: во вкладке «Видео» сначала показываем видеоальбомы
+                // (video.getAlbums) — горизонтальный список карточек над «Все видео».
+                // Тап по альбому → openedVideoAlbum (грузим видео через video.get с
+                // album_id) и рендерим их в сетке + кнопку «Назад к альбомам».
+                // Паттерн — PROFILE_TAB_PHOTO ниже + ProfileScreen PROFILE_TAB_VIDEO.
+                val openedVAlbum = openedVideoAlbum
+                if (openedVAlbum != null) {
+                    // Открыли видеоальбом — видео из этого альбома + «Назад».
+                    item(key = "friend_album_video_back") {
+                        AlbumBackRow(title = openedVAlbum.title) {
+                            openedVideoAlbum = null
+                            albumVideos = emptyList()
+                        }
                     }
-                } else if (videos.isEmpty()) {
-                    item(key = "friend_video_empty") { TabEmptyRow("У этого пользователя нет видео") }
+                    if (albumVideosLoading && albumVideos.isEmpty()) {
+                        item(key = "friend_album_video_progress") { TabProgressRow() }
+                    } else if (albumVideosError != null && albumVideos.isEmpty()) {
+                        item(key = "friend_album_video_error") {
+                            TabErrorRow(message = albumVideosError ?: "", onRetry = { tabRetryTick++ })
+                        }
+                    } else if (albumVideos.isEmpty()) {
+                        item(key = "friend_album_video_empty") {
+                            TabEmptyRow("В альбоме нет видео")
+                        }
+                    } else {
+                        val albumVideoRows = albumVideos.chunked(2)
+                        itemsIndexed(
+                            albumVideoRows,
+                            key = { idx, _ -> "friend_album_video_row_$idx" },
+                        ) { _, rowVideos ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                rowVideos.forEach { video ->
+                                    ProfileVideoCard(
+                                        video = video,
+                                        onClick = { onVideoClick(video) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                repeat(2 - rowVideos.size) { Spacer(modifier = Modifier.weight(1f)) }
+                            }
+                        }
+                    }
                 } else {
-                    val rows = videos.chunked(2)
-                    itemsIndexed(rows, key = { idx, _ -> "friend_video_row_$idx" }) { _, rowVideos ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            rowVideos.forEach { video ->
-                                ProfileVideoCard(
-                                    video = video,
-                                    onClick = { onVideoClick(video) },
-                                    modifier = Modifier.weight(1f),
-                                )
+                    // Горизонтальный список видеоальбомов (если есть) над «Все видео».
+                    if (videoAlbums.isNotEmpty()) {
+                        item(key = "friend_video_albums_header") {
+                            Text(
+                                text = "Видеоальбомы (${videoAlbums.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                        item(key = "friend_video_albums_row") {
+                            ProfileVideoAlbumsRow(
+                                albums = videoAlbums,
+                                onAlbumClick = { openedVideoAlbum = it },
+                            )
+                        }
+                    }
+                    val ve = videoError
+                    if (videoLoading) {
+                        item(key = "friend_video_progress") { TabProgressRow() }
+                    } else if (ve != null) {
+                        item(key = "friend_video_error") {
+                            TabErrorRow(message = ve, onRetry = { tabRetryTick++ })
+                        }
+                    } else if (videos.isEmpty()) {
+                        item(key = "friend_video_empty") { TabEmptyRow("У этого пользователя нет видео") }
+                    } else {
+                        val rows = videos.chunked(2)
+                        itemsIndexed(rows, key = { idx, _ -> "friend_video_row_$idx" }) { _, rowVideos ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                rowVideos.forEach { video ->
+                                    ProfileVideoCard(
+                                        video = video,
+                                        onClick = { onVideoClick(video) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
                             }
                         }
                     }
