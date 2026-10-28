@@ -2677,7 +2677,17 @@ class VKApiClient(
     suspend fun accountBan(ownerId: Long): Boolean {
         if (isOffline()) return false
         val json = call("account.ban", mapOf("owner_id" to ownerId.toString())) ?: return false
-        return json.has("response")
+        if (json.has("response")) return true
+        // B-BAN-4: VK иногда возвращает err=15 (Access denied) на ban, хотя бан
+        // сработал (например, повторный бан уже заблокированного). VK web SPA
+        // трактует err=15 как success (HAR-подтверждено: .then(success, err => {
+        // if (err.error_code === 15) return success_handler(); })).
+        val errorCode = json.getAsJsonObject("error")?.get("error_code")?.takeIf { !it.isJsonNull }?.asInt
+        if (errorCode == 15) {
+            AppLog.i("VKApiClient", "account.ban: err=15 treated as success (ban already applied) ownerId=$ownerId")
+            return true
+        }
+        return false
     }
 
     /** P3.1: messages.markAsSpam — пожаловаться на спам (message_ids, optional peer_id). */
@@ -20078,7 +20088,15 @@ class VKApiClient(
     suspend fun accountUnban(ownerId: Long): Boolean {
         if (isOffline()) return false
         val json = call("account.unban", mapOf("owner_id" to ownerId.toString())) ?: return false
-        return json.getAsJsonObject("response") != null
+        if (json.getAsJsonObject("response") != null) return true
+        // B-BAN-4: err=15 = Access denied, но разбан уже применился (повторный unban
+        // уже разблокированного). VK web трактует как success.
+        val errorCode = json.getAsJsonObject("error")?.get("error_code")?.takeIf { !it.isJsonNull }?.asInt
+        if (errorCode == 15) {
+            AppLog.i("VKApiClient", "account.unban: err=15 treated as success (unban already applied) ownerId=$ownerId")
+            return true
+        }
+        return false
     }
 
     // ════════════════════════════════════════════════════════════════════
