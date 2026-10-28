@@ -384,6 +384,20 @@ fun CommunityScreen(
     // (album-centric UX из HAR: открыть альбом → «Добавить видео» → search с
     // owner_id=-groupId → выбрать → addToAlbum). null = диалог закрыт.
     var showAddVideoSearchFor by remember { mutableStateOf<VideoAlbum?>(null) }
+    // BUILDER-VIDEO-SEARCH-COMMUNITY: поиск видео во вкладке «Видео» (tab 2).
+    // Отдельное от wallSearch (tab 0) состояние — НЕ конфликтует с поиском
+    // записей стены. Паритет с VideoScreen/ProfileScreen. При вводе: scoped
+    // поиск (ownerId=-groupId = видео сообщества) + search_global=1 (глобальный
+    // — чужие видео VK, fix b525f31). При пустом запросе: существующий UI
+    // (альбомы + «Все видео» grid). LaunchedEffect(debounce) ниже, рядом
+    // с PagingTrigger(videosState).
+    var videoSearchQuery by remember { mutableStateOf("") }
+    var videoSearchResults by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var videoSearchLoading by remember { mutableStateOf(false) }
+    var videoSearchError by remember { mutableStateOf<String?>(null) }
+    var videoSearchOffset by remember { mutableStateOf(0) }
+    var videoSearchHasMore by remember { mutableStateOf(false) }
+    var videoSearchLoaded by remember { mutableStateOf(false) }
     val videoCrudContext = LocalContext.current
 
     // Шаг 3 (#32c): state для вкладки «Музыка».
@@ -845,6 +859,91 @@ fun CommunityScreen(
 
     // Шаг 2 (#32b): канонический триггер пагинации видео, гейт по вкладке 2.
     PagingTrigger(listState = listState, state = videosState, enabled = selectedTab == 2)
+
+    // BUILDER-VIDEO-SEARCH-COMMUNITY: поиск видео во вкладке «Видео» (tab 2)
+    // через VK video.search. Scoped: ownerId=-groupId (видео сообщества) +
+    // search_global=1 (глобальный — чужие видео VK, fix b525f31). VK корректно
+    // комбинирует owner_id + search_global: сначала свои, потом чужие.
+    // Debounce 400мс — эталон VideoScreen (500мс)/AddVideoToAlbumSearchDialog
+    // (350мс), компромисс между отзывчивостью и нагрузкой на API. Гейт
+    // selectedTab==2: поиск активен только когда пользователь на вкладке «Видео».
+    LaunchedEffect(videoSearchQuery, selectedTab) {
+        if (selectedTab != 2) return@LaunchedEffect
+        val q = videoSearchQuery
+        if (q.isBlank()) {
+            videoSearchResults = emptyList()
+            videoSearchLoading = false
+            videoSearchError = null
+            videoSearchOffset = 0
+            videoSearchHasMore = false
+            videoSearchLoaded = false
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(400)  // debounce
+        videoSearchLoading = true
+        videoSearchError = null
+        videoSearchOffset = 0
+        videoSearchHasMore = false
+        try {
+            val page = app.apiClient.videoSearch(query = q, count = 30, offset = 0, ownerId = -groupId)
+            videoSearchResults = page
+            videoSearchOffset = page.size
+            videoSearchHasMore = page.size >= 30
+            videoSearchLoaded = true
+            AppLog.i("CommunityScreen", "video search: ${page.size} for «$q»")
+        } catch (e: Exception) {
+            videoSearchError = e.message ?: "Ошибка поиска видео"
+            AppLog.e("CommunityScreen", "videoSearch error", e)
+        } finally {
+            videoSearchLoading = false
+        }
+    }
+
+    // BUILDER-VIDEO-SEARCH-COMMUNITY: подгрузка следующих результатов поиска
+    // видео (offset-based пагинация, эталон — VideoScreen.loadMoreSearch).
+    // Guards: не запускать параллельные запросы, только если hasMore и запрос
+    // ещё активен. Дедуп по ownerId_id (видео из разных источников могут
+    // совпадать по id, но не по владельцу).
+    fun loadMoreVideoSearch() {
+        if (videoSearchLoading || !videoSearchHasMore || videoSearchQuery.isBlank()) return
+        scope.launch {
+            videoSearchLoading = true
+            try {
+                val page = app.apiClient.videoSearch(
+                    query = videoSearchQuery, count = 30,
+                    offset = videoSearchOffset, ownerId = -groupId,
+                )
+                val fresh = page.filter { nv -> videoSearchResults.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                videoSearchResults = (videoSearchResults + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                videoSearchOffset += page.size
+                videoSearchHasMore = page.size >= 30
+                AppLog.i("CommunityScreen", "video search loadMore: +${fresh.size} (offset=${videoSearchOffset}, total=${videoSearchResults.size})")
+            } catch (e: Exception) {
+                AppLog.e("CommunityScreen", "video search load more failed: ${e.message}")
+            } finally {
+                videoSearchLoading = false
+            }
+        }
+    }
+
+    // BUILDER-VIDEO-SEARCH-COMMUNITY: триггер догрузки результатов поиска видео
+    // при скролле к концу. videoSearchResults — отдельный список (НЕ
+    // PagedListState), поэтому стандартный PagingTrigger не подходит — ручной
+    // эквивалент (паттерн 1:1 с wall search trigger выше и PagingTrigger в
+    // PagedListState.kt:199). Гейты: selectedTab==2, videoSearchQuery.isNotBlank()
+    // (активный поиск), результаты непустые, не внутри loadMoreVideoSearch
+    // (loading/hasMore — проверяются внутри loadMoreVideoSearch).
+    LaunchedEffect(listState, selectedTab, videoSearchQuery) {
+        snapshotFlow {
+            if (selectedTab != 2 || videoSearchQuery.isBlank()) return@snapshotFlow false
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible >= layoutInfo.totalItemsCount - 3 && videoSearchResults.isNotEmpty()
+        }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { loadMoreVideoSearch() }
+    }
 
     // #GROUP-CLIPS: первая загрузка клипов сообщества при переходе на вкладку 3.
     // Фаза 0/1: PagedListState + показан список пуст → грузим первую страницу.
@@ -2046,6 +2145,113 @@ fun CommunityScreen(
                         }
                     }
                 } else {
+                // BUILDER-VIDEO-SEARCH-COMMUNITY: поисковое поле для вкладки
+                // «Видео» (tab 2), всегда вверху когда не в drill-down альбома.
+                // Отдельный state (videoSearchQuery) — НЕ ломает wallSearch (tab 0).
+                // При пустом запросе: существующий UI (альбомы + «Все видео» grid).
+                // При вводе: результаты scoped-поиска (ownerId=-groupId = видео
+                // сообщества) + search_global=1 (глобальный, чужие видео VK).
+                item(key = "video_search_input") {
+                    OutlinedTextField(
+                        value = videoSearchQuery,
+                        onValueChange = { videoSearchQuery = it },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        placeholder = { Text("Поиск видео…") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (videoSearchQuery.isNotEmpty()) {
+                                IconButton(onClick = { videoSearchQuery = "" }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Очистить")
+                                }
+                            }
+                        },
+                        singleLine = true,
+                    )
+                }
+                if (videoSearchQuery.isNotBlank()) {
+                    // BUILDER-VIDEO-SEARCH-COMMUNITY: результаты поиска видео.
+                    // Scoped: ownerId=-groupId + search_global=1 (VK сначала свои,
+                    // потом чужие). Grid 2 колонки — паттерн как в «Все видео».
+                    if (videoSearchLoading && videoSearchResults.isEmpty()) {
+                        item(key = "video_search_loading") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                            }
+                        }
+                    } else if (videoSearchError != null && videoSearchResults.isEmpty()) {
+                        item(key = "video_search_error") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = videoSearchError ?: "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
+                    } else if (videoSearchResults.isEmpty()) {
+                        item(key = "video_search_empty") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Ничего не найдено",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                        }
+                    } else {
+                        item(key = "video_search_title") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            ) {
+                                Text(
+                                    text = "Результаты поиска (${videoSearchResults.size})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        }
+                        val searchVideoRows = videoSearchResults.chunked(2)
+                        itemsIndexed(searchVideoRows, key = { idx, _ -> "video_search_row_$idx" }) { _, rowVideos ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                rowVideos.forEach { video ->
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        VideoThumbnail(
+                                            video = video,
+                                            onClick = onVideoClick,
+                                            compact = true,
+                                        )
+                                    }
+                                }
+                                repeat(2 - rowVideos.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        if (videoSearchHasMore) {
+                            item(key = "video_search_load_more") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                }
+                            }
+                        }
+                    }
+                } else {
                 // ALBUMS-IN-VIDEO: горизонтальный список видеоальбомов (если есть)
                 // над «Все видео». Не блокируем «Все видео» — показываем и альбомы,
                 // и сетку; загрузка альбомов идёт параллельно с видео.
@@ -2224,6 +2430,7 @@ fun CommunityScreen(
                         PagingFooter(state = videosState, emptyText = "Это все видео")
                     }
                 }
+                } // else (videoSearchQuery.isBlank() — существующий UI: альбомы + «Все видео»)
                 } // else (openedVideoAlbum == null — показываем альбомы + «Все видео»)
             }
             3 -> {
