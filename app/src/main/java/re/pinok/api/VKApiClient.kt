@@ -20088,7 +20088,11 @@ class VKApiClient(
     suspend fun accountUnban(ownerId: Long): Boolean {
         if (isOffline()) return false
         val json = call("account.unban", mapOf("owner_id" to ownerId.toString())) ?: return false
-        if (json.getAsJsonObject("response") != null) return true
+        // FIX-CAST: VK возвращает {"response":1} — response это JsonPrimitive (число),
+        // НЕ JsonObject. getAsJsonObject("response") бросал ClassCastException →
+        // UI падал в catch с "account ban/unban failed" даже при успехе.
+        // Используем has("response") — работает для любого типа response.
+        if (json.has("response")) return true
         // B-BAN-4: err=15 = Access denied, но разбан уже применился (повторный unban
         // уже разблокированного). VK web трактует как success.
         val errorCode = json.getAsJsonObject("error")?.get("error_code")?.takeIf { !it.isJsonNull }?.asInt
