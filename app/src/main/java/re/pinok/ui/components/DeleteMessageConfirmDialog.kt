@@ -4,7 +4,6 @@
 // (одиночное и массовое удаление). Эталон: VK-стиль (скриншот пользователя).
 package re.pinok.ui.components
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
