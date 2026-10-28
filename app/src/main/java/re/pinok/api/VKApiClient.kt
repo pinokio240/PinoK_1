@@ -326,6 +326,11 @@ class VKApiClient(
         // поэтому правка round-trip: читаем объект, меняем enable/title/link,
         // неизвестные поля сохраняются как есть.
         val actionButtonRaw: String? = null,
+        // BOARD-TOPICS-COUNTERS: counters.topics из groups.getById fields=counters.
+        // Количество топиков в обсуждениях группы (целое число). Работает для
+        // ВСЕХ юзеров (не требует админ-прав, в отличие от groups.getSettings).
+        // null = поле не пришло (counters не запрошен / закрытая группа).
+        val topicsCount: Int? = null,
     ) {
         // W35-a: порог показа блока «Управление» — admin_level >= 1 || is_admin==1
         // (сверка §5.1: модератор уже имеет часть админ-пунктов).
@@ -10683,7 +10688,7 @@ class VKApiClient(
         // W35-a: + админ-блок (is_admin/admin_level/is_advertiser/can_message/
         // can_suggest/can_post/member_status) — сверка «Группа_админ» §3.1/§5.1.
         // Доп. поля безопасны для остальных вызовов — парсеры читают только известные.
-        fields: String = "photo_100,photo_200,description,members_count,verified,activity,status,screen_name,site,is_member,type,is_admin,admin_level,is_advertiser,can_message,can_suggest,can_post,member_status,cover",
+        fields: String = "photo_100,photo_200,description,members_count,verified,activity,status,screen_name,site,is_member,type,is_admin,admin_level,is_advertiser,can_message,can_suggest,can_post,member_status,cover,counters",
     ): List<GroupInfo> {
         if (isOffline() || groupIds.isEmpty()) return emptyList()
         // #30i (groups fix): всегда используем group_ids (plural) — это работает
@@ -10759,6 +10764,12 @@ class VKApiClient(
                     // (AdminCtaScreen; в default fields поля НЕТ — только явный запрос).
                     actionButtonRaw = o.get("action_button")?.takeIf { !it.isJsonNull && it.isJsonObject }
                         ?.asJsonObject?.toString(),
+                    // BOARD-TOPICS-COUNTERS: counters.topics — количество топиков
+                    // в обсуждениях. groups.getById fields=counters → {counters:{topics:N,...}}.
+                    // Паттерн Fenrir (AbsWallFragment.setupCounter): topics>0 → вкладка
+                    // активна. takeIf isJsonObject — защита от примитивов/null.
+                    topicsCount = o.get("counters")?.takeIf { it.isJsonObject }?.asJsonObject
+                        ?.get("topics")?.takeIf { !it.isJsonNull }?.asInt,
                 )
             }
         } catch (e: Exception) {

@@ -303,6 +303,11 @@ fun CommunityScreen(
     // ломаются (если вкладка не показана, по ней никогда не кликают).
     var groupSections by remember { mutableStateOf<VKApiClient.GroupSections?>(null) }
     var sectionsLoaded by remember { mutableStateOf(false) }
+    // BOARD-TOPICS-COUNTERS: counters.topics из groups.getById (как Fenrir).
+    // Primary gate для вкладки «Обсуждения» — работает для ВСЕХ юзеров (не
+    // требует админ-прав, в отличие от GroupSections.topics из getSettings).
+    // null = не загружено, 0 = админ отключил / нет топиков, >0 = есть топики.
+    var topicsCount by remember { mutableStateOf<Int?>(null) }
 
     // Шаг 1 (#32a): state для вкладки «Фото» — единый паттерн пагинации.
     // photosGet(ownerId=-groupId, albumId="wall", count=50); конец когда page.size < 50.
@@ -576,6 +581,10 @@ fun CommunityScreen(
                 val groups = app.apiClient.groupsGetById(listOf(groupId))
                 groupInfo = groups.firstOrNull()
                 isMember = groupInfo?.isMember == 1
+                // BOARD-TOPICS-COUNTERS: counters.topics уже в GroupInfo (groups.getById
+                // fields=counters). Не нужен отдельный запрос — переиспользуем загруженный.
+                topicsCount = groupInfo?.topicsCount
+                AppLog.i("CommunityScreen", "counters.topics = $topicsCount for groupId=$groupId")
                 if (groupInfo == null) {
                     errorText = app.apiClient.lastApiError ?: "Сообщество не найдено (id=$groupId)"
                 } else {
@@ -634,9 +643,13 @@ fun CommunityScreen(
     // выключает секцию (значение 0 — disabled), исключаем пару из списка;
     // остальные индексы сохраняются. «Клипы» и «Файлы» — всегда (в VK API
     // нет групповой настройки clips, а docs.get работает для любого сообщества).
-    val tabs: List<Pair<Int, String>> = remember(groupSections, sectionsLoaded) {
+    val tabs: List<Pair<Int, String>> = remember(groupSections, sectionsLoaded, topicsCount) {
         val s = groupSections
         val has = s != null
+        // BOARD-TOPICS-COUNTERS: primary gate — counters.topics из groups.getById
+        // (работает для ВСЕХ юзеров, не требует админа). Secondary — GroupSections.topics
+        // (0/1 флаг из getSettings, только для менеджеров). null = не загружено → не показывать.
+        val showTopics = (topicsCount != null && topicsCount > 0) || s?.topics == 1
         buildList {
             // «Записи» (wall): 0=выкл, 1=открытая, 2=ограниченная, 3=закрытая.
             // Всегда показываем вкладку: даже выключенная стена у сообщества
@@ -649,7 +662,6 @@ fun CommunityScreen(
                 add(2 to "Видео")
                 add(3 to "Клипы")
                 add(4 to "Музыка")
-                add(5 to "Обсуждения")
             } else {
                 val sn = s
                 if (sn.wall != 0) add(0 to "Записи")
@@ -657,8 +669,12 @@ fun CommunityScreen(
                 if (sn.video > 0) add(2 to "Видео")
                 add(3 to "Клипы")
                 if (sn.audio > 0) add(4 to "Музыка")
-                if (sn.topics > 0) add(5 to "Обсуждения")
             }
+            // BOARD-TOPICS-COUNTERS: вкладка «Обсуждения» — primary counters.topics>0
+            // (есть топики) ИЛИ secondary GroupSections.topics==1 (админ включил).
+            // topicsCount==null (не загружено) → не показывать. topicsCount==0 →
+            // не показывать (админ отключил или нет топиков). >0 → показывать.
+            if (showTopics) add(5 to "Обсуждения")
             // «Файлы» (docs) — всегда: docs.get работает для любого сообщества
             // (не требует админ-прав), даже если админ выключил секцию docs=0.
             add(6 to "Файлы")
@@ -1126,6 +1142,8 @@ fun CommunityScreen(
                             val grps = app.apiClient.groupsGetById(listOf(groupId))
                             groupInfo = grps.firstOrNull()
                             isMember = groupInfo?.isMember == 1
+                            // BOARD-TOPICS-COUNTERS: обновить при retry.
+                            topicsCount = groupInfo?.topicsCount
                             if (groupInfo == null) {
                                 errorText = app.apiClient.lastApiError ?: "Сообщество не найдено (id=$groupId)"
                             } else {
