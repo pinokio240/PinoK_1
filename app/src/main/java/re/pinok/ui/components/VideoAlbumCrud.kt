@@ -481,6 +481,14 @@ fun AddVideoToAlbumSearchDialog(
     ownerId: Long?,
     onDismiss: () -> Unit,
     onAdded: (video: Video) -> Unit,
+    /**
+     * ADD-TARGET-FIX: владелец АЛЬБОМА для videoAddToAlbum (target_id).
+     * По умолчанию = ownerId (backwards-compatible: ProfileScreen/VideoScreen
+     * где поиск и альбом принадлежат одному owner).
+     * Для CommunityScreen: ownerId=null (глобальный поиск),
+     * albumOwnerId=-groupId (альбом сообщества — VK требует target_id).
+     */
+    albumOwnerId: Long? = ownerId,
 ) {
     val ctx = LocalContext.current
     // SovaApp не в сигнатуре (фиксированная) — получаем через applicationContext.
@@ -598,7 +606,7 @@ fun AddVideoToAlbumSearchDialog(
                                                     val ok = a.apiClient.videoAddToAlbum(
                                                         albumId = album.id,
                                                         video = video,
-                                                        ownerId = ownerId,
+                                                        ownerId = albumOwnerId,  // ADD-TARGET-FIX: target_id = владелец альбома
                                                     )
                                                     if (ok) {
                                                         addedIds = addedIds + "${video.ownerId}_${video.id}"

@@ -3039,14 +3039,17 @@ fun CommunityScreen(
         )
     }
     // B-INT-COMMUNITY: диалог глобального поиска видео для добавления в открытый
-    // альбом сообщества. ownerId=null = глобальный поиск по всему VK (как в
-    // ProfileScreen) — пользователь может добавлять любые видео, не только
-    // из сообщества. Album-centric UX из HAR. onAdded → optimistic update.
+    // альбом сообщества. ADD-TARGET-FIX: разделение ownerId (поиск) vs albumOwnerId (target_id).
+    // - ownerId=null = глобальный поиск VK-wide (можно найти любые видео, не только из сообщества)
+    // - albumOwnerId=-groupId = владелец альбома (сообщество) → VK требует target_id
+    //   в video.addToAlbum, без него err=100 "album_id is incorrect"
+    // (подтверждено HAR: target_id=-165284550, video.ownerId=любое)
     val addVideoSearchTarget = showAddVideoSearchFor
     if (addVideoSearchTarget != null) {
         AddVideoToAlbumSearchDialog(
             album = addVideoSearchTarget,
-            ownerId = null,   // глобальный поиск VK-wide (паритет с ProfileScreen)
+            ownerId = null,              // глобальный поиск VK-wide
+            albumOwnerId = -groupId,     // target_id = владелец альбома (сообщество)
             onDismiss = { showAddVideoSearchFor = null },
             onAdded = { video ->
                 // Optimistic update (albumVideosRefreshTick НЕ заведён —
