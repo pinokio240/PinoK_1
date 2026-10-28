@@ -78,6 +78,7 @@ import re.pinok.data.model.GiftItem
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Track
 import re.pinok.data.model.Video
+import re.pinok.data.model.VideoAlbum
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
 
@@ -581,6 +582,15 @@ private fun VideoPickerTab(
     multiSelect: Boolean = false,
     selectedKeys: Set<String> = emptySet(),
 ) {
+    // ATTACH-PICKER-ALBUMS: видеоальбомы + пагинация по образцу PhotoPickerTab.
+    var albums by remember { mutableStateOf<List<VideoAlbum>>(emptyList()) }
+    var albumsLoading by remember { mutableStateOf(true) }
+    var albumsError by remember { mutableStateOf<String?>(null) }
+    // null = «Все видео» (videoGetWithCount без albumId); non-null = открыт
+    // конкретный альбом (videoGetWithCount(albumId)). Тап по карточке альбома
+    // меняет openedAlbum → LaunchedEffect(openedAlbum) перезагружает список.
+    var openedAlbum by remember { mutableStateOf<VideoAlbum?>(null) }
+
     var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -591,8 +601,26 @@ private fun VideoPickerTab(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    // Загрузка альбомов — один раз при входе в таб (video.getAlbums).
+    // Не блокирует видео: videoGetWithCount грузится параллельно в эффекте ниже.
+    LaunchedEffect(Unit) {
+        try {
+            val myId = app.tokenStorage.load()?.userId ?: 0L
+            val (total, list) = app.apiClient.videoGetAlbums(ownerId = myId)
+            albums = list
+        } catch (e: Exception) {
+            AppLog.e("VideoPicker", "albums load failed", e)
+            albumsError = e.message
+        } finally {
+            albumsLoading = false
+        }
+    }
+
     fun loadMore() {
         if (loadingMore || loading || !hasMore) return
+        // Capture в локальный val — открытие другого альбома во время загрузки
+        // не должно подмешать «чужую» страницу в текущий список.
+        val currentAlbum = openedAlbum
         scope.launch {
             loadingMore = true
             try {
@@ -601,7 +629,12 @@ private fun VideoPickerTab(
                 //   Pair<Int, List<Track>>. Было `val (total, page)` → page: Int,
                 //   page.size/filter/isNotEmpty unresolved (compiler искал
                 //   Modifier.size). Меняем порядок деструктуризации.
-                val (page, total) = app.apiClient.videoGetWithCount(count = 50, offset = serverOffset)
+                // ATTACH-PICKER-ALBUMS: albumId для пагинации внутри альбома.
+                val (page, total) = app.apiClient.videoGetWithCount(
+                    count = 50,
+                    offset = serverOffset,
+                    albumId = currentAlbum?.id,
+                )
                 serverOffset += page.size
                 val fresh = page
                     .filter { it.id > 0L && it.ownerId != 0L }
@@ -618,11 +651,22 @@ private fun VideoPickerTab(
         }
     }
 
-    LaunchedEffect(Unit) {
+    // Загрузка видео: videoGetWithCount без albumId («Все видео») или с albumId
+    // (конкретный альбом). Перезапускается при смене openedAlbum — обнуляем
+    // offset/hasMore/videos. Параллелен загрузке альбомов выше.
+    LaunchedEffect(openedAlbum) {
         loading = true
+        error = null
+        serverOffset = 0
+        hasMore = false
+        videos = emptyList()
         try {
             // #MULTI-SELECT-FIX: Pair<List<Video>, Int> — page first (см. loadMore).
-            val (page, total) = app.apiClient.videoGetWithCount(count = 50, offset = 0)
+            val (page, total) = app.apiClient.videoGetWithCount(
+                count = 50,
+                offset = 0,
+                albumId = openedAlbum?.id,
+            )
             videos = page.filter { it.id > 0L && it.ownerId != 0L }
                 .distinctBy { "${it.ownerId}_${it.id}" }
             serverOffset = page.size
@@ -649,33 +693,115 @@ private fun VideoPickerTab(
     }
 
     when {
-        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // Первичная загрузка (нет ещё ни видео, ни альбомов) — полный экран-заглушка.
+        loading && videos.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
-        error != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        error != null && videos.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text("Не удалось загрузить: $error", color = MaterialTheme.colorScheme.error)
         }
-        videos.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        // Есть альбомы или открыт альбом → показываем LazyColumn даже при пустых
+        // videos (чтобы был виден ряд альбомов / back-row для возврата).
+        videos.isEmpty() && openedAlbum == null && albums.isEmpty() && !albumsLoading -> Box(
+            Modifier.fillMaxSize().padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
             Text("Нет видео", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
-            items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
-                // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Video.key.
-                val key = "video_${video.ownerId}_${video.id}"
-                VideoRow(
-                    video = video,
-                    onClick = { onPick(video) },
-                    multiSelect = multiSelect,
-                    isSelected = selectedKeys.contains(key),
-                )
+            // Back-row если открыт альбом (возврат к «Все видео»).
+            if (openedAlbum != null) {
+                item(key = "video_album_back") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { openedAlbum = null }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            openedAlbum?.title?.ifBlank { "Без названия" } ?: "Альбом",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                }
             }
-            if (hasMore) {
-                item(key = "video_picker_more") {
+            // LazyRow альбомов — только в режиме «Все видео» (как в PhotoPickerTab).
+            if (openedAlbum == null && albums.isNotEmpty()) {
+                item(key = "video_albums_row") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(vertical = 4.dp),
+                    ) {
+                        // «Все видео» — первый псевдо-альбом (openedAlbum == null).
+                        item(key = "all_videos") {
+                            AlbumChip(
+                                title = "Все видео",
+                                countText = null,
+                                coverUrl = null,
+                                isSelected = openedAlbum == null,
+                                onClick = { openedAlbum = null },
+                            )
+                        }
+                        items(albums, key = { "valbum_${it.ownerId}_${it.id}" }) { album ->
+                            AlbumChip(
+                                title = album.title.ifBlank { "Без названия" },
+                                countText = "${album.count} видео",
+                                coverUrl = album.coverUrl,
+                                isSelected = openedAlbum?.id == album.id,
+                                onClick = { openedAlbum = album },
+                            )
+                        }
+                    }
+                }
+            } else if (openedAlbum == null && albumsLoading) {
+                // Во время первой загрузки альбомов — тонкий индикатор над списком
+                // (не блокируя видео — они грузятся параллельно).
+                item(key = "video_albums_loading") {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                }
+            }
+            // albumsError != null — альбомы опциональны, не блокируем видео
+            // (ошибка уже залогирована в LaunchedEffect выше).
+
+            if (videos.isEmpty() && !loading && error == null) {
+                // Открыт пустой альбом — показываем «Нет видео» внутри LazyColumn,
+                // сохраняя back-row выше (возврат к «Все видео»).
+                item(key = "video_empty_in_album") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Нет видео", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else {
+                items(videos, key = { "${it.ownerId}_${it.id}" }) { video ->
+                    // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Video.key.
+                    val key = "video_${video.ownerId}_${video.id}"
+                    VideoRow(
+                        video = video,
+                        onClick = { onPick(video) },
+                        multiSelect = multiSelect,
+                        isSelected = selectedKeys.contains(key),
+                    )
+                }
+                if (hasMore) {
+                    item(key = "video_picker_more") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
                     }
                 }
             }
