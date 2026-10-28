@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.PlaylistAdd
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -89,7 +89,7 @@ fun VideoContextMenuDropdown(
         if (showAddToAlbum) {
             DropdownMenuItem(
                 text = { Text("Добавить в альбом") },
-                leadingIcon = { Icon(Icons.Outlined.PlaylistAdd, null) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.PlaylistAdd, null) },
                 onClick = { onDismiss(); onAddToAlbum() },
             )
         }
@@ -365,7 +365,7 @@ fun AddVideoToAlbumDialog(
                                 .padding(vertical = 6.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Outlined.PlaylistAdd, null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.AutoMirrored.Outlined.PlaylistAdd, null, tint = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.width(12.dp))
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Text(

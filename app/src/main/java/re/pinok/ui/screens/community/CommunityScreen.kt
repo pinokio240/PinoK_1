@@ -345,6 +345,11 @@ fun CommunityScreen(
     var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var albumVideosLoading by remember { mutableStateOf(false) }
     var albumVideosError by remember { mutableStateOf<String?>(null) }
+    // REVIEWER-2: тик перезагрузки списка альбомов после CRUD (create/rename/
+    // delete). LaunchedEffect(selectedTab, groupId) НЕ перезапускается при смене
+    // videoAlbumsLoaded (его нет в ключах), поэтому без этого тика список после
+    // CRUD оставался бы пустым до ручного переключения вкладки.
+    var videoAlbumsRefreshTick by remember { mutableStateOf(0) }
 
     // VIDEO-ALBUMS-CRUD: state для диалогов и контекстных меню.
     // Создание/переименование/удаление альбома + добавление/удаление видео
@@ -721,7 +726,7 @@ fun CommunityScreen(
     // (videoAlbumsLoaded-флаг); переключение туда-обратно не перезапрашивает.
     // openedVideoAlbum != null → блокируем фоновую (пере)загрузку, т.к. пользователь
     // уже открыл конкретный альбом (его фото грузит LaunchedEffect ниже).
-    LaunchedEffect(selectedTab, groupId) {
+    LaunchedEffect(selectedTab, groupId, videoAlbumsRefreshTick) {
         if (selectedTab != 2 || videoAlbumsLoaded || videoAlbumsLoading || openedVideoAlbum != null) return@LaunchedEffect
         videoAlbumsLoading = true
         videoAlbumsError = null
@@ -2531,9 +2536,11 @@ fun CommunityScreen(
                         )
                         if (albumId != null && albumId > 0) {
                             Toast.makeText(videoCrudContext, "Альбом создан", Toast.LENGTH_SHORT).show()
-                            // Сбрасываем state — LaunchedEffect перезагрузит список.
+                            // REVIEWER-2: инвалидируем флаг + тик перезагрузки.
+                            // (не очищаем videoAlbums — новый альбом добавится
+                            // после перезагрузки с сервера, без flicker «пусто».)
                             videoAlbumsLoaded = false
-                            videoAlbums = emptyList()
+                            videoAlbumsRefreshTick++
                         } else {
                             val err = app.apiClient.lastApiError ?: "Не удалось создать альбом"
                             Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
@@ -2571,9 +2578,10 @@ fun CommunityScreen(
                             if (openedVideoAlbum?.id == target.id) {
                                 openedVideoAlbum = openedVideoAlbum?.copy(title = newTitle)
                             }
-                            // Принудительный refresh с сервера.
+                            // REVIEWER-2: оптимистичный .map{} выше остаётся видимым,
+                            // перезагрузка с сервера идёт фоном через videoAlbumsRefreshTick.
                             videoAlbumsLoaded = false
-                            videoAlbums = emptyList()
+                            videoAlbumsRefreshTick++
                         } else {
                             val err = app.apiClient.lastApiError ?: "Не удалось переименовать"
                             Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
@@ -2606,9 +2614,12 @@ fun CommunityScreen(
                                 openedVideoAlbum = null
                                 albumVideos = emptyList()
                             }
-                            // Refresh списка альбомов.
+                            // REVIEWER-2: оптимистичное удаление из списка + тик
+                            // перезагрузки (вместо emptyList(), которое очищало бы
+                            // весь ряд до перезагрузки).
+                            videoAlbums = videoAlbums.filterNot { it.id == target.id && it.ownerId == target.ownerId }
                             videoAlbumsLoaded = false
-                            videoAlbums = emptyList()
+                            videoAlbumsRefreshTick++
                         } else {
                             val err = app.apiClient.lastApiError ?: "Не удалось удалить альбом"
                             Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()

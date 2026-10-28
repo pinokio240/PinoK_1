@@ -343,6 +343,11 @@ fun ProfileScreen(
     // чтобы перезапустить video.get(albumId) при той же ссылке на альбом
     // (паттерн albumPhotosRetryTick для фотоальбомов выше).
     var albumVideosRetryTick by remember { mutableStateOf(0) }
+    // REVIEWER-2: тик перезагрузки списка альбомов после CRUD (create/rename/
+    // delete). LaunchedEffect(selectedContentTab, contentRetryTick) НЕ перезапускается
+    // при смене videoAlbumsLoaded, поэтому без этого тика список после CRUD
+    // оставался бы пустым/устаревшим до ручного переключения вкладки.
+    var videoAlbumsRefreshTick by remember { mutableStateOf(0) }
 
     // VIDEO-ALBUMS-CRUD: state для диалогов и контекстных меню. Свой профиль →
     // можно создавать/переименовывать/удалять альбомы и управлять видео в них.
@@ -544,7 +549,7 @@ fun ProfileScreen(
 
     // П-1: вкладки контента грузятся ЛЕНИВО при первом выборе
     // (ключ-флаг loaded + LaunchedEffect по активной вкладке).
-    LaunchedEffect(selectedContentTab, contentRetryTick) {
+    LaunchedEffect(selectedContentTab, contentRetryTick, videoAlbumsRefreshTick) {
         val ownerId = profile?.id ?: return@LaunchedEffect
         when (selectedContentTab) {
             PROFILE_TAB_MUSIC -> if (!musicLoaded && !musicLoading) {
@@ -586,12 +591,12 @@ fun ProfileScreen(
                     musicLoading = false
                 }
             }
-            PROFILE_TAB_VIDEO -> if (!videoLoaded && !videoLoading) {
-                videoLoading = true
-                videoError = null
-                // ALBUMS-IN-VIDEO: параллельно с «всеми видео» грузим видеоальбомы
-                // (video.getAlbums) — для горизонтального списка над «Все видео»
-                // (паттерн PROFILE-ALBUMS для фото → видеоальбомы).
+            PROFILE_TAB_VIDEO -> {
+                // REVIEWER-2: видеоальбомы грузим НЕЗАВИСИМО от «всех видео» —
+                // CRUD (videoAlbumsRefreshTick++) может инвалидировать список альбомов,
+                // не затрагивая videoLoaded. Раньше этот блок был внутри
+                // `if (!videoLoaded && !videoLoading)` и блокировался после первой
+                // загрузки видео — список альбомов не обновлялся после CRUD.
                 if (!videoAlbumsLoaded && !videoAlbumsLoading) {
                     launch {
                         videoAlbumsLoading = true
@@ -609,20 +614,24 @@ fun ProfileScreen(
                         }
                     }
                 }
-                try {
-                    // W33-c: полная пагинация (total у video.get недоступен —
-                    // hasMore по заполненности RAW-страницы, паттерн закладок).
-                    val page = app.apiClient.videoGet(ownerId = ownerId, count = PROFILE_VIDEO_PAGE)
-                    videoServerOffset = page.size
-                    videos = page.filter { it.id > 0L }
-                    videoHasMore = page.size >= PROFILE_VIDEO_PAGE
-                    videoLoaded = true
-                    AppLog.i("ProfileScreen", "Video tab loaded: ${videos.size} videos")
-                } catch (e: Exception) {
-                    AppLog.e("ProfileScreen", "Video tab load failed", e)
-                    videoError = "Ошибка: ${e.message}"
-                } finally {
-                    videoLoading = false
+                if (!videoLoaded && !videoLoading) {
+                    videoLoading = true
+                    videoError = null
+                    try {
+                        // W33-c: полная пагинация (total у video.get недоступен —
+                        // hasMore по заполненности RAW-страницы, паттерн закладок).
+                        val page = app.apiClient.videoGet(ownerId = ownerId, count = PROFILE_VIDEO_PAGE)
+                        videoServerOffset = page.size
+                        videos = page.filter { it.id > 0L }
+                        videoHasMore = page.size >= PROFILE_VIDEO_PAGE
+                        videoLoaded = true
+                        AppLog.i("ProfileScreen", "Video tab loaded: ${videos.size} videos")
+                    } catch (e: Exception) {
+                        AppLog.e("ProfileScreen", "Video tab load failed", e)
+                        videoError = "Ошибка: ${e.message}"
+                    } finally {
+                        videoLoading = false
+                    }
                 }
             }
             PROFILE_TAB_PHOTO -> if (!photoLoaded && !photoLoading) {
@@ -2444,8 +2453,11 @@ fun ProfileScreen(
                         )
                         if (albumId != null && albumId > 0) {
                             Toast.makeText(videoCrudContext, "Альбом создан", Toast.LENGTH_SHORT).show()
+                            // REVIEWER-2: инвалидируем флаг + тик перезагрузки
+                            // (не очищаем videoAlbums — новый альбом добавится после
+                            // перезагрузки с сервера, без flicker «пусто»).
                             videoAlbumsLoaded = false
-                            videoAlbums = emptyList()
+                            videoAlbumsRefreshTick++
                         } else {
                             val err = app.apiClient.lastApiError ?: "Не удалось создать альбом"
                             Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
@@ -2486,8 +2498,10 @@ fun ProfileScreen(
                             if (openedVideoAlbum?.id == target.id) {
                                 openedVideoAlbum = openedVideoAlbum?.copy(title = newTitle)
                             }
+                            // REVIEWER-2: оптимистичный .map{} выше остаётся видимым,
+                            // перезагрузка с сервера идёт фоном через videoAlbumsRefreshTick.
                             videoAlbumsLoaded = false
-                            videoAlbums = emptyList()
+                            videoAlbumsRefreshTick++
                         } else {
                             val err = app.apiClient.lastApiError ?: "Не удалось переименовать"
                             Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
@@ -2524,8 +2538,12 @@ fun ProfileScreen(
                                 openedVideoAlbum = null
                                 albumVideos = emptyList()
                             }
+                            // REVIEWER-2: оптимистичное удаление из списка + тик
+                            // перезагрузки (вместо emptyList(), которое очищало бы
+                            // весь ряд до перезагрузки).
+                            videoAlbums = videoAlbums.filterNot { it.id == target.id && it.ownerId == target.ownerId }
                             videoAlbumsLoaded = false
-                            videoAlbums = emptyList()
+                            videoAlbumsRefreshTick++
                         } else {
                             val err = app.apiClient.lastApiError ?: "Не удалось удалить альбом"
                             Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
