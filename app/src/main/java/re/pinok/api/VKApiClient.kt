@@ -10261,7 +10261,10 @@ class VKApiClient(
         offset: Int = 0,
     ): Pair<Int, List<re.pinok.data.model.VideoAlbum>> {
         if (isOffline()) return 0 to emptyList()
-        val args = mutableMapOf("count" to count.toString(), "extended" to "1")
+        // need_system=1: возвращать системные альбомы («Видео на стене», «Добавленные» и т.д.)
+        // — parity с photos.getAlbums (need_system=1). Без этого параметра VK отдаёт
+        // только пользовательские альбомы, и системные не видны в UI.
+        val args = mutableMapOf("count" to count.toString(), "extended" to "1", "need_system" to "1")
         if (ownerId != null) args["owner_id"] = ownerId.toString()
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("video.getAlbums", args) ?: return 0 to emptyList()
