@@ -307,6 +307,7 @@ import re.pinok.ui.components.RepostGroupCache
 // компонент (тот же, что в CommunityScreen/UserProfileScreen).
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.PostMenuItem
+import re.pinok.ui.components.DeleteMessageConfirmDialog
 import re.pinok.ui.components.PendingPhotosBar
 import re.pinok.ui.components.PendingPhoto
 import re.pinok.ui.components.nextPendingPhotoId
@@ -912,7 +913,11 @@ fun ChatDetailScreen(
         .collectAsState(initial = false)
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+    // DELETE-MSG-CONFIRM: показ диалога подтверждения удаления.
+    // - bulkDeletePending — для bulk-режима (выбрано N сообщений).
+    // - messageToDelete — для одиночного удаления из контекстного меню.
+    var bulkDeletePending by remember { mutableStateOf(false) }
+    var messageToDelete by remember { mutableStateOf<re.pinok.data.model.Message?>(null) }
 
     // Fix #137: inline "session expired" dialog (instead of AuthActivity hiding the chat).
     // Shown when uploadAndSendPhoto fails due to access_token invalidation (VK API error
@@ -1923,7 +1928,13 @@ fun ChatDetailScreen(
     }
 
     // Удаление сообщения.
-    fun deleteMessage(message: re.pinok.data.model.Message) {
+    // DELETE-MSG-CONFIRM: deleteForAll пробрасывается из диалога
+    // (DeleteMessageConfirmDialog). Дефолт true — обратно-совместимо со старыми
+    // вызовами вне UI-флоу (если появятся).
+    fun deleteMessage(
+        message: re.pinok.data.model.Message,
+        deleteForAll: Boolean = true,
+    ) {
         val cmid = message.conversationMessageId
         val msgId = message.id
         scope.launch {
@@ -1934,10 +1945,10 @@ fun ChatDetailScreen(
                 // Если cmid=null (редкий случай — service-сообщения) — fallback
                 // на старый messagesDelete по message_id.
                 val ok = if (cmid != null && cmid > 0) {
-                    app.apiClient.messagesDeleteByCmid(peerId, cmid, deleteForAll = true)
+                    app.apiClient.messagesDeleteByCmid(peerId, cmid, deleteForAll = deleteForAll)
                 } else {
                     AppLog.w("ChatDetailScreen", "deleteMessage: cmid is null for msg id=$msgId, fallback to message_id")
-                    app.apiClient.messagesDelete(msgId, deleteForAll = true)
+                    app.apiClient.messagesDelete(msgId, deleteForAll = deleteForAll)
                 }
                 if (ok) {
                     messages = messages.filter { it.id != msgId }
@@ -2134,12 +2145,13 @@ fun ChatDetailScreen(
         exitSelection()
     }
 
-    fun deleteSelected() {
+    fun deleteSelected(deleteForAll: Boolean = true) {
         val ids = selectedIds.toList()
         if (ids.isEmpty()) return
         // Fix #207: для каждого выбранного сообщения ищем его cmid в загруженном
         // списке messages. Если cmid есть — удаляем через messagesDeleteByCmid
         // (VK API 5.221+). Иначе fallback на messagesDelete по message_id.
+        // DELETE-MSG-CONFIRM: deleteForAll пробрасывается из диалога.
         val msgsById = messages.associateBy { it.id }
         scope.launch {
             var failed = 0
@@ -2148,10 +2160,10 @@ fun ChatDetailScreen(
                     val msg = msgsById[id]
                     val cmid = msg?.conversationMessageId
                     val ok = if (cmid != null && cmid > 0) {
-                        app.apiClient.messagesDeleteByCmid(peerId, cmid, deleteForAll = true)
+                        app.apiClient.messagesDeleteByCmid(peerId, cmid, deleteForAll = deleteForAll)
                     } else {
                         AppLog.w("ChatDetailScreen", "bulk delete: cmid null for id=$id, fallback to message_id")
-                        app.apiClient.messagesDelete(id, deleteForAll = true)
+                        app.apiClient.messagesDelete(id, deleteForAll = deleteForAll)
                     }
                     if (!ok) failed++
                 } catch (e: Exception) {
@@ -3896,7 +3908,7 @@ fun ChatDetailScreen(
                             Icon(Icons.AutoMirrored.Outlined.Forward, contentDescription = "Переслать")
                         }
                         IconButton(
-                            onClick = { showDeleteConfirm = true },
+                            onClick = { bulkDeletePending = true },
                             enabled = selectedIds.isNotEmpty(),
                         ) {
                             Icon(Icons.Outlined.Delete, contentDescription = "Удалить")
@@ -5454,7 +5466,9 @@ fun ChatDetailScreen(
                                     },
                                     onDelete = {
                                         contextMsgId = null
-                                        deleteMessage(msg)
+                                        // DELETE-MSG-CONFIRM: НЕ удаляем сразу —
+                                        // показываем диалог подтверждения через state.
+                                        messageToDelete = msg
                                     },
                                     onForward = {
                                         contextMsgId = null
@@ -6048,29 +6062,32 @@ fun ChatDetailScreen(
         )
     }
 
-    // P2.5: bulk delete confirmation.
-    if (showDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Удалить сообщения?") },
-            text = {
-                Text(
-                    "Выбрано: ${selectedIds.size}. " +
-                        "Сообщения будут удалены для всех участников.",
-                )
+    // P2.5 / DELETE-MSG-CONFIRM: bulk delete confirmation с чекбоксом
+    // «Удалить для всех». Заменил прежний AlertDialog на DeleteMessageConfirmDialog
+    // (эталон VK: «Вы действительно хотите удалить?» + чекбокс + НЕТ/ДА).
+    if (bulkDeletePending) {
+        DeleteMessageConfirmDialog(
+            count = selectedIds.size,
+            initialDeleteForAll = true,
+            onDismiss = { bulkDeletePending = false },
+            onConfirm = { deleteForAll ->
+                bulkDeletePending = false
+                deleteSelected(deleteForAll = deleteForAll)
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDeleteConfirm = false
-                    deleteSelected()
-                }) {
-                    Text("Удалить", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text("Отмена")
-                }
+        )
+    }
+
+    // DELETE-MSG-CONFIRM: одиночное удаление из контекстного меню сообщения.
+    // messageToDelete устанавливается в onDelete (замена прямого deleteMessage).
+    val pendingForDelete = messageToDelete
+    if (pendingForDelete != null) {
+        DeleteMessageConfirmDialog(
+            count = 1,
+            initialDeleteForAll = true,
+            onDismiss = { messageToDelete = null },
+            onConfirm = { deleteForAll ->
+                messageToDelete = null
+                deleteMessage(pendingForDelete, deleteForAll = deleteForAll)
             },
         )
     }
