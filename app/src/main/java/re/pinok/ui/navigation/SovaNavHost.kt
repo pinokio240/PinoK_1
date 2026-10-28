@@ -2128,6 +2128,10 @@ composable(Screen.CallsHistory.route) {
                     var shareClip by remember { androidx.compose.runtime.mutableStateOf<re.pinok.data.model.Video?>(null) }
                     var commentClip by remember { androidx.compose.runtime.mutableStateOf<re.pinok.data.model.Video?>(null) }
                     var moreClip by remember { androidx.compose.runtime.mutableStateOf<re.pinok.data.model.Video?>(null) }
+                    // B-BAN-2: подтверждение бана автора клипа (VK web всегда
+                    // показывает модалку — HAR-подтверждено; раньше бан шёл напрямую).
+                    var showBanAuthorDialog by remember { androidx.compose.runtime.mutableStateOf(false) }
+                    var banAuthorTargetId by remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
                     val app = remember { SovaApp.get(nav.context) }
                     val clipScope = rememberCoroutineScope()
 
@@ -2287,15 +2291,9 @@ composable(Screen.CallsHistory.route) {
                                 ).show()
                             },
                             onBanAuthor = {
-                                clipScope.launch {
-                                    val ok = app.apiClient.accountBan(clip.ownerId)
-                                    android.widget.Toast.makeText(
-                                        nav.context,
-                                        if (ok) "Автор заблокирован" else "Не удалось заблокировать",
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                    if (ok) vm.refresh()
-                                }
+                                // B-BAN-2: НЕ банить сразу — открыть модалку подтверждения.
+                                banAuthorTargetId = clip.ownerId
+                                showBanAuthorDialog = true
                             },
                             onCopyLink = {
                                 val link = "https://vk.com/clip${clip.ownerId}_${clip.id}"
@@ -2330,6 +2328,58 @@ composable(Screen.CallsHistory.route) {
                                 android.widget.Toast.makeText(
                                     nav.context, "Клип удалён", android.widget.Toast.LENGTH_SHORT,
                                 ).show()
+                            },
+                        )
+                    }
+
+                    // B-BAN-2: модалка подтверждения перед accountBan автора клипа.
+                    if (showBanAuthorDialog && banAuthorTargetId != null) {
+                        val targetId = banAuthorTargetId!!
+                        AlertDialog(
+                            onDismissRequest = {
+                                showBanAuthorDialog = false
+                                banAuthorTargetId = null
+                            },
+                            title = { Text("Заблокировать автора?") },
+                            text = {
+                                Text(
+                                    "Пользователь будет добавлен в чёрный список. " +
+                                        "Он не сможет писать вам и видеть ваш профиль.",
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showBanAuthorDialog = false
+                                    val tid = targetId
+                                    banAuthorTargetId = null
+                                    clipScope.launch {
+                                        try {
+                                            val ok = app.apiClient.accountBan(tid)
+                                            android.widget.Toast.makeText(
+                                                nav.context,
+                                                if (ok) "Автор заблокирован" else "Не удалось заблокировать",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                            if (ok) vm.refresh()
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(
+                                                nav.context,
+                                                "Ошибка: ${e.message}",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                }) {
+                                    Text("Заблокировать", color = MaterialTheme.colorScheme.error)
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = {
+                                    showBanAuthorDialog = false
+                                    banAuthorTargetId = null
+                                }) {
+                                    Text("Отмена")
+                                }
                             },
                         )
                     }
