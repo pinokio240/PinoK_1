@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
@@ -95,6 +96,7 @@ import re.pinok.ui.components.CreateVideoAlbumDialog
 import re.pinok.ui.components.RenameVideoAlbumDialog
 import re.pinok.ui.components.DeleteVideoAlbumConfirmDialog
 import re.pinok.ui.components.AddVideoToAlbumDialog
+import re.pinok.ui.components.AddVideoToAlbumSearchDialog
 import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.components.AlbumContextMenuDropdown
 import re.pinok.ui.components.VideoContextMenuDropdown
@@ -172,6 +174,8 @@ fun VideoScreen(
     var showCreateAlbumDialog by remember { mutableStateOf(false) }
     var albumToRename by remember { mutableStateOf<VideoAlbum?>(null) }
     var albumToDelete by remember { mutableStateOf<VideoAlbum?>(null) }
+    // B-INT-VIDEO: альбом-цель для диалога поиска видео (album-centric flow).
+    var showAddVideoSearchFor by remember { mutableStateOf<VideoAlbum?>(null) }
     var videoToAddToAlbum by remember { mutableStateOf<Video?>(null) }
     var videoToDelete by remember { mutableStateOf<Video?>(null) }
     var albumMenuTarget by remember { mutableStateOf<VideoAlbum?>(null) }
@@ -678,6 +682,21 @@ fun VideoScreen(
                                 state = albumVideosListState,
                                 contentPadding = PaddingValues(bottom = 16.dp),
                             ) {
+                                // B-INT-VIDEO: кнопка «+ Добавить видео» в начале списка —
+                                // album-centric flow (открыть альбом → найти видео → addToAlbum).
+                                item(key = "add_video_to_album_btn") {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { showAddVideoSearchFor = selectedAlbum }
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(Icons.Outlined.Add, contentDescription = null, tint = vkAccent)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Добавить видео", color = vkAccent, fontWeight = FontWeight.Medium)
+                                    }
+                                }
                                 items(albumVideos, key = { "${it.ownerId}_${it.id}" }) { video ->
                                     Box {
                                     VKVideoCard(
@@ -1277,6 +1296,30 @@ fun VideoScreen(
                         AppLog.e("VideoScreen", "videoDelete failed", e)
                         Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
+                }
+            },
+        )
+    }
+
+    // B-INT-VIDEO: album-centric диалог поиска видео для добавления в открытый альбом.
+    // ownerId=null → VideoScreen = свой профиль, глобальный поиск VK-wide.
+    val addVideoSearchTarget = showAddVideoSearchFor
+    if (addVideoSearchTarget != null) {
+        AddVideoToAlbumSearchDialog(
+            album = addVideoSearchTarget,
+            ownerId = null,
+            onDismiss = { showAddVideoSearchFor = null },
+            onAdded = { video ->
+                // Optimistic update: добавить видео в albumVideos + bump refresh tick
+                // (LaunchedEffect(selectedAlbum, albumVideosRefreshTick) не триггерится,
+                // т.к. selectedAlbum не менялся — поэтому просто конкатенируем список).
+                albumVideos = albumVideos + video
+                albumVideosRefreshTick++
+                // Обновляем счётчик альбома (оптимистично +1).
+                albums = albums.map {
+                    if (it.id == addVideoSearchTarget.id && it.ownerId == addVideoSearchTarget.ownerId) {
+                        it.copy(count = it.count + 1)
+                    } else it
                 }
             },
         )
