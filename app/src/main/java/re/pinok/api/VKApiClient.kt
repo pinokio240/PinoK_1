@@ -10223,6 +10223,7 @@ class VKApiClient(
         query: String,
         count: Int = 30,
         offset: Int = 0,
+        ownerId: Long? = null,   // B-SEARCH-OWNER: scoped поиск (null=глобальный, -groupId=видео сообщества)
     ): List<Video> {
         if (isOffline() || query.isBlank()) return emptyList()
         val args = mutableMapOf(
@@ -10230,6 +10231,7 @@ class VKApiClient(
             "count" to count.toString(),
             "extended" to "1",
         )
+        if (ownerId != null) args["owner_id"] = ownerId.toString()
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("video.search", args) ?: return emptyList()
         // #VIDEO-SEARCH-FIX: раньше парсер работал инлайн и падал на первой же
