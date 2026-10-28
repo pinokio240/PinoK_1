@@ -329,6 +329,11 @@ fun ProfileScreen(
     var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var albumVideosLoading by remember { mutableStateOf(false) }
     var albumVideosError by remember { mutableStateOf<String?>(null) }
+    // ALBUMS-IN-VIDEO: счётчик ретраев видео альбома (кнопка «Повторить» в
+    // TabErrorRow) — пробрасывается в ключ LaunchedEffect(openedVideoAlbum),
+    // чтобы перезапустить video.get(albumId) при той же ссылке на альбом
+    // (паттерн albumPhotosRetryTick для фотоальбомов выше).
+    var albumVideosRetryTick by remember { mutableStateOf(0) }
     // ══ П-6b (#PROFILE-GAP-6b): остаток плана — вкладки Клипы/Статьи/Закладки ══
     // Клипы (shortVideo.getOwnerVideos) — Video с вертикальным постером.
     var clipsLoaded by remember { mutableStateOf(false) }
@@ -718,8 +723,10 @@ fun ProfileScreen(
 
     // ALBUMS-IN-VIDEO: открыли видеоальбом — грузим его видео (video.get с
     // album_id). Паттерн — LaunchedEffect(openedAlbum) для фотоальбомов выше.
-    // Сброс при тапе «Назад»: openedVideoAlbum = null (гейт в начале).
-    LaunchedEffect(openedVideoAlbum) {
+    // albumVideosRetryTick — кнопка «Повторить» в TabErrorRow перезапускает
+    // этот эффект (паттерн albumPhotosRetryTick). Сброс при тапе «Назад»:
+    // openedVideoAlbum = null (гейт в начале).
+    LaunchedEffect(openedVideoAlbum, albumVideosRetryTick) {
         val album = openedVideoAlbum ?: return@LaunchedEffect
         val prof = profile ?: return@LaunchedEffect
         albumVideosLoading = true
@@ -1764,7 +1771,7 @@ fun ProfileScreen(
                     item(key = "album_video_progress") { TabProgressRow() }
                 } else if (albumVideosError != null && albumVideos.isEmpty()) {
                     item(key = "album_video_error") {
-                        TabErrorRow(message = albumVideosError ?: "", onRetry = { contentRetryTick++ })
+                        TabErrorRow(message = albumVideosError ?: "", onRetry = { albumVideosRetryTick++ })
                     }
                 } else if (albumVideos.isEmpty()) {
                     item(key = "album_video_empty") {

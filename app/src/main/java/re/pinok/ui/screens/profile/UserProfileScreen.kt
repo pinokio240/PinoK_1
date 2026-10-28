@@ -287,6 +287,11 @@ fun UserProfileScreen(
     var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var albumVideosLoading by remember { mutableStateOf(false) }
     var albumVideosError by remember { mutableStateOf<String?>(null) }
+    // ALBUMS-IN-VIDEO: счётчик ретраев видео альбома (кнопка «Повторить» в
+    // TabErrorRow) — пробрасывается в ключ LaunchedEffect(openedVideoAlbum),
+    // чтобы перезапустить video.get(albumId) при той же ссылке на альбом
+    // (паттерн albumPhotosRetryTick для фотоальбомов выше).
+    var albumVideosRetryTick by remember { mutableStateOf(0) }
 
     // Свой профиль? Если да — не показываем «Добавить в друзья».
     val currentUserId = app.exchangeAuthRepository.userId()
@@ -472,8 +477,10 @@ fun UserProfileScreen(
     }
 
     // ALBUMS-IN-VIDEO: открыли видеоальбом — грузим его видео (video.get с
-    // album_id, owner_id = userId). Паттерн — LaunchedEffect(openedAlbum) выше.
-    LaunchedEffect(openedVideoAlbum) {
+    // album_id, owner_id = userId). albumVideosRetryTick — кнопка «Повторить»
+    // в TabErrorRow перезапускает этот эффект (паттерн albumPhotosRetryTick
+    // для фотоальбомов выше). Паттерн — LaunchedEffect(openedAlbum) выше.
+    LaunchedEffect(openedVideoAlbum, albumVideosRetryTick) {
         val album = openedVideoAlbum ?: return@LaunchedEffect
         albumVideosLoading = true
         albumVideosError = null
@@ -1006,7 +1013,7 @@ fun UserProfileScreen(
                         item(key = "friend_album_video_progress") { TabProgressRow() }
                     } else if (albumVideosError != null && albumVideos.isEmpty()) {
                         item(key = "friend_album_video_error") {
-                            TabErrorRow(message = albumVideosError ?: "", onRetry = { tabRetryTick++ })
+                            TabErrorRow(message = albumVideosError ?: "", onRetry = { albumVideosRetryTick++ })
                         }
                     } else if (albumVideos.isEmpty()) {
                         item(key = "friend_album_video_empty") {
