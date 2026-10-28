@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Search
@@ -134,6 +135,7 @@ import re.pinok.ui.components.CreateVideoAlbumDialog
 import re.pinok.ui.components.RenameVideoAlbumDialog
 import re.pinok.ui.components.DeleteVideoAlbumConfirmDialog
 import re.pinok.ui.components.AddVideoToAlbumDialog
+import re.pinok.ui.components.AddVideoToAlbumSearchDialog
 import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
@@ -378,6 +380,10 @@ fun CommunityScreen(
     var showAlbumVideoMenuFor by remember { mutableStateOf<Video?>(null) }
     var addToAlbumTarget by remember { mutableStateOf<Video?>(null) }
     var deleteVideoTarget by remember { mutableStateOf<Video?>(null) }
+    // B-INT-COMMUNITY: целевой альбом для диалога scoped-поиска видео сообщества
+    // (album-centric UX из HAR: открыть альбом → «Добавить видео» → search с
+    // owner_id=-groupId → выбрать → addToAlbum). null = диалог закрыт.
+    var showAddVideoSearchFor by remember { mutableStateOf<VideoAlbum?>(null) }
     val videoCrudContext = LocalContext.current
 
     // Шаг 3 (#32c): state для вкладки «Музыка».
@@ -1877,6 +1883,33 @@ fun CommunityScreen(
                             )
                         }
                     }
+                    // B-INT-COMMUNITY: кнопка «+ Добавить видео» в drill-down
+                    // открытого альбома (только админ — canManageAlbums). Тап →
+                    // AddVideoToAlbumSearchDialog со scoped-поиском видео сообщества
+                    // (ownerId=-groupId, matches HAR album-centric flow).
+                    if (canManageAlbums) {
+                        item(key = "add_video_to_album_btn") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showAddVideoSearchFor = openedVideoAlbum }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Add,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Добавить видео",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        }
+                    }
                     if (albumVideosLoading && albumVideos.isEmpty()) {
                         item {
                             Box(
@@ -2792,6 +2825,22 @@ fun CommunityScreen(
                         Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
+            },
+        )
+    }
+    // B-INT-COMMUNITY: диалог scoped-поиска видео сообщества для добавления
+    // в открытый альбом (ownerId=-groupId → video.search с owner_id). Album-
+    // centric UX из HAR. onAdded → optimistic update albumVideos.
+    val addVideoSearchTarget = showAddVideoSearchFor
+    if (addVideoSearchTarget != null) {
+        AddVideoToAlbumSearchDialog(
+            album = addVideoSearchTarget,
+            ownerId = -groupId,   // scoped поиск: видео сообщества
+            onDismiss = { showAddVideoSearchFor = null },
+            onAdded = { video ->
+                // Optimistic update (albumVideosRefreshTick НЕ заведён —
+                // просто добавляем в список открытого альбома).
+                albumVideos = albumVideos + video
             },
         )
     }
