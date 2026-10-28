@@ -635,6 +635,13 @@ private fun VideoPickerTab(
                     offset = serverOffset,
                     albumId = currentAlbum?.id,
                 )
+                // REVIEWER-3: race-guard. currentAlbum фиксирует albumId для
+                // запроса, но НЕ защищает read/write videos — за время сетевого
+                // вызова пользователь мог тапнуть другой альбом → LaunchedEffect
+                // (openedAlbum) уже сбросил videos/serverOffset/hasMore. Без этой
+                // проверки свежая страница чужого albumId примешалась бы в новый
+                // список (BUILDER-комментарий про «не подмешать» иначе ложен).
+                if (openedAlbum != currentAlbum) return@launch
                 serverOffset += page.size
                 val fresh = page
                     .filter { it.id > 0L && it.ownerId != 0L }
