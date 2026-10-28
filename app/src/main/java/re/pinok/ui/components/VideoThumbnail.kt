@@ -2,6 +2,11 @@ package re.pinok.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+// VIDEO-ALBUMS-CRUD: combinedClickable для long-press → контекстное меню
+// (добавить в альбом / убрать из альбома / удалить). Backwards-compatible: при
+// onLongClick=null ведёт себя как clickable (существующие вызовы не меняются).
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
@@ -49,6 +54,7 @@ import re.pinok.util.toCountString
  *   (#POST-TEXT-EXPAND, исходное поведение CommunityScreen); при false —
  *   статичное название (FeedScreen).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun VideoThumbnail(
     video: Video,
@@ -59,6 +65,10 @@ fun VideoThumbnail(
     // превью + duration overlay, без названия/счётчиков. Используется в
     // CommunityScreen (вкладка Видео) в FlowRow 2 колонки.
     compact: Boolean = false,
+    // VIDEO-ALBUMS-CRUD: long-press → контекстное меню (добавить в альбом /
+    // убрать / удалить). null = обычный клик (поведение не меняется для всех
+    // существующих вызовов VideoThumbnail).
+    onLongClick: ((Video) -> Unit)? = null,
 ) {
     val thumbUrl = video.thumbUrl
     if (compact) {
@@ -66,7 +76,10 @@ fun VideoThumbnail(
         Column(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .clickable { onClick(video) },
+                .combinedClickable(
+                    onClick = { onClick(video) },
+                    onLongClick = onLongClick?.let { cb -> { cb(video) } },
+                ),
         ) {
             Box(
                 modifier = Modifier
@@ -123,7 +136,10 @@ fun VideoThumbnail(
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick(video) },
+            .combinedClickable(
+                onClick = { onClick(video) },
+                onLongClick = onLongClick?.let { cb -> { cb(video) } },
+            ),
         elevation = CardDefaults.cardElevation(0.dp),
     ) {
         Column {

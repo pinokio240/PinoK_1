@@ -2,6 +2,10 @@ package re.pinok.ui.screens.community
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+// VIDEO-ALBUMS-CRUD: combinedClickable для long-press на видео-альбомах/видео
+// (контекстные меню: переименовать/удалить альбом, добавить в альбом/себе).
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,12 +47,18 @@ import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+// VIDEO-ALBUMS-CRUD: AlertDialog для создания/переименования/удаления альбомов
+// и DropdownMenu/DropdownMenuItem для контекстных меню (long-press).
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +68,7 @@ import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -114,6 +125,15 @@ import re.pinok.ui.components.rememberPagedListState
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.components.VideoThumbnail
+// VIDEO-ALBUMS-CRUD: общие UI-компоненты для управления альбомами/видео.
+import re.pinok.ui.components.VideoContextMenuDropdown
+import re.pinok.ui.components.AlbumContextMenuDropdown
+import re.pinok.ui.components.CreateVideoAlbumCard
+import re.pinok.ui.components.CreateVideoAlbumDialog
+import re.pinok.ui.components.RenameVideoAlbumDialog
+import re.pinok.ui.components.DeleteVideoAlbumConfirmDialog
+import re.pinok.ui.components.AddVideoToAlbumDialog
+import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
@@ -325,6 +345,26 @@ fun CommunityScreen(
     var albumVideos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var albumVideosLoading by remember { mutableStateOf(false) }
     var albumVideosError by remember { mutableStateOf<String?>(null) }
+
+    // VIDEO-ALBUMS-CRUD: state для диалогов и контекстных меню.
+    // Создание/переименование/удаление альбома + добавление/удаление видео
+    // в альбом. UI-паттерн: long-press на карточке → DropdownMenu (как
+    // NotificationsScreen.kt:1226 combinedClickable).
+    val currentUserId = app.getVkUid()
+    // canManageAlbums: только админ сообщества может создавать/переименовывать/
+    // удалять альбомы и добавлять в них видео. isManager приходит из groups.getById.
+    // Если groupInfo ещё не загружен — кнопки не показываем (VK всё равно отклонит
+    // с ошибкой 7/15 — см. спеку).
+    val canManageAlbums = groupInfo?.isManager == true
+    var showCreateAlbumDialog by remember { mutableStateOf(false) }
+    var renameAlbumTarget by remember { mutableStateOf<VideoAlbum?>(null) }
+    var deleteAlbumTarget by remember { mutableStateOf<VideoAlbum?>(null) }
+    var showAlbumMenuFor by remember { mutableStateOf<VideoAlbum?>(null) }
+    var showVideoMenuFor by remember { mutableStateOf<Video?>(null) }
+    var showAlbumVideoMenuFor by remember { mutableStateOf<Video?>(null) }
+    var addToAlbumTarget by remember { mutableStateOf<Video?>(null) }
+    var deleteVideoTarget by remember { mutableStateOf<Video?>(null) }
+    val videoCrudContext = LocalContext.current
 
     // Шаг 3 (#32c): state для вкладки «Музыка».
     // #AUDIO-PAGING-ALL (волна 38): была капнута на 50 (одна страница audioGet) —
@@ -1804,6 +1844,69 @@ fun CommunityScreen(
                                             video = video,
                                             onClick = onVideoClick,
                                             compact = true,
+                                            onLongClick = { showAlbumVideoMenuFor = video },
+                                        )
+                                        // VIDEO-ALBUMS-CRUD (B4): long-press на видео
+                                        // внутри открытого альбома → меню (убрать из
+                                        // альбома / удалить видео / добавить себе).
+                                        // Права: «Убрать из альбома» + «Удалить видео»
+                                        // — только админ (canManageAlbums). «Добавить
+                                        // себе» — для всех (если видео чужое).
+                                        VideoContextMenuDropdown(
+                                            target = video,
+                                            state = showAlbumVideoMenuFor,
+                                            onDismiss = { showAlbumVideoMenuFor = null },
+                                            showRemoveFromAlbum = canManageAlbums,
+                                            showDeleteVideo = canManageAlbums && video.ownerId == -groupId,
+                                            showAddToSelf = video.ownerId != currentUserId,
+                                            onRemoveFromAlbum = {
+                                                showAlbumVideoMenuFor = null
+                                                scope.launch {
+                                                    val album = openedVideoAlbum
+                                                    if (album == null) {
+                                                        Toast.makeText(videoCrudContext, "Альбом не открыт", Toast.LENGTH_SHORT).show()
+                                                        return@launch
+                                                    }
+                                                    try {
+                                                        val ok = app.apiClient.videoRemoveFromAlbum(
+                                                            albumId = album.id,
+                                                            video = video,
+                                                            ownerId = -groupId,
+                                                        )
+                                                        if (ok) {
+                                                            // Оптимистично: убираем из списка сразу.
+                                                            albumVideos = albumVideos.filter { it.id != video.id || it.ownerId != video.ownerId }
+                                                            Toast.makeText(videoCrudContext, "Убрано из альбома", Toast.LENGTH_SHORT).show()
+                                                        } else {
+                                                            Toast.makeText(videoCrudContext, "Не удалось убрать из альбома", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        AppLog.e("CommunityScreen", "videoRemoveFromAlbum failed", e)
+                                                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            },
+                                            onDeleteVideo = {
+                                                showAlbumVideoMenuFor = null
+                                                deleteVideoTarget = video
+                                            },
+                                            onAddToSelf = {
+                                                showAlbumVideoMenuFor = null
+                                                scope.launch {
+                                                    try {
+                                                        val ok = app.apiClient.videoAdd(
+                                                            videoId = video.id,
+                                                            ownerId = video.ownerId,
+                                                            accessKey = video.accessKey,
+                                                        )
+                                                        val msg = if (ok) "Добавлено вам" else "Не удалось добавить"
+                                                        Toast.makeText(videoCrudContext, msg, Toast.LENGTH_SHORT).show()
+                                                    } catch (e: Exception) {
+                                                        AppLog.e("CommunityScreen", "videoAdd (self) failed", e)
+                                                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            },
                                         )
                                     }
                                 }
@@ -1817,16 +1920,45 @@ fun CommunityScreen(
                 // ALBUMS-IN-VIDEO: горизонтальный список видеоальбомов (если есть)
                 // над «Все видео». Не блокируем «Все видео» — показываем и альбомы,
                 // и сетку; загрузка альбомов идёт параллельно с видео.
-                if (videoAlbums.isNotEmpty()) {
+                if (videoAlbums.isNotEmpty() || canManageAlbums) {
                     item(key = "community_video_albums_row") {
                         LazyRow(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
+                            // VIDEO-ALBUMS-CRUD (B1): карточка «+ Создать альбом» в
+                            // начале ряда. Только админ сообщества (canManageAlbums);
+                            // для не-админа VK всё равно отклонил бы с ошибкой 7/15.
+                            if (canManageAlbums) {
+                                item(key = "create_video_album_card") {
+                                    CreateVideoAlbumCard(
+                                        onClick = { showCreateAlbumDialog = true },
+                                        widthDp = 140.dp,
+                                    )
+                                }
+                            }
                             items(videoAlbums, key = { "valbum_${it.ownerId}_${it.id}" }) { album ->
                                 CommunityVideoAlbumRow(
                                     album = album,
                                     onClick = { openedVideoAlbum = album },
+                                    onLongClick = if (canManageAlbums) {
+                                        { showAlbumMenuFor = album }
+                                    } else null,
+                                )
+                                // VIDEO-ALBUMS-CRUD (B2): long-press на альбоме →
+                                // контекстное меню (переименовать/удалить).
+                                AlbumContextMenuDropdown(
+                                    target = album,
+                                    state = showAlbumMenuFor,
+                                    onDismiss = { showAlbumMenuFor = null },
+                                    onRename = {
+                                        showAlbumMenuFor = null
+                                        renameAlbumTarget = album
+                                    },
+                                    onDelete = {
+                                        showAlbumMenuFor = null
+                                        deleteAlbumTarget = album
+                                    },
                                 )
                             }
                         }
@@ -1909,6 +2041,39 @@ fun CommunityScreen(
                                         video = video,
                                         onClick = onVideoClick,
                                         compact = true,
+                                        onLongClick = { showVideoMenuFor = video },
+                                    )
+                                    // VIDEO-ALBUMS-CRUD (B3): long-press на видео в
+                                    // «Все видео» → меню. «Добавить в альбом» — только
+                                    // админ (canManageAlbums). «Добавить себе» — всем,
+                                    // если видео чужое (video.ownerId != currentUserId).
+                                    VideoContextMenuDropdown(
+                                        target = video,
+                                        state = showVideoMenuFor,
+                                        onDismiss = { showVideoMenuFor = null },
+                                        showAddToAlbum = canManageAlbums,
+                                        showAddToSelf = video.ownerId != currentUserId,
+                                        onAddToAlbum = {
+                                            showVideoMenuFor = null
+                                            addToAlbumTarget = video
+                                        },
+                                        onAddToSelf = {
+                                            showVideoMenuFor = null
+                                            scope.launch {
+                                                try {
+                                                    val ok = app.apiClient.videoAdd(
+                                                        videoId = video.id,
+                                                        ownerId = video.ownerId,
+                                                        accessKey = video.accessKey,
+                                                    )
+                                                    val msg = if (ok) "Добавлено вам" else "Не удалось добавить"
+                                                    Toast.makeText(videoCrudContext, msg, Toast.LENGTH_SHORT).show()
+                                                } catch (e: Exception) {
+                                                    AppLog.e("CommunityScreen", "videoAdd (self) failed", e)
+                                                    Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
                                     )
                                 }
                             }
@@ -2343,6 +2508,178 @@ fun CommunityScreen(
                     } catch (e: Exception) {
                         AppLog.e("CommunityScreen", "wallPostWithAttachments(group) failed", e)
                         Toast.makeText(composerContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+        )
+    }
+
+    // ══ VIDEO-ALBUMS-CRUD: диалоги и пикеры ══
+    // B1: создание альбома. После успеха — сбрасываем флаги loaded/list,
+    // чтобы LaunchedEffect(selectedTab==2) перезагрузил список альбомов.
+    if (showCreateAlbumDialog) {
+        CreateVideoAlbumDialog(
+            onDismiss = { showCreateAlbumDialog = false },
+            onConfirm = { title, privacy ->
+                showCreateAlbumDialog = false
+                scope.launch {
+                    try {
+                        val albumId = app.apiClient.videoCreateAlbum(
+                            title = title,
+                            privacy = privacy,
+                            ownerId = -groupId,
+                        )
+                        if (albumId != null && albumId > 0) {
+                            Toast.makeText(videoCrudContext, "Альбом создан", Toast.LENGTH_SHORT).show()
+                            // Сбрасываем state — LaunchedEffect перезагрузит список.
+                            videoAlbumsLoaded = false
+                            videoAlbums = emptyList()
+                        } else {
+                            val err = app.apiClient.lastApiError ?: "Не удалось создать альбом"
+                            Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "videoCreateAlbum failed", e)
+                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+        )
+    }
+    // B2: переименование альбома.
+    renameAlbumTarget?.let { album ->
+        RenameVideoAlbumDialog(
+            initialTitle = album.title,
+            onDismiss = { renameAlbumTarget = null },
+            onConfirm = { newTitle ->
+                val target = album
+                renameAlbumTarget = null
+                scope.launch {
+                    try {
+                        val ok = app.apiClient.videoEditAlbum(
+                            albumId = target.id,
+                            title = newTitle,
+                            ownerId = -groupId,
+                        )
+                        if (ok) {
+                            Toast.makeText(videoCrudContext, "Переименовано", Toast.LENGTH_SHORT).show()
+                            // Обновляем локально + полный refresh.
+                            videoAlbums = videoAlbums.map {
+                                if (it.id == target.id && it.ownerId == target.ownerId) it.copy(title = newTitle)
+                                else it
+                            }
+                            if (openedVideoAlbum?.id == target.id) {
+                                openedVideoAlbum = openedVideoAlbum?.copy(title = newTitle)
+                            }
+                            // Принудительный refresh с сервера.
+                            videoAlbumsLoaded = false
+                            videoAlbums = emptyList()
+                        } else {
+                            val err = app.apiClient.lastApiError ?: "Не удалось переименовать"
+                            Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "videoEditAlbum failed", e)
+                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+        )
+    }
+    // B2: подтверждение удаления альбома.
+    deleteAlbumTarget?.let { album ->
+        DeleteVideoAlbumConfirmDialog(
+            albumTitle = album.title.ifBlank { "Без названия" },
+            onDismiss = { deleteAlbumTarget = null },
+            onConfirm = {
+                val target = album
+                deleteAlbumTarget = null
+                scope.launch {
+                    try {
+                        val ok = app.apiClient.videoDeleteAlbum(
+                            albumId = target.id,
+                            ownerId = -groupId,
+                        )
+                        if (ok) {
+                            Toast.makeText(videoCrudContext, "Альбом удалён", Toast.LENGTH_SHORT).show()
+                            if (openedVideoAlbum?.id == target.id) {
+                                openedVideoAlbum = null
+                                albumVideos = emptyList()
+                            }
+                            // Refresh списка альбомов.
+                            videoAlbumsLoaded = false
+                            videoAlbums = emptyList()
+                        } else {
+                            val err = app.apiClient.lastApiError ?: "Не удалось удалить альбом"
+                            Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "videoDeleteAlbum failed", e)
+                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+        )
+    }
+    // B3: пикер альбома для добавления видео.
+    addToAlbumTarget?.let { video ->
+        AddVideoToAlbumDialog(
+            albums = videoAlbums,
+            onDismiss = { addToAlbumTarget = null },
+            onPick = { album ->
+                val target = video
+                addToAlbumTarget = null
+                scope.launch {
+                    try {
+                        val ok = app.apiClient.videoAddToAlbum(
+                            albumId = album.id,
+                            video = target,
+                            ownerId = -groupId,
+                        )
+                        val msg = if (ok) "Добавлено в альбом «${album.title}»" else "Не удалось добавить"
+                        Toast.makeText(videoCrudContext, msg, Toast.LENGTH_SHORT).show()
+                        // Если альбом открыт — обновляем его состав.
+                        if (openedVideoAlbum?.id == album.id) {
+                            albumVideos = albumVideos + target
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "videoAddToAlbum failed", e)
+                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onCreateAlbum = {
+                addToAlbumTarget = null
+                showCreateAlbumDialog = true
+            },
+        )
+    }
+    // B4: подтверждение удаления видео.
+    deleteVideoTarget?.let { video ->
+        DeleteVideoConfirmDialog(
+            videoTitle = video.title.ifBlank { "Без названия" },
+            onDismiss = { deleteVideoTarget = null },
+            onConfirm = {
+                val target = video
+                deleteVideoTarget = null
+                scope.launch {
+                    try {
+                        val ok = app.apiClient.videoDelete(
+                            videoId = target.id,
+                            ownerId = target.ownerId,
+                        )
+                        if (ok) {
+                            Toast.makeText(videoCrudContext, "Видео удалено", Toast.LENGTH_SHORT).show()
+                            // Оптимистично убираем из обоих списков.
+                            albumVideos = albumVideos.filterNot { it.id == target.id && it.ownerId == target.ownerId }
+                            videosState.removeById("${target.ownerId}_${target.id}")
+                        } else {
+                            val err = app.apiClient.lastApiError ?: "Не удалось удалить видео"
+                            Toast.makeText(videoCrudContext, err, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("CommunityScreen", "videoDelete failed", e)
+                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
             },
@@ -2818,12 +3155,20 @@ private fun CommunityAlbumRow(
  *
  * Паттерн — [CommunityAlbumRow] (фотоальбом), стиль — вертикальная Card 140dp.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CommunityVideoAlbumRow(album: VideoAlbum, onClick: () -> Unit) {
+private fun CommunityVideoAlbumRow(
+    album: VideoAlbum,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
     Card(
         modifier = Modifier
             .width(140.dp)
-            .clickable { onClick() },
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

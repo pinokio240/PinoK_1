@@ -10300,6 +10300,92 @@ class VKApiClient(
     }
 
     /**
+     * #VIDEO-ALBUMS-CRUD: video.createAlbum — создать пустой альбом видео.
+     * @param title название альбома
+     * @param privacy 0=все, 1=только я, 2=друзья, 3=друзья и друзья друзей (по VK докам)
+     * @param ownerId null=текущий юзер; positive=указанный юзер; negative=группа (-groupId)
+     * @return id созданного альбома, или null при ошибке
+     */
+    suspend fun videoCreateAlbum(title: String, privacy: Int = 0, ownerId: Long? = null): Long? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "title" to title,
+            "privacy" to privacy.toString(),
+        )
+        // Для группы: ownerId отрицательный → group_id = -ownerId (положительный)
+        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        val json = call("video.createAlbum", args) ?: return null
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return null
+            safeLongNullable(resp.get("album_id")) ?: safeLongNullable(resp.get("id"))
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "video.createAlbum parse error: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * #VIDEO-ALBUMS-CRUD: video.editAlbum — переименовать/сменить приватность альбома.
+     */
+    suspend fun videoEditAlbum(albumId: Long, title: String, privacy: Int? = null, ownerId: Long? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "album_id" to albumId.toString(),
+            "title" to title,
+        )
+        if (privacy != null) args["privacy"] = privacy.toString()
+        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        val json = call("video.editAlbum", args) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #VIDEO-ALBUMS-CRUD: video.deleteAlbum — удалить альбом.
+     */
+    suspend fun videoDeleteAlbum(albumId: Long, ownerId: Long? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf("album_id" to albumId.toString())
+        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        val json = call("video.deleteAlbum", args) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #VIDEO-ALBUMS-CRUD: video.addToAlbum — добавить видео в альбом.
+     * @param albumId ID целевого альбома
+     * @param video видео (нужен id, ownerId, accessKey)
+     * @param ownerId владелец альбома (null=свой, positive=юзер, negative=группа)
+     */
+    suspend fun videoAddToAlbum(albumId: Long, video: Video, ownerId: Long? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "album_id" to albumId.toString(),
+            "video_id" to video.id.toString(),
+            "owner_id" to video.ownerId.toString(),  // владелец ВИДЕО (не альбома)
+        )
+        if (!video.accessKey.isNullOrBlank()) args["access_key"] = video.accessKey
+        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        val json = call("video.addToAlbum", args) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * #VIDEO-ALBUMS-CRUD: video.removeFromAlbum — убрать видео из альбома.
+     */
+    suspend fun videoRemoveFromAlbum(albumId: Long, video: Video, ownerId: Long? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "album_id" to albumId.toString(),
+            "video_id" to video.id.toString(),
+            "owner_id" to video.ownerId.toString(),
+        )
+        if (!video.accessKey.isNullOrBlank()) args["access_key"] = video.accessKey
+        if (ownerId != null && ownerId < 0) args["group_id"] = (-ownerId).toString()
+        val json = call("video.removeFromAlbum", args) ?: return false
+        return json.has("response")
+    }
+
+    /**
      * #VIDEO-PORT: video.getCatalog — разделы видео-каталога.
      * Возвращает response.sections[] («Для вас»/«Тренды»/«Детям»/«Телеканалы»).
      */

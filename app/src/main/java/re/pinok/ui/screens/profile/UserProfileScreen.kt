@@ -94,6 +94,9 @@ import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.components.RepostGroupCache
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.ShareSheet
+// VIDEO-ALBUMS-CRUD: long-press на видео → контекстное меню (только «Добавить
+// себе» для чужого профиля — нет прав на управление альбомами).
+import re.pinok.ui.components.VideoContextMenuDropdown
 import re.pinok.util.AppLog
 
 /**
@@ -292,6 +295,14 @@ fun UserProfileScreen(
     // чтобы перезапустить video.get(albumId) при той же ссылке на альбом
     // (паттерн albumPhotosRetryTick для фотоальбомов выше).
     var albumVideosRetryTick by remember { mutableStateOf(0) }
+
+    // VIDEO-ALBUMS-CRUD (B3/B4): для чужого профиля — только long-press на видео
+    // (как в «Все видео», так и в открытом альбоме) → «Добавить себе». Управления
+    // альбомами нет (нельзя создавать/переименовывать/удалять чужие альбомы).
+    var showVideoMenuFor by remember { mutableStateOf<Video?>(null) }
+    var showAlbumVideoMenuFor by remember { mutableStateOf<Video?>(null) }
+    val videoCrudContext = LocalContext.current
+
 
     // Свой профиль? Если да — не показываем «Добавить в друзья».
     val currentUserId = app.exchangeAuthRepository.userId()
@@ -1030,11 +1041,40 @@ fun UserProfileScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 rowVideos.forEach { video ->
-                                    ProfileVideoCard(
-                                        video = video,
-                                        onClick = { onVideoClick(video) },
-                                        modifier = Modifier.weight(1f),
-                                    )
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        ProfileVideoCard(
+                                            video = video,
+                                            onClick = { onVideoClick(video) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            onLongClick = { showAlbumVideoMenuFor = video },
+                                        )
+                                        // VIDEO-ALBUMS-CRUD (B4, чужой профиль):
+                                        // только «Добавить себе» (если видео чужое).
+                                        // Управлять альбомом нельзя.
+                                        VideoContextMenuDropdown(
+                                            target = video,
+                                            state = showAlbumVideoMenuFor,
+                                            onDismiss = { showAlbumVideoMenuFor = null },
+                                            showAddToSelf = video.ownerId != currentUserId,
+                                            onAddToSelf = {
+                                                showAlbumVideoMenuFor = null
+                                                scope.launch {
+                                                    try {
+                                                        val ok = app.apiClient.videoAdd(
+                                                            videoId = video.id,
+                                                            ownerId = video.ownerId,
+                                                            accessKey = video.accessKey,
+                                                        )
+                                                        val msg = if (ok) "Добавлено вам" else "Не удалось добавить"
+                                                        Toast.makeText(videoCrudContext, msg, Toast.LENGTH_SHORT).show()
+                                                    } catch (e: Exception) {
+                                                        AppLog.e("UserProfileScreen", "videoAdd (self) failed", e)
+                                                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            },
+                                        )
+                                    }
                                 }
                                 repeat(2 - rowVideos.size) { Spacer(modifier = Modifier.weight(1f)) }
                             }
@@ -1075,11 +1115,39 @@ fun UserProfileScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 rowVideos.forEach { video ->
-                                    ProfileVideoCard(
-                                        video = video,
-                                        onClick = { onVideoClick(video) },
-                                        modifier = Modifier.weight(1f),
-                                    )
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        ProfileVideoCard(
+                                            video = video,
+                                            onClick = { onVideoClick(video) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            onLongClick = { showVideoMenuFor = video },
+                                        )
+                                        // VIDEO-ALBUMS-CRUD (B3, чужой профиль):
+                                        // только «Добавить себе» (если видео чужое).
+                                        VideoContextMenuDropdown(
+                                            target = video,
+                                            state = showVideoMenuFor,
+                                            onDismiss = { showVideoMenuFor = null },
+                                            showAddToSelf = video.ownerId != currentUserId,
+                                            onAddToSelf = {
+                                                showVideoMenuFor = null
+                                                scope.launch {
+                                                    try {
+                                                        val ok = app.apiClient.videoAdd(
+                                                            videoId = video.id,
+                                                            ownerId = video.ownerId,
+                                                            accessKey = video.accessKey,
+                                                        )
+                                                        val msg = if (ok) "Добавлено вам" else "Не удалось добавить"
+                                                        Toast.makeText(videoCrudContext, msg, Toast.LENGTH_SHORT).show()
+                                                    } catch (e: Exception) {
+                                                        AppLog.e("UserProfileScreen", "videoAdd (self) failed", e)
+                                                        Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
