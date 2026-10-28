@@ -1128,6 +1128,9 @@ private fun PhotoPickerTab(
                         offset = serverOffset,
                     ).mapNotNull { it.toVkPhotoRef() }
                 }
+                // B-G: post-await race-guard — если пользователь переключил альбом
+                // во время запроса, чужая страница не должна попасть в текущий список.
+                if (openedAlbum != currentAlbum) return@launch
                 serverOffset += page.size
                 val fresh = page.filter { nv -> photos.none { it.ownerId == nv.ownerId && it.id == nv.id } }
                 photos = (photos + fresh).distinctBy { "${it.ownerId}_${it.id}" }
