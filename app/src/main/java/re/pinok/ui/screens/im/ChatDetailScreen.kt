@@ -1145,17 +1145,20 @@ fun ChatDetailScreen(
     var shareToChatUrl by remember { mutableStateOf<String?>(null) }
     // P5.1: единый обработчик клика по ссылке. Внешний браузер — ACTION_VIEW,
     // внутренний — навигация на InternalBrowserScreen (через onOpenUrlInternal).
+    //
+    // INTERNAL-LINK-ROUTING: ветка «внешний браузер» теперь идёт через
+    // re.pinok.util.openUrlExternal — это значит VK-ссылки (vk.com/vk.ru/
+    // m.vk.ru/vkvideo.ru/vk.me) ВСЕГДА открываются ВНУТРИ PinoK (через
+    // MainActivity → VkUrlDeepLinker.deepLinkFromUrl → нативный экран),
+    // а не-VK ссылки — во внешнем браузере (как раньше).
+    //
+    // Если openLinksInternal=true — все ссылки (включая VK) идут в
+    // InternalBrowserScreen (WebView), что тоже «внутри приложения».
     val onUrlClick: (String) -> Unit = { url ->
         if (openLinksInternal) {
             onOpenUrlInternal(url)
         } else {
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                ctx.startActivity(intent)
-            } catch (e: Exception) {
-                AppLog.e("ChatDetailScreen", "open url failed: ${e.message}")
-            }
+            re.pinok.util.openUrlExternal(ctx, url)
         }
     }
 

@@ -228,12 +228,21 @@ fun buildBoardCommentText(
 /**
  * Fix #204: Открывает URL внешним браузером (ACTION_VIEW) с нормализацией.
  *
- * Переиспользуется лентой (FeedScreen) и просмотром поста (PostDetailScreen),
- * где нет настройки внутреннего браузера. ChatDetailScreen использует свой
- * [onUrlClick] с поддержкой openLinksInInternalBrowser.
+ * Переиспользуется лентой (FeedScreen), просмотром поста (PostDetailScreen),
+ * репостами (RepostBlock), link-вложениями (PostAttachmentRenderer),
+ * обсуждениями (BoardTopicScreen) и чатом (ChatDetailScreen).
  *
  * Логика нормализации взята из Fix #51-A (LinkCard): добавляем https:// если
  * нет scheme, валидируем scheme+host, проверяем resolveActivity.
+ *
+ * INTERNAL-LINK-ROUTING (запрос пользователя: «все ссылки VK.RU должны
+ * переходить внутри приложения»): если host URL принадлежит VK-семейству
+ * (vk.com / m.vk.com / vk.ru / m.vk.ru / vkvideo.ru / vk.me), ссылка
+ * открывается ВНУТРИ PinoK через [openVkUrlInternal] (ACTION_VIEW intent,
+ * направленный явно на MainActivity → handleDeepLinkIntent →
+ * VkUrlDeepLinker.deepLinkFromUrl → нативная навигация OpenPost/OpenPhoto/
+ * OpenVideo/OpenUser/OpenCommunity/InternalBrowser). Не-VK ссылки — внешний
+ * браузер (как раньше).
  */
 fun openUrlExternal(ctx: Context, rawUrl: String) {
     val url = rawUrl.trim()
@@ -254,6 +263,14 @@ fun openUrlExternal(ctx: Context, rawUrl: String) {
         Toast.makeText(ctx, "Некорректная ссылка", Toast.LENGTH_SHORT).show()
         return
     }
+
+    // INTERNAL-LINK-ROUTING: VK-ссылки открываем ВНУТРИ приложения.
+    if (isVkUrl(uri)) {
+        openVkUrlInternal(ctx, normalized)
+        return
+    }
+
+    // Не-VK ссылка → внешний браузер (как раньше).
     val intent = Intent(Intent.ACTION_VIEW, uri)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     if (intent.resolveActivity(ctx.packageManager) == null) {
@@ -267,6 +284,86 @@ fun openUrlExternal(ctx: Context, rawUrl: String) {
     } catch (e: Exception) {
         AppLog.w("Linkify", "failed to open url=$normalized", e)
         Toast.makeText(ctx, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
+ * INTERNAL-LINK-ROUTING: host-множество VK-доменов.
+ *
+ * Синхронизировано с intent-filter MainActivity в AndroidManifest.xml
+ * (vk.com / m.vk.com / vk.ru / m.vk.ru) + добавлены vkvideo.ru и vk.me
+ * (manifest intent-filter их не ловит, но openVkUrlInternal использует
+ * setClass → MainActivity примет ACTION_VIEW с любым VK host).
+ */
+private val VK_DOMAINS = setOf(
+    "vk.com",
+    "m.vk.com",
+    "vk.ru",
+    "m.vk.ru",
+    "vkvideo.ru",
+    "vk.me",
+)
+
+/**
+ * INTERNAL-LINK-ROUTING: проверка, является ли host URL VK-доменом.
+ *
+ * Сравнение по ТОЧНОМУ host (с нормализацией: lowercase + срез «www.»),
+ * чтобы не срабатывал на look-alike домены типа «notvk.ru»,
+ * «vk.com.evil.example» или query-параметре «?ref=vk.com».
+ */
+private fun isVkUrl(uri: Uri): Boolean {
+    val host = uri.host?.lowercase()?.removePrefix("www.") ?: return false
+    return host in VK_DOMAINS
+}
+
+/**
+ * INTERNAL-LINK-ROUTING: открыть VK-ссылку ВНУТРИ приложения.
+ *
+ * Строит ACTION_VIEW intent с URI=url, направленный ЯВНО на MainActivity
+ * через [Intent.setClass] — это обходит системный chooser (пользователю НЕ
+ * предлагают выбор между PinoK / VK / браузером). MainActivity.handleDeepLinkIntent
+ * перехватит ACTION_VIEW → [re.pinok.realtime.VkUrlDeepLinker.deepLinkFromUrl]
+ * → навигация к нативному экрану (OpenPost/OpenPhoto/OpenVideo/OpenUser/
+ * OpenCommunity/InternalBrowser).
+ *
+ * Флаги:
+ *  - FLAG_ACTIVITY_NEW_TASK — обязательно при startActivity из не-Activity
+ *    контекста (Application / Service / Compose `ctx` может быть Application).
+ *  - FLAG_ACTIVITY_CLEAR_TOP — если MainActivity уже в стеке, очищаем верхушку
+ *    и доставляем новый intent через onNewIntent → handleDeepLinkIntent.
+ *
+ * Fallback: если MainActivity почему-то не смогла принять intent (например,
+ * process crash / security exception) — повторяем как обычный ACTION_VIEW
+ * без setClass (системный chooser / внешний браузер).
+ */
+private fun openVkUrlInternal(ctx: Context, url: String) {
+    AppLog.i("Linkify", "INTERNAL-LINK-ROUTING: opening VK url internally: $url")
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        setClass(ctx, re.pinok.ui.MainActivity::class.java)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+    try {
+        ctx.startActivity(intent)
+        AppLog.i("Linkify", "INTERNAL-LINK-ROUTING: routed to MainActivity: $url")
+    } catch (e: Exception) {
+        AppLog.w(
+            "Linkify",
+            "INTERNAL-LINK-ROUTING: failed to open internally, fallback to external: $url",
+            e,
+        )
+        // Fallback: внешний браузер если внутренний не сработал.
+        val extIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            ctx.startActivity(extIntent)
+        } catch (e2: Exception) {
+            AppLog.w(
+                "Linkify",
+                "INTERNAL-LINK-ROUTING: external fallback also failed: $url",
+                e2,
+            )
+            Toast.makeText(ctx, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show()
+        }
     }
 }
 
