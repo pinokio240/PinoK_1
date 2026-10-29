@@ -5034,6 +5034,127 @@ class VKApiClient(
         }
     }
 
+    // === B-B: новые board.* методы (управление обсуждениями) ===
+    // Паритет с VK web SPA: создание/редактирование/удаление тем и комментариев,
+    // открытие/закрытие/закрепление тем, лайки комментариев (type=board_comment).
+
+    /**
+     * board.addTopic — создать тему обсуждения.
+     * @param groupId ID сообщества (positive)
+     * @param title заголовок (max 255)
+     * @param text текст темы (max 4096)
+     * @param fromGroup 1=от имени группы, 0=от себя
+     * @return ID созданной темы, или null при ошибке
+     */
+    suspend fun boardAddTopic(groupId: Long, title: String, text: String, fromGroup: Int = 0): Long? {
+        if (isOffline()) return null
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "title" to title,
+            "text" to text,
+            "from_group" to fromGroup.toString(),
+        )
+        val json = call("board.addTopic", args) ?: return null
+        return try {
+            json.getAsJsonObject("response")?.get("topic_id")?.takeIf { !it.isJsonNull }?.asLong
+                ?: json.getAsJsonObject("response")?.get("id")?.takeIf { !it.isJsonNull }?.asLong
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "board.addTopic parse error", e)
+            null
+        }
+    }
+
+    /** board.deleteTopic — удалить тему обсуждения. */
+    suspend fun boardDeleteTopic(groupId: Long, topicId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("board.deleteTopic", mapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /** board.editTopic — редактировать тему (title и/или text). */
+    suspend fun boardEditTopic(groupId: Long, topicId: Long, title: String? = null, text: String? = null): Boolean {
+        if (isOffline()) return false
+        val args = mutableMapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+        )
+        if (title != null) args["title"] = title
+        if (text != null) args["text"] = text
+        val json = call("board.editTopic", args) ?: return false
+        return json.has("response")
+    }
+
+    /** board.deleteComment — удалить комментарий темы обсуждения. */
+    suspend fun boardDeleteComment(groupId: Long, topicId: Long, commentId: Long): Boolean {
+        if (isOffline()) return false
+        val json = call("board.deleteComment", mapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+            "comment_id" to commentId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /** board.editComment — редактировать текст комментария темы обсуждения. */
+    suspend fun boardEditComment(groupId: Long, topicId: Long, commentId: Long, text: String): Boolean {
+        if (isOffline()) return false
+        val json = call("board.editComment", mapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+            "comment_id" to commentId.toString(),
+            "text" to text,
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * board.closeTopic / board.openTopic — закрыть/открыть тему обсуждения.
+     * @param closed true=закрыть (board.closeTopic), false=открыть (board.openTopic)
+     */
+    suspend fun boardCloseTopic(groupId: Long, topicId: Long, closed: Boolean = true): Boolean {
+        if (isOffline()) return false
+        val method = if (closed) "board.closeTopic" else "board.openTopic"
+        val json = call(method, mapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * board.fixTopic / board.unFixTopic — закрепить/открепить тему обсуждения.
+     * @param fixed true=закрепить (board.fixTopic), false=открепить (board.unFixTopic)
+     */
+    suspend fun boardFixTopic(groupId: Long, topicId: Long, fixed: Boolean = true): Boolean {
+        if (isOffline()) return false
+        val method = if (fixed) "board.fixTopic" else "board.unFixTopic"
+        val json = call(method, mapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
+    /**
+     * Лайк комментария темы обсуждения.
+     * VK: likes.add / likes.delete с type="board_comment", owner_id=-groupId (ОТРИЦАТЕЛЬНЫЙ
+     * group_id — для board_comment owner_id это ID группы со знаком минус), item_id=commentId.
+     * @param like true=поставить лайк (likes.add), false=снять (likes.delete)
+     */
+    suspend fun boardLikeComment(groupId: Long, commentId: Long, like: Boolean = true): Boolean {
+        if (isOffline()) return false
+        val method = if (like) "likes.add" else "likes.delete"
+        val json = call(method, mapOf(
+            "type" to "board_comment",
+            "owner_id" to (-groupId).toString(),  // ОТРИЦАТЕЛЬНЫЙ group_id для board_comment
+            "item_id" to commentId.toString(),
+        )) ?: return false
+        return json.has("response")
+    }
+
     /** Получить теги закладок. VK: fave.getTags (getTagList НЕ существует — err=3) */
     suspend fun faveGetTagList(): List<re.pinok.data.model.FaveTag> {
         if (isOffline()) return emptyList()
