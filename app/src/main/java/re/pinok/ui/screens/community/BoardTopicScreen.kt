@@ -19,6 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -355,8 +358,46 @@ fun BoardTopicScreen(
                 },
             )
         },
-        // #B-FIX-2: composer перенесён из bottomBar в конец LazyColumn (в потоке,
-        // прокручивается с контентом — как в снапшоте VK web, НЕ fixed).
+        // PIN-COMPOSER: composer закреплён внизу (Scaffold.bottomBar), как в
+        // ChatDetailScreen / PostDetailScreen. БЕЗ разделителя — Material3 сам
+        // отделяет bottomBar от content. B-FIX-2 ошибочно перенёс composer в
+        // LazyColumn item (уезжал со скроллом) — противоречит паттерну сообщений.
+        bottomBar = {
+            ComposerRow(
+                text = commentText,
+                onTextChange = { commentText = it },
+                sending = sending,
+                onSendingChange = { sending = it },
+                uploading = uploading,
+                onUploadingChange = { uploading = it },
+                myPhoto = myPhoto,
+                showAttachMenu = showAttachMenu,
+                onShowAttachMenuChange = { showAttachMenu = it },
+                showEmojiPanel = showEmojiPanel,
+                onShowEmojiPanelChange = { showEmojiPanel = it },
+                pendingPhotoUris = pendingPhotoUris,
+                onPendingPhotoUrisChange = { pendingPhotoUris = it },
+                pendingFileUris = pendingFileUris,
+                onPendingFileUrisChange = { pendingFileUris = it },
+                onLaunchPhotoPicker = {
+                    commentMultiPhotoLauncher.launch(
+                        PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageOnly,
+                        ),
+                    )
+                },
+                onLaunchFilePicker = {
+                    commentMultiFileLauncher.launch(arrayOf("*/*"))
+                },
+                groupId = groupId,
+                topicId = topicId,
+                onSentSuccess = {
+                    reloadTrigger++  // перезагрузить комментарии.
+                    currentPage = 1
+                    offset = 0
+                },
+            )
+        },
     ) { innerPadding ->
         when {
             loading && comments.isEmpty() -> {
@@ -601,52 +642,6 @@ fun BoardTopicScreen(
                             )
                         }
 
-                        // VK-STYLING-2 (AUDIT #32): <hr class="RCvVnl"> separator перед
-                        // composer (как в снапшоте VK web — тонкий разделитель над input row).
-                        item(key = "composer_divider") {
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                thickness = 0.5.dp,
-                            )
-                        }
-                        // #B-FIX-2: composer в потоке (НЕ fixed) — последний item LazyColumn.
-                        // По снапшоту VK web: avatar 36dp + contenteditable + attach + emoji + send.
-                        item(key = "composer") {
-                            ComposerRow(
-                                text = commentText,
-                                onTextChange = { commentText = it },
-                                sending = sending,
-                                onSendingChange = { sending = it },
-                                uploading = uploading,
-                                onUploadingChange = { uploading = it },
-                                myPhoto = myPhoto,
-                                showAttachMenu = showAttachMenu,
-                                onShowAttachMenuChange = { showAttachMenu = it },
-                                showEmojiPanel = showEmojiPanel,
-                                onShowEmojiPanelChange = { showEmojiPanel = it },
-                                pendingPhotoUris = pendingPhotoUris,
-                                onPendingPhotoUrisChange = { pendingPhotoUris = it },
-                                pendingFileUris = pendingFileUris,
-                                onPendingFileUrisChange = { pendingFileUris = it },
-                                onLaunchPhotoPicker = {
-                                    commentMultiPhotoLauncher.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                        ),
-                                    )
-                                },
-                                onLaunchFilePicker = {
-                                    commentMultiFileLauncher.launch(arrayOf("*/*"))
-                                },
-                                groupId = groupId,
-                                topicId = topicId,
-                                onSentSuccess = {
-                                    reloadTrigger++  // перезагрузить комментарии.
-                                    currentPage = 1
-                                    offset = 0
-                                },
-                            )
-                        }
                     }
 
                     // FAB «наверх» над комментариями темы.
@@ -1151,8 +1146,9 @@ private fun ComposerRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .imePadding()
-            .navigationBarsPadding(),
+            // PIN-COMPOSER: windowInsetsPadding для bottomBar — IME поднимает composer,
+            // navigationBars для жестовой панели. Паритет с PostDetailScreen composer.
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
     ) {
         // COMPOSER-REUSE: photos bar — превью выбранных фото (как PostDetailScreen CommentPhotosBar).
         if (pendingPhotoUris.isNotEmpty()) {
