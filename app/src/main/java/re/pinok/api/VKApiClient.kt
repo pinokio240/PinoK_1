@@ -5308,8 +5308,19 @@ class VKApiClient(
         )
         val json = call("board.addTopic", args) ?: return null
         return try {
-            json.getAsJsonObject("response")?.get("topic_id")?.takeIf { !it.isJsonNull }?.asLong
-                ?: json.getAsJsonObject("response")?.get("id")?.takeIf { !it.isJsonNull }?.asLong
+            // FIX-CAST: VK возвращает {"response":<topic_id>} — response это JsonPrimitive
+            // (число = ID созданной темы), НЕ JsonObject. getAsJsonObject("response")
+            // бросал ClassCastException → метод возвращал null → UI показывал «Не удалось»
+            // → пользователь тапал снова → ДУБЛИКАТЫ тем.
+            val resp = json.get("response") ?: return null
+            if (resp.isJsonObject) {
+                // Объект с полем topic_id/id (некоторые VK версии)
+                resp.asJsonObject.get("topic_id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: resp.asJsonObject.get("id")?.takeIf { !it.isJsonNull }?.asLong
+            } else {
+                // JsonPrimitive = topic_id напрямую (как {"response":123456})
+                resp.takeIf { !it.isJsonNull }?.asLong
+            }
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "board.addTopic parse error", e)
             null
