@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -12,6 +13,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.EmojiEmotions
+import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.Poll
+import androidx.compose.material.icons.outlined.VideoCameraBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,9 +60,12 @@ import re.pinok.SovaApp
  *   suspend fun boardAddTopic(groupId, title, text, fromGroup=0): Long?
  *   — возвращает topic_id (response.topic_id ?: response.id) или null.
  *
- * НЕ включает: 6 attach-иконок (attach-photo/video/audio/file/poll),
- * emoji-smile, «Опубликовать от имени группы» (fromGroup=0 зафиксирован —
- * юзер обычный участник). Это добавится позже отдельными задачами.
+ * НЕ включает (TODO-заглушки B-FIX-4): реальный attach-payload для
+ * 6 кнопок (device/photo/video/audio/file/poll) и emoji-picker — кнопки
+ * видны как в снапшоте VK web (HTML4), но onClick — пустые TODO. Сам
+ * board.addTopic не принимает attachments — нужен отдельный upload-flow.
+ * «Опубликовать от имени группы» (fromGroup=0 зафиксирован — юзер обычный
+ * участник). Это добавится позже отдельными задачами.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -143,6 +155,66 @@ fun CreateBoardTopicScreen(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+
+            // B-FIX-4 (#SCOUT-BOARD-SNAP HTML4): ряд attach-кнопок 24×24 + emoji,
+            // как в форме создания темы VK web. Слева 6 кнопок attach, справа
+            // emoji-smile. onClick — TODO-заглушки (attach-payload не реализован).
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = { /* TODO upload from device */ }) {
+                    Icon(
+                        Icons.Outlined.AttachFile,
+                        contentDescription = "С устройства",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(onClick = { /* TODO photo */ }) {
+                    Icon(
+                        Icons.Outlined.PhotoCamera,
+                        contentDescription = "Фото",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(onClick = { /* TODO video */ }) {
+                    Icon(
+                        Icons.Outlined.VideoCameraBack,
+                        contentDescription = "Видео",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(onClick = { /* TODO audio */ }) {
+                    Icon(
+                        Icons.Outlined.MusicNote,
+                        contentDescription = "Аудио",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(onClick = { /* TODO file/doc */ }) {
+                    Icon(
+                        Icons.Outlined.Description,
+                        contentDescription = "Файл",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(onClick = { /* TODO poll */ }) {
+                    Icon(
+                        Icons.Outlined.Poll,
+                        contentDescription = "Опрос",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { /* TODO emoji */ }) {
+                    Icon(
+                        Icons.Outlined.EmojiEmotions,
+                        contentDescription = "Эмодзи",
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
             }
 
             // ── Кнопка «Создать тему» ──────────────────────────────────

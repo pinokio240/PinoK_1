@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -124,6 +126,14 @@ fun BoardTopicScreen(
     var editingComment by remember { mutableStateOf<BoardComment?>(null) }
     var editText by remember { mutableStateOf("") }
 
+    // B-FIX-4: «Редактировать тему» (board.editTopic). Локальный заголовок
+    // темы — обновляется после успешного editTopic (параметр `title` у экрана
+    // immutable, без локального state-а в TopAppBar остался бы старый текст).
+    var displayTitle by remember { mutableStateOf(title) }
+    var showEditTopicDialog by remember { mutableStateOf(false) }
+    var editTopicTitle by remember { mutableStateOf(title) }
+    var editTopicText by remember { mutableStateOf("") }
+
     // Первая загрузка (+ перезагрузка при смене sort / после отправки комментария).
     LaunchedEffect(groupId, topicId, sort, reloadTrigger) {
         scope.launch {
@@ -190,7 +200,7 @@ fun BoardTopicScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = title,
+                        text = displayTitle,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -205,6 +215,18 @@ fun BoardTopicScreen(
                 // ↑ = asc (старые сверху), ↓ = desc (новые сверху). Смена sort перезагружает
                 // ленту через LaunchedEffect(groupId, topicId, sort, reloadTrigger).
                 actions = {
+                    // B-FIX-4: «Редактировать тему» (board.editTopic). Гейт упрощён —
+                    // показываем всегда: VK сам отклонит (err=15/7) если у юзера нет
+                    // прав (не автор темы / не админ группы). canEditTopic можно
+                    // сузить позже: groupInfo?.isManager==true ИЛИ первый комментарий
+                    // created_by == currentUserId (app.exchangeAuthRepository.userId()).
+                    IconButton(onClick = {
+                        editTopicTitle = displayTitle
+                        editTopicText = ""
+                        showEditTopicDialog = true
+                    }) {
+                        Icon(Icons.Outlined.Edit, contentDescription = "Редактировать тему")
+                    }
                     IconButton(onClick = {
                         sort = if (sort == "asc") "desc" else "asc"
                     }) {
@@ -333,7 +355,7 @@ fun BoardTopicScreen(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                         ) {
                             Text(
-                                text = title,
+                                text = displayTitle,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface,
@@ -474,6 +496,72 @@ fun BoardTopicScreen(
             },
             dismissButton = {
                 TextButton(onClick = { editingComment = null }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
+    // B-FIX-4: диалог редактирования темы (board.editTopic). Поля: Заголовок
+    // (max 255) + Текст (max 4096). На «Сохранить» вызываем boardEditTopic —
+    // при успехе обновляем displayTitle (TopAppBar + header) и закрываем диалог.
+    if (showEditTopicDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditTopicDialog = false },
+            title = { Text("Редактирование темы") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = editTopicTitle,
+                        onValueChange = { if (it.length <= 255) editTopicTitle = it },
+                        label = { Text("Заголовок") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editTopicText,
+                        onValueChange = { if (it.length <= 4096) editTopicText = it },
+                        label = { Text("Текст") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 100.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    // Заголовок обязателен — VK требует title (пустой → err).
+                    if (editTopicTitle.isBlank()) return@TextButton
+                    val newTitle = editTopicTitle
+                    val newText = editTopicText.ifBlank { null }
+                    scope.launch {
+                        val ok = app.apiClient.boardEditTopic(
+                            groupId = groupId,
+                            topicId = topicId,
+                            title = newTitle,
+                            text = newText,
+                        )
+                        if (ok) {
+                            displayTitle = newTitle
+                            Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                            showEditTopicDialog = false
+                        } else {
+                            // VK отклонил (err=15/7 — нет прав, иное). lastApiError
+                            // содержит код+сообщение из response.error.
+                            Toast.makeText(
+                                ctx,
+                                "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditTopicDialog = false }) {
                     Text("Отмена")
                 }
             },
