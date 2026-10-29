@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -46,10 +47,12 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -143,6 +146,7 @@ import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
 import re.pinok.util.toRelativeTime
+import kotlin.math.min
 import java.util.Locale
 import android.widget.Toast
 import android.content.Intent
@@ -451,11 +455,16 @@ fun CommunityScreen(
     // B-C: long-press меню темы (Закрепить/Закрыть/Удалить) — только для админа.
     var showTopicMenu by remember { mutableStateOf<BoardTopic?>(null) }
     var deleteTopicTarget by remember { mutableStateOf<BoardTopic?>(null) }
+    // B-FIX-1: поиск по обсуждениям (board-search-input) + sort dropdown
+    // (global_sorting): 1=по дате обновления (default VK web), 2=по дате создания.
+    var topicsSearchQuery by remember { mutableStateOf("") }
+    var topicsSortExpanded by remember { mutableStateOf(false) }
+    var topicsSortOrder by remember { mutableStateOf(1) }
     val topicsState = rememberPagedListState<BoardTopic>(
         fetcher = { cursor ->
             // P0.47-REVERT: board.getTopics — getContentForTabs(tab="topics") → пусто.
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val result = app.apiClient.boardGetTopicsFull(groupId = groupId, count = 30, offset = offset)
+            val result = app.apiClient.boardGetTopicsFull(groupId = groupId, count = 30, offset = offset, order = topicsSortOrder)
             topicsAuthors = topicsAuthors + result.authors
             canAddTopics = result.canAddTopics
             val next = if (result.topics.isEmpty() ||
@@ -2622,9 +2631,13 @@ fun CommunityScreen(
                 }
             }
             5 -> {
-                // Шаг 4 (#32d): Обсуждения — boardGetTopics(groupId).
+                // Шаг 4 (#32d): Обсуждения — board.getTopics.
                 // Список тем; тап → onTopicClick → BoardTopicScreen.
                 // Пагинация — канонический PagingTrigger (гейт selectedTab == 5 выше).
+                // B-FIX-1: локальная фильтрация тем по поисковому запросу
+                // (board-search-input, как в VK web — клиентский filter по title).
+                val filteredTopics = if (topicsSearchQuery.isBlank()) topicsState.items
+                    else topicsState.items.filter { it.title.contains(topicsSearchQuery, ignoreCase = true) }
                 if (topicsState.loading && topicsState.items.isEmpty()) {
                     item {
                         Box(
@@ -2663,28 +2676,110 @@ fun CommunityScreen(
                         }
                     }
                 } else {
-                    item {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    // B-FIX-1: header вкладки «Обсуждения» — заголовок «Обсуждения (N)»
+                    // + кнопка «Создать тему» (TextButton, как в VK web — board-create-topic-button
+                    // в header, НЕ FAB). Гейт canAddTopics (board.getTopics can_add_topics).
+                    item(key = "board_header") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
                                 text = "Обсуждения (${topicsState.items.size})",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium,
                             )
+                            if (canAddTopics) {
+                                TextButton(onClick = onCreateTopic) {
+                                    Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Создать тему")
+                                }
+                            }
                         }
                     }
-                    items(topicsState.items, key = { "topic_${groupId}_${it.id}" }) { topic ->
-                        // B-C: long-press меню темы — только админ (canManageAlbums).
-                        val openTopicMenu: (() -> Unit)? = if (canManageAlbums) {
-                            { showTopicMenu = topic }
-                        } else null
-                        BoardTopicRow(
-                            topic = topic,
-                            authors = topicsAuthors,
-                            onLongClick = openTopicMenu,
-                            onClick = { onTopicClick(groupId, topic.id, topic.title) },
-                        )
+                    // B-FIX-1: поле поиска «Поиск по обсуждениям» (board-search-input)
+                    // + sort dropdown (global_sorting) — «По дате обновления/создания».
+                    item(key = "board_search") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = topicsSearchQuery,
+                                onValueChange = { topicsSearchQuery = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Поиск по обсуждениям") },
+                                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (topicsSearchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { topicsSearchQuery = "" }) {
+                                            Icon(Icons.Filled.Close, contentDescription = "Очистить")
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                            )
+                            Box {
+                                TextButton(onClick = { topicsSortExpanded = true }) {
+                                    Text(if (topicsSortOrder == 1) "По дате обновления" else "По дате создания")
+                                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                                }
+                                DropdownMenu(
+                                    expanded = topicsSortExpanded,
+                                    onDismissRequest = { topicsSortExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("По дате обновления") },
+                                        onClick = {
+                                            if (topicsSortOrder != 1) {
+                                                topicsSortOrder = 1
+                                                scope.launch { topicsState.reset(); topicsState.loadFirst() }
+                                            }
+                                            topicsSortExpanded = false
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("По дате создания") },
+                                        onClick = {
+                                            if (topicsSortOrder != 2) {
+                                                topicsSortOrder = 2
+                                                scope.launch { topicsState.reset(); topicsState.loadFirst() }
+                                            }
+                                            topicsSortExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (filteredTopics.isEmpty()) {
+                        item(key = "topics_no_match") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Ничего не найдено",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                        }
+                    } else {
+                        items(filteredTopics, key = { "topic_${groupId}_${it.id}" }) { topic ->
+                            // B-C: long-press меню темы — только админ (canManageAlbums).
+                            val openTopicMenu: (() -> Unit)? = if (canManageAlbums) {
+                                { showTopicMenu = topic }
+                            } else null
+                            BoardTopicRow(
+                                topic = topic,
+                                authors = topicsAuthors,
+                                onLongClick = openTopicMenu,
+                                onClick = { onTopicClick(groupId, topic.id, topic.title) },
+                            )
+                        }
                     }
                     // Фаза 0/1: общий футер пагинации тем.
                     item(key = "topics_paging_footer") {
@@ -2761,24 +2856,13 @@ fun CommunityScreen(
 
     // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» — работает на
     // всех табах сообщества (стена/видео/обсуждения — один общий LazyList).
-    // B-C: когда на вкладке «Обсуждения» показан FAB «+ Создать тему»,
-    // приподнимаем стрелку «наверх», чтобы FAB-ы не перекрывали друг друга.
-    val createTopicFabVisible = selectedTab == 5 && canAddTopics
+    // B-FIX-1: «Создать тему» перенесена в header вкладки «Обсуждения»
+    // (TextButton, как в VK web — board-create-topic-button в header, НЕ FAB).
+    // ScrollToTopFab больше не нужно приподнимать над FAB-ом создания темы.
     ScrollToTopFab(
         listState = listState,
-        modifier = Modifier.align(Alignment.BottomEnd)
-            .padding(end = 16.dp, bottom = if (createTopicFabVisible) 88.dp else 16.dp),
+        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
     )
-    // B-C: FAB «+ Создать тему» (вкладка «Обсуждения», гейт canAddTopics из
-    // board.getTopics — VK отдаёт false для закрытых/только-для-админа досок).
-    if (createTopicFabVisible) {
-        FloatingActionButton(
-            onClick = onCreateTopic,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-        ) {
-            Icon(Icons.Filled.Add, contentDescription = "Создать тему")
-        }
-    }
     } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
 
     // B-C: long-press меню темы обсуждения (Закрепить/Закрыть/Удалить).
@@ -3377,20 +3461,58 @@ private fun BoardTopicRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // B-C: превью последнего комментария (как VK web — под title, серый, 1 строка).
-                // SMART-CAST-FIX: lastComment — public API property из другого модуля (BoardTopic data class),
-                // Kotlin не делает smart cast к String (non-null) после isNotEmptyOrNull().
-                // Захватываем в локальную val.
-                val lastCommentPreview = topic.lastComment
-                if (!lastCommentPreview.isNullOrEmpty()) {
-                    Text(
-                        text = lastCommentPreview,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
+                // B-FIX-1: превью last-comment — avatar 40dp + name + «Ответил/Ответила {date}»
+                // (как в VK web: last-comment-author-photo 40×40 + last-comment-author-name +
+                // board-topic-last-comment-date «Ответил/Ответила {date} в {time}»).
+                // Заменяет текстовое превью topic.lastComment (B-C). Склонение глагола
+                // по sex автора (1=жен → «Ответила», иначе «Ответил»). sex парсится в
+                // parseUserProfileMini (B-FIX-3 уже добавил sex в mini-профиль).
+                if (topic.updatedBy != 0L && topic.updated > 0) {
+                    val lastAuthor = authors[topic.updatedBy]
+                    val lastAuthorName = lastAuthor?.fullName ?: "Пользователь"
+                    val isFemale = lastAuthor?.sex == 1
+                    val verb = if (isFemale) "Ответила" else "Ответил"
+                    val dateStr = topic.updated.toRelativeTime()
+                    Row(
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier.size(40.dp).clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            val photo = lastAuthor?.photo100
+                            if (!photo.isNullOrEmpty()) {
+                                AsyncImage(
+                                    model = photo,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Outlined.Person,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = lastAuthorName,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "$verb $dateStr",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
@@ -3405,20 +3527,9 @@ private fun BoardTopicRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
-                    // B-C: автор + относительная дата последнего комментария
-                    // (topic.updated/updatedBy), fallback — дата создания темы.
-                    if (topic.updatedBy != 0L && topic.updated > 0) {
-                        val authorName = authors[topic.updatedBy]?.fullName
-                        val dateStr = topic.updated.toRelativeTime()
-                        val label = if (!authorName.isNullOrEmpty()) "$authorName • $dateStr" else dateStr
-                        Text(
-                            text = "• $label",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (topic.created > 0) {
+                    // B-FIX-1: дата создания темы показывается только если нет
+                    // last-comment (avatar-превью выше уже содержит дату обновления).
+                    if ((topic.updatedBy == 0L || topic.updated <= 0) && topic.created > 0) {
                         Text(
                             text = "• " + topic.created.toAbsoluteTime(),
                             style = MaterialTheme.typography.labelSmall,
@@ -3431,6 +3542,41 @@ private fun BoardTopicRow(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
                         )
+                    }
+                }
+                // B-FIX-1: mini-пагинация «Стр. 1 2 3 4» для тем с >20 комм.
+                // (как в VK web — offset=N*20). Page-кнопки открывают тему
+                // (открытие на конкретной странице требует offset в route — вне scope).
+                if (topic.comments > 20) {
+                    val pages = (topic.comments + 19) / 20
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Стр.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                        val maxPages = min(pages, 6)
+                        for (p in 1..maxPages) {
+                            TextButton(
+                                onClick = onClick,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                            ) {
+                                Text(
+                                    text = "$p",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                        if (pages > 6) {
+                            Text(
+                                text = " …",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
                     }
                 }
             }

@@ -5086,6 +5086,10 @@ class VKApiClient(
         groupId: Long,
         count: Int = 30,
         offset: Int = 0,
+        // B-FIX-1: order — VK API board.getTopics: 1=по дате обновления (default
+        // VK web, «По дате обновления»), 2=по дате создания. Соответствует
+        // global_sorting dropdown в снапшоте VK web SPA.
+        order: Int = 1,
     ): BoardTopicsResult {
         if (isOffline()) return BoardTopicsResult(emptyList(), 0, emptyMap(), false)
         val json = call("board.getTopics", mapOf(
@@ -5095,6 +5099,7 @@ class VKApiClient(
             "extended" to "1",
             "preview" to "2",
             "preview_length" to "90",
+            "order" to order.toString(),
             // REVIEW-BOARD risk#1: photo_100/photo_200 для аватарок авторов
             // (parseUserProfileMini читает photo_100, не только photo_50)
             "fields" to "photo_50,photo_100,photo_200,sex",
