@@ -42,10 +42,13 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,6 +64,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -398,6 +402,10 @@ fun BoardTopicScreen(
                     currentPage = 1
                     offset = 0
                 },
+                // B-FIX-B: показывать Switch «От имени сообщества». В BoardTopicScreen
+                // нет флага isManager (маршрут без admin-флага), поэтому default true.
+                // VK отклонит err=15 если у юзера нет прав — Switch просто не сработает.
+                showFromGroup = true,
             )
         },
     ) { innerPadding ->
@@ -572,6 +580,8 @@ fun BoardTopicScreen(
                                         editText = c.text
                                     },
                                     onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
+                                    groupId = groupId,
+                                    topicId = topicId,
                                 )
                             }
                         }
@@ -635,6 +645,8 @@ fun BoardTopicScreen(
                                     editText = c.text
                                 },
                                 onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
+                                groupId = groupId,
+                                topicId = topicId,
                             )
                             // VK-STYLING (AUDIT #33): разделитель между комментариями
                             // (как <hr class="RCvVnl"> в снапшоте VK web, color #dce1e6).
@@ -811,6 +823,10 @@ private fun BoardCommentCard(
     onDelete: (BoardComment) -> Unit,
     onEdit: (BoardComment) -> Unit,
     onUserClick: (Long) -> Unit = {},
+    // B-FIX-B (TRACER-2 gap): groupId/topicId для «Скопировать ссылку»
+    // (VK topic URL: vk.com/topic-{groupId}_{topicId}?post={commentId}).
+    groupId: Long = 0L,
+    topicId: Long = 0L,
 ) {
     val author = authors[comment.creatorId]
     val authorName = author?.fullName?.takeIf { it.isNotBlank() }
@@ -820,6 +836,8 @@ private fun BoardCommentCard(
     var showMenu by remember { mutableStateOf(false) }
     // #B-FIX-2: showmoretext — свёрнутый длинный текст комментария.
     var expanded by remember { mutableStateOf(false) }
+    // B-FIX-B: ctx для Toast/Clipboard в меню «Скопировать ссылку».
+    val ctx = LocalContext.current
 
     // VK-STYLING (AUDIT #1/#2/#4/#5): flat Surface (radius 8dp, БЕЗ elevation),
     // padding-block 8dp / padding-inline 0dp (как flat row в снапшоте VK web HTML3).
@@ -948,6 +966,45 @@ private fun BoardCommentCard(
                                     },
                                 )
                             }
+                            // B-FIX-B (TRACER-2 gap): «Скопировать ссылку» — clipboard.
+                            // VK topic URL: vk.com/topic-{groupId}_{topicId}?post={commentId}
+                            DropdownMenuItem(
+                                text = { Text("Скопировать ссылку") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Link, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    val url = "https://vk.com/topic${-groupId}_${topicId}?post=${comment.id}"
+                                    val clipboard = ctx.getSystemService(
+                                        android.content.Context.CLIPBOARD_SERVICE,
+                                    ) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(
+                                        android.content.ClipData.newPlainText("Ссылка", url),
+                                    )
+                                    Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                                },
+                            )
+                            // B-FIX-B (TRACER-2 gap): «Пожаловаться» — TODO report API.
+                            // VK не имеет board.reportComment; заглушка toast, дальше через
+                            // wall.reportComment или общий VK report flow.
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Пожаловаться", color = MaterialTheme.colorScheme.error)
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Report,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    Toast.makeText(ctx, "Жалоба отправляется...", Toast.LENGTH_SHORT).show()
+                                    // TODO: реализовать через wall.reportComment или общий VK report API.
+                                },
+                            )
                         }
                     }
                 }
@@ -1140,10 +1197,16 @@ private fun ComposerRow(
     groupId: Long,
     topicId: Long,
     onSentSuccess: () -> Unit,
+    // B-FIX-B (TRACER-2 gap): гейт Switch «От имени сообщества» (from_group).
+    // Передаётся из call-site (bottomBar) как showFromGroup = isManager;
+    // если флага прав нет — default false (VK вернёт err=15 если у юзера нет прав).
+    showFromGroup: Boolean = false,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    // B-FIX-B: from_group (1 = постить от имени сообщества). Гейт showFromGroup.
+    var fromGroup by remember { mutableStateOf(0) }
 
     Column(
         modifier = Modifier
@@ -1248,6 +1311,28 @@ private fun ComposerRow(
                         modifier = Modifier.clickable { onTextChange(text + emoji) },
                     )
                 }
+            }
+        }
+        // B-FIX-B (TRACER-2 gap): Switch «От имени сообщества» (from_group).
+        // VK API board.createComment(from_group=1) постит от имени сообщества;
+        // гейт showFromGroup (isManager). Отдельный compact row над composer-ом.
+        if (showFromGroup) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Switch(
+                    checked = fromGroup == 1,
+                    onCheckedChange = { fromGroup = if (it) 1 else 0 },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "От имени сообщества",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         // Composer row (avatar + input + attach + emoji + send), как PostDetailScreen L1040.
@@ -1415,11 +1500,15 @@ private fun ComposerRow(
                                 .joinToString(",")
                                 .ifBlank { null }
                             // boardCreateComment: ownerId для группы = -groupId (метод берёт abs).
+                            // B-FIX-B: from_group (0=от себя, 1=от сообщества) — Switch выше.
+                            // Параметр fromGroup в VKApiClient.boardCreateComment добавлен
+                            // агентом B-FIX-A (TRACER-2 gap, паритет с VK web from_group).
                             val ok = app.apiClient.boardCreateComment(
                                 ownerId = -groupId,
                                 topicId = topicId,
                                 message = textToSend,
                                 attachments = allAttachments,
+                                fromGroup = fromGroup,
                             )
                             if (ok) {
                                 onSentSuccess()

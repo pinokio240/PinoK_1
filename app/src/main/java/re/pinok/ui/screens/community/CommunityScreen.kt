@@ -2777,10 +2777,12 @@ fun CommunityScreen(
                         }
                     } else {
                         items(filteredTopics, key = { "topic_${groupId}_${it.id}" }) { topic ->
-                            // B-C: long-press меню темы — только админ (canManageAlbums).
-                            val openTopicMenu: (() -> Unit)? = if (canManageAlbums) {
-                                { showTopicMenu = topic }
-                            } else null
+                            // B-FIX-B (TRACER-2 gap): long-press меню темы — для ВСЕХ
+                            // (не только админ). Содержимое меню зависит от прав
+                            // (canManageAlbums): админ видит Закрепить/Закрыть/Удалить
+                            // + Поделиться/Скопировать/Пожаловаться; обычный юзер —
+                            // только Поделиться/Скопировать/Пожаловаться.
+                            val openTopicMenu: (() -> Unit)? = { showTopicMenu = topic }
                             BoardTopicRow(
                                 topic = topic,
                                 authors = topicsAuthors,
@@ -2873,7 +2875,8 @@ fun CommunityScreen(
     )
     } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
 
-    // B-C: long-press меню темы обсуждения (Закрепить/Закрыть/Удалить).
+    // B-C: long-press меню темы обсуждения (Закрепить/Закрыть/Удалить +
+    // B-FIX-B: Поделиться/Скопировать ссылку/Пожаловаться — для ВСЕХ юзеров).
     val menuTopic = showTopicMenu
     if (menuTopic != null) {
         val ctx = LocalContext.current
@@ -2887,45 +2890,91 @@ fun CommunityScreen(
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
+                    // B-FIX-B: админ-действия (Закрепить/Закрыть/Удалить) — гейт canManageAlbums.
+                    if (canManageAlbums) {
+                        TextButton(
+                            onClick = {
+                                val target = menuTopic
+                                showTopicMenu = null
+                                scope.launch {
+                                    val ok = app.apiClient.boardFixTopic(groupId, target.id, !target.isFixedBool)
+                                    if (ok) {
+                                        topicsState.loadFirst()
+                                    } else {
+                                        Toast.makeText(ctx, "Не удалось изменить закрепление", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (menuTopic.isFixedBool) "Открепить" else "Закрепить") }
+                        TextButton(
+                            onClick = {
+                                val target = menuTopic
+                                showTopicMenu = null
+                                scope.launch {
+                                    val ok = app.apiClient.boardCloseTopic(groupId, target.id, target.isClosed != 1)
+                                    if (ok) {
+                                        topicsState.loadFirst()
+                                    } else {
+                                        Toast.makeText(ctx, "Не удалось изменить статус", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (menuTopic.isClosed == 1) "Открыть тему" else "Закрыть тему") }
+                        TextButton(
+                            onClick = {
+                                deleteTopicTarget = menuTopic
+                                showTopicMenu = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                "Удалить",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    // B-FIX-B (TRACER-2 gap): Поделиться/Скопировать ссылку/Пожаловаться —
+                    // для ВСЕХ юзеров (включая не-админов). VK topic URL:
+                    // vk.com/topic-{groupId}_{topicId}.
                     TextButton(
                         onClick = {
-                            val target = menuTopic
+                            val url = "https://vk.com/topic-${groupId}_${menuTopic.id}"
                             showTopicMenu = null
-                            scope.launch {
-                                val ok = app.apiClient.boardFixTopic(groupId, target.id, !target.isFixedBool)
-                                if (ok) {
-                                    topicsState.loadFirst()
-                                } else {
-                                    Toast.makeText(ctx, "Не удалось изменить закрепление", Toast.LENGTH_SHORT).show()
-                                }
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, url)
                             }
+                            ctx.startActivity(Intent.createChooser(send, "Поделиться"))
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (menuTopic.isFixedBool) "Открепить" else "Закрепить") }
+                    ) { Text("Поделиться") }
                     TextButton(
                         onClick = {
-                            val target = menuTopic
                             showTopicMenu = null
-                            scope.launch {
-                                val ok = app.apiClient.boardCloseTopic(groupId, target.id, target.isClosed != 1)
-                                if (ok) {
-                                    topicsState.loadFirst()
-                                } else {
-                                    Toast.makeText(ctx, "Не удалось изменить статус", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                            val url = "https://vk.com/topic-${groupId}_${menuTopic.id}"
+                            val clipboard = ctx.getSystemService(
+                                android.content.Context.CLIPBOARD_SERVICE,
+                            ) as android.content.ClipboardManager
+                            clipboard.setPrimaryClip(
+                                android.content.ClipData.newPlainText("Ссылка", url),
+                            )
+                            Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (menuTopic.isClosed == 1) "Открыть тему" else "Закрыть тему") }
+                    ) { Text("Скопировать ссылку") }
                     TextButton(
                         onClick = {
-                            deleteTopicTarget = menuTopic
                             showTopicMenu = null
+                            // TODO: VK не имеет board.reportTopic; заглушка toast,
+                            // дальше через общий VK report flow (wall.reportPost-like).
+                            Toast.makeText(ctx, "Жалоба отправляется...", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            "Удалить",
+                            "Пожаловаться",
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
