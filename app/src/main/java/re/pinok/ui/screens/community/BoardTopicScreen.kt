@@ -45,10 +45,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
@@ -263,12 +266,21 @@ fun BoardTopicScreen(
                     // B-FIX-8: «Редактировать тему» TextButton (modePrimary accent, как
                     // board-topic-edit-button в снапшоте VK web). Гейт упрощён — показываем
                     // всегда: VK отклонит (err=15/7) если нет прав (не автор/не админ).
-                    TextButton(onClick = {
-                        editTopicTitle = displayTitle
-                        editTopicText = ""
-                        showEditTopicDialog = true
-                    }) {
-                        Text("Редактировать тему")
+                    // VK-STYLING-2 (AUDIT #29): board-topic-edit-button — filled accent
+                    // button (vkuiButton sizeS modePrimary appearanceAccent), НЕ TextButton.
+                    Button(
+                        onClick = {
+                            editTopicTitle = displayTitle
+                            editTopicText = ""
+                            showEditTopicDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BoardAccent,
+                            contentColor = Color.White,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text("Редактировать тему", style = MaterialTheme.typography.labelMedium)
                     }
                     Box {
                         // B-FIX-7 (AUDIT #54): accent #447bba (board_comments_sorting —
@@ -278,7 +290,12 @@ fun BoardTopicScreen(
                             colors = ButtonDefaults.textButtonColors(contentColor = BoardAccent),
                         ) {
                             Text(if (sort == "asc") "Сначала старые" else "Сначала новые")
-                            Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
+                            // VK-STYLING-2 (AUDIT #30): dropdown_outline_16 (16dp, НЕ default 24).
+                            Icon(
+                                Icons.Outlined.ArrowDropDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
                         }
                         DropdownMenu(
                             expanded = sortExpanded,
@@ -362,11 +379,12 @@ fun BoardTopicScreen(
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             ) {
-                                // B-FIX-8: headlineSmall (крупнее) + accent, как
-                                // board-topic-title (weight1 accent) в снапшоте VK web.
+                                // VK-STYLING-2 (AUDIT #25): board-topic-title — title2
+                                // (20px / 600). headlineSmall=24sp слишком крупно → 20sp.
                                 Text(
                                     text = displayTitle,
-                                    style = MaterialTheme.typography.headlineSmall,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontSize = 20.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     // B-FIX-7 (AUDIT #54): accent #447bba (vkcom_light).
                                     color = BoardAccent,
@@ -546,6 +564,14 @@ fun BoardTopicScreen(
                             )
                         }
 
+                        // VK-STYLING-2 (AUDIT #32): <hr class="RCvVnl"> separator перед
+                        // composer (как в снапшоте VK web — тонкий разделитель над input row).
+                        item(key = "composer_divider") {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                thickness = 0.5.dp,
+                            )
+                        }
                         // #B-FIX-2: composer в потоке (НЕ fixed) — последний item LazyColumn.
                         // По снапшоту VK web: avatar 36dp + contenteditable + attach + emoji + send.
                         item(key = "composer") {
@@ -1076,12 +1102,24 @@ private fun ComposerRow(
             }
         }
         Spacer(Modifier.width(8.dp))
+        // VK-STYLING-2 (AUDIT #17, #18): borderless поле — как contenteditable div в
+        // VK web (border:0, NO outline). Серый фон surfaceVariant, скругление 8dp.
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
             modifier = Modifier.weight(1f),
-            placeholder = { Text("Написать комментарий…") },
+            placeholder = {
+                Text("Написать комментарий…", color = MaterialTheme.colorScheme.outline)
+            },
             maxLines = 4,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color.Transparent,
+                unfocusedBorderColor = Color.Transparent,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         )
         Spacer(Modifier.width(4.dp))
         // B-FIX-8: attach-dropdown (Фотография/Документ), как show-attach-dropdown
@@ -1089,7 +1127,12 @@ private fun ComposerRow(
         var attachMenuExpanded by remember { mutableStateOf(false) }
         Box {
             IconButton(onClick = { attachMenuExpanded = true }) {
-                Icon(Icons.Outlined.AttachFile, contentDescription = "Прикрепить")
+                // VK-STYLING-2 (AUDIT #19): attach_20 (20dp, НЕ default 24).
+                Icon(
+                    Icons.Outlined.AttachFile,
+                    contentDescription = "Прикрепить",
+                    modifier = Modifier.size(20.dp),
+                )
             }
             DropdownMenu(
                 expanded = attachMenuExpanded,
@@ -1110,11 +1153,21 @@ private fun ComposerRow(
         // VK-STYLING-FIX: camera (comment_upload_photo) — отдельная кнопка в ряду
         // composer, как в VK web (attach + camera + emoji + send, 4 кнопки).
         IconButton(onClick = { /* TODO: photo upload */ }) {
-            Icon(Icons.Outlined.PhotoCamera, contentDescription = "Фотография")
+            // VK-STYLING-2 (AUDIT #19): camera_outline_20 (20dp, НЕ default 24).
+            Icon(
+                Icons.Outlined.PhotoCamera,
+                contentDescription = "Фотография",
+                modifier = Modifier.size(20.dp),
+            )
         }
         // Emoji (emoji-smile / smile_outline_20 в VK web).
         IconButton(onClick = { /* TODO: emoji */ }) {
-            Icon(Icons.Outlined.EmojiEmotions, contentDescription = "Эмодзи")
+            // VK-STYLING-2 (AUDIT #19): smile_outline_20 (20dp, НЕ default 24).
+            Icon(
+                Icons.Outlined.EmojiEmotions,
+                contentDescription = "Эмодзи",
+                modifier = Modifier.size(20.dp),
+            )
         }
         // VK-STYLING-FIX: send-comment — только иконка send_24 (как в VK web),
         // БЕЗ текста «Сохранить». B-FIX-8 ошибочно добавил Button с текстом —
@@ -1130,8 +1183,10 @@ private fun ComposerRow(
                 Icon(
                     Icons.AutoMirrored.Outlined.Send,
                     contentDescription = "Отправить",
-                    tint = if (text.isNotBlank()) MaterialTheme.colorScheme.primary
-                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                    // VK-STYLING-2 (AUDIT #21, #22): send-comment — accent #447bba
+                    // (НЕ primary #0077FF), disabled — icon_tertiary #aeb7c2.
+                    tint = if (text.isNotBlank()) BoardAccent
+                           else Color(0xFFAEB7C2),
                 )
             }
         }
