@@ -13370,6 +13370,9 @@ class VKApiClient(
             },
             verified = o.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
             followersCount = countersObj?.get("followers")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+            // B-FIX-3: sex нужен для склонения «Ответил/Ответила» по полу автора
+            // в снапшоте уведомлений/комментариев. VK web: 0=unknown,1=female,2=male.
+            sex = safeInt(o.get("sex")),
         )
     }
 

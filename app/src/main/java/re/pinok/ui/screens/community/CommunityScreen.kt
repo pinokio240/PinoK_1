@@ -3398,7 +3398,10 @@ private fun BoardTopicRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "${topic.comments} комм.",
+                        // B-FIX-3: pluralComments() вместо «N комм.» — корректное склонение
+                        // (1 комментарий / 2 комментария / 5 комментариев). Хелпер internal
+                        // в BoardTopicScreen.kt, тот же пакет re.pinok.ui.screens.community.
+                        text = pluralComments(topic.comments),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
