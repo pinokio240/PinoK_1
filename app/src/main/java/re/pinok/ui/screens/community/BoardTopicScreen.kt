@@ -2,7 +2,6 @@ package re.pinok.ui.screens.community
 
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,8 +39,6 @@ import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -52,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -562,6 +561,12 @@ fun BoardTopicScreen(
                                 },
                                 onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
                             )
+                            // VK-STYLING (AUDIT #33): разделитель между комментариями
+                            // (как <hr class="RCvVnl"> в снапшоте VK web, color #dce1e6).
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                thickness = 0.5.dp,
+                            )
                         }
 
                         // VK-STYLING-2 (AUDIT #32): <hr class="RCvVnl"> separator перед
@@ -786,15 +791,18 @@ private fun BoardCommentCard(
     // #B-FIX-2: showmoretext — свёрнутый длинный текст комментария.
     var expanded by remember { mutableStateOf(false) }
 
-    Card(
+    // VK-STYLING (AUDIT #1/#2/#4/#5): flat Surface (radius 8dp, БЕЗ elevation),
+    // padding-block 8dp / padding-inline 0dp (как flat row в снапшоте VK web HTML3).
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 0.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // Аватар 28dp (как в снапшоте VK web). Фото если есть, иначе буква имени.
             // B-FIX-8: online-индикатор 12dp зелёный (Color 0xFF4BB34B) на BottomEnd
@@ -824,13 +832,15 @@ private fun BoardCommentCard(
                     }
                 }
                 if (author?.online == 1) {
+                    // VK-STYLING (AUDIT #3/#4): online-dot 8dp БЕЗ border,
+                    // offset right:3px bottom:3px, bg #4bb34b (как div.WjmGck в VK web).
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .size(12.dp)
+                            .offset(x = (-3).dp, y = (-3).dp)
+                            .size(8.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF4BB34B))
-                            .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                            .background(Color(0xFF4BB34B)),
                     )
                 }
             }
@@ -851,7 +861,8 @@ private fun BoardCommentCard(
                     ) {
                         Text(
                             text = authorName,
-                            style = MaterialTheme.typography.labelMedium,
+                            // VK-STYLING (AUDIT #10): bodyMedium ~14sp (было labelMedium 12sp).
+                            style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             // B-FIX-7 (AUDIT #54): accent #447bba (comment-owner link).
                             color = BoardAccent,
@@ -865,16 +876,16 @@ private fun BoardCommentCard(
                     // (по снапшоту VK web: comment-reply НЕ в 3-dot меню).
                     // B-FIX-8: MoreHoriz + текст «Действия» (как more_horizontal_16 +
                     // visible «Действия» в снапшоте VK web HTML3; было MoreVert без текста).
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Действия",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                        Box {
-                            IconButton(onClick = { showMenu = true }) {
-                                Icon(Icons.Outlined.MoreHoriz, contentDescription = "Действия")
-                            }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            // VK-STYLING (AUDIT #6/#34): только MoreHoriz 16dp,
+                            // «Действия» — sr-only (contentDescription для a11y, НЕ видимый Text).
+                            Icon(
+                                Icons.Outlined.MoreHoriz,
+                                contentDescription = "Действия",
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                         DropdownMenu(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
@@ -906,7 +917,6 @@ private fun BoardCommentCard(
                                     },
                                 )
                             }
-                        }
                         }
                     }
                 }
@@ -955,7 +965,8 @@ private fun BoardCommentCard(
                         // B-FIX-7 (AUDIT #28): «15 фев 2021» без времени для старых,
                         // «в HH:mm» сегодня, «вчера в HH:mm», «d MMM в HH:mm» этот год.
                         text = comment.created.toBoardCommentDate(),
-                        style = MaterialTheme.typography.labelSmall,
+                        // VK-STYLING (AUDIT #15): bodySmall ~13sp (было labelSmall 11sp).
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     TextButton(
@@ -964,7 +975,8 @@ private fun BoardCommentCard(
                     ) {
                         Text(
                             text = "Ответить",
-                            style = MaterialTheme.typography.labelSmall,
+                            // VK-STYLING (AUDIT #13): bodySmall ~13sp (было labelSmall 11sp).
+                            style = MaterialTheme.typography.bodySmall,
                             // B-FIX-7 (AUDIT #54): accent #447bba (comment-reply).
                             color = BoardAccent,
                         )
@@ -972,12 +984,15 @@ private fun BoardCommentCard(
                     Spacer(Modifier.weight(1f))
                     // Like БЕЗ счётчика (как like_outline_16 в VK web).
                     IconButton(onClick = { onLike(comment) }) {
+                        // VK-STYLING (AUDIT #7): like_outline_16 (16dp), tint VK red #e64646 /
+                        // secondary #99a2ad (было 24dp + Material pink #E91E63).
                         Icon(
                             imageVector = if (comment.isLiked) Icons.Filled.Favorite
                                           else Icons.Outlined.FavoriteBorder,
                             contentDescription = "Лайк",
-                            tint = if (comment.isLiked) Color(0xFFE91E63)
-                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (comment.isLiked) Color(0xFFE64646)
+                                   else Color(0xFF99A2AD),
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                 }
