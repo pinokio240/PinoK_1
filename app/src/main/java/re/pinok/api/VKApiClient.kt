@@ -4898,15 +4898,21 @@ class VKApiClient(
         ownerId: Long,
         topicId: Long,
         message: String,
+        attachments: String? = null,
     ): Boolean {
         if (isOffline()) return false
         // group_id должен быть положительным (без минуса).
         val groupId = if (ownerId < 0) -ownerId else ownerId
-        val json = call("board.createComment", mapOf(
+        val args = mutableMapOf(
             "group_id" to groupId.toString(),
             "topic_id" to topicId.toString(),
             "message" to message,
-        )) ?: return false
+        )
+        // VK API board.createComment: attachments CSV-список
+        // <type><owner_id>_<media_id>,<type><owner_id>_<media_id>
+        // (фото/видео/аудио/документ). Паритет с wall.createComment.
+        if (!attachments.isNullOrBlank()) args["attachments"] = attachments
+        val json = call("board.createComment", args) ?: return false
         return json.has("response")
     }
 
