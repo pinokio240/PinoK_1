@@ -5034,6 +5034,232 @@ class VKApiClient(
         }
     }
 
+    // ============================================================
+    // #B-A (SCOUT-BOARD-SNAP): расширенные типы возврата для обсуждений.
+    //
+    // Из HAR-снапшота VK web: board.getTopics/board.getComments с extended=1
+    // возвращают profiles[] (и groups[] для комментариев от имени сообщества),
+    // которые PinoK раньше НЕ парсил — UI показывал «Пользователь #ID» вместо
+    // реального имени/аватара автора. Result-типы несут authors-карту, чтобы
+    // UI мог сразу отрисовать имя/аватар без отдельного батча usersGetByIds.
+    //
+    // Для комментариев сообществ (from_id < 0) группа мапится в UserProfile с
+    // отрицательным id (прецедент: parseNewsfeedResponse L4776-4789) — UI
+    // показывает автора той же строкой, что и для юзеров.
+    // ============================================================
+
+    /**
+     * #B-A: результат board.getTopics с авторами и флагом can_add_topics.
+     * @param authors creatorId/updatedBy -> профиль (из profiles[]).
+     */
+    data class BoardTopicsResult(
+        val topics: List<re.pinok.data.model.BoardTopic>,
+        val totalCount: Int,
+        val authors: Map<Long, UserProfile>,
+        val canAddTopics: Boolean,
+    )
+
+    /**
+     * #B-A: результат board.getComments с авторами.
+     * @param authors from_id -> профиль (из profiles[] + groups[] как -gid).
+     */
+    data class BoardCommentsResult(
+        val comments: List<re.pinok.data.model.BoardComment>,
+        val totalCount: Int,
+        val authors: Map<Long, UserProfile>,
+    )
+
+    /**
+     * #B-A (SCOUT-BOARD-SNAP): board.getTopics — полный разбор с authors.
+     *
+     * Параметры из HAR-снапшота VK web (api v=5.289):
+     *   extended=1, preview=2 (превью последнего комментария),
+     *   preview_length=90, fields=photo_50,sex (для профилей авторов).
+     *
+     * Существующий [boardGetTopics]/[boardGetTopicsWithCount] оставлены как
+     * есть (backwards-compat, возвращают List/Pair без authors). Этот метод
+     * дополнительно парсит is_fixed/updated/updated_by/last_comment и profiles[].
+     *
+     * @return [BoardTopicsResult] (topics + totalCount + authors + canAddTopics).
+     */
+    suspend fun boardGetTopicsFull(
+        groupId: Long,
+        count: Int = 30,
+        offset: Int = 0,
+    ): BoardTopicsResult {
+        if (isOffline()) return BoardTopicsResult(emptyList(), 0, emptyMap(), false)
+        val json = call("board.getTopics", mapOf(
+            "group_id" to groupId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "extended" to "1",
+            "preview" to "2",
+            "preview_length" to "90",
+            "fields" to "photo_50,sex",
+        )) ?: return BoardTopicsResult(emptyList(), 0, emptyMap(), false)
+        return try {
+            val resp = json.getAsJsonObject("response")
+                ?: return BoardTopicsResult(emptyList(), 0, emptyMap(), false)
+            val items = resp.getAsJsonArray("items") ?: emptyList()
+            val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
+
+            // can_add_topics: VK API docs — int (0/1), но web-ответ иногда
+            // отдаёт boolean. Терпим обе формы (прецедент: Fix #237 can_like).
+            val canAddTopics = resp.get("can_add_topics")?.let { el ->
+                when {
+                    el.isJsonNull -> false
+                    el.isJsonPrimitive && el.asJsonPrimitive.isBoolean -> el.asBoolean
+                    else -> safeInt(el) == 1
+                }
+            } ?: false
+
+            val topics = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                re.pinok.data.model.BoardTopic(
+                    id = safeLong(o.get("id")),
+                    title = safeString(o.get("title")) ?: "",
+                    created = safeLong(o.get("created")),
+                    creatorId = safeLong(o.get("created_by")),
+                    comments = safeInt(o.get("comments")),
+                    isClosed = safeInt(o.get("is_closed")),
+                    isFixed = safeInt(o.get("is_fixed")),
+                    updated = safeLong(o.get("updated")),
+                    updatedBy = safeLong(o.get("updated_by")),
+                    lastComment = safeString(o.get("last_comment")),
+                )
+            }
+
+            // profiles[] -> authors (creatorId/updatedBy ссылаются на юзеров).
+            val authors = mutableMapOf<Long, UserProfile>()
+            val profilesArr = resp.getAsJsonArray("profiles")
+            if (profilesArr != null) {
+                for (el in profilesArr) {
+                    if (!el.isJsonObject) continue
+                    val o = el.asJsonObject
+                    val uid = safeLong(o.get("id"))
+                    if (uid == 0L) continue
+                    authors[uid] = parseUserProfileMini(o)
+                }
+            }
+
+            BoardTopicsResult(
+                topics = topics,
+                totalCount = if (totalCount > 0) totalCount else rawCount,
+                authors = authors,
+                canAddTopics = canAddTopics,
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "boardGetTopicsFull parse error", e)
+            BoardTopicsResult(emptyList(), 0, emptyMap(), false)
+        }
+    }
+
+    /**
+     * #B-A (SCOUT-BOARD-SNAP): board.getComments — полный разбор с likes/
+     * attachments/can_edit/can_delete + authors (profiles[] + groups[]).
+     *
+     * Параметры из HAR-снапшота VK web (api v=5.289):
+     *   need_likes=1, extended=1, sort=asc|desc.
+     *
+     * Существующий [boardGetComments] оставлен как есть (backwards-compat,
+     * List без authors/likes/attachments). Этот метод дополнительно парсит
+     * attachments/likes/can_edit/can_delete и profiles[]+groups[] (для
+     * комментариев от имени сообщества, from_id < 0).
+     *
+     * @param sort "asc" (сначала старые, дефолт VK web) или "desc".
+     * @return [BoardCommentsResult] (comments + totalCount + authors).
+     */
+    suspend fun boardGetCommentsFull(
+        groupId: Long,
+        topicId: Long,
+        count: Int = 30,
+        offset: Int = 0,
+        sort: String = "asc",
+    ): BoardCommentsResult {
+        if (isOffline()) return BoardCommentsResult(emptyList(), 0, emptyMap())
+        val json = call("board.getComments", mapOf(
+            "group_id" to groupId.toString(),
+            "topic_id" to topicId.toString(),
+            "count" to count.toString(),
+            "offset" to offset.toString(),
+            "extended" to "1",
+            "need_likes" to "1",
+            "sort" to sort,
+        )) ?: return BoardCommentsResult(emptyList(), 0, emptyMap())
+        return try {
+            val resp = json.getAsJsonObject("response")
+                ?: return BoardCommentsResult(emptyList(), 0, emptyMap())
+            val items = resp.getAsJsonArray("items") ?: emptyList()
+            val rawCount = items.size()
+            val totalCount = safeInt(resp.get("count"))
+
+            val comments = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val o = el.asJsonObject
+                re.pinok.data.model.BoardComment(
+                    id = safeLong(o.get("id")),
+                    text = safeString(o.get("text")) ?: "",
+                    created = safeLong(o.get("date")),
+                    creatorId = safeLong(o.get("from_id")),
+                    attachments = parseAttachments(o),
+                    likes = o.getAsJsonObject("likes")?.let { l ->
+                        Post.Likes(
+                            count = safeInt(l.get("count")),
+                            userLikes = safeInt(l.get("user_likes")),
+                            canLike = safeInt(l.get("can_like"), 1),
+                        )
+                    },
+                    canEdit = safeInt(o.get("can_edit")),
+                    canDelete = safeInt(o.get("can_delete")),
+                )
+            }
+
+            // authors: profiles[] (from_id > 0) + groups[] (from_id < 0 → -gid).
+            val authors = mutableMapOf<Long, UserProfile>()
+            val profilesArr = resp.getAsJsonArray("profiles")
+            if (profilesArr != null) {
+                for (el in profilesArr) {
+                    if (!el.isJsonObject) continue
+                    val o = el.asJsonObject
+                    val uid = safeLong(o.get("id"))
+                    if (uid == 0L) continue
+                    authors[uid] = parseUserProfileMini(o)
+                }
+            }
+            val groupsArr = resp.getAsJsonArray("groups")
+            if (groupsArr != null) {
+                for (el in groupsArr) {
+                    if (!el.isJsonObject) continue
+                    val o = el.asJsonObject
+                    val gid = safeLong(o.get("id"))
+                    if (gid == 0L) continue
+                    val gName = safeString(o.get("name")) ?: "Сообщество"
+                    // photo_50 (board.getTopics fields) / photo_100/200 если есть.
+                    val photo = safeString(o.get("photo_50"))
+                        ?: safeString(o.get("photo_100"))
+                        ?: safeString(o.get("photo_200"))
+                    authors[-gid] = UserProfile(
+                        id = -gid,
+                        firstName = gName,
+                        lastName = "",
+                        photo100 = photo,
+                    )
+                }
+            }
+
+            BoardCommentsResult(
+                comments = comments,
+                totalCount = if (totalCount > 0) totalCount else rawCount,
+                authors = authors,
+            )
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "boardGetCommentsFull parse error", e)
+            BoardCommentsResult(emptyList(), 0, emptyMap())
+        }
+    }
+
     // === B-B: новые board.* методы (управление обсуждениями) ===
     // Паритет с VK web SPA: создание/редактирование/удаление тем и комментариев,
     // открытие/закрытие/закрепление тем, лайки комментариев (type=board_comment).

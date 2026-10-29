@@ -1077,25 +1077,54 @@ data class PhotoStandalone(
 
 /**
  * #30h: Тема обсуждения сообщества (board.getTopics).
+ *
+ * #B-A (SCOUT-BOARD-SNAP): расширенные поля из HAR-снапшота VK web —
+ * is_fixed (закреплена ли тема), updated/updated_by (дата/автор последнего
+ * комментария), last_comment (превью текста последнего комментария,
+ * обрезается по preview_length=90). Раньше PinoK парсил только 6 базовых
+ * полей, хотя VK отдаёт расширенный набор при preview=2.
  */
 data class BoardTopic(
-    @SerializedName("id")         val id: Long,
-    @SerializedName("title")      val title: String,
-    @SerializedName("created")    val created: Long,
-    @SerializedName("created_by") val creatorId: Long,
-    @SerializedName("comments")   val comments: Int,
-    @SerializedName("is_closed")  val isClosed: Int = 0,
-)
+    @SerializedName("id")            val id: Long,
+    @SerializedName("title")          val title: String,
+    @SerializedName("created")        val created: Long,
+    @SerializedName("created_by")     val creatorId: Long,
+    @SerializedName("comments")       val comments: Int,
+    @SerializedName("is_closed")      val isClosed: Int = 0,
+    // #B-A (SCOUT-BOARD-SNAP): расширенные поля.
+    @SerializedName("is_fixed")       val isFixed: Int = 0,
+    @SerializedName("updated")         val updated: Long = 0,
+    @SerializedName("updated_by")      val updatedBy: Long = 0,
+    @SerializedName("last_comment")   val lastComment: String? = null,
+) {
+    /** Закреплена ли тема (is_fixed == 1). */
+    val isFixedBool: Boolean get() = isFixed == 1
+}
 
 /**
  * #30h: Комментарий в теме обсуждения (board.getComments).
+ *
+ * #B-A (SCOUT-BOARD-SNAP): расширенные поля из HAR-снапшота VK web —
+ * attachments (фото/документы в комментарии), likes (count/user_likes/
+ * can_like — нужны need_likes=1), can_edit/can_delete (для UI кнопок
+ * редактирования/удаления). Раньше PinoK парсил только 4 базовых поля.
  */
 data class BoardComment(
-    @SerializedName("id")      val id: Long,
-    @SerializedName("text")    val text: String,
-    @SerializedName("date")    val created: Long,
-    @SerializedName("from_id") val creatorId: Long,
-)
+    @SerializedName("id")           val id: Long,
+    @SerializedName("text")         val text: String,
+    @SerializedName("date")          val created: Long,
+    @SerializedName("from_id")      val creatorId: Long,
+    // #B-A (SCOUT-BOARD-SNAP): расширенные поля.
+    @SerializedName("attachments")   val attachments: List<Attachment>? = null,
+    @SerializedName("likes")         val likes: Post.Likes? = null,
+    @SerializedName("can_edit")       val canEdit: Int = 0,
+    @SerializedName("can_delete")     val canDelete: Int = 0,
+) {
+    /** Кол-во лайков комментария (0 если блок likes отсутствует). */
+    val likesCount: Int get() = likes?.count ?: 0
+    /** Поставил ли текущий юзер лайк (user_likes == 1). */
+    val isLiked: Boolean get() = likes?.userLikes == 1
+}
 
 @Suppress("unused")
 data class EqualizerPreset(
