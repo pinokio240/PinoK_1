@@ -1107,25 +1107,31 @@ private fun ComposerRow(
                 )
             }
         }
+        // VK-STYLING-FIX: camera (comment_upload_photo) — отдельная кнопка в ряду
+        // composer, как в VK web (attach + camera + emoji + send, 4 кнопки).
+        IconButton(onClick = { /* TODO: photo upload */ }) {
+            Icon(Icons.Outlined.PhotoCamera, contentDescription = "Фотография")
+        }
         // Emoji (emoji-smile / smile_outline_20 в VK web).
         IconButton(onClick = { /* TODO: emoji */ }) {
             Icon(Icons.Outlined.EmojiEmotions, contentDescription = "Эмодзи")
         }
-        // B-FIX-8: send — Button «Сохранить» + Send icon (как send-comment в VK web:
-        // vkuiButton modePrimary с текстом «Сохранить» + send_24, disabled до ввода).
-        Button(
+        // VK-STYLING-FIX: send-comment — только иконка send_24 (как в VK web),
+        // БЕЗ текста «Сохранить». B-FIX-8 ошибочно добавил Button с текстом —
+        // нарушало стилистику VK (в снапшоте только иконка-стрелка send_24).
+        // disabled до ввода (как VK web: <button disabled data-testid="send-comment">).
+        IconButton(
             onClick = onSend,
             enabled = text.isNotBlank() && !sending,
         ) {
             if (sending) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             } else {
-                Text("Сохранить")
-                Spacer(Modifier.width(4.dp))
                 Icon(
                     Icons.AutoMirrored.Outlined.Send,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                    contentDescription = "Отправить",
+                    tint = if (text.isNotBlank()) MaterialTheme.colorScheme.primary
+                           else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
