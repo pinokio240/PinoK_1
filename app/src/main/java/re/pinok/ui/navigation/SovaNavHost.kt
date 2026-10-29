@@ -3127,6 +3127,10 @@ composable(Screen.CallsHistory.route) {
                         topicId = tId,
                         title = tTitle,
                         onBack = { nav.popBackStack() },
+                        // #B-FIX-5: клик по имени автора комментария → UserProfile.
+                        onUserClick = { userId ->
+                            nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
                     )
                 }
                 // B-E (#SCOUT-BOARD-SNAP): экран создания темы обсуждения.

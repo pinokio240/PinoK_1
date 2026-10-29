@@ -98,13 +98,19 @@ private const val MAX_PAGINATION_BUTTONS = 10
  *  - showmoretext для длинных комментариев (>200 символов, «Показать полностью»);
  *  - sort dropdown «Сначала старые/новые» (TextButton + ArrowDropDown, НЕ glyph).
  *
+ * #B-FIX-5 (по снапшоту HTML3): 3 расхождения закрыты:
+ *  - «Ответить» — отдельная TextButton в meta-row (между дата и лайк), НЕ в 3-dot меню;
+ *  - onReply вставляет VK mention format `[id{userId}|{firstName}], ` в composer;
+ *  - onUserClick wiring: имя автора → навигация на UserProfile (из SovaNavHost).
+ *
  * Использует [re.pinok.api.VKApiClient.boardGetCommentsFull] (extended=1, need_likes=1) —
  * comments + authors (Map<from_id, UserProfile>) + totalCount за один запрос.
  *
- * @param groupId  ID группы (положительный, как в groups[].id)
- * @param topicId  ID темы
- * @param title    Заголовок темы (для TopAppBar + header)
- * @param onBack   Callback возврата
+ * @param groupId     ID группы (положительный, как в groups[].id)
+ * @param topicId     ID темы
+ * @param title       Заголовок темы (для TopAppBar + header)
+ * @param onBack      Callback возврата
+ * @param onUserClick Callback клика по имени автора комментария (id) → UserProfile
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,6 +119,9 @@ fun BoardTopicScreen(
     topicId: Long,
     title: String,
     onBack: () -> Unit,
+    // #B-FIX-5: клик по имени автора комментария (comment-owner в снапшоте VK web)
+    // → навигация на UserProfile. Передаётся из SovaNavHost.
+    onUserClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -407,9 +416,17 @@ fun BoardTopicScreen(
                                         }
                                     },
                                     onReply = { c ->
+                                        // #B-FIX-5: VK mention format [id{userId}|{firstName}]
+                                        // — VK распарсит и рендерит как ссылку, автор получит
+                                        // уведомление об ответе (как в VK web SPA).
                                         val author = (topicBodyAuthors + authors)[c.creatorId]
-                                        val name = author?.firstName?.takeIf { it.isNotBlank() } ?: ""
-                                        if (name.isNotBlank()) commentText = "$name, "
+                                        val firstName = author?.firstName?.takeIf { it.isNotBlank() }
+                                        val userId = c.creatorId
+                                        val mention = if (firstName != null && userId != 0L)
+                                            "[id$userId|$firstName], " else ""
+                                        commentText = if (commentText.isBlank()) mention
+                                                      else mention + commentText
+                                        // TODO: установить фокус на composer (focusRequester).
                                     },
                                     onDelete = { c ->
                                         scope.launch {
@@ -428,7 +445,7 @@ fun BoardTopicScreen(
                                         editingComment = c
                                         editText = c.text
                                     },
-                                    onUserClick = { /* TODO: nav to user profile */ },
+                                    onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
                                 )
                             }
                         }
@@ -463,11 +480,17 @@ fun BoardTopicScreen(
                                     }
                                 },
                                 onReply = { c ->
-                                    // Вставить имя автора в composer (упрощённый «ответ» —
-                                    // VK web открывает инлайн-форму ответа, для MVP подставляем имя).
+                                    // #B-FIX-5: VK mention format [id{userId}|{firstName}]
+                                    // — VK распарсит и рендерит как ссылку, автор получит
+                                    // уведомление об ответе (как в VK web SPA).
                                     val author = authors[c.creatorId]
-                                    val name = author?.firstName?.takeIf { it.isNotBlank() } ?: ""
-                                    if (name.isNotBlank()) commentText = "$name, "
+                                    val firstName = author?.firstName?.takeIf { it.isNotBlank() }
+                                    val userId = c.creatorId
+                                    val mention = if (firstName != null && userId != 0L)
+                                        "[id$userId|$firstName], " else ""
+                                    commentText = if (commentText.isBlank()) mention
+                                                  else mention + commentText
+                                    // TODO: установить фокус на composer (focusRequester).
                                 },
                                 onDelete = { c ->
                                     scope.launch {
@@ -485,7 +508,7 @@ fun BoardTopicScreen(
                                     editingComment = c
                                     editText = c.text
                                 },
-                                onUserClick = { /* TODO: nav to user profile */ },
+                                onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
                             )
                         }
 
@@ -609,10 +632,14 @@ internal fun pluralComments(n: Int): String {
  *
  * #B-FIX-2 (AUDIT-BOARD-SNAP-VS-CODE): по снапшоту VK web —
  *  - аватар 28dp + имя автора (из [authors] — profiles[]), кликабельное (TextButton primary);
- *  - 3-dot меню (Действия): Ответить / Редактировать (canEdit==1) / Удалить (canDelete==1);
  *  - лайк БЕЗ счётчика (только Favorite/FavoriteBorder, как like_outline_16 в VK web);
  *  - showmoretext для длинных комментариев (>200 символов, «Показать полностью»/«Свернуть»);
  *  - вложения: photo media-grid (80dp, RoundedCornerShape 8dp) + doc (40dp icon + title + ext).
+ *
+ * #B-FIX-5 (по снапшоту HTML3): meta-row = date + «Ответить» (отдельная TextButton,
+ * accent/primary, НЕ в 3-dot меню) + spacer + like. 3-dot меню теперь только
+ * Редактировать (canEdit==1) / Удалить (canDelete==1). Имя автора кликабельно →
+ * [onUserClick] → навигация на UserProfile.
  *
  * @param onUserClick callback клика по имени автора (id автора комментария).
  */
@@ -677,6 +704,8 @@ private fun BoardCommentCard(
                 ) {
                     // #B-FIX-2: owner-name — кликабельная ссылка (TextButton, primary).
                     // По снапшоту VK web owner-link ведёт на профиль автора.
+                    // #B-FIX-5: дата перенесена в нижнюю meta-row (между «Ответить» и лайком,
+                    // как comment-reply/comment-like в снапшоте VK web HTML3).
                     TextButton(
                         onClick = { onUserClick(comment.creatorId) },
                         contentPadding = PaddingValues(0.dp),
@@ -692,12 +721,9 @@ private fun BoardCommentCard(
                         )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = comment.created.toAbsoluteTime(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                    // 3-dot меню (Действия) — Ответить / Редактировать / Удалить.
+                    // 3-dot меню (Действия) — Редактировать / Удалить.
+                    // #B-FIX-5: «Ответить» вынесен в отдельную TextButton в meta-row
+                    // (по снапшоту VK web: comment-reply НЕ в 3-dot меню).
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Outlined.MoreVert, contentDescription = "Действия")
@@ -706,13 +732,8 @@ private fun BoardCommentCard(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Ответить") },
-                                onClick = {
-                                    showMenu = false
-                                    onReply(comment)
-                                },
-                            )
+                            // #B-FIX-5: «Ответить» удалён из 3-dot меню — теперь отдельная
+                            // TextButton в meta-row (как comment-reply в снапшоте VK web).
                             if (comment.canEdit == 1) {
                                 DropdownMenuItem(
                                     text = { Text("Редактировать") },
@@ -764,15 +785,40 @@ private fun BoardCommentCard(
                 }
                 // #B-FIX-2: вложения — photo media-grid + doc secondaryattachment.
                 CommentAttachments(comment.attachments)
-                // #B-FIX-2: лайк БЕЗ счётчика (только иконка, как like_outline_16 в VK web).
-                IconButton(onClick = { onLike(comment) }) {
-                    Icon(
-                        imageVector = if (comment.isLiked) Icons.Filled.Favorite
-                                      else Icons.Outlined.FavoriteBorder,
-                        contentDescription = "Лайк",
-                        tint = if (comment.isLiked) Color(0xFFE91E63)
-                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                // #B-FIX-5: meta-row по снапшоту VK web HTML3 — date + «Ответить»
+                // (отдельная TextButton, accent/primary) + spacer + like (БЕЗ счётчика).
+                // Порядок как в снапшоте: comment-text → date → comment-reply → comment-like.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = comment.created.toAbsoluteTime(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
                     )
+                    TextButton(
+                        onClick = { onReply(comment) },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            text = "Ответить",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // Like БЕЗ счётчика (как like_outline_16 в VK web).
+                    IconButton(onClick = { onLike(comment) }) {
+                        Icon(
+                            imageVector = if (comment.isLiked) Icons.Filled.Favorite
+                                          else Icons.Outlined.FavoriteBorder,
+                            contentDescription = "Лайк",
+                            tint = if (comment.isLiked) Color(0xFFE91E63)
+                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
