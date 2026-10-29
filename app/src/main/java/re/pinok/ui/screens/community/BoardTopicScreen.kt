@@ -260,6 +260,16 @@ fun BoardTopicScreen(
                 // TextButton + ArrowDropDown, НЕ glyph ↑/↓). Смена sort перезагружает
                 // ленту через LaunchedEffect(groupId, topicId, sort, offset, reloadTrigger).
                 actions = {
+                    // B-FIX-8: «Редактировать тему» TextButton (modePrimary accent, как
+                    // board-topic-edit-button в снапшоте VK web). Гейт упрощён — показываем
+                    // всегда: VK отклонит (err=15/7) если нет прав (не автор/не админ).
+                    TextButton(onClick = {
+                        editTopicTitle = displayTitle
+                        editTopicText = ""
+                        showEditTopicDialog = true
+                    }) {
+                        Text("Редактировать тему")
+                    }
                     Box {
                         // B-FIX-7 (AUDIT #54): accent #447bba (board_comments_sorting —
                         // modeLink accent по снапшоту VK web).
@@ -352,9 +362,11 @@ fun BoardTopicScreen(
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             ) {
+                                // B-FIX-8: headlineSmall (крупнее) + accent, как
+                                // board-topic-title (weight1 accent) в снапшоте VK web.
                                 Text(
-                                    text = title,
-                                    style = MaterialTheme.typography.titleMedium,
+                                    text = displayTitle,
+                                    style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.SemiBold,
                                     // B-FIX-7 (AUDIT #54): accent #447bba (vkcom_light).
                                     color = BoardAccent,
@@ -633,6 +645,70 @@ fun BoardTopicScreen(
             },
         )
     }
+
+    // B-FIX-8: диалог редактирования темы (board.editTopic). Поля: Заголовок
+    // (max 255) + Текст (max 4096). На «Сохранить» вызываем boardEditTopic —
+    // при успехе обновляем displayTitle (TopAppBar + header) и закрываем диалог.
+    // Восстановлено из B-FIX-4 (утеряно при rewrite BoardTopicScreen в B-FIX-2).
+    if (showEditTopicDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditTopicDialog = false },
+            title = { Text("Редактирование темы") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = editTopicTitle,
+                        onValueChange = { if (it.length <= 255) editTopicTitle = it },
+                        label = { Text("Заголовок") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editTopicText,
+                        onValueChange = { if (it.length <= 4096) editTopicText = it },
+                        label = { Text("Текст") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 100.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (editTopicTitle.isBlank()) return@TextButton
+                    val newTitle = editTopicTitle
+                    val newText = editTopicText.ifBlank { null }
+                    scope.launch {
+                        val ok = app.apiClient.boardEditTopic(
+                            groupId = groupId,
+                            topicId = topicId,
+                            title = newTitle,
+                            text = newText,
+                        )
+                        if (ok) {
+                            displayTitle = newTitle
+                            Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                            showEditTopicDialog = false
+                        } else {
+                            Toast.makeText(
+                                ctx,
+                                "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditTopicDialog = false }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
 }
 
 /**
@@ -695,26 +771,40 @@ private fun BoardCommentCard(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // Аватар 28dp (как в снапшоте VK web). Фото если есть, иначе буква имени.
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (authorPhoto != null) {
-                    AsyncImage(
-                        model = authorPhoto,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Text(
-                        text = authorName.firstOrNull()?.uppercase() ?: "?",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.Bold,
+            // B-FIX-8: online-индикатор 12dp зелёный (Color 0xFF4BB34B) на BottomEnd
+            // аватара если author?.online==1 (как div.WjmGck в снапшоте VK web HTML3).
+            Box(modifier = Modifier.size(28.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (authorPhoto != null) {
+                        AsyncImage(
+                            model = authorPhoto,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Text(
+                            text = authorName.firstOrNull()?.uppercase() ?: "?",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                if (author?.online == 1) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF4BB34B))
+                            .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape),
                     )
                 }
             }
@@ -747,10 +837,18 @@ private fun BoardCommentCard(
                     // 3-dot меню (Действия) — Редактировать / Удалить.
                     // #B-FIX-5: «Ответить» вынесен в отдельную TextButton в meta-row
                     // (по снапшоту VK web: comment-reply НЕ в 3-dot меню).
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Outlined.MoreVert, contentDescription = "Действия")
-                        }
+                    // B-FIX-8: MoreHoriz + текст «Действия» (как more_horizontal_16 +
+                    // visible «Действия» в снапшоте VK web HTML3; было MoreVert без текста).
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Действия",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(Icons.Outlined.MoreHoriz, contentDescription = "Действия")
+                            }
                         DropdownMenu(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
@@ -782,6 +880,7 @@ private fun BoardCommentCard(
                                     },
                                 )
                             }
+                        }
                         }
                     }
                 }
@@ -985,23 +1084,49 @@ private fun ComposerRow(
             maxLines = 4,
         )
         Spacer(Modifier.width(4.dp))
-        // Attach (show-attach-dropdown / attach_20 в VK web).
-        IconButton(onClick = { /* TODO: attach */ }) {
-            Icon(Icons.Outlined.AttachFile, contentDescription = "Прикрепить")
+        // B-FIX-8: attach-dropdown (Фотография/Документ), как show-attach-dropdown
+        // в снапшоте VK web (comment_upload_photo camera_outline_20 + comment_attach_doc).
+        var attachMenuExpanded by remember { mutableStateOf(false) }
+        Box {
+            IconButton(onClick = { attachMenuExpanded = true }) {
+                Icon(Icons.Outlined.AttachFile, contentDescription = "Прикрепить")
+            }
+            DropdownMenu(
+                expanded = attachMenuExpanded,
+                onDismissRequest = { attachMenuExpanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Фотография") },
+                    leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) },
+                    onClick = { attachMenuExpanded = false /* TODO: photo upload */ },
+                )
+                DropdownMenuItem(
+                    text = { Text("Документ") },
+                    leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+                    onClick = { attachMenuExpanded = false /* TODO: doc upload */ },
+                )
+            }
         }
         // Emoji (emoji-smile / smile_outline_20 в VK web).
         IconButton(onClick = { /* TODO: emoji */ }) {
             Icon(Icons.Outlined.EmojiEmotions, contentDescription = "Эмодзи")
         }
-        // Send (send_24 в VK web, disabled до ввода).
-        IconButton(onClick = onSend, enabled = text.isNotBlank() && !sending) {
+        // B-FIX-8: send — Button «Сохранить» + Send icon (как send-comment в VK web:
+        // vkuiButton modePrimary с текстом «Сохранить» + send_24, disabled до ввода).
+        Button(
+            onClick = onSend,
+            enabled = text.isNotBlank() && !sending,
+        ) {
             if (sending) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                )
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             } else {
-                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Отправить")
+                Text("Сохранить")
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    Icons.AutoMirrored.Outlined.Send,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }

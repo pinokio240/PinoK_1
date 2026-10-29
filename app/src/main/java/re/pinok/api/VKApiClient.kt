@@ -5103,7 +5103,7 @@ class VKApiClient(
             "order" to order.toString(),
             // REVIEW-BOARD risk#1: photo_100/photo_200 для аватарок авторов
             // (parseUserProfileMini читает photo_100, не только photo_50)
-            "fields" to "photo_50,photo_100,photo_200,sex",
+            "fields" to "photo_50,photo_100,photo_200,sex,online",
         )) ?: return BoardTopicsResult(emptyList(), 0, emptyMap(), false)
         return try {
             val resp = json.getAsJsonObject("response")
@@ -5202,7 +5202,7 @@ class VKApiClient(
             "sort" to sort,
             // REVIEW-BOARD risk#1: fields для аватарок авторов комментариев
             // (profiles[] нужны photo_100/photo_200 для AsyncImage)
-            "fields" to "photo_50,photo_100,photo_200,sex",
+            "fields" to "photo_50,photo_100,photo_200,sex,online",
         )) ?: return BoardCommentsResult(emptyList(), 0, emptyMap())
         return try {
             val resp = json.getAsJsonObject("response")
