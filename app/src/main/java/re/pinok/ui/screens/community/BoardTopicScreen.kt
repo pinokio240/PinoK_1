@@ -210,6 +210,11 @@ fun BoardTopicScreen(
     var editingComment by remember { mutableStateOf<BoardComment?>(null) }
     var editText by remember { mutableStateOf("") }
 
+    // DELETE-CONFIRM: подтверждение удаления комментария (как deleteTopicTarget
+    // в CommunityScreen для темы). Раньше onDelete вызывал boardDeleteComment
+    // напрямую — случайный тап = удаление без отмены. VK web всегда подтверждает.
+    var deleteCommentTarget by remember { mutableStateOf<BoardComment?>(null) }
+
     // B-FIX-8: «Редактировать тему» (board.editTopic). Локальный заголовок темы —
     // обновляется после успешного editTopic (параметр `title` immutable, без локального
     // state-а TopAppBar/header остались бы старым текстом). Восстановлено из B-FIX-4
@@ -563,17 +568,9 @@ fun BoardTopicScreen(
                                         // TODO: установить фокус на composer (focusRequester).
                                     },
                                     onDelete = { c ->
-                                        scope.launch {
-                                            val ok = app.apiClient.boardDeleteComment(groupId, topicId, c.id)
-                                            if (ok) {
-                                                topicBody = null
-                                                if (totalCount > 0) totalCount -= 1
-                                                reloadTrigger++
-                                                Toast.makeText(ctx, "Удалено", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(ctx, "Не удалось удалить", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
+                                        // DELETE-CONFIRM: показываем AlertDialog подтверждения
+                                        // (как deleteTopicTarget в CommunityScreen). Раньше удалял сразу.
+                                        deleteCommentTarget = c
                                     },
                                     onEdit = { c ->
                                         editingComment = c
@@ -630,14 +627,9 @@ fun BoardTopicScreen(
                                 },
                                 onDelete = { c ->
                                     scope.launch {
-                                        val ok = app.apiClient.boardDeleteComment(groupId, topicId, c.id)
-                                        if (ok) {
-                                            comments = comments.filterNot { it.id == c.id }
-                                            if (totalCount > 0) totalCount -= 1
-                                            Toast.makeText(ctx, "Удалено", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(ctx, "Не удалось удалить", Toast.LENGTH_SHORT).show()
-                                        }
+                                        // DELETE-CONFIRM: показываем AlertDialog подтверждения
+                                        // (как deleteTopicTarget в CommunityScreen). Раньше удалял сразу.
+                                        deleteCommentTarget = c
                                     }
                                 },
                                 onEdit = { c ->
@@ -715,6 +707,40 @@ fun BoardTopicScreen(
                 TextButton(onClick = { editingComment = null }) {
                     Text("Отмена")
                 }
+            },
+        )
+    }
+
+    // DELETE-CONFIRM: AlertDialog подтверждения удаления комментария.
+    // Показывается при onDelete (3-dot → Удалить). Smart-cast через локальную val.
+    val deleteComment = deleteCommentTarget
+    if (deleteComment != null) {
+        AlertDialog(
+            onDismissRequest = { deleteCommentTarget = null },
+            title = { Text("Удалить комментарий?") },
+            text = { Text("Комментарий будет удалён без возможности восстановления.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val c = deleteComment
+                    deleteCommentTarget = null
+                    scope.launch {
+                        val ok = app.apiClient.boardDeleteComment(groupId, topicId, c.id)
+                        if (ok) {
+                            // Убираем из обоих списков (topicBody + comments).
+                            if (topicBody?.id == c.id) topicBody = null
+                            comments = comments.filterNot { it.id == c.id }
+                            if (totalCount > 0) totalCount -= 1
+                            Toast.makeText(ctx, "Удалено", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(ctx, "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCommentTarget = null }) { Text("Отмена") }
             },
         )
     }
