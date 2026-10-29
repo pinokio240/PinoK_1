@@ -4899,6 +4899,7 @@ class VKApiClient(
         topicId: Long,
         message: String,
         attachments: String? = null,
+        fromGroup: Int = 0,
     ): Boolean {
         if (isOffline()) return false
         // group_id должен быть положительным (без минуса).
@@ -4912,6 +4913,11 @@ class VKApiClient(
         // <type><owner_id>_<media_id>,<type><owner_id>_<media_id>
         // (фото/видео/аудио/документ). Паритет с wall.createComment.
         if (!attachments.isNullOrBlank()) args["attachments"] = attachments
+        // from_group: 1=от имени сообщества (только для менеджеров группы;
+        // VK отклонит err=15 если нет прав). B-FIX-A (TRACER-2 gap):
+        // VK web SPA не рендерит toggle, но параметр принимается API
+        // напрямую — access_token, БЕЗ hash (в отличие от legacy /al_board.php).
+        if (fromGroup != 0) args["from_group"] = fromGroup.toString()
         val json = call("board.createComment", args) ?: return false
         return json.has("response")
     }
@@ -5338,7 +5344,13 @@ class VKApiClient(
     }
 
     /** board.editTopic — редактировать тему (title и/или text). */
-    suspend fun boardEditTopic(groupId: Long, topicId: Long, title: String? = null, text: String? = null): Boolean {
+    suspend fun boardEditTopic(
+        groupId: Long,
+        topicId: Long,
+        title: String? = null,
+        text: String? = null,
+        fromGroup: Int = 0,
+    ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
             "group_id" to groupId.toString(),
@@ -5346,6 +5358,9 @@ class VKApiClient(
         )
         if (title != null) args["title"] = title
         if (text != null) args["text"] = text
+        // from_group: 1=от имени сообщества (B-FIX-A, TRACER-2 gap).
+        // VK web SPA не рендерит toggle, но параметр принимается API напрямую.
+        if (fromGroup != 0) args["from_group"] = fromGroup.toString()
         val json = call("board.editTopic", args) ?: return false
         return json.has("response")
     }
@@ -5362,14 +5377,24 @@ class VKApiClient(
     }
 
     /** board.editComment — редактировать текст комментария темы обсуждения. */
-    suspend fun boardEditComment(groupId: Long, topicId: Long, commentId: Long, text: String): Boolean {
+    suspend fun boardEditComment(
+        groupId: Long,
+        topicId: Long,
+        commentId: Long,
+        text: String,
+        fromGroup: Int = 0,
+    ): Boolean {
         if (isOffline()) return false
-        val json = call("board.editComment", mapOf(
+        val args = mutableMapOf(
             "group_id" to groupId.toString(),
             "topic_id" to topicId.toString(),
             "comment_id" to commentId.toString(),
             "text" to text,
-        )) ?: return false
+        )
+        // from_group: 1=от имени сообщества (B-FIX-A, TRACER-2 gap).
+        // VK web SPA не рендерит toggle, но параметр принимается API напрямую.
+        if (fromGroup != 0) args["from_group"] = fromGroup.toString()
+        val json = call("board.editComment", args) ?: return false
         return json.has("response")
     }
 

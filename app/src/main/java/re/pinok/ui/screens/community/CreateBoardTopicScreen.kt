@@ -28,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -64,8 +65,12 @@ import re.pinok.SovaApp
  * 6 кнопок (device/photo/video/audio/file/poll) и emoji-picker — кнопки
  * видны как в снапшоте VK web (HTML4), но onClick — пустые TODO. Сам
  * board.addTopic не принимает attachments — нужен отдельный upload-flow.
- * «Опубликовать от имени группы» (fromGroup=0 зафиксирован — юзер обычный
- * участник). Это добавится позже отдельными задачами.
+ *
+ * B-FIX-A (TRACER-2 gap): Switch «От имени сообщества» (from_group).
+ * В VK web SPA toggle НЕ рендерится (только в legacy /al_board.php modal
+ * box через bnt_from_group checkbox), но параметр from_group принимается
+ * API напрямую — access_token, БЕЗ hash. Гейта isManager/canManage в этом
+ * экране нет → показываем всегда; VK отклонит err=15 если нет прав.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,6 +87,8 @@ fun CreateBoardTopicScreen(
     var text by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // B-FIX-A: from_group state — 1=от имени сообщества, 0=от себя.
+    var fromGroup by remember { mutableStateOf(0) }
 
     Scaffold(
         topBar = {
@@ -217,6 +224,22 @@ fun CreateBoardTopicScreen(
                 }
             }
 
+            // ── Switch «От имени сообщества» (B-FIX-A, TRACER-2 gap) ────
+            // from_group=1 → тема публикуется подписью группы. В VK web SPA
+            // toggle НЕ рендерится, но параметр принимается API напрямую.
+            // Гейта isManager нет → показываем всегда (VK err=15 если нет прав).
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("От имени сообщества", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.weight(1f))
+                Switch(
+                    checked = fromGroup == 1,
+                    onCheckedChange = { fromGroup = if (it) 1 else 0 },
+                )
+            }
+
             // ── Кнопка «Создать тему» ──────────────────────────────────
             Button(
                 onClick = {
@@ -233,7 +256,7 @@ fun CreateBoardTopicScreen(
                             return@launch
                         }
                         try {
-                            val topicId = a.apiClient.boardAddTopic(groupId, t, txt, fromGroup = 0)
+                            val topicId = a.apiClient.boardAddTopic(groupId, t, txt, fromGroup = fromGroup)
                             if (topicId != null && topicId > 0) {
                                 Toast.makeText(ctx, "Тема создана", Toast.LENGTH_SHORT).show()
                                 onCreated(topicId, t)
