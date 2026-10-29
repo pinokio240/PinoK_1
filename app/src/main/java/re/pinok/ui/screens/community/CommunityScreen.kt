@@ -3378,9 +3378,13 @@ private fun BoardTopicRow(
                     )
                 }
                 // B-C: превью последнего комментария (как VK web — под title, серый, 1 строка).
-                if (!topic.lastComment.isNullOrEmpty()) {
+                // SMART-CAST-FIX: lastComment — public API property из другого модуля (BoardTopic data class),
+                // Kotlin не делает smart cast к String (non-null) после isNotEmptyOrNull().
+                // Захватываем в локальную val.
+                val lastCommentPreview = topic.lastComment
+                if (!lastCommentPreview.isNullOrEmpty()) {
                     Text(
-                        text = topic.lastComment,
+                        text = lastCommentPreview,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                         maxLines = 1,
