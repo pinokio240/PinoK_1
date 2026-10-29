@@ -2802,6 +2802,10 @@ composable(Screen.CallsHistory.route) {
                         onTopicClick = { gId, topicId, topicTitle ->
                             nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle))
                         },
+                        // B-C: FAB «+ Создать тему» → форма создания (CreateBoardTopicScreen).
+                        onCreateTopic = {
+                            nav.navigate(Screen.CreateBoardTopic.buildRoute(groupId))
+                        },
                         // #OPVK-EXTRACT (Task 3-c): тап по счётчику подписчиков в
                         // шапке → список участников сообщества (groups.getMembers).
                         onMembersClick = { targetGroupId ->

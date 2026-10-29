@@ -56,6 +56,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 // VIDEO-ALBUMS-CRUD: AlertDialog для создания/переименования/удаления альбомов
 // и DropdownMenu/DropdownMenuItem для контекстных меню (long-press).
 import androidx.compose.material3.AlertDialog
@@ -105,6 +106,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.BoardTopic
+import re.pinok.data.model.UserProfile
 import re.pinok.data.model.PhotoItem
 import re.pinok.data.model.Post
 import re.pinok.data.model.Video
@@ -140,6 +142,7 @@ import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
+import re.pinok.util.toRelativeTime
 import java.util.Locale
 import android.widget.Toast
 import android.content.Intent
@@ -165,6 +168,9 @@ fun CommunityScreen(
     onUserClick: (Long) -> Unit = {},
     // Шаг 4 (#32d): тап по теме обсуждения → BoardTopicScreen.
     onTopicClick: (groupId: Long, topicId: Long, title: String) -> Unit = { _, _, _ -> },
+    // B-C: FAB «+ Создать тему» → Screen.CreateBoardTopic (форма создания темы).
+    // Гейтится canAddTopics (board.getTopics can_add_topics) на уровне FAB.
+    onCreateTopic: () -> Unit = {},
     // #OPVK-EXTRACT (Task 3-c): тап по счётчику подписчиков в шапке →
     // GroupMembersScreen (список участников, groups.getMembers).
     onMembersClick: (groupId: Long) -> Unit = {},
@@ -437,15 +443,25 @@ fun CommunityScreen(
     )
 
     // Шаг 4 (#32d): state для вкладки «Обсуждения».
-    // Единый паттерн пагинации: boardGetTopics(groupId, count=30), конец когда page.size < 30.
+    // B-C: boardGetTopicsFull (вместо boardGetTopicsWithCount) — расширенные поля:
+    // isFixed, updated, updatedBy, lastComment + authors (profiles[]) + canAddTopics.
+    // authors/canAddTopics мёрджатся между страницами (как signerNames для стены).
+    var topicsAuthors by remember { mutableStateOf<Map<Long, UserProfile>>(emptyMap()) }
+    var canAddTopics by remember { mutableStateOf(false) }
+    // B-C: long-press меню темы (Закрепить/Закрыть/Удалить) — только для админа.
+    var showTopicMenu by remember { mutableStateOf<BoardTopic?>(null) }
+    var deleteTopicTarget by remember { mutableStateOf<BoardTopic?>(null) }
     val topicsState = rememberPagedListState<BoardTopic>(
         fetcher = { cursor ->
             // P0.47-REVERT: board.getTopics — getContentForTabs(tab="topics") → пусто.
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val (list, totalCount) = app.apiClient.boardGetTopicsWithCount(groupId = groupId, count = 30, offset = offset)
-            val next = if (list.isEmpty() || (totalCount > 0 && offset + list.size >= totalCount))
-                null else ServerOffset(offset + list.size)
-            list to next
+            val result = app.apiClient.boardGetTopicsFull(groupId = groupId, count = 30, offset = offset)
+            topicsAuthors = topicsAuthors + result.authors
+            canAddTopics = result.canAddTopics
+            val next = if (result.topics.isEmpty() ||
+                (result.totalCount > 0 && offset + result.topics.size >= result.totalCount))
+                null else ServerOffset(offset + result.topics.size)
+            result.topics to next
         },
         keyOf = { t -> "topic_${groupId}_${t.id}" },
         rememberKey = groupId,
@@ -2659,8 +2675,14 @@ fun CommunityScreen(
                         }
                     }
                     items(topicsState.items, key = { "topic_${groupId}_${it.id}" }) { topic ->
+                        // B-C: long-press меню темы — только админ (canManageAlbums).
+                        val openTopicMenu: (() -> Unit)? = if (canManageAlbums) {
+                            { showTopicMenu = topic }
+                        } else null
                         BoardTopicRow(
                             topic = topic,
+                            authors = topicsAuthors,
+                            onLongClick = openTopicMenu,
                             onClick = { onTopicClick(groupId, topic.id, topic.title) },
                         )
                     }
@@ -2739,12 +2761,119 @@ fun CommunityScreen(
 
     // Fix #389 #SCROLL-TOP-PARITY: единая FAB-стрелка «наверх» — работает на
     // всех табах сообщества (стена/видео/обсуждения — один общий LazyList).
+    // B-C: когда на вкладке «Обсуждения» показан FAB «+ Создать тему»,
+    // приподнимаем стрелку «наверх», чтобы FAB-ы не перекрывали друг друга.
+    val createTopicFabVisible = selectedTab == 5 && canAddTopics
     ScrollToTopFab(
         listState = listState,
         modifier = Modifier.align(Alignment.BottomEnd)
-            .padding(end = 16.dp, bottom = 16.dp),
+            .padding(end = 16.dp, bottom = if (createTopicFabVisible) 88.dp else 16.dp),
     )
+    // B-C: FAB «+ Создать тему» (вкладка «Обсуждения», гейт canAddTopics из
+    // board.getTopics — VK отдаёт false для закрытых/только-для-админа досок).
+    if (createTopicFabVisible) {
+        FloatingActionButton(
+            onClick = onCreateTopic,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = "Создать тему")
+        }
+    }
     } // closes Box (Fix #389 #SCROLL-TOP-PARITY)
+
+    // B-C: long-press меню темы обсуждения (Закрепить/Закрыть/Удалить).
+    val menuTopic = showTopicMenu
+    if (menuTopic != null) {
+        val ctx = LocalContext.current
+        AlertDialog(
+            onDismissRequest = { showTopicMenu = null },
+            title = {
+                Text(
+                    text = "Действия с темой",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    TextButton(
+                        onClick = {
+                            val target = menuTopic
+                            showTopicMenu = null
+                            scope.launch {
+                                val ok = app.apiClient.boardFixTopic(groupId, target.id, !target.isFixedBool)
+                                if (ok) {
+                                    topicsState.loadFirst()
+                                } else {
+                                    Toast.makeText(ctx, "Не удалось изменить закрепление", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (menuTopic.isFixedBool) "Открепить" else "Закрепить") }
+                    TextButton(
+                        onClick = {
+                            val target = menuTopic
+                            showTopicMenu = null
+                            scope.launch {
+                                val ok = app.apiClient.boardCloseTopic(groupId, target.id, target.isClosed != 1)
+                                if (ok) {
+                                    topicsState.loadFirst()
+                                } else {
+                                    Toast.makeText(ctx, "Не удалось изменить статус", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (menuTopic.isClosed == 1) "Открыть тему" else "Закрыть тему") }
+                    TextButton(
+                        onClick = {
+                            deleteTopicTarget = menuTopic
+                            showTopicMenu = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "Удалить",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showTopicMenu = null }) { Text("Отмена") }
+            },
+        )
+    }
+
+    // B-C: подтверждение удаления темы.
+    val delTopic = deleteTopicTarget
+    if (delTopic != null) {
+        AlertDialog(
+            onDismissRequest = { deleteTopicTarget = null },
+            title = { Text("Удалить тему?") },
+            text = {
+                Text("Тема «${delTopic.title}» будет удалена без возможности восстановления.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = delTopic
+                        deleteTopicTarget = null
+                        scope.launch {
+                            val ok = app.apiClient.boardDeleteTopic(groupId, target.id)
+                            if (ok) {
+                                topicsState.removeById("topic_${groupId}_${target.id}")
+                            }
+                        }
+                    },
+                ) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTopicTarget = null }) { Text("Отмена") }
+            },
+        )
+    }
 
     // Sprint 2, P1-1 (#88): полноэкранный просмотр фото.
     // #ADMIN-POST-ACTIONS-FLAT: диалог-меню PostActionsMenu удалён — его место
@@ -3203,16 +3332,22 @@ private fun formatMemberCount(n: Int): String {
  * @param topic   Тема (BoardTopic)
  * @param onClick Callback тапа → onTopicClick(groupId, topicId, title)
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BoardTopicRow(
-    topic: re.pinok.data.model.BoardTopic,
+    topic: BoardTopic,
+    authors: Map<Long, UserProfile>,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clickable { onClick() },
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -3223,14 +3358,36 @@ private fun BoardTopicRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = topic.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // B-C: индикатор закреплённой темы (Icons.Outlined.PushPin) перед title.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (topic.isFixedBool) {
+                        Icon(
+                            imageVector = Icons.Outlined.PushPin,
+                            contentDescription = "Закреплённая тема",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Text(
+                        text = topic.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // B-C: превью последнего комментария (как VK web — под title, серый, 1 строка).
+                if (!topic.lastComment.isNullOrEmpty()) {
+                    Text(
+                        text = topic.lastComment,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3241,7 +3398,20 @@ private fun BoardTopicRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
-                    if (topic.created > 0) {
+                    // B-C: автор + относительная дата последнего комментария
+                    // (topic.updated/updatedBy), fallback — дата создания темы.
+                    if (topic.updatedBy != 0L && topic.updated > 0) {
+                        val authorName = authors[topic.updatedBy]?.fullName
+                        val dateStr = topic.updated.toRelativeTime()
+                        val label = if (!authorName.isNullOrEmpty()) "$authorName • $dateStr" else dateStr
+                        Text(
+                            text = "• $label",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (topic.created > 0) {
                         Text(
                             text = "• " + topic.created.toAbsoluteTime(),
                             style = MaterialTheme.typography.labelSmall,
