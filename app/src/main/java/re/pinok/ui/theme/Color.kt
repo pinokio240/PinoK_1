@@ -53,6 +53,21 @@ object SovaColors {
     )
 }
 
+/**
+ * B-FIX-7 (AUDIT #54): Локальный accent-цвет для экранов обсуждений (board).
+ *
+ * Снапшот VK web SPA использует vkcom_light theme, где
+ * `--vkui--color_text_accent` / `color_icon_accent` / `color_background_accent`
+ * = `#447bba` (НЕ дефолтный VK_MODERN `#0077FF` из настроек приложения).
+ *
+ * Глобальный accent (SovaColors.accents[accentIndex]) НЕ меняем — это сломало бы
+ * остальные экраны (лента, чаты, профиль и т.п., где юзер сам выбирает акцент).
+ * Вместо этого board-экраны (BoardTopicScreen, CommunityScreen BoardTopicRow)
+ * используют [BoardAccent] локально для accent-элементов: title темы, owner-name,
+ * «Ответить», «Создать тему», упоминания [id|Имя] в комментариях.
+ */
+val BoardAccent = Color(0xFF447BBA)
+
 // #CHAT-BACKGROUND: палитра фона диалога удалена — с 2026-10-16 цвет фона и текста диалога
 // выбирается спектральным пикером (SpectrumColorPicker) и хранится как точный ARGB Int,
 // см. SovaPrefs.chatTextColorArgb / chatBgColorArgb.

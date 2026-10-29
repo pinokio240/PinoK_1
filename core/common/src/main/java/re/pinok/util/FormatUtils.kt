@@ -70,6 +70,66 @@ fun Long.toMsgTime(): String {
     return sdf.format(Date(this * 1000))
 }
 
+// ─── Board (обсуждения) — B-FIX-7 / AUDIT #10, #28 ──────────────────────────
+
+/**
+ * B-FIX-7 (AUDIT #10): Дата превью last-comment в списке тем.
+ *
+ * Формат по снапшоту VK web: «Ответил 28 окт в 08:32».
+ *  - Текущий год:  «d MMM в HH:mm»   → 28 окт в 08:32
+ *  - Прошлый год:   «d MMM yyyy в HH:mm» → 28 окт 2024 в 08:32
+ *
+ * [this] — Unix timestamp в секундах (VK API board.getTopics `updated`).
+ */
+fun Long.toBoardLastCommentDate(): String {
+    val tsMs = this * 1000L
+    val calNow = java.util.Calendar.getInstance()
+    val calTs = java.util.Calendar.getInstance().apply { timeInMillis = tsMs }
+    val sameYear = calNow.get(java.util.Calendar.YEAR) == calTs.get(java.util.Calendar.YEAR)
+    val pattern = if (sameYear) "d MMM 'в' HH:mm" else "d MMM yyyy 'в' HH:mm"
+    return try {
+        SimpleDateFormat(pattern, RU_LOCALE).format(Date(tsMs))
+    } catch (_: Exception) {
+        ""
+    }
+}
+
+/**
+ * B-FIX-7 (AUDIT #28): Дата комментария в теме (board.getComments `created`).
+ *
+ * Формат по снапшоту VK web (внизу комментария, между текстом и «Ответить»):
+ *  - Сегодня:        «в HH:mm»            (15:30)
+ *  - Вчера:          «вчера в HH:mm»
+ *  - Этот год:       «d MMM в HH:mm»     (9 мар в 14:30)
+ *  - Иначе (старый): «d MMM yyyy» БЕЗ времени (15 фев 2021) — как в снапшоте.
+ *
+ * [this] — Unix timestamp в секундах.
+ */
+fun Long.toBoardCommentDate(): String {
+    val nowMs = System.currentTimeMillis()
+    val tsMs = this * 1000L
+    val calNow = java.util.Calendar.getInstance().apply { timeInMillis = nowMs }
+    val calTs = java.util.Calendar.getInstance().apply { timeInMillis = tsMs }
+    val dayNow = calNow.get(java.util.Calendar.DAY_OF_YEAR)
+    val dayTs = calTs.get(java.util.Calendar.DAY_OF_YEAR)
+    val yearNow = calNow.get(java.util.Calendar.YEAR)
+    val yearTs = calTs.get(java.util.Calendar.YEAR)
+    return try {
+        when {
+            yearNow == yearTs && dayNow == dayTs ->
+                SimpleDateFormat("'в' HH:mm", RU_LOCALE).format(Date(tsMs))
+            yearNow == yearTs && dayNow - dayTs == 1 ->
+                SimpleDateFormat("'вчера в' HH:mm", RU_LOCALE).format(Date(tsMs))
+            yearNow == yearTs ->
+                SimpleDateFormat("d MMM 'в' HH:mm", RU_LOCALE).format(Date(tsMs))
+            else ->
+                SimpleDateFormat("d MMM yyyy", RU_LOCALE).format(Date(tsMs))
+        }
+    } catch (_: Exception) {
+        ""
+    }
+}
+
 /**
  * P1.1: Дата для date-separator'а в чате: «Сегодня», «Вчера», «12 июля»,
  * «12 июля 2024» (для старых лет).

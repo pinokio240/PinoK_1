@@ -5084,7 +5084,8 @@ class VKApiClient(
      */
     suspend fun boardGetTopicsFull(
         groupId: Long,
-        count: Int = 30,
+        // B-FIX-7 (AUDIT #50): count=20 (VK web пагинация по HAR-снапшоту, было 30).
+        count: Int = 20,
         offset: Int = 0,
         // B-FIX-1: order — VK API board.getTopics: 1=по дате обновления (default
         // VK web, «По дате обновления»), 2=по дате создания. Соответствует
@@ -5185,7 +5186,8 @@ class VKApiClient(
     suspend fun boardGetCommentsFull(
         groupId: Long,
         topicId: Long,
-        count: Int = 30,
+        // B-FIX-7 (AUDIT #50): count=20 (VK web пагинация по HAR-снапшоту, было 30).
+        count: Int = 20,
         offset: Int = 0,
         sort: String = "asc",
     ): BoardCommentsResult {

@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -143,9 +144,10 @@ import re.pinok.ui.components.AddVideoToAlbumDialog
 import re.pinok.ui.components.AddVideoToAlbumSearchDialog
 import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.navigation.CommunityRestoreHolder
+import re.pinok.ui.theme.BoardAccent
 import re.pinok.util.AppLog
 import re.pinok.util.toAbsoluteTime
-import re.pinok.util.toRelativeTime
+import re.pinok.util.toBoardLastCommentDate
 import kotlin.math.min
 import java.util.Locale
 import android.widget.Toast
@@ -464,7 +466,8 @@ fun CommunityScreen(
         fetcher = { cursor ->
             // P0.47-REVERT: board.getTopics — getContentForTabs(tab="topics") → пусто.
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val result = app.apiClient.boardGetTopicsFull(groupId = groupId, count = 30, offset = offset, order = topicsSortOrder)
+            // B-FIX-7 (AUDIT #50): count=20 (VK web пагинация по HAR-снапшоту).
+            val result = app.apiClient.boardGetTopicsFull(groupId = groupId, count = 20, offset = offset, order = topicsSortOrder)
             topicsAuthors = topicsAuthors + result.authors
             canAddTopics = result.canAddTopics
             val next = if (result.topics.isEmpty() ||
@@ -2691,7 +2694,12 @@ fun CommunityScreen(
                                 fontWeight = FontWeight.Medium,
                             )
                             if (canAddTopics) {
-                                TextButton(onClick = onCreateTopic) {
+                                // B-FIX-7 (AUDIT #54): accent #447bba (board-create-topic-button,
+                                // appearanceAccent по снапшоту VK web).
+                                TextButton(
+                                    onClick = onCreateTopic,
+                                    colors = ButtonDefaults.textButtonColors(contentColor = BoardAccent),
+                                ) {
                                     Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("Создать тему")
@@ -3448,7 +3456,8 @@ private fun BoardTopicRow(
                         Icon(
                             imageVector = Icons.Outlined.PushPin,
                             contentDescription = "Закреплённая тема",
-                            tint = MaterialTheme.colorScheme.primary,
+                            // B-FIX-7 (AUDIT #54): accent #447bba.
+                            tint = BoardAccent,
                             modifier = Modifier.size(16.dp),
                         )
                     }
@@ -3456,7 +3465,9 @@ private fun BoardTopicRow(
                         text = topic.title,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        // B-FIX-7 (AUDIT #54): accent #447bba (board-topic-title —
+                        // weight1 accent link по снапшоту VK web).
+                        color = BoardAccent,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -3472,7 +3483,9 @@ private fun BoardTopicRow(
                     val lastAuthorName = lastAuthor?.fullName ?: "Пользователь"
                     val isFemale = lastAuthor?.sex == 1
                     val verb = if (isFemale) "Ответила" else "Ответил"
-                    val dateStr = topic.updated.toRelativeTime()
+                    // B-FIX-7 (AUDIT #10): «Ответил 28 окт в 08:32» — d MMM в HH:mm
+                    // (текущий год) / d MMM yyyy в HH:mm (прошлый год), как в снапшоте.
+                    val dateStr = topic.updated.toBoardLastCommentDate()
                     Row(
                         modifier = Modifier.padding(top = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -3503,6 +3516,9 @@ private fun BoardTopicRow(
                             Text(
                                 text = lastAuthorName,
                                 style = MaterialTheme.typography.labelSmall,
+                                // B-FIX-7 (AUDIT #54): accent #447bba
+                                // (last-comment-author-name — ссылка по снапшоту VK web).
+                                color = BoardAccent,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )

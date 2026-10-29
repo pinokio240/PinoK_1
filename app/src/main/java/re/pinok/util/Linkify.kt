@@ -152,6 +152,79 @@ fun linkifyVkText(
     if (cursor < text.length) append(text.substring(cursor))
 }
 
+// ─── Board (обсуждения): упоминания [id|Имя] — B-FIX-7 / AUDIT #26 ───────────
+
+/**
+ * Regex для VK mention-формата в комментариях обсуждений:
+ *  - `[id123|Иван]`      → пользователь (id положительный)
+ *  - `[club456|Имя группы]` / `[public789|Имя]` → сообщество (id отрицательный)
+ *  - `[123|Имя]`         → голый id (VK иногда отдаёт без префикса)
+ *
+ * Группа 1 = префикс (`id`/`club`/`public` или пусто), группа 2 = числовой id,
+ * группа 3 = отображаемое имя. `|` и `]` не допускаются внутри имени (иначе жадный
+ * match съест соседние токены).
+ *
+ * ВНИМАНИЕ: НЕ путать с inline-ссылками `[#alias|display|url]` (см.
+ * [VK_INLINE_LINK_REGEX]) — это другой формат, у него `#`-префикс и 3 части.
+ * Mention'ы указывают на юзеров/сообщества, а не на URL — поэтому обрабатываются
+ * отдельным regex'ом и отдельным callback'ом [onUserClick].
+ */
+private val VK_MENTION_REGEX = Regex(
+    "\\[(id|club|public)?(\\d+)\\|([^\\]]+)\\]",
+)
+
+/**
+ * B-FIX-7 (AUDIT #26): Превращает текст комментария с VK mention'ами
+ * `[id123|Иван]` / `[club456|Имя]` в [AnnotatedString] с кликабельными span'ами.
+ *
+ * Каждое упоминание рендерится именем (group 3) цветом [mentionColor] (accent),
+ * как [LinkAnnotation.Clickable] с [LinkInteractionListener] → [onUserClick]:
+ *  - `id`/без префикса → положительный id (пользователь)
+ *  - `club`/`public`   → отрицательный id (сообщество, как VK API from_id<0)
+ *
+ * Остальной текст остаётся обычным. Клик по упоминанию вызывает [onUserClick](id).
+ * Используется [LinkAnnotation.Clickable] (НЕ deprecated [ClickableText]) —
+ * как в [linkifyVkText], рендерится обычным `Text`.
+ *
+ * @param text         сырой текст комментария (возможно уже обрезанный showmoretext)
+ * @param mentionColor цвет упоминаний (BoardAccent #447bba по снапшоту VK web)
+ * @param onUserClick  callback клика по упоминанию (id>0 — юзер, id<0 — сообщество)
+ * @return AnnotatedString с кликабельными mention-ссылками.
+ */
+fun buildBoardCommentText(
+    text: String,
+    mentionColor: Color,
+    onUserClick: (Long) -> Unit,
+): AnnotatedString = buildAnnotatedString {
+    var lastEnd = 0
+    for (match in VK_MENTION_REGEX.findAll(text)) {
+        val prefix = match.groupValues[1]
+        val rawId = match.groupValues[2].toLongOrNull() ?: 0L
+        val name = match.groupValues[3]
+        if (name.isBlank() || rawId == 0L) continue
+        // club/public → отрицательный id (сообщество), иначе — пользователь.
+        val entityId = if (prefix == "club" || prefix == "public") -rawId else rawId
+        if (match.range.first > lastEnd) {
+            append(text.substring(lastEnd, match.range.first))
+        }
+        val nameStart = length
+        addLink(
+            LinkAnnotation.Clickable(
+                tag = "user_$entityId",
+                styles = TextLinkStyles(
+                    style = SpanStyle(color = mentionColor),
+                ),
+                linkInteractionListener = LinkInteractionListener { onUserClick(entityId) },
+            ),
+            start = nameStart,
+            end = nameStart + name.length,
+        )
+        append(name)
+        lastEnd = match.range.last + 1
+    }
+    if (lastEnd < text.length) append(text.substring(lastEnd))
+}
+
 /**
  * Fix #204: Открывает URL внешним браузером (ACTION_VIEW) с нормализацией.
  *

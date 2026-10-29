@@ -2,6 +2,7 @@ package re.pinok.ui.screens.community
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -31,9 +33,11 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,8 +77,10 @@ import re.pinok.data.model.BoardComment
 import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ScrollToTopFab
+import re.pinok.ui.theme.BoardAccent
 import re.pinok.util.AppLog
-import re.pinok.util.toAbsoluteTime
+import re.pinok.util.buildBoardCommentText
+import re.pinok.util.toBoardCommentDate
 
 /** Размер страницы комментариев (VK web: count=20). */
 private const val PAGE_SIZE = 20
@@ -161,6 +167,15 @@ fun BoardTopicScreen(
     var editingComment by remember { mutableStateOf<BoardComment?>(null) }
     var editText by remember { mutableStateOf("") }
 
+    // B-FIX-8: «Редактировать тему» (board.editTopic). Локальный заголовок темы —
+    // обновляется после успешного editTopic (параметр `title` immutable, без локального
+    // state-а TopAppBar/header остались бы старым текстом). Восстановлено из B-FIX-4
+    // (было утеряно при rewrite BoardTopicScreen в B-FIX-2).
+    var displayTitle by remember { mutableStateOf(title) }
+    var showEditTopicDialog by remember { mutableStateOf(false) }
+    var editTopicTitle by remember { mutableStateOf(title) }
+    var editTopicText by remember { mutableStateOf("") }
+
     // Загрузка текущего юзера (аватар 36dp для composer).
     LaunchedEffect(Unit) {
         scope.launch {
@@ -230,7 +245,7 @@ fun BoardTopicScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = title,
+                        text = displayTitle,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -246,7 +261,12 @@ fun BoardTopicScreen(
                 // ленту через LaunchedEffect(groupId, topicId, sort, offset, reloadTrigger).
                 actions = {
                     Box {
-                        TextButton(onClick = { sortExpanded = true }) {
+                        // B-FIX-7 (AUDIT #54): accent #447bba (board_comments_sorting —
+                        // modeLink accent по снапшоту VK web).
+                        TextButton(
+                            onClick = { sortExpanded = true },
+                            colors = ButtonDefaults.textButtonColors(contentColor = BoardAccent),
+                        ) {
                             Text(if (sort == "asc") "Сначала старые" else "Сначала новые")
                             Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
                         }
@@ -336,7 +356,8 @@ fun BoardTopicScreen(
                                     text = title,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    // B-FIX-7 (AUDIT #54): accent #447bba (vkcom_light).
+                                    color = BoardAccent,
                                 )
                                 if (totalCount > 0) {
                                     Text(
@@ -363,7 +384,8 @@ fun BoardTopicScreen(
                                             onClick = { goToPage(p) },
                                             colors = if (p == currentPage)
                                                 ButtonDefaults.textButtonColors(
-                                                    contentColor = MaterialTheme.colorScheme.primary,
+                                                    // B-FIX-7 (AUDIT #54): accent #447bba.
+                                                    contentColor = BoardAccent,
                                                 )
                                             else ButtonDefaults.textButtonColors(
                                                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -715,7 +737,8 @@ private fun BoardCommentCard(
                             text = authorName,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary,
+                            // B-FIX-7 (AUDIT #54): accent #447bba (comment-owner link).
+                            color = BoardAccent,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -770,10 +793,20 @@ private fun BoardCommentCard(
                 } else {
                     comment.text
                 }
-                Text(
+                // B-FIX-7 (AUDIT #26): парсинг VK mention'ов [id|Имя] / [club|Имя]
+                // → кликабельные AnnotatedString spans (accent #447bba). Клик по упоминанию
+                // → onUserClick(entityId) (id>0 — юзер, id<0 — сообщество, как VK from_id).
+                // LinkAnnotation.Clickable (НЕ deprecated ClickableText) — рендерится Text.
+                val annotatedText = buildBoardCommentText(
                     text = displayText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    mentionColor = BoardAccent,
+                    onUserClick = onUserClick,
+                )
+                Text(
+                    text = annotatedText,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
                 )
                 if (comment.text.length > SHOWMORE_THRESHOLD) {
                     TextButton(
@@ -794,7 +827,9 @@ private fun BoardCommentCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = comment.created.toAbsoluteTime(),
+                        // B-FIX-7 (AUDIT #28): «15 фев 2021» без времени для старых,
+                        // «в HH:mm» сегодня, «вчера в HH:mm», «d MMM в HH:mm» этот год.
+                        text = comment.created.toBoardCommentDate(),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
@@ -805,7 +840,8 @@ private fun BoardCommentCard(
                         Text(
                             text = "Ответить",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            // B-FIX-7 (AUDIT #54): accent #447bba (comment-reply).
+                            color = BoardAccent,
                         )
                     }
                     Spacer(Modifier.weight(1f))
