@@ -104,6 +104,7 @@ import android.content.Intent
 import re.pinok.ui.components.ShareToChatSheet
 import re.pinok.ui.screens.bookmarks.BookmarksScreen
 import re.pinok.ui.screens.community.BoardTopicScreen
+import re.pinok.ui.screens.community.CreateBoardTopicScreen
 import re.pinok.ui.screens.community.CommunityScreen
 // #OPVK-EXTRACT (Task 3-c): экран «Участники сообщества».
 import re.pinok.ui.screens.community.GroupMembersScreen
@@ -3122,6 +3123,24 @@ composable(Screen.CallsHistory.route) {
                         topicId = tId,
                         title = tTitle,
                         onBack = { nav.popBackStack() },
+                    )
+                }
+                // B-E (#SCOUT-BOARD-SNAP): экран создания темы обсуждения.
+                composable(
+                    route = Screen.CreateBoardTopic.route,
+                    arguments = listOf(
+                        navArgument(Screen.CreateBoardTopic.ARG_GROUP_ID) { type = NavType.LongType },
+                    ),
+                ) { entry ->
+                    val gId = entry.arguments?.getLong(Screen.CreateBoardTopic.ARG_GROUP_ID) ?: 0L
+                    CreateBoardTopicScreen(
+                        groupId = gId,
+                        onBack = { nav.popBackStack() },
+                        onCreated = { topicId, topicTitle ->
+                            nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle)) {
+                                popUpTo(Screen.CreateBoardTopic.route) { inclusive = true }
+                            }
+                        },
                     )
                 }
                 // Sprint 1, P0-2 (#74): экран чужого профиля.

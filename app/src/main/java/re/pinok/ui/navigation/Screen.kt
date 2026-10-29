@@ -301,6 +301,17 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     }
 
     /**
+     * B-E (#SCOUT-BOARD-SNAP): Экран создания темы обсуждения сообщества.
+     * Принимает groupId как path-параметр. Форма: Заголовок (max 255) + Текст
+     * (max 4096) с счётчиками → board.addTopic. После успеха навигация к
+     * BoardTopic с popUpTo(inclusive=true) — back не возвращает к пустой форме.
+     */
+    object CreateBoardTopic : Screen("create_board_topic/{groupId}", "Новая тема", null) {
+        const val ARG_GROUP_ID = "groupId"
+        fun buildRoute(groupId: Long): String = "create_board_topic/$groupId"
+    }
+
+    /**
      * Sprint 1, P0-2 (#74): Экран чужого профиля — стена + инфо + действия.
      * Принимает userId как path-параметр (положительный, как в users[].id).
      * Открывается тапом по автору поста (fromId > 0), другу, собеседнику в чате.
