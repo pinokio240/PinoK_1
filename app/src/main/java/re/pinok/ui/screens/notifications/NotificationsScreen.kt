@@ -131,6 +131,7 @@ import re.pinok.realtime.VkUrlDeepLinker
 import re.pinok.api.VKApiClient
 import re.pinok.realtime.VkNotificationsNotifier
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.ui.theme.UiScale
@@ -503,6 +504,12 @@ fun NotificationsScreen(
     // true = показываем все/просмотренные. Переключатель работает
     // (юзер может переключить на «Просмотренные»).
     var showViewed by remember { mutableStateOf(false) }
+
+    // FIX-C: PhotoViewer для фото-вложений уведомлений. Раньше тап по фото
+    // открывал пост (onPostClick), теперь — native PhotoViewer (pinch-zoom + swipe).
+    // photoViewerUrls != null → диалог показан; photoViewerIndex — стартовая позиция.
+    var photoViewerUrls by remember { mutableStateOf<List<String>?>(null) }
+    var photoViewerIndex by remember { mutableStateOf(0) }
 
     // Скрытые уведомления (для undo)
     val hiddenKeys = remember { mutableStateListOf<String>() }
@@ -1052,6 +1059,11 @@ fun NotificationsScreen(
                                     onHideNotification = { hideNotificationWithUndo(it) },
                                     onUnsubscribeNotification = { unsubscribeWithUndo(it) },
                                     onOpenNotificationSettings = onOpenNotificationSettings,
+                                    // FIX-C: фото-вложения открывают native PhotoViewer.
+                                    onPhotoClick = { urls, idx ->
+                                        photoViewerUrls = urls
+                                        photoViewerIndex = idx
+                                    },
                                 )
                                 HorizontalDivider(
                                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -1105,6 +1117,18 @@ fun NotificationsScreen(
                     .padding(end = 16.dp, bottom = 16.dp),
             )
         }
+
+        // FIX-C: PhotoViewer overlay для фото-вложений уведомлений.
+        // photoViewerUrls != null → диалог показан поверх всего экрана (Dialog).
+        // Список URL фото-вложений собирается в NotificationCard при тапе по фото.
+        val pvUrls = photoViewerUrls
+        if (pvUrls != null) {
+            PhotoViewer(
+                photos = pvUrls,
+                initial = photoViewerIndex,
+                onDismiss = { photoViewerUrls = null },
+            )
+        }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1126,6 +1150,8 @@ private fun NotificationCardSwipeable(
     onHideNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
     onUnsubscribeNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
     onOpenNotificationSettings: (() -> Unit)? = null,
+    // FIX-C: тап по фото-вложению → PhotoViewer (полноэкранный просмотр).
+    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = {
@@ -1166,6 +1192,8 @@ private fun NotificationCardSwipeable(
             onHideNotification = onHideNotification,
             onUnsubscribeNotification = onUnsubscribeNotification,
             onOpenNotificationSettings = onOpenNotificationSettings,
+            // FIX-C: фото-вложения открывают native PhotoViewer.
+            onPhotoClick = onPhotoClick,
         )
     }
 }
@@ -1188,6 +1216,8 @@ private fun NotificationCard(
     onHideNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
     onUnsubscribeNotification: ((VKApiClient.NotificationItem) -> Unit)? = null,
     onOpenNotificationSettings: (() -> Unit)? = null,
+    // FIX-C: тап по фото-вложению → PhotoViewer (полноэкранный просмотр).
+    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
 ) {
     val typeIcon = getTypeIcon(item.type)
     var showContextMenu by remember { mutableStateOf(false) }
@@ -1465,7 +1495,20 @@ private fun NotificationCard(
                                         onPostClick(att.ownerId, att.itemId)
                                     }
                                 }
-                                // Фото — пока просто открываем профиль/пост
+                                // FIX-C: Фото — открываем native PhotoViewer (pinch-zoom + swipe),
+                                // а не пост (см. аудит AUDIT-REPLIES-UI, находка 7).
+                                // Список URL всех фото-вложений + индекс тапнутого → PhotoViewer.
+                                else if (att.type == "photo" && !att.thumbUrl.isNullOrBlank()) {
+                                    val photoUrls = item.attachments
+                                        .filter { it.type == "photo" }
+                                        .mapNotNull { it.thumbUrl }
+                                    val clickedIdx = photoUrls.indexOf(att.thumbUrl)
+                                    onPhotoClick(
+                                        photoUrls,
+                                        if (clickedIdx >= 0) clickedIdx else 0,
+                                    )
+                                }
+                                // Прочие типы — fallback на пост/профиль (как раньше)
                                 else if (onPostClick != null && att.ownerId != 0L && att.itemId != 0L) {
                                     onPostClick(att.ownerId, att.itemId)
                                 }
@@ -1657,7 +1700,21 @@ private fun NotificationCard(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        // FIX-C: одиночное фото (parentPhotoUrl) — открываем native PhotoViewer.
+                        // Раньше compact-превью вообще не имело клика. Видео (parentVideoThumb)
+                        // кликом не наделяем — для него остаётся общий клик по карточке (navigate).
+                        .then(
+                            if (item.parentPhotoUrl != null) {
+                                Modifier.clickable(
+                                    role = androidx.compose.ui.semantics.Role.Button,
+                                    // listOfNotNull — гарантия List<String> (без smart-cast в лямбде).
+                                    onClick = { onPhotoClick(listOfNotNull(item.parentPhotoUrl), 0) },
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (thumbUrl != null) {

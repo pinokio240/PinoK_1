@@ -5574,6 +5574,8 @@ fun ChatDetailScreen(
                                     // history-режиме channels.getHistory).
                                     onCommentsClick = { channelCommentsTarget = msg.peerId to msg.id },
                                     onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
+                                    // FIX-C: имя отправителя кликабельно → UserProfile.
+                                    onUserClick = onUserClick,
                                     isGrouped = item.isGrouped,
                                     // P1.2: swipe-to-reply (отключён в режиме выбора).
                                     swipeEnabled = swipeReplyEnabled && !selectionMode,
@@ -6347,6 +6349,10 @@ private fun MessageBubble(
     onCommentsClick: () -> Unit = {},
     // P5.1: клик по фото-вложению → полноэкранный просмотр (PhotoViewer).
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    // FIX-C: тап по имени отправителя в bubble → профиль автора сообщения.
+    // Раньше имя было обычным Text (не .clickable) → нельзя было перейти в профиль.
+    // Теперь обёрнуто в Modifier.clickable → onUserClick(message.fromId) → UserProfile.
+    onUserClick: (Long) -> Unit = {},
     showReactionPicker: Boolean,
     onShowReactionPicker: () -> Unit,
     onHideReactionPicker: () -> Unit,
@@ -6570,6 +6576,10 @@ private fun MessageBubble(
                 }
                 if (senderName.isNotBlank()) {
                     Spacer(Modifier.width(4.dp))
+                    // FIX-C: имя отправителя кликабельно — тап открывает профиль автора
+                    // сообщения (message.fromId). Раньше был обычный Text без .clickable
+                    // (см. аудит AUDIT-REPLIES-UI, находка 6). clickable с Role.Button —
+                    // семантический тап-таргет, без ripple-min-sizing (inline в Row).
                     Text(
                         text = senderName,
                         style = MaterialTheme.typography.labelSmall,
@@ -6577,6 +6587,10 @@ private fun MessageBubble(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(
+                            role = androidx.compose.ui.semantics.Role.Button,
+                            onClick = { onUserClick(message.fromId) },
+                        ),
                     )
                     // P0.46-reactions-inline: VK web PeerTitle__icon — маленькая иконка
                     // реакции рядом с именем автора (если у сообщения есть реакция).
@@ -6790,6 +6804,8 @@ private fun MessageBubble(
                             onWallClick = onWallClick,
                             onUrlClick = onUrlClick,
                             onVideoClick = onVideoClick,
+                            // FIX-C: имя fwd-автора кликабельно → UserProfile.
+                            onUserClick = onUserClick,
                         )
                     }
                 }
@@ -9507,6 +9523,10 @@ private fun ForwardedMessageBlock(
     onWallClick: (re.pinok.data.model.Post) -> Unit = {},
     onUrlClick: (String) -> Unit = {},
     onVideoClick: (Video) -> Unit = {},
+    // FIX-C: тап по имени fwd-автора → профиль автора пересланного сообщения.
+    // Раньше имя было обычным Text (не .clickable) → нельзя было перейти в профиль
+    // автора пересланного сообщения (см. аудит AUDIT-REPLIES-UI, находка 6).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val sel = LocalAttachmentSelection.current
     // Имя автора: если fromId > 0 — профиль пользователя, иначе — сообщество.
@@ -9549,6 +9569,10 @@ private fun ForwardedMessageBlock(
             )
             Spacer(Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
+                // FIX-C: имя fwd-автора кликабельно — тап открывает профиль автора
+                // пересланного сообщения (fwd.fromId). Только если fromId != 0L
+                // (action-сообщения и «Пересланное сообщение» fallback не кликабельны).
+                // Раньше был обычный Text без .clickable (см. аудит AUDIT-REPLIES-UI, находка 6).
                 Text(
                     text = authorName ?: "Пересланное сообщение",
                     style = MaterialTheme.typography.labelMedium,
@@ -9556,6 +9580,14 @@ private fun ForwardedMessageBlock(
                     color = textColor.copy(alpha = 0.95f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = if (fwd.fromId != 0L) {
+                        Modifier.clickable(
+                            role = androidx.compose.ui.semantics.Role.Button,
+                            onClick = { onUserClick(fwd.fromId) },
+                        )
+                    } else {
+                        Modifier
+                    },
                 )
                 val subtitle = buildString {
                     if (authorName != null) append("Пересланное сообщение")
