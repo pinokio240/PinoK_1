@@ -93,6 +93,7 @@ import re.pinok.data.model.Attachment
 import re.pinok.data.model.BoardComment
 import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.theme.BoardAccent
@@ -1238,28 +1239,67 @@ private fun CommentAttachments(attachments: List<Attachment>?) {
     val docs = attachments.filter { it.type == "doc" && it.doc != null }
     if (photos.isEmpty() && docs.isEmpty()) return
 
+    // VIEW-ATTACHMENTS: state для полноэкранного просмотрщика фото (PhotoViewer).
+    // Раньше фото были НЕ кликабельны — нельзя было просмотреть вложения.
+    var photoViewerIndex by remember { mutableStateOf<Int?>(null) }
+    val photoUrls = remember(photos) {
+        photos.mapNotNull { it.photo?.largestUrl ?: it.photo?.mediumUrl ?: it.photo?.smallUrl }
+    }
+    if (photoViewerIndex != null && photoUrls.isNotEmpty()) {
+        PhotoViewer(
+            photos = photoUrls,
+            initial = photoViewerIndex!!.coerceIn(0, photoUrls.lastIndex),
+            onDismiss = { photoViewerIndex = null },
+        )
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // Photos: media-grid (up to 3 в ряд, 80dp, RoundedCornerShape 8dp).
+        // VIEW-ATTACHMENTS: кликабельны → открывают PhotoViewer (полноэкранный просмотр).
         if (photos.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                photos.take(3).forEach { att ->
+                photos.take(3).forEachIndexed { idx, att ->
                     val url = att.photo?.largestUrl ?: att.photo?.mediumUrl
                     AsyncImage(
                         model = url,
                         contentDescription = null,
                         modifier = Modifier
                             .size(80.dp)
-                            .clip(RoundedCornerShape(8.dp)),
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { photoViewerIndex = idx },
                         contentScale = ContentScale.Crop,
                     )
+                }
+                // Если фото >3 — показать «+N» badge (как VK web media-grid).
+                if (photos.size > 3) {
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { photoViewerIndex = 3 },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("+${photos.size - 3}", style = MaterialTheme.typography.titleMedium)
+                    }
                 }
             }
         }
         // Docs: 40dp иконка + title + ext (secondaryattachment в VK web).
+        // VIEW-ATTACHMENTS: кликабельны → открывают URL документа в браузере.
+        val ctx = LocalContext.current
         docs.forEach { att ->
             val doc = att.doc ?: return@forEach
+            val docUrl = doc.url
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        if (!docUrl.isNullOrBlank()) {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(docUrl))
+                            ctx.startActivity(intent)
+                        }
+                    },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
