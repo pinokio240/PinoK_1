@@ -649,7 +649,10 @@ fun CommunityScreen(
         // BOARD-TOPICS-COUNTERS: primary gate — counters.topics из groups.getById
         // (работает для ВСЕХ юзеров, не требует админа). Secondary — GroupSections.topics
         // (0/1 флаг из getSettings, только для менеджеров). null = не загружено → не показывать.
-        val showTopics = (topicsCount != null && topicsCount > 0) || s?.topics == 1
+        // SMART-CAST-FIX: topicsCount — делегированное свойство (var by remember),
+        // Kotlin не делает smart cast на > 0 после != null. Захватываем в локальную val.
+        val tc = topicsCount
+        val showTopics = (tc != null && tc > 0) || s?.topics == 1
         buildList {
             // «Записи» (wall): 0=выкл, 1=открытая, 2=ограниченная, 3=закрытая.
             // Всегда показываем вкладку: даже выключенная стена у сообщества
