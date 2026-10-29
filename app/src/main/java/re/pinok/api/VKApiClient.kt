@@ -5100,7 +5100,11 @@ class VKApiClient(
         return try {
             val resp = json.getAsJsonObject("response")
                 ?: return BoardTopicsResult(emptyList(), 0, emptyMap(), false)
-            val items = resp.getAsJsonArray("items") ?: emptyList()
+            // §REVIEW-BOARD fix: НЕ используем `?: emptyList()` — это меняет
+            // тип items на Iterable<JsonElement>, у которого нет .size() (см.
+            // прецедент §37.12 #326 fix в shortVideo.get L20767-20769). Держим
+            // JsonArray, тогда .size() компилируется и .mapNotNull работает.
+            val items = resp.getAsJsonArray("items") ?: com.google.gson.JsonArray()
             val rawCount = items.size()
             val totalCount = safeInt(resp.get("count"))
 
@@ -5191,7 +5195,11 @@ class VKApiClient(
         return try {
             val resp = json.getAsJsonObject("response")
                 ?: return BoardCommentsResult(emptyList(), 0, emptyMap())
-            val items = resp.getAsJsonArray("items") ?: emptyList()
+            // §REVIEW-BOARD fix: НЕ используем `?: emptyList()` — это меняет
+            // тип items на Iterable<JsonElement>, у которого нет .size() (см.
+            // прецедент §37.12 #326 fix в shortVideo.get L20767-20769). Держим
+            // JsonArray, тогда .size() компилируется и .mapNotNull работает.
+            val items = resp.getAsJsonArray("items") ?: com.google.gson.JsonArray()
             val rawCount = items.size()
             val totalCount = safeInt(resp.get("count"))
 
