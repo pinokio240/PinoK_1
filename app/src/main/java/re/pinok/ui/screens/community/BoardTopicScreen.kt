@@ -452,7 +452,9 @@ fun BoardTopicScreen(
                     val c = editing
                     val newText = editText
                     editingComment = null
-                    if (c != null && newText.isNotBlank()) {
+                    // c уже non-null (editing smart-cast в if (editing != null) выше).
+                    // WARN-FIX: убрана избыточная проверка c != null (always true).
+                    if (newText.isNotBlank()) {
                         scope.launch {
                             val ok = app.apiClient.boardEditComment(groupId, topicId, c.id, newText)
                             if (ok) {
