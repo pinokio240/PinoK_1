@@ -173,7 +173,10 @@ fun CommunityScreen(
     onPostClick: (Post) -> Unit = {},
     onUserClick: (Long) -> Unit = {},
     // Шаг 4 (#32d): тап по теме обсуждения → BoardTopicScreen.
-    onTopicClick: (groupId: Long, topicId: Long, title: String) -> Unit = { _, _, _ -> },
+    // EDIT-TOPIC-CHECKBOXES: +isFixed/isClosed — передаются в SovaNavHost для
+    // инициализации checkbox'ов «Закрепить/Закрыть тему» в AlertDialog
+    // редактирования темы (board.getTopics уже вернул is_fixed/is_closed).
+    onTopicClick: (groupId: Long, topicId: Long, title: String, isFixed: Int, isClosed: Int) -> Unit = { _, _, _, _, _ -> },
     // B-C: FAB «+ Создать тему» → Screen.CreateBoardTopic (форма создания темы).
     // Гейтится canAddTopics (board.getTopics can_add_topics) на уровне FAB.
     onCreateTopic: () -> Unit = {},
@@ -2787,7 +2790,9 @@ fun CommunityScreen(
                                 topic = topic,
                                 authors = topicsAuthors,
                                 onLongClick = openTopicMenu,
-                                onClick = { onTopicClick(groupId, topic.id, topic.title) },
+                                // EDIT-TOPIC-CHECKBOXES: передаём isFixed/isClosed для
+                                // инициализации checkbox'ов в AlertDialog редактирования.
+                                onClick = { onTopicClick(groupId, topic.id, topic.title, topic.isFixed, topic.isClosed) },
                             )
                         }
                     }
@@ -3471,7 +3476,7 @@ private fun formatMemberCount(n: Int): String {
  * Закрытые темы помечаются badge "Закрыта".
  *
  * @param topic   Тема (BoardTopic)
- * @param onClick Callback тапа → onTopicClick(groupId, topicId, title)
+ * @param onClick Callback тапа → onTopicClick(groupId, topicId, title, isFixed, isClosed)
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

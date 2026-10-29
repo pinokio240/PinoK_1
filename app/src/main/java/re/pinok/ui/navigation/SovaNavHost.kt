@@ -2799,8 +2799,10 @@ composable(Screen.CallsHistory.route) {
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
                         // Шаг 4 (#32d): тап по теме обсуждения → BoardTopicScreen.
-                        onTopicClick = { gId, topicId, topicTitle ->
-                            nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle))
+                        // EDIT-TOPIC-CHECKBOXES: передаём isFixed/isClosed для
+                        // инициализации checkbox'ов в AlertDialog редактирования.
+                        onTopicClick = { gId, topicId, topicTitle, isFixed, isClosed ->
+                            nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle, isFixed, isClosed))
                         },
                         // B-C: FAB «+ Создать тему» → форма создания (CreateBoardTopicScreen).
                         onCreateTopic = {
@@ -3117,11 +3119,23 @@ composable(Screen.CallsHistory.route) {
                             type = NavType.StringType
                             defaultValue = "Обсуждение"
                         },
+                        // EDIT-TOPIC-CHECKBOXES: isFixed/isClosed для инициализации
+                        // checkbox'ов «Закрепить/Закрыть тему» в AlertDialog.
+                        navArgument(Screen.BoardTopic.ARG_IS_FIXED) {
+                            type = NavType.IntType
+                            defaultValue = 0
+                        },
+                        navArgument(Screen.BoardTopic.ARG_IS_CLOSED) {
+                            type = NavType.IntType
+                            defaultValue = 0
+                        },
                     ),
                 ) { entry ->
                     val gId = entry.arguments?.getLong(Screen.BoardTopic.ARG_GROUP_ID) ?: 0L
                     val tId = entry.arguments?.getLong(Screen.BoardTopic.ARG_TOPIC_ID) ?: 0L
                     val tTitle = entry.arguments?.getString(Screen.BoardTopic.ARG_TITLE) ?: "Обсуждение"
+                    val tIsFixed = entry.arguments?.getInt(Screen.BoardTopic.ARG_IS_FIXED) ?: 0
+                    val tIsClosed = entry.arguments?.getInt(Screen.BoardTopic.ARG_IS_CLOSED) ?: 0
                     BoardTopicScreen(
                         groupId = gId,
                         topicId = tId,
@@ -3131,6 +3145,9 @@ composable(Screen.CallsHistory.route) {
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
+                        // EDIT-TOPIC-CHECKBOXES: исходное состояние темы.
+                        isFixed = tIsFixed,
+                        isClosed = tIsClosed,
                     )
                 }
                 // B-E (#SCOUT-BOARD-SNAP): экран создания темы обсуждения.

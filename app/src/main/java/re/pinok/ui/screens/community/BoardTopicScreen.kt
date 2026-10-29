@@ -52,6 +52,7 @@ import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -145,6 +146,13 @@ fun BoardTopicScreen(
     // #B-FIX-5: клик по имени автора комментария (comment-owner в снапшоте VK web)
     // → навигация на UserProfile. Передаётся из SovaNavHost.
     onUserClick: (Long) -> Unit = {},
+    // EDIT-TOPIC-CHECKBOXES: исходное состояние темы (is_fixed/is_closed из
+    // board.getTopics) передаётся через route args, чтобы AlertDialog
+    // «Редактирование темы» инициализировал checkbox'ы текущим состоянием.
+    // VK web save_topic_info шлёт title+closed+fixed одним вызовом; PinoK
+    // использует 3 отдельных API (boardEditTopic/boardFixTopic/boardCloseTopic).
+    isFixed: Int = 0,
+    isClosed: Int = 0,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -223,6 +231,14 @@ fun BoardTopicScreen(
     var showEditTopicDialog by remember { mutableStateOf(false) }
     var editTopicTitle by remember { mutableStateOf(title) }
     var editTopicText by remember { mutableStateOf("") }
+    // EDIT-TOPIC-CHECKBOXES: state checkbox'ов «Закрепить тему» (board.fixTopic)
+    // и «Закрыть тему» (board.closeTopic) в AlertDialog редактирования темы.
+    // Инициализируется из isFixed/isClosed (route args) при открытии диалога.
+    // deleteTopicConfirm — отдельный AlertDialog подтверждения удаления темы
+    // (board.deleteTopic), открывается кнопкой «Удалить» в edit dialog.
+    var editTopicFixed by remember { mutableStateOf(isFixed == 1) }
+    var editTopicClosed by remember { mutableStateOf(isClosed == 1) }
+    var deleteTopicConfirm by remember { mutableStateOf(false) }
 
     // Загрузка текущего юзера (аватар 36dp для composer).
     LaunchedEffect(Unit) {
@@ -317,6 +333,10 @@ fun BoardTopicScreen(
                         onClick = {
                             editTopicTitle = displayTitle
                             editTopicText = ""
+                            // EDIT-TOPIC-CHECKBOXES: инициализируем checkbox'ы
+                            // текущим состоянием темы (is_fixed/is_closed из route args).
+                            editTopicFixed = isFixed == 1
+                            editTopicClosed = isClosed == 1
                             showEditTopicDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -749,6 +769,14 @@ fun BoardTopicScreen(
     // (max 255) + Текст (max 4096). На «Сохранить» вызываем boardEditTopic —
     // при успехе обновляем displayTitle (TopAppBar + header) и закрываем диалог.
     // Восстановлено из B-FIX-4 (утеряно при rewrite BoardTopicScreen в B-FIX-2).
+    //
+    // EDIT-TOPIC-CHECKBOXES: добавлены checkbox'ы «Закрепить тему» (board.fixTopic)
+    // и «Закрыть тему» (board.closeTopic) + кнопка «Удалить» (board.deleteTopic).
+    // VK web save_topic_info шлёт title+closed+fixed одним вызовом через /al_board.php;
+    // PinoK использует публичный API: 3 отдельных метода (boardEditTopic +
+    // boardFixTopic + boardCloseTopic), которые вызываются последовательно при
+    // «Сохранить» (fix/close — только если checkbox изменился относительно
+    // исходного состояния isFixed/isClosed).
     if (showEditTopicDialog) {
         AlertDialog(
             onDismissRequest = { showEditTopicDialog = false },
@@ -771,6 +799,23 @@ fun BoardTopicScreen(
                             .fillMaxWidth()
                             .heightIn(min = 100.dp),
                     )
+                    // EDIT-TOPIC-CHECKBOXES: checkbox'ы состояния темы.
+                    // bnt_fixed / bnt_closed из legacy /al_board.php modal box.
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = editTopicFixed,
+                            onCheckedChange = { editTopicFixed = it },
+                        )
+                        Text("Закрепить тему")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = editTopicClosed,
+                            onCheckedChange = { editTopicClosed = it },
+                        )
+                        Text("Закрыть тему")
+                    }
                 }
             },
             confirmButton = {
@@ -778,6 +823,10 @@ fun BoardTopicScreen(
                     if (editTopicTitle.isBlank()) return@TextButton
                     val newTitle = editTopicTitle
                     val newText = editTopicText.ifBlank { null }
+                    // EDIT-TOPIC-CHECKBOXES: фиксируем, изменились ли checkbox'ы
+                    // относительно исходного состояния темы (isFixed/isClosed).
+                    val fixedChanged = editTopicFixed != (isFixed == 1)
+                    val closedChanged = editTopicClosed != (isClosed == 1)
                     scope.launch {
                         val ok = app.apiClient.boardEditTopic(
                             groupId = groupId,
@@ -786,6 +835,14 @@ fun BoardTopicScreen(
                             text = newText,
                         )
                         if (ok) {
+                            // Если checkbox изменился — вызываем fix/close (3-й и 4-й
+                            // запросы композитного VK web save_topic_info).
+                            if (fixedChanged) {
+                                app.apiClient.boardFixTopic(groupId, topicId, fixed = editTopicFixed)
+                            }
+                            if (closedChanged) {
+                                app.apiClient.boardCloseTopic(groupId, topicId, closed = editTopicClosed)
+                            }
                             displayTitle = newTitle
                             Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
                             showEditTopicDialog = false
@@ -802,9 +859,51 @@ fun BoardTopicScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showEditTopicDialog = false }) {
-                    Text("Отмена")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // EDIT-TOPIC-CHECKBOXES: кнопка «Удалить» (error color) рядом с
+                    // «Отмена». Открывает отдельный AlertDialog подтверждения.
+                    TextButton(onClick = { deleteTopicConfirm = true }) {
+                        Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(onClick = { showEditTopicDialog = false }) {
+                        Text("Отмена")
+                    }
                 }
+            },
+        )
+    }
+
+    // EDIT-TOPIC-CHECKBOXES: подтверждение удаления темы (board.deleteTopic).
+    // Открывается кнопкой «Удалить» в AlertDialog редактирования темы. После
+    // успеха — onBack() для возврата к списку тем (тема больше не существует).
+    if (deleteTopicConfirm) {
+        AlertDialog(
+            onDismissRequest = { deleteTopicConfirm = false },
+            title = { Text("Удалить тему?") },
+            text = { Text("Тема и все комментарии будут удалены без восстановления.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteTopicConfirm = false
+                    showEditTopicDialog = false
+                    scope.launch {
+                        val ok = app.apiClient.boardDeleteTopic(groupId, topicId)
+                        if (ok) {
+                            Toast.makeText(ctx, "Тема удалена", Toast.LENGTH_SHORT).show()
+                            onBack()
+                        } else {
+                            Toast.makeText(
+                                ctx,
+                                "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTopicConfirm = false }) { Text("Отмена") }
             },
         )
     }

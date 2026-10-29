@@ -291,13 +291,25 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * Шаг 4 (#32d): Экран темы обсуждения сообщества.
      * Принимает groupId/topicId как path-параметры, title — через query
      * (для TopAppBar). Загружает board.getComments с пагинацией.
+     *
+     * EDIT-TOPIC-CHECKBOXES: isFixed/isClosed передаются через query-параметры,
+     * чтобы AlertDialog «Редактирование темы» мог инициализировать checkbox'ы
+     * «Закрепить тему» / «Закрыть тему» текущим состоянием темы
+     * (board.getTopics уже вернул is_fixed/is_closed — не нужен доп. запрос).
      */
-    object BoardTopic : Screen("board_topic/{groupId}/{topicId}?title={title}", "Обсуждение", null) {
+    object BoardTopic : Screen(
+        "board_topic/{groupId}/{topicId}?title={title}&isFixed={isFixed}&isClosed={isClosed}",
+        "Обсуждение", null,
+    ) {
         const val ARG_GROUP_ID = "groupId"
         const val ARG_TOPIC_ID = "topicId"
         const val ARG_TITLE = "title"
-        fun buildRoute(groupId: Long, topicId: Long, title: String): String =
-            "board_topic/$groupId/$topicId?title=${android.net.Uri.encode(title)}"
+        const val ARG_IS_FIXED = "isFixed"
+        const val ARG_IS_CLOSED = "isClosed"
+        fun buildRoute(groupId: Long, topicId: Long, title: String, isFixed: Int = 0, isClosed: Int = 0): String =
+            "board_topic/$groupId/$topicId" +
+            "?title=${android.net.Uri.encode(title)}" +
+            "&isFixed=$isFixed&isClosed=$isClosed"
     }
 
     /**
