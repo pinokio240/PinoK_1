@@ -1,7 +1,12 @@
 package re.pinok.ui.screens.community
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,13 +34,13 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,6 +84,7 @@ import re.pinok.data.model.BoardComment
 import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ScrollToTopFab
+import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.theme.BoardAccent
 import re.pinok.util.AppLog
 import re.pinok.util.buildBoardCommentText
@@ -164,6 +170,32 @@ fun BoardTopicScreen(
     // Composer state.
     var commentText by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
+
+    // COMPOSER-REUSE: attach/emoji/upload state, заимствован из PostDetailScreen composer.
+    // (attachmentString опущен — board-композер не имеет AttachmentPickerSheet-флоу;
+    //  photo/file идут напрямую через pendingPhotoUris/pendingFileUris → upload → CSV.)
+    var showAttachMenu by remember { mutableStateOf(false) }
+    var showEmojiPanel by remember { mutableStateOf(false) }
+    var uploading by remember { mutableStateOf(false) }
+    var pendingPhotoUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingFileUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    // COMPOSER-REUSE: multi-pickers (PickMultipleVisualMedia/OpenMultipleDocument),
+    // как PostDetailScreen L242+. До 10 фото / 10 файлов за раз.
+    val commentMultiPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            pendingPhotoUris = (pendingPhotoUris + uris).take(10)
+        }
+    }
+    val commentMultiFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            pendingFileUris = (pendingFileUris + uris).take(10)
+        }
+    }
 
     // Диалог редактирования комментария (3-dot → Редактировать).
     var editingComment by remember { mutableStateOf<BoardComment?>(null) }
@@ -583,35 +615,36 @@ fun BoardTopicScreen(
                             ComposerRow(
                                 text = commentText,
                                 onTextChange = { commentText = it },
-                                onSend = {
-                                    if (commentText.isBlank() || sending) return@ComposerRow
-                                    sending = true
-                                    val text = commentText
-                                    scope.launch {
-                                        try {
-                                            // boardCreateComment(ownerId, topicId, message): ownerId для
-                                            // группы = -groupId (отрицательный). Метод внутри берёт abs.
-                                            val ok = app.apiClient.boardCreateComment(-groupId, topicId, text)
-                                            if (ok) {
-                                                commentText = ""
-                                                reloadTrigger++  // перезагрузить комментарии.
-                                                currentPage = 1
-                                                offset = 0
-                                            }
-                                            Toast.makeText(
-                                                ctx,
-                                                if (ok) "Отправлено" else "Не удалось",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        } catch (e: Exception) {
-                                            Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        } finally {
-                                            sending = false
-                                        }
-                                    }
-                                },
                                 sending = sending,
+                                onSendingChange = { sending = it },
+                                uploading = uploading,
+                                onUploadingChange = { uploading = it },
                                 myPhoto = myPhoto,
+                                showAttachMenu = showAttachMenu,
+                                onShowAttachMenuChange = { showAttachMenu = it },
+                                showEmojiPanel = showEmojiPanel,
+                                onShowEmojiPanelChange = { showEmojiPanel = it },
+                                pendingPhotoUris = pendingPhotoUris,
+                                onPendingPhotoUrisChange = { pendingPhotoUris = it },
+                                pendingFileUris = pendingFileUris,
+                                onPendingFileUrisChange = { pendingFileUris = it },
+                                onLaunchPhotoPicker = {
+                                    commentMultiPhotoLauncher.launch(
+                                        PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                        ),
+                                    )
+                                },
+                                onLaunchFilePicker = {
+                                    commentMultiFileLauncher.launch(arrayOf("*/*"))
+                                },
+                                groupId = groupId,
+                                topicId = topicId,
+                                onSentSuccess = {
+                                    reloadTrigger++  // перезагрузить комментарии.
+                                    currentPage = 1
+                                    offset = 0
+                                },
                             )
                         }
                     }
@@ -1071,140 +1104,360 @@ private fun CommentAttachments(attachments: List<Attachment>?) {
 }
 
 /**
- * #B-FIX-2: Composer в потоке (НЕ fixed bottomBar) — последний item LazyColumn.
- * По снапшоту VK web: avatar 36dp текущего юзера + OutlinedTextField + attach + emoji + send.
+ * #COMPOSER-REUSE: Composer обсуждений — паттерн заимствован из PostDetailScreen
+ * composer (L1040-1180). Переиспользует UnifiedAttachMenu (public компонент) +
+ * uploadPhotoForComment / uploadDocForComment → attachments CSV → boardCreateComment.
+ *
+ * Отличия от PostDetailScreen:
+ *  - НЕ использует PendingPhoto/PendingCommentFile (они private в PostDetail) —
+ *    простые List<Uri>, temp-файлы создаются на лету при отправке (как PostDetail L1153).
+ *  - boardCreateComment принимает attachments напрямую (commit 5857e0a).
+ *  - showGift=false, showPoll=false (board не поддерживает: gifts.send — только ЛС,
+ *    polls.add — только посты).
  *
  * @param myPhoto URL аватара текущего юзера (photo_100 из users.get); null → fallback Person icon.
  * @param sending флаг отправки (показывает CircularProgressIndicator вместо Send).
+ * @param uploading флаг загрузки вложений (показывает CircularProgressIndicator на attach).
+ * @param onSentSuccess вызывается после успешной отправки (перезагрузка + page=1 + offset=0).
  */
 @Composable
 private fun ComposerRow(
     text: String,
     onTextChange: (String) -> Unit,
-    onSend: () -> Unit,
     sending: Boolean,
+    onSendingChange: (Boolean) -> Unit,
+    uploading: Boolean,
+    onUploadingChange: (Boolean) -> Unit,
     myPhoto: String?,
+    showAttachMenu: Boolean,
+    onShowAttachMenuChange: (Boolean) -> Unit,
+    showEmojiPanel: Boolean,
+    onShowEmojiPanelChange: (Boolean) -> Unit,
+    pendingPhotoUris: List<Uri>,
+    onPendingPhotoUrisChange: (List<Uri>) -> Unit,
+    pendingFileUris: List<Uri>,
+    onPendingFileUrisChange: (List<Uri>) -> Unit,
+    onLaunchPhotoPicker: () -> Unit,
+    onLaunchFilePicker: () -> Unit,
+    groupId: Long,
+    topicId: Long,
+    onSentSuccess: () -> Unit,
 ) {
-    Row(
+    val app = SovaApp.get()
+    val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
             .imePadding()
-            .navigationBarsPadding()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .navigationBarsPadding(),
     ) {
-        // Avatar 36dp текущего юзера (comment-author-avatar в VK web).
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (myPhoto != null) {
-                AsyncImage(
-                    model = myPhoto,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Icon(
-                    Icons.Outlined.Person,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
-        // VK-STYLING-2 (AUDIT #17, #18): borderless поле — как contenteditable div в
-        // VK web (border:0, NO outline). Серый фон surfaceVariant, скругление 8dp.
-        // FIX-COMPILE: colors() должен вызываться в @Composable scope (читает MaterialTheme),
-        // contentPadding НЕ параметр OutlinedTextField (убран). shape передаём отдельно.
-        val containerColor = MaterialTheme.colorScheme.surfaceVariant
-        OutlinedTextField(
-            value = text,
-            onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
-            placeholder = {
-                Text("Написать комментарий…", color = MaterialTheme.colorScheme.outline)
-            },
-            maxLines = 4,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color.Transparent,
-                unfocusedBorderColor = Color.Transparent,
-                focusedContainerColor = containerColor,
-                unfocusedContainerColor = containerColor,
-            ),
-            shape = RoundedCornerShape(8.dp),
-        )
-        Spacer(Modifier.width(4.dp))
-        // B-FIX-8: attach-dropdown (Фотография/Документ), как show-attach-dropdown
-        // в снапшоте VK web (comment_upload_photo camera_outline_20 + comment_attach_doc).
-        var attachMenuExpanded by remember { mutableStateOf(false) }
-        Box {
-            IconButton(onClick = { attachMenuExpanded = true }) {
-                // VK-STYLING-2 (AUDIT #19): attach_20 (20dp, НЕ default 24).
-                Icon(
-                    Icons.Outlined.AttachFile,
-                    contentDescription = "Прикрепить",
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            DropdownMenu(
-                expanded = attachMenuExpanded,
-                onDismissRequest = { attachMenuExpanded = false },
+        // COMPOSER-REUSE: photos bar — превью выбранных фото (как PostDetailScreen CommentPhotosBar).
+        if (pendingPhotoUris.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                DropdownMenuItem(
-                    text = { Text("Фотография") },
-                    leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) },
-                    onClick = { attachMenuExpanded = false /* TODO: photo upload */ },
-                )
-                DropdownMenuItem(
-                    text = { Text("Документ") },
-                    leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
-                    onClick = { attachMenuExpanded = false /* TODO: doc upload */ },
-                )
+                pendingPhotoUris.forEachIndexed { idx, uri ->
+                    Box(
+                        modifier = Modifier
+                            .size(60.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                    ) {
+                        AsyncImage(
+                            model = uri,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                        IconButton(
+                            onClick = {
+                                onPendingPhotoUrisChange(
+                                    pendingPhotoUris.toMutableList().also { it.removeAt(idx) }
+                                )
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(20.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "Удалить",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
             }
         }
-        // VK-STYLING-FIX: camera (comment_upload_photo) — отдельная кнопка в ряду
-        // composer, как в VK web (attach + camera + emoji + send, 4 кнопки).
-        IconButton(onClick = { /* TODO: photo upload */ }) {
-            // VK-STYLING-2 (AUDIT #19): camera_outline_20 (20dp, НЕ default 24).
-            Icon(
-                Icons.Outlined.PhotoCamera,
-                contentDescription = "Фотография",
-                modifier = Modifier.size(20.dp),
-            )
+        // COMPOSER-REUSE: files bar — превью выбранных файлов (имя + иконка, клик = удалить).
+        if (pendingFileUris.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                pendingFileUris.forEachIndexed { idx, uri ->
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                onPendingFileUrisChange(
+                                    pendingFileUris.toMutableList().also { it.removeAt(idx) }
+                                )
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Description,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = uri.lastPathSegment ?: "Файл",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
         }
-        // Emoji (emoji-smile / smile_outline_20 в VK web).
-        IconButton(onClick = { /* TODO: emoji */ }) {
-            // VK-STYLING-2 (AUDIT #19): smile_outline_20 (20dp, НЕ default 24).
-            Icon(
-                Icons.Outlined.EmojiEmotions,
-                contentDescription = "Эмодзи",
-                modifier = Modifier.size(20.dp),
-            )
+        // COMPOSER-REUSE: emoji panel — упрощённая сетка популярных эмодзи
+        // (PostDetailScreen EmojiGridPanel здесь избыточен — board-композер компактнее).
+        if (showEmojiPanel) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf("😀", "😂", "❤️", "👍", "🔥", "🎉", "😍", "😎").forEach { emoji ->
+                    Text(
+                        text = emoji,
+                        fontSize = 24.sp,
+                        modifier = Modifier.clickable { onTextChange(text + emoji) },
+                    )
+                }
+            }
         }
-        // VK-STYLING-FIX: send-comment — только иконка send_24 (как в VK web),
-        // БЕЗ текста «Сохранить». B-FIX-8 ошибочно добавил Button с текстом —
-        // нарушало стилистику VK (в снапшоте только иконка-стрелка send_24).
-        // disabled до ввода (как VK web: <button disabled data-testid="send-comment">).
-        IconButton(
-            onClick = onSend,
-            enabled = text.isNotBlank() && !sending,
+        // Composer row (avatar + input + attach + emoji + send), как PostDetailScreen L1040.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (sending) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            } else {
-                Icon(
-                    Icons.AutoMirrored.Outlined.Send,
-                    contentDescription = "Отправить",
-                    // VK-STYLING-2 (AUDIT #21, #22): send-comment — accent #447bba
-                    // (НЕ primary #0077FF), disabled — icon_tertiary #aeb7c2.
-                    tint = if (text.isNotBlank()) BoardAccent
-                           else Color(0xFFAEB7C2),
+            // Avatar 36dp текущего юзера (comment-author-avatar в VK web).
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (myPhoto != null) {
+                    AsyncImage(
+                        model = myPhoto,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            // VK-STYLING-2 (AUDIT #17, #18): borderless поле — как contenteditable div в
+            // VK web (border:0, NO outline). Серый фон surfaceVariant, скругление 8dp.
+            val containerColor = MaterialTheme.colorScheme.surfaceVariant
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                modifier = Modifier.weight(1f),
+                placeholder = {
+                    Text("Написать комментарий…", color = MaterialTheme.colorScheme.outline)
+                },
+                maxLines = 4,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = containerColor,
+                    unfocusedContainerColor = containerColor,
+                ),
+                shape = RoundedCornerShape(8.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            // COMPOSER-REUSE: UnifiedAttachMenu (переиспользуемый public компонент, НЕ дублируем).
+            Box {
+                IconButton(
+                    onClick = { onShowAttachMenuChange(true) },
+                    enabled = !sending && !uploading,
+                ) {
+                    if (uploading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        // VK-STYLING-2 (AUDIT #19): attach_20 (20dp, НЕ default 24).
+                        Icon(
+                            Icons.Outlined.AttachFile,
+                            contentDescription = "Прикрепить",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                UnifiedAttachMenu(
+                    expanded = showAttachMenu,
+                    onDismissRequest = { onShowAttachMenuChange(false) },
+                    onPhoto = { onLaunchPhotoPicker() },
+                    onCamera = { /* TODO: camera (TakePicture + FileProvider) */ },
+                    onVideo = { /* TODO: video picker (AttachmentPickerSheet) */ },
+                    onAudio = { /* TODO: audio picker (audioGet) */ },
+                    onFile = { onLaunchFilePicker() },
+                    // Подарки/опросы недоступны в board (VK API: gifts.send — только ЛС,
+                    // polls.add — только посты).
+                    showGift = false,
+                    showPoll = false,
                 )
+            }
+            // Emoji toggle (smile_outline_20 в VK web).
+            IconButton(onClick = { onShowEmojiPanelChange(!showEmojiPanel) }) {
+                // VK-STYLING-2 (AUDIT #19): smile_outline_20 (20dp, НЕ default 24).
+                Icon(
+                    Icons.Outlined.EmojiEmotions,
+                    contentDescription = "Эмодзи",
+                    modifier = Modifier.size(20.dp),
+                    tint = if (showEmojiPanel) BoardAccent
+                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Send (send_24 в VK web, только иконка, БЕЗ текста «Сохранить»).
+            // disabled до ввода (как VK web: <button disabled data-testid="send-comment">).
+            IconButton(
+                onClick = {
+                    val textToSend = text.trim()
+                    val hasContent = textToSend.isNotBlank() ||
+                        pendingPhotoUris.isNotEmpty() || pendingFileUris.isNotEmpty()
+                    if (!hasContent || sending || uploading) return@IconButton
+                    // Снапшотим списки ДО очистки (оптимистичный UX, как PostDetailScreen).
+                    val photosCopy = pendingPhotoUris.toList()
+                    val filesCopy = pendingFileUris.toList()
+                    onTextChange("")
+                    onPendingPhotoUrisChange(emptyList())
+                    onPendingFileUrisChange(emptyList())
+                    onShowEmojiPanelChange(false)
+                    onSendingChange(true)
+                    scope.launch {
+                        try {
+                            // Upload photos → "photo{ownerId}_{id}" (uploadPhotoForComment,
+                            // wall-photo pipeline: getWallUploadServer → upload → saveWallPhoto).
+                            val photoAttachments = mutableListOf<String>()
+                            if (photosCopy.isNotEmpty()) {
+                                onUploadingChange(true)
+                                for (uri in photosCopy) {
+                                    val inFile = kotlin.io.path.createTempFile(
+                                        prefix = "board_photo_",
+                                        suffix = ".jpg",
+                                        directory = ctx.cacheDir.toPath(),
+                                    ).toFile()
+                                    try {
+                                        ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                                            inFile.outputStream().use { out -> ins.copyTo(out) }
+                                        } ?: continue
+                                        val att = app.apiClient.uploadPhotoForComment(inFile, "image/*")
+                                        if (att != null) photoAttachments += att
+                                    } finally {
+                                        inFile.delete()
+                                    }
+                                }
+                                onUploadingChange(false)
+                            }
+                            // Upload files → "doc{ownerId}_{id}" (uploadDocForComment,
+                            // docs.getWallUploadServer → upload).
+                            val fileAttachments = mutableListOf<String>()
+                            if (filesCopy.isNotEmpty()) {
+                                onUploadingChange(true)
+                                for (uri in filesCopy) {
+                                    val inFile = kotlin.io.path.createTempFile(
+                                        prefix = "board_doc_",
+                                        suffix = ".bin",
+                                        directory = ctx.cacheDir.toPath(),
+                                    ).toFile()
+                                    try {
+                                        ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                                            inFile.outputStream().use { out -> ins.copyTo(out) }
+                                        } ?: continue
+                                        val att = app.apiClient.uploadDocForComment(inFile)
+                                        if (att != null) fileAttachments += att
+                                    } finally {
+                                        inFile.delete()
+                                    }
+                                }
+                                onUploadingChange(false)
+                            }
+                            // CSV: photo{ownerId}_{id},doc{ownerId}_{id},…
+                            val allAttachments = (photoAttachments + fileAttachments)
+                                .joinToString(",")
+                                .ifBlank { null }
+                            // boardCreateComment: ownerId для группы = -groupId (метод берёт abs).
+                            val ok = app.apiClient.boardCreateComment(
+                                ownerId = -groupId,
+                                topicId = topicId,
+                                message = textToSend,
+                                attachments = allAttachments,
+                            )
+                            if (ok) {
+                                onSentSuccess()
+                                Toast.makeText(ctx, "Отправлено", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(
+                                    ctx,
+                                    "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                        } finally {
+                            onSendingChange(false)
+                        }
+                    }
+                },
+                enabled = (text.isNotBlank() || pendingPhotoUris.isNotEmpty() ||
+                    pendingFileUris.isNotEmpty()) && !sending && !uploading,
+            ) {
+                if (sending) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.Send,
+                        contentDescription = "Отправить",
+                        // VK-STYLING-2 (AUDIT #21, #22): send-comment — accent #447bba
+                        // (НЕ primary #0077FF), disabled — icon_tertiary #aeb7c2.
+                        tint = if (text.isNotBlank() || pendingPhotoUris.isNotEmpty() ||
+                                       pendingFileUris.isNotEmpty())
+                               BoardAccent else Color(0xFFAEB7C2),
+                    )
+                }
             }
         }
     }
