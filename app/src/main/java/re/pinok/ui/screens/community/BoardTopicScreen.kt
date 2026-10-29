@@ -837,14 +837,27 @@ fun BoardTopicScreen(
                         if (ok) {
                             // Если checkbox изменился — вызываем fix/close (3-й и 4-й
                             // запросы композитного VK web save_topic_info).
+                            // REAL-CHECK: проверяем результат каждого вызова,
+                            // НЕ fire-and-forget. Если VK отклонит (err=15/7) —
+                            // toast с ошибкой, чтобы пользователь знал что не сработало.
+                            var fixOk = true
+                            var closeOk = true
                             if (fixedChanged) {
-                                app.apiClient.boardFixTopic(groupId, topicId, fixed = editTopicFixed)
+                                fixOk = app.apiClient.boardFixTopic(groupId, topicId, fixed = editTopicFixed)
+                                if (!fixOk) {
+                                    Toast.makeText(ctx, "Не удалось закрепить: ${app.apiClient.lastApiError ?: "нет прав"}", Toast.LENGTH_SHORT).show()
+                                }
                             }
                             if (closedChanged) {
-                                app.apiClient.boardCloseTopic(groupId, topicId, closed = editTopicClosed)
+                                closeOk = app.apiClient.boardCloseTopic(groupId, topicId, closed = editTopicClosed)
+                                if (!closeOk) {
+                                    Toast.makeText(ctx, "Не удалось закрыть: ${app.apiClient.lastApiError ?: "нет прав"}", Toast.LENGTH_SHORT).show()
+                                }
                             }
                             displayTitle = newTitle
-                            Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                            if (fixOk && closeOk) {
+                                Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                            }
                             showEditTopicDialog = false
                         } else {
                             Toast.makeText(
