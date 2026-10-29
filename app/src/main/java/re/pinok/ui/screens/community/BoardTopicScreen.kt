@@ -1119,6 +1119,9 @@ private fun ComposerRow(
         Spacer(Modifier.width(8.dp))
         // VK-STYLING-2 (AUDIT #17, #18): borderless поле — как contenteditable div в
         // VK web (border:0, NO outline). Серый фон surfaceVariant, скругление 8dp.
+        // FIX-COMPILE: colors() должен вызываться в @Composable scope (читает MaterialTheme),
+        // contentPadding НЕ параметр OutlinedTextField (убран). shape передаём отдельно.
+        val containerColor = MaterialTheme.colorScheme.surfaceVariant
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
@@ -1130,11 +1133,10 @@ private fun ComposerRow(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Color.Transparent,
                 unfocusedBorderColor = Color.Transparent,
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                focusedContainerColor = containerColor,
+                unfocusedContainerColor = containerColor,
             ),
             shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         )
         Spacer(Modifier.width(4.dp))
         // B-FIX-8: attach-dropdown (Фотография/Документ), как show-attach-dropdown
