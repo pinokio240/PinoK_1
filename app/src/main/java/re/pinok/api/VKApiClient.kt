@@ -19133,23 +19133,34 @@ class VKApiClient(
                 val entity = entityEl.asJsonObject
                 parentType = entity.get("type")?.asString ?: ""
                 parentOwnerId = entity.get("owner_id")?.asLong ?: 0L
-                // post_id / photo_id / video_id / topic_id / id — разные имена для разных типов
+                // FIX-NOTIF §2: extraction entity.id (= comment_id для comment-сущности)
+                // ВЫНЕСЕН ДО цепочки parentItemId и сохраняется отдельно. Раньше fallback-
+                // цепочка parentItemId = post_id?:photo_id?:video_id?:topic_id?:entity.id
+                // при отсутствии post_id у comment-сущности клала comment_id в parentItemId
+                // → OpenPost(owner, comment_id, comment_id) открывал несуществующий пост
+                // wall{owner}_{comment_id}?reply={comment_id}. Теперь parentItemId БЕЗ
+                // entity.id (= 0L при отсутствии post_id → fallbackDeepLink безопасно
+                // открывает Notifications), а parentCommentId заполняется ВСЕГДА
+                // (= commentId) — навигация скроллит к комментарию через parentCommentId.
+                val commentId = entity.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                // post_id / photo_id / video_id / topic_id — разные имена для разных типов.
+                // БЕЗ entity.id в конце: не падаем в comment_id, когда VK не прислал post_id.
                 parentItemId = entity.get("post_id")?.asLong
                     ?: entity.get("photo_id")?.asLong
                     ?: entity.get("video_id")?.asLong
                     ?: entity.get("topic_id")?.asLong
-                    ?: entity.get("id")?.asLong
                     ?: 0L
                 parentText = entity.get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
                 // §42.4 #PUSH-DEEPLINK: entity.url — канонический VK permalink
                 // (например «https://vk.com/wall-123_456?reply=789»). Надёжнее
                 // чем type+post_id, т.к. однозначно кодирует comment_id (?reply=).
                 parentUrl = entity.get("url")?.takeIf { !it.isJsonNull }?.asString
-                // §42.4 #PUSH-DEEPLINK: для comment-сущности сохраняем id
-                // комментария — к нему скроллим в PostDetailScreen.
-                if (parentType.equals("comment", ignoreCase = true)) {
-                    parentCommentId = entity.get("id")?.asLong ?: 0L
-                }
+                // §42.4 #PUSH-DEEPLINK: id комментария — к нему скроллим в PostDetailScreen.
+                // FIX-NOTIF §2: заполняем parentCommentId = commentId ВСЕГДА (раньше
+                // только при parentType=="comment"). Для НЕ-comment-сущностей VK шлёт
+                // post_id/photo_id/video_id/topic_id, но не id → commentId=0L → безопасно.
+                // Для comment-сущностей commentId = entity.id = comment_id → корректный скролл.
+                parentCommentId = commentId
             }
             // action.type = "entity_show" — это тип ДЕЙСТВИЯ (что будет при клике),
             // не тип уведомления. Для actions кнопок не используем — в redesign
@@ -19669,7 +19680,12 @@ class VKApiClient(
             val t = actionText.lowercase()
             val byVerb = when {
                 t.contains("ответил") -> "reply_comment"
-                t.contains("оценил") || t.contains("реакцию") -> "like"
+                // FIX-NOTIF §1: глагол «оценил» возвращал generic "like" — терялась
+                // специфика комментария. Если parentType=="comment" → "like_comment"
+                // (своя иконка в NotificationsScreen.getTypeIcon + своя навигация
+                // в VkUrlDeepLinker.fallbackDeepLink — OpenPost с parentCommentId).
+                t.contains("оценил") || t.contains("реакцию") ->
+                    if (parentType.equals("comment", ignoreCase = true)) "like_comment" else "like"
                 t.contains("прокомментировал") || t.contains("комментарий") -> "comment"
                 t.contains("упомянул") -> "mention"
                 t.contains("поделил") || t.contains("репост") -> "copy"
