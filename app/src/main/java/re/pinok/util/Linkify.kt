@@ -64,20 +64,37 @@ private data class LinkMatch(
     val start: Int,
     val end: Int,        // эксклюзивный (как range.last+1), без замыкающей пунктуации
     val display: String,  // что показать юзеру
-    val url: String,      // куда вести
+    val url: String,      // куда вести (пусто для mention'ов — см. mentionId)
+    val mentionId: Long? = null,  // != null → это VK-упоминание [id|Имя]/[club|Имя] (не URL)
 )
 
 /**
- * Превращает текст с VK inline-ссылками и обычными URL в [AnnotatedString]
- * с кликабельными [LinkAnnotation.Clickable]. Клик вызывает [onUrlClick].
+ * Превращает текст с VK inline-ссылками, упоминаниями и обычными URL в
+ * [AnnotatedString] с кликабельными [LinkAnnotation.Clickable].
  *
- * @param linkColor цвет ссылок (на исходящем bubble — onPrimary, на входящем — primary)
- * @param onUrlClick обработчик клика (внутренний/внешний браузер по настройке)
+ * Парсит три вида токенов:
+ *  1. VK inline-ссылки `[#alias|display|url]` / `[#display|url]` → клик → [onUrlClick].
+ *  2. VK упоминания `[id123|Имя]` / `[club456|Имя]` / `[public789|Имя]` / `[123|Имя]`
+ *     → клик → [onMentionClick] (если задан) ИЛИ [onUrlClick] с canonical
+ *     `https://vk.com/id…` / `https://vk.com/club…` (→ openUrlExternal →
+ *     INTERNAL-LINK-ROUTING → профиль юзера/сообщества).
+ *  3. Обычные URL `http(s)://…` / `www.…` → клик → [onUrlClick].
+ *
+ * Упоминания рендерятся БЕЗ подчёркивания (только цвет [linkColor], как VK web),
+ * inline-ссылки и URL — с подчёркиванием. Перекрытия (inline-токен/упоминание может
+ * содержать URL внутри display) разрешаются в пользу первого по позиции токена.
+ *
+ * @param linkColor       цвет всех кликабельных span'ов (ссылок и упоминаний)
+ * @param onUrlClick      обработчик клика по ссылке/URL (внутренний/внешний браузер)
+ * @param onMentionClick  опц. обработчик клика по упоминанию (id>0 — юзер, id<0 —
+ *                        сообщество). Если null — упоминание кликается через
+ *                        [onUrlClick] с canonical vk.com URL (→ профиль).
  */
 fun linkifyVkText(
     text: String,
     linkColor: Color,
     onUrlClick: (String) -> Unit,
+    onMentionClick: ((Long) -> Unit)? = null,
 ): AnnotatedString = buildAnnotatedString {
     val matches = mutableListOf<LinkMatch>()
 
@@ -94,7 +111,26 @@ fun linkifyVkText(
         )
     }
 
-    // 2. Обычные URL (http(s)://, www.) — с отрезанием замыкающей пунктуации
+    // 2. VK упоминания [id123|Имя] / [club456|Имя] / [public789|Имя] / [123|Имя]
+    //    (B-FIX-7 / AUDIT #26 / FIX-A). club|public → отрицательный id (сообщество),
+    //    иначе — пользователь. display = имя (group 3); url пустой — клик идёт через
+    //    mentionId (onMentionClick либо onUrlClick с canonical vk.com URL).
+    for (m in VK_MENTION_REGEX.findAll(text)) {
+        val prefix = m.groupValues[1]
+        val rawId = m.groupValues[2].toLongOrNull() ?: 0L
+        val name = m.groupValues[3]
+        if (name.isBlank() || rawId == 0L) continue
+        val entityId = if (prefix == "club" || prefix == "public") -rawId else rawId
+        matches += LinkMatch(
+            start = m.range.first,
+            end = m.range.last + 1,
+            display = name,
+            url = "",
+            mentionId = entityId,
+        )
+    }
+
+    // 3. Обычные URL (http(s)://, www.) — с отрезанием замыкающей пунктуации
     for (m in PLAIN_URL_REGEX.findAll(text)) {
         var url = m.value
         var end = m.range.last + 1
@@ -113,7 +149,7 @@ fun linkifyVkText(
         )
     }
 
-    // 3. Сортируем по позиции и отбрасываем перекрытия (inline-токен может содержать
+    // 4. Сортируем по позиции и отбрасываем перекрытия (inline-токен/упоминание может содержать
     //    URL внутри display — тогда优先итет у токена, т.к. он добавлен первым и start меньше
     //    при равенстве start). Простой approach: отсортировать по start, затем skip'ать
     //    match'и чей start < последний добавленный end.
@@ -127,21 +163,34 @@ fun linkifyVkText(
         }
     }
 
-    // 4. Сборка AnnotatedString: обычный текст между ссылками + addLink + append display.
+    // 5. Сборка AnnotatedString: обычный текст между ссылками + addLink + append display.
+    //    Упоминания — БЕЗ подчёркивания (как VK web), inline-ссылки/URL — с подчёркиванием.
     var cursor = 0
     for ((idx, m) in accepted.withIndex()) {
         if (m.start > cursor) append(text.substring(cursor, m.start))
         val tag = "vklink_$idx"
+        val isMention = m.mentionId != null
+        val style = if (isMention) {
+            SpanStyle(color = linkColor)
+        } else {
+            SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+        }
         addLink(
             LinkAnnotation.Clickable(
                 tag = tag,
-                styles = TextLinkStyles(
-                    style = SpanStyle(
-                        color = linkColor,
-                        textDecoration = TextDecoration.Underline,
-                    ),
-                ),
-                linkInteractionListener = LinkInteractionListener { onUrlClick(m.url) },
+                styles = TextLinkStyles(style = style),
+                linkInteractionListener = LinkInteractionListener {
+                    val mid = m.mentionId
+                    if (mid != null) {
+                        // Упоминание: onMentionClick если задан, иначе onUrlClick с
+                        // canonical vk.com URL (→ openUrlExternal → INTERNAL-LINK-ROUTING
+                        // → профиль юзера/сообщества).
+                        val handler = onMentionClick
+                        if (handler != null) handler(mid) else onUrlClick(vkProfileUrl(mid))
+                    } else {
+                        onUrlClick(m.url)
+                    }
+                },
             ),
             start = m.start,
             end = m.end,
@@ -151,6 +200,16 @@ fun linkifyVkText(
     }
     if (cursor < text.length) append(text.substring(cursor))
 }
+
+/**
+ * FIX-A: canonical VK profile URL для mention-fallback (когда [linkifyVkText]
+ * вызвана БЕЗ onMentionClick). id>0 → `https://vk.com/id…` (пользователь),
+ * id<0 → `https://vk.com/club…` (сообщество). URL проходит через openUrlExternal
+ * → isVkUrl → openVkUrlInternal → VkUrlDeepLinker.deepLinkFromUrl → OpenUser/OpenCommunity.
+ */
+private fun vkProfileUrl(entityId: Long): String =
+    if (entityId > 0) "https://vk.com/id$entityId"
+    else "https://vk.com/club${-entityId}"
 
 // ─── Board (обсуждения): упоминания [id|Имя] — B-FIX-7 / AUDIT #26 ───────────
 
@@ -166,25 +225,24 @@ fun linkifyVkText(
  *
  * ВНИМАНИЕ: НЕ путать с inline-ссылками `[#alias|display|url]` (см.
  * [VK_INLINE_LINK_REGEX]) — это другой формат, у него `#`-префикс и 3 части.
- * Mention'ы указывают на юзеров/сообщества, а не на URL — поэтому обрабатываются
- * отдельным regex'ом и отдельным callback'ом [onUserClick].
+ * Mention'ы указывают на юзеров/сообщества, а не на URL — поэтому парсятся
+ * отдельным regex'ом, но в рамках единого [linkifyVkText] (FIX-A): клик →
+ * [linkifyVkText]'s onMentionClick (или onUrlClick с canonical vk.com URL).
  */
 private val VK_MENTION_REGEX = Regex(
     "\\[(id|club|public)?(\\d+)\\|([^\\]]+)\\]",
 )
 
 /**
- * B-FIX-7 (AUDIT #26): Превращает текст комментария с VK mention'ами
- * `[id123|Иван]` / `[club456|Имя]` в [AnnotatedString] с кликабельными span'ами.
+ * B-FIX-7 (AUDIT #26) / FIX-A: Превращает текст комментария обсуждения с VK
+ * mention'ами `[id123|Иван]` / `[club456|Имя]` в [AnnotatedString] с кликабельными
+ * span'ами. Тонкая обёртка над [linkifyVkText] — логика парсинга упоминаний
+ * унифицирована (раньше дублировалась отдельным циклом здесь).
  *
- * Каждое упоминание рендерится именем (group 3) цветом [mentionColor] (accent),
- * как [LinkAnnotation.Clickable] с [LinkInteractionListener] → [onUserClick]:
+ * Каждое упоминание рендерится именем цветом [mentionColor] (accent, БЕЗ
+ * подчёркивания — как VK web), клик → [onUserClick](entityId):
  *  - `id`/без префикса → положительный id (пользователь)
  *  - `club`/`public`   → отрицательный id (сообщество, как VK API from_id<0)
- *
- * Остальной текст остаётся обычным. Клик по упоминанию вызывает [onUserClick](id).
- * Используется [LinkAnnotation.Clickable] (НЕ deprecated [ClickableText]) —
- * как в [linkifyVkText], рендерится обычным `Text`.
  *
  * @param text         сырой текст комментария (возможно уже обрезанный showmoretext)
  * @param mentionColor цвет упоминаний (BoardAccent #447bba по снапшоту VK web)
@@ -195,35 +253,15 @@ fun buildBoardCommentText(
     text: String,
     mentionColor: Color,
     onUserClick: (Long) -> Unit,
-): AnnotatedString = buildAnnotatedString {
-    var lastEnd = 0
-    for (match in VK_MENTION_REGEX.findAll(text)) {
-        val prefix = match.groupValues[1]
-        val rawId = match.groupValues[2].toLongOrNull() ?: 0L
-        val name = match.groupValues[3]
-        if (name.isBlank() || rawId == 0L) continue
-        // club/public → отрицательный id (сообщество), иначе — пользователь.
-        val entityId = if (prefix == "club" || prefix == "public") -rawId else rawId
-        if (match.range.first > lastEnd) {
-            append(text.substring(lastEnd, match.range.first))
-        }
-        val nameStart = length
-        addLink(
-            LinkAnnotation.Clickable(
-                tag = "user_$entityId",
-                styles = TextLinkStyles(
-                    style = SpanStyle(color = mentionColor),
-                ),
-                linkInteractionListener = LinkInteractionListener { onUserClick(entityId) },
-            ),
-            start = nameStart,
-            end = nameStart + name.length,
-        )
-        append(name)
-        lastEnd = match.range.last + 1
-    }
-    if (lastEnd < text.length) append(text.substring(lastEnd))
-}
+): AnnotatedString = linkifyVkText(
+    text = text,
+    linkColor = mentionColor,
+    // В обсуждениях inline-ссылки [#…|…|…] и обычные URL встречаются редко; если
+    // появились — клик no-op (как было до унификации: buildBoardCommentText парсил
+    // только mention'ы). Упоминания → onUserClick (прямая навигация BoardTopicScreen).
+    onUrlClick = {},
+    onMentionClick = onUserClick,
+)
 
 /**
  * Fix #204: Открывает URL внешним браузером (ACTION_VIEW) с нормализацией.
