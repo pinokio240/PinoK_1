@@ -331,7 +331,7 @@ fun BoardTopicScreen(
                                 )
                                 if (totalCount > 0) {
                                     Text(
-                                        text = "$totalCount " + pluralComments(totalCount),
+                                        text = pluralComments(totalCount),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.outline,
                                     )
@@ -593,14 +593,15 @@ fun BoardTopicScreen(
 /**
  * Склонение «комментарий/комментария/комментариев» по числу (RU plural rules).
  */
-private fun pluralComments(n: Int): String {
+internal fun pluralComments(n: Int): String {
     val mod10 = n % 10
     val mod100 = n % 100
-    return when {
+    val word = when {
         mod10 == 1 && mod100 != 11 -> "комментарий"
         mod10 in 2..4 && mod100 !in 12..14 -> "комментария"
         else -> "комментариев"
     }
+    return "$n $word"
 }
 
 /**
