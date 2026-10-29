@@ -95,6 +95,8 @@ import re.pinok.util.AppLog
 fun VideoPlatformRouter(
     video: Video,
     onBack: () -> Unit,
+    // FIX-B: клик по имени автора комментария видео → UserProfile (из SovaNavHost).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = SovaApp.getOrNull()
@@ -116,7 +118,7 @@ fun VideoPlatformRouter(
         // VideoPlayerScreen сам попытается videoGetById и в случае неудачи покажет
         // понятную ошибку. Флаг externalVideosEnabled на VK/UNKNOWN НЕ влияет.
         VideoPlatform.VK,
-        VideoPlatform.UNKNOWN -> VideoPlayerScreen(video = video, onBack = onBack)
+        VideoPlatform.UNKNOWN -> VideoPlayerScreen(video = video, onBack = onBack, onUserClick = onUserClick)
 
         // FEED-FIX-4 (#349): OK-видео зависит от externalVideosEnabled (default true).
         // При externalEnabled=true: нативный путь (OkVideoRepository → ExoPlayer,
@@ -126,7 +128,7 @@ fun VideoPlatformRouter(
         // CookieManager/токены → побочный эффект с потерей авторизации устранён.
         VideoPlatform.OK -> {
             if (externalEnabled) {
-                VideoPlayerScreen(video = video, onBack = onBack)
+                VideoPlayerScreen(video = video, onBack = onBack, onUserClick = onUserClick)
             } else {
                 AppLog.i(TAG, "OK video #${video.id} blocked (externalVideosEnabled=false) — placeholder")
                 ExternalVideosDisabledPlaceholder(

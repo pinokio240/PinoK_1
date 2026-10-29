@@ -430,6 +430,8 @@ private val VK_SLIDER_BG = Color(0x66FFFFFF) // hsla(0,0%,100%,.4)
 fun VideoPlayerScreen(
     video: Video,
     onBack: () -> Unit,
+    // FIX-B: клик по имени автора комментария → UserProfile (из VideoPlatformRouter/SovaNavHost).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = SovaApp.get()
@@ -3743,6 +3745,8 @@ private fun VideoCommentsSheet(
                                 postOwnerId = video.ownerId,
                                 currentUserId = currentUserId,
                                 onShareComment = { sharingComment = it },
+                                // FIX-B: проброс onUserClick → UserProfile.
+                                onUserClick = onUserClick,
                             )
                             HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = 16.dp),

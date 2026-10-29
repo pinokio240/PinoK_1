@@ -360,6 +360,8 @@ fun ClipShareSheet(
 fun ClipCommentsSheet(
     clip: Video,
     onDismiss: () -> Unit,
+    // FIX-B: клик по имени автора комментария → UserProfile (из SovaNavHost).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -474,6 +476,8 @@ fun ClipCommentsSheet(
                             postOwnerId = clip.ownerId,
                             currentUserId = currentUserId,
                             onShareComment = { sharingComment = it },
+                            // FIX-B: проброс onUserClick → UserProfile.
+                            onUserClick = onUserClick,
                         )
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 16.dp),

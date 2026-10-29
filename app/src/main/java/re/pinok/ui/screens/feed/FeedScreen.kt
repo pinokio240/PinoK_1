@@ -1948,6 +1948,8 @@ fun FeedScreen(
                                     sharingComment.value = c
                                     sharingCommentOwnerId.value = comment.ownerId
                                 },
+                                // FIX-B: проброс onUserClick → UserProfile (Likes-tab).
+                                onUserClick = onUserClick,
                             )
                         }
                     }
@@ -2273,6 +2275,8 @@ fun FeedScreen(
             onDismiss = { commentingPost.value = null },
             onVideoClick = onVideoClickSavePos,
             onPhotoClick = { urls, idx -> photoViewerState.value = urls to idx },
+            // FIX-B: проброс onUserClick → UserProfile (FeedScreen.onUserClick из SovaNavHost).
+            onUserClick = onUserClick,
         )
     }
 
@@ -2988,6 +2992,8 @@ private fun CommentsBottomSheet(
     onDismiss: () -> Unit,
     onVideoClick: (Video) -> Unit = {},
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    // FIX-B: клик по имени автора комментария → UserProfile (из FeedScreen.onUserClick).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val ctx = LocalContext.current
@@ -3225,6 +3231,8 @@ private fun CommentsBottomSheet(
                                 },
                                 currentUserId = currentUserId,
                                 onShareComment = { c -> sharingComment = c },
+                                // FIX-B: проброс onUserClick для имени автора комментария.
+                                onUserClick = onUserClick,
                             )
                         }
                     }

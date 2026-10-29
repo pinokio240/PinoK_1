@@ -88,6 +88,8 @@ private fun toastShort(context: Context, message: String) {
 fun AdminCommentsScreen(
     groupId: Long,
     onBack: () -> Unit,
+    // FIX-B: клик по имени автора комментария → UserProfile (из SovaNavHost).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val context = LocalContext.current
@@ -521,6 +523,8 @@ fun AdminCommentsScreen(
                         onReply = { replyEntry = entry },
                         onBan = { banEntry = entry },
                         onShareComment = { sharingComment = it },
+                        // FIX-B: проброс onUserClick → UserProfile.
+                        onUserClick = onUserClick,
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
                 }
@@ -645,6 +649,8 @@ private fun AdminCommentCard(
     onReply: () -> Unit,
     onBan: () -> Unit,
     onShareComment: (Comment) -> Unit,
+    // FIX-B: клик по имени автора комментария → UserProfile (из AdminCommentsScreen).
+    onUserClick: (Long) -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         // P0.46-unify-comments: основной рендер комментария — общий CommentItem.
@@ -668,6 +674,8 @@ private fun AdminCommentCard(
             onShareComment = onShareComment,
             onEditComment = {},
             onDeleteComment = { onDelete() },
+            // FIX-B: проброс onUserClick → UserProfile.
+            onUserClick = onUserClick,
         )
         // Превью поста-источника (админ-контекст: важно видеть, к какому посту
         // относится комментарий — для модераторских действий).

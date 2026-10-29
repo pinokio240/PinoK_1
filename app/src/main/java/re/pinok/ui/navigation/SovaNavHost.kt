@@ -2233,6 +2233,8 @@ composable(Screen.CallsHistory.route) {
                         re.pinok.ui.screens.clips.ClipCommentsSheet(
                             clip = clip,
                             onDismiss = { commentClip = null },
+                            // FIX-B: клик по имени автора комментария клипа → UserProfile.
+                            onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
                         )
                     }
 
@@ -3080,6 +3082,8 @@ composable(Screen.CallsHistory.route) {
                     AdminCommentsScreen(
                         groupId = commentsGroupId,
                         onBack = { nav.popBackStack() },
+                        // FIX-B: клик по имени автора комментария → UserProfile.
+                        onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
                     )
                 }
                 // ADMIN-EVENTS: «События» сообщества — панель уведомлений.
@@ -3281,6 +3285,8 @@ composable(Screen.CallsHistory.route) {
                         onOpenPlaylist = { ownerId, playlistId, accessKey ->
                             nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
                         },
+                        // FIX-B: клик по имени автора комментария → UserProfile.
+                        onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
                     )
                 }
                 composable(
@@ -3516,6 +3522,8 @@ composable(Screen.CallsHistory.route) {
         VideoPlatformRouter(
             video = video,
             onBack = { VideoHolder.close() },
+            // FIX-B: клик по имени автора комментария видео → UserProfile.
+            onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
         )
     }
     // §42.4 #PUSH-DEEPLINK: PhotoViewer overlay — фото из push-уведомления

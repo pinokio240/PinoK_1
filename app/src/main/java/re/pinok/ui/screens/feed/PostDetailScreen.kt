@@ -149,6 +149,9 @@ fun PostDetailScreen(
     onGroupClick: (Long) -> Unit = {},
     // #PLAYLIST-OPEN-NOT-PLAY: тап по плейлисту-вложению поста → экран плейлиста.
     onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
+    // FIX-B: клик по имени автора комментария → навигация на профиль (UserProfile).
+    // Передаётся из SovaNavHost: nav.navigate(Screen.UserProfile.buildRoute(uid)).
+    onUserClick: (Long) -> Unit = {},
 ) {
     val app = SovaApp.get()
     // #COMMENT-EDIT: текущий userId — чтобы определить «свои» комментарии
@@ -872,6 +875,8 @@ fun PostDetailScreen(
                             onShareComment = { c ->
                                 sharingComment = c
                             },
+                            // FIX-B: проброс onUserClick для имени автора комментария.
+                            onUserClick = onUserClick,
                         )
                     }
 
@@ -1588,6 +1593,9 @@ internal fun CommentItem(
     onDeleteComment: (Comment) -> Unit = {},
     // P0.46-share-comment: поделиться комментарием (wall_reply{ownerId}_{commentId}).
     onShareComment: (Comment) -> Unit = {},
+    // FIX-B: клик по имени автора комментария → навигация на профиль (UserProfile).
+    // Аудит: имя автора было plain Text без .clickable — теперь TextButton.
+    onUserClick: (Long) -> Unit = {},
 ) {
     val author = profiles[comment.fromId]
     val authorName = author?.fullName ?: "Неизвестный"
@@ -1671,11 +1679,19 @@ internal fun CommentItem(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = authorName,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                )
+                // FIX-B: имя автора — кликабельное (TextButton) → onUserClick(fromId) → UserProfile.
+                // Раньше был plain Text без .clickable — нельзя было перейти в профиль автора.
+                TextButton(
+                    onClick = { onUserClick(comment.fromId) },
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text(
+                        text = authorName,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Text(
                     text = commentDateStr,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2008,6 +2024,8 @@ internal fun CommentItem(
                             onEditComment = onEditComment,
                             onDeleteComment = onDeleteComment,
                             onShareComment = onShareComment,
+                            // FIX-B: проброс onUserClick для имени автора ответа.
+                            onUserClick = onUserClick,
                         )
                     }
                     if (isLoadingReplies) {
@@ -2045,6 +2063,8 @@ internal fun ReplyItem(
     onEditComment: (Comment) -> Unit = {},
     onDeleteComment: (Comment) -> Unit = {},
     onShareComment: (Comment) -> Unit = {},
+    // FIX-B: клик по имени автора ответа → onUserClick(fromId) → UserProfile.
+    onUserClick: (Long) -> Unit = {},
 ) {
     // P0.46-share-reply: long-press меню для ответов в ветке.
     val isOwnReply = reply.fromId == currentUserId && currentUserId != 0L
@@ -2096,12 +2116,18 @@ internal fun ReplyItem(
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = authorName,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                // FIX-B: имя автора ответа — кликабельное (TextButton) → onUserClick(reply.fromId).
+                TextButton(
+                    onClick = { onUserClick(reply.fromId) },
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text(
+                        text = authorName,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Spacer(Modifier.width(6.dp))
                 Text(
                     text = dateStr,
