@@ -904,12 +904,24 @@ private fun BoardCommentCard(
                     // 3-dot меню (Действия) — Редактировать / Удалить.
                     // #B-FIX-5: «Ответить» вынесен в отдельную TextButton в meta-row
                     // (по снапшоту VK web: comment-reply НЕ в 3-dot меню).
-                    // B-FIX-8: MoreHoriz + текст «Действия» (как more_horizontal_16 +
-                    // visible «Действия» в снапшоте VK web HTML3; было MoreVert без текста).
+                    // VK-STYLING-SNAPSHOT: comment_action_edit — ОТДЕЛЬНАЯ видимая кнопка
+                    // «Редактировать» (pen_outline_16), как в снапшоте VK web HTML3/тест2.
+                    // Раньше была спрятана в 3-dot меню (расхождение). Теперь рядом с «Действия».
+                    if (comment.canEdit == 1) {
+                        IconButton(onClick = { onEdit(comment) }) {
+                            Icon(
+                                Icons.Outlined.Edit,
+                                contentDescription = "Редактировать",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    // comment_action_more — dropdown «Действия» (more_horizontal_16).
+                    // В снапшоте VK web: только «Удалить» (canDelete) + «Пожаловаться».
+                    // «Редактировать» убрана отсюда — теперь отдельная кнопка выше.
                     Box {
                         IconButton(onClick = { showMenu = true }) {
-                            // VK-STYLING (AUDIT #6/#34): только MoreHoriz 16dp,
-                            // «Действия» — sr-only (contentDescription для a11y, НЕ видимый Text).
                             Icon(
                                 Icons.Outlined.MoreHoriz,
                                 contentDescription = "Действия",
@@ -920,17 +932,6 @@ private fun BoardCommentCard(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
                         ) {
-                            // #B-FIX-5: «Ответить» удалён из 3-dot меню — теперь отдельная
-                            // TextButton в meta-row (как comment-reply в снапшоте VK web).
-                            if (comment.canEdit == 1) {
-                                DropdownMenuItem(
-                                    text = { Text("Редактировать") },
-                                    onClick = {
-                                        showMenu = false
-                                        onEdit(comment)
-                                    },
-                                )
-                            }
                             if (comment.canDelete == 1) {
                                 DropdownMenuItem(
                                     text = { Text("Удалить") },
