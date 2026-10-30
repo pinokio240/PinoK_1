@@ -2148,11 +2148,9 @@ fun FeedScreen(
                     },
                     onEditPost = {
                         // FIX-TODO-2: экран редактирования поста не реализован →
-                        // toast-заглушка (не молчаливый тап). wall.edit работает,
-                        // но отдельный экран редактирования — отдельная задача.
-                        val ctx = LocalContext.current
+                        // toast-заглушка. photoShareContext уже в scope (L1077).
                         android.widget.Toast.makeText(
-                            ctx,
+                            photoShareContext,
                             "Редактирование поста скоро",
                             android.widget.Toast.LENGTH_SHORT,
                         ).show()
