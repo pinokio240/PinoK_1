@@ -3188,8 +3188,12 @@ composable(Screen.CallsHistory.route) {
                         onBack = { nav.popBackStack() },
                         onCreated = { topicId, topicTitle ->
                             // TOPICS-REFRESH: устанавливаем флаг для CommunityScreen.
-                            nav.getBackStackEntry(Screen.Community.route)
-                                .savedStateHandle["topics_need_refresh"] = true
+                            // SAFE-BACKSTACK: getBackStackEntry может упасть IllegalArgumentException
+                            // если Community не в стеке (deep link). try/catch — безопасно.
+                            try {
+                                nav.getBackStackEntry(Screen.Community.route)
+                                    .savedStateHandle["topics_need_refresh"] = true
+                            } catch (_: Exception) { }
                             nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle)) {
                                 popUpTo(Screen.CreateBoardTopic.route) { inclusive = true }
                             }
@@ -3235,8 +3239,12 @@ composable(Screen.CallsHistory.route) {
                         initialClosed = tClosed,
                         onEdited = {
                             // TOPICS-REFRESH: обновить список тем в CommunityScreen.
-                            nav.getBackStackEntry(Screen.Community.route)
-                                .savedStateHandle["topics_need_refresh"] = true
+                            // SAFE-BACKSTACK: getBackStackEntry может упасть если Community
+                            // не в стеке (deep link). try/catch — безопасно.
+                            try {
+                                nav.getBackStackEntry(Screen.Community.route)
+                                    .savedStateHandle["topics_need_refresh"] = true
+                            } catch (_: Exception) { }
                             nav.popBackStack()
                         },
                     )
