@@ -2,6 +2,8 @@
 package re.pinok.ui.screens.community
 
 import android.widget.Toast
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.MusicNote
@@ -42,8 +45,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.io.File
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
+import re.pinok.ui.components.AttachmentPickerSheet
+import re.pinok.ui.components.AttachmentPickerTab
 
 /**
  * B-E (#SCOUT-BOARD-SNAP форма создания темы): экран «Новая тема» обсуждения.
@@ -57,17 +63,19 @@ import re.pinok.SovaApp
  * popUpTo текущего маршрута (inclusive=true) — back из открытой темы не
  * возвращает пользователя обратно к пустой форме.
  *
- * Source API (коммит af0fdb3):
+ * Source API (коммит af0fdb3 + 3a85d79):
  *   suspend fun boardAddTopic(groupId, title, text, fromGroup=0, attachments=null): Long?
  *   — возвращает topic_id (response.topic_id ?: response.id) или null.
- *   FIX-TODO-2: attachments добавлен (паритет с boardCreateComment), но экран
- *   пока передаёт null (upload-flow не реализован).
+ *   attachments — CSV-строка VK-вложений ("photo{oid}_{id},video{oid}_{id}").
  *
- * FIX-TODO-2 (B-FIX-4 resolved): 6 attach-кнопок (device/photo/video/audio/
- * file/poll) и emoji — onClick теперь показывает toast «Прикрепление в
- * разработке» / «Эмодзи скоро», а НЕ молчаливая заглушка. board.addTopic принимает
- * attachments, но для реального attach нужен upload-flow (uploadPhotoForComment →
- * photo{ownerId}_{id}) — отдельная задача; сигнатура уже готова (см. выше).
+ * ATTACH-PATTERN-2: прикрепление вложений (паттерн заимствован из
+ * [PostDetailScreen] composer). Без заглушек:
+ *   • Фото с устройства   → PickVisualMedia(ImageOnly) + uploadPhotoForComment
+ *   • Файл с устройства   → OpenDocument(*) + uploadDocForComment
+ *   • Видео / Аудио / Док из VK → AttachmentPickerSheet → attachment-строка
+ *   • Опрос   → toast «Опросы в разработке» (VK polls.add — сложный flow)
+ *   • Эмодзи  → toast «Эмодзи скоро» (минимум — не молчаливо)
+ * boardAddTopic вызывается с attachments = vkAttachmentString.
  *
  * B-FIX-A (TRACER-2 gap): Switch «От имени сообщества» (from_group).
  * В VK web SPA toggle НЕ рендерится (только в legacy /al_board.php modal
@@ -92,6 +100,105 @@ fun CreateBoardTopicScreen(
     var error by remember { mutableStateOf<String?>(null) }
     // B-FIX-A: from_group state — 1=от имени сообщества, 0=от себя.
     var fromGroup by remember { mutableStateOf(0) }
+
+    // ATTACH-PATTERN-2: state вложений темы (паттерн из PostDetailScreen).
+    // Видео/аудио/фото/док из VK → AttachmentPickerSheet → attachment-строка.
+    // Фото/файл с устройства → лаунчер → uploadPhotoForComment/uploadDocForComment.
+    var showAttachmentPicker by remember { mutableStateOf(false) }
+    var attachmentPickerTab by remember { mutableStateOf(AttachmentPickerTab.Music) }
+    var vkAttachmentString by remember { mutableStateOf<String?>(null) }
+    var vkAttachmentLabel by remember { mutableStateOf<String?>(null) }
+    var uploading by remember { mutableStateOf(false) }
+
+    // Фото с устройства: PickVisualMedia(ImageOnly) → temp-файл → uploadPhotoForComment
+    // → "photo{ownerId}_{id}" attachment-строка (паттерн из PostDetailScreen L1167).
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val a = app ?: run {
+                Toast.makeText(ctx, "Приложение не готово", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            uploading = true
+            var inFile: File? = null
+            try {
+                val f = kotlin.io.path.createTempFile(
+                    prefix = "btp_photo_",
+                    suffix = ".jpg",
+                    directory = ctx.cacheDir.toPath(),
+                ).toFile()
+                inFile = f
+                ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                    f.outputStream().use { out -> ins.copyTo(out) }
+                } ?: return@launch
+                val att = a.apiClient.uploadPhotoForComment(f, "image/*")
+                if (att != null) {
+                    vkAttachmentString = att
+                    vkAttachmentLabel = "Фото"
+                    Toast.makeText(ctx, "Фото прикреплено", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(ctx, "Не удалось загрузить фото", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                inFile?.delete()
+                uploading = false
+            }
+        }
+    }
+
+    // Файл с устройства: OpenDocument(*) → temp-файл → uploadDocForComment
+    // → "doc{ownerId}_{id}" attachment-строка (паттерн из PostDetailScreen L1186).
+    val docPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val a = app ?: run {
+                Toast.makeText(ctx, "Приложение не готово", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            uploading = true
+            var tempFile: File? = null
+            try {
+                var nameFromResolver: String? = null
+                try {
+                    ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (cursor.moveToFirst() && nameIdx >= 0) {
+                            nameFromResolver = cursor.getString(nameIdx)
+                        }
+                    }
+                } catch (_: Exception) { }
+                val rawName = nameFromResolver
+                    ?: uri.lastPathSegment?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+                    ?: "file"
+                val displayName = rawName.replace(Regex("[^a-zA-Z0-9._\\- а-яА-ЯёЁ()\\[\\]]"), "_")
+                    .ifBlank { "file_${System.currentTimeMillis()}" }
+                val f = File(ctx.cacheDir, "btp_doc_${System.currentTimeMillis()}_$displayName")
+                tempFile = f
+                ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                    f.outputStream().use { out -> ins.copyTo(out) }
+                } ?: return@launch
+                val att = a.apiClient.uploadDocForComment(f)
+                if (att != null) {
+                    vkAttachmentString = att
+                    vkAttachmentLabel = "Документ: $displayName"
+                    Toast.makeText(ctx, "Файл прикреплён", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(ctx, "Не удалось загрузить файл", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                tempFile?.delete()
+                uploading = false
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -167,62 +274,87 @@ fun CreateBoardTopicScreen(
                 )
             }
 
-            // B-FIX-4 (#SCOUT-BOARD-SNAP HTML4): ряд attach-кнопок 24×24 + emoji,
-            // как в форме создания темы VK web. Слева 6 кнопок attach, справа
-            // emoji-smile. FIX-TODO-2: onClick → toast (attach-payload/upload-flow
-            // не реализован; сигнатура boardAddTopic уже принимает attachments).
+            // ATTACH-PATTERN-2 (#SCOUT-BOARD-SNAP): ряд attach-кнопок 24×24 +
+            // emoji, как в форме создания темы VK web. Слева 6 кнопок attach,
+            // справа emoji-smile. Видео/аудио/док-из-VK → AttachmentPickerSheet;
+            // фото-с-устройства → PickVisualMedia + uploadPhotoForComment;
+            // файл-с-устройства → OpenDocument + uploadDocForComment;
+            // опрос → toast (VK polls.add — сложный flow); emoji → toast.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
-                }) {
+                // С устройства → OpenDocument(*) + uploadDocForComment.
+                IconButton(
+                    onClick = { docPickerLauncher.launch(arrayOf("*/*")) },
+                    enabled = !uploading,
+                ) {
                     Icon(
                         Icons.Outlined.AttachFile,
                         contentDescription = "С устройства",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Загрузка фото скоро", Toast.LENGTH_SHORT).show()
-                }) {
+                // Фото → PickVisualMedia(ImageOnly) + uploadPhotoForComment.
+                IconButton(
+                    onClick = {
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    enabled = !uploading,
+                ) {
                     Icon(
                         Icons.Outlined.PhotoCamera,
                         contentDescription = "Фото",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
-                }) {
+                // Видео → AttachmentPickerSheet(Video).
+                IconButton(
+                    onClick = {
+                        attachmentPickerTab = AttachmentPickerTab.Video
+                        showAttachmentPicker = true
+                    },
+                    enabled = !uploading,
+                ) {
                     Icon(
                         Icons.Outlined.VideoCameraBack,
                         contentDescription = "Видео",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
-                }) {
+                // Аудио → AttachmentPickerSheet(Music).
+                IconButton(
+                    onClick = {
+                        attachmentPickerTab = AttachmentPickerTab.Music
+                        showAttachmentPicker = true
+                    },
+                    enabled = !uploading,
+                ) {
                     Icon(
                         Icons.Outlined.MusicNote,
                         contentDescription = "Аудио",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
-                }) {
+                // Файл/документ из VK → AttachmentPickerSheet(Docs).
+                IconButton(
+                    onClick = {
+                        attachmentPickerTab = AttachmentPickerTab.Docs
+                        showAttachmentPicker = true
+                    },
+                    enabled = !uploading,
+                ) {
                     Icon(
                         Icons.Outlined.Description,
                         contentDescription = "Файл",
                         modifier = Modifier.size(24.dp),
                     )
                 }
+                // Опрос → toast (VK API polls.add — сложный flow, вне скоупа).
                 IconButton(onClick = {
-                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, "Опросы в разработке", Toast.LENGTH_SHORT).show()
                 }) {
                     Icon(
                         Icons.Outlined.Poll,
@@ -231,6 +363,7 @@ fun CreateBoardTopicScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                // Эмодзи → toast (минимум — не молчаливо).
                 IconButton(onClick = {
                     Toast.makeText(ctx, "Эмодзи скоро", Toast.LENGTH_SHORT).show()
                 }) {
@@ -258,14 +391,48 @@ fun CreateBoardTopicScreen(
                 )
             }
 
+            // ATTACH-PATTERN-2: индикатор выбранного вложения (над Submit).
+            if (vkAttachmentLabel != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        vkAttachmentLabel!!,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = {
+                        vkAttachmentString = null
+                        vkAttachmentLabel = null
+                    }) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "Убрать",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+            if (uploading) {
+                Text(
+                    "Загрузка вложения…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+
             // ── Кнопка «Создать тему» ──────────────────────────────────
             Button(
                 onClick = {
-                    if (title.isBlank() || sending) return@Button
+                    if (title.isBlank() || sending || uploading) return@Button
                     sending = true
                     error = null
                     val t = title
                     val txt = text
+                    val atts = vkAttachmentString
                     scope.launch {
                         val a = app
                         if (a == null) {
@@ -274,9 +441,15 @@ fun CreateBoardTopicScreen(
                             return@launch
                         }
                         try {
-                            val topicId = a.apiClient.boardAddTopic(groupId, t, txt, fromGroup = fromGroup)
+                            val topicId = a.apiClient.boardAddTopic(
+                                groupId, t, txt,
+                                fromGroup = fromGroup,
+                                attachments = atts,
+                            )
                             if (topicId != null && topicId > 0) {
                                 Toast.makeText(ctx, "Тема создана", Toast.LENGTH_SHORT).show()
+                                vkAttachmentString = null
+                                vkAttachmentLabel = null
                                 onCreated(topicId, t)
                             } else {
                                 error = "Не удалось: ${a.apiClient.lastApiError ?: "ошибка"}"
@@ -288,7 +461,7 @@ fun CreateBoardTopicScreen(
                         }
                     }
                 },
-                enabled = title.isNotBlank() && !sending,
+                enabled = title.isNotBlank() && !sending && !uploading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (sending) {
@@ -301,5 +474,39 @@ fun CreateBoardTopicScreen(
                 }
             }
         }
+    }
+
+    // ATTACH-PATTERN-2: AttachmentPickerSheet для видео/аудио/фото/док из VK
+    // (паттерн из PostDetailScreen L1524). Фото-с-устройства и файл-с-устройства
+    // идут через лаунчеры выше; здесь — только выбор готовых VK-вложений.
+    if (showAttachmentPicker) {
+        AttachmentPickerSheet(
+            onDismiss = { showAttachmentPicker = false },
+            initialTab = attachmentPickerTab,
+            showGiftTab = false,
+            showPhotoTab = true,
+            showDocsTab = true,
+            onPickAudio = { track ->
+                vkAttachmentString = "audio${track.ownerId}_${track.id}"
+                vkAttachmentLabel = "Музыка: ${track.title}"
+                showAttachmentPicker = false
+            },
+            onPickVideo = { video ->
+                vkAttachmentString = "video${video.ownerId}_${video.id}"
+                vkAttachmentLabel = "Видео: ${video.title.ifBlank { "видео" }}"
+                showAttachmentPicker = false
+            },
+            onPickPhotoAttachment = { att, _ ->
+                // _ = thumb-превью (не нужен — только attachment-строка).
+                vkAttachmentString = att
+                vkAttachmentLabel = "Фото из VK"
+                showAttachmentPicker = false
+            },
+            onPickDocAttachment = { att, title ->
+                vkAttachmentString = att
+                vkAttachmentLabel = "Документ: $title"
+                showAttachmentPicker = false
+            },
+        )
     }
 }
