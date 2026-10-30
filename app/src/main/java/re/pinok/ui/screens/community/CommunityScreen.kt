@@ -2686,11 +2686,14 @@ fun CommunityScreen(
                             )
                             if (canAddTopics) {
                                 Spacer(Modifier.height(16.dp))
+                                // VK-STYLING: vkuiButton__modeSecondary __appearanceAccent
+                                // __stretched — secondary container + accent text + full width.
                                 Button(
                                     onClick = onCreateTopic,
+                                    modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        contentColor = BoardAccent,
                                     ),
                                 ) {
                                     Text("Добавить обсуждение")
