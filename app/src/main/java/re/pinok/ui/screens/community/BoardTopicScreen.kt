@@ -1243,7 +1243,7 @@ private fun CommentAttachments(attachments: List<Attachment>?) {
     // Раньше фото были НЕ кликабельны — нельзя было просмотреть вложения.
     var photoViewerIndex by remember { mutableStateOf<Int?>(null) }
     val photoUrls = remember(photos) {
-        photos.mapNotNull { it.photo?.largestUrl ?: it.photo?.mediumUrl ?: it.photo?.smallUrl }
+        photos.mapNotNull { it.photo?.largestUrl ?: it.photo?.mediumUrl }
     }
     if (photoViewerIndex != null && photoUrls.isNotEmpty()) {
         PhotoViewer(
