@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
@@ -367,12 +368,33 @@ fun BoardTopicScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = displayTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // GAPS-FIX: breadcrumbs «Обсуждения → Тема» в TopAppBar
+                    // (по снапшоту VK web: «Группа → Обсуждения → Тема»).
+                    // «Обсуждения» кликабельна → onBack() (возврат к списку тем).
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Обсуждения",
+                            color = BoardAccent,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { onBack() },
+                        )
+                        Icon(
+                            Icons.Outlined.ChevronRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.outline,
+                        )
+                        Text(
+                            text = displayTitle,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -1076,27 +1098,27 @@ private fun BoardCommentCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        // GAPS-FIX: comment-author-avatar-admin — бейдж «АДМИН» для
+                        // комментариев от имени сообщества (creatorId < 0, как VK web
+                        // comment-author-avatar-admin). Рядом с именем автора.
+                        if (comment.creatorId < 0) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "АДМИН",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier
+                                    .background(BoardAccent, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     // 3-dot меню (Действия) — Редактировать / Удалить.
                     // #B-FIX-5: «Ответить» вынесен в отдельную TextButton в meta-row
                     // (по снапшоту VK web: comment-reply НЕ в 3-dot меню).
-                    // VK-STYLING-SNAPSHOT: comment_action_edit — ОТДЕЛЬНАЯ видимая кнопка
-                    // «Редактировать» (pen_outline_16), как в снапшоте VK web HTML3/тест2.
-                    // Раньше была спрятана в 3-dot меню (расхождение). Теперь рядом с «Действия».
-                    if (comment.canEdit == 1) {
-                        IconButton(onClick = { onEdit(comment) }) {
-                            Icon(
-                                Icons.Outlined.Edit,
-                                contentDescription = "Редактировать",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    // comment_action_more — dropdown «Действия» (more_horizontal_16).
-                    // В снапшоте VK web: только «Удалить» (canDelete) + «Пожаловаться».
-                    // «Редактировать» убрана отсюда — теперь отдельная кнопка выше.
+                    // GAPS-FIX: comment_action_edit перенесён ВНУТРИ comment_action_more
+                    // dropdown (как в VK web), отдельная IconButton(Edit) убрана.
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(
@@ -1109,6 +1131,23 @@ private fun BoardCommentCard(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
                         ) {
+                            // GAPS-FIX: «Редактировать» — первый пункт dropdown
+                            // (comment_action_edit внутри comment_action_more, по VK web).
+                            if (comment.canEdit == 1) {
+                                DropdownMenuItem(
+                                    text = { Text("Редактировать") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.Edit,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onEdit(comment)
+                                    },
+                                )
+                            }
                             if (comment.canDelete == 1) {
                                 DropdownMenuItem(
                                     text = { Text("Удалить") },
