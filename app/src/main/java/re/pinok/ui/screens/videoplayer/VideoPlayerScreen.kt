@@ -2857,6 +2857,7 @@ fun VideoPlayerScreen(
         VideoCommentsSheet(
             video = resolvedVideo,
             onDismiss = { showCommentsSheet = false },
+            onUserClick = onUserClick,
         )
     }
     if (showShareSheet) {
@@ -3602,6 +3603,7 @@ private fun VideoMoreMenuItems(
 private fun VideoCommentsSheet(
     video: Video,
     onDismiss: () -> Unit,
+    onUserClick: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = SovaApp.get()
