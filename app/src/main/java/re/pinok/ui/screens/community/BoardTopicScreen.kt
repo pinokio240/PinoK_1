@@ -99,9 +99,12 @@ import re.pinok.data.model.Attachment
 import re.pinok.data.model.BoardComment
 import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.AttachmentPickerSheet
+import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.UnifiedAttachMenu
+import re.pinok.ui.components.buildVkAttachment
 import re.pinok.ui.theme.BoardAccent
 import re.pinok.util.AppLog
 import re.pinok.util.buildBoardCommentText
@@ -196,13 +199,26 @@ fun BoardTopicScreen(
     var sending by remember { mutableStateOf(false) }
 
     // COMPOSER-REUSE: attach/emoji/upload state, заимствован из PostDetailScreen composer.
-    // (attachmentString опущен — board-композер не имеет AttachmentPickerSheet-флоу;
-    //  photo/file идут напрямую через pendingPhotoUris/pendingFileUris → upload → CSV.)
+    // ATTACH-PATTERN-1: добавлен AttachmentPickerSheet-флоу (аудио/видео/фото/документы
+    //  из библиотеки VK — без upload); device-фото/файлы идут через pendingPhotoUris/
+    //  pendingFileUris → upload → CSV, а VK-объекты — через vkAttachmentString.
     var showAttachMenu by remember { mutableStateOf(false) }
     var showEmojiPanel by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
     var pendingPhotoUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingFileUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    // ATTACH-PATTERN-1: VK-library picker state (аудио/видео/фото/документы из
+    // библиотеки VK — без upload, паттерн PostDetailScreen L201-220 + L1524-1555).
+    // showAttachmentPicker — модал AttachmentPickerSheet; attachmentPickerTab —
+    // стартовый таб; vkAttachmentString — готовая attachment-строка
+    // ("audio{owner}_{id}[_key]" / "video{owner}_{id}[_key]" / "photo{owner}_{id}" /
+    // "doc{owner}_{id}") для boardCreateComment(attachments=CSV); vkAttachmentLabel —
+    // текст-превью над composer (как attachedFileName в PostDetailScreen L907-930).
+    var showAttachmentPicker by remember { mutableStateOf(false) }
+    var attachmentPickerTab by remember { mutableStateOf(AttachmentPickerTab.Music) }
+    var vkAttachmentString by remember { mutableStateOf<String?>(null) }
+    var vkAttachmentLabel by remember { mutableStateOf<String?>(null) }
 
     // COMPOSER-REUSE: multi-pickers (PickMultipleVisualMedia/OpenMultipleDocument),
     // как PostDetailScreen L242+. До 10 фото / 10 файлов за раз.
@@ -475,16 +491,40 @@ fun BoardTopicScreen(
                         cameraPermissionLauncher.launch(permission)
                     }
                 },
-                // FIX-TODO-1 #2: видео — PickVisualMedia(VideoOnly) + toast (video upload пока не реализован).
+                // ATTACH-PATTERN-1: видео из VK — AttachmentPickerSheet(Video), БЕЗ upload
+                // (VK уже имеет объект; picker вернёт "video{owner}_{id}[_key]"). Паттерн
+                // PostDetailScreen L1091-1094. Заменяет toast-заглушку FIX-TODO-1 #2.
                 onVideo = {
-                    Toast.makeText(ctx, "Загрузка видео скоро", Toast.LENGTH_SHORT).show()
-                    commentMultiPhotoLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
-                    )
+                    attachmentPickerTab = AttachmentPickerTab.Video
+                    showAttachmentPicker = true
                 },
-                // FIX-TODO-1 #3: аудио — toast-заглушка (audio picker пока не реализован).
+                // ATTACH-PATTERN-1: аудио из VK — AttachmentPickerSheet(Music), БЕЗ upload
+                // (picker вернёт "audio{owner}_{id}[_key]"). Паттерн PostDetailScreen
+                // L1095-1098. Заменяет toast-заглушку FIX-TODO-1 #3.
                 onAudio = {
-                    Toast.makeText(ctx, "Выбор аудио скоро", Toast.LENGTH_SHORT).show()
+                    attachmentPickerTab = AttachmentPickerTab.Music
+                    showAttachmentPicker = true
+                },
+                // ATTACH-PATTERN-1: фото из VK — AttachmentPickerSheet(Photos), БЕЗ upload
+                // (photos.getAll → "photo{owner}_{id}[_key]"). Паттерн PostDetailScreen L1086-1090.
+                showPhotoFromVk = true,
+                onPhotoFromVk = {
+                    attachmentPickerTab = AttachmentPickerTab.Photos
+                    showAttachmentPicker = true
+                },
+                // ATTACH-PATTERN-1: документ из VK — AttachmentPickerSheet(Docs), БЕЗ upload
+                // (docs.get → "doc{owner}_{id}[_key]"). Паттерн PostDetailScreen L1102-1106.
+                showFileFromVk = true,
+                onFileFromVk = {
+                    attachmentPickerTab = AttachmentPickerTab.Docs
+                    showAttachmentPicker = true
+                },
+                // ATTACH-PATTERN-1: превью VK-вложения над composer (label + кнопка убрать).
+                vkAttachmentString = vkAttachmentString,
+                vkAttachmentLabel = vkAttachmentLabel,
+                onClearVkAttachment = {
+                    vkAttachmentString = null
+                    vkAttachmentLabel = null
                 },
                 // FIX-TODO-1 #5: FocusRequester для onReply-фокуса на composer.
                 composerFocusRequester = composerFocusRequester,
@@ -990,6 +1030,43 @@ fun BoardTopicScreen(
             },
         )
     }
+
+    // ATTACH-PATTERN-1: модал выбора вложений из библиотеки VK (аудио/видео/фото/
+    // документы — БЕЗ upload, VK уже имеет объекты). Паттерн PostDetailScreen
+    // L1524-1555. Picker возвращает готовую attachment-строку ("audio{owner}_{id}"
+    // и т.д.) → vkAttachmentString → добавляется к allAttachments CSV в onSend.
+    if (showAttachmentPicker) {
+        AttachmentPickerSheet(
+            onDismiss = { showAttachmentPicker = false },
+            initialTab = attachmentPickerTab,
+            showGiftTab = false,
+            showPhotoTab = true,
+            showDocsTab = true,
+            onPickAudio = { track ->
+                // buildVkAttachment собирает "audio{owner}_{id}[_key]" (с access_key
+                // для приватного контента), как PostDetailScreen L1531-1536.
+                vkAttachmentString = buildVkAttachment("audio", track.ownerId, track.id, track.accessKey)
+                vkAttachmentLabel = "Музыка: ${track.title}"
+                showAttachmentPicker = false
+            },
+            onPickVideo = { video ->
+                vkAttachmentString = buildVkAttachment("video", video.ownerId, video.id, video.accessKey)
+                vkAttachmentLabel = "Видео: ${video.title.ifBlank { "видео" }}"
+                showAttachmentPicker = false
+            },
+            onPickPhotoAttachment = { att, _ ->
+                // _ = thumb: превью тут не нужно, только attachment-строка.
+                vkAttachmentString = att
+                vkAttachmentLabel = "Фото из VK"
+                showAttachmentPicker = false
+            },
+            onPickDocAttachment = { att, title ->
+                vkAttachmentString = att
+                vkAttachmentLabel = "Документ: $title"
+                showAttachmentPicker = false
+            },
+        )
+    }
 }
 
 /**
@@ -1449,6 +1526,21 @@ private fun ComposerRow(
     onCamera: () -> Unit,
     onVideo: () -> Unit,
     onAudio: () -> Unit,
+    // ATTACH-PATTERN-1: фото/документ «Из VK» — табы AttachmentPickerSheet (без upload).
+    // Прокидываются в UnifiedAttachMenu (showPhotoFromVk/showFileFromVk + callbacks),
+    // как PostDetailScreen L1086-1106. Меню скрывает пункты при false (default).
+    showPhotoFromVk: Boolean = false,
+    onPhotoFromVk: () -> Unit = {},
+    showFileFromVk: Boolean = false,
+    onFileFromVk: () -> Unit = {},
+    // ATTACH-PATTERN-1: превью VK-вложения (аудио/видео/фото/документ из библиотеки
+    // VK — без upload). vkAttachmentString — готовая attachment-строка (читается в
+    // onSend для hasContent/snapshot/CSV; очищается через onClearVkAttachment).
+    // vkAttachmentLabel — текст-превью над composer (как attachedFileName в
+    // PostDetailScreen L906-930). Кнопка ✕ вызывает onClearVkAttachment.
+    vkAttachmentString: String? = null,
+    vkAttachmentLabel: String? = null,
+    onClearVkAttachment: () -> Unit = {},
     // FIX-TODO-1 #5: FocusRequester для автофокуса composer при onReply.
     composerFocusRequester: FocusRequester,
     groupId: Long,
@@ -1473,6 +1565,47 @@ private fun ComposerRow(
             // navigationBars для жестовой панели. Паритет с PostDetailScreen composer.
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
     ) {
+        // ATTACH-PATTERN-1: превью VK-вложения (аудио/видео/фото/документ из VK —
+        // без upload). Паттерн attachedFileName PostDetailScreen L906-930. Кнопка ✕
+        // очищает vkAttachmentString + label (onClearVkAttachment из call-site).
+        if (vkAttachmentLabel != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Outlined.AttachFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = vkAttachmentLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = onClearVkAttachment,
+                    modifier = Modifier.size(20.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Убрать",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         // COMPOSER-REUSE: photos bar — превью выбранных фото (как PostDetailScreen CommentPhotosBar).
         if (pendingPhotoUris.isNotEmpty()) {
             Row(
@@ -1669,11 +1802,17 @@ private fun ComposerRow(
                     expanded = showAttachMenu,
                     onDismissRequest = { onShowAttachMenuChange(false) },
                     onPhoto = { onLaunchPhotoPicker() },
-                    // FIX-TODO-1 #1/#2/#3: callbacks прокинуты из call-site (паттерн onLaunchPhotoPicker).
+                    // FIX-TODO-1 #1 + ATTACH-PATTERN-1: callbacks прокинуты из call-site
+                    // (паттерн onLaunchPhotoPicker).
                     onCamera = { onCamera() },
                     onVideo = { onVideo() },
                     onAudio = { onAudio() },
                     onFile = { onLaunchFilePicker() },
+                    // ATTACH-PATTERN-1: фото/документ «Из VK» — табы AttachmentPickerSheet.
+                    showPhotoFromVk = showPhotoFromVk,
+                    onPhotoFromVk = { onPhotoFromVk() },
+                    showFileFromVk = showFileFromVk,
+                    onFileFromVk = { onFileFromVk() },
                     // Подарки/опросы недоступны в board (VK API: gifts.send — только ЛС,
                     // polls.add — только посты).
                     showGift = false,
@@ -1697,14 +1836,22 @@ private fun ComposerRow(
                 onClick = {
                     val textToSend = text.trim()
                     val hasContent = textToSend.isNotBlank() ||
-                        pendingPhotoUris.isNotEmpty() || pendingFileUris.isNotEmpty()
+                        pendingPhotoUris.isNotEmpty() || pendingFileUris.isNotEmpty() ||
+                        vkAttachmentString != null
                     if (!hasContent || sending || uploading) return@IconButton
                     // Снапшотим списки ДО очистки (оптимистичный UX, как PostDetailScreen).
                     val photosCopy = pendingPhotoUris.toList()
                     val filesCopy = pendingFileUris.toList()
+                    // ATTACH-PATTERN-1: снапшот VK-attachment (audio/video/photo/doc из
+                    // библиотеки VK — без upload) ДО очистки, как attachmentToSend в
+                    // PostDetailScreen L1134-1135.
+                    val vkAttachmentToSend = vkAttachmentString
                     onTextChange("")
                     onPendingPhotoUrisChange(emptyList())
                     onPendingFileUrisChange(emptyList())
+                    // ATTACH-PATTERN-1: очищаем VK-превью (label/string) после снапшота
+                    // через callback (params — val, меняются в call-site scope).
+                    onClearVkAttachment()
                     onShowEmojiPanelChange(false)
                     onSendingChange(true)
                     scope.launch {
@@ -1755,8 +1902,13 @@ private fun ComposerRow(
                                 }
                                 onUploadingChange(false)
                             }
-                            // CSV: photo{ownerId}_{id},doc{ownerId}_{id},…
-                            val allAttachments = (photoAttachments + fileAttachments)
+                            // CSV: photo{ownerId}_{id},doc{ownerId}_{id},… + VK-attachment
+                            // (audio/video/photo/doc из библиотеки, без upload). Паттерн
+                            // PostDetailScreen L1201-1208 (listOfNotNull + filter blank).
+                            val allAttachments = (
+                                photoAttachments + fileAttachments +
+                                    listOfNotNull(vkAttachmentToSend)
+                            ).filter { it.isNotBlank() }
                                 .joinToString(",")
                                 .ifBlank { null }
                             // boardCreateComment: ownerId для группы = -groupId (метод берёт abs).
@@ -1788,7 +1940,8 @@ private fun ComposerRow(
                     }
                 },
                 enabled = (text.isNotBlank() || pendingPhotoUris.isNotEmpty() ||
-                    pendingFileUris.isNotEmpty()) && !sending && !uploading,
+                    pendingFileUris.isNotEmpty() || vkAttachmentString != null) &&
+                    !sending && !uploading,
             ) {
                 if (sending) {
                     CircularProgressIndicator(
@@ -1802,7 +1955,7 @@ private fun ComposerRow(
                         // VK-STYLING-2 (AUDIT #21, #22): send-comment — accent #447bba
                         // (НЕ primary #0077FF), disabled — icon_tertiary #aeb7c2.
                         tint = if (text.isNotBlank() || pendingPhotoUris.isNotEmpty() ||
-                                       pendingFileUris.isNotEmpty())
+                                       pendingFileUris.isNotEmpty() || vkAttachmentString != null)
                                BoardAccent else Color(0xFFAEB7C2),
                     )
                 }
