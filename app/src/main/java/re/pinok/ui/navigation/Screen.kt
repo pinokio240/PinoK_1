@@ -296,9 +296,17 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * чтобы AlertDialog «Редактирование темы» мог инициализировать checkbox'ы
      * «Закрепить тему» / «Закрыть тему» текущим состоянием темы
      * (board.getTopics уже вернул is_fixed/is_closed — не нужен доп. запрос).
+     *
+     * FIX-4 BUG-2: offset (VK API offset комментариев, кратно PAGE_SIZE=20) +
+     * sort ("asc"|"desc") — мини-пагинация «Стр. 1 2 3 4» в CommunityScreen
+     * передаёт offset=(page-1)*20, чтобы открыть тему на нужной странице.
+     *
+     * FIX-4 BUG-6: canManage (bool) — гейт Switch «От имени сообщества» в
+     * composer (board.createComment from_group=1). Передаётся из CommunityScreen
+     * (groupInfo?.isManager) — если false, switch не показывается.
      */
     object BoardTopic : Screen(
-        "board_topic/{groupId}/{topicId}?title={title}&isFixed={isFixed}&isClosed={isClosed}",
+        "board_topic/{groupId}/{topicId}?title={title}&isFixed={isFixed}&isClosed={isClosed}&offset={offset}&sort={sort}&canManage={canManage}",
         "Обсуждение", null,
     ) {
         const val ARG_GROUP_ID = "groupId"
@@ -306,10 +314,23 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         const val ARG_TITLE = "title"
         const val ARG_IS_FIXED = "isFixed"
         const val ARG_IS_CLOSED = "isClosed"
-        fun buildRoute(groupId: Long, topicId: Long, title: String, isFixed: Int = 0, isClosed: Int = 0): String =
+        const val ARG_OFFSET = "offset"
+        const val ARG_SORT = "sort"
+        const val ARG_CAN_MANAGE = "canManage"
+        fun buildRoute(
+            groupId: Long,
+            topicId: Long,
+            title: String,
+            isFixed: Int = 0,
+            isClosed: Int = 0,
+            offset: Int = 0,
+            sort: String = "asc",
+            canManage: Boolean = false,
+        ): String =
             "board_topic/$groupId/$topicId" +
             "?title=${android.net.Uri.encode(title)}" +
-            "&isFixed=$isFixed&isClosed=$isClosed"
+            "&isFixed=$isFixed&isClosed=$isClosed" +
+            "&offset=$offset&sort=$sort&canManage=$canManage"
     }
 
     /**

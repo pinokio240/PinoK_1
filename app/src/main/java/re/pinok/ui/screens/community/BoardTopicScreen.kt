@@ -30,14 +30,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -50,6 +55,7 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -174,6 +180,15 @@ fun BoardTopicScreen(
     isClosed: Int = 0,
     // EDIT-TOPIC-MODAL: см. KDoc — сигнал нав-слою после успешного edit.
     onTopicEdited: () -> Unit = {},
+    // FIX-4 BUG-2: открытие темы на конкретной странице комментариев (из
+    // мини-пагинации «Стр. 1 2 3» в CommunityScreen). initialOffset — VK API
+    // offset (кратно PAGE_SIZE=20); initialSort — "asc"|"desc" (по умолчанию "asc").
+    initialOffset: Int = 0,
+    initialSort: String = "asc",
+    // FIX-4 BUG-6: гейт Switch «От имени сообщества» (board.createComment
+    // from_group=1). Передаётся из CommunityScreen (canManageAlbums=isManager).
+    // false → switch скрыт (VK вернёт err=15 если юзер пошлёт from_group=1 без прав).
+    canManage: Boolean = false,
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -195,12 +210,15 @@ fun BoardTopicScreen(
     var myPhoto by remember { mutableStateOf<String?>(null) }
 
     // #B-FIX-2: сортировка asc/desc + dropdown состояния.
-    var sort by remember { mutableStateOf("asc") }
+    // FIX-4 BUG-2: инициализация из route (initialSort / initialOffset — мини-пагинация).
+    var sort by remember { mutableStateOf(initialSort) }
     var sortExpanded by remember { mutableStateOf(false) }
 
     // #B-FIX-2: пагинация кнопками (НЕ infinite scroll).
-    var currentPage by remember { mutableStateOf(1) }
-    var offset by remember { mutableStateOf(0) }
+    // FIX-4 BUG-2: currentPage/offset из route (initialOffset) — открыть тему на
+    // странице N (offset кратен PAGE_SIZE=20; page = offset/PAGE_SIZE + 1).
+    var currentPage by remember { mutableStateOf(if (initialOffset > 0) initialOffset / PAGE_SIZE + 1 else 1) }
+    var offset by remember { mutableStateOf(initialOffset) }
 
     // Триггер перезагрузки после отправки комментария.
     var reloadTrigger by remember { mutableStateOf(0) }
@@ -304,50 +322,127 @@ fun BoardTopicScreen(
     var topicIsClosed by remember { mutableStateOf(isClosed == 1) }
 
     // EDIT-TOPIC-MODAL: модалка «Редактирование темы» (AlertDialog, как
-    // CreatePostDialog для редактирования поста). editTopicAttachments — CSV
-    // вложений (VK-библиотека через AttachmentPickerSheet + фото с устройства
-    // через uploadPhotoForComment), передаётся в board.editTopic (HAR:
-    // group_id, topic_id, title, attachments). Тело темы (text) НЕ редактируется
-    // — как в VK web initTopicEditBox.
+    // CreatePostDialog для редактирования поста). Тело темы (text) НЕ
+    // редактируется — как в VK web initTopicEditBox.
+    // FIX-2 (edit-форма parity): состояние вложений приведено к parity с
+    // CreatePostDialog — существующие вложения темы (topicBody.attachments)
+    // загружаются в editTopicExistingAttachments (data-loss фикс: VK
+    // board.editTopic ЗАМЕНЯЕТ весь набор), новые VK-вложения/фото/файлы/
+    // видео добавляются через соответствующие списки с поштучным ✕.
     var showEditTopicDialog by remember { mutableStateOf(false) }
     var editTopicTitle by remember { mutableStateOf(title) }
     var editTopicFixed by remember { mutableStateOf(isFixed == 1) }
     var editTopicClosed by remember { mutableStateOf(isClosed == 1) }
-    var editTopicAttachments by remember { mutableStateOf<String?>(null) }
+    // FIX-2 A: существующие вложения темы (List<Attachment> из topicBody).
+    // При открытии диалога инициализируются из topicBody.attachments.
+    var editTopicExistingAttachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
+    // FIX-2 B/C: новые VK-вложения этой сессии (с превью + ✕ удалением).
+    var editTopicVkAttachments by remember { mutableStateOf<List<EditTopicVkPreview>>(emptyList()) }
+    // FIX-2 D: мульти-фото с устройства (до 10, PickMultipleVisualMedia) —
+    // upload при submit через uploadPhotoForComment (паттерн CreatePostDialog).
+    var editTopicPendingPhotos by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    // FIX-2 C: мульти-файлы с устройства (до 10, OpenMultipleDocuments) —
+    // upload при submit через uploadDocForComment (паттерн CreatePostDialog).
+    var editTopicPendingFiles by remember { mutableStateOf<List<PendingTopicFile>>(emptyList()) }
+    // FIX-2 C: видео с устройства (PickVisualMedia VideoOnly) — upload при
+    // submit через videoSave + videoUploadFile (паттерн CreatePostDialog).
+    var editTopicPendingVideoUri by remember { mutableStateOf<Uri?>(null) }
+    // FIX-2 C: видео по ссылке (videoSave link_url — VK скачивает сам).
+    var editTopicVideoLinkAttachment by remember { mutableStateOf<String?>(null) }
+    var editTopicShowVideoLinkDialog by remember { mutableStateOf(false) }
+    var editTopicVideoLinkLoading by remember { mutableStateOf(false) }
     var editTopicUploading by remember { mutableStateOf(false) }
+    var editTopicSubmitting by remember { mutableStateOf(false) }
     var editTopicShowAttach by remember { mutableStateOf(false) }
     var editTopicShowPicker by remember { mutableStateOf(false) }
     var editTopicPickerTab by remember { mutableStateOf(AttachmentPickerTab.Photos) }
+    // FIX-2 E: подтверждение удаления темы (AlertDialog, как CommunityScreen).
+    var showDeleteTopicConfirm by remember { mutableStateOf(false) }
 
-    // EDIT-TOPIC-MODAL: фото с устройства → temp-файл → uploadPhotoForComment
-    // → "photo{ownerId}_{id}" attachment-строка (паттерн CreateBoardTopicScreen
-    // photoPickerLauncher; board.editTopic принимает ту же CSV, что и board.addTopic).
+    // FIX-2 D: мульти-фото лаунчер (PickMultipleVisualMedia, maxItems=10) —
+    // parity с CreatePostDialog.multiPhotoLauncher. Превью 60dp + ✕ на каждом.
     val editTopicPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            editTopicPendingPhotos = (editTopicPendingPhotos + uris).take(10)
+        }
+    }
+
+    // FIX-2 C: видео с устройства (PickVisualMedia VideoOnly) — parity с
+    // CreatePostDialog.videoLauncher. Upload при submit.
+    val editTopicVideoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            editTopicUploading = true
-            var inFile: File? = null
+        if (uri != null) editTopicPendingVideoUri = uri
+    }
+
+    // FIX-2 C: мульти-файлы с устройства (OpenMultipleDocuments) — parity с
+    // CreatePostDialog.multiFileLauncher. URI → temp-файл → upload при submit.
+    val editTopicDocLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val newFiles = mutableListOf<PendingTopicFile>()
+        for (uri in uris) {
             try {
-                val f = File(ctx.cacheDir, "bte_photo_${System.currentTimeMillis()}.jpg")
-                inFile = f
-                ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                    f.outputStream().use { out -> ins.copyTo(out) }
-                } ?: return@launch
-                val att = app.apiClient.uploadPhotoForComment(f, "image/*")
-                if (att != null) {
-                    editTopicAttachments = appendAttachmentCsv(editTopicAttachments, att)
-                    Toast.makeText(ctx, "Фото прикреплено", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(ctx, "Не удалось загрузить фото", Toast.LENGTH_SHORT).show()
-                }
+                val inputStream = ctx.contentResolver.openInputStream(uri) ?: continue
+                var nameFromResolver: String? = null
+                try {
+                    ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (cursor.moveToFirst() && nameIdx >= 0) {
+                            nameFromResolver = cursor.getString(nameIdx)
+                        }
+                    }
+                } catch (_: Exception) { }
+                val rawName = nameFromResolver
+                    ?: uri.lastPathSegment?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+                    ?: "file"
+                val safeTempName = "edit_topic_${System.currentTimeMillis()}_${newFiles.size}_$rawName"
+                val tempFile = File(ctx.cacheDir, safeTempName)
+                tempFile.outputStream().use { out -> inputStream.copyTo(out) }
+                inputStream.close()
+                newFiles += PendingTopicFile(
+                    id = nextPendingTopicFileId(),
+                    file = tempFile,
+                    displayName = rawName,
+                )
             } catch (e: Exception) {
-                Toast.makeText(ctx, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
-            } finally {
-                inFile?.delete()
-                editTopicUploading = false
+                AppLog.e("BoardTopicScreen", "editTopicDocLauncher: copy uri→file error for $uri", e)
             }
+        }
+        if (newFiles.isNotEmpty()) {
+            editTopicPendingFiles = (editTopicPendingFiles + newFiles).take(10)
+        }
+    }
+
+    // FIX-2 C: камера для edit-диалога — TakePicture + FileProvider (паттерн
+    // screen-level cameraLauncher, routes captured photo to editTopicPendingPhotos).
+    var editTopicCameraImageUri by rememberSaveable(stateSaver = CameraUriSaver) { mutableStateOf<Uri?>(null) }
+    val editTopicCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val uri = editTopicCameraImageUri
+        editTopicCameraImageUri = null
+        if (!ok || uri == null) return@rememberLauncherForActivityResult
+        editTopicPendingPhotos = (editTopicPendingPhotos + uri).take(10)
+        AppLog.i("BoardTopicScreen", "edit-topic camera photo added to editTopicPendingPhotos")
+    }
+    val editTopicCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            val uri = createCameraImageUri(ctx)
+            if (uri != null) {
+                editTopicCameraImageUri = uri
+                editTopicCameraLauncher.launch(uri)
+            } else {
+                AppLog.w("BoardTopicScreen", "edit-topic createCameraImageUri returned null")
+            }
+        } else {
+            AppLog.w("BoardTopicScreen", "edit-topic CAMERA permission denied")
+            Toast.makeText(ctx, "Нужен доступ к камере", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -471,11 +566,20 @@ fun BoardTopicScreen(
                         onClick = {
                             // EDIT-TOPIC-MODAL: prefill актуальным состоянием темы
                             // (displayTitle/topicIsFixed/topicIsClosed обновляются после
-                            // успешного edit; вложения новой сессии — с чистого листа).
+                            // успешного edit). FIX-2 A: загружаем СУЩЕСТВУЮЩИЕ вложения
+                            // темы (topicBody.attachments) в editTopicExistingAttachments —
+                            // VK board.editTopic ЗАМЕНЯЕТ весь набор вложений, поэтому
+                            // пользователь должен видеть их и мог сохранить без потерь.
+                            // Новые вложения новой сессии — с чистого листа.
                             editTopicTitle = displayTitle
                             editTopicFixed = topicIsFixed
                             editTopicClosed = topicIsClosed
-                            editTopicAttachments = null
+                            editTopicExistingAttachments = topicBody?.attachments ?: emptyList()
+                            editTopicVkAttachments = emptyList()
+                            editTopicPendingPhotos = emptyList()
+                            editTopicPendingFiles = emptyList()
+                            editTopicPendingVideoUri = null
+                            editTopicVideoLinkAttachment = null
                             showEditTopicDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -614,14 +718,32 @@ fun BoardTopicScreen(
                 groupId = groupId,
                 topicId = topicId,
                 onSentSuccess = {
+                    // FIX-4 BUG-4: при sort="asc" новый коммент попадает на последнюю
+                    // страницу (asc = сначала старые) — если сбросить на стр.1, юзер
+                    // его не увидит. Считаем totalPages = ceil((totalCount+1)/PAGE_SIZE)
+                    // (+1 — только что добавленный коммент ещё не учтён в totalCount) и
+                    // переходим на последнюю страницу. При sort="desc" — наоборот, новый
+                    // коммент в начале первой страницы (поведение как раньше).
                     reloadTrigger++  // перезагрузить комментарии.
-                    currentPage = 1
-                    offset = 0
+                    val curSort = sort
+                    val curTotal = totalCount
+                    if (curSort == "asc") {
+                        val newTotal = curTotal + 1
+                        val pages = if (newTotal > 0) (newTotal + PAGE_SIZE - 1) / PAGE_SIZE else 1
+                        currentPage = pages
+                        offset = (pages - 1) * PAGE_SIZE
+                    } else {
+                        // desc: новый коммент наверху → стр.1.
+                        currentPage = 1
+                        offset = 0
+                    }
                 },
-                // B-FIX-B: показывать Switch «От имени сообщества». В BoardTopicScreen
-                // нет флага isManager (маршрут без admin-флага), поэтому default true.
-                // VK отклонит err=15 если у юзера нет прав — Switch просто не сработает.
-                showFromGroup = true,
+                // FIX-4 BUG-6: гейт Switch «От имени сообщества» (board.createComment
+                // from_group=1) — только для менеджера (canManage из route, передаётся
+                // из CommunityScreen как canManageAlbums = groupInfo?.isManager).
+                // РАНЬШЕ showFromGroup=true для ВСЕХ — VK отклонял err=15 при попытке.
+                // Если canManage=false → switch скрыт (ComposerRow гейтит по showFromGroup).
+                showFromGroup = canManage,
             )
         },
     ) { innerPadding ->
@@ -968,19 +1090,20 @@ fun BoardTopicScreen(
         )
     }
 
-    // EDIT-TOPIC-MODAL: AlertDialog «Редактирование темы» — тот же паттерн, что
-    // CreatePostDialog для редактирования поста (БЕЗ заглушек): title (max 255),
-    // checkbox'ы «Закрепить/Закрыть тему», attach-меню (UnifiedAttachMenu) +
-    // AttachmentPickerSheet. Submit: board.editTopic (title + attachments CSV,
-    // HAR: group_id/topic_id/title/attachments) → board.fixTopic/unFixTopic и
-    // board.closeTopic/openTopic — только если checkbox изменился. Тело темы
-    // (text) не редактируется — как в VK web initTopicEditBox.
+    // EDIT-TOPIC-MODAL: AlertDialog «Редактирование темы» — parity с
+    // CreatePostDialog (БЕЗ заглушек). FIX-2: загружает существующие вложения
+    // темы (topicBody.attachments → editTopicExistingAttachments), отображает
+    // через эталонный CommentAttachmentsView + AttachmentLabelRow с поштучным
+    // ✕ удалением. UnifiedAttachMenu с ВСЕМИ show* флагами как в CreatePostDialog.
+    // Submit: board.editTopic (title + attachments CSV) → board.fixTopic/
+    // unFixTopic и board.closeTopic/openTopic — только если checkbox изменился.
+    // Delete: board.deleteTopic (отдельная confirm-модалка).
     if (showEditTopicDialog) {
         AlertDialog(
-            onDismissRequest = { showEditTopicDialog = false },
+            onDismissRequest = { if (!editTopicSubmitting) showEditTopicDialog = false },
             title = { Text("Редактирование темы") },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     // Заголовок (VK web: input[maxlength=255]).
                     OutlinedTextField(
                         value = editTopicTitle,
@@ -1006,24 +1129,169 @@ fun BoardTopicScreen(
                         )
                         Text("Закрыть тему", style = MaterialTheme.typography.bodyMedium)
                     }
-                    Spacer(Modifier.height(4.dp))
-                    // Attachment-кнопка + меню (как в composer).
+                    Spacer(Modifier.height(8.dp))
+
+                    // FIX-2 B: CommentAttachmentsView — эталонный отображатель
+                    // существующих вложений темы (фото-сетка, видео-превью, аудио-
+                    // список, док-чипы). Паттерн BoardCommentCard (тело темы).
+                    val existingAtts = editTopicExistingAttachments
+                    if (existingAtts.isNotEmpty()) {
+                        CommentAttachmentsView(
+                            attachments = existingAtts,
+                            onVideoClick = onVideoClick,
+                            onPhotoClick = { urls, idx ->
+                                // Переиспользуем screen-level photoViewerState.
+                                photoViewerState = urls to idx
+                            },
+                        )
+                        // FIX-2 B: поштучное удаление существующих вложений (✕ на
+                        // каждом). AttachmentLabelRow — паттерн CreatePostDialog.
+                        // Удаление через фильтрацию списка по индексу.
+                        existingAtts.forEachIndexed { index, att ->
+                            EditTopicAttachmentLabelRow(
+                                icon = { editTopicExistingAttachmentIcon(att) },
+                                label = editTopicExistingAttachmentLabel(att),
+                                onRemove = {
+                                    editTopicExistingAttachments =
+                                        editTopicExistingAttachments.filterIndexed { i, _ -> i != index }
+                                },
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    // FIX-2 D: мульти-фото с устройства — превью 60dp + ✕ на каждом
+                    // (parity с CreatePostDialog.pendingPhotos, но 60dp вместо 72dp
+                    // по требованию задачи).
+                    if (editTopicPendingPhotos.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(editTopicPendingPhotos) { idx, uri ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(60.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                ) {
+                                    AsyncImage(
+                                        model = uri,
+                                        contentDescription = "Фото для темы",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            editTopicPendingPhotos =
+                                                editTopicPendingPhotos.filterIndexed { i, _ -> i != idx }
+                                        },
+                                        modifier = Modifier.align(Alignment.TopEnd),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.size(22.dp).clip(CircleShape)
+                                                .background(Color.Black.copy(alpha = 0.6f)),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = "✕",
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.labelSmall,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    // FIX-2 C: видео с устройства — AttachmentLabelRow + ✕.
+                    val editTopicVideoUri = editTopicPendingVideoUri
+                    if (editTopicVideoUri != null) {
+                        EditTopicAttachmentLabelRow(
+                            icon = { Icon(Icons.Outlined.VideoLibrary, contentDescription = null) },
+                            label = "Видео с устройства",
+                            onRemove = { editTopicPendingVideoUri = null },
+                        )
+                    }
+                    // FIX-2 C: видео по ссылке — AttachmentLabelRow + ✕.
+                    val editTopicVidLink = editTopicVideoLinkAttachment
+                    if (editTopicVidLink != null) {
+                        EditTopicAttachmentLabelRow(
+                            icon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                            label = "Видео по ссылке",
+                            onRemove = { editTopicVideoLinkAttachment = null },
+                        )
+                    }
+                    // FIX-2 C: файлы с устройства — AttachmentLabelRow + ✕ на каждом.
+                    editTopicPendingFiles.forEach { pf ->
+                        EditTopicAttachmentLabelRow(
+                            icon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+                            label = pf.displayName,
+                            onRemove = {
+                                editTopicPendingFiles =
+                                    editTopicPendingFiles.filterNot { it.id == pf.id }
+                                pf.file.delete()
+                            },
+                        )
+                    }
+                    // FIX-2 B/C: VK-библиотека (аудио/видео/фото/док) — AttachmentLabelRow
+                    // с превью + ✕ на каждом (parity с CreatePostDialog.vkAttachments).
+                    editTopicVkAttachments.forEach { va ->
+                        EditTopicAttachmentLabelRow(
+                            icon = {
+                                val thumb = va.thumb
+                                if (thumb != null) {
+                                    AsyncImage(
+                                        model = thumb,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(6.dp)),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                } else {
+                                    Icon(Icons.Outlined.AttachFile, contentDescription = null)
+                                }
+                            },
+                            label = va.label,
+                            onRemove = {
+                                editTopicVkAttachments =
+                                    editTopicVkAttachments.filterNot { it.att == va.att }
+                            },
+                        )
+                    }
+
+                    // FIX-2 C: строка «Прикрепить файлы» + UnifiedAttachMenu с ВСЕМИ
+                    // show* флагами как в CreatePostDialog (parity). БЕЗ заглушек —
+                    // каждая attach-кнопка вызывает реальный API/паттерн.
                     Box {
-                        IconButton(
-                            onClick = { editTopicShowAttach = true },
-                            enabled = !editTopicUploading,
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .clickable(enabled = !editTopicSubmitting && !editTopicUploading) {
+                                    editTopicShowAttach = true
+                                }
+                                .padding(vertical = 10.dp, horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
-                                Icons.Outlined.AttachFile,
-                                contentDescription = "Прикрепить",
+                                Icons.Outlined.AddPhotoAlternate,
+                                contentDescription = null,
                                 modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Прикрепить файлы",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                         }
                         UnifiedAttachMenu(
                             expanded = editTopicShowAttach,
                             onDismissRequest = { editTopicShowAttach = false },
-                            // Фото с устройства → uploadPhotoForComment → CSV
-                            // (полный функционал — то же вложение, что и из VK).
+                            // FIX-2 D: мульти-фото с устройства (PickMultipleVisualMedia).
                             onPhoto = {
                                 editTopicPhotoLauncher.launch(
                                     PickVisualMediaRequest(
@@ -1031,120 +1299,289 @@ fun BoardTopicScreen(
                                     ),
                                 )
                             },
-                            showCamera = false,
+                            // FIX-2 C: камера — TakePicture + FileProvider.
+                            showCamera = true,
+                            onCamera = {
+                                val permission = Manifest.permission.CAMERA
+                                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                                        ctx, permission) ==
+                                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    val uri = createCameraImageUri(ctx)
+                                    if (uri != null) {
+                                        editTopicCameraImageUri = uri
+                                        editTopicCameraLauncher.launch(uri)
+                                    }
+                                } else {
+                                    editTopicCameraPermissionLauncher.launch(permission)
+                                }
+                            },
                             // Фото из VK — AttachmentPickerSheet(Photos).
                             showPhotoFromVk = true,
                             onPhotoFromVk = {
                                 editTopicPickerTab = AttachmentPickerTab.Photos
                                 editTopicShowPicker = true
                             },
-                            showVideo = false,
-                            showMusic = false,
-                            showFile = false,
+                            // FIX-2 C: видео из библиотеки VK.
+                            showVideo = true,
+                            onVideo = {
+                                editTopicPickerTab = AttachmentPickerTab.Video
+                                editTopicShowPicker = true
+                            },
+                            // FIX-2 C: видео с устройства (video.save + videoUploadFile).
+                            showVideoFromDevice = true,
+                            onVideoFromDevice = {
+                                editTopicVideoLauncher.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.VideoOnly,
+                                    ),
+                                )
+                            },
+                            // FIX-2 C: видео по ссылке (video.save link_url).
+                            showVideoLink = true,
+                            onVideoLink = { editTopicShowVideoLinkDialog = true },
+                            // FIX-2 C: музыка из библиотеки VK.
+                            showMusic = true,
+                            onAudio = {
+                                editTopicPickerTab = AttachmentPickerTab.Music
+                                editTopicShowPicker = true
+                            },
+                            // FIX-2 C: файл с устройства (OpenMultipleDocuments →
+                            // uploadDocForComment при submit).
+                            showFile = true,
+                            onFile = { editTopicDocLauncher.launch(arrayOf("*/*")) },
                             // Файл из VK — AttachmentPickerSheet(Docs).
                             showFileFromVk = true,
                             onFileFromVk = {
                                 editTopicPickerTab = AttachmentPickerTab.Docs
                                 editTopicShowPicker = true
                             },
+                            // Подарков в темах нет (VK web) — пункт скрыт.
                             showGift = false,
+                            // FIX-2 C: poll. В CreatePostDialog showPoll=true (polls.add
+                            // → poll{owner}_{id}). Для board.editTopic poll НЕ поддерживается:
+                            // VK Board API принимает только photo/video/audio/doc в attachments.
+                            // polls.add создаёт poll для wall.post, не для board. Если
+                            // передать poll{owner}_{id} в board.editTopic → VK вернёт ошибку.
+                            // Документируем это отклонение от CreatePostDialog parity.
                             showPoll = false,
                         )
                     }
-                    if (editTopicUploading) {
+                    if (editTopicUploading || editTopicSubmitting) {
                         Text(
-                            "Загрузка вложения…",
+                            if (editTopicSubmitting) "Сохранение…" else "Загрузка вложения…",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
                     }
-                    // Индикатор выбранных вложений (label + кнопка убрать).
-                    val atts = editTopicAttachments
-                    if (atts != null) {
-                        val attCount = atts.split(',').filter { it.isNotBlank() }.size
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Outlined.AttachFile,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                if (attCount == 1) "Вложение прикреплено"
-                                else "Вложений: $attCount",
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(
-                                onClick = { editTopicAttachments = null },
-                                modifier = Modifier.size(20.dp),
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Close,
-                                    contentDescription = "Убрать",
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            }
-                        }
-                    }
                 }
             },
             confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // FIX-2 E: кнопка «Удалить тему» — открывает confirm-диалог.
+                    TextButton(
+                        onClick = { showDeleteTopicConfirm = true },
+                        enabled = !editTopicSubmitting && !editTopicUploading,
+                    ) {
+                        Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(
+                        onClick = {
+                            if (editTopicTitle.isBlank()) return@TextButton
+                            val t = editTopicTitle.trim()
+                            val fixed = editTopicFixed
+                            val closed = editTopicClosed
+                            // FIX-2: capture списков для smart-cast в корутине.
+                            val existingAtt = editTopicExistingAttachments
+                            val vkAtt = editTopicVkAttachments
+                            val pendingPhotos = editTopicPendingPhotos
+                            val pendingFiles = editTopicPendingFiles
+                            val pendingVideo = editTopicPendingVideoUri
+                            val videoLink = editTopicVideoLinkAttachment
+                            scope.launch {
+                                editTopicSubmitting = true
+                                try {
+                                    // FIX-2: сборка CSV вложений из всех источников
+                                    // (существующие + новые VK + загруженные фото/файлы/видео).
+                                    val attachments = mutableListOf<String>()
+                                    // 1. Существующие вложения (из topicBody, не удалённые ✕).
+                                    for (att in existingAtt) {
+                                        attachmentToCsvString(att)?.let { attachments += it }
+                                    }
+                                    // 2. VK-библиотека (аудио/видео/фото/док из пикера).
+                                    for (va in vkAtt) {
+                                        attachments += va.att
+                                    }
+                                    // 3. Фото с устройства → uploadPhotoForComment (паттерн
+                                    //    CreatePostDialog.postWithAttachments).
+                                    for (uri in pendingPhotos) {
+                                        editTopicUploading = true
+                                        val f = File(ctx.cacheDir,
+                                            "bte_photo_${System.currentTimeMillis()}.jpg")
+                                        try {
+                                            ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                                                f.outputStream().use { out -> ins.copyTo(out) }
+                                            } ?: run {
+                                                Toast.makeText(ctx, "Не удалось прочитать фото",
+                                                    Toast.LENGTH_SHORT).show()
+                                                editTopicUploading = false
+                                                return@launch
+                                            }
+                                            val att = app.apiClient.uploadPhotoForComment(f, "image/*")
+                                            if (att != null) {
+                                                attachments += att
+                                            } else {
+                                                Toast.makeText(ctx, "Не удалось загрузить фото",
+                                                    Toast.LENGTH_SHORT).show()
+                                                editTopicUploading = false
+                                                return@launch
+                                            }
+                                        } finally {
+                                            f.delete()
+                                        }
+                                    }
+                                    editTopicUploading = false
+                                    // 4. Файлы с устройства → uploadDocForComment (паттерн
+                                    //    CreatePostDialog.postWithAttachments).
+                                    for (pf in pendingFiles) {
+                                        val att = app.apiClient.uploadDocForComment(pf.file)
+                                        if (att != null) {
+                                            attachments += att
+                                        } else {
+                                            Toast.makeText(ctx,
+                                                "Не удалось загрузить файл: ${pf.displayName}",
+                                                Toast.LENGTH_SHORT).show()
+                                            return@launch
+                                        }
+                                    }
+                                    // 5. Видео с устройства → videoSave + videoUploadFile
+                                    //    (паттерн CreatePostDialog.postWithAttachments).
+                                    if (pendingVideo != null) {
+                                        val ticket = app.apiClient.videoSave(
+                                            name = "Видео", isClips = false)
+                                        if (ticket == null) {
+                                            Toast.makeText(ctx, "Ошибка подготовки видео",
+                                                Toast.LENGTH_SHORT).show()
+                                            return@launch
+                                        }
+                                        val uploaded = app.apiClient.videoUploadFile(
+                                            ticket.uploadUrl, pendingVideo)
+                                        if (!uploaded) {
+                                            Toast.makeText(ctx, "Ошибка загрузки видео",
+                                                Toast.LENGTH_SHORT).show()
+                                            return@launch
+                                        }
+                                        attachments += buildVkAttachment(
+                                            "video", ticket.ownerId, ticket.videoId)
+                                    }
+                                    // 6. Видео по ссылке (тикет уже получен в VideoLinkDialog).
+                                    if (videoLink != null) {
+                                        attachments += videoLink
+                                    }
+                                    // CSV для board.editTopic (пустая строка = удалить все
+                                    // вложения; null/blank = не отправлять параметр — вложения
+                                    // не меняются, но мы ВСЕГДА отправляем, т.к. edit-диалог
+                                    // должен сохранить текущий набор или заменить на новый).
+                                    val csv = if (attachments.isEmpty()) "" else attachments.joinToString(",")
+                                    // 1. board.editTopic — title + attachments (text НЕ трогаем:
+                                    //    null → VK не обновит тело, как в VK web edit box).
+                                    val ok = app.apiClient.boardEditTopic(
+                                        groupId = groupId,
+                                        topicId = topicId,
+                                        title = t,
+                                        attachments = csv,
+                                    )
+                                    // 2. board.fixTopic/unFixTopic — только если checkbox
+                                    //    изменился относительно актуального состояния темы.
+                                    if (ok && fixed != topicIsFixed) {
+                                        val fixOk = app.apiClient.boardFixTopic(groupId, topicId, fixed = fixed)
+                                        if (fixOk) {
+                                            topicIsFixed = fixed
+                                        } else {
+                                            Toast.makeText(
+                                                ctx,
+                                                "Не удалось закрепить: ${app.apiClient.lastApiError ?: "нет прав"}",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                    // 3. board.closeTopic/openTopic — только если checkbox
+                                    //    изменился относительно актуального состояния темы.
+                                    if (ok && closed != topicIsClosed) {
+                                        val closeOk = app.apiClient.boardCloseTopic(groupId, topicId, closed = closed)
+                                        if (closeOk) {
+                                            topicIsClosed = closed
+                                        } else {
+                                            Toast.makeText(
+                                                ctx,
+                                                "Не удалось закрыть: ${app.apiClient.lastApiError ?: "нет прав"}",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                    if (ok) {
+                                        displayTitle = t
+                                        Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                                        showEditTopicDialog = false
+                                        // Очистка temp-файлов pendingFiles.
+                                        pendingFiles.forEach { it.file.delete() }
+                                        // Перезагрузить тело темы (attachments изменились).
+                                        reloadTrigger++
+                                        // Сообщить nav-слою: список тем в CommunityScreen перечитает title.
+                                        onTopicEdited()
+                                    } else {
+                                        Toast.makeText(
+                                            ctx,
+                                            "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    AppLog.e("BoardTopicScreen", "editTopic submit error", e)
+                                    Toast.makeText(ctx, "Ошибка: ${e.message}",
+                                        Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    editTopicUploading = false
+                                    editTopicSubmitting = false
+                                }
+                            }
+                        },
+                        enabled = editTopicTitle.isNotBlank() && !editTopicUploading && !editTopicSubmitting,
+                    ) { Text(if (editTopicSubmitting) "…" else "Сохранить") }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showEditTopicDialog = false },
+                    enabled = !editTopicSubmitting && !editTopicUploading,
+                ) { Text("Отмена") }
+            },
+        )
+    }
+
+    // FIX-2 E: подтверждение удаления темы (AlertDialog, как CommunityScreen
+    // deleteTopicTarget L3036-3062). board.deleteTopic → onSuccess закрывает
+    // edit-диалог, триггерит refresh (onTopicEdited) и onBack (тема удалена).
+    if (showDeleteTopicConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteTopicConfirm = false },
+            title = { Text("Удалить тему?") },
+            text = { Text("Тема «${editTopicTitle}» будет удалена без возможности восстановления.") },
+            confirmButton = {
                 TextButton(
                     onClick = {
-                        if (editTopicTitle.isBlank()) return@TextButton
-                        val t = editTopicTitle.trim()
-                        val fixed = editTopicFixed
-                        val closed = editTopicClosed
-                        val newAtts = editTopicAttachments
+                        showDeleteTopicConfirm = false
                         scope.launch {
-                            // 1. board.editTopic — title + attachments (text НЕ трогаем:
-                            //    null → VK не обновит тело, как в VK web edit box).
-                            val ok = app.apiClient.boardEditTopic(
-                                groupId = groupId,
-                                topicId = topicId,
-                                title = t,
-                                attachments = newAtts,
-                            )
-                            // 2. board.fixTopic/unFixTopic — только если checkbox
-                            //    изменился относительно актуального состояния темы.
-                            if (ok && fixed != topicIsFixed) {
-                                val fixOk = app.apiClient.boardFixTopic(groupId, topicId, fixed = fixed)
-                                if (fixOk) {
-                                    topicIsFixed = fixed
-                                } else {
-                                    Toast.makeText(
-                                        ctx,
-                                        "Не удалось закрепить: ${app.apiClient.lastApiError ?: "нет прав"}",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
-                            }
-                            // 3. board.closeTopic/openTopic — только если checkbox
-                            //    изменился относительно актуального состояния темы.
-                            if (ok && closed != topicIsClosed) {
-                                val closeOk = app.apiClient.boardCloseTopic(groupId, topicId, closed = closed)
-                                if (closeOk) {
-                                    topicIsClosed = closed
-                                } else {
-                                    Toast.makeText(
-                                        ctx,
-                                        "Не удалось закрыть: ${app.apiClient.lastApiError ?: "нет прав"}",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
-                            }
+                            editTopicSubmitting = true
+                            val ok = app.apiClient.boardDeleteTopic(groupId, topicId)
+                            editTopicSubmitting = false
                             if (ok) {
-                                displayTitle = t
-                                Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
                                 showEditTopicDialog = false
-                                // Перезагрузить тело темы (attachments могли измениться).
-                                reloadTrigger++
-                                // Сообщить nav-слою: список тем в CommunityScreen перечитает title.
+                                Toast.makeText(ctx, "Тема удалена", Toast.LENGTH_SHORT).show()
+                                // Сообщить nav-слою: список тем перечитает без этой темы.
                                 onTopicEdited()
+                                // Вернуться к списку тем (тема больше не существует).
+                                onBack()
                             } else {
                                 Toast.makeText(
                                     ctx,
@@ -1154,48 +1591,87 @@ fun BoardTopicScreen(
                             }
                         }
                     },
-                    enabled = editTopicTitle.isNotBlank() && !editTopicUploading,
-                ) { Text("Сохранить") }
+                    enabled = !editTopicSubmitting,
+                ) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { showEditTopicDialog = false }) { Text("Отмена") }
+                TextButton(
+                    onClick = { showDeleteTopicConfirm = false },
+                    enabled = !editTopicSubmitting,
+                ) { Text("Отмена") }
             },
         )
     }
 
-    // EDIT-TOPIC-MODAL: AttachmentPickerSheet для модалки редактирования (фото/
-    // документы/аудио/видео из библиотеки VK — без upload, VK уже имеет объекты;
-    // аудио/видео табы всегда рендерятся в пикере → колбэки обязаны быть
-    // функциональными: board.editTopic принимает тот же CSV, что и board.addTopic).
+    // FIX-2 C: AttachmentPickerSheet для edit-диалога (фото/документы/аудио/
+    // видео из библиотеки VK — БЕЗ upload, VK уже имеет объекты). multiSelect=true
+    // (parity с CreatePostDialog) — пользователь выбирает несколько, «Готово (N)»
+    // flush'ит все в editTopicVkAttachments. onPick НЕ закрывает picker (multi).
     if (editTopicShowPicker) {
         AttachmentPickerSheet(
             onDismiss = { editTopicShowPicker = false },
             initialTab = editTopicPickerTab,
+            multiSelect = true,
             showGiftTab = false,
             showPhotoTab = true,
             showDocsTab = true,
             onPickAudio = { track ->
-                editTopicAttachments = appendAttachmentCsv(
-                    editTopicAttachments,
+                editTopicVkAttachments = editTopicVkAttachments + EditTopicVkPreview(
                     buildVkAttachment("audio", track.ownerId, track.id, track.accessKey),
+                    "Музыка: ${track.title}",
+                    track.albumThumb,
                 )
-                editTopicShowPicker = false
             },
             onPickVideo = { video ->
-                editTopicAttachments = appendAttachmentCsv(
-                    editTopicAttachments,
+                val poster = video.image?.maxByOrNull { it.width }?.url
+                editTopicVkAttachments = editTopicVkAttachments + EditTopicVkPreview(
                     buildVkAttachment("video", video.ownerId, video.id, video.accessKey),
+                    "Видео: ${video.title.ifBlank { "видео" }}",
+                    poster,
                 )
-                editTopicShowPicker = false
             },
-            onPickPhotoAttachment = { att, _ ->
-                // _ = thumb: превью тут не нужно, только attachment-строка.
-                editTopicAttachments = appendAttachmentCsv(editTopicAttachments, att)
-                editTopicShowPicker = false
+            onPickPhotoAttachment = { att, thumb ->
+                editTopicVkAttachments = editTopicVkAttachments +
+                    EditTopicVkPreview(att, "Фото из VK", thumb)
             },
-            onPickDocAttachment = { att, _ ->
-                editTopicAttachments = appendAttachmentCsv(editTopicAttachments, att)
-                editTopicShowPicker = false
+            onPickDocAttachment = { att, title ->
+                editTopicVkAttachments = editTopicVkAttachments +
+                    EditTopicVkPreview(att, "Документ: $title")
+            },
+        )
+    }
+
+    // FIX-2 C: диалог «Видео по ссылке» (video.save link_url) — parity с
+    // CreatePostDialog.VideoLinkDialog. VK скачивает видео с внешнего ресурса.
+    if (editTopicShowVideoLinkDialog) {
+        EditTopicVideoLinkDialog(
+            loading = editTopicVideoLinkLoading,
+            onDismiss = { if (!editTopicVideoLinkLoading) editTopicShowVideoLinkDialog = false },
+            onAttach = { link ->
+                scope.launch {
+                    editTopicVideoLinkLoading = true
+                    try {
+                        val ticket = app.apiClient.videoSave(
+                            name = "Видео по ссылке",
+                            isClips = false,
+                            linkUrl = link,
+                        )
+                        if (ticket == null) {
+                            Toast.makeText(ctx, "Не удалось добавить видео по ссылке",
+                                Toast.LENGTH_SHORT).show()
+                        } else {
+                            editTopicVideoLinkAttachment = buildVkAttachment(
+                                "video", ticket.ownerId, ticket.videoId)
+                            editTopicShowVideoLinkDialog = false
+                        }
+                    } catch (e: Exception) {
+                        AppLog.e("BoardTopicScreen", "edit-topic videoSave(link) error", e)
+                        Toast.makeText(ctx, "Не удалось добавить видео по ссылке",
+                            Toast.LENGTH_SHORT).show()
+                    } finally {
+                        editTopicVideoLinkLoading = false
+                    }
+                }
             },
         )
     }
@@ -1256,6 +1732,207 @@ fun BoardTopicScreen(
  */
 private fun appendAttachmentCsv(current: String?, add: String): String =
     if (current.isNullOrBlank()) add else "$current,$add"
+
+// ── FIX-2: edit-topic parity helpers (data classes + helpers) ──────────────
+
+/**
+ * FIX-2: VK-вложение edit-диалога с превью (parity с CreatePostDialog.VkAttachPreview).
+ * att — готовая attachment-строка ("audio{owner}_{id}[_key]"), label — текст-превью,
+ * thumb — URL миниатюры (для фото/видео/аудио, null для документов).
+ */
+private data class EditTopicVkPreview(
+    val att: String,
+    val label: String,
+    val thumb: String? = null,
+)
+
+/**
+ * FIX-2: файл, ожидающий отправки в edit-диалоге (выбран через OpenMultipleDocuments).
+ * Паритет с CreatePostDialog.PendingPostFile.
+ */
+private data class PendingTopicFile(
+    val id: Long,
+    val file: File,
+    val displayName: String,
+)
+
+/** Генератор уникальных id для [PendingTopicFile]. */
+private val editTopicFileIdCounter = java.util.concurrent.atomic.AtomicLong(0)
+private fun nextPendingTopicFileId(): Long = editTopicFileIdCounter.incrementAndGet()
+
+/**
+ * FIX-2 A: конвертация существующего [Attachment] (из topicBody.attachments) в
+ * VK attachment-строку для CSV ("photo{owner}_{id}[_key]" и т.д.). VK board.editTopic
+ * ЗАМЕНЯЕТ весь набор вложений — поэтому существующие конвертируются в CSV, чтобы
+ * пользователь мог их сохранить (или удалить ✕ — тогда они не попадут в CSV).
+ * Неподдерживаемые типы (sticker/wall/…) возвращают null (пропускаются).
+ */
+private fun attachmentToCsvString(att: Attachment): String? = when (att.type) {
+    "photo" -> att.photo?.let { buildVkAttachment("photo", it.ownerId, it.id) }
+    "video" -> att.video?.let { buildVkAttachment("video", it.ownerId, it.id, it.accessKey) }
+    "audio" -> att.audio?.let { buildVkAttachment("audio", it.ownerId, it.id, it.accessKey) }
+    "doc" -> att.doc?.let { buildVkAttachment("doc", it.ownerId, it.id, it.accessKey) }
+    "poll" -> att.poll?.let { buildVkAttachment("poll", it.ownerId, it.id) }
+    else -> null
+}
+
+/**
+ * FIX-2 B: иконка для существующего вложения в AttachmentLabelRow (✕-удаление).
+ * Использует thumb URL где доступно (фото/видео/аудио), иначе — иконка-фолбэк.
+ */
+@Composable
+private fun editTopicExistingAttachmentIcon(att: Attachment) {
+    when (att.type) {
+        "photo" -> {
+            val url = att.photo?.largestUrl
+            if (url != null) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(Icons.Outlined.AttachFile, contentDescription = null)
+            }
+        }
+        "video" -> {
+            val poster = att.video?.image?.maxByOrNull { it.width }?.url
+            if (poster != null) {
+                AsyncImage(
+                    model = poster,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(Icons.Outlined.VideoLibrary, contentDescription = null)
+            }
+        }
+        "audio" -> {
+            val thumb = att.audio?.albumThumb
+            if (thumb != null) {
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(Icons.Outlined.AttachFile, contentDescription = null)
+            }
+        }
+        "doc" -> Icon(Icons.Outlined.Description, contentDescription = null)
+        else -> Icon(Icons.Outlined.AttachFile, contentDescription = null)
+    }
+}
+
+/**
+ * FIX-2 B: текст-превью для существующего вложения в AttachmentLabelRow.
+ */
+private fun editTopicExistingAttachmentLabel(att: Attachment): String = when (att.type) {
+    "photo" -> "Фото"
+    "video" -> "Видео: ${att.video?.title?.ifBlank { "видео" } ?: "видео"}"
+    "audio" -> "Музыка: ${att.audio?.fullTitle ?: "аудио"}"
+    "doc" -> "Документ: ${att.doc?.title ?: "файл"}"
+    "poll" -> "Опрос: ${att.poll?.question ?: ""}"
+    else -> "Вложение: ${att.type}"
+}
+
+/**
+ * FIX-2 B: строка-превью вложения (иконка + подпись + кнопка ✕) — parity с
+ * CreatePostDialog.AttachmentLabelRow. Используется для существующих и новых
+ * вложений в edit-диалоге. IconButton — дефолтный (48dp тач-таргет).
+ */
+@Composable
+private fun EditTopicAttachmentLabelRow(
+    icon: @Composable () -> Unit,
+    label: String,
+    onRemove: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon()
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onRemove) {
+            Icon(
+                Icons.Outlined.Close,
+                contentDescription = "Удалить вложение",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * FIX-2 C: диалог «Видео по ссылке» — parity с CreatePostDialog.VideoLinkDialog.
+ * video.save(link_url=…) → тикет → attachment "video{owner}_{id}" (upload не нужен,
+ * VK скачивает сам).
+ */
+@Composable
+private fun EditTopicVideoLinkDialog(
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onAttach: (String) -> Unit,
+) {
+    var url by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Видео по ссылке") },
+        text = {
+            Column {
+                Text(
+                    text = "VK скачает видео с внешнего ресурса. " +
+                        "Оно появится в теме после серверной обработки.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Ссылка на видео") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    enabled = !loading,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val link = if (url.startsWith("http://") || url.startsWith("https://")) {
+                        url.trim()
+                    } else {
+                        "https://${url.trim()}"
+                    }
+                    onAttach(link)
+                },
+                enabled = url.isNotBlank() && !loading,
+            ) {
+                Text(if (loading) "Загрузка…" else "Прикрепить")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !loading) { Text("Отмена") }
+        },
+    )
+}
 
 /**
  * Склонение «комментарий/комментария/комментариев» по числу (RU plural rules).

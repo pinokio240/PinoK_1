@@ -179,7 +179,15 @@ fun CommunityScreen(
     // EDIT-TOPIC-CHECKBOXES: +isFixed/isClosed — передаются в SovaNavHost для
     // инициализации checkbox'ов «Закрепить/Закрыть тему» в AlertDialog
     // редактирования темы (board.getTopics уже вернул is_fixed/is_closed).
-    onTopicClick: (groupId: Long, topicId: Long, title: String, isFixed: Int, isClosed: Int) -> Unit = { _, _, _, _, _ -> },
+    // FIX-4 BUG-2: +offset/sort — для мини-пагинации «Стр. 1 2 3» (открыть
+    // тему на конкретной странице комментариев; offset кратен PAGE_SIZE=20).
+    // FIX-4 BUG-6: +canManage — гейт Switch «От имени сообщества» в composer
+    // (board.createComment from_group=1) — передаём canManageAlbums (isManager).
+    onTopicClick: (
+        groupId: Long, topicId: Long, title: String,
+        isFixed: Int, isClosed: Int,
+        offset: Int = 0, sort: String = "asc", canManage: Boolean = false,
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
     // B-C: FAB «+ Создать тему» → Screen.CreateBoardTopic (форма создания темы).
     // Гейтится canAddTopics (board.getTopics can_add_topics) на уровне FAB.
     onCreateTopic: () -> Unit = {},
@@ -462,9 +470,8 @@ fun CommunityScreen(
     var canAddTopics by remember { mutableStateOf(false) }
     // TOPICS-REFRESH: topicsRefreshTick приходит из SovaNavHost savedStateHandle.
     // При topicsRefreshTick > 0 → перезагрузка списка тем (после создания/удаления).
-    LaunchedEffect(topicsRefreshTick) {
-        if (topicsRefreshTick > 0) onTopicsRefreshConsumed()
-    }
+    // FIX-4 BUG-1: consume перенесён ВНУТЬ Effect B (после loadFirst) — отдельный
+    // Effect A сбрасывал tick 1→0 ПАРАЛЛЕЛЬНО с HTTP, что отменяло loadFirst.
     // B-C: long-press меню темы (Закрепить/Закрыть/Удалить) — только для админа.
     var showTopicMenu by remember { mutableStateOf<BoardTopic?>(null) }
     var deleteTopicTarget by remember { mutableStateOf<BoardTopic?>(null) }
@@ -1087,13 +1094,20 @@ fun CommunityScreen(
     // TOPICS-REFRESH: topicsRefreshTick в ключах — перезагружает список после
     // создания/удаления темы. При первом входе — loadFirst (если пусто).
     // При topicsRefreshTick++ — reload (сброс к первой странице).
+    // FIX-4 BUG-1: consume ПОСЛЕ loadFirst (try/finally) — иначе topicsRefreshTick
+    // 1→0 во время HTTP → recompose → Effect отменяется → HTTP прерывается.
     LaunchedEffect(selectedTab, groupId, topicsRefreshTick) {
         if (selectedTab == 5 && !topicsState.loading) {
             if (topicsState.items.isEmpty() && topicsState.cursor == null) {
                 topicsState.loadFirst()
             } else if (topicsRefreshTick > 0) {
                 // Перезагрузка после CRUD — сбросить к первой странице.
-                topicsState.loadFirst()
+                // consume в finally — гарантия сброса tick даже при ошибке.
+                try {
+                    topicsState.loadFirst()
+                } finally {
+                    onTopicsRefreshConsumed()
+                }
             }
         }
     }
@@ -2460,12 +2474,17 @@ fun CommunityScreen(
                                     // «Все видео» → меню. «Добавить в альбом» — только
                                     // админ (canManageAlbums). «Добавить себе» — всем,
                                     // если видео чужое (video.ownerId != currentUserId).
+                                    // FIX-4 BUG-5: «Удалить видео» добавлено в grid-меню
+                                    // «Все видео» (как в открытом альбоме на стр. ~2147) —
+                                    // для видео, принадлежащих сообществу (ownerId=-groupId),
+                                    // только админ (canManageAlbums).
                                     VideoContextMenuDropdown(
                                         target = video,
                                         state = showVideoMenuFor,
                                         onDismiss = { showVideoMenuFor = null },
                                         showAddToAlbum = canManageAlbums,
                                         showAddToSelf = video.ownerId != currentUserId,
+                                        showDeleteVideo = canManageAlbums && video.ownerId == -groupId,
                                         onAddToAlbum = {
                                             showVideoMenuFor = null
                                             addToAlbumTarget = video
@@ -2486,6 +2505,10 @@ fun CommunityScreen(
                                                     Toast.makeText(videoCrudContext, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
+                                        },
+                                        onDeleteVideo = {
+                                            showVideoMenuFor = null
+                                            deleteVideoTarget = video
                                         },
                                     )
                                 }
@@ -2827,7 +2850,26 @@ fun CommunityScreen(
                                 onLongClick = openTopicMenu,
                                 // EDIT-TOPIC-CHECKBOXES: передаём isFixed/isClosed для
                                 // инициализации checkbox'ов в AlertDialog редактирования.
-                                onClick = { onTopicClick(groupId, topic.id, topic.title, topic.isFixed, topic.isClosed) },
+                                // FIX-4 BUG-2: обычный тап по строке → страница 1 (offset=0).
+                                // FIX-4 BUG-6: +canManage (canManageAlbums=isManager).
+                                onClick = {
+                                    onTopicClick(
+                                        groupId, topic.id, topic.title,
+                                        topic.isFixed, topic.isClosed,
+                                        /* offset = */ 0, /* sort = */ "asc",
+                                        /* canManage = */ canManageAlbums,
+                                    )
+                                },
+                                // FIX-4 BUG-2: мини-пагинация «Стр. 1 2 3» — открыть
+                                // тему на странице N (offset=(N-1)*20, кратно PAGE_SIZE=20).
+                                onPageClick = { page ->
+                                    onTopicClick(
+                                        groupId, topic.id, topic.title,
+                                        topic.isFixed, topic.isClosed,
+                                        /* offset = */ (page - 1) * 20, /* sort = */ "asc",
+                                        /* canManage = */ canManageAlbums,
+                                    )
+                                },
                             )
                         }
                     }
@@ -3373,9 +3415,12 @@ fun CommunityScreen(
             albumOwnerId = -groupId,     // target_id = владелец альбома (сообщество)
             onDismiss = { showAddVideoSearchFor = null },
             onAdded = { video ->
-                // Optimistic update (albumVideosRefreshTick НЕ заведён —
-                // просто добавляем в список открытого альбома).
+                // Optimistic update: сразу добавляем в список открытого альбома.
+                // FIX-4 BUG-3: +videoAlbumsRefreshTick++ — обновить счётчик на
+                // карточке альбома (videoAlbums) после добавления видео в альбом
+                // (как ProfileScreen:2668 — иначе счётчик отстаёт на +1).
                 albumVideos = albumVideos + video
+                videoAlbumsRefreshTick++
             },
         )
     }
@@ -3502,6 +3547,9 @@ private fun formatMemberCount(n: Int): String {
  *
  * @param topic   Тема (BoardTopic)
  * @param onClick Callback тапа → onTopicClick(groupId, topicId, title, isFixed, isClosed)
+ * @param onPageClick FIX-4 BUG-2: тап по кнопке мини-пагинации «Стр. N» —
+ *        открывает тему на странице N (offset=(N-1)*20). null/empty = кнопки
+ *        скрыты (legacy behavior — все кнопки вызывали onClick).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -3510,6 +3558,7 @@ private fun BoardTopicRow(
     authors: Map<Long, UserProfile>,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
+    onPageClick: ((page: Int) -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier
@@ -3640,10 +3689,13 @@ private fun BoardTopicRow(
                     }
                 }
                 // B-FIX-1: mini-пагинация «Стр. 1 2 3 4» для тем с >20 комм.
-                // (как в VK web — offset=N*20). Page-кнопки открывают тему
-                // (открытие на конкретной странице требует offset в route — вне scope).
-                if (topic.comments > 20) {
+                // (как в VK web — offset=N*20).
+                // FIX-4 BUG-2: page-кнопки открывают тему на конкретной странице
+                // (offset=(p-1)*20 через route) — РАНЬШЕ все кнопки вызывали один
+                // onClick (открывали тему на стр.1). Гейт по onPageClick != null.
+                if (topic.comments > 20 && onPageClick != null) {
                     val pages = (topic.comments + 19) / 20
+                    val pageClick = onPageClick
                     Row(
                         modifier = Modifier.padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -3656,7 +3708,7 @@ private fun BoardTopicRow(
                         val maxPages = min(pages, 6)
                         for (p in 1..maxPages) {
                             TextButton(
-                                onClick = onClick,
+                                onClick = { pageClick(p) },
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                             ) {
                                 Text(

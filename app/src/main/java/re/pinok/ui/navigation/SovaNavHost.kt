@@ -2813,8 +2813,11 @@ composable(Screen.CallsHistory.route) {
                         // Шаг 4 (#32d): тап по теме обсуждения → BoardTopicScreen.
                         // EDIT-TOPIC-CHECKBOXES: передаём isFixed/isClosed для
                         // инициализации checkbox'ов в AlertDialog редактирования.
-                        onTopicClick = { gId, topicId, topicTitle, isFixed, isClosed ->
-                            nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle, isFixed, isClosed))
+                        // FIX-4 BUG-2: +offset/sort — для мини-пагинации «Стр. 1 2 3»
+                        // (открытие темы на конкретной странице комментариев).
+                        // FIX-4 BUG-6: +canManage — гейт Switch «От имени сообщества».
+                        onTopicClick = { gId, topicId, topicTitle, isFixed, isClosed, offset, sort, canManage ->
+                            nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle, isFixed, isClosed, offset, sort, canManage))
                         },
                         // B-C: FAB «+ Создать тему» → форма создания (CreateBoardTopicScreen).
                         onCreateTopic = {
@@ -3143,6 +3146,25 @@ composable(Screen.CallsHistory.route) {
                             type = NavType.IntType
                             defaultValue = 0
                         },
+                        // FIX-4 BUG-2: offset (VK API offset комментариев) — для
+                        // мини-пагинации «Стр. 1 2 3» в CommunityScreen (открыть
+                        // тему на конкретной странице).
+                        navArgument(Screen.BoardTopic.ARG_OFFSET) {
+                            type = NavType.IntType
+                            defaultValue = 0
+                        },
+                        // FIX-4 BUG-2: sort комментариев ("asc"|"desc") — пока всегда
+                        // "asc" из мини-пагинации (sort-переключатель в BoardTopicScreen).
+                        navArgument(Screen.BoardTopic.ARG_SORT) {
+                            type = NavType.StringType
+                            defaultValue = "asc"
+                        },
+                        // FIX-4 BUG-6: canManage (isManager из CommunityScreen) —
+                        // гейт Switch «От имени сообщества» в composer.
+                        navArgument(Screen.BoardTopic.ARG_CAN_MANAGE) {
+                            type = NavType.BoolType
+                            defaultValue = false
+                        },
                     ),
                 ) { entry ->
                     val gId = entry.arguments?.getLong(Screen.BoardTopic.ARG_GROUP_ID) ?: 0L
@@ -3150,6 +3172,9 @@ composable(Screen.CallsHistory.route) {
                     val tTitle = entry.arguments?.getString(Screen.BoardTopic.ARG_TITLE) ?: "Обсуждение"
                     val tIsFixed = entry.arguments?.getInt(Screen.BoardTopic.ARG_IS_FIXED) ?: 0
                     val tIsClosed = entry.arguments?.getInt(Screen.BoardTopic.ARG_IS_CLOSED) ?: 0
+                    val tOffset = entry.arguments?.getInt(Screen.BoardTopic.ARG_OFFSET) ?: 0
+                    val tSort = entry.arguments?.getString(Screen.BoardTopic.ARG_SORT) ?: "asc"
+                    val tCanManage = entry.arguments?.getBoolean(Screen.BoardTopic.ARG_CAN_MANAGE) ?: false
                     BoardTopicScreen(
                         groupId = gId,
                         topicId = tId,
@@ -3165,6 +3190,12 @@ composable(Screen.CallsHistory.route) {
                         // EDIT-TOPIC-CHECKBOXES: исходное состояние темы.
                         isFixed = tIsFixed,
                         isClosed = tIsClosed,
+                        // FIX-4 BUG-2: открытие темы на конкретной странице (offset
+                        // из мини-пагинации). initialSort — дефолт "asc".
+                        initialOffset = tOffset,
+                        initialSort = tSort,
+                        // FIX-4 BUG-6: гейт Switch «От имени сообщества» (isManager).
+                        canManage = tCanManage,
                         // EDIT-TOPIC-MODAL: редактирование темы — AlertDialog внутри
                         // BoardTopicScreen (как CreatePostDialog), БЕЗ отдельного экрана.
                         // После успешного edit — флаг topics_need_refresh, чтобы список
