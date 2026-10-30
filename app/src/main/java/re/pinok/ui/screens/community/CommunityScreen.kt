@@ -169,6 +169,9 @@ fun CommunityScreen(
     // P0.18 (Task 30): начальная вкладка при открытии CommunityScreen из stories
     // overlay (Фото автора → tab=1, Видео автора → tab=2). Default 0 (Записи).
     initialTab: Int = 0,
+    // TOPICS-REFRESH: тик для перезагрузки списка тем (из SovaNavHost savedStateHandle).
+    topicsRefreshTick: Int = 0,
+    onTopicsRefreshConsumed: () -> Unit = {},
     onVideoClick: (Video) -> Unit = {},
     onPostClick: (Post) -> Unit = {},
     onUserClick: (Long) -> Unit = {},
@@ -457,6 +460,11 @@ fun CommunityScreen(
     // authors/canAddTopics мёрджатся между страницами (как signerNames для стены).
     var topicsAuthors by remember { mutableStateOf<Map<Long, UserProfile>>(emptyMap()) }
     var canAddTopics by remember { mutableStateOf(false) }
+    // TOPICS-REFRESH: topicsRefreshTick приходит из SovaNavHost savedStateHandle.
+    // При topicsRefreshTick > 0 → перезагрузка списка тем (после создания/удаления).
+    LaunchedEffect(topicsRefreshTick) {
+        if (topicsRefreshTick > 0) onTopicsRefreshConsumed()
+    }
     // B-C: long-press меню темы (Закрепить/Закрыть/Удалить) — только для админа.
     var showTopicMenu by remember { mutableStateOf<BoardTopic?>(null) }
     var deleteTopicTarget by remember { mutableStateOf<BoardTopic?>(null) }
@@ -1075,11 +1083,18 @@ fun CommunityScreen(
             .collect { loadMoreCommunityTracks() }
     }
 
-    // Шаг 4 (#32d): первая загрузка тем обсуждений при переходе на вкладку 5.
-    // Фаза 0/1: PagedListState + показан список пуст → грузим первую страницу.
-    LaunchedEffect(selectedTab, groupId) {
-        if (selectedTab == 5 && !topicsState.loading && topicsState.items.isEmpty() && topicsState.cursor == null) {
-            topicsState.loadFirst()
+    // Шаг 4 (#32d): загрузка тем обсуждения при переходе на вкладку 5.
+    // TOPICS-REFRESH: topicsRefreshTick в ключах — перезагружает список после
+    // создания/удаления темы. При первом входе — loadFirst (если пусто).
+    // При topicsRefreshTick++ — reload (сброс к первой странице).
+    LaunchedEffect(selectedTab, groupId, topicsRefreshTick) {
+        if (selectedTab == 5 && !topicsState.loading) {
+            if (topicsState.items.isEmpty() && topicsState.cursor == null) {
+                topicsState.loadFirst()
+            } else if (topicsRefreshTick > 0) {
+                // Перезагрузка после CRUD — сбросить к первой странице.
+                topicsState.loadFirst()
+            }
         }
     }
 

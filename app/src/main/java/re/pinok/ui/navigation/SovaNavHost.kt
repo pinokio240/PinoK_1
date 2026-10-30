@@ -2786,8 +2786,18 @@ composable(Screen.CallsHistory.route) {
                     val groupId = entry.arguments?.getLong(Screen.Community.ARG_GROUP_ID) ?: 0L
                     val initialTab = entry.arguments?.getString(Screen.Community.ARG_TAB)?.toIntOrNull()
                         ?.coerceIn(0, 6) ?: 0
+                    // TOPICS-REFRESH: проверяем savedStateHandle — флаг устанавливается
+                    // при создании/удалении темы (CreateBoardTopicScreen.onCreated /
+                    // BoardTopicScreen.onBack после deleteTopic).
+                    val topicsNeedRefresh = entry.savedStateHandle
+                        .getStateFlow<Boolean>("topics_need_refresh", false)
+                        .collectAsState()
                     CommunityScreen(
                         groupId = groupId,
+                        topicsRefreshTick = if (topicsNeedRefresh.value) 1 else 0,
+                        onTopicsRefreshConsumed = {
+                            entry.savedStateHandle["topics_need_refresh"] = false
+                        },
                         initialTab = initialTab,
                         onBack = { nav.popBackStack() },
                         onVideoClick = { video ->
@@ -3166,6 +3176,9 @@ composable(Screen.CallsHistory.route) {
                         groupId = gId,
                         onBack = { nav.popBackStack() },
                         onCreated = { topicId, topicTitle ->
+                            // TOPICS-REFRESH: устанавливаем флаг для CommunityScreen.
+                            nav.getBackStackEntry(Screen.Community.route)
+                                .savedStateHandle["topics_need_refresh"] = true
                             nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle)) {
                                 popUpTo(Screen.CreateBoardTopic.route) { inclusive = true }
                             }
