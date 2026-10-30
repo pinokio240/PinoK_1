@@ -5416,7 +5416,7 @@ class VKApiClient(
             "group_id" to groupId.toString(),
             "topic_id" to topicId.toString(),
             "comment_id" to commentId.toString(),
-            "text" to text,
+            "message" to text,
         )
         // from_group: 1=от имени сообщества (B-FIX-A, TRACER-2 gap).
         // VK web SPA не рендерит toggle, но параметр принимается API напрямую.
