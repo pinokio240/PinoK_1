@@ -3007,9 +3007,14 @@ fun CommunityScreen(
                     TextButton(
                         onClick = {
                             showTopicMenu = null
-                            // TODO: VK не имеет board.reportTopic; заглушка toast,
-                            // дальше через общий VK report flow (wall.reportPost-like).
-                            Toast.makeText(ctx, "Жалоба отправляется...", Toast.LENGTH_SHORT).show()
+                            // FIX-TODO-2: VK API не имеет board.reportTopic — toast-заглушка
+                            // (как VK web report flow; реальной отправки жалобы на тему нет,
+                            // т.к. метод отсутствует в VK API). Поведение оставлено как toast.
+                            Toast.makeText(
+                                ctx,
+                                "Жалоба на тему недоступна: VK API не поддерживает",
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {

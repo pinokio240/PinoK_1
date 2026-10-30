@@ -2146,7 +2146,17 @@ fun FeedScreen(
                             AppLog.d("FeedScreen", "pin toggle: ok=$ok")
                         }
                     },
-                    onEditPost = { /* TODO: экран редактирования поста */ },
+                    onEditPost = {
+                        // FIX-TODO-2: экран редактирования поста не реализован →
+                        // toast-заглушка (не молчаливый тап). wall.edit работает,
+                        // но отдельный экран редактирования — отдельная задача.
+                        val ctx = LocalContext.current
+                        android.widget.Toast.makeText(
+                            ctx,
+                            "Редактирование поста скоро",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    },
                     onHideFromFeed = { p ->
                         scope.launch {
                             val ok = app.apiClient.newsfeedIgnoreItem("wall", p.ownerId, p.id)

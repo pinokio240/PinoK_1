@@ -1,6 +1,7 @@
 package re.pinok.ui.screens.clips
 
 import android.Manifest
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -487,13 +488,16 @@ private fun ReviewStage(
             )
             Spacer(Modifier.height(8.dp))
 
-            // Music picker (stub — TODO: добавить audio search dialog).
+            // Music picker (FIX-TODO-2: §37.12 music picker не реализован → toast-заглушка,
+            // тап не молчаливый; полноценный audio-search-dialog — отдельная задача).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color.White.copy(alpha = 0.08f))
-                    .clickable { /* TODO §37.12: music picker */ }
+                    .clickable {
+                        Toast.makeText(context, "Выбор музыки скоро", Toast.LENGTH_SHORT).show()
+                    }
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

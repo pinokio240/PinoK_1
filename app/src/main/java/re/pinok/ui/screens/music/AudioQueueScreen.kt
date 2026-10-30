@@ -1,6 +1,7 @@
 // File: ui/screens/music/AudioQueueScreen.kt
 package re.pinok.ui.screens.music
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,7 +60,7 @@ import kotlin.math.abs
  * Fix #62: Экран очереди воспроизведения (список «Далее»).
  *
  * Моделирован по скриншоту SOVA reference (Screenshot_20260628_185136.png):
- *  — Заголовок «Далее» + кнопка «Сохранить как плейлист» (TODO)
+ *  — Заголовок «Далее» + кнопка «Сохранить как плейлист» (FIX-TODO-2: toast)
  *  — Список треков очереди
  *  — Текущий трек выделен иконкой play/pause
  *  — Тап по треку → переключение на него (seekToDefaultPosition)
@@ -83,6 +85,7 @@ fun AudioQueueScreen(
 ) {
     BackHandler { onBack() }
 
+    val context = LocalContext.current
     val playerState by PlayerConnection.playerState.collectAsState()
 
     val vkBlack = Color(0xFF0F0F10)
@@ -152,7 +155,9 @@ fun AudioQueueScreen(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clickable { /* TODO: сохранение в плейлист */ }
+                    .clickable {
+                        Toast.makeText(context, "Сохранение в плейлист скоро", Toast.LENGTH_SHORT).show()
+                    }
                     .padding(horizontal = 8.dp, vertical = 8.dp),
             )
         }
@@ -286,6 +291,7 @@ private fun QueueTrackRow(
     // Волна 31 #AUDIO-QUEUE-PLAYLIST: пройденные треки приглушены (как в VK
     // web queue). alpha стоит ПОСЛЕ background в цепочке — фон текущего трека
     // не мутнеет, приглушается только контент.
+    val context = LocalContext.current
     val contentAlpha = if (isPast && !isCurrent) 0.45f else 1f
     Row(
         modifier = Modifier
@@ -350,7 +356,10 @@ private fun QueueTrackRow(
             )
         }
 
-        IconButton(onClick = { /* TODO: меню трека */ }) {
+        // FIX-TODO-2: меню трека не реализовано → toast-заглушка (не молчаливый тап).
+        IconButton(onClick = {
+            Toast.makeText(context, "Меню трека скоро", Toast.LENGTH_SHORT).show()
+        }) {
             Icon(Icons.Filled.MoreVert, "Ещё", tint = secondaryColor, modifier = Modifier.size(20.dp))
         }
     }

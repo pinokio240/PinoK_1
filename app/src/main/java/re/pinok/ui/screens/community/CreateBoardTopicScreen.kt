@@ -58,13 +58,16 @@ import re.pinok.SovaApp
  * возвращает пользователя обратно к пустой форме.
  *
  * Source API (коммит af0fdb3):
- *   suspend fun boardAddTopic(groupId, title, text, fromGroup=0): Long?
+ *   suspend fun boardAddTopic(groupId, title, text, fromGroup=0, attachments=null): Long?
  *   — возвращает topic_id (response.topic_id ?: response.id) или null.
+ *   FIX-TODO-2: attachments добавлен (паритет с boardCreateComment), но экран
+ *   пока передаёт null (upload-flow не реализован).
  *
- * НЕ включает (TODO-заглушки B-FIX-4): реальный attach-payload для
- * 6 кнопок (device/photo/video/audio/file/poll) и emoji-picker — кнопки
- * видны как в снапшоте VK web (HTML4), но onClick — пустые TODO. Сам
- * board.addTopic не принимает attachments — нужен отдельный upload-flow.
+ * FIX-TODO-2 (B-FIX-4 resolved): 6 attach-кнопок (device/photo/video/audio/
+ * file/poll) и emoji — onClick теперь показывает toast «Прикрепление в
+ * разработке» / «Эмодзи скоро», а НЕ молчаливая заглушка. board.addTopic принимает
+ * attachments, но для реального attach нужен upload-flow (uploadPhotoForComment →
+ * photo{ownerId}_{id}) — отдельная задача; сигнатура уже готова (см. выше).
  *
  * B-FIX-A (TRACER-2 gap): Switch «От имени сообщества» (from_group).
  * В VK web SPA toggle НЕ рендерится (только в legacy /al_board.php modal
@@ -166,48 +169,61 @@ fun CreateBoardTopicScreen(
 
             // B-FIX-4 (#SCOUT-BOARD-SNAP HTML4): ряд attach-кнопок 24×24 + emoji,
             // как в форме создания темы VK web. Слева 6 кнопок attach, справа
-            // emoji-smile. onClick — TODO-заглушки (attach-payload не реализован).
+            // emoji-smile. FIX-TODO-2: onClick → toast (attach-payload/upload-flow
+            // не реализован; сигнатура boardAddTopic уже принимает attachments).
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { /* TODO upload from device */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.AttachFile,
                         contentDescription = "С устройства",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = { /* TODO photo */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Загрузка фото скоро", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.PhotoCamera,
                         contentDescription = "Фото",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = { /* TODO video */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.VideoCameraBack,
                         contentDescription = "Видео",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = { /* TODO audio */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.MusicNote,
                         contentDescription = "Аудио",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = { /* TODO file/doc */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.Description,
                         contentDescription = "Файл",
                         modifier = Modifier.size(24.dp),
                     )
                 }
-                IconButton(onClick = { /* TODO poll */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Прикрепление в разработке", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.Poll,
                         contentDescription = "Опрос",
@@ -215,7 +231,9 @@ fun CreateBoardTopicScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = { /* TODO emoji */ }) {
+                IconButton(onClick = {
+                    Toast.makeText(ctx, "Эмодзи скоро", Toast.LENGTH_SHORT).show()
+                }) {
                     Icon(
                         Icons.Outlined.EmojiEmotions,
                         contentDescription = "Эмодзи",

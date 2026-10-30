@@ -5302,9 +5302,22 @@ class VKApiClient(
      * @param title заголовок (max 255)
      * @param text текст темы (max 4096)
      * @param fromGroup 1=от имени группы, 0=от себя
+     * @param attachments CSV-список вложений (FIX-TODO-2, паритет с boardCreateComment):
+     *   `<type><owner_id>_<media_id>,...` (фото/видео/аудио/документ). VK API
+     *   board.addTopic принимает attachments напрямую; экран создания темы пока
+     *   передаёт null (attach-кнопки → toasts, upload-flow не реализован) —
+     *   параметр добавлен forward-compat, чтобы будущий upload-flow
+     *   (uploadPhotoForComment/uploadDocForComment) сразу его использовал без
+     *   правки сигнатуры.
      * @return ID созданной темы, или null при ошибке
      */
-    suspend fun boardAddTopic(groupId: Long, title: String, text: String, fromGroup: Int = 0): Long? {
+    suspend fun boardAddTopic(
+        groupId: Long,
+        title: String,
+        text: String,
+        fromGroup: Int = 0,
+        attachments: String? = null,
+    ): Long? {
         if (isOffline()) return null
         val args = mutableMapOf(
             "group_id" to groupId.toString(),
@@ -5312,6 +5325,10 @@ class VKApiClient(
             "text" to text,
             "from_group" to fromGroup.toString(),
         )
+        // FIX-TODO-2: attachments (CSV, как board.createComment). VK API
+        // board.addTopic принимает attachments; PinoK пока не передаёт (attach-кнопки
+        // → toasts), но параметр exposed для будущего upload-flow.
+        if (!attachments.isNullOrBlank()) args["attachments"] = attachments
         val json = call("board.addTopic", args) ?: return null
         return try {
             // FIX-CAST: VK возвращает {"response":<topic_id>} — response это JsonPrimitive
