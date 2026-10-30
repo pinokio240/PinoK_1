@@ -186,7 +186,7 @@ fun CommunityScreen(
     onTopicClick: (
         groupId: Long, topicId: Long, title: String,
         isFixed: Int, isClosed: Int,
-        offset: Int = 0, sort: String = "asc", canManage: Boolean = false,
+        offset: Int, sort: String, canManage: Boolean,
     ) -> Unit = { _, _, _, _, _, _, _, _ -> },
     // B-C: FAB «+ Создать тему» → Screen.CreateBoardTopic (форма создания темы).
     // Гейтится canAddTopics (board.getTopics can_add_topics) на уровне FAB.
