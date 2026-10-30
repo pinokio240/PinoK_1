@@ -20,10 +20,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PhotoCamera
-import androidx.compose.material.icons.outlined.Poll
 import androidx.compose.material.icons.outlined.VideoCameraBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,8 +74,8 @@ import re.pinok.ui.components.AttachmentPickerTab
  *   • Фото с устройства   → PickVisualMedia(ImageOnly) + uploadPhotoForComment
  *   • Файл с устройства   → OpenDocument(*) + uploadDocForComment
  *   • Видео / Аудио / Док из VK → AttachmentPickerSheet → attachment-строка
- *   • Опрос   → toast «Опросы в разработке» (VK polls.add — сложный flow)
- *   • Эмодзи  → toast «Эмодзи скоро» (минимум — не молчаливо)
+ *   • Опрос  → убран (FIX-3: VK Board API не поддерживает polls в темах)
+ *   • Эмодзи → убран (FIX-3: CreatePostDialog-эталон не имеет emoji-кнопки)
  * boardAddTopic вызывается с attachments = vkAttachmentString.
  *
  * B-FIX-A (TRACER-2 gap): Switch «От имени сообщества» (from_group).
@@ -283,12 +281,15 @@ fun CreateBoardTopicScreen(
                 )
             }
 
-            // ATTACH-PATTERN-2 (#SCOUT-BOARD-SNAP): ряд attach-кнопок 24×24 +
-            // emoji, как в форме создания темы VK web. Слева 6 кнопок attach,
-            // справа emoji-smile. Видео/аудио/док-из-VK → AttachmentPickerSheet;
-            // фото-с-устройства → PickVisualMedia + uploadPhotoForComment;
-            // файл-с-устройства → OpenDocument + uploadDocForComment;
-            // опрос → toast (VK polls.add — сложный flow); emoji → toast.
+            // ATTACH-PATTERN-2 (#SCOUT-BOARD-SNAP): ряд attach-кнопок 24×24,
+            // как в форме создания темы VK web. Видео/аудио/док-из-VK →
+            // AttachmentPickerSheet; фото-с-устройства → PickVisualMedia +
+            // uploadPhotoForComment; файл-с-устройства → OpenDocument +
+            // uploadDocForComment.
+            // FIX-3: кнопки Poll и Emoji убраны БЕЗ toast-заглушек —
+            // VK Board API не поддерживает polls в темах (poll только для
+            // постов стены), а CreatePostDialog (эталон) эмодзи-кнопки не
+            // имеет. Реальной функциональности не было — stub'ы удалены.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -358,27 +359,6 @@ fun CreateBoardTopicScreen(
                     Icon(
                         Icons.Outlined.Description,
                         contentDescription = "Файл",
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                // Опрос → toast (VK API polls.add — сложный flow, вне скоупа).
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Опросы в разработке", Toast.LENGTH_SHORT).show()
-                }) {
-                    Icon(
-                        Icons.Outlined.Poll,
-                        contentDescription = "Опрос",
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                // Эмодзи → toast (минимум — не молчаливо).
-                IconButton(onClick = {
-                    Toast.makeText(ctx, "Эмодзи скоро", Toast.LENGTH_SHORT).show()
-                }) {
-                    Icon(
-                        Icons.Outlined.EmojiEmotions,
-                        contentDescription = "Эмодзи",
                         modifier = Modifier.size(24.dp),
                     )
                 }

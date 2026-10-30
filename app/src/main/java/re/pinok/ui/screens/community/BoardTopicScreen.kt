@@ -50,7 +50,6 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -1482,28 +1481,11 @@ private fun BoardCommentCard(
                                     Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
                                 },
                             )
-                            // B-FIX-B (TRACER-2 gap): «Пожаловаться» — report stub.
-                            // VK API не имеет board.reportComment; wall.reportComment существует
-                            // в VK API, но НЕ обёрнут в VKApiClient — toast + log (UX-заглушка).
-                            DropdownMenuItem(
-                                text = {
-                                    Text("Пожаловаться", color = MaterialTheme.colorScheme.error)
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.Report,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.error,
-                                    )
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    Toast.makeText(ctx, "Жалоба отправляется...", Toast.LENGTH_SHORT).show()
-                                    // FIX-TODO-1 #4: VK API не имеет board.reportComment;
-                                    // wall.reportComment не обёрнут в VKApiClient — toast + log.
-                                    AppLog.w("BoardTopicScreen", "reportComment stub: comment=${comment.id} (no VK API wrapper)")
-                                },
-                            )
+                            // FIX-3: пункт «Пожаловаться» на board-коммент убран —
+                            // VK API не имеет board.reportComment (wall.reportComment
+                            // работает только для комментариев к постам стены, не
+                            // для board). Реальной отправки жалобы не было (toast
+                            // + log — stub); stub удалён БЕЗ замены на заглушку.
                         }
                     }
                 }

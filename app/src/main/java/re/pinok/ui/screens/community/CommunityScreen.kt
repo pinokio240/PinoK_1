@@ -3004,25 +3004,10 @@ fun CommunityScreen(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Скопировать ссылку") }
-                    TextButton(
-                        onClick = {
-                            showTopicMenu = null
-                            // FIX-TODO-2: VK API не имеет board.reportTopic — toast-заглушка
-                            // (как VK web report flow; реальной отправки жалобы на тему нет,
-                            // т.к. метод отсутствует в VK API). Поведение оставлено как toast.
-                            Toast.makeText(
-                                ctx,
-                                "Жалоба на тему недоступна: VK API не поддерживает",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            "Пожаловаться",
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+                    // FIX-3: пункт «Пожаловаться» на тему убран — VK API не имеет
+                    // board.reportTopic (метод отсутствует). Реальной отправки жалобы
+                    // не было (toast «VK API не поддерживает» — stub); stub удалён
+                    // БЕЗ замены на заглушку.
                 }
             },
             confirmButton = {},
