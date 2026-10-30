@@ -3159,20 +3159,25 @@ composable(Screen.CallsHistory.route) {
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
-                        // EDIT-TOPIC-SCREEN: «Редактировать тему» → отдельный экран
-                        // (как VK web /topic-{gid}_{tid}/edit). Передаём текущие
-                        // title/isFixed/isClosed через route args для prefill формы.
-                        onEditTopic = {
-                            nav.navigate(
-                                Screen.EditBoardTopic.buildRoute(gId, tId, tTitle, tIsFixed, tIsClosed)
-                            )
-                        },
                         // ATTACH-VIEW: клик по видео-вложению комментария → VideoHolder
                         // (внешний видеоплеер, как PostDetailScreen onVideoClick).
                         onVideoClick = { video -> VideoHolder.open(video) },
                         // EDIT-TOPIC-CHECKBOXES: исходное состояние темы.
                         isFixed = tIsFixed,
                         isClosed = tIsClosed,
+                        // EDIT-TOPIC-MODAL: редактирование темы — AlertDialog внутри
+                        // BoardTopicScreen (как CreatePostDialog), БЕЗ отдельного экрана.
+                        // После успешного edit — флаг topics_need_refresh, чтобы список
+                        // тем в CommunityScreen перечитал заголовок.
+                        onTopicEdited = {
+                            // SAFE-BACKSTACK: getBackStackEntry может упасть
+                            // IllegalArgumentException если Community не в стеке
+                            // (deep link). try/catch — безопасно.
+                            try {
+                                nav.getBackStackEntry(Screen.Community.route)
+                                    .savedStateHandle["topics_need_refresh"] = true
+                            } catch (_: Exception) { }
+                        },
                     )
                 }
                 // B-E (#SCOUT-BOARD-SNAP): экран создания темы обсуждения.
@@ -3200,55 +3205,9 @@ composable(Screen.CallsHistory.route) {
                         },
                     )
                 }
-                // EDIT-TOPIC-SCREEN (#BUILDER-EDIT-ATTACH): экран редактирования темы.
-                // Переиспользует CreateBoardTopicScreen с editMode=true. После успешного
-                // edit — флаг topics_need_refresh для CommunityScreen + popBackStack
-                // (возврат к BoardTopicScreen, который перерисует title из BackStack).
-                composable(
-                    route = Screen.EditBoardTopic.route,
-                    arguments = listOf(
-                        navArgument(Screen.EditBoardTopic.ARG_GROUP_ID) { type = NavType.LongType },
-                        navArgument(Screen.EditBoardTopic.ARG_TOPIC_ID) { type = NavType.LongType },
-                        navArgument(Screen.EditBoardTopic.ARG_TITLE) {
-                            type = NavType.StringType
-                            defaultValue = ""
-                        },
-                        navArgument(Screen.EditBoardTopic.ARG_IS_FIXED) {
-                            type = NavType.IntType
-                            defaultValue = 0
-                        },
-                        navArgument(Screen.EditBoardTopic.ARG_IS_CLOSED) {
-                            type = NavType.IntType
-                            defaultValue = 0
-                        },
-                    ),
-                ) { entry ->
-                    val gId = entry.arguments?.getLong(Screen.EditBoardTopic.ARG_GROUP_ID) ?: 0L
-                    val tId = entry.arguments?.getLong(Screen.EditBoardTopic.ARG_TOPIC_ID) ?: 0L
-                    val tTitle = entry.arguments?.getString(Screen.EditBoardTopic.ARG_TITLE) ?: ""
-                    val tFixed = entry.arguments?.getInt(Screen.EditBoardTopic.ARG_IS_FIXED) ?: 0
-                    val tClosed = entry.arguments?.getInt(Screen.EditBoardTopic.ARG_IS_CLOSED) ?: 0
-                    CreateBoardTopicScreen(
-                        groupId = gId,
-                        onBack = { nav.popBackStack() },
-                        onCreated = { _, _ -> },  // не используется в editMode.
-                        editMode = true,
-                        topicId = tId,
-                        initialTitle = tTitle,
-                        initialFixed = tFixed,
-                        initialClosed = tClosed,
-                        onEdited = {
-                            // TOPICS-REFRESH: обновить список тем в CommunityScreen.
-                            // SAFE-BACKSTACK: getBackStackEntry может упасть если Community
-                            // не в стеке (deep link). try/catch — безопасно.
-                            try {
-                                nav.getBackStackEntry(Screen.Community.route)
-                                    .savedStateHandle["topics_need_refresh"] = true
-                            } catch (_: Exception) { }
-                            nav.popBackStack()
-                        },
-                    )
-                }
+                // EDIT-TOPIC-SCREEN → EDIT-TOPIC-MODAL: отдельный экран редактирования
+                // темы (Screen.EditBoardTopic) УДАЛЁН — редактирование теперь в
+                // AlertDialog внутри BoardTopicScreen (как CreatePostDialog).
                 // Sprint 1, P0-2 (#74): экран чужого профиля.
                 composable(
                     route = Screen.UserProfile.route,

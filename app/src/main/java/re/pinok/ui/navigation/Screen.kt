@@ -324,28 +324,6 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     }
 
     /**
-     * EDIT-TOPIC-SCREEN (#BUILDER-EDIT-ATTACH): экран редактирования темы обсуждения.
-     * Переиспользует CreateBoardTopicScreen с editMode=true. Параметры title/isFixed/
-     * isClosed передаются через route args (как в BoardTopic) для инициализации формы
-     * (title prefill + checkbox prefill). VK web: /topic-{gid}_{tid}/edit — отдельный
-     * route (Box-модалка legacy /al_board.php), PinoK — отдельный нав-экран.
-     */
-    object EditBoardTopic : Screen(
-        "edit_board_topic/{groupId}/{topicId}?title={title}&isFixed={isFixed}&isClosed={isClosed}",
-        "Редактирование темы", null,
-    ) {
-        const val ARG_GROUP_ID = "groupId"
-        const val ARG_TOPIC_ID = "topicId"
-        const val ARG_TITLE = "title"
-        const val ARG_IS_FIXED = "isFixed"
-        const val ARG_IS_CLOSED = "isClosed"
-        fun buildRoute(groupId: Long, topicId: Long, title: String, isFixed: Int = 0, isClosed: Int = 0): String =
-            "edit_board_topic/$groupId/$topicId" +
-            "?title=${android.net.Uri.encode(title)}" +
-            "&isFixed=$isFixed&isClosed=$isClosed"
-    }
-
-    /**
      * Sprint 1, P0-2 (#74): Экран чужого профиля — стена + инфо + действия.
      * Принимает userId как path-параметр (положительный, как в users[].id).
      * Открывается тапом по автору поста (fromId > 0), другу, собеседнику в чате.

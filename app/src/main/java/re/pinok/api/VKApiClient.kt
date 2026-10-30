@@ -5360,13 +5360,21 @@ class VKApiClient(
         return json.has("response")
     }
 
-    /** board.editTopic — редактировать тему (title и/или text). */
+    /**
+     * board.editTopic — редактировать тему (title и/или text и/или attachments).
+     * @param attachments EDIT-TOPIC-MODAL: CSV-строка вложений (`photo{oid}_{id}`,
+     *   `video{oid}_{id}[_key]`, `audio{oid}_{id}[_key]`, `doc{oid}_{id}[_key]`) —
+     *   как в HAR (board.editTopic POST: group_id, topic_id, title, attachments).
+     *   VK заменяет весь набор вложений темы на переданный список. null/blank →
+     *   параметр не отправляется (вложения темы не меняются).
+     */
     suspend fun boardEditTopic(
         groupId: Long,
         topicId: Long,
         title: String? = null,
         text: String? = null,
         fromGroup: Int = 0,
+        attachments: String? = null,
     ): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf(
@@ -5375,6 +5383,8 @@ class VKApiClient(
         )
         if (title != null) args["title"] = title
         if (text != null) args["text"] = text
+        // EDIT-TOPIC-MODAL: attachments (CSV, как board.addTopic/board.createComment).
+        if (!attachments.isNullOrBlank()) args["attachments"] = attachments
         // from_group: 1=от имени сообщества (B-FIX-A, TRACER-2 gap).
         // VK web SPA не рендерит toggle, но параметр принимается API напрямую.
         if (fromGroup != 0) args["from_group"] = fromGroup.toString()
