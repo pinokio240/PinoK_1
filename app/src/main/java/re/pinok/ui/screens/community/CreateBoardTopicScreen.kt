@@ -19,22 +19,27 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Poll
 import androidx.compose.material.icons.outlined.VideoCameraBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -91,17 +96,35 @@ fun CreateBoardTopicScreen(
     groupId: Long,
     onBack: () -> Unit,
     onCreated: (topicId: Long, title: String) -> Unit,
+    // EDIT-TOPIC-SCREEN: режим редактирования (переиспользование формы создания).
+    editMode: Boolean = false,
+    topicId: Long = 0L,
+    initialTitle: String = "",
+    initialFixed: Int = 0,
+    initialClosed: Int = 0,
+    // вызывается после успешного edit (вместо onCreated в editMode).
+    onEdited: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as? SovaApp
     val scope = rememberCoroutineScope()
 
-    var title by remember { mutableStateOf("") }
+    // EDIT-TOPIC-SCREEN: prefill title из initialTitle при editMode.
+    var title by remember { mutableStateOf(if (editMode) initialTitle else "") }
     var text by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // B-FIX-A: from_group state — 1=от имени сообщества, 0=от себя.
     var fromGroup by remember { mutableStateOf(0) }
+
+    // EDIT-TOPIC-SCREEN: state checkbox'ов «Закрепить тему» (board.fixTopic)
+    // и «Закрыть тему» (board.closeTopic) — инициализируется из initialFixed/
+    // initialClosed (route args). deleteTopicConfirm — отдельный AlertDialog
+    // подтверждения удаления темы (board.deleteTopic), открывается кнопкой
+    // «Удалить тему» под submit-кнопкой.
+    var editTopicFixed by remember { mutableStateOf(initialFixed == 1) }
+    var editTopicClosed by remember { mutableStateOf(initialClosed == 1) }
+    var deleteTopicConfirm by remember { mutableStateOf(false) }
 
     // ATTACH-PATTERN-2: state вложений темы (паттерн из PostDetailScreen).
     // Видео/аудио/фото/док из VK → AttachmentPickerSheet → attachment-строка.
@@ -205,7 +228,13 @@ fun CreateBoardTopicScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Новая тема", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = {
+                    Text(
+                        if (editMode) "Редактирование темы" else "Новая тема",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
@@ -378,19 +407,50 @@ fun CreateBoardTopicScreen(
             }
 
             // ── Switch «От имени сообщества» (B-FIX-A, TRACER-2 gap) ────
-            // from_group=1 → тема публикуется подписью группы. В VK web SPA
-            // toggle НЕ рендерится, но параметр принимается API напрямую.
-            // Гейта isManager нет → показываем всегда (VK err=15 если нет прав).
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("От имени сообщества", style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.weight(1f))
-                Switch(
-                    checked = fromGroup == 1,
-                    onCheckedChange = { fromGroup = if (it) 1 else 0 },
-                )
+            // EDIT-TOPIC-SCREEN: Switch скрыт в editMode (VK web edit form не
+            // имеет toggle from_group — только create-форма /al_board.php modal).
+            if (!editMode) {
+                // from_group=1 → тема публикуется подписью группы. В VK web SPA
+                // toggle НЕ рендерится, но параметр принимается API напрямую.
+                // Гейта isManager нет → показываем всегда (VK err=15 если нет прав).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("От имени сообщества", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Switch(
+                        checked = fromGroup == 1,
+                        onCheckedChange = { fromGroup = if (it) 1 else 0 },
+                    )
+                }
+            }
+            // EDIT-TOPIC-SCREEN: checkbox'ы «Закрепить/Закрыть тему» (только editMode).
+            // VK web save_topic_info: _bet_fixed / _bet_closed checkbox'ы в edit box.
+            // PinoK: board.fixTopic / board.closeTopic — отдельные API-методы,
+            // вызываются при submit только если checkbox изменился относительно
+            // исходного состояния (initialFixed / initialClosed).
+            if (editMode) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = editTopicFixed,
+                        onCheckedChange = { editTopicFixed = it },
+                    )
+                    Text("Закрепить тему", style = MaterialTheme.typography.bodyMedium)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = editTopicClosed,
+                        onCheckedChange = { editTopicClosed = it },
+                    )
+                    Text("Закрыть тему", style = MaterialTheme.typography.bodyMedium)
+                }
             }
 
             // ATTACH-PATTERN-2: индикатор выбранного вложения (над Submit).
@@ -426,7 +486,8 @@ fun CreateBoardTopicScreen(
                 )
             }
 
-            // ── Кнопка «Создать тему» ──────────────────────────────────
+            // ── Кнопка submit (Создать тему / Сохранить) ──────────────
+            // EDIT-TOPIC-SCREEN: ветвление editMode в onClick.
             Button(
                 onClick = {
                     if (title.isBlank() || sending || uploading) return@Button
@@ -443,18 +504,71 @@ fun CreateBoardTopicScreen(
                             return@launch
                         }
                         try {
-                            val topicId = a.apiClient.boardAddTopic(
-                                groupId, t, txt,
-                                fromGroup = fromGroup,
-                                attachments = atts,
-                            )
-                            if (topicId != null && topicId > 0) {
-                                Toast.makeText(ctx, "Тема создана", Toast.LENGTH_SHORT).show()
-                                vkAttachmentString = null
-                                vkAttachmentLabel = null
-                                onCreated(topicId, t)
+                            if (editMode) {
+                                // EDIT-TOPIC-SCREEN: board.editTopic (title + text).
+                                // text = null если пусто — VK не обновит тело (как VK web,
+                                // где edit form НЕ редактирует текст темы).
+                                val ok = a.apiClient.boardEditTopic(
+                                    groupId = groupId,
+                                    topicId = topicId,
+                                    title = t,
+                                    text = txt.ifBlank { null },
+                                )
+                                if (ok) {
+                                    // EDIT-TOPIC-CHECKBOXES: fix/close только если
+                                    // checkbox изменился относительно initialFixed/Closed
+                                    // (как VK web save_topic_info: 3-й/4-й запрос композита).
+                                    val fixedChanged = editTopicFixed != (initialFixed == 1)
+                                    val closedChanged = editTopicClosed != (initialClosed == 1)
+                                    var fixOk = true
+                                    var closeOk = true
+                                    if (fixedChanged) {
+                                        fixOk = a.apiClient.boardFixTopic(
+                                            groupId, topicId, fixed = editTopicFixed,
+                                        )
+                                        if (!fixOk) {
+                                            Toast.makeText(
+                                                ctx,
+                                                "Не удалось закрепить: ${a.apiClient.lastApiError ?: "нет прав"}",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                    if (closedChanged) {
+                                        closeOk = a.apiClient.boardCloseTopic(
+                                            groupId, topicId, closed = editTopicClosed,
+                                        )
+                                        if (!closeOk) {
+                                            Toast.makeText(
+                                                ctx,
+                                                "Не удалось закрыть: ${a.apiClient.lastApiError ?: "нет прав"}",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                    if (fixOk && closeOk) {
+                                        Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
+                                    }
+                                    vkAttachmentString = null
+                                    vkAttachmentLabel = null
+                                    onEdited()
+                                } else {
+                                    error = "Не удалось: ${a.apiClient.lastApiError ?: "ошибка"}"
+                                }
                             } else {
-                                error = "Не удалось: ${a.apiClient.lastApiError ?: "ошибка"}"
+                                val newTopicId = a.apiClient.boardAddTopic(
+                                    groupId, t, txt,
+                                    fromGroup = fromGroup,
+                                    attachments = atts,
+                                )
+                                if (newTopicId != null && newTopicId > 0) {
+                                    Toast.makeText(ctx, "Тема создана", Toast.LENGTH_SHORT).show()
+                                    vkAttachmentString = null
+                                    vkAttachmentLabel = null
+                                    onCreated(newTopicId, t)
+                                } else {
+                                    error = "Не удалось: ${a.apiClient.lastApiError ?: "ошибка"}"
+                                }
                             }
                         } catch (e: Exception) {
                             error = "Ошибка: ${e.message}"
@@ -472,7 +586,24 @@ fun CreateBoardTopicScreen(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Text("Создать тему")
+                    Text(if (editMode) "Сохранить" else "Создать тему")
+                }
+            }
+            // EDIT-TOPIC-SCREEN: кнопка «Удалить тему» (только в editMode).
+            // VK web delete_topic — отдельная кнопка в footer формы редактирования.
+            if (editMode) {
+                OutlinedButton(
+                    onClick = { deleteTopicConfirm = true },
+                    enabled = !sending && !uploading,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text("Удалить тему", color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -508,6 +639,53 @@ fun CreateBoardTopicScreen(
                 vkAttachmentString = att
                 vkAttachmentLabel = "Документ: $title"
                 showAttachmentPicker = false
+            },
+        )
+    }
+
+    // EDIT-TOPIC-SCREEN: подтверждение удаления темы (board.deleteTopic).
+    // Открывается кнопкой «Удалить тему» под submit-кнопкой. После успеха —
+    // onBack() для возврата к списку тем (тема больше не существует).
+    if (deleteTopicConfirm) {
+        AlertDialog(
+            onDismissRequest = { deleteTopicConfirm = false },
+            title = { Text("Удалить тему?") },
+            text = { Text("Тема и все комментарии будут удалены без возможности восстановления.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteTopicConfirm = false
+                    sending = true
+                    scope.launch {
+                        val a = app
+                        if (a == null) {
+                            error = "Приложение не готово"
+                            sending = false
+                            return@launch
+                        }
+                        try {
+                            val ok = a.apiClient.boardDeleteTopic(groupId, topicId)
+                            if (ok) {
+                                Toast.makeText(ctx, "Тема удалена", Toast.LENGTH_SHORT).show()
+                                onBack()
+                            } else {
+                                Toast.makeText(
+                                    ctx,
+                                    "Не удалось: ${a.apiClient.lastApiError ?: "ошибка"}",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                        } finally {
+                            sending = false
+                        }
+                    }
+                }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTopicConfirm = false }) { Text("Отмена") }
             },
         )
     }

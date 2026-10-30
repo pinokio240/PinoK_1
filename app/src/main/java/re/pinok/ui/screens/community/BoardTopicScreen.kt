@@ -53,7 +53,6 @@ import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -99,8 +98,10 @@ import re.pinok.data.model.Attachment
 import re.pinok.data.model.BoardComment
 import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
+import re.pinok.data.model.Video
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
+import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.UnifiedAttachMenu
@@ -156,9 +157,16 @@ fun BoardTopicScreen(
     // #B-FIX-5: клик по имени автора комментария (comment-owner в снапшоте VK web)
     // → навигация на UserProfile. Передаётся из SovaNavHost.
     onUserClick: (Long) -> Unit = {},
+    // EDIT-TOPIC-SCREEN: «Редактировать тему» → навигация на отдельный экран
+    // (как VK web /topic-{gid}_{tid}/edit). Заменяет in-place AlertDialog.
+    onEditTopic: () -> Unit = {},
+    // ATTACH-VIEW: клик по видео-вложению комментария → внешний видеоплеер
+    // (VideoHolder.open из SovaNavHost). CommentAttachmentsView прокидывает
+    // onVideoClick наружу (как PostDetailScreen L1875-1878).
+    onVideoClick: (Video) -> Unit = {},
     // EDIT-TOPIC-CHECKBOXES: исходное состояние темы (is_fixed/is_closed из
-    // board.getTopics) передаётся через route args, чтобы AlertDialog
-    // «Редактирование темы» инициализировал checkbox'ы текущим состоянием.
+    // board.getTopics) передаётся через route args, чтобы экран редактирования
+    // инициализировал checkbox'ы текущим состоянием.
     // VK web save_topic_info шлёт title+closed+fixed одним вызовом; PinoK
     // использует 3 отдельных API (boardEditTopic/boardFixTopic/boardCloseTopic).
     isFixed: Int = 0,
@@ -279,22 +287,17 @@ fun BoardTopicScreen(
     // напрямую — случайный тап = удаление без отмены. VK web всегда подтверждает.
     var deleteCommentTarget by remember { mutableStateOf<BoardComment?>(null) }
 
-    // B-FIX-8: «Редактировать тему» (board.editTopic). Локальный заголовок темы —
-    // обновляется после успешного editTopic (параметр `title` immutable, без локального
-    // state-а TopAppBar/header остались бы старым текстом). Восстановлено из B-FIX-4
-    // (было утеряно при rewrite BoardTopicScreen в B-FIX-2).
+    // B-FIX-8: «Редактировать тему» — локальный заголовок темы для TopAppBar/
+    // header. Параметр `title` immutable, без локального state после edit экрана
+    // остался бы старым текстом (EDIT-TOPIC-SCREEN: edit теперь на отдельном
+    // экране, displayTitle не обновляется локально — только через навигацию).
     var displayTitle by remember { mutableStateOf(title) }
-    var showEditTopicDialog by remember { mutableStateOf(false) }
-    var editTopicTitle by remember { mutableStateOf(title) }
-    var editTopicText by remember { mutableStateOf("") }
-    // EDIT-TOPIC-CHECKBOXES: state checkbox'ов «Закрепить тему» (board.fixTopic)
-    // и «Закрыть тему» (board.closeTopic) в AlertDialog редактирования темы.
-    // Инициализируется из isFixed/isClosed (route args) при открытии диалога.
-    // deleteTopicConfirm — отдельный AlertDialog подтверждения удаления темы
-    // (board.deleteTopic), открывается кнопкой «Удалить» в edit dialog.
-    var editTopicFixed by remember { mutableStateOf(isFixed == 1) }
-    var editTopicClosed by remember { mutableStateOf(isClosed == 1) }
-    var deleteTopicConfirm by remember { mutableStateOf(false) }
+
+    // ATTACH-VIEW: screen-level state для полноэкранного просмотрщика фото
+    // (CommentAttachmentsView прокидывает onPhotoClick → photoViewerState).
+    // Паттерн из PostDetailScreen L362 (photoViewerState = Pair<List<String>, Int>?).
+    // PhotoViewer рендерится на уровне экрана (после Scaffold), как L623-630.
+    var photoViewerState by remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
 
     // Загрузка текущего юзера (аватар 36dp для composer).
     LaunchedEffect(Unit) {
@@ -386,15 +389,7 @@ fun BoardTopicScreen(
                     // VK-STYLING-2 (AUDIT #29): board-topic-edit-button — filled accent
                     // button (vkuiButton sizeS modePrimary appearanceAccent), НЕ TextButton.
                     Button(
-                        onClick = {
-                            editTopicTitle = displayTitle
-                            editTopicText = ""
-                            // EDIT-TOPIC-CHECKBOXES: инициализируем checkbox'ы
-                            // текущим состоянием темы (is_fixed/is_closed из route args).
-                            editTopicFixed = isFixed == 1
-                            editTopicClosed = isClosed == 1
-                            showEditTopicDialog = true
-                        },
+                        onClick = onEditTopic,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BoardAccent,
                             contentColor = Color.White,
@@ -706,6 +701,11 @@ fun BoardTopicScreen(
                                         editText = c.text
                                     },
                                     onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
+                                    // ATTACH-VIEW: onVideoClick/onPhotoClick для CommentAttachmentsView
+                                    // в теле темы (первый комментарий). onPhotoClick → screen-level
+                                    // photoViewerState (полноэкранный просмотрщик фото).
+                                    onVideoClick = onVideoClick,
+                                    onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
                                     groupId = groupId,
                                     topicId = topicId,
                                 )
@@ -767,6 +767,11 @@ fun BoardTopicScreen(
                                     editText = c.text
                                 },
                                 onUserClick = onUserClick,  // #B-FIX-5: wiring → UserProfile
+                                // ATTACH-VIEW: onVideoClick/onPhotoClick для CommentAttachmentsView
+                                // в обычных комментариях. onPhotoClick → screen-level
+                                // photoViewerState (полноэкранный просмотрщик фото).
+                                onVideoClick = onVideoClick,
+                                onPhotoClick = { urls, idx -> photoViewerState = urls to idx },
                                 groupId = groupId,
                                 topicId = topicId,
                             )
@@ -875,159 +880,22 @@ fun BoardTopicScreen(
         )
     }
 
-    // B-FIX-8: диалог редактирования темы (board.editTopic). Поля: Заголовок
-    // (max 255) + Текст (max 4096). На «Сохранить» вызываем boardEditTopic —
-    // при успехе обновляем displayTitle (TopAppBar + header) и закрываем диалог.
-    // Восстановлено из B-FIX-4 (утеряно при rewrite BoardTopicScreen в B-FIX-2).
-    //
-    // EDIT-TOPIC-CHECKBOXES: добавлены checkbox'ы «Закрепить тему» (board.fixTopic)
-    // и «Закрыть тему» (board.closeTopic) + кнопка «Удалить» (board.deleteTopic).
-    // VK web save_topic_info шлёт title+closed+fixed одним вызовом через /al_board.php;
-    // PinoK использует публичный API: 3 отдельных метода (boardEditTopic +
-    // boardFixTopic + boardCloseTopic), которые вызываются последовательно при
-    // «Сохранить» (fix/close — только если checkbox изменился относительно
-    // исходного состояния isFixed/isClosed).
-    if (showEditTopicDialog) {
-        AlertDialog(
-            onDismissRequest = { showEditTopicDialog = false },
-            title = { Text("Редактирование темы") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = editTopicTitle,
-                        onValueChange = { if (it.length <= 255) editTopicTitle = it },
-                        label = { Text("Заголовок") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = editTopicText,
-                        onValueChange = { if (it.length <= 4096) editTopicText = it },
-                        label = { Text("Текст") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 100.dp),
-                    )
-                    // EDIT-TOPIC-CHECKBOXES: checkbox'ы состояния темы.
-                    // bnt_fixed / bnt_closed из legacy /al_board.php modal box.
-                    Spacer(Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = editTopicFixed,
-                            onCheckedChange = { editTopicFixed = it },
-                        )
-                        Text("Закрепить тему")
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = editTopicClosed,
-                            onCheckedChange = { editTopicClosed = it },
-                        )
-                        Text("Закрыть тему")
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (editTopicTitle.isBlank()) return@TextButton
-                    val newTitle = editTopicTitle
-                    val newText = editTopicText.ifBlank { null }
-                    // EDIT-TOPIC-CHECKBOXES: фиксируем, изменились ли checkbox'ы
-                    // относительно исходного состояния темы (isFixed/isClosed).
-                    val fixedChanged = editTopicFixed != (isFixed == 1)
-                    val closedChanged = editTopicClosed != (isClosed == 1)
-                    scope.launch {
-                        val ok = app.apiClient.boardEditTopic(
-                            groupId = groupId,
-                            topicId = topicId,
-                            title = newTitle,
-                            text = newText,
-                        )
-                        if (ok) {
-                            // Если checkbox изменился — вызываем fix/close (3-й и 4-й
-                            // запросы композитного VK web save_topic_info).
-                            // REAL-CHECK: проверяем результат каждого вызова,
-                            // НЕ fire-and-forget. Если VK отклонит (err=15/7) —
-                            // toast с ошибкой, чтобы пользователь знал что не сработало.
-                            var fixOk = true
-                            var closeOk = true
-                            if (fixedChanged) {
-                                fixOk = app.apiClient.boardFixTopic(groupId, topicId, fixed = editTopicFixed)
-                                if (!fixOk) {
-                                    Toast.makeText(ctx, "Не удалось закрепить: ${app.apiClient.lastApiError ?: "нет прав"}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                            if (closedChanged) {
-                                closeOk = app.apiClient.boardCloseTopic(groupId, topicId, closed = editTopicClosed)
-                                if (!closeOk) {
-                                    Toast.makeText(ctx, "Не удалось закрыть: ${app.apiClient.lastApiError ?: "нет прав"}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                            displayTitle = newTitle
-                            if (fixOk && closeOk) {
-                                Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
-                            }
-                            showEditTopicDialog = false
-                        } else {
-                            Toast.makeText(
-                                ctx,
-                                "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                    }
-                }) {
-                    Text("Сохранить")
-                }
-            },
-            dismissButton = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // EDIT-TOPIC-CHECKBOXES: кнопка «Удалить» (error color) рядом с
-                    // «Отмена». Открывает отдельный AlertDialog подтверждения.
-                    TextButton(onClick = { deleteTopicConfirm = true }) {
-                        Text("Удалить", color = MaterialTheme.colorScheme.error)
-                    }
-                    TextButton(onClick = { showEditTopicDialog = false }) {
-                        Text("Отмена")
-                    }
-                }
-            },
-        )
-    }
+    // EDIT-TOPIC-SCREEN: AlertDialog редактирования темы УДАЛЕН — теперь
+    // редактирование на отдельном экране (Screen.EditBoardTopic, как VK web
+    // /topic-{gid}_{tid}/edit). Кнопка «Редактировать тему» в TopAppBar
+    // вызывает onEditTopic() → навигация (wired в SovaNavHost).
+    // AlertDialog подтверждения удаления темы также перенесён на экран
+    // редактирования (CreateBoardTopicScreen.deleteTopicConfirm).
 
-    // EDIT-TOPIC-CHECKBOXES: подтверждение удаления темы (board.deleteTopic).
-    // Открывается кнопкой «Удалить» в AlertDialog редактирования темы. После
-    // успеха — onBack() для возврата к списку тем (тема больше не существует).
-    if (deleteTopicConfirm) {
-        AlertDialog(
-            onDismissRequest = { deleteTopicConfirm = false },
-            title = { Text("Удалить тему?") },
-            text = { Text("Тема и все комментарии будут удалены без восстановления.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    deleteTopicConfirm = false
-                    showEditTopicDialog = false
-                    scope.launch {
-                        val ok = app.apiClient.boardDeleteTopic(groupId, topicId)
-                        if (ok) {
-                            Toast.makeText(ctx, "Тема удалена", Toast.LENGTH_SHORT).show()
-                            onBack()
-                        } else {
-                            Toast.makeText(
-                                ctx,
-                                "Не удалось: ${app.apiClient.lastApiError ?: "ошибка"}",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                    }
-                }) {
-                    Text("Удалить", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteTopicConfirm = false }) { Text("Отмена") }
-            },
+    // ATTACH-VIEW: screen-level PhotoViewer для фото-вложений комментариев
+    // (CommentAttachmentsView onPhotoClick → photoViewerState). Паттерн из
+    // PostDetailScreen L623-630. Рендерится поверх Scaffold, как у PostDetail.
+    val pvState = photoViewerState
+    if (pvState != null) {
+        PhotoViewer(
+            photos = pvState.first,
+            initial = pvState.second,
+            onDismiss = { photoViewerState = null },
         )
     }
 
@@ -1108,6 +976,12 @@ private fun BoardCommentCard(
     onDelete: (BoardComment) -> Unit,
     onEdit: (BoardComment) -> Unit,
     onUserClick: (Long) -> Unit = {},
+    // ATTACH-VIEW: колбэки для CommentAttachmentsView (эталонный компонент).
+    // onVideoClick → внешний видеоплеер (VideoHolder из SovaNavHost);
+    // onPhotoClick → screen-level photoViewerState (полноэкранный просмотрщик).
+    // Паттерн из PostDetailScreen CommentRow L1875-1878.
+    onVideoClick: (Video) -> Unit = {},
+    onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
     // B-FIX-B (TRACER-2 gap): groupId/topicId для «Скопировать ссылку»
     // (VK topic URL: vk.com/topic-{groupId}_{topicId}?post={commentId}).
     groupId: Long = 0L,
@@ -1326,8 +1200,16 @@ private fun BoardCommentCard(
                         Text(if (expanded) "Свернуть" else "Показать полностью")
                     }
                 }
-                // #B-FIX-2: вложения — photo media-grid + doc secondaryattachment.
-                CommentAttachments(comment.attachments)
+                // ATTACH-VIEW: эталонный CommentAttachmentsView (photo+video+audio+
+                // doc+voice+link+sticker) вместо локального CommentAttachments (только
+                // photo+doc). Паритет с PostDetailScreen L1875-1878. Колбэки:
+                // onVideoClick → внешний видеоплеер, onPhotoClick → screen-level
+                // photoViewerState (полноэкранный просмотрщик фото).
+                CommentAttachmentsView(
+                    attachments = comment.attachments ?: emptyList(),
+                    onVideoClick = onVideoClick,
+                    onPhotoClick = onPhotoClick,
+                )
                 // #B-FIX-5: meta-row по снапшоту VK web HTML3 — date + «Ответить»
                 // (отдельная TextButton, accent/primary) + spacer + like (БЕЗ счётчика).
                 // Порядок как в снапшоте: comment-text → date → comment-reply → comment-like.
@@ -1377,112 +1259,20 @@ private fun BoardCommentCard(
 }
 
 /**
- * #B-FIX-2: вложения комментария — фото (media-grid, 80dp, radius 8dp) +
- * документы (40dp иконка + title + ext). По снапшоту VK web.
+ * ATTACH-VIEW: локальный private CommentAttachments УДАЛЁН — заменён на эталонный
+ * CommentAttachmentsView (re.pinok.ui.components.CommentAttachmentsView).
+ *
+ * Локальный компонент рендерил только photo + doc (80dp grid + 40dp icon row),
+ * с внутренним PhotoViewer state и URL через largestUrl ?: mediumUrl.
+ *
+ * Эталонный CommentAttachmentsView рендерит: photo (сетка 1/2/3 колонки, 200dp/96dp),
+ * video (16:9 thumb+play+title+dur), audio (играемый AudioAttachmentList), doc
+ * (CommentDocChip), audio_message/voice (CommentVoiceChip), link (CommentLinkCard),
+ * sticker (CDN URL vk.ru/sticker/1-{id}-{size}). PhotoViewer поднят на уровень
+ * экрана (photoViewerState, как PostDetailScreen L362/L623-630).
+ *
+ * Паритет с PostDetailScreen (единый компонент для всех комментариев).
  */
-@Composable
-private fun CommentAttachments(attachments: List<Attachment>?) {
-    if (attachments.isNullOrEmpty()) return
-    val photos = attachments.filter { it.type == "photo" && it.photo != null }
-    val docs = attachments.filter { it.type == "doc" && it.doc != null }
-    if (photos.isEmpty() && docs.isEmpty()) return
-
-    // VIEW-ATTACHMENTS: state для полноэкранного просмотрщика фото (PhotoViewer).
-    // Раньше фото были НЕ кликабельны — нельзя было просмотреть вложения.
-    var photoViewerIndex by remember { mutableStateOf<Int?>(null) }
-    val photoUrls = remember(photos) {
-        photos.mapNotNull { it.photo?.largestUrl ?: it.photo?.mediumUrl }
-    }
-    if (photoViewerIndex != null && photoUrls.isNotEmpty()) {
-        PhotoViewer(
-            photos = photoUrls,
-            initial = photoViewerIndex!!.coerceIn(0, photoUrls.lastIndex),
-            onDismiss = { photoViewerIndex = null },
-        )
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // Photos: media-grid (up to 3 в ряд, 80dp, RoundedCornerShape 8dp).
-        // VIEW-ATTACHMENTS: кликабельны → открывают PhotoViewer (полноэкранный просмотр).
-        if (photos.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                photos.take(3).forEachIndexed { idx, att ->
-                    val url = att.photo?.largestUrl ?: att.photo?.mediumUrl
-                    AsyncImage(
-                        model = url,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(80.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { photoViewerIndex = idx },
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-                // Если фото >3 — показать «+N» badge (как VK web media-grid).
-                if (photos.size > 3) {
-                    Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable { photoViewerIndex = 3 },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("+${photos.size - 3}", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-            }
-        }
-        // Docs: 40dp иконка + title + ext (secondaryattachment в VK web).
-        // VIEW-ATTACHMENTS: кликабельны → открывают URL документа в браузере.
-        val ctx = LocalContext.current
-        docs.forEach { att ->
-            val doc = att.doc ?: return@forEach
-            val docUrl = doc.url
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        if (!docUrl.isNullOrBlank()) {
-                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(docUrl))
-                            ctx.startActivity(intent)
-                        }
-                    },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Outlined.Description,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = doc.title,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = doc.ext.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-            }
-        }
-    }
-}
 
 /**
  * #COMPOSER-REUSE: Composer обсуждений — паттерн заимствован из PostDetailScreen

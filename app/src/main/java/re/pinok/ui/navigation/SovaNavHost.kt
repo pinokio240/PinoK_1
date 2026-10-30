@@ -3159,6 +3159,17 @@ composable(Screen.CallsHistory.route) {
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
+                        // EDIT-TOPIC-SCREEN: «Редактировать тему» → отдельный экран
+                        // (как VK web /topic-{gid}_{tid}/edit). Передаём текущие
+                        // title/isFixed/isClosed через route args для prefill формы.
+                        onEditTopic = {
+                            nav.navigate(
+                                Screen.EditBoardTopic.buildRoute(gId, tId, tTitle, tIsFixed, tIsClosed)
+                            )
+                        },
+                        // ATTACH-VIEW: клик по видео-вложению комментария → VideoHolder
+                        // (внешний видеоплеер, как PostDetailScreen onVideoClick).
+                        onVideoClick = { video -> VideoHolder.open(video) },
                         // EDIT-TOPIC-CHECKBOXES: исходное состояние темы.
                         isFixed = tIsFixed,
                         isClosed = tIsClosed,
@@ -3182,6 +3193,51 @@ composable(Screen.CallsHistory.route) {
                             nav.navigate(Screen.BoardTopic.buildRoute(gId, topicId, topicTitle)) {
                                 popUpTo(Screen.CreateBoardTopic.route) { inclusive = true }
                             }
+                        },
+                    )
+                }
+                // EDIT-TOPIC-SCREEN (#BUILDER-EDIT-ATTACH): экран редактирования темы.
+                // Переиспользует CreateBoardTopicScreen с editMode=true. После успешного
+                // edit — флаг topics_need_refresh для CommunityScreen + popBackStack
+                // (возврат к BoardTopicScreen, который перерисует title из BackStack).
+                composable(
+                    route = Screen.EditBoardTopic.route,
+                    arguments = listOf(
+                        navArgument(Screen.EditBoardTopic.ARG_GROUP_ID) { type = NavType.LongType },
+                        navArgument(Screen.EditBoardTopic.ARG_TOPIC_ID) { type = NavType.LongType },
+                        navArgument(Screen.EditBoardTopic.ARG_TITLE) {
+                            type = NavType.StringType
+                            defaultValue = ""
+                        },
+                        navArgument(Screen.EditBoardTopic.ARG_IS_FIXED) {
+                            type = NavType.IntType
+                            defaultValue = 0
+                        },
+                        navArgument(Screen.EditBoardTopic.ARG_IS_CLOSED) {
+                            type = NavType.IntType
+                            defaultValue = 0
+                        },
+                    ),
+                ) { entry ->
+                    val gId = entry.arguments?.getLong(Screen.EditBoardTopic.ARG_GROUP_ID) ?: 0L
+                    val tId = entry.arguments?.getLong(Screen.EditBoardTopic.ARG_TOPIC_ID) ?: 0L
+                    val tTitle = entry.arguments?.getString(Screen.EditBoardTopic.ARG_TITLE) ?: ""
+                    val tFixed = entry.arguments?.getInt(Screen.EditBoardTopic.ARG_IS_FIXED) ?: 0
+                    val tClosed = entry.arguments?.getInt(Screen.EditBoardTopic.ARG_IS_CLOSED) ?: 0
+                    CreateBoardTopicScreen(
+                        groupId = gId,
+                        onBack = { nav.popBackStack() },
+                        onCreated = { _, _ -> },  // не используется в editMode.
+                        editMode = true,
+                        topicId = tId,
+                        initialTitle = tTitle,
+                        initialFixed = tFixed,
+                        initialClosed = tClosed,
+                        onEdited = {
+                            // TOPICS-REFRESH: обновить список тем в CommunityScreen.
+                            nav.getBackStackEntry(Screen.Community.route)
+                                .savedStateHandle["topics_need_refresh"] = true
+                            nav.popBackStack()
                         },
                     )
                 }
