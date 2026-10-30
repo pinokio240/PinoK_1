@@ -1,5 +1,6 @@
 package re.pinok.ui.screens.community
 
+import android.Manifest
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -75,10 +76,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -87,6 +92,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import java.io.File
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Attachment
@@ -214,6 +220,39 @@ fun BoardTopicScreen(
             pendingFileUris = (pendingFileUris + uris).take(10)
         }
     }
+
+    // FIX-TODO-1 #1: камера в комментариях — TakePicture + FileProvider,
+    // паттерн 1:1 из PostDetailScreen L311-335. Снимок идёт в общий
+    // pendingPhotoUris (превью + отправка через uploadPhotoForComment).
+    // rememberSaveable + Saver — переживает process death во время съёмки.
+    var cameraImageUri by rememberSaveable(stateSaver = CameraUriSaver) { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val uri = cameraImageUri
+        cameraImageUri = null
+        if (!ok || uri == null) return@rememberLauncherForActivityResult
+        pendingPhotoUris = (pendingPhotoUris + uri).take(10)
+        AppLog.i("BoardTopicScreen", "camera photo added to pendingPhotoUris (preview)")
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            val uri = createCameraImageUri(ctx)
+            if (uri != null) {
+                cameraImageUri = uri
+                cameraLauncher.launch(uri)
+            } else {
+                AppLog.w("BoardTopicScreen", "createCameraImageUri returned null")
+            }
+        } else {
+            AppLog.w("BoardTopicScreen", "CAMERA permission denied")
+            Toast.makeText(ctx, "Нужен доступ к камере", Toast.LENGTH_SHORT).show()
+        }
+    }
+    // FIX-TODO-1 #5: FocusRequester на composer — автофокус при onReply.
+    val composerFocusRequester = remember { FocusRequester() }
 
     // Диалог редактирования комментария (3-dot → Редактировать).
     var editingComment by remember { mutableStateOf<BoardComment?>(null) }
@@ -421,6 +460,34 @@ fun BoardTopicScreen(
                 onLaunchFilePicker = {
                     commentMultiFileLauncher.launch(arrayOf("*/*"))
                 },
+                // FIX-TODO-1 #1: камера — TakePicture + FileProvider (паттерн PostDetailScreen L1071).
+                onCamera = {
+                    val permission = Manifest.permission.CAMERA
+                    if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, permission) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) {
+                        val uri = createCameraImageUri(ctx)
+                        if (uri != null) {
+                            cameraImageUri = uri
+                            cameraLauncher.launch(uri)
+                        }
+                    } else {
+                        cameraPermissionLauncher.launch(permission)
+                    }
+                },
+                // FIX-TODO-1 #2: видео — PickVisualMedia(VideoOnly) + toast (video upload пока не реализован).
+                onVideo = {
+                    Toast.makeText(ctx, "Загрузка видео скоро", Toast.LENGTH_SHORT).show()
+                    commentMultiPhotoLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                    )
+                },
+                // FIX-TODO-1 #3: аудио — toast-заглушка (audio picker пока не реализован).
+                onAudio = {
+                    Toast.makeText(ctx, "Выбор аудио скоро", Toast.LENGTH_SHORT).show()
+                },
+                // FIX-TODO-1 #5: FocusRequester для onReply-фокуса на composer.
+                composerFocusRequester = composerFocusRequester,
                 groupId = groupId,
                 topicId = topicId,
                 onSentSuccess = {
@@ -586,7 +653,8 @@ fun BoardTopicScreen(
                                             "[id$userId|$firstName], " else ""
                                         commentText = if (commentText.isBlank()) mention
                                                       else mention + commentText
-                                        // TODO: установить фокус на composer (focusRequester).
+                                        // FIX-TODO-1 #5: автофокус на composer при ответе.
+                                        composerFocusRequester.requestFocus()
                                     },
                                     onDelete = { c ->
                                         // DELETE-CONFIRM: показываем AlertDialog подтверждения
@@ -644,7 +712,8 @@ fun BoardTopicScreen(
                                         "[id$userId|$firstName], " else ""
                                     commentText = if (commentText.isBlank()) mention
                                                   else mention + commentText
-                                    // TODO: установить фокус на composer (focusRequester).
+                                    // FIX-TODO-1 #5: автофокус на composer при ответе.
+                                    composerFocusRequester.requestFocus()
                                 },
                                 onDelete = { c ->
                                     scope.launch {
@@ -1124,9 +1193,9 @@ private fun BoardCommentCard(
                                     Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
                                 },
                             )
-                            // B-FIX-B (TRACER-2 gap): «Пожаловаться» — TODO report API.
-                            // VK не имеет board.reportComment; заглушка toast, дальше через
-                            // wall.reportComment или общий VK report flow.
+                            // B-FIX-B (TRACER-2 gap): «Пожаловаться» — report stub.
+                            // VK API не имеет board.reportComment; wall.reportComment существует
+                            // в VK API, но НЕ обёрнут в VKApiClient — toast + log (UX-заглушка).
                             DropdownMenuItem(
                                 text = {
                                     Text("Пожаловаться", color = MaterialTheme.colorScheme.error)
@@ -1141,7 +1210,9 @@ private fun BoardCommentCard(
                                 onClick = {
                                     showMenu = false
                                     Toast.makeText(ctx, "Жалоба отправляется...", Toast.LENGTH_SHORT).show()
-                                    // TODO: реализовать через wall.reportComment или общий VK report API.
+                                    // FIX-TODO-1 #4: VK API не имеет board.reportComment;
+                                    // wall.reportComment не обёрнут в VKApiClient — toast + log.
+                                    AppLog.w("BoardTopicScreen", "reportComment stub: comment=${comment.id} (no VK API wrapper)")
                                 },
                             )
                         }
@@ -1372,6 +1443,14 @@ private fun ComposerRow(
     onPendingFileUrisChange: (List<Uri>) -> Unit,
     onLaunchPhotoPicker: () -> Unit,
     onLaunchFilePicker: () -> Unit,
+    // FIX-TODO-1 #1/#2/#3: callbacks камеры/видео/аудио (паттерн onLaunchPhotoPicker).
+    // Launchers (cameraLauncher/cameraPermissionLauncher/commentMultiPhotoLauncher)
+    // живут в BoardTopicScreen — сюда прокидываются как callbacks.
+    onCamera: () -> Unit,
+    onVideo: () -> Unit,
+    onAudio: () -> Unit,
+    // FIX-TODO-1 #5: FocusRequester для автофокуса composer при onReply.
+    composerFocusRequester: FocusRequester,
     groupId: Long,
     topicId: Long,
     onSentSuccess: () -> Unit,
@@ -1550,7 +1629,9 @@ private fun ComposerRow(
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(composerFocusRequester),
                 placeholder = {
                     Text("Написать комментарий…", color = MaterialTheme.colorScheme.outline)
                 },
@@ -1588,9 +1669,10 @@ private fun ComposerRow(
                     expanded = showAttachMenu,
                     onDismissRequest = { onShowAttachMenuChange(false) },
                     onPhoto = { onLaunchPhotoPicker() },
-                    onCamera = { /* TODO: camera (TakePicture + FileProvider) */ },
-                    onVideo = { /* TODO: video picker (AttachmentPickerSheet) */ },
-                    onAudio = { /* TODO: audio picker (audioGet) */ },
+                    // FIX-TODO-1 #1/#2/#3: callbacks прокинуты из call-site (паттерн onLaunchPhotoPicker).
+                    onCamera = { onCamera() },
+                    onVideo = { onVideo() },
+                    onAudio = { onAudio() },
                     onFile = { onLaunchFilePicker() },
                     // Подарки/опросы недоступны в board (VK API: gifts.send — только ЛС,
                     // polls.add — только посты).
@@ -1728,3 +1810,31 @@ private fun ComposerRow(
         }
     }
 }
+
+/**
+ * FIX-TODO-1 #1: URI для снимка камеры через FileProvider (cache-path заявлен в
+ * manifest, authority «<pkg>.fileprovider»). Паттерн 1:1 из PostDetailScreen
+ * createCameraImageUri (L2284). null — FileProvider не настроен.
+ */
+private fun createCameraImageUri(ctx: android.content.Context): Uri? {
+    return try {
+        val photoFile = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+        androidx.core.content.FileProvider.getUriForFile(
+            ctx,
+            "${ctx.packageName}.fileprovider",
+            photoFile,
+        )
+    } catch (e: Exception) {
+        AppLog.e("BoardTopicScreen", "createCameraImageUri failed", e)
+        null
+    }
+}
+
+/**
+ * FIX-TODO-1 #1: Saver для Uri — rememberSaveable переживает process death во
+ * время съёмки (паттерн PostDetailScreen CameraUriSaver L2302, Fix #126 чата).
+ */
+private val CameraUriSaver: Saver<Uri?, String> = Saver(
+    save = { it?.toString() ?: "" },
+    restore = { saved -> if (saved.isBlank()) null else Uri.parse(saved) },
+)
