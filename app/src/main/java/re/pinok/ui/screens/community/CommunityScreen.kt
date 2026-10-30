@@ -2670,15 +2670,32 @@ fun CommunityScreen(
                     }
                 } else if (topicsState.items.isEmpty()) {
                     item {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(24.dp),
-                            contentAlignment = Alignment.Center,
+                        // EMPTY-STATE: по снапшоту VK web (groups_tabs_content_empty):
+                        // «Пока никто не добавил обсуждения» + кнопка «Добавить обсуждение»
+                        // (groups_tabs_content_button_add, modeSecondary appearanceAccent).
+                        // Гейт canAddTopics — есть права на создание темы (админ/редактор).
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Text(
-                                text = "В сообществе нет обсуждений",
+                                text = "Пока никто не добавил обсуждения",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.outline,
+                                textAlign = TextAlign.Center,
                             )
+                            if (canAddTopics) {
+                                Spacer(Modifier.height(16.dp))
+                                Button(
+                                    onClick = onCreateTopic,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    ),
+                                ) {
+                                    Text("Добавить обсуждение")
+                                }
+                            }
                         }
                     }
                 } else {
