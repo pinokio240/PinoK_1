@@ -4576,13 +4576,14 @@ class VKApiClient(
     // ─── #30h: недостающие методы VK API ───────────────────────────────
 
     /**
-     * wall.getById — получить конкретные посты по owner_id_post_id.
+     * wall.getById — получить конкретные посты по owner_id_post_id (без access_key).
      *
-     * FIX-BOOKMARKS-COMMENTS: делегирует в overload с Triple, передавая
-     * accessKey=null (backward-compatible для всех существующих call-sites).
+     * Backward-compatible: используется всеми существующими call-sites
+     * (FeedScreen и др.). Для приватных постов использовать
+     * [wallGetByIdWithAccessKey].
      */
     suspend fun wallGetById(posts: List<Pair<Long, Long>>): WallByIdResult =
-        wallGetById(posts.map { Triple(it.first, it.second, null) })
+        wallGetByIdWithAccessKey(posts.map { Triple(it.first, it.second, null) })
 
     /**
      * FIX-BOOKMARKS-COMMENTS: wall.getById с поддержкой access_key.
@@ -4595,7 +4596,7 @@ class VKApiClient(
      * @param posts список Triple(ownerId, postId, accessKey?) — accessKey
      *   null для публичных постов (формат `ownerId_postId`).
      */
-    suspend fun wallGetById(posts: List<Triple<Long, Long, String?>>): WallByIdResult {
+    suspend fun wallGetByIdWithAccessKey(posts: List<Triple<Long, Long, String?>>): WallByIdResult {
         if (isOffline() || posts.isEmpty()) return WallByIdResult(emptyList(), emptyMap())
         val postsStr = posts.joinToString(",") { triple ->
             // VK формат: ownerId_postId или ownerId_postId_accessKey (для приватных).

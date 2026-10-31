@@ -388,7 +388,7 @@ fun PostDetailScreen(
         var p = current
         if (isStub) {
             try {
-                val result = app.apiClient.wallGetById(
+                val result = app.apiClient.wallGetByIdWithAccessKey(
                     listOf(Triple(ownerId, postId, effectiveAccessKey))
                 )
                 val fetched = result.posts.firstOrNull { it.ownerId == ownerId && it.id == postId }
