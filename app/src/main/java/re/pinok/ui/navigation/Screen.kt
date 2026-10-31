@@ -381,11 +381,23 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
      * Fix #71: Экран детального просмотра поста.
      * Принимает ownerId/postId как path-параметры. Сам объект Post передаётся
      * через in-memory holder [re.pinok.ui.navigation.PostHolder].
+     *
+     * FIX-BOOKMARKS-COMMENTS: добавлен опциональный query-параметр accessKey
+     * для приватных постов из закрытых сообществ (VK API wall.getById требует
+     * формат ownerId_postId_accessKey). По умолчанию null → запрос без accessKey
+     * (backward-compatible: существующие call-sites с 2-мя аргументами работают).
      */
-    object PostDetail : Screen("post_detail/{ownerId}/{postId}", "Пост", null) {
+    object PostDetail : Screen("post_detail/{ownerId}/{postId}?accessKey={accessKey}", "Пост", null) {
         const val ARG_OWNER_ID = "ownerId"
         const val ARG_POST_ID = "postId"
-        fun buildRoute(ownerId: Long, postId: Long): String = "post_detail/$ownerId/$postId"
+        const val ARG_ACCESS_KEY = "accessKey"
+        fun buildRoute(ownerId: Long, postId: Long, accessKey: String? = null): String {
+            return if (accessKey != null) {
+                "post_detail/$ownerId/$postId?accessKey=${android.net.Uri.encode(accessKey)}"
+            } else {
+                "post_detail/$ownerId/$postId"
+            }
+        }
     }
 
     /**

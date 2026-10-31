@@ -144,6 +144,11 @@ import java.util.Locale
 fun PostDetailScreen(
     ownerId: Long,
     postId: Long,
+    // FIX-BOOKMARKS-COMMENTS: accessKey для приватных постов из закрытых
+    // сообществ. Передаётся из route (Bookmarks flow). null для публичных
+    // постов (Feed/Profile/Community/Search) — там accessKey уже есть в
+    // holder'е (полный Post из API), fallback берётся из holderPost.
+    accessKey: String? = null,
     onBack: () -> Unit,
     onVideoClick: (Video) -> Unit = {},
     onGroupClick: (Long) -> Unit = {},
@@ -376,10 +381,16 @@ fun PostDetailScreen(
         val current = post
         val isStub = current == null ||
             (current.text.isBlank() && current.attachments.isNullOrEmpty())
+        // FIX-BOOKMARKS-COMMENTS: accessKey из route (Bookmarks flow) имеет
+        // приоритет; fallback на holderPost.accessKey (Feed/Profile/etc.
+        // кладут полный Post с accessKey из API в PostHolder.last).
+        val effectiveAccessKey: String? = accessKey ?: current?.accessKey
         var p = current
         if (isStub) {
             try {
-                val result = app.apiClient.wallGetById(listOf(ownerId to postId))
+                val result = app.apiClient.wallGetById(
+                    listOf(Triple(ownerId, postId, effectiveAccessKey))
+                )
                 val fetched = result.posts.firstOrNull { it.ownerId == ownerId && it.id == postId }
                 if (fetched != null) {
                     fetchedPost = fetched

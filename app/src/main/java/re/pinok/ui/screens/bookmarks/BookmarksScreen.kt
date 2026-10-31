@@ -111,7 +111,7 @@ private fun bookmarkKey(bm: Bookmark): String =
 fun BookmarksScreen(
     onUserClick: ((userId: Long) -> Unit)? = null,
     onGroupClick: ((groupId: Long) -> Unit)? = null,
-    onPostClick: ((ownerId: Long, postId: Long) -> Unit)? = null,
+    onPostClick: ((ownerId: Long, postId: Long, accessKey: String?) -> Unit)? = null,
     onVideoClick: ((ownerId: Long, videoId: Long) -> Unit)? = null,
 ) {
     val app = SovaApp.get()
@@ -690,7 +690,7 @@ fun BookmarksScreen(
                                 // CommunityScreen. Раньше вызывал onGroupClick →
                                 // открывал группу вместо самого поста.
                                 onPostContextClick = bm.post?.let { p ->
-                                    { onPostClick?.invoke(p.ownerId, p.id) }
+                                    { onPostClick?.invoke(p.ownerId, p.id, p.accessKey) }
                                 },
                                 onDeletePost = bm.post?.let { p ->
                                     {
@@ -728,7 +728,7 @@ fun BookmarksScreen(
                                 onClick = {
                                     when (bm.type) {
                                         "post" -> bm.post?.let { p ->
-                                            onPostClick?.invoke(p.ownerId, p.id)
+                                            onPostClick?.invoke(p.ownerId, p.id, p.accessKey)
                                         }
                                         "user", "profile", "page" -> bm.user?.let { u ->
                                             onUserClick?.invoke(u.id)

@@ -2083,11 +2083,16 @@ fun SovaNavHost(
                         onGroupClick = { groupId ->
                             nav.navigate(Screen.Community.buildRoute(groupId))
                         },
-                        onPostClick = { ownerId, postId ->
+                        onPostClick = { ownerId, postId, accessKey ->
+                            // FIX-BOOKMARKS-COMMENTS: закладки хранят Post целиком,
+                            // но в holder передаём stub с accessKey (как делают
+                            // другие handlers с полным Post). accessKey критичен
+                            // для wall.getById приватных постов из закрытых групп.
                             PostHolder.last = re.pinok.data.model.Post(
                                 ownerId = ownerId, fromId = ownerId, id = postId, date = 0, text = "",
+                                accessKey = accessKey,
                             )
-                            nav.navigate(Screen.PostDetail.buildRoute(ownerId, postId))
+                            nav.navigate(Screen.PostDetail.buildRoute(ownerId, postId, accessKey))
                         },
                         onVideoClick = { ownerId, videoId ->
                             // FIX: VideoHolder.last не устанавливался — VideoPlayerScreen не получал Video
@@ -3333,13 +3338,25 @@ composable(Screen.CallsHistory.route) {
                     arguments = listOf(
                         navArgument(Screen.PostDetail.ARG_OWNER_ID) { type = NavType.LongType },
                         navArgument(Screen.PostDetail.ARG_POST_ID) { type = NavType.LongType },
+                        // FIX-BOOKMARKS-COMMENTS: опциональный accessKey для
+                        // приватных постов из закрытых сообществ (wall.getById
+                        // формат ownerId_postId_accessKey). nullable → посты без
+                        // accessKey (Feed/Profile/Community) работают как раньше.
+                        navArgument(Screen.PostDetail.ARG_ACCESS_KEY) {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        },
                     ),
                 ) { entry ->
                     val ownerId = entry.arguments?.getLong(Screen.PostDetail.ARG_OWNER_ID) ?: -1L
                     val postId = entry.arguments?.getLong(Screen.PostDetail.ARG_POST_ID) ?: -1L
+                    val accessKey = entry.arguments?.getString(Screen.PostDetail.ARG_ACCESS_KEY)
+                        ?.takeIf { it.isNotBlank() }
                     PostDetailScreen(
                         ownerId = ownerId,
                         postId = postId,
+                        accessKey = accessKey,
                         onBack = { nav.popBackStack() },
                         onVideoClick = { video ->
                             VideoHolder.open(video)
