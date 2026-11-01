@@ -90,6 +90,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -111,6 +112,8 @@ import re.pinok.data.model.ChatFolder
 import re.pinok.realtime.LongPollEvent
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 import re.pinok.util.toChatDate
 import re.pinok.util.toMsgTime
 import re.pinok.ui.components.SkeletonChatList
@@ -2170,6 +2173,10 @@ private fun ChatCard(
     val photo = chat.peer.photo
     val lastMsgId = chat.lastMessage?.id ?: 0L
     val hasUnread = chat.unreadCount > 0
+    // #PREVIEW-LINKIFY (2026-11-01): контекст для кликов по VK-ссылкам в превью
+    // последнего сообщения (INTERNAL-LINK-ROUTING → нативные экраны).
+    val previewContext = LocalContext.current
+    val previewLinkColor = MaterialTheme.colorScheme.primary
     // #CHANNELS-PIN (П3): канальное закрепление читается из серверного sort_id
     // (major_id > 0, парсится parseChannelItem) — оно НЕ зависит от локального
     // im_pinned_dialogs диалоговой вкладки, поэтому отдельный флаг для меню.
@@ -2440,7 +2447,11 @@ private fun ChatCard(
                         // Не ломает подстановку превью: typingText == null → прежний
                         // preview (текст/метка вложения/action-текст/«Вы: » префикс).
                         Text(
-                            text = if (typingText != null) typingText else preview,
+                            text = if (typingText != null) AnnotatedString(typingText) else linkifyVkText(
+                                preview,
+                                previewLinkColor,
+                                onUrlClick = { url -> openUrlExternal(previewContext, url) },
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (typingText != null)
                                 MaterialTheme.colorScheme.primary

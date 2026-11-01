@@ -2578,7 +2578,12 @@ class MainActivity : ComponentActivity() {
                 }
                 val parsed = re.pinok.realtime.VkUrlDeepLinker.deepLinkFromUrl(url)
                 if (parsed == null) {
-                    AppLog.w("MainActivity", "ACTION_VIEW: URL not recognized as VK permalink: $url")
+                    // #LINK-VANITY (2026-11-01): неопознанный VK-URL — это может быть
+                    // КОРОТКОЕ ИМЯ (screenname) профиля/сообщества: vk.com/durov,
+                    // vk.ru/donghuaworld и т.п. Резолвим через utils.resolveScreenName
+                    // и открываем НАТИВНЫЙ ЭКРАН PinoK (Community/UserProfile).
+                    // Если резолв не удался/это не user/group — внутренний WebView.
+                    resolveVkVanityAsync(url)
                     return
                 }
                 AppLog.i("MainActivity", "ACTION_VIEW: url='$url' → $parsed")
@@ -2654,6 +2659,67 @@ class MainActivity : ComponentActivity() {
     /** §42: сброс pending-deep-link после того, как SovaNavHost навигировал. */
     fun consumeDeepLink() {
         pendingDeepLink = null
+    }
+
+    /**
+     * #LINK-VANITY (2026-11-01): пытается резолвить «vanity» (короткое имя) из
+     * неопознанного VK-URL в нативный deep-link (сообщество/профиль).
+     *
+     * `vk.com/durov`, `vk.ru/donghuaworld` и т.п. — путь из ОДНОГО сегмента,
+     * не похожего на id/club/wall/photo/... → utils.resolveScreenName.
+     * Успех: type=group → OpenCommunity, type=user → OpenUser (нативный экран
+     * PinoK). Неуспех/не user/group → OpenWeb (внутренний WebView).
+     *
+     * Асинхронный: резолв требует сети (suspend), поэтому результат кладётся
+     * в [pendingDeepLink] по готовности.
+     */
+    private fun resolveVkVanityAsync(url: String) {
+        // Извлекаем первый path-сегмент: без scheme, host, query/fragment.
+        val cleaned = url.substringAfter("://").substringBefore('?').substringBefore('#')
+        val path = cleaned.substringAfter('/')  // «durov» / «donghuaworld» / «»
+        if (path.isBlank() || path.contains('/')) {
+            // Пустой путь или вложенный (не vanilla) — внутренний WebView.
+            AppLog.w("MainActivity", "ACTION_VIEW: URL not recognized as VK permalink — InternalBrowser: $url")
+            pendingDeepLink = re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenWeb(url)
+            return
+        }
+        // Пропускаем служебные/заведомо не-screenname пути.
+        val reserved = setOf(
+            "wall", "photo", "video", "topic", "id", "club", "public", "album",
+            "market", "settings", "friends", "feed", "im", "gifts", "bookmarks",
+            "notifications", "devices", "search", "write", "join", "app", "playlist",
+            "audios", "videos", "albums", "hashtag", "login", "logout", "register",
+        )
+        if (path.lowercase() in reserved || path.startsWith("id") || path.startsWith("club")) {
+            AppLog.w("MainActivity", "ACTION_VIEW: reserved/non-vanity path '$path' — InternalBrowser: $url")
+            pendingDeepLink = re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenWeb(url)
+            return
+        }
+        val app = SovaApp.get(this)
+        lifecycleScope.launch {
+            val resolved = try {
+                app.apiClient.resolveScreenName(path)
+            } catch (e: Exception) {
+                AppLog.w("MainActivity", "resolveScreenName failed for '$path': ${e.message}")
+                null
+            }
+            val action: re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction =
+                when (resolved?.second) {
+                    // #LINK-VANITY (2026-11-01): resolveScreenName возвращает ПОЛОЖИТЕЛЬНЫЙ
+                    // object_id. Screen.Community/CommunityScreen ожидают ПОЛОЖИТЕЛЬНЫЙ
+                    // groupId (внутри сами делают ownerId = -groupId) — инверсия НЕ нужна.
+                    "group" -> re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenCommunity(resolved.first)
+                    "user" -> re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenUser(resolved.first)
+                    else -> {
+                        AppLog.w("MainActivity", "resolveScreenName('$path') → ${resolved?.second ?: "null"} — InternalBrowser")
+                        re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenWeb(url)
+                    }
+                }
+            if (resolved != null) {
+                AppLog.i("MainActivity", "ACTION_VIEW: vanity resolved '$path' → ${resolved.second} ${resolved.first}")
+            }
+            pendingDeepLink = action
+        }
     }
 
     /**

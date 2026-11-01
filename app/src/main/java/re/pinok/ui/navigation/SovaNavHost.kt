@@ -589,8 +589,17 @@ fun SovaNavHost(
                     }
                 }
                 is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenCommunity -> {
-                    AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Community group=${link.groupId}")
-                    navHostController.navigate(Screen.Community.buildRoute(link.groupId)) {
+                    // #CLUB-SIGN (2026-11-01): DeepLinkAction.OpenCommunity хранит groupId
+                    // ОТРИЦАТЕЛЬНЫМ (VK API конвенция: club123 → -123). Но Screen.Community/
+                    // CommunityScreen ожидают ПОЛОЖИТЕЛЬНЫЙ groupId (внутри сами делают
+                    // ownerId = -groupId). Без нормализации groups.getById получал
+                    // group_ids=-123 → err=100 («One of the parameters... invalid») и
+                    // страница сообщества не загружалась (по vk.com/club123 в т.ч.).
+                    // Нормализуем знак здесь — единая точка для всех источников
+                    // (club-URL, push-уведомления, vanity-резолв).
+                    val positiveGroupId = kotlin.math.abs(link.groupId)
+                    AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Community group=${link.groupId} → $positiveGroupId")
+                    navHostController.navigate(Screen.Community.buildRoute(positiveGroupId)) {
                         launchSingleTop = true
                     }
                 }
@@ -624,6 +633,14 @@ fun SovaNavHost(
                     // §49.6 Sprint VK-ID-1.6: deep-link из security-alert notification.
                     AppLog.i("SovaNavHost", "DEEP_LINK: navigating to Devices")
                     navHostController.navigate("devices") {
+                        launchSingleTop = true
+                    }
+                }
+                is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenWeb -> {
+                    // #LINK-OPENWEB (2026-11-01): неопознанный VK-URL — внутренний
+                    // WebView-браузер (не внешний, не молчаливый дроп).
+                    AppLog.i("SovaNavHost", "DEEP_LINK: opening InternalBrowser url=${link.url}")
+                    navHostController.navigate(Screen.InternalBrowser.buildRoute(link.url)) {
                         launchSingleTop = true
                     }
                 }

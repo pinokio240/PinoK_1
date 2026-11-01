@@ -100,6 +100,8 @@ import re.pinok.ui.components.ShareSheet
 // себе» для чужого профиля — нет прав на управление альбомами).
 import re.pinok.ui.components.VideoContextMenuDropdown
 import re.pinok.util.AppLog
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 
 /**
  * Sprint 1, P0-2 (#74): Экран чужого профиля.
@@ -1631,6 +1633,7 @@ private fun profileInfoRows(p: UserProfile): List<Pair<String, String>> {
  */
 @Composable
 private fun ProfileInfoSection(rows: List<Pair<String, String>>) {
+    val infoContext = LocalContext.current
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Text(
             text = "Информация",
@@ -1650,7 +1653,11 @@ private fun ProfileInfoSection(rows: List<Pair<String, String>>) {
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = value,
+                        text = linkifyVkText(
+                            value,
+                            MaterialTheme.colorScheme.primary,
+                            onUrlClick = { url -> openUrlExternal(infoContext, url) },
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

@@ -24486,3 +24486,18 @@ Work Log:
 - Баг «только 33 трека»: в `audioGetPlaylistById` (VKApiClient.kt) было стоп-условие `if (page.size < pageSize) break` при догрузке страниц — VK отдаёт максимум ~33 трека за страницу даже при count=100, поэтому плейлисты обрезались на 33. Стоп убран (#AUDIO-PAGING-HOLE-2); конец определяется пустой страницей либо tracks.size >= total. Симптом: нажал «Скачать» на экране плейлиста — скачивалось только 33 трека.
 - UI-фикс «пустое место»: 1) кнопка «Отменить загрузку» вынесена из горизонтального ряда кнопок (Играть/Скачать/Сохранить копию) в отдельную строку под ними — на узких экранах 4 кнопки не влезали и обрезались, ряд «прыгал»; 2) пилюля «В плейлист» (полноширинная строка с пустотой слева) скрыта на экране плейлиста: в AudioAttachmentList добавлен параметр `showSaveHeader: Boolean = true`, PlaylistDetailScreen передаёт `showSaveHeader = false` (другие экраны не затронуты).
 - Сборка пользователем — успех (проверено на устройстве/сборкой пользователя).
+
+---
+Task ID: SESSION-2026-11-01-LINKS
+Agent: main (MultiTool), 2026-11-01
+Task: VK-ссылки открываются ВНУТРИ PinoK нативными экранами (linkify) + роутер (vk.cc, голые домены, OpenWeb, vanity-резолв, фикс groupId) + версия 2.2.8.
+
+Work Log:
+- INTERNAL-LINK-ROUTING: VK-ссылки открываются ВНУТРИ PinoK нативными экранами. Добавлен linkify: в уведомлениях (item.text/parentText/replyText/bubbleText), превью последних сообщений в списке чатов, описаниях видео, плейлистов (музыка), профиля/юзер-профиля (статус/о себе/интересы/музыка/фильмы/книги), сообществ (статус/описание).
+- Роутер: в VK_DOMAINS добавлен vk.cc; PLAIN_URL_REGEX теперь ловит «голые» vk.com/vk.ru/m.vk.com/m.vk.ru без scheme.
+- Решения «не закрыто где-то в браузере»: неопознанные VK-URL (market/settings и т.п.) — новый DeepLinkAction.OpenWeb → внутренний WebView (Screen.InternalBrowser), а не внешний браузер и не молчаливый дроп; покрыт во всех when (webUrlFor, SovaNavHost, VkNotificationsNotifier, MainActivity).
+- Vanity-резолв: короткие имена vk.com/durov, vk.ru/donghuaworld → utils.resolveScreenName → нативные Community/UserProfile (метод resolveVkVanityAsync в MainActivity, асинхронно через lifecycleScope).
+- Фикс знака groupId (#CLUB-SIGN): OpenCommunity хранил ОТРИЦАТЕЛЬНЫЙ id (VK API), а Screen.Community/groups.getById ждут положительный → club123 по ссылкам и из уведомлений не открывался (groups.getById err=100 «group_ids is undefined»). Нормализация abs() в SovaNavHost.handleDeepLink.
+- Версия 2.2.7 → 2.2.8 (code 228): app/build.gradle.kts, BuildStamp.kt (STAMP "calls-2026.11.01-2.2.8"), version.json (блок 228, apkUrl releases/download/V2.2.8/Pinok_0111262119.apk, sha256 30ce1e429708262fab047a54226c3cfbaac469e9e5beb5b37967c18ec9316fdc, notes), подписано приватным ключом (публичный XvaSZqNnskbup2Obuj+XwN7q2pqHJKpYUsrtbde8wEI= — совпадает с RELEASE_PUBLIC_KEY_B64 в APK), version.json.sig verify OK.
+- НЕ трогали (по требованию «минимальные правки»): клипы (клик по всему описанию = первый хэштег), закреплённые посты каналов и превью вложений постов в чате (take(80)/take(200) + клик по карточке) — осознанный отказ от linkify там.
+- Проверки: двойное ревью субагентом (синтаксис + overflow String/AnnotatedString + недостающие импорты LocalContext исправлены). Сборки/тесты на устройстве — пользователь (успех по его словам).

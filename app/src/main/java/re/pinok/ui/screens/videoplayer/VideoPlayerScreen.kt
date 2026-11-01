@@ -185,6 +185,8 @@ import re.pinok.ui.screens.feed.CommentItem
 import re.pinok.util.AppLog
 import re.pinok.util.HevcSupport
 import re.pinok.util.VkUserAgent
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 import androidx.compose.material.icons.outlined.VerifiedUser
 
 // ── AnimatedVisibility wrapper — обходит ColumnScope ambiguity ──
@@ -2813,7 +2815,11 @@ fun VideoPlayerScreen(
                     var descOverflowed by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = desc,
+                        text = linkifyVkText(
+                            desc,
+                            Color(0xFF1976D2),
+                            onUrlClick = { url -> openUrlExternal(context, url) },
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = VK_WHITE.copy(alpha = 0.9f),
                         fontSize = 14.sp,

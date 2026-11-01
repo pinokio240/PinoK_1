@@ -47,12 +47,14 @@ private val VK_INLINE_LINK_REGEX = Regex(
 )
 
 /**
- * Regex для обычных URL: `http(s)://…` и `www.…`.
+ * Regex для обычных URL: `http(s)://…`, `www.…` и «голых» VK-путей
+ * `vk.com/…`, `m.vk.com/…` (без scheme — VK web так оформляет ссылки на
+ * стены/профили/сообщества, и их тоже нужно открывать внутри приложения).
  * Без запятых/точек с запятой/скобок в составе (отрезаются как пунктуация).
  * Дефис, точка, подчёркивание, проценты, параметры запроса — включены.
  */
 private val PLAIN_URL_REGEX = Regex(
-    "(?:https?://|www\\.)[A-Za-z0-9._~:/?#@!\\$&'()*+=%\\-]+",
+    "(?:https?://|www\\.|(?:m\\.)?vk\\.(?:com|ru|cc)/)[A-Za-z0-9._~:/?#@!\\$&'()*+=%\\-]+",
     RegexOption.IGNORE_CASE,
 )
 
@@ -340,6 +342,7 @@ private val VK_DOMAINS = setOf(
     "m.vk.ru",
     "vkvideo.ru",
     "vk.me",
+    "vk.cc",
 )
 
 /**

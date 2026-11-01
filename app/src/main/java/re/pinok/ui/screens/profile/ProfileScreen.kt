@@ -91,6 +91,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -2679,6 +2680,7 @@ fun ProfileHeader(
     // параметра — там правка статуса не показывается.
     onStatusClick: (() -> Unit)? = null,
 ) {
+    val profileContext = LocalContext.current
     Column(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2743,7 +2745,14 @@ fun ProfileHeader(
         if (statusText != null) {
             Spacer(Modifier.height(4.dp))
             Text(
-                text = statusText,
+                // #STATUS-LINKIFY (2026-11-01): статус ЧУЖОГО профиля кликабелен
+                // (VK-ссылки → внутренние экраны); свой статус (onStatusClick != null)
+                // оставляем как есть — тап редактирует статус, а не открывает ссылку.
+                text = if (statusClick == null) linkifyVkText(
+                    statusText,
+                    MaterialTheme.colorScheme.primary,
+                    onUrlClick = { url -> openUrlExternal(profileContext, url) },
+                ) else AnnotatedString(statusText),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 3,

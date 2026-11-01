@@ -136,6 +136,8 @@ import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 import re.pinok.util.toRelativeTime
 
 // P1.6 (DIAG-C2 §5): локальный тип-фильтр уведомлений (NOTIFICATION_FILTERS +
@@ -1222,6 +1224,11 @@ private fun NotificationCard(
     val typeIcon = getTypeIcon(item.type)
     var showContextMenu by remember { mutableStateOf(false) }
 
+    // #NOTIF-LINKIFY (2026-11-01): VK-ссылки/упоминания в текстах уведомлений
+    // кликабельны → openUrlExternal → INTERNAL-LINK-ROUTING (нативные экраны).
+    val context = LocalContext.current
+    val linkColor = MaterialTheme.colorScheme.primary
+
     // #NOTIF-DEEPLINK (2026-10-02): клик по карточке → существующий движок
     // VkUrlDeepLinker.deepLinkFor(item) строит точный target (пост с commentId,
     // фото, видео, юзер, сообщество, уведомления). Раньше клик открывал пост
@@ -1330,7 +1337,11 @@ private fun NotificationCard(
         Column(modifier = Modifier.weight(1f)) {
             // Текст уведомления
             Text(
-                text = item.text,
+                text = linkifyVkText(
+                    item.text,
+                    linkColor,
+                    onUrlClick = { url -> openUrlExternal(context, url) },
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 3,
@@ -1347,7 +1358,11 @@ private fun NotificationCard(
             if (item.parentText.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = item.parentText,
+                    text = linkifyVkText(
+                        item.parentText,
+                        linkColor,
+                        onUrlClick = { url -> openUrlExternal(context, url) },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 3,
@@ -1377,7 +1392,11 @@ private fun NotificationCard(
                             )
                         }
                         Text(
-                            text = item.replyText,
+                            text = linkifyVkText(
+                                item.replyText,
+                                linkColor,
+                                onUrlClick = { url -> openUrlExternal(context, url) },
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 2,
@@ -1413,11 +1432,15 @@ private fun NotificationCard(
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                 ) {
-                    Text(
-                        text = item.bubbleText,
+Text(
+                        text = linkifyVkText(
+                            item.bubbleText,
+                            linkColor,
+                            onUrlClick = { url -> openUrlExternal(context, url) },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

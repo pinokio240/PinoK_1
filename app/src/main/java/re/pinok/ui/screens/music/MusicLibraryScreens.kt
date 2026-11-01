@@ -2,6 +2,7 @@
 package re.pinok.ui.screens.music
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +73,8 @@ import re.pinok.media.TrackDownloadManager
 import re.pinok.data.model.DownloadStatus
 import re.pinok.ui.components.AudioAttachmentList
 import re.pinok.util.AppLog
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 
 // #MUSIC-PORT: общие цвета (как в MusicScreen/AudioQueueScreen).
 private val VK_BLACK = androidx.compose.ui.graphics.Color(0xFF0F0F10)
@@ -234,6 +237,7 @@ fun PlaylistDetailScreen(
 ) {
     BackHandler { onBack() }
     val app = SovaApp.get()
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var playlist by remember { mutableStateOf<AudioPlaylist?>(null) }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
@@ -326,7 +330,17 @@ fun PlaylistDetailScreen(
                         }
                         Spacer(Modifier.height(12.dp))
                         playlist?.description?.takeIf { it.isNotBlank() }?.let { desc ->
-                            Text(desc, color = VK_TEXT_SECONDARY, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                text = linkifyVkText(
+                                    desc,
+                                    VK_ACCENT,
+                                    onUrlClick = { url -> openUrlExternal(context, url) },
+                                ),
+                                color = VK_TEXT_SECONDARY,
+                                fontSize = 13.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                             Spacer(Modifier.height(8.dp))
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

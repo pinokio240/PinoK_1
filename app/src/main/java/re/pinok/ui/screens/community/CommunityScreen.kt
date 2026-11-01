@@ -146,6 +146,8 @@ import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.navigation.CommunityRestoreHolder
 import re.pinok.ui.theme.BoardAccent
 import re.pinok.util.AppLog
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 import re.pinok.util.toAbsoluteTime
 import re.pinok.util.toBoardLastCommentDate
 import kotlin.math.min
@@ -1473,10 +1475,17 @@ fun CommunityScreen(
                     }
                 }
             }
+            // #GROUP-LINKIFY (2026-11-01): контекст для VK-ссылок в статусе/описании
+            // группы (INTERNAL-LINK-ROUTING → нативные экраны).
+            val descContext = LocalContext.current
             // Status text
             if (!g.status.isNullOrBlank()) {
                 Text(
-                    text = g.status,
+                    text = linkifyVkText(
+                        g.status,
+                        MaterialTheme.colorScheme.primary,
+                        onUrlClick = { url -> openUrlExternal(descContext, url) },
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
@@ -1491,9 +1500,17 @@ fun CommunityScreen(
                 // Заменён на Text + clickable modifier — проще и стабильнее.
                 val descColor = MaterialTheme.colorScheme.onSurfaceVariant
                 val linkColor = Color(0xFF1976D2)
+                // #DESC-LINKIFY (2026-11-01): VK-ссылки в описании кликабельны
+                // (LinkAnnotation перехватывает тап по ссылке; тап по остальному
+                // тексту по-прежнему разворачивает описание).
+                val linkifiedDesc = linkifyVkText(
+                    g.description,
+                    linkColor,
+                    onUrlClick = { url -> openUrlExternal(descContext, url) },
+                )
                 Text(
                     text = buildAnnotatedString {
-                        append(g.description)
+                        append(linkifiedDesc)
                         if (!descExpanded) {
                             withStyle(SpanStyle(color = linkColor)) {
                                 append(" Показать ещё")

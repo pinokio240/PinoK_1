@@ -1280,6 +1280,13 @@ object VkNotificationsNotifier {
             VkUrlDeepLinker.DeepLinkAction.OpenDevices -> {
                 intent.action = VkUrlDeepLinker.ACTION_OPEN_DEVICES
             }
+            is VkUrlDeepLinker.DeepLinkAction.OpenWeb -> {
+                // #LINK-OPENWEB (2026-11-01): из push-нотификации не приходит, но
+                // sealed-класс обязан быть покрыт. Транслируем как ACTION_VIEW
+                // с URL — MainActivity обработает через InternalBrowser.
+                intent.action = android.content.Intent.ACTION_VIEW
+                intent.data = android.net.Uri.parse(deepLink.url)
+            }
         }
         return intent
     }

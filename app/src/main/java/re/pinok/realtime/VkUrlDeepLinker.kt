@@ -122,6 +122,10 @@ object VkUrlDeepLinker {
         object OpenNotifications : DeepLinkAction()
         /** §49.6 Sprint VK-ID-1.6: открыть экран «Устройства и сессии». */
         object OpenDevices : DeepLinkAction()
+        /** #LINK-OPENWEB (2026-11-01): неопознанный VK-URL (vanity-имя, market,
+         * settings и т.п.) — открывается во ВНУТРЕННЕМ WebView-браузере
+         * (Screen.InternalBrowser), а не во внешнем. */
+        data class OpenWeb(val url: String) : DeepLinkAction()
     }
 
     /**
@@ -436,6 +440,7 @@ object VkUrlDeepLinker {
             is DeepLinkAction.OpenCommunity -> "https://vk.com/club${-action.groupId}"
             DeepLinkAction.OpenNotifications -> "https://vk.com/notifications"
             DeepLinkAction.OpenDevices -> "https://vk.com/settings?act=devices"
+            is DeepLinkAction.OpenWeb -> action.url
         }
     }
 }

@@ -1,6 +1,7 @@
 // File: ui/screens/music/MusicScreen.kt
 package re.pinok.ui.screens.music
 
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +77,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +103,8 @@ import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
 import re.pinok.ui.components.shareTrack
 import re.pinok.util.AppLog
+import re.pinok.util.linkifyVkText
+import re.pinok.util.openUrlExternal
 import kotlin.math.abs
 
 /**
@@ -3423,6 +3427,7 @@ private fun SearchPlaylistCard(
     textColor: Color,
     secondaryColor: Color,
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .width(140.dp)
@@ -3473,7 +3478,11 @@ private fun SearchPlaylistCard(
         }
         if (subtitle.isNotBlank()) {
             Text(
-                text = subtitle,
+                text = if (!playlistDescription.isNullOrBlank()) linkifyVkText(
+                    subtitle,
+                    secondaryColor,
+                    onUrlClick = { url -> openUrlExternal(context, url) },
+                ) else AnnotatedString(subtitle),
                 color = secondaryColor,
                 fontSize = 10.sp,
                 maxLines = 1,
