@@ -74,6 +74,7 @@ import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
 import re.pinok.data.model.Bookmark
 import re.pinok.data.model.FaveTag
+import re.pinok.data.model.Post
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
 import re.pinok.ui.components.PostCard as UnifiedPostCard
@@ -111,7 +112,7 @@ private fun bookmarkKey(bm: Bookmark): String =
 fun BookmarksScreen(
     onUserClick: ((userId: Long) -> Unit)? = null,
     onGroupClick: ((groupId: Long) -> Unit)? = null,
-    onPostClick: ((ownerId: Long, postId: Long, accessKey: String?) -> Unit)? = null,
+    onPostClick: ((post: Post) -> Unit)? = null,
     onVideoClick: ((ownerId: Long, videoId: Long) -> Unit)? = null,
 ) {
     val app = SovaApp.get()
@@ -690,7 +691,7 @@ fun BookmarksScreen(
                                 // CommunityScreen. Раньше вызывал onGroupClick →
                                 // открывал группу вместо самого поста.
                                 onPostContextClick = bm.post?.let { p ->
-                                    { onPostClick?.invoke(p.ownerId, p.id, p.accessKey) }
+                                    { onPostClick?.invoke(p) }
                                 },
                                 onDeletePost = bm.post?.let { p ->
                                     {
@@ -728,7 +729,7 @@ fun BookmarksScreen(
                                 onClick = {
                                     when (bm.type) {
                                         "post" -> bm.post?.let { p ->
-                                            onPostClick?.invoke(p.ownerId, p.id, p.accessKey)
+                                            onPostClick?.invoke(p)
                                         }
                                         "user", "profile", "page" -> bm.user?.let { u ->
                                             onUserClick?.invoke(u.id)

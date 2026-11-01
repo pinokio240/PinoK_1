@@ -2083,16 +2083,16 @@ fun SovaNavHost(
                         onGroupClick = { groupId ->
                             nav.navigate(Screen.Community.buildRoute(groupId))
                         },
-                        onPostClick = { ownerId, postId, accessKey ->
-                            // FIX-BOOKMARKS-COMMENTS: закладки хранят Post целиком,
-                            // но в holder передаём stub с accessKey (как делают
-                            // другие handlers с полным Post). accessKey критичен
-                            // для wall.getById приватных постов из закрытых групп.
-                            PostHolder.last = re.pinok.data.model.Post(
-                                ownerId = ownerId, fromId = ownerId, id = postId, date = 0, text = "",
-                                accessKey = accessKey,
-                            )
-                            nav.navigate(Screen.PostDetail.buildRoute(ownerId, postId, accessKey))
+                        onPostClick = { post ->
+                            // FIX-BOOKMARKS-STUB: убрана заглушка Post(text="").
+                            // Паттерн как в Feed handler (стр.1729-1731): кладём
+                            // ПОЛНЫЙ Post из bm.post в PostHolder.last — он уже
+                            // распарсен через parsePostMini со всеми полями (text,
+                            // attachments, likes, accessKey). isStub=false →
+                            // wallGetById fallback НЕ вызывается, пост отображается
+                            // сразу, комментарии грузятся через wallGetComments.
+                            PostHolder.last = post
+                            nav.navigate(Screen.PostDetail.buildRoute(post.ownerId, post.id, post.accessKey))
                         },
                         onVideoClick = { ownerId, videoId ->
                             // FIX: VideoHolder.last не устанавливался — VideoPlayerScreen не получал Video
