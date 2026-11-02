@@ -6668,7 +6668,7 @@ private fun MessageBubble(
         // «Цвет пузыря») — уважаем его даже в bubbleless-режиме (без alpha-гашения).
         // Иначе — старое поведение: primary.copy(0.08) для out, Transparent для in.
         val bubblelessBg = when {
-            isOut && appearance.bubbleColor != null -> appearance.bubbleColor!!
+            isOut && appearance.bubbleColor != null -> appearance.bubbleColor
             isOut -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
             else -> appearance.bubbleColor ?: androidx.compose.ui.graphics.Color.Transparent
         }
