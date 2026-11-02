@@ -1953,7 +1953,7 @@ internal fun pluralComments(n: Int): String {
  *
  * #B-FIX-2 (AUDIT-BOARD-SNAP-VS-CODE): по снапшоту VK web —
  *  - аватар 28dp + имя автора (из [authors] — profiles[]), кликабельное (TextButton primary);
- *  - лайк БЕЗ счётчика (только Favorite/FavoriteBorder, как like_outline_16 в VK web);
+ *  - лайк со счётчиком при likesCount>0 (как VK web: Favorite/FavoriteBorder + число);
  *  - showmoretext для длинных комментариев (>200 символов, «Показать полностью»/«Свернуть»);
  *  - вложения: photo media-grid (80dp, RoundedCornerShape 8dp) + doc (40dp icon + title + ext).
  *
@@ -2236,18 +2236,35 @@ private fun BoardCommentCard(
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    // Like БЕЗ счётчика (как like_outline_16 в VK web).
-                    IconButton(onClick = { onLike(comment) }) {
-                        // VK-STYLING (AUDIT #7): like_outline_16 (16dp), tint VK red #e64646 /
-                        // secondary #99a2ad (было 24dp + Material pink #E91E63).
-                        Icon(
-                            imageVector = if (comment.isLiked) Icons.Filled.Favorite
-                                          else Icons.Outlined.FavoriteBorder,
-                            contentDescription = "Лайк",
-                            tint = if (comment.isLiked) Color(0xFFE64646)
-                                   else Color(0xFF99A2AD),
-                            modifier = Modifier.size(16.dp),
-                        )
+                    // Like СО счётчиком при likesCount>0 (как like_outline_16 в VK web).
+                    // Паттерн PostDetailScreen.CommentItem / ActionIcon — иконка + Text справа.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        IconButton(
+                            onClick = { onLike(comment) },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            // VK-STYLING (AUDIT #7): like_outline_16 (16dp), tint VK red #e64646 /
+                            // secondary #99a2ad (было 24dp + Material pink #E91E63).
+                            Icon(
+                                imageVector = if (comment.isLiked) Icons.Filled.Favorite
+                                              else Icons.Outlined.FavoriteBorder,
+                                contentDescription = "Лайк",
+                                tint = if (comment.isLiked) Color(0xFFE64646)
+                                       else Color(0xFF99A2AD),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                        if (comment.likesCount > 0) {
+                            Text(
+                                text = "${comment.likesCount}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (comment.isLiked) Color(0xFFE64646)
+                                        else Color(0xFF99A2AD),
+                            )
+                        }
                     }
                 }
             }

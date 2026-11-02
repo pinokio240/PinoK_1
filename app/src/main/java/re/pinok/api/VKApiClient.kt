@@ -4774,6 +4774,9 @@ class VKApiClient(
             "count" to count.toString(),
             "extended" to "1",
             "fields" to "photo_100,online,verified",
+            // BUILD-COMMENT-LIKES: просим VK вернуть likes.count/user_likes
+            // (паритет с boardGetCommentsFull / wallGetComments).
+            "need_likes" to "1",
         ))
         if (json == null) return CommentsResult(emptyList(), emptyMap())
         return try {
@@ -8347,6 +8350,10 @@ class VKApiClient(
             // комментарием. Без этого параметра поле thread не приходит совсем,
             // и UI не может показать «N ответов» под комментарием.
             "thread_items_count" to threadItemsCount.toString(),
+            // BUILD-COMMENT-LIKES: просим VK вернуть likes.count/user_likes для
+            // каждого комментария (паритет с boardGetCommentsFull / wallGetCommentsForPosts).
+            // Без need_likes=1 поле likes может не прийти.
+            "need_likes" to "1",
         )
         // §37.12 #328: comment_id — fetch ответов на конкретный комментарий.
         if (commentId != null) args["comment_id"] = commentId.toString()
