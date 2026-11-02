@@ -197,6 +197,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Outline
@@ -3398,6 +3399,20 @@ fun ChatDetailScreen(
         try {
             val chats = app.apiClient.messagesGetConversationsById(listOf(peerId))
             val chat = chats.firstOrNull()
+            // FIX-1 ✓✓ (BUILD-READMARK-BUBBLE-FIX): chat.outRead (out_read) — каноничный
+            // «до какого исходящего сообщения прочитано» из messages.getConversationsById.
+            // Симметрично с MessagesScreen: помечаем readState=1 для isOut-сообщений с
+            // id <= outRead. id здесь — message_id, совпадает с out_read (НЕ cmid).
+            // Без этого ✓✓ рисовался только по stale message.readState или терялся при
+            // LP replay=0 (нет подписчика). Применяем к текущему списку messages.
+            val outRead = chat?.outRead ?: 0L
+            if (outRead > 0L) {
+                messages = messages.map { msg ->
+                    if (msg.isOut && msg.id > 0 && msg.id <= outRead && msg.readState == 0) {
+                        msg.copy(readState = 1)
+                    } else msg
+                }
+            }
             pinnedMessage = if (isGroupChat) chat?.pinnedMessage else null
             // Fix #122: используем единый isMuted() helper (учитывает no_sound,
             // disabled_forever, disabled_until).
@@ -6416,14 +6431,22 @@ private fun MessageBubble(
     // #CHAT-APPEARANCE: если включён независимый шрифт диалога и выбран цвет текста —
     // переопределяем цвет текста сообщения со всех пузырей (исходящих и входящих).
     val chatTextColorOverride = LocalChatAppearance.current.textColor
+    // FIX-3 (BUILD-READMARK-BUBBLE-FIX): адаптивный textColor под luminance(bubbleColor).
+    // Если выбран светлый кастомный bubbleColor — текст onPrimary (белый) становится
+    // невидимым. Светлый (luminance > 0.5) → onSurface (тёмный). bubbleless — всегда
+    // onSurface (нет яркого bubble-фона).
     val textColor = if (chatTextColorOverride != null) {
         chatTextColorOverride
     } else if (bubbleless) {
         MaterialTheme.colorScheme.onSurface
     } else if (isOut) {
-        MaterialTheme.colorScheme.onPrimary
+        val bc = appearance.bubbleColor
+        if (bc != null && bc.luminance() > 0.5f) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onPrimary
     } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        val bc = appearance.bubbleColor
+        if (bc != null && bc.luminance() > 0.5f) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onSurfaceVariant
     }
     val time = message.date.toMsgTime()
     var lastClickTime by remember { mutableStateOf(0L) }
@@ -6640,10 +6663,14 @@ private fun MessageBubble(
         // #MSG-BUBBLE-COLOR: если задан «свой цвет пузыря», то для outgoing берём
         // его с alpha=0.08 (как раньше primary), incoming — Transparent (как сейчас).
         val bubblelessShape = RoundedCornerShape(4.dp)
-        val bubblelessBg = if (isOut) {
-            (appearance.bubbleColor ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.08f)
-        } else {
-            androidx.compose.ui.graphics.Color.Transparent
+        // FIX-2 (BUILD-READMARK-BUBBLE-FIX): bubbleless не должен гасить выбранный
+        // пользователем bubbleColor. Если appearance.bubbleColor != null (явный выбор
+        // «Цвет пузыря») — уважаем его даже в bubbleless-режиме (без alpha-гашения).
+        // Иначе — старое поведение: primary.copy(0.08) для out, Transparent для in.
+        val bubblelessBg = when {
+            isOut && appearance.bubbleColor != null -> appearance.bubbleColor!!
+            isOut -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            else -> appearance.bubbleColor ?: androidx.compose.ui.graphics.Color.Transparent
         }
         val msgShape = if (bubbleless) bubblelessShape else bubbleShape
         val msgBg = if (bubbleless) bubblelessBg else bubbleColor
@@ -6835,8 +6862,12 @@ private fun MessageBubble(
                     // P5.1: текст с кликабельными ссылками (LinkAnnotation.Clickable).
                     // linkColor: на исходящем цветном bubble — onPrimary (видно),
                     // на входящем/bubbleless — primary (accent).
+                    // FIX-3 (BUILD-READMARK-BUBBLE-FIX): светлый кастомный bubbleColor →
+                    // primary (accent) виднее, чем onPrimary (белый на белом).
                     val linkColor = if (isOut && !bubbleless) {
-                        MaterialTheme.colorScheme.onPrimary
+                        val bc = appearance.bubbleColor
+                        if (bc != null && bc.luminance() > 0.5f) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onPrimary
                     } else {
                         MaterialTheme.colorScheme.primary
                     }
